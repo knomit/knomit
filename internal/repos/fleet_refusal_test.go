@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/pki"
-	"knomit/internal/store"
 )
 
 // The classes of a refused fleet sync, from the recorded error's text and
@@ -38,7 +39,7 @@ func TestClassifyFleetRefusal(t *testing.T) {
 		{"bad_certificate, not of the installed root", refusedBad, pki.StandingUntrusted, FleetRefusalOther},
 		{"another alert (a host with nothing installed)", refusedOther, pki.StandingValid, FleetRefusalOther},
 		{"this instance refused the host's certificate", untrusted, pki.StandingValid, FleetRefusalMoved},
-		{"a commit the host's judge refused", store.CommitRefusedByJudge + ": rule B: " + pki.ErrUntrustedRoot.Error(), pki.StandingValid, ""},
+		{"a commit the host's judge refused", verify.CommitRefusedByJudge + ": rule B: " + pki.ErrUntrustedRoot.Error(), pki.StandingValid, ""},
 		{"no error", "", pki.StandingValid, ""},
 		{"an unreachable host", "push: dial tcp 127.0.0.1:1: connect: connection refused", pki.StandingValid, ""},
 	} {

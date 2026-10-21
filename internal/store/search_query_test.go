@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
@@ -100,7 +102,7 @@ func TestRecentFacts_WithQuery_SortsByRelevanceNotDate(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/c.md", testFactBody("far-target gamma", 0.7, nil), "init c", "")
 	require.NoError(t, err)
 
-	entries, total, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 50})
+	entries, total, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{Text: "match-target alpha", Limit: 50})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, total, 1, "match-target fact must be in the result set")
 	require.NotEmpty(t, entries)
@@ -108,7 +110,7 @@ func TestRecentFacts_WithQuery_SortsByRelevanceNotDate(t *testing.T) {
 		"strongest match must come first regardless of commit time (got order: %v)", pathsOf(entries))
 }
 
-func pathsOf(entries []RecentFactEntry) []string {
+func pathsOf(entries []index.RecentFactEntry) []string {
 	out := make([]string, len(entries))
 	for i, e := range entries {
 		out[i] = e.Path
@@ -140,7 +142,7 @@ func TestRecentFacts_PopulatesDomainAndEntities(t *testing.T) {
 	require.NoError(t, err)
 
 	// Non-search path: empty Text → executes the plain RecentFacts SQL.
-	entries, total, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Limit: 50})
+	entries, total, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{Limit: 50})
 	require.NoError(t, err)
 	require.Equal(t, 1, total)
 	require.Len(t, entries, 1)
@@ -150,7 +152,7 @@ func TestRecentFacts_PopulatesDomainAndEntities(t *testing.T) {
 
 	// Search path: Text != "" → executes recentFactsSearch. Use the
 	// rankedEmbedder fixture so the vector search yields a hit on this fact.
-	searchEntries, _, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 50})
+	searchEntries, _, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{Text: "match-target alpha", Limit: 50})
 	require.NoError(t, err)
 	require.NotEmpty(t, searchEntries, "rankedEmbedder must match the match-target fact")
 	require.Equal(t, path, searchEntries[0].Path)
@@ -178,13 +180,13 @@ func TestRecentFacts_PopulatesCommitHash(t *testing.T) {
 	commit := result.CommitHash
 
 	// No-text path.
-	entries, _, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Limit: 50})
+	entries, _, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, commit, entries[0].CommitHash, "no-text RecentFacts must populate CommitHash")
 
 	// Text-search path.
-	searchEntries, _, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 50})
+	searchEntries, _, err := svc.Search().RecentFacts(ctx, branch, index.SearchOptions{Text: "match-target alpha", Limit: 50})
 	require.NoError(t, err)
 	require.NotEmpty(t, searchEntries)
 	require.Equal(t, commit, searchEntries[0].CommitHash, "text-search RecentFacts must populate CommitHash")

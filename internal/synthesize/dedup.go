@@ -7,8 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
@@ -216,7 +217,7 @@ func dedupCluster(
 	g.SetLimit(maxConcurrentDedupSearches)
 	for _, fact := range cluster {
 		g.Go(func() error {
-			sq := store.SearchOptions{
+			sq := index.SearchOptions{
 				QueryByPath:   fact.File,
 				MinSimilarity: threshold,
 				Limit:         10,

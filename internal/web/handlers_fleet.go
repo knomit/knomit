@@ -143,7 +143,7 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // revoke_due (only when true) for a left record whose leaf the master's leave
 // duty revokes.
 func fleetMemberRow(mem repos.FleetMemberRow) map[string]any {
-	f := repos.MemberFieldsOf(mem.Member)
+	f := repos.MemberFieldsOf(mem.Member.Member)
 	row := map[string]any{
 		"agent": mem.Agent, "state": mem.State, "host": mem.Host, "branch": mem.Branch, "path": mem.Path,
 		"addresses": f.Addresses, "git": f.Git, "capabilities": f.Capabilities,

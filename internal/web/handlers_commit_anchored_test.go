@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	knomitfact "knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -93,7 +94,7 @@ func TestHandleCommitAnchoredFact_ReturnsHALEnvelope(t *testing.T) {
 // /commits/{sha}/facts/.../incoming returns a HAL collection (not 404).
 func TestHandleCommitAnchoredFact_IncomingReturns200(t *testing.T) {
 	provider := &stubFactSubProvider{
-		incoming: []store.RefSummary{
+		incoming: []index.RefSummary{
 			{Path: "know/b.md", Title: "B", Commit: "abc123"},
 		},
 	}
@@ -148,7 +149,7 @@ func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
 // self URL (containing /commits/{sha}/).
 func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
-		outgoing: []store.RefSummary{
+		outgoing: []index.RefSummary{
 			{Path: "know/b.md", Title: "Fact B", Type: "synthesis", Commit: "abc123"},
 		},
 	}

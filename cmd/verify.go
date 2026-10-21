@@ -8,12 +8,13 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/spf13/cobra"
 
 	"knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // Exit codes. Kept as named constants because the difference between 1 and 2 is
@@ -191,7 +192,7 @@ func runVerify(cmd *cobra.Command, opts verifyOpts) (int, error) {
 
 	out := cmd.OutOrStdout()
 	errOut := cmd.ErrOrStderr()
-	vopts := store.VerifyOpts{Deep: opts.deep, AllBranches: opts.allBranches}
+	vopts := fsck.VerifyOpts{Deep: opts.deep, AllBranches: opts.allBranches}
 
 	names := []string{opts.repoName}
 	if opts.all {
@@ -219,7 +220,7 @@ func runVerify(cmd *cobra.Command, opts verifyOpts) (int, error) {
 		// printed "remove with --prune-generated-refs" and "pruned generated
 		// ref: okf/main" within three lines of each other, and left the pruned
 		// refs listed under branches_not_indexed in the JSON.
-		var pruned store.PruneResult
+		var pruned fsck.PruneResult
 		if opts.pruneRefs {
 			// pruned is reported even on error: PruneResult.Refs holds only what
 			// was actually deleted, so a partial failure still has to say which
@@ -313,7 +314,7 @@ func reportSkippedArchived(w io.Writer, m *repos.Manager) {
 // maxIssues is deliberately NOT applied here. Truncating machine-readable
 // output would hand a CI job a report that looks complete and is not; the flag
 // is documented as affecting the text rendering only.
-func toJSON(r store.IntegrityReport, pruned store.PruneResult) jsonReport {
+func toJSON(r fsck.IntegrityReport, pruned fsck.PruneResult) jsonReport {
 	out := jsonReport{
 		Repo:      r.Repo,
 		CheckedAt: r.CheckedAt.UTC().Format("2006-01-02T15:04:05Z"),

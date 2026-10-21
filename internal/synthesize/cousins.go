@@ -6,10 +6,10 @@ import (
 	"sort"
 	"sync"
 
+	"knomit/internal/store/index"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
-
-	"knomit/internal/store"
 )
 
 // Cousin-meeting inside prune (knomit#149).
@@ -157,7 +157,7 @@ func joinCousinsForPrune(
 		g.Go(func() error {
 			// NO `Path` filter. That single omission IS the fix — everything
 			// else here is bookkeeping around it.
-			results, err := d.Search.Search(gctx, branch, store.SearchOptions{
+			results, err := d.Search.Search(gctx, branch, index.SearchOptions{
 				QueryByPath:   path,
 				MinSimilarity: threshold,
 				Limit:         10,

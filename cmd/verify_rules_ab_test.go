@@ -14,12 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 	"knomit/internal/pki"
-	"knomit/internal/store"
 )
 
 // `knomit verify ci` over two plain checkouts — a knowledge-base checkout
@@ -115,7 +116,7 @@ func TestVerifyCI_RulesABOverPlainCheckouts(t *testing.T) {
 	// per agent writing its own record, signed by its own key.
 	kb := filepath.Join(tmp, "kb")
 	git(tmp, nil, "clone", "-q", fleet, kb)
-	want := map[string]string{"joiner": "", "gone": store.RuleRevoked, "stranger": store.RuleNoRecord}
+	want := map[string]string{"joiner": "", "gone": verify.RuleRevoked, "stranger": verify.RuleNoRecord}
 	for id := range want {
 		a := agents[id]
 		git(kb, nil, "checkout", "-q", "-b", "cand-"+id, "origin/main")
@@ -146,12 +147,12 @@ func TestVerifyCI_RulesABOverPlainCheckouts(t *testing.T) {
 		jsonOut, jcode := run(append(base, "--json")...)
 		require.Equal(t, code, jcode, id)
 
-		var got store.RangeVerdict
+		var got verify.RangeVerdict
 		require.NoError(t, json.Unmarshal([]byte(jsonOut), &got), jsonOut)
-		direct, err := store.CheckRange(store.RangeInput{KBDir: kb, Main: "origin/main", Candidate: "cand-" + id, FleetDir: fleet, FleetRev: "HEAD"})
+		direct, err := verify.CheckRange(verify.RangeInput{KBDir: kb, Main: "origin/main", Candidate: "cand-" + id, FleetDir: fleet, FleetRev: "HEAD"})
 		require.NoError(t, err)
 		require.Equal(t, direct, got, "%s: --json is CheckRange's verdict", id)
-		require.Equal(t, store.VerifyEnforce, got.Mode)
+		require.Equal(t, verify.VerifyEnforce, got.Mode)
 		require.Equal(t, 1, got.Checked, id)
 
 		if rule == "" {

@@ -35,6 +35,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/gitserve"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -305,7 +307,7 @@ func newMissionHost(t *testing.T, edit mutate) (*missionNode, string) {
 			return
 		}
 		defer release()
-		ctx := store.WithPushPolicy(r.Context(), store.PushPolicy{Pusher: mPeerFP, OwnBranch: ri.AgentBranch()})
+		ctx := gitserve.WithPushPolicy(r.Context(), gitserve.PushPolicy{Pusher: mPeerFP, OwnBranch: ri.AgentBranch()})
 		svc.Handler().ServeHTTP(w, r.WithContext(ctx))
 	}))
 	t.Cleanup(srv.Close)

@@ -3,7 +3,7 @@ package synthesize
 import (
 	"fmt"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // Effort dials how hard a pipeline digs for emergent facts nobody wrote down.
@@ -105,14 +105,14 @@ func (s ScopeFilter) Matches(domains, entities []string) bool {
 	}
 	for _, want := range s.Domain {
 		for _, d := range domains {
-			if store.DomainTagMatches(d, want) {
+			if index.DomainTagMatches(d, want) {
 				return true
 			}
 		}
 	}
 	for _, want := range s.Entities {
 		for _, e := range entities {
-			if store.EntityTagMatches(e, want) {
+			if index.EntityTagMatches(e, want) {
 				return true
 			}
 		}

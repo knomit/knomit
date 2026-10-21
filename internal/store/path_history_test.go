@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -29,11 +31,11 @@ func openPathHistoryStore(t *testing.T) (*Service, context.Context) {
 
 // fullHistory pages PathHistory to the end with a small page size, so every
 // test also exercises the keyset continuation.
-func fullHistory(t *testing.T, svc *Service, branch, path, anchor string) []FactRevision {
+func fullHistory(t *testing.T, svc *Service, branch, path, anchor string) []index.FactRevision {
 	t.Helper()
 	ctx := context.Background()
-	var out []FactRevision
-	var cur *PathHistoryCursor
+	var out []index.FactRevision
+	var cur *index.PathHistoryCursor
 	for range 1000 {
 		page, next, err := svc.Search().PathHistory(ctx, branch, path, anchor, cur, 2)
 		require.NoError(t, err)
@@ -48,7 +50,7 @@ func fullHistory(t *testing.T, svc *Service, branch, path, anchor string) []Fact
 	return nil
 }
 
-func historyCommits(revs []FactRevision) []string {
+func historyCommits(revs []index.FactRevision) []string {
 	out := make([]string, len(revs))
 	for i, r := range revs {
 		out[i] = r.Commit
@@ -275,7 +277,7 @@ func TestPathHistory_DiffBaseIsTheEditedFromContent(t *testing.T) {
 	require.NoError(t, err)
 
 	revs := fullHistory(t, svc, "main", p, m)
-	byCommit := map[string]FactRevision{}
+	byCommit := map[string]index.FactRevision{}
 	for _, r := range revs {
 		byCommit[r.Commit] = r
 	}
@@ -419,7 +421,7 @@ func TestPathHistory_ContinuationAfterPurgeIsHistoryChanged(t *testing.T) {
 	require.Len(t, page, 2)
 
 	// A position naming a change that is not indexed is refused, not empty.
-	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", last, &PathHistoryCursor{Frontier: []string{strings.Repeat("ab", 20)}, AnchorOnBranch: true}, 2)
+	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", last, &index.PathHistoryCursor{Frontier: []string{strings.Repeat("ab", 20)}, AnchorOnBranch: true}, 2)
 	require.ErrorIs(t, err, ErrHistoryChanged)
 }
 

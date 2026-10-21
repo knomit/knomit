@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/store/facts"
 	"knomit/internal/store/vocab"
 )
@@ -21,7 +23,7 @@ import (
 
 // FactQuery is the interface for fact read/search/existence queries.
 type FactQuery interface {
-	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
+	Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error)
 	// LiveFactCount is how many facts are live on branch at HEAD — the
 	// denominator for any corpus-size-relative rule. Stats().Total answers the
 	// same question but pays for three json_each GROUP BYs and the highlights
@@ -30,14 +32,14 @@ type FactQuery interface {
 	LiveFactCount(ctx context.Context, branch string) (int, error)
 	GetByPath(ctx context.Context, branch, path string) (*facts.FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
-	Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error)
+	Stats(ctx context.Context, branch, pathPrefix, axis string) (index.StatsResult, error)
 	// Highlights returns only the highlight rows Stats would have returned,
 	// under an explicit axis. For callers that need to re-cut a top-N by a
 	// different axis and already hold every aggregate Stats computes.
-	Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error)
+	Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]index.Highlight, bool, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
-	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
-	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
+	RecentFacts(ctx context.Context, branch string, opts index.SearchOptions) ([]index.RecentFactEntry, int, error)
+	FactsIter(ctx context.Context, branch string) (*index.FactsIter, error)
 	// FactExistsAt reports whether `path` has any valid (added/modified)
 	// version in the sparse history reachable from `commit` on `branch`,
 	// walking past retractions. Pass commit == "" for a HEAD-anchored check.
@@ -55,9 +57,9 @@ type FactQuery interface {
 
 // GraphStore is the interface for DERIVED_FROM / SIMILAR_TO graph queries.
 type GraphStore interface {
-	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
-	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
-	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	ExplainFact(ctx context.Context, branch, path string) (index.ExplainResult, error)
+	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]index.RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]index.RefSummary, error)
 	// SubgraphEdges returns the undirected SIMILAR_TO adjacency among the given
 	// fact paths (one pair per edge whose both endpoints are non-deleted Fact
 	// nodes in the set). Scoped clustering runs Louvain over this bounded
@@ -75,12 +77,12 @@ type GraphStore interface {
 	// live on branch, plus the live fact count. The Phase-3 subject-
 	// disjointness gate derives its operating point from this distribution
 	// rather than from any fixed cut (MN13).
-	SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error)
+	SubjectLabelDF(ctx context.Context, branch string) (index.SubjectLabelDF, error)
 	// SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for
 	// the given fact paths. Only edges where both endpoints are in paths are
 	// kept. Liveness is enforced via NOT n.deleted = true. An empty or
 	// single-element paths slice returns an empty graph with Density == 0.
-	SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error)
+	SimilarityAdjacency(ctx context.Context, paths []string) (index.SimilarityGraph, error)
 	// ReverseDependentPaths returns all paths transitively DERIVED_FROM any
 	// version of `path` (all historical versions seeded), NOT
 	// liveness-filtered. Membership among live members is the consumer's job.
@@ -89,8 +91,8 @@ type GraphStore interface {
 
 // HistoryQuery is the interface for commit-log / revision history queries.
 type HistoryQuery interface {
-	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
-	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
+	Log(ctx context.Context, branch, path string) ([]index.LogEntry, error)
+	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]index.LogEntryWithTags, string, string, error)
 	// RevisionsBefore returns up to `limit` revisions of `path` in the
 	// first-parent ancestry of `anchorCommit`, newest → oldest: the version
 	// live at an anchor (as_of dates). Resolution stays on RevisionsBefore;
@@ -102,18 +104,18 @@ type HistoryQuery interface {
 	// change below one it descends from, and the keyset position to continue
 	// from (nil at the end). Precomputed at index time (path_changes): reads
 	// only. ErrHistoryChanged on a continuation whose history is gone.
-	PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error)
+	PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *index.PathHistoryCursor, limit int) ([]index.FactRevision, *index.PathHistoryCursor, error)
 	// LiveRevision is RevisionsBefore(anchor, 1) for a .md path, answered
 	// from path_changes' jump pointers instead of a first-parent walk. Used
 	// only by knomit_explain (the root's commit next to its history).
 	LiveRevision(ctx context.Context, branch, path, anchor string) (string, error)
-	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
-	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
+	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*index.CommitDetailResult, error)
+	Activity(ctx context.Context, branch, path string) (index.ActivityResult, error)
 }
 
 // MethodologyMatcher is the interface for methodology-fact matching.
 type MethodologyMatcher interface {
-	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
+	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]index.MethodologyMatch, error)
 }
 
 // SearchIndex composes the four query sub-services. Implemented by *searchFacade
@@ -284,14 +286,14 @@ type MotifIndex interface {
 	AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error)
 	// Clusters returns the resolved vocabulary — one row per CLUSTER, most
 	// frequent first, deterministic on ties.
-	Clusters(ctx context.Context, branch string) ([]MotifCluster, error)
+	Clusters(ctx context.Context, branch string) ([]vocab.MotifCluster, error)
 	// ClustersUnder is Clusters narrowed to the facts under a path prefix: a
 	// cluster no fact there carries is ABSENT, and DF counts carriers in that
 	// subtree while DFTotal keeps the branch-wide figure. An empty prefix is
 	// exactly Clusters. Membership and CanonicalID stay branch-wide either way,
 	// so a scoped view never renames a cluster the unscoped one has already
 	// named.
-	ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error)
+	ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]vocab.MotifCluster, error)
 	// CarrierTitles returns up to limit titles of live facts carrying the
 	// cluster. The judge sees these: string-only clustering keeps
 	// adjacent-family false merges (§12-E3), and the titles are what expose it.
@@ -299,28 +301,28 @@ type MotifIndex interface {
 	// ClustersNeedingDefinition returns live clusters whose definition is
 	// missing or was authored over a different membership. Staleness is a
 	// comparison, not a flag — so it catches every cause of drift.
-	ClustersNeedingDefinition(ctx context.Context, branch string) ([]DefinitionTarget, error)
+	ClustersNeedingDefinition(ctx context.Context, branch string) ([]vocab.DefinitionTarget, error)
 	// PutDefinition stores a definition, stamped with the membership it was
 	// AUTHORED AGAINST — carried from the DefinitionTarget, not read at write
 	// time, so a merge applied between planning and applying cannot mark a
 	// pre-merge definition current. See DefinitionStamp for why the "I have no
 	// membership" case is a flag rather than an empty string.
-	PutDefinition(ctx context.Context, branch, clusterKey, definition string, stamp DefinitionStamp) error
+	PutDefinition(ctx context.Context, branch, clusterKey, definition string, stamp vocab.DefinitionStamp) error
 	// Definition returns a cluster's standing definition, INCLUDING a stale one
 	// — a stale sentence is used as interim rather than gapping the cluster.
 	Definition(ctx context.Context, branch, clusterKey string) (string, bool, error)
 	// Definitions is the bulk Definition + freshness for many clusters at once.
 	// Absent key = no definition. See MotifDefinitionStatus.
-	Definitions(ctx context.Context, branch string, keys []string) (map[string]MotifDefinitionStatus, error)
+	Definitions(ctx context.Context, branch string, keys []string) (map[string]vocab.MotifDefinitionStatus, error)
 	// VocabularyHealth computes the §3.3 metrics over AUTHORED facts only.
 	// Diagnostic; nothing branches on it.
-	VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error)
+	VocabularyHealth(ctx context.Context, branch string) (vocab.MotifVocabularyHealth, error)
 	// VocabularyHealthUnder is VocabularyHealth over the authored facts under a
 	// path prefix. An empty prefix is exactly VocabularyHealth. It exists so a
 	// scoped vocabulary view can report health for the SAME facts its list is
 	// counted over — a branch-wide strip beside a subtree-wide list would put
 	// two populations in one row.
-	VocabularyHealthUnder(ctx context.Context, branch, pathPrefix string) (MotifVocabularyHealth, error)
+	VocabularyHealthUnder(ctx context.Context, branch, pathPrefix string) (vocab.MotifVocabularyHealth, error)
 	// MotifCoverage reports how many live authored facts carry a motif, out of
 	// how many there are. Both counts come from one query over one denominator
 	// so they cannot disagree (knomit#124). The backlog term left with the
@@ -329,7 +331,7 @@ type MotifIndex interface {
 	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
 	// AliasRows returns the alias table with its audit columns (method and the
 	// merge rationale).
-	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)
+	AliasRows(ctx context.Context, branch string) (map[string]vocab.AliasRow, error)
 	// ClusterKey returns the STABLE identity of a spelling's cluster. Use this,
 	// never CanonicalID, to key state that must survive across sessions:
 	// CanonicalID is the highest-df member spelling and flips as usage shifts.
@@ -341,8 +343,8 @@ type MotifIndex interface {
 type AbstractionIndex interface {
 	// LiveFactsMissingTitleVector returns up to limit live epistemic facts on
 	// branch that have no title vector yet, lowest fact id first.
-	LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]TitleTarget, error)
-	PutTitleVectors(ctx context.Context, vecs []TitleVector) error
+	LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]vocab.TitleTarget, error)
+	PutTitleVectors(ctx context.Context, vecs []vocab.TitleVector) error
 	// TitleVectorCoverage reports (embedded, total) over live epistemic facts.
 	TitleVectorCoverage(ctx context.Context, branch string) (have, total int, err error)
 	// LiveEpistemicFacts is the live set, keyed by fact id with its path.
@@ -354,7 +356,7 @@ type AbstractionIndex interface {
 	// TopTitleNeighbours returns up to k live epistemic neighbours of factID on
 	// the axis, self excluded, most similar first. A fact with no vector yet
 	// returns nothing rather than an error.
-	TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]TitleNeighbour, error)
+	TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]vocab.TitleNeighbour, error)
 	// BodyVectorsByFactID returns STORED blended vectors from facts_vec.
 	BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
 
@@ -363,13 +365,13 @@ type AbstractionIndex interface {
 	// ReplaceRestatementPairs applies one cache delta atomically: pairs touching
 	// dropFactIDs are removed, add is inserted, and coveredNow is recorded as
 	// covered.
-	ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error
+	ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []vocab.RestatementPair, coveredNow []int64) error
 	// RestatementPairsByMatchKind returns the top `limit` pairs found by one of
 	// the named match kinds, ranked by title cosine WITHIN that population.
 	// Structurally matched pairs are near-certain duplicates whatever their
 	// titles score, so they cannot be reached through the cosine ranking that
 	// serves the title-KNN population.
-	RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error)
+	RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]vocab.RestatementPair, error)
 	// RestatementPairsByMatchKindOldest returns the `limit` OLDEST standing
 	// pairs of the named match kinds, by mint order rather than by cosine.
 	//
@@ -392,26 +394,26 @@ type AbstractionIndex interface {
 	// session, which churns every rowid and makes this ordering deterministic
 	// but not age-stable. Callers must SAY WHICH REGIME THEY ARE IN rather than
 	// claim an oldest-first guarantee they do not have.
-	RestatementPairsByMatchKindOldest(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error)
+	RestatementPairsByMatchKindOldest(ctx context.Context, branch string, kinds []string, limit int) ([]vocab.RestatementPair, error)
 	// TitleVectorsByFactID returns STORED title-axis vectors, keyed by fact id.
 	// Symmetric with BodyVectorsByFactID; nothing is re-embedded.
 	TitleVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
 	// LiveEpistemicFactTitles is LiveEpistemicFacts with the title, for the
 	// structural detection pass — which matches on what a fact SAYS IT IS
 	// rather than on where it sits in the vector space.
-	LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]LiveFactTitle, error)
+	LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]vocab.LiveFactTitle, error)
 	// RestatementPairsByRank returns the top `limit` pairs by title cosine.
-	RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error)
+	RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]vocab.RestatementPair, error)
 	// RestatementPairStats describes the standing population. Observability
 	// only — no branch reads these values.
-	RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error)
+	RestatementPairStats(ctx context.Context, branch string) (vocab.RestatementPairStats, error)
 
 	// RecordRestatementVerdict records what the judge did with one
 	// shortlist-originated pair.
-	RecordRestatementVerdict(ctx context.Context, branch string, v RestatementVerdict) error
+	RecordRestatementVerdict(ctx context.Context, branch string, v vocab.RestatementVerdict) error
 	// RecentRestatementVerdicts returns the last `window` verdicts, newest
 	// first — the input to the throttle.
-	RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error)
+	RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]vocab.RestatementVerdict, error)
 	// KeptPairFactIDs returns pairs the judge declined, keyed by FactIDPairKey.
 	// Consulted when MINTING pairs, so a declined pair is not re-created by a
 	// later neighbour rescan.
@@ -431,30 +433,9 @@ type AbstractionIndex interface {
 }
 
 // The implementation lives in the vocab child (internal/store/vocab,
-// abstraction.go). Its alias, its compile-time guard and the shortlist types
-// whose names carry the axis' vocabulary are declared HERE, not in
-// vocab_seam.go or interface_guards.go, because internal/synthesize
-// TestConformance_ReviewPipelineOnly lets only interfaces.go, service.go and
-// vocab/abstraction.go name them.
-type (
-	abstractionIndex     = vocab.AbstractionIndex
-	RestatementPair      = vocab.RestatementPair
-	RestatementPairStats = vocab.RestatementPairStats
-	RestatementVerdict   = vocab.RestatementVerdict
-)
-
-var _ AbstractionIndex = (*abstractionIndex)(nil)
-
-// Restatement pair match kinds — how a standing pair was found.
-const (
-	// MatchPathIdentity: their paths normalise to one identity — the same
-	// segment set, or one path's segments a subset of the other's, after
-	// casefolding, stemming, and ignoring a UUID filename.
-	MatchPathIdentity = "path-identity"
-	// MatchRareToken: they share a token that is rare in THIS corpus's own
-	// token distribution — an identifier, in practice.
-	MatchRareToken = "rare-token"
-)
+// abstraction.go), whose compile-time guard sits here so the review-pipeline
+// conformance scan keeps this file on its allowlist.
+var _ AbstractionIndex = (*vocab.AbstractionIndex)(nil)
 
 //go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 //go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder

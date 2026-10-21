@@ -4,6 +4,8 @@ import (
 	"sort"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -13,7 +15,7 @@ import (
 // asserts WHICH commits E4 refused, not merely that it refused something.
 func refusedSet(t *testing.T, err error) []string {
 	t.Helper()
-	var fl *ForeignLineageError
+	var fl *verify.ForeignLineageError
 	require.ErrorAs(t, err, &fl, "a foreign lineage must FAIL the create")
 	out := append([]string(nil), fl.Commits...)
 	sort.Strings(out)

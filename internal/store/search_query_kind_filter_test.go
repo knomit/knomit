@@ -6,6 +6,8 @@ import (
 	"sort"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -56,7 +58,7 @@ func seedMixedKindFacts(t *testing.T, branch string) *Service {
 	return svc
 }
 
-func pathsOfResults(rs []SearchResult) []string {
+func pathsOfResults(rs []index.SearchResult) []string {
 	out := make([]string, len(rs))
 	for i, r := range rs {
 		out[i] = r.Path
@@ -72,7 +74,7 @@ func TestSearchOptions_IncludeKinds_PragmaticOnly(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeKinds: []string{"pragmatic"},
 	})
 	require.NoError(t, err)
@@ -88,7 +90,7 @@ func TestSearchOptions_IncludeKinds_EpistemicOnly(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeKinds: []string{"epistemic"},
 	})
 	require.NoError(t, err)
@@ -103,7 +105,7 @@ func TestSearchOptions_IncludeKinds_Both(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeKinds: []string{"epistemic", "pragmatic"},
 	})
 	require.NoError(t, err)
@@ -118,7 +120,7 @@ func TestSearchOptions_IncludeKinds_Empty(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{})
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{})
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{"kb/heuristic/h.md", "kb/obs/a.md", "kb/policy/p.md"},
@@ -134,7 +136,7 @@ func TestSearchOptions_IncludeKinds_AndIncludeTypes(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
+	results, err := svc.Search().Search(context.Background(), branch, index.SearchOptions{
 		IncludeKinds: []string{"pragmatic"},
 		IncludeTypes: []string{"policy"},
 	})

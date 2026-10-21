@@ -5,6 +5,10 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/gitserve"
+
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -25,9 +29,9 @@ import (
 // every later push); "matches any base" accepts it.
 func TestReceivePack_CrissCrossMergeOfMainAccepted(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 1)
+	h := newPushHost(t, verify.VerifyOff, 1)
 	fp, branch := pusherOf(t, newTestSigner(t))
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch})
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch})
 	h.svc.SetSigner(newTestSigner(t))
 	p := newPeer(t, h.srv.URL)
 
@@ -35,7 +39,7 @@ func TestReceivePack_CrissCrossMergeOfMainAccepted(t *testing.T) {
 	p.setBranch("work", b)
 	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch))
 
-	changed := h.hostEditsOntology(VerifyOff) // M1 on main
+	changed := h.hostEditsOntology(verify.VerifyOff) // M1 on main
 	require.NoError(t, p.repo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}))
 	m1 := p.head()
 	require.Equal(t, changed, p.files(m1)[fact.OntologyFile])
@@ -57,16 +61,16 @@ func TestReceivePack_CrissCrossMergeOfMainAccepted(t *testing.T) {
 // newer main. c1 is still new on this push, so the branch stays wedged.
 func TestReceivePack_CrissCrossThenNewerMainAccepted(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 1)
+	h := newPushHost(t, verify.VerifyOff, 1)
 	fp, branch := pusherOf(t, newTestSigner(t))
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch})
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch})
 	h.svc.SetSigner(newTestSigner(t))
 	p := newPeer(t, h.srv.URL)
 
 	b := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
 	p.setBranch("work", b)
 	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+branch))
-	h.hostEditsOntology(VerifyOff)
+	h.hostEditsOntology(verify.VerifyOff)
 	require.NoError(t, p.repo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}))
 	m1 := p.head()
 	c1 := p.commitAs("peer-abcd1234", []*object.Commit{b, m1}, nil,
@@ -100,14 +104,14 @@ func TestReceivePack_CrissCrossThenNewerMainAccepted(t *testing.T) {
 // change to the host's agent branch.
 func TestReceivePack_AdoptedHostHeldTipMergeRefused(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 1)
+	h := newPushHost(t, verify.VerifyOff, 1)
 	fp, branch := pusherOf(t, newTestSigner(t))
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch})
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch})
 	h.svc.SetSigner(newTestSigner(t))
 
 	const legacy = "agent/legacy-11111111"
 	require.NoError(t, h.svc.Branches().CreateBranch(ctx, legacy, "main"))
-	evil := kbOntology(VerifyOff) + "# legacy edit\n"
+	evil := kbOntology(verify.VerifyOff) + "# legacy edit\n"
 	_, _, err := h.svc.Facts().WriteFileExactForTest(ctx, legacy, fact.OntologyFile, evil, "ontology", "edit", "")
 	require.NoError(t, err)
 

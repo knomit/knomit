@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/refs"
@@ -767,7 +769,7 @@ func applyDedupMerge(
 		// The directory is derived from the on-disk path so it carries the
 		// configured ontology root's real case.
 		categoryDir := categoryDirOf(paths[i])
-		sq := store.SearchOptions{
+		sq := index.SearchOptions{
 			Text:          f.Title + " " + f.Body,
 			Path:          categoryDir,
 			MinSimilarity: dedupThreshold,

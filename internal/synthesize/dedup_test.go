@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/store"
 
@@ -35,7 +37,7 @@ type ctxCapturingSearchIndex struct {
 	gotCtx context.Context
 }
 
-func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	s.mu.Lock()
 	s.called++
 	// First write wins. The doc comment above has always promised "the
@@ -184,7 +186,7 @@ func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 	}
 	idx := &fixedPairSearch{
 		SearchQuery: svc.Search(),
-		results: []store.SearchResult{
+		results: []index.SearchResult{
 			searchHit(winnerPath),
 			searchHit(loserPath),
 		},

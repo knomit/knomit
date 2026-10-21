@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
@@ -699,7 +701,7 @@ func (r *RepoHandle) MustVerify() { AssertIntegrity(r.sb.t, r) }
 
 // VerifyWith returns the report without asserting; caller inspects it.
 // Used by G-category tests that want to inspect specific issues.
-func (r *RepoHandle) VerifyWith(opts store.VerifyOpts) store.IntegrityReport {
+func (r *RepoHandle) VerifyWith(opts fsck.VerifyOpts) fsck.IntegrityReport {
 	report, err := r.ri.Verify(context.Background(), opts)
 	if err != nil {
 		r.sb.t.Fatalf("VerifyWith on repo %q: %v", r.name, err)

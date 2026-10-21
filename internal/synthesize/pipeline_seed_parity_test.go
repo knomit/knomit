@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // The seed scan has TWO paths to a fact.Fact — the full scan projects a search
@@ -51,7 +52,7 @@ func TestSeedScanPaths_ProduceTheSameFact(t *testing.T) {
 	require.NoError(t, err)
 
 	// Path 1 — the full scan's projection of a search hit.
-	results, err := env.svc.Search().Search(ctx, env.branch, store.SearchOptions{Limit: 100})
+	results, err := env.svc.Search().Search(ctx, env.branch, index.SearchOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	fromSearch := factFromSearchResult(results[0])

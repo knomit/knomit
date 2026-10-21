@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/store"
 )
 
@@ -18,7 +20,7 @@ func (f *FactHandle) Incoming() *EdgeView {
 	t := f.t
 	t.Helper()
 
-	var refs []store.RefSummary
+	var refs []index.RefSummary
 	var err error
 	f.branch.repo.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -38,7 +40,7 @@ func (f *FactHandle) Outgoing() *EdgeView {
 	t := f.t
 	t.Helper()
 
-	var refs []store.RefSummary
+	var refs []index.RefSummary
 	var err error
 	f.branch.repo.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -59,7 +61,7 @@ type EdgeView struct {
 	kind   string // "incoming" or "outgoing", for error messages
 	path   string
 	commit string
-	items  []store.RefSummary
+	items  []index.RefSummary
 }
 
 // MustHaveCount asserts the view has exactly n entries.

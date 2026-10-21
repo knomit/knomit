@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
@@ -247,12 +249,12 @@ value).`,
 				}
 				upstream = u
 			}
-			v, err := store.CheckRange(store.RangeInput{
+			v, err := verify.CheckRange(verify.RangeInput{
 				KBDir: dir, Main: upstream, Candidate: candidate,
 				FleetDir: fleet, FleetRev: fleetRev, FleetRoot: fleetRoot, KBRoot: kbRoot,
 			})
 			if err != nil {
-				if errors.Is(err, store.ErrNoFleet) {
+				if errors.Is(err, verify.ErrNoFleet) {
 					err = fmt.Errorf("%w: pass --fleet <fleet repository checkout>", err)
 				}
 				return &ExitCodeError{Code: exitFailed, Err: err}
@@ -264,7 +266,7 @@ value).`,
 				if err := enc.Encode(v); err != nil {
 					return &ExitCodeError{Code: exitFailed, Err: err}
 				}
-			} else if v.Mode == store.VerifyOff && len(v.Refused) == 0 {
+			} else if v.Mode == verify.VerifyOff && len(v.Refused) == 0 {
 				fmt.Fprintf(out, "verification is off in %s: no signature to check; every new fact keeps the ontology's validations\n", upstream)
 			} else {
 				fmt.Fprintf(out, "%s onto %s: mode %s, %d new commit(s), %d refused\n",

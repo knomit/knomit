@@ -6,6 +6,10 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/gitserve"
+
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -50,14 +54,14 @@ func TestMergeGuard_RefusesPrivateRevertMergesKB(t *testing.T) {
 	for name, mergeCall := range guardedMerges {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			h := newPushHost(t, VerifyOff, 1)
+			h := newPushHost(t, verify.VerifyOff, 1)
 			h.svc.SetSigner(newTestSigner(t))
 			old := h.branchFiles(hostBranch)[fact.OntologyFile]
 			fork := hostBranch + "-fork"
 			require.NoError(t, h.svc.Branches().CreateBranch(ctx, fork, hostBranch)) // pre-edit fork point
 
 			// The host's agent branch changes its ontology.
-			newer := kbOntology(VerifyOff) + "# host edit\n"
+			newer := kbOntology(verify.VerifyOff) + "# host edit\n"
 			_, _, err := h.svc.Facts().WriteFileExactForTest(ctx, hostBranch, fact.OntologyFile, newer, "ontology", "edit", "")
 			require.NoError(t, err)
 
@@ -107,10 +111,10 @@ func TestMergeGuard_RefusesPrivateRevertMergesKB(t *testing.T) {
 // takes the peer's version of a conflicting .knomit path is still refused.
 func TestMergeGuard_SideCannotOverrideIt(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 1)
+	h := newPushHost(t, verify.VerifyOff, 1)
 	h.svc.SetSigner(newTestSigner(t))
-	peer := h.branchWith("agent/peer-44444444", hostBranch, fact.OntologyFile, kbOntology(VerifyOff)+"# peer\n")
-	_, _, err := h.svc.Facts().WriteFileExactForTest(ctx, hostBranch, fact.OntologyFile, kbOntology(VerifyOff)+"# host\n", "o", "edit", "")
+	peer := h.branchWith("agent/peer-44444444", hostBranch, fact.OntologyFile, kbOntology(verify.VerifyOff)+"# peer\n")
+	_, _, err := h.svc.Facts().WriteFileExactForTest(ctx, hostBranch, fact.OntologyFile, kbOntology(verify.VerifyOff)+"# host\n", "o", "edit", "")
 	require.NoError(t, err)
 	tip := h.ref(hostBranch)
 	_, err = h.svc.MergePushed(ctx, "agent/peer-44444444", hostBranch, peer, merge.ResolveSrc)
@@ -122,9 +126,9 @@ func TestMergeGuard_SideCannotOverrideIt(t *testing.T) {
 // history) is compared with the EMPTY tree, so carrying any private path
 // refuses it; the same root commit without one is accepted.
 func TestReceivePack_ClosureUnrelatedHistoryEmptyTree(t *testing.T) {
-	h := newPushHost(t, VerifyOff, 1)
+	h := newPushHost(t, verify.VerifyOff, 1)
 	fp, branch := pusherOf(t, newTestSigner(t))
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch})
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch})
 	p := newPeer(t, h.srv.URL)
 	head := p.head()
 

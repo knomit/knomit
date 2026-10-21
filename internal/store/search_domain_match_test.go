@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -44,7 +46,7 @@ func TestSearch_DomainContainmentMatching(t *testing.T) {
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
-	paths := func(opts SearchOptions) map[string]bool {
+	paths := func(opts index.SearchOptions) map[string]bool {
 		res, err := svc.Search().Search(ctx, branch, opts)
 		require.NoError(t, err)
 		m := map[string]bool{}
@@ -56,24 +58,24 @@ func TestSearch_DomainContainmentMatching(t *testing.T) {
 
 	// Single token "ai" → the ai facet family (gov1, gov2, safety), NOT the
 	// vulnerabilities fact (no "ai" token).
-	got := paths(SearchOptions{Domain: []string{"ai"}})
+	got := paths(index.SearchOptions{Domain: []string{"ai"}})
 	require.True(t, got["kb/gov1.md"] && got["kb/gov2.md"] && got["kb/safety.md"],
 		"domain=ai must match all ai-tagged facts (containment), got %v", got)
 	require.False(t, got["kb/vuln.md"], "domain=ai must NOT match the vulnerabilities fact, got %v", got)
 
 	// Multi-token, order-independent, ALL required: "governance ai" → only the
 	// two governance facts, not safety.
-	got = paths(SearchOptions{Domain: []string{"governance ai"}})
+	got = paths(index.SearchOptions{Domain: []string{"governance ai"}})
 	require.True(t, got["kb/gov1.md"] && got["kb/gov2.md"], "governance ai must match both gov facts, got %v", got)
 	require.False(t, got["kb/safety.md"], "governance ai must NOT match ai safety, got %v", got)
 
 	// Case/hyphen-insensitive: "AI-Governance" canonicalises identically.
-	got = paths(SearchOptions{Domain: []string{"AI-Governance"}})
+	got = paths(index.SearchOptions{Domain: []string{"AI-Governance"}})
 	require.True(t, got["kb/gov1.md"] && got["kb/gov2.md"], "AI-Governance must match both gov facts, got %v", got)
 	require.False(t, got["kb/safety.md"], "AI-Governance must NOT match ai safety, got %v", got)
 
 	// Plural stemming: querying singular "vulnerability" matches "vulnerabilities".
-	got = paths(SearchOptions{Domain: []string{"vulnerability"}})
+	got = paths(index.SearchOptions{Domain: []string{"vulnerability"}})
 	require.True(t, got["kb/vuln.md"], "vulnerability must match the 'vulnerabilities' fact via stemming, got %v", got)
 }
 
@@ -207,7 +209,7 @@ func TestSearch_DomainMiddleSegmentSearchable(t *testing.T) {
 	mk("kb/mt.md", "Multi-Tenant Auth", []string{"multi-tenant/auth"}) // canonical: "multi tenant/auth"
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
-	paths := func(opts SearchOptions) map[string]bool {
+	paths := func(opts index.SearchOptions) map[string]bool {
 		res, err := svc.Search().Search(ctx, branch, opts)
 		require.NoError(t, err)
 		m := map[string]bool{}
@@ -218,12 +220,12 @@ func TestSearch_DomainMiddleSegmentSearchable(t *testing.T) {
 	}
 
 	for _, term := range []string{"tenant", "auth", "multi"} {
-		got := paths(SearchOptions{Domain: []string{term}})
+		got := paths(index.SearchOptions{Domain: []string{term}})
 		require.True(t, got["kb/mt.md"],
 			"domain=%q must match 'multi-tenant/auth' via its interior token, got %v", term, got)
 	}
 	// Slash-hierarchy descendant match still works for the leading segment.
-	got := paths(SearchOptions{Domain: []string{"multi tenant"}, DomainExact: false})
+	got := paths(index.SearchOptions{Domain: []string{"multi tenant"}, DomainExact: false})
 	require.True(t, got["kb/mt.md"], "multi tenant must still match, got %v", got)
 }
 
@@ -254,7 +256,7 @@ func TestSearch_DegenerateDomainFilterIsNoOp(t *testing.T) {
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
 	for _, junk := range []string{"---", "-", "   "} {
-		res, err := svc.Search().Search(ctx, branch, SearchOptions{Domain: []string{junk}})
+		res, err := svc.Search().Search(ctx, branch, index.SearchOptions{Domain: []string{junk}})
 		require.NoError(t, err)
 		found := false
 		for _, r := range res {

@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
-	"knomit/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +67,7 @@ func TestDedupCluster_SurvivorDoesNotCiteItself(t *testing.T) {
 			}
 			idx := &fixedPairSearch{
 				SearchQuery: svc.Search(),
-				results:     []store.SearchResult{searchHit(winnerPath), searchHit(loserPath)},
+				results:     []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)},
 			}
 
 			surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",

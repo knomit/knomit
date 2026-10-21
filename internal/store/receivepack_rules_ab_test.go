@@ -6,6 +6,10 @@ import (
 	"regexp"
 	"testing"
 
+	"knomit/internal/store/gitserve"
+
+	"knomit/internal/store/fleetrec"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -75,7 +79,7 @@ func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 	extra["kb/members/rogue/1.md"] = memberFile("rogue", fact.MemberActive, r.PublicKey())
 	h := newFleetPushHost(t, extra)
 	fleetCalls := 0
-	h.setPolicy(PushPolicy{OwnBranch: hostBranch})
+	h.setPolicy(gitserve.PushPolicy{OwnBranch: hostBranch})
 
 	cases := []struct {
 		id   string
@@ -83,9 +87,9 @@ func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 		want string
 	}{
 		{"joiner", "", ""},
-		{"gone", "", RuleRevoked},
-		{"stranger", "", RuleNoRecord},
-		{"rogue", "kb/members/boss/2.md", RuleNotOwner},
+		{"gone", "", verify.RuleRevoked},
+		{"stranger", "", verify.RuleNoRecord},
+		{"rogue", "kb/members/boss/2.md", verify.RuleNotOwner},
 	}
 	signers := map[string]ssh.Signer{"joiner": j, "gone": g, "stranger": z, "rogue": r}
 	for i, tc := range cases {
@@ -101,7 +105,7 @@ func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 		peer.setBranch("work", c)
 		fp, _ := pusherOf(t, signer)
 		branch := "agent/case-" + string(rune('a'+i))
-		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (Fleet, error) {
+		h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (fleetrec.Fleet, error) {
 			fleetCalls++
 			return h.svc.FleetAt("main")
 		}})
@@ -120,10 +124,10 @@ func TestReceivePack_RulesABMatchCheckRange(t *testing.T) {
 			require.Equal(t, plumbing.ZeroHash, h.ref(branch), "%s: a refused branch is not created", tc.id)
 		}
 
-		v, err := CheckRange(RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: c.Hash.String(),
+		v, err := verify.CheckRange(verify.RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: c.Hash.String(),
 			FleetDir: dir, FleetRev: "refs/remotes/origin/main"})
 		require.NoError(t, err)
-		require.Equal(t, VerifyEnforce, v.Mode)
+		require.Equal(t, verify.VerifyEnforce, v.Mode)
 		require.Equal(t, 1, v.Checked, tc.id)
 		gateRule := ""
 		if len(v.Refused) > 0 {
@@ -163,7 +167,7 @@ func TestReceivePack_CleanMergeSignatureStates(t *testing.T) {
 		gate   string // CheckRange verdict
 	}{
 		{"a bad signature", r, true, "", ""},
-		{"a verifying signature by another member", boss, false, RuleNotPusher, ""},
+		{"a verifying signature by another member", boss, false, verify.RuleNotPusher, ""},
 	}
 	ran := 0
 	for i, tc := range cases {
@@ -181,7 +185,7 @@ func TestReceivePack_CleanMergeSignatureStates(t *testing.T) {
 		require.True(t, v3.OK, "%s: fixture: the merge is M3-clean", tc.name)
 		peer.setBranch("work", m)
 		branch := "agent/sig-" + string(rune('a'+i))
-		h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (Fleet, error) {
+		h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (fleetrec.Fleet, error) {
 			return h.svc.FleetAt("main")
 		}})
 
@@ -199,7 +203,7 @@ func TestReceivePack_CleanMergeSignatureStates(t *testing.T) {
 			require.Equal(t, plumbing.ZeroHash, h.ref(branch), "%s: a refused branch is not created", tc.name)
 		}
 
-		v, err := CheckRange(RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: m.Hash.String(),
+		v, err := verify.CheckRange(verify.RangeInput{KBDir: dir, Main: "refs/remotes/origin/main", Candidate: m.Hash.String(),
 			FleetDir: dir, FleetRev: "refs/remotes/origin/main"})
 		require.NoError(t, err)
 		require.Equal(t, 3, v.Checked, tc.name)

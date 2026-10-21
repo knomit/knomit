@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"knomit/internal/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -29,7 +31,7 @@ func lostHashes(l []remotesync.LostCommit) []string {
 // still on the branch -> red.
 func TestDrop_TheForeignRefusalListsWhatLeavingTheMergeOutLosesAndTheConfirmedFallbackDoesIt(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md", "kb/notes/other.md") // authored "side"
 	merge := h.ref(hostBranch)
@@ -72,7 +74,7 @@ func TestDrop_TheForeignRefusalListsWhatLeavingTheMergeOutLosesAndTheConfirmedFa
 // SABOTAGE: drop the LeaveOut list from the merge refusal -> red.
 func TestDrop_TheMergeRefusalOffersLeavingTheMergeOut(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md")
 	m := h.ref(hostBranch)
@@ -97,7 +99,7 @@ func TestDrop_TheMergeRefusalOffersLeavingTheMergeOut(t *testing.T) {
 // -> other.md ends at its first version -> red.
 func TestDrop_AnUnfoldedSideIsReplayedParentsFirst(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	require.NoError(t, h.svc.Branches().CreateBranch(ctx, "agent/side", hostBranch))
 	var side []plumbing.Hash

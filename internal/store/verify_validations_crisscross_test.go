@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 
@@ -52,7 +54,7 @@ func TestValidation_ACrissCrossCannotSmuggleAnInvalidFact(t *testing.T) {
 			}
 			P := f.commit(f.kb, with(base, "kb/notes/x.md", good, "kb/notes/y.md", y), "agent-x", nil, K1, K2)
 			f.ref(f.kb, "cand", P)
-			v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+			v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 			require.NoError(t, err)
 			require.Equal(t, 0, v.ExitCode(), "PR 1 is valid: %+v", v.Refused)
 			f.ref(f.kb, "main", P)
@@ -62,10 +64,10 @@ func TestValidation_ACrissCrossCannotSmuggleAnInvalidFact(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, bases, 2, "fixture: a criss-cross")
 			f.ref(f.kb, "cand", T)
-			v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+			v, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 			require.NoError(t, err)
 			require.Equal(t, 1, v.ExitCode(), "PR 2 must be refused: %+v", v.Refused)
-			require.Equal(t, RuleValidation, v.Refused[0].Rule)
+			require.Equal(t, verify.RuleValidation, v.Refused[0].Rule)
 			require.Contains(t, v.Refused[0].Reason, "kb/notes/x.md")
 		})
 	}
@@ -87,7 +89,7 @@ func TestValidation_APushOntoAHeldInvalidIntermediateIsRefused(t *testing.T) {
 	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch))
 	p.setBranch("work", bad)
 	err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch)
-	require.Equal(t, RuleValidation, pushRefusal(t, err))
+	require.Equal(t, verify.RuleValidation, pushRefusal(t, err))
 	require.Equal(t, fixed.Hash, h.ref(peerBranch), "the ref stays at the admitted tip")
 }
 
@@ -109,9 +111,9 @@ func TestValidation_TheRefusalNamesANonMergeWriter(t *testing.T) {
 	C := f.commit(f.kb, with(base, "kb/notes/x.md", note("x", "c")), "agent-x", nil, B)
 	M := f.commit(f.kb, with(base, "kb/notes/x.md", bad), "agent-x", nil, B, C)
 	f.ref(f.kb, "cand", M)
-	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
-	require.Equal(t, RuleValidation, v.Refused[0].Rule)
+	require.Equal(t, verify.RuleValidation, v.Refused[0].Rule)
 	require.Equal(t, A.Hash.String(), v.Refused[0].Commit)
 }
 
@@ -137,8 +139,8 @@ func TestValidation_TheRefusalNamesTheLatestWriterByTopology(t *testing.T) {
 	C := f.commit(f.kb, with(base, "kb/notes/x.md", bad), "agent-x", nil, B)
 	require.True(t, A.Committer.When.After(C.Committer.When), "fixture: A is dated after C")
 	f.ref(f.kb, "cand", C)
-	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
-	require.Equal(t, RuleValidation, v.Refused[0].Rule)
+	require.Equal(t, verify.RuleValidation, v.Refused[0].Rule)
 	require.Equal(t, C.Hash.String(), v.Refused[0].Commit)
 }

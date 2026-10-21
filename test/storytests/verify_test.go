@@ -17,6 +17,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -42,7 +44,7 @@ func TestVerify_CleanRepoIsClean(t *testing.T) {
 
 	r.MustVerify() // fails on any Error
 
-	rep := r.VerifyWith(store.VerifyOpts{Deep: true})
+	rep := r.VerifyWith(fsck.VerifyOpts{Deep: true})
 	require.True(t, rep.IsStrictlyClean(), "strictly clean: no errors, no warnings: %v", rep.Issues)
 }
 
@@ -71,9 +73,9 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	r.CorruptObject(res.BlobHash)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
+	rep := r.VerifyWith(fsck.VerifyOpts{})
 	require.False(t, rep.IsClean())
-	requireIssue(t, rep, store.CategoryGitReachability, "")
+	requireIssue(t, rep, fsck.CategoryGitReachability, "")
 }
 
 // ── G3 ────────────────────────────────────────────────────────────────────
@@ -102,9 +104,9 @@ func TestVerify_DetectsCommitLogGap(t *testing.T) {
 	require.NoError(t, err)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
+	rep := r.VerifyWith(fsck.VerifyOpts{})
 	require.False(t, rep.IsClean())
-	requireIssue(t, rep, store.CategoryCommitLog, "")
+	requireIssue(t, rep, fsck.CategoryCommitLog, "")
 }
 
 // ── G4 ────────────────────────────────────────────────────────────────────
@@ -125,8 +127,8 @@ func TestVerify_DetectsFactsCoherenceGap(t *testing.T) {
 	require.NoError(t, err)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
-	requireIssue(t, rep, store.CategoryFactsCoherence, "kb/x.md")
+	rep := r.VerifyWith(fsck.VerifyOpts{})
+	requireIssue(t, rep, fsck.CategoryFactsCoherence, "kb/x.md")
 }
 
 // ── G5 ────────────────────────────────────────────────────────────────────
@@ -146,8 +148,8 @@ func TestVerify_DetectsFactsCoherenceBlobMismatch(t *testing.T) {
 	require.NoError(t, err)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
-	requireIssue(t, rep, store.CategoryFactsCoherence, "kb/x.md")
+	rep := r.VerifyWith(fsck.VerifyOpts{})
+	requireIssue(t, rep, fsck.CategoryFactsCoherence, "kb/x.md")
 }
 
 // ── G6 ────────────────────────────────────────────────────────────────────
@@ -168,19 +170,19 @@ func TestVerify_DeepCatchesFactFormat(t *testing.T) {
 	r.RawGitWrite("agent/test", "kb/bad.md", badContent, "add malformed")
 	r.ExpectDirty()
 
-	deep := r.VerifyWith(store.VerifyOpts{Deep: true})
+	deep := r.VerifyWith(fsck.VerifyOpts{Deep: true})
 	foundWarn := false
 	for _, issue := range deep.Issues {
-		if issue.Category == store.CategoryFactFormat && issue.Severity == store.SeverityWarning && issue.Path == "kb/bad.md" {
+		if issue.Category == fsck.CategoryFactFormat && issue.Severity == fsck.SeverityWarning && issue.Path == "kb/bad.md" {
 			foundWarn = true
 			break
 		}
 	}
 	require.True(t, foundWarn, "Deep verify must report fact-format Warning: %v", deep.Issues)
 
-	shallow := r.VerifyWith(store.VerifyOpts{Deep: false})
+	shallow := r.VerifyWith(fsck.VerifyOpts{Deep: false})
 	for _, issue := range shallow.Issues {
-		require.NotEqual(t, store.CategoryFactFormat, issue.Category,
+		require.NotEqual(t, fsck.CategoryFactFormat, issue.Category,
 			"shallow verify must not run fact-format check")
 	}
 }
@@ -207,10 +209,10 @@ func TestVerify_SurvivesMultipleRepos(t *testing.T) {
 	require.NoError(t, err)
 	a.ExpectDirty()
 
-	aRep := a.VerifyWith(store.VerifyOpts{})
+	aRep := a.VerifyWith(fsck.VerifyOpts{})
 	require.False(t, aRep.IsClean(), "A should be dirty")
 
-	bRep := b.VerifyWith(store.VerifyOpts{})
+	bRep := b.VerifyWith(fsck.VerifyOpts{})
 	require.True(t, bRep.IsClean(), "B should stay clean: %v", bRep.Issues)
 }
 
@@ -234,9 +236,9 @@ func TestVerify_DetectsMissingEmbedding(t *testing.T) {
 	require.NoError(t, err)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
+	rep := r.VerifyWith(fsck.VerifyOpts{})
 	require.False(t, rep.IsClean())
-	requireIssue(t, rep, store.CategoryEmbeddingsCoverage, "")
+	requireIssue(t, rep, fsck.CategoryEmbeddingsCoverage, "")
 }
 
 // ── G9 ────────────────────────────────────────────────────────────────────
@@ -274,19 +276,19 @@ func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 	require.NoError(t, err)
 	r.ExpectDirty()
 
-	rep := r.VerifyWith(store.VerifyOpts{})
+	rep := r.VerifyWith(fsck.VerifyOpts{})
 	require.False(t, rep.IsClean())
-	requireIssue(t, rep, store.CategoryGraphCoherence, "kb/x.md")
+	requireIssue(t, rep, fsck.CategoryGraphCoherence, "kb/x.md")
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
 // requireIssue asserts the report contains at least one Error-severity
 // issue with the given category and (if non-empty) path.
-func requireIssue(t *testing.T, rep store.IntegrityReport, category, path string) {
+func requireIssue(t *testing.T, rep fsck.IntegrityReport, category, path string) {
 	t.Helper()
 	for _, issue := range rep.Issues {
-		if issue.Severity != store.SeverityError {
+		if issue.Severity != fsck.SeverityError {
 			continue
 		}
 		if issue.Category != category {

@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // testLocalRepoID is a well-formed 12-hex repo id. It is a REAL id shape, not
@@ -273,7 +274,7 @@ func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 			{File: "b.md", Domain: []string{"billing"}, Entities: []string{"Payment"},
 				LineageRefs: localFactRefPaths(childRefs, testLocalRepoID)},
 		}
-		g := store.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
+		g := index.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
 		clusters := ClusterResult{Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}}}
 
 		idx := NewMockSearchIndex(ctrl)
@@ -391,14 +392,14 @@ func TestBridgeLineage_BackwardProjectionExcludesLineagePair(t *testing.T) {
 		m := NewMockSearchIndex(gomock.NewController(t))
 		expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
 		m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+			DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 				pairs := make([][2]string, 0)
 				for i := 0; i < len(paths); i++ {
 					for j := i + 1; j < len(paths); j++ {
 						pairs = append(pairs, [2]string{paths[i], paths[j]})
 					}
 				}
-				return store.NewSimilarityGraph(pairs), nil
+				return index.NewSimilarityGraph(pairs), nil
 			}).AnyTimes()
 		m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
 			Return(map[string]struct{}{}, nil).AnyTimes()

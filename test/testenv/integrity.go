@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/fsck"
 )
 
 // AssertIntegrity runs Verify(Deep: true) against r's RepoInstance and fails
@@ -12,7 +12,7 @@ import (
 // (they don't affect IsClean).
 func AssertIntegrity(t *testing.T, r *RepoHandle) {
 	t.Helper()
-	report, err := r.ri.Verify(context.Background(), store.VerifyOpts{Deep: true})
+	report, err := r.ri.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	if err != nil {
 		t.Fatalf("verify on repo %q errored: %v", r.name, err)
 	}

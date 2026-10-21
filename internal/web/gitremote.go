@@ -5,11 +5,12 @@ import (
 	"net/http"
 	"strings"
 
+	"knomit/internal/store/gitserve"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/auth"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // gitHTTPProvider is the narrow interface GitRemoteHandler needs — just the
@@ -106,7 +107,7 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 		u2.RawPath = ""
 		ctx := r.Context()
 		if isGitPush(r) {
-			ctx = store.WithPushPolicy(ctx, pushPolicy(r, rm, ri))
+			ctx = gitserve.WithPushPolicy(ctx, pushPolicy(r, rm, ri))
 		}
 		r2 := r.WithContext(ctx)
 		r2.URL = &u2
@@ -121,9 +122,9 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 // Anonymous, socket and operator principals cannot push, and bearer tokens
 // never reach /git (the OAuth listener mounts no /git). The whole-request
 // refusals are decided here, where the principal and the repo are.
-func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) store.PushPolicy {
+func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) gitserve.PushPolicy {
 	p, _ := auth.FromContext(r.Context())
-	pol := store.PushPolicy{
+	pol := gitserve.PushPolicy{
 		OwnBranch: ri.AgentBranch(),
 		Fleet:     rm.FleetAtMain,
 		Judged:    rm.FleetPushJudged(ri),

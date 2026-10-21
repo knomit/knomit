@@ -12,9 +12,10 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
 	"knomit/test/testenv"
 )
 
@@ -254,6 +255,6 @@ func TestIndex_VerifyDetectsMissingEmbedding(t *testing.T) {
 	// Mark dirty so the Storyboard teardown doesn't re-verify.
 	repo.ExpectDirty()
 
-	rep := repo.VerifyWith(store.VerifyOpts{})
-	requireIssue(t, rep, store.CategoryEmbeddingsCoverage, "kb/x.md")
+	rep := repo.VerifyWith(fsck.VerifyOpts{})
+	requireIssue(t, rep, fsck.CategoryEmbeddingsCoverage, "kb/x.md")
 }

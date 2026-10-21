@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
@@ -20,7 +22,6 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/pki"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -264,7 +265,7 @@ func TestFleetStatus_LastErrorCommitRefusedIsTheJudgesRefusal(t *testing.T) {
 	ctx := context.Background()
 	m := newFleetHost(t, t.TempDir(), nil)
 	db := m.ControlDB()
-	judged := errors.New("Push: knomit: commit 5a6d21e8 " + store.CommitRefusedByJudge +
+	judged := errors.New("Push: knomit: commit 5a6d21e8 " + verify.CommitRefusedByJudge +
 		": host-record: agent \"alpha\" changes artifacts/fleet/host: only the fleet's master writes where the fleet is hosted")
 	for _, row := range []struct {
 		err     error
@@ -438,12 +439,12 @@ func TestCreateFleet_ForgeRootFirstThenMainPublished(t *testing.T) {
 	require.Equal(t, []string{"https://fleet-host.example:19279/git/fleet"}, st.Host.WouldServe,
 		"the master on a forge: the URLs members would use if it hosted the fleet here")
 
-	v, err := store.CheckRange(store.RangeInput{
+	v, err := verify.CheckRange(verify.RangeInput{
 		KBDir: bare, Main: hs[1].hash, Candidate: "refs/heads/main",
 		FleetDir: bare, FleetRev: "refs/heads/main",
 	})
 	require.NoError(t, err)
-	require.Equal(t, store.VerifyEnforce, v.Mode, "the fleet ontology declares enforce")
+	require.Equal(t, verify.VerifyEnforce, v.Mode, "the fleet ontology declares enforce")
 	require.Equal(t, 5, v.Checked, "root, leaf, record, host and master-marker commits")
 	require.Empty(t, v.Refused)
 }

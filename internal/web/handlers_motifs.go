@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -19,18 +22,18 @@ import (
 // on. Every method is a straight pass-through to store.MotifIndex — the seam
 // exists for test injection, mirroring domainsProvider.
 type motifsProvider interface {
-	Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]store.MotifCluster, error)
-	Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]store.MotifDefinitionStatus, error)
-	VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.MotifVocabularyHealth, error)
-	AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]store.AliasRow, error)
+	Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error)
+	Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]vocab.MotifDefinitionStatus, error)
+	VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (vocab.MotifVocabularyHealth, error)
+	AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]vocab.AliasRow, error)
 	ClusterKey(ctx context.Context, ri *repos.RepoInstance, branch, motif string) (string, error)
 }
 
 type defaultMotifsProvider struct{}
 
-func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]store.MotifCluster, error) {
+func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error) {
 	var (
-		out []store.MotifCluster
+		out []vocab.MotifCluster
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -42,9 +45,9 @@ func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstanc
 	return out, err
 }
 
-func (defaultMotifsProvider) Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]store.MotifDefinitionStatus, error) {
+func (defaultMotifsProvider) Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]vocab.MotifDefinitionStatus, error) {
 	var (
-		out map[string]store.MotifDefinitionStatus
+		out map[string]vocab.MotifDefinitionStatus
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -56,9 +59,9 @@ func (defaultMotifsProvider) Definitions(ctx context.Context, ri *repos.RepoInst
 	return out, err
 }
 
-func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.MotifVocabularyHealth, error) {
+func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (vocab.MotifVocabularyHealth, error) {
 	var (
-		out store.MotifVocabularyHealth
+		out vocab.MotifVocabularyHealth
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -70,9 +73,9 @@ func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.Rep
 	return out, err
 }
 
-func (defaultMotifsProvider) AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]store.AliasRow, error) {
+func (defaultMotifsProvider) AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]vocab.AliasRow, error) {
 	var (
-		out map[string]store.AliasRow
+		out map[string]vocab.AliasRow
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -167,7 +170,7 @@ type motifsView struct {
 }
 
 // definitionState renders a cluster's Definitions lookup as the wire enum.
-func definitionState(st store.MotifDefinitionStatus, ok bool) string {
+func definitionState(st vocab.MotifDefinitionStatus, ok bool) string {
 	switch {
 	case !ok:
 		return "missing"
@@ -253,7 +256,7 @@ func motifCollectionQuery(w http.ResponseWriter, r *http.Request) (motifCollecti
 }
 
 // motifClusterKeys is the bulk-Definitions argument for a cluster list.
-func motifClusterKeys(clusters []store.MotifCluster) []string {
+func motifClusterKeys(clusters []vocab.MotifCluster) []string {
 	keys := make([]string, len(clusters))
 	for i, c := range clusters {
 		keys[i] = c.ClusterKey
@@ -272,15 +275,15 @@ func motifClusterKeys(clusters []store.MotifCluster) []string {
 // meaning: a key absent from it has no definition at all.
 func renderMotifCollection(
 	w http.ResponseWriter, r *http.Request, base string,
-	clusters []store.MotifCluster, defs map[string]store.MotifDefinitionStatus,
-	health store.MotifVocabularyHealth, p motifCollectionParams,
+	clusters []vocab.MotifCluster, defs map[string]vocab.MotifDefinitionStatus,
+	health vocab.MotifVocabularyHealth, p motifCollectionParams,
 ) {
 	if q := strings.ToLower(strings.TrimSpace(p.q)); q != "" {
 		// A NEW slice, never clusters[:0]: filtering in place rewrites the
 		// backing array the provider handed over, so a provider that
 		// returns a cached or shared slice would be silently corrupted by
 		// a read request.
-		kept := make([]store.MotifCluster, 0, len(clusters))
+		kept := make([]vocab.MotifCluster, 0, len(clusters))
 		for _, c := range clusters {
 			if motifClusterMatches(c, defs[c.ClusterKey].Definition, q) {
 				kept = append(kept, c)
@@ -295,7 +298,7 @@ func renderMotifCollection(
 	if p.sort == "name" {
 		// Same reasoning as the narrowing above: sort a copy, never the
 		// provider's own slice.
-		sorted := make([]store.MotifCluster, len(clusters))
+		sorted := make([]vocab.MotifCluster, len(clusters))
 		copy(sorted, clusters)
 		clusters = sorted
 		sort.Slice(clusters, func(i, j int) bool {
@@ -402,7 +405,7 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 
 // motifClusterMatches reports whether q (already lowercased) occurs in any
 // member spelling or in the cluster's definition.
-func motifClusterMatches(c store.MotifCluster, definition, q string) bool {
+func motifClusterMatches(c vocab.MotifCluster, definition, q string) bool {
 	for _, m := range c.Members {
 		if strings.Contains(strings.ToLower(m), q) {
 			return true
@@ -508,7 +511,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
 		}
-		byKey := make(map[string]store.MotifCluster, len(clusters))
+		byKey := make(map[string]vocab.MotifCluster, len(clusters))
 		for _, c := range clusters {
 			byKey[c.ClusterKey] = c
 		}
@@ -541,9 +544,9 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 		// cannot disagree with the full listing it links to. Passing every
 		// member spelling keeps the union correct on an unrebuilt corpus,
 		// where exact-tier resolution knows nothing about siblings (C2).
-		entries, total, err := facts.RecentFacts(r.Context(), ri, branch, store.SearchOptions{
+		entries, total, err := facts.RecentFacts(r.Context(), ri, branch, index.SearchOptions{
 			Motifs:     cluster.Members,
-			MotifMatch: store.MotifMatchExact,
+			MotifMatch: index.MotifMatchExact,
 			Limit:      carrierLimit,
 		})
 		if err != nil {
@@ -582,7 +585,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 		motifsBase := b.Branch(repoName, a) + "/motifs"
 		pivot := url.Values{}
 		pivot.Set("motifs", strings.Join(cluster.Members, ","))
-		pivot.Set("motif_match", string(store.MotifMatchExact))
+		pivot.Set("motif_match", string(index.MotifMatchExact))
 
 		hal.WriteHAL(w, http.StatusOK, motifDetailView{
 			ClusterKey:      cluster.ClusterKey,

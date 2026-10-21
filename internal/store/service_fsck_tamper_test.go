@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 )
 
@@ -57,6 +59,6 @@ func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
 			JOIN node_props_text b ON b.node_id = nl.node_id
 			JOIN property_keys kb ON kb.id = b.key_id AND kb.key = 'blob_hash'
 			WHERE nl.label = ? AND p.value = ? AND b.value = ?
-		)`, NodeFact, path, blobHash)
+		)`, index.NodeFact, path, blobHash)
 	return err
 }

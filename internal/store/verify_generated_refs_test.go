@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +25,7 @@ func TestVerify_NoGeneratedRefs(t *testing.T) {
 		testFactBody("A", 0.9, nil), "seed", "learn")
 	require.NoError(t, err)
 
-	report, err := svc.Verify(ctx, VerifyOpts{})
+	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.Empty(t, report.Issues, "a healthy repo must verify clean")
 	require.Equal(t, []string{"main"}, report.Branches, "no generated refs may appear as branches")

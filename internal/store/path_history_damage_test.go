@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -81,7 +83,7 @@ func TestPathHistory_MissingBlobIsContentUnavailable(t *testing.T) {
 	svc = reopen(t, svc, dbPath)
 	revs := fullHistory(t, svc, "main", "kb/t.md", c[2])
 	require.Equal(t, reversed(c), historyCommits(revs))
-	byCommit := map[string]FactRevision{}
+	byCommit := map[string]index.FactRevision{}
 	for _, r := range revs {
 		byCommit[r.Commit] = r
 	}

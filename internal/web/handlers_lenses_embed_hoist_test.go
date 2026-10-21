@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/embeddings/params"
-	"knomit/internal/store"
 )
 
 // countingEmbedder answers every query with the same fixed vector and counts
@@ -65,7 +66,7 @@ func newCountingEmbedder() *countingEmbedder {
 // different size.
 func TestLensSearch_EmbedsQueryOncePerRequest_NotPerMount(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		"alpha": {sr("kb/a/1.md", "Write fact", 9)},
 		"beta":  {sr("kb/b/2.md", "Read fact", 8)},
 		"gamma": {sr("kb/g/3.md", "Other fact", 7)},
@@ -134,7 +135,7 @@ func TestLensSearch_EveryMountGetsTheSameQueryVector(t *testing.T) {
 //     the pre- and post-change binaries against the same corpus, byte-for-byte
 //     identical (see the branch's measurement writeup).
 func TestLensSearch_HoistedEmbedMatchesPerMountEmbed(t *testing.T) {
-	rows := map[string][]store.SearchResult{
+	rows := map[string][]index.SearchResult{
 		"alpha": {sr("kb/a/1.md", "A one", 3), sr("kb/shared.md", "Shadowed", 99)},
 		"beta":  {sr("kb/shared.md", "Winner-shadowed copy", 50), sr("kb/b/2.md", "B two", 1)},
 	}
@@ -221,7 +222,7 @@ func float32SliceEqual(a, b []float32) bool {
 // still wins that path, and the fused order is unchanged.
 func TestLensSearch_FusionIsBindingOrderNotCompletionOrder(t *testing.T) {
 	stub := &lensSearchStub{
-		byRepo: map[string][]store.SearchResult{
+		byRepo: map[string][]index.SearchResult{
 			"alpha": {sr("kb/shared.md", "write copy", 1), sr("kb/a.md", "alpha only", 2)},
 			"beta":  {sr("kb/shared.md", "read copy", 99), sr("kb/b.md", "beta only", 98)},
 		},
@@ -257,7 +258,7 @@ func TestLensSearch_FusionIsBindingOrderNotCompletionOrder(t *testing.T) {
 // whole request, even when the healthy mounts are still in flight.
 func TestLensSearch_MountErrorFailsWholeRequestUnderConcurrency(t *testing.T) {
 	stub := &lensSearchStub{
-		byRepo:      map[string][]store.SearchResult{"alpha": {sr("kb/a.md", "alpha", 1)}},
+		byRepo:      map[string][]index.SearchResult{"alpha": {sr("kb/a.md", "alpha", 1)}},
 		errRepo:     "beta",
 		delayByRepo: map[string]time.Duration{"alpha": 40 * time.Millisecond},
 	}

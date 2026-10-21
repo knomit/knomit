@@ -1,6 +1,7 @@
 package store
 
 import (
+	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
 )
 
@@ -20,9 +21,9 @@ var _ PipelineIndex = (*sessions.PipelineIndex)(nil)
 var _ ToolSessionIndex = (*sessions.ToolIndex)(nil)
 
 var (
-	_ FactQuery          = (*factQuery)(nil)
-	_ GraphStore         = (*graphStore)(nil)
-	_ HistoryQuery       = (*historyQuery)(nil)
-	_ MethodologyMatcher = (*methodologyMatcher)(nil)
-	_ SearchIndex        = (*searchFacade)(nil)
+	_ FactQuery          = (*index.FactQuery)(nil)
+	_ GraphStore         = (*index.GraphStore)(nil)
+	_ HistoryQuery       = (*index.HistoryQuery)(nil)
+	_ MethodologyMatcher = (*index.MethodologyMatcher)(nil)
+	_ SearchIndex        = (*index.Facade)(nil)
 )

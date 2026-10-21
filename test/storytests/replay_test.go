@@ -20,9 +20,10 @@ package storytests
 import (
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
 	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
@@ -178,6 +179,6 @@ func TestReplay_ResultIsIntegral(t *testing.T) {
 
 	dst.MergeFrom(src, merge.StrategyLocalWins)
 
-	rep := repo.VerifyWith(store.VerifyOpts{Deep: true})
+	rep := repo.VerifyWith(fsck.VerifyOpts{Deep: true})
 	require.True(t, rep.IsStrictlyClean(), "post-merge repo must be strictly clean: %v", rep.Issues)
 }

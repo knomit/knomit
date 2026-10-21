@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/gitserve"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
@@ -224,7 +226,7 @@ func TestCheckRange_MalformedTreeRefused(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Checked, kind)
 		got := onlyRefusal(t, v)
-		require.Equal(t, RuleMalformedTree, got.Rule, kind)
+		require.Equal(t, verify.RuleMalformedTree, got.Rule, kind)
 		require.Equal(t, mc.Hash.String(), got.Commit, kind)
 		require.Contains(t, got.Reason, "kb/zz-bogus", kind)
 		ran++
@@ -237,7 +239,7 @@ func TestCheckRange_MalformedTreeRefused(t *testing.T) {
 	mc := bogusMergeOf(t, f.fleet.Storer, main2, main, repoOn(t, f.fleet.Storer).blob("payload"))
 	f.ref(f.fleet, "cand", mc)
 	got := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleMalformedTree, got.Rule, "fleet repository")
+	require.Equal(t, verify.RuleMalformedTree, got.Rule, "fleet repository")
 	require.Contains(t, got.Reason, "kb/zz-bogus")
 }
 
@@ -266,7 +268,7 @@ func TestCheckRange_MalformedTreeInTheOwnFolder(t *testing.T) {
 	evil := bogusOwnFolderCommit(t, f, main, x)
 	f.ref(f.fleet, "cand", evil)
 	got := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleMalformedTree, got.Rule)
+	require.Equal(t, verify.RuleMalformedTree, got.Rule)
 	require.Equal(t, evil.Hash.String(), got.Commit)
 	require.Contains(t, got.Reason, "kb/members/agent-x/zz")
 
@@ -282,7 +284,7 @@ func TestCheckRange_MalformedTreeInTheOwnFolder(t *testing.T) {
 	f.ref(f.fleet, "main", evil)
 	next := f.commit(f.fleet, with(base, "kb/members/boss/1.md", base["kb/members/boss/1.md"]+"\nv2\n"), "boss", boss, evil)
 	f.ref(f.fleet, "cand", next)
-	_, err = CheckRange(RangeInput{KBDir: f.fleetDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	_, err = verify.CheckRange(verify.RangeInput{KBDir: f.fleetDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.Error(t, err, "the gate cannot run on a fleet whose tree is malformed")
 	require.Contains(t, err.Error(), "kb/members/agent-x/zz")
 }
@@ -331,7 +333,7 @@ func TestReceivePack_MalformedTreeRefused(t *testing.T) {
 	extra["kb/members/rogue/1.md"] = memberFile("rogue", fact.MemberActive, r.PublicKey())
 	fleetHost := newFleetPushHost(t, extra)
 	fp, _ := pusherOf(t, r)
-	fleetHost.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (Fleet, error) {
+	fleetHost.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (fleetrec.Fleet, error) {
 		return fleetHost.svc.FleetAt("main")
 	}})
 	offHost := newPushHost(t, "off", 0)
@@ -352,13 +354,13 @@ func TestReceivePack_MalformedTreeRefused(t *testing.T) {
 		{"unsigned merge, a dir naming a held blob", fleetHost, func(pe *peer, head *object.Commit) *object.Commit {
 			side := pe.commitAs("rogue", []*object.Commit{head}, r, with(pe.files(head), "kb/members/rogue/2.md", "a"))
 			return bogusMergeOf(t, pe.repo.Storer, side, head, held(pe, head, "kb/members/boss/1.md"))
-		}, []string{RuleMalformedTree, "kb/zz-bogus"}},
+		}, []string{verify.RuleMalformedTree, "kb/zz-bogus"}},
 		{"signed commit, a dir naming a held blob in the own folder", fleetHost, func(pe *peer, head *object.Commit) *object.Commit {
 			st := pe.repo.Storer
 			tree := graftTree(t, st, head.TreeHash, "kb/members/rogue",
 				object.TreeEntry{Name: "zz", Mode: filemode.Dir, Hash: held(pe, head, "kb/members/boss/1.md")})
 			return shapeCommit(t, st, tree, "rogue", r, head)
-		}, []string{RuleMalformedTree, "kb/members/rogue/zz"}},
+		}, []string{verify.RuleMalformedTree, "kb/members/rogue/zz"}},
 		{"verify off, a dir naming a held blob before kb/.hidden.md", offHost, func(pe *peer, head *object.Commit) *object.Commit {
 			st := pe.repo.Storer
 			bogus := held(pe, head, fact.OntologyFile)
@@ -366,7 +368,7 @@ func TestReceivePack_MalformedTreeRefused(t *testing.T) {
 				with(pe.files(head), "kb/.hidden.md", "a private path"))
 			tree := graftTree(t, st, c.TreeHash, "kb", object.TreeEntry{Name: "-", Mode: filemode.Dir, Hash: bogus})
 			return shapeCommit(t, st, tree, "", nil, head)
-		}, []string{RuleMalformedTree, "kb/- (mode"}},
+		}, []string{verify.RuleMalformedTree, "kb/- (mode"}},
 		{"a dir naming a missing object", fleetHost, func(pe *peer, head *object.Commit) *object.Commit {
 			side := pe.commitAs("rogue", []*object.Commit{head}, r, with(pe.files(head), "kb/members/rogue/3.md", "b"))
 			return bogusMergeOf(t, pe.repo.Storer, side, head, plumbing.NewHash(missingHash))
@@ -442,7 +444,7 @@ func TestCheckRange_MalformedParentTreeRefused(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, v.Checked)
 	got := onlyRefusal(t, v)
-	require.Equal(t, RuleMalformedTree, got.Rule)
+	require.Equal(t, verify.RuleMalformedTree, got.Rule)
 	require.Equal(t, c.Hash.String(), got.Commit)
 	require.Contains(t, got.Reason, "parent "+p.Hash.String()+": kb/zz-bogus (mode")
 }
@@ -456,7 +458,7 @@ func TestCheckRange_MalformedParentTreeRefused(t *testing.T) {
 // SABOTAGE: loop commitTreeShape over c.ParentHashes[:0] → the push is
 // admitted → red.
 func TestReceivePack_MalformedUpstreamTipRefused(t *testing.T) {
-	h := newPushHost(t, VerifyOff, 1)
+	h := newPushHost(t, verify.VerifyOff, 1)
 	pe := newPeer(t, h.srv.URL)
 	p := malformedTip(t, pe.repo.Storer, pe.head(), "", nil)
 	// Plant P as the host's main, every object of it host-held.
@@ -479,7 +481,7 @@ func TestReceivePack_MalformedUpstreamTipRefused(t *testing.T) {
 	requireWellFormed(t, c)
 	const branch = "agent/bogus-up"
 	out := pushNew(t, h, pe, c, branch)
-	require.Contains(t, out, "knomit: commit "+c.Hash.String()+" refused: "+RuleMalformedTree)
+	require.Contains(t, out, "knomit: commit "+c.Hash.String()+" refused: "+verify.RuleMalformedTree)
 	require.Contains(t, out, "parent "+p.Hash.String()+": kb/zz-bogus (mode")
 	require.Equal(t, plumbing.ZeroHash, h.ref(branch), "a refused branch is not created")
 	require.Equal(t, p.Hash, h.ref("main"), "main does not move")

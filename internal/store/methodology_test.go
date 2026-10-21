@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -106,7 +108,7 @@ func TestRelevantMethodologyForFact_FiltersByTypeAndBranch(t *testing.T) {
 	require.ElementsMatch(t, []string{"kb/meta/reasoning/m1.md", "kb/meta/reasoning/m2.md"}, paths)
 
 	// Verify body hydration: each result has the body we wrote.
-	byPath := map[string]MethodologyMatch{}
+	byPath := map[string]index.MethodologyMatch{}
 	for _, m := range got {
 		byPath[m.Path] = m
 	}
@@ -333,7 +335,7 @@ func TestRelevantMethodologyForFact_Composite_FormulaIsApplied(t *testing.T) {
 			m.Path, m.VectorScore, m.TagOverlap, m.Score)
 	}
 
-	byPath := map[string]MethodologyMatch{}
+	byPath := map[string]index.MethodologyMatch{}
 	for _, m := range got {
 		byPath[m.Path] = m
 	}

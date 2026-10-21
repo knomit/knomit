@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // TestReshapeCohesiveSubset_BroadSetWithEmbeddedClique verifies that when
@@ -25,7 +25,7 @@ func TestReshapeCohesiveSubset_BroadSetWithEmbeddedClique(t *testing.T) {
 			pairs = append(pairs, [2]string{clique[i], clique[j]})
 		}
 	}
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 
 	clusterOf := map[string]int{
 		"a0": 0, "a1": 0, "a2": 0, "a3": 0,
@@ -94,7 +94,7 @@ func TestReshapeCohesiveSubset_IntraCommunityOnlyReturnsNil(t *testing.T) {
 	// Connect b0-b1 within community 1.
 	pairs = append(pairs, [2]string{"b0", "b1"})
 	// NO edges between community 0 and community 1.
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 
 	clusterOf := map[string]int{
 		"a0": 0, "a1": 0, "a2": 0, "a3": 0,
@@ -116,7 +116,7 @@ func TestReshapeCohesiveSubset_NoConnectedCrossCommunityPair(t *testing.T) {
 	// Two communities, members connected only within communities.
 	// Same as above but even sparser: only a0-a1 connected within community 0.
 	pairs := [][2]string{{"a0", "a1"}}
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 	clusterOf := map[string]int{"a0": 0, "a1": 0, "b0": 1, "b1": 1}
 	members := []string{"a0", "a1", "b0", "b1"}
 
@@ -138,7 +138,7 @@ func TestReshapeCohesiveSubset_Determinism(t *testing.T) {
 		{"y0", "y1"},
 		{"x0", "y0"}, {"x0", "y1"}, {"x1", "y0"}, {"x1", "y1"}, {"x2", "y2"},
 	}
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 	clusterOf := map[string]int{
 		"x0": 0, "x1": 0, "x2": 0,
 		"y0": 1, "y1": 1, "y2": 1,
@@ -173,7 +173,7 @@ func TestReshapeCohesiveSubset_CohFloorTooHigh(t *testing.T) {
 		{"a", "b"}, // cross-community edge (seed)
 		{"b", "c"}, // c connects to b only (would create density 2/3 ≈ 0.67)
 	}
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 	clusterOf := map[string]int{"a": 0, "b": 1}
 	// c is absent from clusterOf → its own community; not a problem for this test.
 	members := []string{"a", "b", "c"}
@@ -199,7 +199,7 @@ func TestReshapeCohesiveSubset_AbsentPathsAreCrossCommunity(t *testing.T) {
 	// "p" and "q" are connected but absent from clusterOf.
 	// Per the spec: absent paths are each their own community → p != q → cross-community.
 	pairs := [][2]string{{"p", "q"}}
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 	clusterOf := map[string]int{} // intentionally empty
 
 	result := reshapeCohesiveSubset([]string{"p", "q"}, g, clusterOf, 0.0, 4)
@@ -219,7 +219,7 @@ func TestReshapeCohesiveSubset_ResultIsSorted(t *testing.T) {
 		{"z_path", "m_path"},
 		{"a_path", "m_path"},
 	}
-	g := store.NewSimilarityGraph(pairs)
+	g := index.NewSimilarityGraph(pairs)
 	clusterOf := map[string]int{"z_path": 0, "a_path": 1}
 	// m_path absent — its own community.
 	members := []string{"z_path", "m_path", "a_path"}

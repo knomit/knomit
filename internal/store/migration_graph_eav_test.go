@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/migrate"
@@ -123,15 +125,15 @@ func seedDuplicateEdges(t *testing.T, db *sql.DB) (src, tgt, derivedWithProps in
 	}
 	// Three duplicates of one relationship edge, and a second distinct type, so
 	// the dedup has to key on (source_id, target_id, type) rather than the pair.
-	edge(EdgeSimilarTo)
-	edge(EdgeSimilarTo)
-	edge(EdgeSimilarTo)
-	edge(EdgeTagged)
+	edge(index.EdgeSimilarTo)
+	edge(index.EdgeSimilarTo)
+	edge(index.EdgeSimilarTo)
+	edge(index.EdgeTagged)
 
 	// DERIVED_FROM is a deliberate multi-edge: both rows must survive, and the
 	// properties that distinguish them must survive with them.
-	edge(EdgeDerivedFrom)
-	derivedWithProps = edge(EdgeDerivedFrom)
+	edge(index.EdgeDerivedFrom)
+	derivedWithProps = edge(index.EdgeDerivedFrom)
 	_, err = db.Exec(`INSERT OR IGNORE INTO property_keys(key) VALUES ('source_commit')`)
 	require.NoError(t, err)
 	_, err = db.Exec(`
@@ -162,9 +164,9 @@ func TestMigration000015_DedupesExistingEdgesBeforeIndexing(t *testing.T) {
 			src, tgt, edgeType).Scan(&n))
 		return n
 	}
-	require.Equal(t, 1, count(EdgeSimilarTo), "duplicate relationship edges must collapse to one")
-	require.Equal(t, 1, count(EdgeTagged), "a distinct type is a distinct identity, not a duplicate")
-	require.Equal(t, 2, count(EdgeDerivedFrom),
+	require.Equal(t, 1, count(index.EdgeSimilarTo), "duplicate relationship edges must collapse to one")
+	require.Equal(t, 1, count(index.EdgeTagged), "a distinct type is a distinct identity, not a duplicate")
+	require.Equal(t, 2, count(index.EdgeDerivedFrom),
 		"DERIVED_FROM is a deliberate multi-edge — the partial index must exempt it")
 
 	// Deleting by id would silently take the properties with it via cascade.
@@ -180,7 +182,7 @@ func TestMigration000015_DedupesExistingEdgesBeforeIndexing(t *testing.T) {
 	require.Equal(t, 1, idx, "the unique index must be created once duplicates are gone")
 
 	_, err := db.Exec(
-		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, src, tgt, EdgeSimilarTo)
+		`INSERT INTO edges(source_id, target_id, type) VALUES (?, ?, ?)`, src, tgt, index.EdgeSimilarTo)
 	require.Error(t, err, "the index must reject a duplicate once the migration has run")
 }
 

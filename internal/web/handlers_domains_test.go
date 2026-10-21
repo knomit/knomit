@@ -8,8 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
@@ -18,7 +19,7 @@ import (
 type stubDomainsProvider struct {
 	domains        map[string]int
 	domainStatsErr error
-	facts          []store.SearchResult
+	facts          []index.SearchResult
 	domainFactsErr error
 }
 
@@ -26,7 +27,7 @@ func (s *stubDomainsProvider) DomainStats(_ context.Context, _ *repos.RepoInstan
 	return s.domains, s.domainStatsErr
 }
 
-func (s *stubDomainsProvider) DomainFacts(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]store.SearchResult, error) {
+func (s *stubDomainsProvider) DomainFacts(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]index.SearchResult, error) {
 	return s.facts, s.domainFactsErr
 }
 
@@ -108,7 +109,7 @@ func TestHandleHALDomains_UnknownRepo_Returns404(t *testing.T) {
 
 func TestHandleHALDomainFacts_ReturnsCollection(t *testing.T) {
 	provider := &stubDomainsProvider{
-		facts: []store.SearchResult{
+		facts: []index.SearchResult{
 			{FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: "know/ai/a.md", Title: "AI Fact", Type: "observation", Confidence: 0.9}}},
 			{FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: "know/ai/b.md", Title: "AI Fact 2", Type: "hypothesis", Confidence: 0.7}}},
 		},

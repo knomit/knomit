@@ -14,12 +14,12 @@ func (s *Service) integrity() *fsck.Checker {
 }
 
 // Verify walks the store and returns an integrity report. See integrity.Verify.
-func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport, error) {
+func (s *Service) Verify(ctx context.Context, opts fsck.VerifyOpts) (fsck.IntegrityReport, error) {
 	return s.integrity().Verify(ctx, opts)
 }
 
 // PruneGeneratedRefs deletes generated export residue. See
 // integrity.PruneGeneratedRefs.
-func (s *Service) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
+func (s *Service) PruneGeneratedRefs(ctx context.Context) (fsck.PruneResult, error) {
 	return s.integrity().PruneGeneratedRefs(ctx)
 }

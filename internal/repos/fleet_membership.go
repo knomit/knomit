@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -329,7 +331,7 @@ func (m *Manager) EnrollFleetMember(ctx context.Context, agentID, keyLine, addre
 // before they reach main (judgeOwnRange), so writing this leaf would leave a
 // commit on the master's branch that main can never take. The §1.5 rejoin,
 // of an id whose record is on the branch, is unaffected.
-func (m *Manager) refuseRenewalWithoutRecord(ri *RepoInstance, onMain *store.FleetPKI, agentID string) error {
+func (m *Manager) refuseRenewalWithoutRecord(ri *RepoInstance, onMain *fleetrec.PKI, agentID string) error {
 	if leaf, err := onMain.Cert(agentID); err != nil || leaf == nil {
 		return err
 	}
@@ -445,7 +447,7 @@ func (m *Manager) fleetURLForBundle(ri *RepoInstance, address string) (string, e
 // A different key under an id that has a leaf is refused always (§1.5: a lost
 // or rotated key is a fresh start under a new agent id). The same key with
 // its old leaf on main's CRL is the §1.5 Rejoin.
-func refuseEnrolledID(p *store.FleetPKI, agentID string, pub ed25519.PublicKey) error {
+func refuseEnrolledID(p *fleetrec.PKI, agentID string, pub ed25519.PublicKey) error {
 	leaf, err := p.Cert(agentID)
 	if err != nil {
 		return err

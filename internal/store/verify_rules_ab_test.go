@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -159,12 +161,12 @@ func (f *rangeFixture) fleetMain(files map[string]string) *object.Commit {
 // checkSelf runs CheckRange with the fleet repository as BOTH the knowledge
 // base and the fleet (a fleet's own merge job: --dir . --fleet .), candidate
 // "cand", fleet revision fleetRev ("" = main).
-func (f *rangeFixture) checkSelf(fleetRev string) RangeVerdict {
+func (f *rangeFixture) checkSelf(fleetRev string) verify.RangeVerdict {
 	f.t.Helper()
 	if fleetRev == "" {
 		fleetRev = "main"
 	}
-	v, err := CheckRange(RangeInput{KBDir: f.fleetDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: fleetRev})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.fleetDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: fleetRev})
 	require.NoError(f.t, err)
 	return v
 }
@@ -195,7 +197,7 @@ func (f *rangeFixture) selfReg(main *object.Commit, base map[string]string, id s
 	return c
 }
 
-func onlyRefusal(t *testing.T, v RangeVerdict) Refusal {
+func onlyRefusal(t *testing.T, v verify.RangeVerdict) verify.Refusal {
 	t.Helper()
 	require.Len(t, v.Refused, 1, "%+v", v)
 	return v.Refused[0]
@@ -213,7 +215,7 @@ func TestRuleA_AdmittedWithMatchingCert(t *testing.T) {
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	v := f.checkSelf("")
-	require.Equal(t, VerifyEnforce, v.Mode)
+	require.Equal(t, verify.VerifyEnforce, v.Mode)
 	require.Equal(t, 1, v.Checked)
 	require.Empty(t, v.Refused, "a self-registration with a valid leaf artifact is admitted")
 	require.Equal(t, 0, v.ExitCode())
@@ -221,7 +223,7 @@ func TestRuleA_AdmittedWithMatchingCert(t *testing.T) {
 	g, gmain, gbase := selfRegFixture(t, nil)
 	g.selfReg(gmain, gbase, "joiner", j)
 	r := onlyRefusal(t, g.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule, "no PKI: today's rule")
+	require.Equal(t, verify.RuleNoRecord, r.Rule, "no PKI: today's rule")
 	require.NotContains(t, r.Reason, "self-registration", "no PKI: rule A is not even consulted")
 }
 
@@ -232,7 +234,7 @@ func TestRuleA_NoCertIsNoRecord(t *testing.T) {
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), nil))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Contains(t, r.Reason, "no artifacts/fleet/certs/joiner.pem at the fleet revision")
 }
 
@@ -247,7 +249,7 @@ func TestRuleA_RevokedSerialRefused(t *testing.T) {
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(serial), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleRevoked, r.Rule)
+	require.Equal(t, verify.RuleRevoked, r.Rule)
 	require.Contains(t, r.Reason, serial.Text(16))
 }
 
@@ -262,7 +264,7 @@ func TestRuleA_CertForOtherKeyIsKeyMismatch(t *testing.T) {
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleKeyMismatch, r.Rule)
+	require.Equal(t, verify.RuleKeyMismatch, r.Rule)
 	require.Contains(t, r.Reason, "for another key than the signing key")
 }
 
@@ -278,7 +280,7 @@ func TestRuleA_CertNotChainingRefused(t *testing.T) {
 	f, main, base := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Contains(t, r.Reason, "does not chain to the fleet root")
 }
 
@@ -306,7 +308,7 @@ func TestRuleA_ShapeOnlyOwnMembersFolder(t *testing.T) {
 		c := f.commit(f.fleet, with(base, kv...), "joiner", j, main)
 		f.ref(f.fleet, "cand", c)
 		r := onlyRefusal(t, f.checkSelf(""))
-		require.Equal(t, RuleNoRecord, r.Rule, name)
+		require.Equal(t, verify.RuleNoRecord, r.Rule, name)
 		require.NotContains(t, r.Reason, "self-registration", "%s: rule A must not be consulted", name)
 		ran++
 	}
@@ -351,8 +353,8 @@ func TestRuleA_MergeDiffAgainstEveryParent(t *testing.T) {
 	for _, r := range v.Refused {
 		rules[r.Commit] = r.Rule
 	}
-	require.Equal(t, RuleNoRecord, rules[gm.Hash.String()], "the merge leaves the folder against main")
-	require.Equal(t, RuleNoRecord, rules[gside.Hash.String()])
+	require.Equal(t, verify.RuleNoRecord, rules[gm.Hash.String()], "the merge leaves the folder against main")
+	require.Equal(t, verify.RuleNoRecord, rules[gside.Hash.String()])
 }
 
 // R4 (review F2), as clarified by O3: rule A runs only when the id has NO
@@ -401,13 +403,13 @@ func TestRuleA_OnlyWithoutAnActiveRecordAndForAKeyNoOtherIDHolds(t *testing.T) {
 		kind    int
 	}{
 		{"left record, old key", joinerRec(fact.MemberLeft, old.PublicKey()), leaf, nil, j, "", admitted},
-		{"active record, other key", joinerRec(fact.MemberActive, old.PublicKey()), leaf, nil, j, RuleKeyMismatch, gate},
+		{"active record, other key", joinerRec(fact.MemberActive, old.PublicKey()), leaf, nil, j, verify.RuleKeyMismatch, gate},
 		{"left record, same key, fresh leaf", joinerRec(fact.MemberLeft, j.PublicKey()), freshLeaf, []*big.Int{revokedSerial}, j, "", admitted},
-		{"left record, same key, revoked leaf", joinerRec(fact.MemberLeft, j.PublicKey()), revokedLeaf, []*big.Int{revokedSerial}, j, RuleRevoked, ruleA},
-		{"no record, key is boss's", nil, bossLeafAsJoiner, nil, boss, RuleNoRecord, gate},
+		{"left record, same key, revoked leaf", joinerRec(fact.MemberLeft, j.PublicKey()), revokedLeaf, []*big.Int{revokedSerial}, j, verify.RuleRevoked, ruleA},
+		{"no record, key is boss's", nil, bossLeafAsJoiner, nil, boss, verify.RuleNoRecord, gate},
 		{"no record, key is another id's left record's",
 			map[string]string{"kb/members/ghost/1.md": memberFile("ghost", fact.MemberLeft, j.PublicKey())},
-			leaf, nil, j, RuleNoRecord, gate},
+			leaf, nil, j, verify.RuleNoRecord, gate},
 	}
 	ran := 0
 	for _, tc := range cases {
@@ -449,18 +451,18 @@ func TestRulesAB_LeafIssuedToAnotherIDIsRefused(t *testing.T) {
 	f := newRangeFixture(t)
 	f.abFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())},
 		p.artifacts(p.crl(), map[string]string{"agent-x": xAsBoss}))
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	r := onlyRefusal(t, v)
-	require.Equal(t, RuleNoCert, r.Rule)
+	require.Equal(t, verify.RuleNoCert, r.Rule)
 	require.Contains(t, r.Reason, `names agent "boss", not "agent-x"`)
 
 	jAsOther, _ := p.leaf("other", j)
 	g, gmain, gbase := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{"joiner": jAsOther}))
 	g.selfReg(gmain, gbase, "joiner", j)
 	r = onlyRefusal(t, g.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Contains(t, r.Reason, `names agent "other", not "joiner"`)
 }
 
@@ -477,14 +479,14 @@ func TestRuleA_OnlyInTheFleetRepository(t *testing.T) {
 		files[k] = v
 	}
 	f.fleetMain(files)
-	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	base := map[string]string{fact.OntologyFile: kbOntology(verify.VerifyEnforce)}
 	root := f.commit(f.kb, base, "", nil)
 	f.ref(f.kb, "main", root)
 	f.ref(f.kb, "cand", f.commit(f.kb, with(base, "kb/members/joiner/1.md", "x"), "joiner", j, root))
-	v, err := f.check(VerifyEnforce)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	r := onlyRefusal(t, v)
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.NotContains(t, r.Reason, "self-registration")
 }
 
@@ -508,7 +510,7 @@ func TestRuleA_IDTextMeansNothing(t *testing.T) {
 	oleaf, _ := p.leaf(honest, other)
 	g, gmain, gbase := selfRegFixture(t, p.artifacts(p.crl(), map[string]string{honest: oleaf}))
 	g.selfReg(gmain, gbase, honest, j)
-	require.Equal(t, RuleKeyMismatch, onlyRefusal(t, g.checkSelf("")).Rule, "a matching suffix admits nothing")
+	require.Equal(t, verify.RuleKeyMismatch, onlyRefusal(t, g.checkSelf("")).Rule, "a matching suffix admits nothing")
 }
 
 // An unreadable CRL fails rule A CLOSED (never admitted on a CRL nobody can
@@ -520,14 +522,14 @@ func TestRulesAB_UnreadableCRL(t *testing.T) {
 	f, main, base := selfRegFixture(t, p.artifacts("not a crl", map[string]string{"joiner": leaf}))
 	f.selfReg(main, base, "joiner", j)
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Contains(t, r.Reason, "CRL invalid")
 
 	g, gmain, gbase := selfRegFixture(t, with(p.artifacts("", map[string]string{"joiner": leaf}),
 		"kb/members/joiner/1.md", memberFile("joiner", fact.MemberActive, j.PublicKey())))
 	g.ref(g.fleet, "cand", g.commit(g.fleet, with(gbase, "kb/members/joiner/1.md", "v2"), "joiner", j, gmain))
 	r = onlyRefusal(t, g.checkSelf(""))
-	require.Equal(t, RuleNoCert, r.Rule, "an active member with no CRL at all is refused under PKI")
+	require.Equal(t, verify.RuleNoCert, r.Rule, "an active member with no CRL at all is refused under PKI")
 	require.Contains(t, r.Reason, "CRL missing")
 }
 
@@ -559,15 +561,15 @@ func TestRuleB_RevokedAtLaterFleetRevisionOnly(t *testing.T) {
 	rec := map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}
 	before := f.abFleet(rec, p.artifacts(p.crl(), map[string]string{"agent-x": leaf}))
 	after := f.abFleet(rec, p.artifacts(p.crl(serial), map[string]string{"agent-x": leaf}))
-	f.kbWith(VerifyEnforce, "agent-x", x)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
 
-	at := func(rev *object.Commit) RangeVerdict {
-		v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: rev.Hash.String()})
+	at := func(rev *object.Commit) verify.RangeVerdict {
+		v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: rev.Hash.String()})
 		require.NoError(t, err)
 		return v
 	}
 	r := onlyRefusal(t, at(after))
-	require.Equal(t, RuleRevoked, r.Rule)
+	require.Equal(t, verify.RuleRevoked, r.Rule)
 	require.Contains(t, r.Reason, serial.Text(16))
 	v := at(before)
 	require.Equal(t, 1, v.Checked)
@@ -596,16 +598,16 @@ func TestRuleB_FailsClosedUnderPKI(t *testing.T) {
 		reason string
 	}{
 		{"valid leaf", p.artifacts(p.crl(), map[string]string{"agent-x": xleaf}), "", ""},
-		{"leaf for another key", p.artifacts(p.crl(oserial), map[string]string{"agent-x": oleaf}), RuleKeyMismatch, "for another key than the member record's"},
-		{"leaf from a rogue root", p.artifacts(p.crl(rserial), map[string]string{"agent-x": rleaf}), RuleNoCert, "does not chain to the fleet root"},
-		{"no leaf", p.artifacts(p.crl(), nil), RuleNoCert, "no artifacts/fleet/certs/agent-x.pem"},
+		{"leaf for another key", p.artifacts(p.crl(oserial), map[string]string{"agent-x": oleaf}), verify.RuleKeyMismatch, "for another key than the member record's"},
+		{"leaf from a rogue root", p.artifacts(p.crl(rserial), map[string]string{"agent-x": rleaf}), verify.RuleNoCert, "does not chain to the fleet root"},
+		{"no leaf", p.artifacts(p.crl(), nil), verify.RuleNoCert, "no artifacts/fleet/certs/agent-x.pem"},
 	}
 	ran := 0
 	for _, tc := range cases {
 		f := newRangeFixture(t)
 		f.abFleet(rec, tc.arts)
-		f.kbWith(VerifyEnforce, "agent-x", x)
-		v, err := f.check(VerifyEnforce)
+		f.kbWith(verify.VerifyEnforce, "agent-x", x)
+		v, err := f.check(verify.VerifyEnforce)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Checked, tc.name)
 		if tc.want == "" {
@@ -648,7 +650,7 @@ func TestRuleA_RecordMustMatchTheLeaf(t *testing.T) {
 		f, main, base := selfRegFixture(t, arts)
 		f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, tc.kv...), "joiner", k1, main))
 		r := onlyRefusal(t, f.checkSelf(""))
-		require.Equal(t, RuleNoRecord, r.Rule, tc.name)
+		require.Equal(t, verify.RuleNoRecord, r.Rule, tc.name)
 		require.Contains(t, r.Reason, "self-registration not admitted", tc.name)
 		require.Contains(t, r.Reason, tc.reason, tc.name)
 		ran++
@@ -664,13 +666,13 @@ func TestRuleA_RecordMustMatchTheLeaf(t *testing.T) {
 	f, main, base := selfRegFixture(t, arts)
 	f.ref(f.fleet, "cand", f.commit(f.fleet, with(base, "kb/members/joiner/1.md", stray), "joiner", k1, main))
 	r := onlyRefusal(t, f.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Equal(t, `no member record for agent "joiner"`, r.Reason, "the owner rule refused the shape")
 
 	g, gmain, gbase := selfRegFixture(t, with(arts, "kb/members/joiner/1.md", stray))
 	g.ref(g.fleet, "cand", g.commit(g.fleet, gbase, "joiner", k1, gmain))
 	r = onlyRefusal(t, g.checkSelf(""))
-	require.Equal(t, RuleNoRecord, r.Rule)
+	require.Equal(t, verify.RuleNoRecord, r.Rule)
 	require.Contains(t, r.Reason, "self-registration not admitted")
 	require.Contains(t, r.Reason, `names agent "boss"`)
 }
@@ -691,16 +693,16 @@ func TestRulesAB_NoPKIIsToday(t *testing.T) {
 		want    string // "" = admitted
 	}{
 		{"active", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", x, ""},
-		{"no record", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-z", x, RuleNoRecord},
-		{"key mismatch", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", y, RuleKeyMismatch},
+		{"no record", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-z", x, verify.RuleNoRecord},
+		{"key mismatch", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", y, verify.RuleKeyMismatch},
 		{"ambiguous", map[string]string{
 			"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey()),
-			"agent-x/2.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", x, RuleAmbiguous},
+			"agent-x/2.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", x, verify.RuleAmbiguous},
 		{"duplicate key", map[string]string{
 			"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey()),
-			"agent-y/1.md": memberFile("agent-y", fact.MemberActive, x.PublicKey())}, "agent-x", x, RuleDuplicateKey},
-		{"inactive", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberLeft, x.PublicKey())}, "agent-x", x, RuleInactive},
-		{"unsigned", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", nil, RuleSignature},
+			"agent-y/1.md": memberFile("agent-y", fact.MemberActive, x.PublicKey())}, "agent-x", x, verify.RuleDuplicateKey},
+		{"inactive", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberLeft, x.PublicKey())}, "agent-x", x, verify.RuleInactive},
+		{"unsigned", map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())}, "agent-x", nil, verify.RuleSignature},
 	}
 	xl, _ := p.leaf("agent-x", x)
 	yl, _ := p.leaf("agent-y", y)
@@ -711,8 +713,8 @@ func TestRulesAB_NoPKIIsToday(t *testing.T) {
 		for _, arts := range []map[string]string{nil, withLeaves} {
 			f := newRangeFixture(t)
 			f.abFleet(row.members, arts)
-			f.kbWith(VerifyEnforce, row.author, row.signer)
-			v, err := f.check(VerifyEnforce)
+			f.kbWith(verify.VerifyEnforce, row.author, row.signer)
+			v, err := f.check(verify.VerifyEnforce)
 			require.NoError(t, err)
 			require.Equal(t, 1, v.Checked, row.name)
 			if row.want == "" {

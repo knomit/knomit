@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -71,7 +73,7 @@ func TestVerifyAccepts_UnblockAnE4Refusal(t *testing.T) {
 	_, err = m.Create(context.Background(), CreateSpec{
 		Name: "rejoined", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
 	}, func(Event) {})
-	require.ErrorIs(t, err, store.ErrForeignLineage, "the pre-signing commit is refused, loudly")
+	require.ErrorIs(t, err, verify.ErrForeignLineage, "the pre-signing commit is refused, loudly")
 	require.Contains(t, err.Error(), "knomit verify accept "+unsigned, "the error names the exact command")
 	require.Equal(t, unsigned, strings.TrimSpace(gitOut(t, bare, "rev-parse", m.deps.AgentBranch)), "the remote is untouched")
 

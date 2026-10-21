@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -43,7 +45,7 @@ func expiresFixture(t *testing.T) (*Service, string) {
 	return svc, branch
 }
 
-func searchPaths(t *testing.T, svc *Service, branch string, q SearchOptions) []string {
+func searchPaths(t *testing.T, svc *Service, branch string, q index.SearchOptions) []string {
 	t.Helper()
 	if q.Now.IsZero() {
 		q.Now = expNow
@@ -58,7 +60,7 @@ func searchPaths(t *testing.T, svc *Service, branch string, q SearchOptions) []s
 	return out
 }
 
-func recentPaths(t *testing.T, svc *Service, branch string, q SearchOptions) []string {
+func recentPaths(t *testing.T, svc *Service, branch string, q index.SearchOptions) []string {
 	t.Helper()
 	if q.Now.IsZero() {
 		q.Now = expNow
@@ -84,20 +86,20 @@ func TestSearch_ExpiryFilters(t *testing.T) {
 	all := []string{"kb/alpha/later.md", "kb/alpha/never.md", "kb/alpha/past.md", "kb/alpha/soon.md"}
 	cases := []struct {
 		name string
-		q    SearchOptions
+		q    index.SearchOptions
 		want []string
 	}{
-		{"no filter hides nothing", SearchOptions{}, all},
-		{"expired=true", SearchOptions{Expired: boolp(true)}, []string{"kb/alpha/past.md"}},
-		{"expired=false includes the undated", SearchOptions{Expired: boolp(false)},
+		{"no filter hides nothing", index.SearchOptions{}, all},
+		{"expired=true", index.SearchOptions{Expired: boolp(true)}, []string{"kb/alpha/past.md"}},
+		{"expired=false includes the undated", index.SearchOptions{Expired: boolp(false)},
 			[]string{"kb/alpha/later.md", "kb/alpha/never.md", "kb/alpha/soon.md"}},
-		{"expires_before alone excludes the undated", SearchOptions{ExpiresBefore: expNow.Add(48 * time.Hour)},
+		{"expires_before alone excludes the undated", index.SearchOptions{ExpiresBefore: expNow.Add(48 * time.Hour)},
 			[]string{"kb/alpha/past.md", "kb/alpha/soon.md"}},
-		{"expires_after alone excludes the undated", SearchOptions{ExpiresAfter: expNow},
+		{"expires_after alone excludes the undated", index.SearchOptions{ExpiresAfter: expNow},
 			[]string{"kb/alpha/later.md", "kb/alpha/soon.md"}},
-		{"window idiom: after=now, before=now+2d", SearchOptions{ExpiresAfter: expNow, ExpiresBefore: expNow.Add(48 * time.Hour)},
+		{"window idiom: after=now, before=now+2d", index.SearchOptions{ExpiresAfter: expNow, ExpiresBefore: expNow.Add(48 * time.Hour)},
 			[]string{"kb/alpha/soon.md"}},
-		{"type still composes", SearchOptions{Expired: boolp(true), IncludeTypes: []string{"observation"}}, nil},
+		{"type still composes", index.SearchOptions{Expired: boolp(true), IncludeTypes: []string{"observation"}}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,8 +113,8 @@ func TestSearch_ExpiryFilters(t *testing.T) {
 func TestSearch_ExpiredBoundaryIsInclusive(t *testing.T) {
 	svc, branch := motifEnv(t)
 	writeExpiresFact(t, svc, branch, "kb/alpha/edge.md", "hypothesis", expNow.Format(time.RFC3339))
-	require.Equal(t, []string{"kb/alpha/edge.md"}, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}))
-	require.Empty(t, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true), Now: expNow.Add(-time.Second)}),
+	require.Equal(t, []string{"kb/alpha/edge.md"}, searchPaths(t, svc, branch, index.SearchOptions{Expired: boolp(true)}))
+	require.Empty(t, searchPaths(t, svc, branch, index.SearchOptions{Expired: boolp(true), Now: expNow.Add(-time.Second)}),
 		"one second before its expiry the fact is not expired")
 }
 
@@ -126,12 +128,12 @@ func TestSearch_ResultsCarryExpiresAsWritten(t *testing.T) {
 	want := expNow.Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	require.True(t, strings.HasSuffix(want, "Z"))
 
-	res, err := svc.fq.Search(ctx, branch, SearchOptions{Path: "kb/alpha/soon.md"})
+	res, err := svc.fq.Search(ctx, branch, index.SearchOptions{Path: "kb/alpha/soon.md"})
 	require.NoError(t, err)
 	require.Len(t, res, 1)
 	require.Equal(t, want, res[0].Expires)
 
-	rec, _, err := svc.fq.RecentFacts(ctx, branch, SearchOptions{Path: "kb/alpha/soon.md", Limit: 5})
+	rec, _, err := svc.fq.RecentFacts(ctx, branch, index.SearchOptions{Path: "kb/alpha/soon.md", Limit: 5})
 	require.NoError(t, err)
 	require.Len(t, rec, 1)
 	require.Equal(t, want, rec[0].Expires)
@@ -153,12 +155,12 @@ func TestFactExpires_RebuildRepopulates(t *testing.T) {
 	ctx := context.Background()
 	_, err := svc.si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM fact_expires`)
 	require.NoError(t, err)
-	require.Empty(t, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}),
+	require.Empty(t, searchPaths(t, svc, branch, index.SearchOptions{Expired: boolp(true)}),
 		"clearing must empty the side table, or the rebuild below proves nothing")
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
-	require.Equal(t, []string{"kb/alpha/past.md"}, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}))
+	require.Equal(t, []string{"kb/alpha/past.md"}, searchPaths(t, svc, branch, index.SearchOptions{Expired: boolp(true)}))
 	var n int
 	require.NoError(t, svc.si.RepoForTest().DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_expires`).Scan(&n))
@@ -191,7 +193,7 @@ func TestFactExpires_UpgradeFromV5ForcesRebuild(t *testing.T) {
 	require.True(t, stale, "an index built at graph schema 5 must be rebuilt to pick up expires")
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
-	require.Equal(t, []string{"kb/alpha/past.md"}, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}))
+	require.Equal(t, []string{"kb/alpha/past.md"}, searchPaths(t, svc, branch, index.SearchOptions{Expired: boolp(true)}))
 }
 
 // TestHighlights_MarkExpired: highlights and Stats bypass newFactFilter.
@@ -206,8 +208,8 @@ func TestHighlights_MarkExpired(t *testing.T) {
 	writeExpiresFact(t, svc, branch, "kb/alpha/soon.md", "hypothesis", real.Add(24*time.Hour).Format(time.RFC3339))
 	ctx := context.Background()
 
-	check := func(hs []Highlight, where string) {
-		byPath := map[string]Highlight{}
+	check := func(hs []index.Highlight, where string) {
+		byPath := map[string]index.Highlight{}
 		for _, h := range hs {
 			byPath[h.Path] = h
 		}
@@ -219,11 +221,11 @@ func TestHighlights_MarkExpired(t *testing.T) {
 		require.True(t, ok, where)
 		require.False(t, soon.Expired, where)
 	}
-	hs, _, err := svc.fq.Highlights(ctx, branch, "kb/alpha/", AxisRecent)
+	hs, _, err := svc.fq.Highlights(ctx, branch, "kb/alpha/", index.AxisRecent)
 	require.NoError(t, err)
 	check(hs, "Highlights")
 
-	st, err := svc.fq.Stats(ctx, branch, "kb/alpha/", AxisRecent)
+	st, err := svc.fq.Stats(ctx, branch, "kb/alpha/", index.AxisRecent)
 	require.NoError(t, err)
 	check(st.Highlights, "Stats")
 	require.Equal(t, 2, st.Types["hypothesis"], "Stats counts are unfiltered: both hypotheses, the expired one included")
@@ -263,7 +265,7 @@ func TestFactExpires_RebuildKeepsSpacedKey(t *testing.T) {
 	body := "---\ntype: hypothesis\ndomain: [alpha]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\nexpires : \"2026-10-01T00:00:00Z\"\n---\n# Spaced\n\nbody\n"
 	_, err := svc.Facts().WriteFact(ctx, branch, "kb/alpha/spaced.md", body, "seed", "")
 	require.NoError(t, err)
-	q := SearchOptions{Expired: boolp(true), Now: expNow}
+	q := index.SearchOptions{Expired: boolp(true), Now: expNow}
 	require.Equal(t, []string{"kb/alpha/spaced.md"}, searchPaths(t, svc, branch, q), "fixture: the incremental path indexes it")
 
 	_, err = svc.si.RepoForTest().DB().ExecContext(ctx, `DELETE FROM fact_expires`)

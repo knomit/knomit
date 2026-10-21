@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -219,7 +221,7 @@ type Strategy interface {
 	// SeedQuery is the store query used by the full-scan seed path (first run,
 	// or any scoped run). Filters cheap enough to push into SQL belong here;
 	// everything else belongs in AcceptSeed.
-	SeedQuery() store.SearchOptions
+	SeedQuery() index.SearchOptions
 
 	// AcceptSeed is the per-fact seed predicate, applied on BOTH scan paths —
 	// after SeedQuery on the full scan and after fact.ParseFact on the

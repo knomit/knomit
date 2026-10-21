@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -299,7 +301,7 @@ func TestApplyDedupMerge_NeverMergesIntoAFlaggedCandidate(t *testing.T) {
 	s, release, err := storeIndices(ri)
 	require.NoError(t, err)
 	defer release()
-	res, err := s.factQuery.Search(ctx, "agent/test", store.SearchOptions{
+	res, err := s.factQuery.Search(ctx, "agent/test", index.SearchOptions{
 		Text: facts[0].Title + " " + facts[0].Body, Path: categoryDirOf(paths[0]), Limit: 1,
 	})
 	require.NoError(t, err)

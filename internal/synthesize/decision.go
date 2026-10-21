@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
@@ -655,7 +657,7 @@ func ApplyReflectDecisions(
 		// embedder. Text search is vector-only: with an embedder that fails, the
 		// search errors (and so does this proposal); a store with NO embedder at
 		// all returns no hits, so the gate is then a no-op rather than looser.
-		hits, err := idx.Search(ctx, branch, store.SearchOptions{
+		hits, err := idx.Search(ctx, branch, index.SearchOptions{
 			Text:          p.Title + "\n\n" + p.Body,
 			IncludeTypes:  []string{string(fact.Methodology)},
 			MinSimilarity: noveltyThreshold,

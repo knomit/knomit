@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/vocab"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // The corpus-state channel (knomit#155, second half).
@@ -84,7 +84,7 @@ func TestStanding_QuietCorpusStillDrainsItsStandingPairs(t *testing.T) {
 			"ordinary planned path and says nothing about the early return")
 	require.False(t, scan.Scoped, "fixture must be unscoped, or the scope guard short-circuits it")
 	standing, err := env.svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.branch,
-		[]string{store.MatchPathIdentity}, 100_000)
+		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 	require.NotEmpty(t, standing, "fixture must hold standing structural pairs")
 

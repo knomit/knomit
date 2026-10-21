@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,16 +23,16 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	ctx := context.Background()
 
 	// Two Fact nodes, distinct (path, blob_hash).
-	srcID, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
+	srcID, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
 		map[string]string{"path": "kb/a.md", "blob_hash": "aaaa"})
 	require.NoError(t, err)
 	require.NotZero(t, srcID)
-	tgtID, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
+	tgtID, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
 		map[string]string{"path": "kb/b.md", "blob_hash": "bbbb"})
 	require.NoError(t, err)
 	require.NotZero(t, tgtID)
 
-	edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, srcID, tgtID, EdgeDerivedFrom)
+	edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, srcID, tgtID, index.EdgeDerivedFrom)
 	require.NoError(t, err)
 	require.NotZero(t, edgeID)
 

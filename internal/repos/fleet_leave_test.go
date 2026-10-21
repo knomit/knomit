@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
@@ -350,15 +352,15 @@ func TestFleetLeave_TheDutyWaitsForAnUnpublishedCRLAndChainsEachRevocation(t *te
 // SABOTAGE: answer main's state whenever main holds a record -> the rejoin
 // row reads left -> red.
 func TestRecordStateOf(t *testing.T) {
-	rec := func(state string) store.FleetMember {
-		return store.FleetMember{Member: fact.Member{Agent: "a", State: state}}
+	rec := func(state string) fleetrec.Member {
+		return fleetrec.Member{Member: fact.Member{Agent: "a", State: state}}
 	}
-	none := store.FleetMember{}
+	none := fleetrec.Member{}
 	for _, c := range []struct {
 		name            string
-		branch          store.FleetMember
+		branch          fleetrec.Member
 		onBranch        bool
-		main            store.FleetMember
+		main            fleetrec.Member
 		onMain, revoked bool
 		want            string
 	}{

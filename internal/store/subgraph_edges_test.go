@@ -12,10 +12,10 @@ import (
 )
 
 // mergeFactNode creates a bare Fact node with the given path/blob_hash.
-func mergeFactNode(t *testing.T, si *searchIndex, path, bh string) int64 {
+func mergeFactNode(t *testing.T, si *index.Index, path, bh string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	id, err := graphMergeNode(ctx, si.RepoForTest().DB(), NodeFact,
+	id, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
 		map[string]string{"path": path, "blob_hash": bh})
 	require.NoError(t, err)
 	require.NotZero(t, id)
@@ -63,9 +63,9 @@ func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
 	outside := mergeFactNode(t, si, "kb/outside.md", "eeee")
 
 	// SIMILAR_TO: a-b and b-c inside the set; c-outside leaves the set.
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, EdgeSimilarTo))
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, outside, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, outside, index.EdgeSimilarTo))
 
 	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/lonely.md"}
 	edges, err := svc.gq.SubgraphEdges(ctx, paths)
@@ -101,9 +101,9 @@ func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
 
 	// A chain a–b–c–d; with chunk size 2 the path set [a,b,c,d] spans two
 	// chunks, and b–c is the cross-chunk edge.
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, EdgeSimilarTo))
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, d, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, d, index.EdgeSimilarTo))
 
 	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"})
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
 
 	// Injection-shaped paths: a single-quote attempt to break the SQL literal and
 	// force a tautology, and a double-quote attempt to break the Cypher literal.
@@ -161,7 +161,7 @@ func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
 
 	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
 	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
-	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
 
 	// Soft-delete b.
 	require.NoError(t, graphSetNodeProps(ctx, si.RepoForTest().DB(), b,

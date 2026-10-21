@@ -3,6 +3,8 @@ package store
 import (
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -60,5 +62,5 @@ func TestArtifacts_AMergeBringingALeafAParentHoldsAddsNothing(t *testing.T) {
 	forged := with(merged, l.LeafPath("gamma"), other)
 	r, ok = f.judgeEntry(f.commit(f.fleet, forged, "agent-x", x, side, main3))
 	require.False(t, ok, "a leaf no parent holds is judged")
-	require.Equal(t, RuleArtifactPKI, r.Rule, r.Reason)
+	require.Equal(t, verify.RuleArtifactPKI, r.Rule, r.Reason)
 }

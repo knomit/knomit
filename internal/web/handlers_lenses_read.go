@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
@@ -187,7 +189,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 					"invalid min_similarity value", r.URL.Path)
 				return
 			}
-			if err := store.ValidateMinSimilarity(n); err != nil {
+			if err := index.ValidateMinSimilarity(n); err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
@@ -248,7 +250,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list facts", err.Error(), r.URL.Path)
 			return
 		}
-		base := store.SearchOptions{
+		base := index.SearchOptions{
 			Text: text,
 			// Embedded ONCE for the whole fan-out, not once per mount — see
 			// lensQueryVec. A text-less browse leaves this nil and never
@@ -300,7 +302,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 		var rows []lensFactItem
 		// Last round's per-mount vector-step report, for the cutoff notice and the
 		// Info log. A text query never deepens, so that is the only round.
-		var diags []store.SearchDiag
+		var diags []index.SearchDiag
 
 		// DEPTH IS RE-DERIVED, not fixed, because dedupe spends it.
 		//
@@ -337,8 +339,8 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 			// Fan out to every selected mount at its Binding-resolved branch. Any
 			// mount error fails the whole request — a lens must never silently shrink
 			// its read set (RFC §9.1).
-			lists := make([][]store.RecentFactEntry, len(targets))
-			diags = make([]store.SearchDiag, len(targets))
+			lists := make([][]index.RecentFactEntry, len(targets))
+			diags = make([]index.SearchDiag, len(targets))
 			mountTotal = 0
 			truncated = false
 			fetched := 0
@@ -373,7 +375,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 
 			// Dedupe by repo-relative path (write mount wins, then binding order).
 			winner := federate.WriteFirstWinners(targets, b.Write(), lists,
-				func(e store.RecentFactEntry) string { return e.Path })
+				func(e index.RecentFactEntry) string { return e.Path })
 
 			// Order the union honouring whichever key each mount ordered by — exactly
 			// as MCP queryRecent does. RecentFacts returns each mount's list
@@ -489,7 +491,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 
 		resp := lensFactsResponse{Facts: page, Total: total}
 		if len(rows) == 0 {
-			resp.Notice = store.CutoffNotice(text != "", minSimilarity, diags...)
+			resp.Notice = index.CutoffNotice(text != "", minSimilarity, diags...)
 		}
 		logLensSearchDiag("facts", b.Name(), text != "", minSimilarity, targets, diags, len(rows))
 		hal.WriteHAL(w, http.StatusOK, resp)
@@ -772,7 +774,7 @@ type lensSearchResponse struct {
 // logLensSearchDiag writes the one Info line per lens text/filter read: whether
 // it had text, the caller's min_similarity, and per-mount cutoff and counts
 // after the vector step and after the cutoff.
-func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float64, targets []federate.Target, diags []store.SearchDiag, returned int) {
+func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float64, targets []federate.Target, diags []index.SearchDiag, returned int) {
 	type mountCounts struct {
 		Mount      string  `json:"mount"`
 		VecHits    int     `json:"vec_hits"`
@@ -834,7 +836,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 					"invalid min_similarity value", r.URL.Path)
 				return
 			}
-			if err := store.ValidateMinSimilarity(n); err != nil {
+			if err := index.ValidateMinSimilarity(n); err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
@@ -883,7 +885,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			hal.WriteProblem(w, http.StatusInternalServerError, "Search failed", err.Error(), r.URL.Path)
 			return
 		}
-		base := store.SearchOptions{
+		base := index.SearchOptions{
 			Text:           qp.Get("q"),
 			Entities:       splitCSV(qp.Get("entities")),
 			Domain:         splitCSV(qp.Get("domain")),
@@ -927,8 +929,8 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 		// the fusion below reads that slice in mount order — a mount's index IS
 		// its identity to FuseRRF and WriteFirstWinners, so results must never be
 		// appended from inside a goroutine.
-		lists := make([][]store.SearchResult, len(targets))
-		diags := make([]store.SearchDiag, len(targets))
+		lists := make([][]index.SearchResult, len(targets))
+		diags := make([]index.SearchDiag, len(targets))
 		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 			q := base
 			q.Path = t.Path
@@ -951,7 +953,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 
 		// Dedupe by repo-relative path (write mount wins, then binding order).
 		winner := federate.WriteFirstWinners(targets, b.Write(), lists,
-			func(res store.SearchResult) string { return res.Path })
+			func(res index.SearchResult) string { return res.Path })
 
 		// Emit deduped rows in fused order: keep a row only when its mount is the
 		// winner for that rel path. A shadowed copy is dropped even when it ranks
@@ -1002,7 +1004,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 
 		resp := lensSearchResponse{Results: rows, Total: total}
 		if len(rows) == 0 {
-			resp.Notice = store.CutoffNotice(base.Text != "", minSimilarity, diags...)
+			resp.Notice = index.CutoffNotice(base.Text != "", minSimilarity, diags...)
 		}
 		logLensSearchDiag("search", b.Name(), base.Text != "", minSimilarity, targets, diags, len(rows))
 		hal.WriteHAL(w, http.StatusOK, resp)

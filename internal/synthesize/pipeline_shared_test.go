@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // Tests for behaviour the engine owns on behalf of EVERY strategy. They are
@@ -149,8 +150,8 @@ func TestPipeline_UnknownSession_TouchesNothing(t *testing.T) {
 // filter in the bridge engine (which excludes only origin=discovered) and
 // seeded its own discovery. Origin MUST survive the projection.
 func TestFactFromSearchResult_PropagatesOrigin(t *testing.T) {
-	mk := func(origin string) store.SearchResult {
-		var r store.SearchResult
+	mk := func(origin string) index.SearchResult {
+		var r index.SearchResult
 		r.Path = "kb/x/p.md"
 		r.Title = "P"
 		r.Body = "body"

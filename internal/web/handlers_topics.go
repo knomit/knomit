@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
@@ -191,11 +193,11 @@ func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 		}
 		highlights := result.Highlights
 		if highlights == nil {
-			highlights = []store.Highlight{}
+			highlights = []index.Highlight{}
 		}
 		axis := result.DefaultAxis
 		if axis == "" {
-			axis = store.AxisConfidence
+			axis = index.AxisConfidence
 		}
 
 		view := statsView{

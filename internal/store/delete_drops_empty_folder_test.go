@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -41,7 +43,7 @@ func TestDeleteFact_LastFactDropsFolder(t *testing.T) {
 
 	// The dropped folders' empty trees are never stored, so nothing is left
 	// unreachable for Verify to report as an orphan.
-	rep, err := svc.Verify(context.Background(), VerifyOpts{})
+	rep, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsStrictlyClean(), "a cascading drop must leave no orphan objects: %v", rep.Issues)
 }

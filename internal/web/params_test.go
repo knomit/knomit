@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 func TestLimitParam(t *testing.T) {
@@ -139,13 +139,13 @@ func TestMotifParams(t *testing.T) {
 		name       string
 		query      string
 		wantMotifs []string
-		wantTier   store.MotifMatchTier
+		wantTier   index.MotifMatchTier
 		wantOK     bool
 	}{
-		{"absent is inert exact", "", nil, store.MotifMatchExact, true},
-		{"csv motifs default exact", "motifs=a-b,c-d", []string{"a-b", "c-d"}, store.MotifMatchExact, true},
-		{"stem accepted", "motifs=a-b&motif_match=stem", []string{"a-b"}, store.MotifMatchStem, true},
-		{"token-2 accepted", "motifs=a-b&motif_match=token-2", []string{"a-b"}, store.MotifMatchToken2, true},
+		{"absent is inert exact", "", nil, index.MotifMatchExact, true},
+		{"csv motifs default exact", "motifs=a-b,c-d", []string{"a-b", "c-d"}, index.MotifMatchExact, true},
+		{"stem accepted", "motifs=a-b&motif_match=stem", []string{"a-b"}, index.MotifMatchStem, true},
+		{"token-2 accepted", "motifs=a-b&motif_match=token-2", []string{"a-b"}, index.MotifMatchToken2, true},
 		{"loose tier rejected", "motifs=a-b&motif_match=token-1", nil, "", false},
 		{"soft rejected", "motifs=a-b&motif_match=soft", nil, "", false},
 		{"garbage rejected", "motifs=a-b&motif_match=fuzzy", nil, "", false},

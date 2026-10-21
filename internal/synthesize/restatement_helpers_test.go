@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
@@ -242,7 +244,7 @@ func (e *restatementEnv) dedupThreshold() float64 {
 	return store.EmbedderThresholds(e.ri.Embedder()).Dedup
 }
 
-func containsPair(pairs []store.RestatementPair, a, b string) bool {
+func containsPair(pairs []vocab.RestatementPair, a, b string) bool {
 	for _, p := range pairs {
 		if (p.APath == a && p.BPath == b) || (p.APath == b && p.BPath == a) {
 			return true
@@ -282,7 +284,7 @@ func (e *restatementEnv) recordVerdict(aPath, bPath string, merged bool) {
 	e.t.Helper()
 	ctx := context.Background()
 	ids := e.liveFactIDs()
-	require.NoError(e.t, e.svc.Abstraction().RecordRestatementVerdict(ctx, e.branch, store.RestatementVerdict{
+	require.NoError(e.t, e.svc.Abstraction().RecordRestatementVerdict(ctx, e.branch, vocab.RestatementVerdict{
 		APath: aPath, BPath: bPath,
 		AFactID: ids[aPath], BFactID: ids[bPath],
 		Resolved: merged, JudgedAt: time.Now(),
@@ -352,10 +354,10 @@ func (e *restatementEnv) writeFactWithMotifsConf(path, title, body string, motif
 }
 
 // keepVerdicts is n judge outcomes that all said "keep".
-func keepVerdicts(n int) []store.RestatementVerdict {
-	out := make([]store.RestatementVerdict, 0, n)
+func keepVerdicts(n int) []vocab.RestatementVerdict {
+	out := make([]vocab.RestatementVerdict, 0, n)
 	for i := range n {
-		out = append(out, store.RestatementVerdict{
+		out = append(out, vocab.RestatementVerdict{
 			APath: fmt.Sprintf("kb/a%d.md", i), BPath: fmt.Sprintf("kb/b%d.md", i),
 			AFactID: int64(i * 2), BFactID: int64(i*2 + 1),
 		})

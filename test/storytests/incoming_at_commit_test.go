@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
 	"knomit/test/testenv"
@@ -88,7 +90,7 @@ func TestIncomingAtCommit_StoryScenarios(t *testing.T) {
 
 		// HEAD-side ExplainFact returns the same lineage as commit-anchored
 		// /incoming at HEAD-active commit for kb/e.md.
-		var headIncoming []store.RefSummary
+		var headIncoming []index.RefSummary
 		var explainErr error
 		agent.WithRead(func(svc *store.Service) {
 			result, err := svc.Search().ExplainFact(context.Background(), "main", "kb/e.md")

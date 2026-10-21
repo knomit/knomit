@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
@@ -82,9 +84,9 @@ func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.
 		if len(vecs) != len(targets) {
 			return 0, 0, errf(reviewTool, "title backfill: embedder returned %d vectors for %d titles", len(vecs), len(targets))
 		}
-		out := make([]store.TitleVector, 0, len(targets))
+		out := make([]vocab.TitleVector, 0, len(targets))
 		for i, t := range targets {
-			out = append(out, store.TitleVector{FactID: t.FactID, Vec: vecs[i]})
+			out = append(out, vocab.TitleVector{FactID: t.FactID, Vec: vecs[i]})
 		}
 		if err := d.Abstraction.PutTitleVectors(ctx, out); err != nil {
 			return 0, 0, wrapf(reviewTool, err, "title backfill: store")
@@ -195,7 +197,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 		return stats, wrapf(reviewTool, err, "shortlist: declined pairs")
 	}
 
-	var candidates []store.RestatementPair
+	var candidates []vocab.RestatementPair
 	for _, id := range requeue {
 		stats.NeighbourQueries++
 		neighbours, err := d.Abstraction.TopTitleNeighbours(ctx, branch, id, pairNeighbourK)
@@ -203,7 +205,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 			return stats, wrapf(reviewTool, err, "shortlist: neighbours for fact %d", id)
 		}
 		for _, n := range neighbours {
-			if _, ok := declined[store.FactIDPairKey(id, n.FactID)]; ok {
+			if _, ok := declined[vocab.FactIDPairKey(id, n.FactID)]; ok {
 				continue
 			}
 			candidates = append(candidates, newRestatementPair(id, onAxis[id], n))
@@ -262,12 +264,12 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 }
 
 // newRestatementPair canonicalises a pair so A-B and B-A are one row.
-func newRestatementPair(id int64, path string, n store.TitleNeighbour) store.RestatementPair {
-	p := store.RestatementPair{
+func newRestatementPair(id int64, path string, n vocab.TitleNeighbour) vocab.RestatementPair {
+	p := vocab.RestatementPair{
 		APath: path, BPath: n.Path,
 		AFactID: id, BFactID: n.FactID,
 		TitleCos:  n.Similarity,
-		MatchKind: store.MatchTitleKNN,
+		MatchKind: vocab.MatchTitleKNN,
 	}
 	if p.BPath < p.APath {
 		p.APath, p.BPath = p.BPath, p.APath
@@ -505,7 +507,7 @@ func shortlistBudget(n int) int {
 // throttleDefunded is read by any branch, so an unproven corpus budgets and
 // probes exactly as a funded or optimistic one does. This changes what is
 // PRINTED, never what is spent.
-func throttleState(verdicts []store.RestatementVerdict) (float64, string) {
+func throttleState(verdicts []vocab.RestatementVerdict) (float64, string) {
 	if len(verdicts) == 0 {
 		return 0, throttleOptimistic
 	}
@@ -532,7 +534,7 @@ func throttleState(verdicts []store.RestatementVerdict) (float64, string) {
 // membership check, never re-clustered: a pair already sitting in one cluster
 // is a pair prune sees anyway, so spending a shortlist slot on it is spending
 // twice for one judgement.
-func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clusters [][]factForLLM, n int) ([]store.RestatementPair, restatementHealth, error) {
+func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clusters [][]factForLLM, n int) ([]vocab.RestatementPair, restatementHealth, error) {
 	var h restatementHealth
 
 	// Coverage is read here rather than passed in, so every caller that builds
@@ -638,7 +640,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// band underfilled. That made the signal contribute nothing in exactly the
 	// case it exists for: pairs the title axis UNDER-RANKS (designer ruling
 	// Q10).
-	eligible := func(p store.RestatementPair) bool {
+	eligible := func(p vocab.RestatementPair) bool {
 		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
 			return false
 		}
@@ -648,7 +650,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		return true
 	}
 
-	var ordinary, motifPairs []store.RestatementPair
+	var ordinary, motifPairs []vocab.RestatementPair
 	for i, p := range widened {
 		if !eligible(p) {
 			continue
@@ -690,9 +692,9 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		motifReserved = 1
 	}
 
-	var out []store.RestatementPair
+	var out []vocab.RestatementPair
 	taken := map[string]struct{}{}
-	add := func(p store.RestatementPair) bool {
+	add := func(p vocab.RestatementPair) bool {
 		key := pathPairKey(p.APath, p.BPath)
 		if _, dup := taken[key]; dup {
 			return false
@@ -784,16 +786,16 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 // construction, and there is no scoped view that would ever co-present the two
 // halves. The widening is real, so it is COUNTED and reported rather than done
 // quietly (h.StructuralOutOfScope).
-func selectStructuralSweep(ctx context.Context, d Deps, branch string, coGrouped map[string]struct{}) ([]store.RestatementPair, error) {
+func selectStructuralSweep(ctx context.Context, d Deps, branch string, coGrouped map[string]struct{}) ([]vocab.RestatementPair, error) {
 	// Over-fetch for the same reason the ordinary band does: the exclusion
 	// below is decided per candidate, so cutting to the allowance first would
 	// let one co-clustered pair silently shrink the sweep.
 	sp, err := d.Abstraction.RestatementPairsByMatchKindOldest(ctx, branch,
-		[]string{store.MatchPathIdentity}, structuralAllowance*shortlistOverfetch)
+		[]string{vocab.MatchPathIdentity}, structuralAllowance*shortlistOverfetch)
 	if err != nil {
 		return nil, wrapf(reviewTool, err, "shortlist: structural sweep")
 	}
-	var out []store.RestatementPair
+	var out []vocab.RestatementPair
 	for _, p := range sp {
 		if len(out) >= structuralAllowance {
 			break
@@ -816,7 +818,7 @@ func selectStructuralSweep(ctx context.Context, d Deps, branch string, coGrouped
 // detection inert exactly where it mattered: the corpus with the least evidence
 // that consolidation is worth anything is the corpus most in need of being
 // shown a near-certain duplicate. The allowance is spent; the budget is not.
-func emitStructuralOnly(structural []store.RestatementPair, h *restatementHealth) []store.RestatementPair {
+func emitStructuralOnly(structural []vocab.RestatementPair, h *restatementHealth) []vocab.RestatementPair {
 	h.StructuralOffered = len(structural)
 	h.Emitted = len(structural)
 	return structural
@@ -854,7 +856,7 @@ func pathPairKey(a, b string) string {
 // asked to work on one area should not spend its judge slots on two facts that
 // are both somewhere else. A fully out-of-scope pair simply waits for an
 // unscoped session.
-func pairTouchesScope(ctx context.Context, d Deps, branch string, p store.RestatementPair) bool {
+func pairTouchesScope(ctx context.Context, d Deps, branch string, p vocab.RestatementPair) bool {
 	for _, path := range []string{p.APath, p.BPath} {
 		f, err := d.Search.GetByPath(ctx, branch, path)
 		if err != nil || f == nil {
@@ -882,7 +884,7 @@ func pairTouchesScope(ctx context.Context, d Deps, branch string, p store.Restat
 // restate- items in a fully-drained 48-item queue. The number was not wrong
 // about what it counted — it counted SELECTION and was read as SERVICE, and
 // nothing in the output could tell the two apart.
-func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, pairs []store.RestatementPair) (served, dropped int, err error) {
+func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, pairs []vocab.RestatementPair) (served, dropped int, err error) {
 	for i, p := range pairs {
 		facts := make([]factForLLM, 0, 2)
 		for _, path := range []string{p.APath, p.BPath} {
@@ -1264,7 +1266,7 @@ func recordShortlistVerdict(ctx context.Context, d Deps, sess *store.PipelineSes
 		}
 	}
 
-	if err := d.Abstraction.RecordRestatementVerdict(ctx, sess.Branch, store.RestatementVerdict{
+	if err := d.Abstraction.RecordRestatementVerdict(ctx, sess.Branch, vocab.RestatementVerdict{
 		APath: judged.APath, BPath: judged.BPath,
 		AFactID: judged.AFactID, BFactID: judged.BFactID,
 		Resolved: resolved, JudgedAt: time.Now().UTC(),
@@ -1338,7 +1340,7 @@ func probeAllowed(ctx context.Context, d Deps, branch string) (bool, error) {
 // Degrades to false on any error: the widener is an ADDITION to the shortlist,
 // and a corpus whose vocabulary cannot be read should still get its ordinary
 // candidates rather than none.
-func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p store.RestatementPair) (bool, error) {
+func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p vocab.RestatementPair) (bool, error) {
 	if d.Motifs == nil {
 		return false, nil
 	}
@@ -1381,7 +1383,7 @@ func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p stor
 // placeholder there would be a number no measurement produced. The pair is not
 // lost — the axis backfill fills in over sessions, and the next refresh that
 // rescans either fact mints it.
-func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64, declined map[string]struct{}) ([]store.RestatementPair, error) {
+func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64, declined map[string]struct{}) ([]vocab.RestatementPair, error) {
 	if len(requeue) == 0 {
 		return nil, nil
 	}
@@ -1408,9 +1410,9 @@ func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64
 		return nil, wrapf(reviewTool, err, "shortlist: title vectors for structural pairs")
 	}
 
-	out := make([]store.RestatementPair, 0, len(matches))
+	out := make([]vocab.RestatementPair, 0, len(matches))
 	for _, m := range matches {
-		if _, ok := declined[store.FactIDPairKey(m.a, m.b)]; ok {
+		if _, ok := declined[vocab.FactIDPairKey(m.a, m.b)]; ok {
 			continue
 		}
 		va, aok := vecs[m.a]
@@ -1418,7 +1420,7 @@ func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64
 		if !aok || !bok {
 			continue
 		}
-		p := store.RestatementPair{
+		p := vocab.RestatementPair{
 			APath: titles[m.a].Path, BPath: titles[m.b].Path,
 			AFactID: m.a, BFactID: m.b,
 			TitleCos:  store.CosineSim(va, vb),

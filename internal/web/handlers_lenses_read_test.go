@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
+
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
@@ -26,8 +29,8 @@ import (
 // call is answered from byRepo keyed by the repo's name, so a single stub drives
 // the whole fan-out. It records the last SearchOptions seen per repo.
 type lensFactsStub struct {
-	byRepo   map[string][]store.RecentFactEntry
-	lastOpts map[string]store.SearchOptions
+	byRepo   map[string][]index.RecentFactEntry
+	lastOpts map[string]index.SearchOptions
 	// totalByRepo overrides the count a mount reports, so a test can model the
 	// real store: RecentFacts runs its own SELECT COUNT(*), so the total is
 	// independent of how many rows the page asked for. Defaults to len(rows).
@@ -36,10 +39,10 @@ type lensFactsStub struct {
 
 func (s *lensFactsStub) RecentFacts(
 	_ context.Context,
-	ri *repos.RepoInstance, _ string, opts store.SearchOptions,
-) ([]store.RecentFactEntry, int, error) {
+	ri *repos.RepoInstance, _ string, opts index.SearchOptions,
+) ([]index.RecentFactEntry, int, error) {
 	if s.lastOpts == nil {
-		s.lastOpts = map[string]store.SearchOptions{}
+		s.lastOpts = map[string]index.SearchOptions{}
 	}
 	s.lastOpts[ri.Name()] = opts
 	e := s.byRepo[ri.Name()]
@@ -109,7 +112,7 @@ func decodeLensFacts(t *testing.T, rec *httptest.ResponseRecorder) lensFactsBody
 // the write repo's name sorts AFTER the read mount's in binding order.
 func TestLensFacts_DuplicatePathWriteWins(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha") // write=zulu sorts after read=alpha
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"zulu":  {{Path: "kb/x/1.md", Title: "Write copy", Type: "observation", CommittedAt: 100}},
 		"alpha": {{Path: "kb/x/1.md", Title: "Read copy", Type: "observation", CommittedAt: 200}},
 	}}
@@ -140,7 +143,7 @@ func TestLensFacts_DuplicatePathWriteWins(t *testing.T) {
 // carries that mount's source identity.
 func TestLensFacts_ReadMountQualifiedPath(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"beta": {{Path: "kb/y/2.md", Title: "Read only", Type: "policy", CommittedAt: 300}},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
@@ -168,7 +171,7 @@ func TestLensFacts_ReadMountQualifiedPath(t *testing.T) {
 // not appear.
 func TestLensFacts_RepoFilterNarrows(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/a/1.md", Title: "Write fact", CommittedAt: 100}},
 		"beta":  {{Path: "kb/b/2.md", Title: "Read fact", CommittedAt: 200}},
 	}}
@@ -204,7 +207,7 @@ func TestLensFacts_UnknownRepoFilter422(t *testing.T) {
 // Recency ordering is by committed_at ACROSS mounts, not grouped by mount.
 func TestLensFacts_RecencyOrderingAcrossMounts(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		// Each mount's list is committed_at-DESC, as RecentFacts returns.
 		"alpha": {
 			{Path: "kb/a/hi.md", Title: "a-300", CommittedAt: 300},
@@ -241,7 +244,7 @@ func TestLensFacts_RecencyOrderingAcrossMounts(t *testing.T) {
 // except path and text.
 func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -309,7 +312,7 @@ func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
 // caller sending the canonical `entity=` got the unfiltered union silently.
 func TestLensFacts_ForwardsCanonicalEntitySingular(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -335,7 +338,7 @@ func TestLensFacts_ForwardsCanonicalEntitySingular(t *testing.T) {
 // `topic`, so a topic-scoped browse returned the full unscoped union.
 func TestLensFacts_TopicShorthandRewritesPath(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -394,7 +397,7 @@ func TestLensFacts_TextQueryPreservesRelevanceOrder(t *testing.T) {
 	// RecentFacts with a text query returns RELEVANCE order (store behaviour):
 	// best match first, regardless of committed_at. Timestamps here are NOT
 	// monotonic, so a recency re-sort would reorder them.
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"solo": {
 			{Path: "kb/x/best.md", Title: "best", CommittedAt: 100},
 			{Path: "kb/x/mid.md", Title: "mid", CommittedAt: 300},
@@ -420,7 +423,7 @@ func TestLensFacts_TextQueryPreservesRelevanceOrder(t *testing.T) {
 // rank-0 rows first regardless of their timestamps — not a global recency sort.
 func TestLensFacts_TextQueryFusesByRankNotTimestamp(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		// Per-mount relevance order. beta's best match is OLDER than alpha's
 		// second-best; a recency sort would put a-old-but-rank1 above b-rank0.
 		"alpha": {
@@ -485,7 +488,7 @@ func TestLensFacts_EmptyMounts(t *testing.T) {
 // whole fan-out. It records the last SearchOptions and whether a non-nil
 // embedder was forwarded, per repo.
 type lensSearchStub struct {
-	byRepo map[string][]store.SearchResult
+	byRepo map[string][]index.SearchResult
 	// delayByRepo staggers per-mount latency. Under a concurrent fan-out this
 	// decides completion order — which the fused response must NOT depend on,
 	// because a mount's INDEX is its identity to FuseRRF and WriteFirstWinners.
@@ -498,17 +501,17 @@ type lensSearchStub struct {
 	// needs no such thing. Without the lock the recording, not the code under
 	// test, is the race.
 	mu       sync.Mutex
-	lastOpts map[string]store.SearchOptions
+	lastOpts map[string]index.SearchOptions
 	embSeen  map[string]bool
 }
 
 func (s *lensSearchStub) Search(
 	_ context.Context,
-	ri *repos.RepoInstance, emb store.Embedder, _ string, opts store.SearchOptions,
-) ([]store.SearchResult, error) {
+	ri *repos.RepoInstance, emb store.Embedder, _ string, opts index.SearchOptions,
+) ([]index.SearchResult, error) {
 	s.mu.Lock()
 	if s.lastOpts == nil {
-		s.lastOpts = map[string]store.SearchOptions{}
+		s.lastOpts = map[string]index.SearchOptions{}
 	}
 	if s.embSeen == nil {
 		s.embSeen = map[string]bool{}
@@ -528,8 +531,8 @@ func (s *lensSearchStub) Search(
 // sr builds a minimal search result: a repo-relative path, title, and native
 // relevance score. The score magnitude is what a naive interleave would sort
 // by; RRF ignores it and orders by per-mount rank instead.
-func sr(path, title string, score float64) store.SearchResult {
-	return store.SearchResult{
+func sr(path, title string, score float64) index.SearchResult {
+	return index.SearchResult{
 		FactWithBody: facts.FactWithBody{
 			FactRecord: facts.FactRecord{Path: path, Title: title, Type: "observation"},
 		},
@@ -575,7 +578,7 @@ func decodeLensSearch(t *testing.T, rec *httptest.ResponseRecorder) lensSearchBo
 // shadowed higher-ranked copy must not appear at all.
 func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha") // write=zulu sorts after read=alpha
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		"zulu":  {sr("kb/x/1.md", "Write copy", 10)},
 		"alpha": {sr("kb/x/1.md", "Read copy", 99)}, // higher score, would rank first
 	}}
@@ -612,7 +615,7 @@ func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
 // This test fails under naive interleaving.
 func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		// Reads() is sorted by repo name → alpha is mount 0, beta is mount 1.
 		"alpha": {sr("kb/a/0.md", "alpha-top", 5)}, // rank 0, LOW score
 		"beta": {
@@ -644,7 +647,7 @@ func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
 // carries that mount's source identity.
 func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		"beta": {sr("kb/y/2.md", "Read only", 42)},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{search: stub}}
@@ -672,7 +675,7 @@ func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
 // do not appear.
 func TestLensSearch_RepoFilterNarrows(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		"alpha": {sr("kb/a/1.md", "Write fact", 100)},
 		"beta":  {sr("kb/b/2.md", "Read fact", 10)},
 	}}
@@ -714,7 +717,7 @@ func TestLensSearch_UnknownRepoFilter422(t *testing.T) {
 // answer a text query is the store's concern, not this handler's.
 func TestLensSearch_EmbedderOffFallback(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		"beta": {sr("kb/b/2.md", "Read fact", 10)},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{search: stub}} // Embedder left nil
@@ -1132,7 +1135,7 @@ func TestLensFact_MissingAndBackendError(t *testing.T) {
 func TestLensFacts_TotalIsTheCorpusCountNotThePage(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensFactsStub{
-		byRepo: map[string][]store.RecentFactEntry{
+		byRepo: map[string][]index.RecentFactEntry{
 			"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 300}},
 			"beta":  {{Path: "kb/b/1.md", Title: "b1", CommittedAt: 200}},
 		},
@@ -1157,7 +1160,7 @@ func TestLensFacts_NarrowedTotalCountsOnlyTheSelectedMounts(t *testing.T) {
 	// leave a total describing a set the reader is no longer looking at.
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensFactsStub{
-		byRepo: map[string][]store.RecentFactEntry{
+		byRepo: map[string][]index.RecentFactEntry{
 			"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 300}},
 			"beta":  {{Path: "kb/b/1.md", Title: "b1", CommittedAt: 200}},
 		},
@@ -1184,7 +1187,7 @@ func TestLensFacts_NarrowedTotalCountsOnlyTheSelectedMounts(t *testing.T) {
 
 func TestLensFacts_RecencyDepthFollowsTheOffset(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 300}},
 		"beta":  {{Path: "kb/b/1.md", Title: "b1", CommittedAt: 200}},
 	}}
@@ -1204,15 +1207,15 @@ func TestLensFacts_ReachesPastTheOldCandidateCap(t *testing.T) {
 	// The regression in one shot: a mount with more than 500 facts, read at an
 	// offset beyond 500. Under the fixed window this returned nothing.
 	m, _ := newTestLensManager(t, "alpha")
-	big := make([]store.RecentFactEntry, 900)
+	big := make([]index.RecentFactEntry, 900)
 	for i := range big {
-		big[i] = store.RecentFactEntry{
+		big[i] = index.RecentFactEntry{
 			Path:        fmt.Sprintf("kb/a/%03d.md", i),
 			Title:       fmt.Sprintf("a%03d", i),
 			CommittedAt: int64(900 - i), // committed_at-DESC, as the store returns
 		}
 	}
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{"alpha": big}}
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{"alpha": big}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[]}`)
@@ -1234,7 +1237,7 @@ func TestLensFacts_DepthHasABackstop(t *testing.T) {
 	// its whole corpus. The ceiling exists only for that, far above any page a
 	// reader scrolls to.
 	m, _ := newTestLensManager(t, "alpha")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 1}},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
@@ -1258,7 +1261,7 @@ func TestLensFacts_DepthHasABackstop(t *testing.T) {
 
 func TestLensFacts_TextQueryKeepsTheRetrievalDepth(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/a/1.md", Title: "a1", CommittedAt: 1, Score: 0.9}},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
@@ -1276,7 +1279,7 @@ func TestLensFacts_TextQueryKeepsTheRetrievalDepth(t *testing.T) {
 // would report two — which is why the sum is the fallback, not the rule.
 func TestLensFacts_ExactUnionCountWhenNothingWasTruncated(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/shared.md", Title: "from-write", CommittedAt: 300}},
 		"beta":  {{Path: "kb/shared.md", Title: "from-read", CommittedAt: 200}},
 	}}
@@ -1308,7 +1311,7 @@ func TestLensFacts_ExactUnionCountWhenNothingWasTruncated(t *testing.T) {
 // those copies but far newer than anything on the write mount.
 func forkBesideUpstream() *lensFactsStub {
 	return &lensFactsStub{
-		byRepo: map[string][]store.RecentFactEntry{
+		byRepo: map[string][]index.RecentFactEntry{
 			"alpha": {
 				{Path: "kb/a.md", Title: "a", CommittedAt: 100},
 				{Path: "kb/b.md", Title: "b", CommittedAt: 90},
@@ -1375,7 +1378,7 @@ func TestLensFacts_NoRefanWhenNothingWasTruncated(t *testing.T) {
 	// The loop must not cost a second round in the ordinary case: if every mount
 	// handed over everything it had, there is no deeper row to go get.
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/a.md", Title: "a", CommittedAt: 100}},
 		"beta":  {{Path: "kb/b.md", Title: "b", CommittedAt: 200}},
 	}}
@@ -1393,17 +1396,17 @@ func TestLensFacts_DeepeningStopsAtTheBackstop(t *testing.T) {
 	// A pathological overlap must not fan out without bound: the loop stops at
 	// maxLensRecencyDepth and answers with what it has.
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	dupes := make([]store.RecentFactEntry, 0, 200)
-	upstream := make([]store.RecentFactEntry, 0, 200)
+	dupes := make([]index.RecentFactEntry, 0, 200)
+	upstream := make([]index.RecentFactEntry, 0, 200)
 	for i := 0; i < 200; i++ {
 		p := fmt.Sprintf("kb/shared-%03d.md", i)
 		// The fork's copies are always newer, so they always lose AND always
 		// sort first: every round of deepening spends itself on duplicates.
-		dupes = append(dupes, store.RecentFactEntry{Path: p, Title: "fork", CommittedAt: int64(10000 - i)})
-		upstream = append(upstream, store.RecentFactEntry{Path: p, Title: "up", CommittedAt: int64(100 - i)})
+		dupes = append(dupes, index.RecentFactEntry{Path: p, Title: "fork", CommittedAt: int64(10000 - i)})
+		upstream = append(upstream, index.RecentFactEntry{Path: p, Title: "up", CommittedAt: int64(100 - i)})
 	}
 	stub := &lensFactsStub{
-		byRepo:      map[string][]store.RecentFactEntry{"alpha": upstream, "beta": dupes},
+		byRepo:      map[string][]index.RecentFactEntry{"alpha": upstream, "beta": dupes},
 		totalByRepo: map[string]int{"beta": 100000},
 	}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
@@ -1440,10 +1443,10 @@ func TestLensFacts_OrdinaryTruncationCostsOneRound(t *testing.T) {
 	// answer in a single fan-out, or every page of every lens pays for the fork
 	// case that never happens to it.
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	mk := func(prefix string, base int64) []store.RecentFactEntry {
-		out := make([]store.RecentFactEntry, 0, 200)
+	mk := func(prefix string, base int64) []index.RecentFactEntry {
+		out := make([]index.RecentFactEntry, 0, 200)
 		for i := 0; i < 200; i++ {
-			out = append(out, store.RecentFactEntry{
+			out = append(out, index.RecentFactEntry{
 				Path:        fmt.Sprintf("kb/%s%03d.md", prefix, i),
 				Title:       fmt.Sprintf("%s%03d", prefix, i),
 				CommittedAt: base - int64(i)*2,
@@ -1451,7 +1454,7 @@ func TestLensFacts_OrdinaryTruncationCostsOneRound(t *testing.T) {
 		}
 		return out
 	}
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		// Interleaved: alpha on even stamps, beta on odd, no shared paths.
 		"alpha": mk("a", 10000),
 		"beta":  mk("b", 9999),
@@ -1504,7 +1507,7 @@ func TestLensFanoutDepth_OverflowingOffsetStillClamps(t *testing.T) {
 // every mount is asked the same question.
 func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -1521,7 +1524,7 @@ func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
 		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
 			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
 		}
-		if opts.MotifMatch != store.MotifMatchToken2 {
+		if opts.MotifMatch != index.MotifMatchToken2 {
 			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
 		}
 	}
@@ -1531,7 +1534,7 @@ func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
 // mount is queried at all (C3/MN6).
 func TestLensFacts_LooseMotifTierRejected(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{}}
 	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -1548,7 +1551,7 @@ func TestLensFacts_LooseMotifTierRejected(t *testing.T) {
 // Same two properties on the relevance twin.
 func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{}}
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{}}
 	s := &Server{Manager: m, providers: storeProviders{search: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -1565,7 +1568,7 @@ func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
 		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
 			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
 		}
-		if opts.MotifMatch != store.MotifMatchToken2 {
+		if opts.MotifMatch != index.MotifMatchToken2 {
 			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
 		}
 	}
@@ -1573,7 +1576,7 @@ func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
 
 func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{}}
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{}}
 	s := &Server{Manager: m, providers: storeProviders{search: stub}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
@@ -1590,7 +1593,7 @@ func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
 // The union rows carry each fact's motifs; a motif-free row omits the key.
 func TestLensFacts_MotifsOnTheWire(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	stub := &lensFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {
 			{Path: "kb/a.md", Title: "Carries a motif", Motifs: []string{"a-b"}, CommittedAt: 2},
 			{Path: "kb/b.md", Title: "Carries none", CommittedAt: 1},
@@ -1625,7 +1628,7 @@ func TestLensSearch_MotifsOnTheWire(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	withMotif := sr("kb/a.md", "Carries a motif", 10)
 	withMotif.Motifs = []string{"a-b"}
-	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
 		"alpha": {withMotif, sr("kb/b.md", "Carries none", 5)},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{search: stub}}
@@ -1661,14 +1664,14 @@ func TestLensSearch_MotifsOnTheWire(t *testing.T) {
 type motifResolvingLensStub struct {
 	// facts[repo] is that mount's corpus; each entry carries the exact motif
 	// spelling its author wrote.
-	facts map[string][]store.RecentFactEntry
+	facts map[string][]index.RecentFactEntry
 	// aliases[repo][term] is the set of spellings that mount resolves term to.
 	// A mount that judge-merged two spellings lists both; a mount that never
 	// did resolves a term to itself, which is the store's own degradation.
 	aliases map[string]map[string][]string
 	// mu guards lastOpts — the search fan-out is concurrent per mount.
 	mu       sync.Mutex
-	lastOpts map[string]store.SearchOptions
+	lastOpts map[string]index.SearchOptions
 }
 
 // resolve mirrors the store's exact tier: a query term expands to the
@@ -1687,12 +1690,12 @@ func (s *motifResolvingLensStub) resolve(repo string, terms []string) map[string
 	return out
 }
 
-func (s *motifResolvingLensStub) carriers(repo string, opts store.SearchOptions) []store.RecentFactEntry {
+func (s *motifResolvingLensStub) carriers(repo string, opts index.SearchOptions) []index.RecentFactEntry {
 	// Recorded under the lock: the lens search fan-out calls this stub once per
 	// mount concurrently (see lensSearchStub's note).
 	s.mu.Lock()
 	if s.lastOpts == nil {
-		s.lastOpts = map[string]store.SearchOptions{}
+		s.lastOpts = map[string]index.SearchOptions{}
 	}
 	s.lastOpts[repo] = opts
 	s.mu.Unlock()
@@ -1701,7 +1704,7 @@ func (s *motifResolvingLensStub) carriers(repo string, opts store.SearchOptions)
 		return corpus
 	}
 	want := s.resolve(repo, opts.Motifs)
-	var out []store.RecentFactEntry
+	var out []index.RecentFactEntry
 	for _, e := range corpus {
 		for _, m := range e.Motifs {
 			if want[m] {
@@ -1715,19 +1718,19 @@ func (s *motifResolvingLensStub) carriers(repo string, opts store.SearchOptions)
 
 func (s *motifResolvingLensStub) RecentFacts(
 	_ context.Context,
-	ri *repos.RepoInstance, _ string, opts store.SearchOptions,
-) ([]store.RecentFactEntry, int, error) {
+	ri *repos.RepoInstance, _ string, opts index.SearchOptions,
+) ([]index.RecentFactEntry, int, error) {
 	e := s.carriers(ri.Name(), opts)
 	return e, len(e), nil
 }
 
 func (s *motifResolvingLensStub) Search(
 	_ context.Context,
-	ri *repos.RepoInstance, _ store.Embedder, _ string, opts store.SearchOptions,
-) ([]store.SearchResult, error) {
-	var out []store.SearchResult
+	ri *repos.RepoInstance, _ store.Embedder, _ string, opts index.SearchOptions,
+) ([]index.SearchResult, error) {
+	var out []index.SearchResult
 	for _, e := range s.carriers(ri.Name(), opts) {
-		out = append(out, store.SearchResult{
+		out = append(out, index.SearchResult{
 			FactWithBody: facts.FactWithBody{
 				FactRecord: facts.FactRecord{Path: e.Path, Title: e.Title, Type: "observation", Motifs: e.Motifs},
 			},
@@ -1744,7 +1747,7 @@ func (s *motifResolvingLensStub) Search(
 // visible rather than assumed.
 func divergentVocabularies() *motifResolvingLensStub {
 	return &motifResolvingLensStub{
-		facts: map[string][]store.RecentFactEntry{
+		facts: map[string][]index.RecentFactEntry{
 			"alpha": {
 				{Path: "kb/alpha-aliased.md", Title: "Alpha aliased", Motifs: []string{"configuration-drifts"}, CommittedAt: 40},
 			},
@@ -1769,7 +1772,7 @@ func divergentVocabularies() *motifResolvingLensStub {
 // provider the union is empty, every term falls through unwidened, and the
 // assertions pass by describing a code path that never ran.
 func divergentVocabulariesUnion() *lensMotifsStub {
-	return &lensMotifsStub{clusters: map[string][]store.MotifCluster{
+	return &lensMotifsStub{clusters: map[string][]vocab.MotifCluster{
 		"alpha": {{ClusterKey: "config-drift", CanonicalID: "config-drift",
 			Members: []string{"config-drift", "configuration-drifts"}, DF: 1, DFTotal: 1}},
 		"beta": {{ClusterKey: "configuration-drifts", CanonicalID: "configuration-drifts",
@@ -1909,7 +1912,7 @@ type lensFactSubStub struct {
 func (s *lensFactSubStub) ExplainFact(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string,
-) (store.ExplainResult, error) {
+) (index.ExplainResult, error) {
 	s.gotRepo, s.gotBranch, s.gotPath = ri.Name(), branch, path
 	return s.stubFactSubProvider.ExplainFact(ctx, ri, branch, path)
 }
@@ -1930,8 +1933,8 @@ type lensRefsBody struct {
 func TestLensFactIncoming_BarePathReadsWriteRepo(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha")
 	sub := &lensFactSubStub{stubFactSubProvider: &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Incoming: []store.RefSummary{
+		explain: index.ExplainResult{
+			Incoming: []index.RefSummary{
 				{Path: "kb/x/2.md", Title: "Cites it"},
 				{Path: "kb/x/3.md", Title: "Also cites it"},
 			},
@@ -1975,8 +1978,8 @@ func TestLensFactIncoming_BarePathReadsWriteRepo(t *testing.T) {
 func TestLensFactOutgoing_QualifiedPathHitsMount(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	sub := &lensFactSubStub{stubFactSubProvider: &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Outgoing: []store.RefSummary{{Path: "kb/y/9.md", Title: "Derived from"}},
+		explain: index.ExplainResult{
+			Outgoing: []index.RefSummary{{Path: "kb/y/9.md", Title: "Derived from"}},
 		},
 	}}
 	s := &Server{Manager: m, providers: storeProviders{

@@ -4,8 +4,9 @@ import (
 	"context"
 	"sort"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // bridgePathCommunities builds the path→communityID map used by both
@@ -213,7 +214,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 				if e == "" {
 					continue
 				}
-				canon := store.CanonicalizeTag(e)
+				canon := index.CanonicalizeTag(e)
 				if _, already := tokenKind[canon]; !already {
 					tokenKind[canon] = BridgeEntity
 					repForm[canon] = e
@@ -225,7 +226,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 				if d == "" {
 					continue
 				}
-				canon := store.CanonicalizeTag(d)
+				canon := index.CanonicalizeTag(d)
 				if _, already := tokenKind[canon]; !already {
 					tokenKind[canon] = BridgeDomain
 					repForm[canon] = d
@@ -248,14 +249,14 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 		if kind == BridgeEntity || kind == BridgeBoth {
 			for _, e := range f.Entities {
 				if e != "" {
-					addMember(store.CanonicalizeTag(e))
+					addMember(index.CanonicalizeTag(e))
 				}
 			}
 		}
 		if kind == BridgeDomain || kind == BridgeBoth {
 			for _, d := range f.Domain {
 				if d != "" {
-					addMember(store.CanonicalizeTag(d))
+					addMember(index.CanonicalizeTag(d))
 				}
 			}
 		}
@@ -275,14 +276,14 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 			excluded := false
 			if tk == BridgeDomain {
 				for _, sd := range scope.Domain {
-					if store.DomainTagMatches(tok, sd) {
+					if index.DomainTagMatches(tok, sd) {
 						excluded = true
 						break
 					}
 				}
 			} else if tk == BridgeEntity {
 				for _, se := range scope.Entities {
-					if store.EntityTagMatches(tok, se) {
+					if index.EntityTagMatches(tok, se) {
 						excluded = true
 						break
 					}

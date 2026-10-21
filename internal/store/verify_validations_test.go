@@ -7,6 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/gitserve"
+
+	"knomit/internal/store/fleetrec"
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -46,8 +51,8 @@ func pushRefusal(t *testing.T, err error) string {
 	require.Error(t, err)
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, CommitRefusedByValidation+": "+RuleValidation+": "):
-		return RuleValidation
+	case strings.Contains(msg, verify.CommitRefusedByValidation+": "+verify.RuleValidation+": "):
+		return verify.RuleValidation
 	case pushRuleRE.MatchString(msg):
 		return pushRuleRE.FindStringSubmatch(msg)[1]
 	}
@@ -83,13 +88,13 @@ func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) 
 		}, ""},
 		{"an invalid new fact", func(p *peer, base *object.Commit) *object.Commit {
 			return p.commit(base, nil, "kb/notes/new.md", note("new"))
-		}, RuleValidation},
+		}, verify.RuleValidation},
 		{"another fact, the invalid legacy fact untouched", func(p *peer, base *object.Commit) *object.Commit {
 			return p.commit(base, nil, "kb/notes/other.md", note("other", "e"))
 		}, ""},
 		{"the legacy fact rewritten, still invalid", func(p *peer, base *object.Commit) *object.Commit {
 			return p.commit(base, nil, "kb/notes/legacy.md", note("legacy v2"))
-		}, RuleValidation},
+		}, verify.RuleValidation},
 		{"the legacy fact fixed", func(p *peer, base *object.Commit) *object.Commit {
 			return p.commit(base, nil, "kb/notes/legacy.md", note("legacy v2", "e"))
 		}, ""},
@@ -107,13 +112,13 @@ func TestValidation_ReceivePackJudgesOnlyWhatACommitAddsOrChanges(t *testing.T) 
 		{"a valid fact a later commit breaks", func(p *peer, base *object.Commit) *object.Commit {
 			c := p.commit(base, nil, "kb/notes/new.md", note("new", "e"))
 			return p.commit(c, nil, "kb/notes/new.md", note("new"))
-		}, RuleValidation},
+		}, verify.RuleValidation},
 		{"a file that is not a fact (not .md, outside the fact root)", func(p *peer, base *object.Commit) *object.Commit {
 			c := p.commit(base, nil, "kb/notes/raw.txt", note("raw"))
 			return p.commit(c, nil, "notes/x.md", note("outside"))
 		}, ""},
 	}
-	modes := []string{"", VerifyOff, VerifyLog}
+	modes := []string{"", verify.VerifyOff, verify.VerifyLog}
 	ran := 0
 	for _, mode := range modes {
 		for _, r := range rows {
@@ -181,9 +186,9 @@ func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
 			// would refuse the invalid content at the source.
 			bad := h.rawBranch("agent/bad-1", hostBranch, "kb/notes/bad.md", note("bad"))
 			_, err := mergeCall(h.svc, ctx, "agent/bad-1", hostBranch, bad)
-			var ve *ValidationRefusedError
+			var ve *verify.ValidationRefusedError
 			require.True(t, errors.As(err, &ve), "want a validation refusal, got %v", err)
-			require.ErrorIs(t, err, ErrValidationRefused)
+			require.ErrorIs(t, err, verify.ErrValidationRefused)
 			require.Contains(t, ve.Reason, "kb/notes/bad.md")
 			require.Contains(t, ve.Reason, `"names-an-entity"`)
 			require.Equal(t, before, h.ref(hostBranch), "a refused merge moves nothing")
@@ -206,7 +211,7 @@ func TestValidation_MergeIntoTheAgentBranchJudgesTheResult(t *testing.T) {
 // is mergeable -> red; make ExitCode block only in enforce -> the off row is
 // exit 0 -> red.
 func TestValidation_CheckRangeBlocksInEveryMode(t *testing.T) {
-	for _, mode := range []string{"", VerifyOff, VerifyLog} {
+	for _, mode := range []string{"", verify.VerifyOff, verify.VerifyLog} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			f := newRangeFixture(t)
 			base := map[string]string{fact.OntologyFile: validatedOntology(mode), "kb/notes/legacy.md": note("legacy")}
@@ -215,24 +220,24 @@ func TestValidation_CheckRangeBlocksInEveryMode(t *testing.T) {
 
 			clean := f.commit(f.kb, with(base, "kb/notes/new.md", note("new", "e")), "agent-x", nil, root)
 			f.ref(f.kb, "cand", clean)
-			v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
-			if mode == VerifyLog {
+			v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+			if mode == verify.VerifyLog {
 				// log needs a fleet; the signature rules then report the
 				// unsigned commit, and log never blocks on them.
 				f.ref(f.fleet, "main", f.commit(f.fleet, map[string]string{fact.OntologyFile: fleetOntologyYAML(t)}, "", nil))
-				v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+				v, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 			}
 			require.NoError(t, err)
 			for _, r := range v.Refused {
-				require.NotEqual(t, RuleValidation, r.Rule, "the untouched legacy fact is not judged: %+v", r)
+				require.NotEqual(t, verify.RuleValidation, r.Rule, "the untouched legacy fact is not judged: %+v", r)
 			}
 			require.Equal(t, 0, v.ExitCode())
 
 			bad := f.commit(f.kb, with(base, "kb/notes/new.md", note("new")), "agent-x", nil, root)
 			f.ref(f.kb, "cand", bad)
-			v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+			v, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 			require.NoError(t, err)
-			require.Equal(t, RuleValidation, v.Refused[0].Rule, "%+v", v.Refused)
+			require.Equal(t, verify.RuleValidation, v.Refused[0].Rule, "%+v", v.Refused)
 			require.Equal(t, bad.Hash.String(), v.Refused[0].Commit)
 			require.Contains(t, v.Refused[0].Reason, `"names-an-entity"`)
 			require.Equal(t, 1, v.ExitCode(), "a validation refusal blocks in every mode")
@@ -240,10 +245,10 @@ func TestValidation_CheckRangeBlocksInEveryMode(t *testing.T) {
 			// A later commit fixes it: the candidate's net change is judged.
 			fixed := f.commit(f.kb, with(base, "kb/notes/new.md", note("new", "e")), "agent-x", nil, bad)
 			f.ref(f.kb, "cand", fixed)
-			v, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+			v, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 			require.NoError(t, err)
 			for _, r := range v.Refused {
-				require.NotEqual(t, RuleValidation, r.Rule, "a fixed candidate: %+v", r)
+				require.NotEqual(t, verify.RuleValidation, r.Rule, "a fixed candidate: %+v", r)
 			}
 		})
 	}
@@ -264,7 +269,7 @@ func TestValidation_TheHubRefusesAMemberFactThatIsNotPolicy(t *testing.T) {
 	extra["kb/members/rogue/1.md"] = memberFile("rogue", fact.MemberActive, r.PublicKey())
 	h := newFleetPushHost(t, extra)
 	fp, _ := pusherOf(t, r)
-	h.setPolicy(PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (Fleet, error) {
+	h.setPolicy(gitserve.PushPolicy{Pusher: fp, OwnBranch: hostBranch, Fleet: func(context.Context) (fleetrec.Fleet, error) {
 		return h.svc.FleetAt("main")
 	}})
 
@@ -274,7 +279,7 @@ func TestValidation_TheHubRefusesAMemberFactThatIsNotPolicy(t *testing.T) {
 	c := peer.commitAs("rogue", []*object.Commit{head}, r, with(peer.files(head), "kb/members/rogue/note.md", obs))
 	peer.setBranch("work", c)
 	err := peer.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/agent/rogue")
-	require.Equal(t, RuleValidation, pushRefusal(t, err))
+	require.Equal(t, verify.RuleValidation, pushRefusal(t, err))
 	require.Contains(t, err.Error(), `"members-are-policy"`)
 	require.Equal(t, plumbing.ZeroHash, h.ref("agent/rogue"))
 
@@ -315,7 +320,7 @@ func TestValidation_AFixedBranchIsAdmittedAfterMainTightensItsOntology(t *testin
 	require.NoError(t, err)
 	p.setBranch("work", c1)
 	err = p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch)
-	require.Equal(t, RuleValidation, pushRefusal(t, err), "the note fails the tightened ontology")
+	require.Equal(t, verify.RuleValidation, pushRefusal(t, err), "the note fails the tightened ontology")
 	c2 := p.commit(c1, nil, "kb/notes/n.md", note("n", "e"))
 	p.setBranch("work", c2)
 	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch), "the fixed branch is admitted")

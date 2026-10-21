@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/merge"
@@ -149,7 +151,7 @@ func TestSchemaVersionState(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, nr, "missing version must still require a rebuild (contract preserved)")
 
-	setVersion(GraphSchemaVersion)
+	setVersion(index.GraphSchemaVersion)
 	st, err = si.SchemaVersionStateForTest(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, schemaCurrent, st)
@@ -167,7 +169,7 @@ func TestSchemaVersionState(t *testing.T) {
 
 	// The key is per-branch, so a current "main" says nothing about a branch
 	// that has never been indexed.
-	setVersion(GraphSchemaVersion)
+	setVersion(index.GraphSchemaVersion)
 	st, err = si.SchemaVersionStateForTest(ctx, "agent/other")
 	require.NoError(t, err)
 	require.Equal(t, schemaMissing, st, "another branch's version must not answer for this one")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/store"
 )
 
@@ -21,7 +23,7 @@ type SearchAssert struct {
 	t       *testing.T
 	branch  *BranchHandle
 	query   string
-	results []store.SearchResult
+	results []index.SearchResult
 }
 
 // Search runs a text query against the branch's search index via the
@@ -34,10 +36,10 @@ type SearchAssert struct {
 func (b *BranchHandle) Search(query string) *SearchAssert {
 	t := b.repo.sb.t
 	t.Helper()
-	var results []store.SearchResult
+	var results []index.SearchResult
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		results, err = svc.Search().Search(context.Background(), b.name, store.SearchOptions{
+		results, err = svc.Search().Search(context.Background(), b.name, index.SearchOptions{
 			Text:  query,
 			Limit: 50,
 		})
@@ -51,7 +53,7 @@ func (b *BranchHandle) Search(query string) *SearchAssert {
 // Results returns the raw slice of store.SearchResult. Use this only when
 // the MustReturn / MustNotReturn / MustRankFirst / MustBeEmpty / MustHaveLen
 // helpers don't fit.
-func (a *SearchAssert) Results() []store.SearchResult { return a.results }
+func (a *SearchAssert) Results() []index.SearchResult { return a.results }
 
 // MustReturn asserts that every path in paths appears somewhere in the
 // result set. Order and score are not checked.
@@ -116,7 +118,7 @@ func (a *SearchAssert) MustHaveLen(n int) *SearchAssert {
 	return a
 }
 
-func resultPaths(results []store.SearchResult) []string {
+func resultPaths(results []index.SearchResult) []string {
 	out := make([]string, len(results))
 	for i, r := range results {
 		out[i] = r.Path

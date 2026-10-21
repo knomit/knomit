@@ -37,22 +37,22 @@ type Service struct {
 	handlerOnce sync.Once
 	handler     http.Handler
 	fi          *facts.Index
-	si          *searchIndex
+	si          *index.Index
 	// The four query sub-services carved out of searchIndex (P1.3). searchIndex
 	// (si) keeps IndexManager + the write/rebuild path; these own the read
 	// surface. search composes all four for the Search() composite.
-	fq *factQuery
-	gq *graphStore
-	hq *historyQuery
-	mq *methodologyMatcher
+	fq *index.FactQuery
+	gq *index.GraphStore
+	hq *index.HistoryQuery
+	mq *index.MethodologyMatcher
 	// ax is the abstraction axis + restatement shortlist. Kept OFF the search
 	// facade on purpose: it is review-pipeline state, and composing it would
 	// hand it to every mcp/web consumer of Search().
-	ax *abstractionIndex
+	ax *vocab.AbstractionIndex
 	// mo is alias resolution: motif spelling -> canonical id. Derived state
 	// (MN3), rebuildable from fact_motifs alone.
-	mo     *motifIndex
-	search *searchFacade
+	mo     *vocab.MotifIndex
+	search *index.Facade
 	pi     *sessions.PipelineIndex
 	ti     *sessions.ToolIndex
 	ri     *remotesync.Index

@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	"strings"
-	"sync"
-	"time"
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
@@ -317,9 +320,9 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).
-	lists := make([][]store.RecentFactEntry, len(targets))
+	lists := make([][]index.RecentFactEntry, len(targets))
 	errs := make([]error, len(targets))
-	diags := make([]store.SearchDiag, len(targets))
+	diags := make([]index.SearchDiag, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
@@ -390,13 +393,13 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 	// snapshot depth, so a shadowed cross-mount copy never consumes a slot and the
 	// snapshot agrees with the web /facts union.
 	order = keepWinners(order, targets, b.Write(), lists,
-		func(e store.RecentFactEntry) string { return e.Path })
+		func(e index.RecentFactEntry) string { return e.Path })
 	if len(order) > maxResults {
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
-			Notice: store.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
+			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
 	}
 
 	// Recent mode snapshots ALL merged rows into the session and serves page 1
@@ -434,7 +437,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 //
 // Branch-wide (no path scope): cluster identity is a property of the lens, not
 // of the path filter the caller happened to send.
-func mcpMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCluster, error) {
+func mcpMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error) {
 	s, release, err := storeIndices(rt.RI)
 	if err != nil {
 		return nil, err
@@ -455,7 +458,7 @@ func mcpMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCl
 // answer from a smaller read set than the lens has, which is precisely what
 // RFC §9.1 forbids. A single-mount binding is skipped: with nothing to merge
 // the expansion is provably an identity.
-func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *store.SearchOptions) error {
+func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *index.SearchOptions) error {
 	widened, err := federate.ExpandMotifTerms(ctx, b, mcpMotifClusters, q.Motifs)
 	if err != nil {
 		return err
@@ -466,24 +469,24 @@ func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *store.SearchOp
 
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
 // Limit is set by the caller per mode.
-func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
+func parseQueryFilters(req mcpgo.CallToolRequest) (index.SearchOptions, error) {
 	// A dot path is closed to the fact tools for reads as well as writes
 	// (F25). The index never holds one, so this would answer "nothing"
 	// anyway — refusing says why, instead of reading as an empty folder.
 	if p := req.GetString("path", ""); fact.IsPrivatePath(p) {
-		return store.SearchOptions{}, fmt.Errorf("path %q is private: %s", p, closedSuffix)
+		return index.SearchOptions{}, fmt.Errorf("path %q is private: %s", p, closedSuffix)
 	}
 	tier, err := parseMotifMatch(req.GetString("motif_match", ""))
 	if err != nil {
-		return store.SearchOptions{}, err
+		return index.SearchOptions{}, err
 	}
 	before, err := parseExpiryBound(req, "expires_before")
 	if err != nil {
-		return store.SearchOptions{}, err
+		return index.SearchOptions{}, err
 	}
 	after, err := parseExpiryBound(req, "expires_after")
 	if err != nil {
-		return store.SearchOptions{}, err
+		return index.SearchOptions{}, err
 	}
 	var expired *bool
 	if _, set := req.GetArguments()["expired"]; set {
@@ -491,14 +494,14 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 		expired = &v
 	}
 	minSim := req.GetFloat("min_similarity", 0)
-	if err := store.ValidateMinSimilarity(minSim); err != nil {
-		return store.SearchOptions{}, err
+	if err := index.ValidateMinSimilarity(minSim); err != nil {
+		return index.SearchOptions{}, err
 	}
 	ctxFilter, err := parseContextFilter(req)
 	if err != nil {
-		return store.SearchOptions{}, err
+		return index.SearchOptions{}, err
 	}
-	return store.SearchOptions{
+	return index.SearchOptions{
 		Context: ctxFilter,
 		// ONE clock per query: the expiry filters and every page's `expired`
 		// marker are computed from this instant (see pagedRowState.AsOf).
@@ -533,7 +536,7 @@ func stringOrSlice(req mcpgo.CallToolRequest, key string) []string {
 }
 
 // hasAnyFilter reports whether any selecting filter was supplied.
-func hasAnyFilter(q store.SearchOptions) bool {
+func hasAnyFilter(q index.SearchOptions) bool {
 	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
 		len(q.DomainAncestor) > 0 || q.Path != "" || q.MinConfidence > 0 ||
 		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0 ||
@@ -662,9 +665,9 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).
-	lists := make([][]store.SearchResult, len(targets))
+	lists := make([][]index.SearchResult, len(targets))
 	errs := make([]error, len(targets))
-	diags := make([]store.SearchDiag, len(targets))
+	diags := make([]index.SearchDiag, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
@@ -698,13 +701,13 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	// shadowed cross-mount copy never consumes a result slot and the page agrees
 	// with the web /search union.
 	order = keepWinners(order, targets, b.Write(), lists,
-		func(r store.SearchResult) string { return r.Path })
+		func(r index.SearchResult) string { return r.Path })
 	if len(order) > maxResults {
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
-			Notice: store.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
+			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
 	}
 
 	// renderRow builds one output row from its fused reference. The displayed
@@ -941,7 +944,7 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 // buildFactOutput renders a search result (first-page rows, whose full body is
 // already in hand). When includeBody is false the body is truncated to a
 // snippet (body_truncated set); otherwise the full body is returned as-is.
-func buildFactOutput(r store.SearchResult, includeBody bool, now time.Time) factOutput {
+func buildFactOutput(r index.SearchResult, includeBody bool, now time.Time) factOutput {
 	body, truncated := bodyView(r.Body, includeBody)
 	return factOutput{
 		Expired:       fact.IsExpiredAt(r.Expires, now),
@@ -1053,8 +1056,8 @@ func orEmpty(s []string) []string {
 // cannot drift — the fact-schema single-source pattern (invariant 2061717e)
 // applied to this knob.
 func motifMatchEnum() []string {
-	out := make([]string, 0, len(store.AllMotifMatchTiers))
-	for _, t := range store.AllMotifMatchTiers {
+	out := make([]string, 0, len(index.AllMotifMatchTiers))
+	for _, t := range index.AllMotifMatchTiers {
 		out = append(out, string(t))
 	}
 	return out
@@ -1070,8 +1073,8 @@ func motifMatchEnum() []string {
 // It cannot be a parse error either — that would say the value is invalid,
 // when it is a valid tier that is not yet calibrated. The distinction is the
 // difference between "you asked wrongly" and "we cannot answer that yet".
-func motifMatchUnavailable(q store.SearchOptions) string {
-	if q.MotifMatch != store.MotifMatchSoft || len(q.Motifs) == 0 {
+func motifMatchUnavailable(q index.SearchOptions) string {
+	if q.MotifMatch != index.MotifMatchSoft || len(q.Motifs) == 0 {
 		return ""
 	}
 	return "motif_match=soft is not available: it needs an operating point calibrated " +
@@ -1086,11 +1089,11 @@ func motifMatchUnavailable(q store.SearchOptions) string {
 // while looking like it succeeded — and for this knob specifically, a typo in
 // a loose tier would silently return the strict tier's results, which a caller
 // checking for breadth cannot distinguish from "there is nothing looser".
-func parseMotifMatch(raw string) (store.MotifMatchTier, error) {
+func parseMotifMatch(raw string) (index.MotifMatchTier, error) {
 	if raw == "" {
-		return store.MotifMatchExact, nil
+		return index.MotifMatchExact, nil
 	}
-	for _, t := range store.AllMotifMatchTiers {
+	for _, t := range index.AllMotifMatchTiers {
 		if string(t) == raw {
 			return t, nil
 		}
@@ -1102,7 +1105,7 @@ func parseMotifMatch(raw string) (store.MotifMatchTier, error) {
 // sort=recent alike): whether it had text, the caller's min_similarity, the
 // binding, and per-mount cutoff and counts after the vector step and after the
 // cutoff. returned[i] is how many rows mount i handed back.
-func logQueryDiag(mode string, b *repos.Binding, q store.SearchOptions, targets []federate.Target, diags []store.SearchDiag, returned []int) {
+func logQueryDiag(mode string, b *repos.Binding, q index.SearchOptions, targets []federate.Target, diags []index.SearchDiag, returned []int) {
 	type mountCounts struct {
 		Mount      string  `json:"mount"`
 		VecHits    int     `json:"vec_hits"`

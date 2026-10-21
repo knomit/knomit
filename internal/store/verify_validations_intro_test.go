@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -23,7 +25,7 @@ func TestValidation_TheRefusalNamesTheCommitThatWroteTheFact(t *testing.T) {
 	good := p.commit(bad, nil, "kb/notes/good.md", note("good", "e"))
 	p.setBranch("work", good)
 	err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch)
-	require.Equal(t, RuleValidation, pushRefusal(t, err))
-	require.Contains(t, err.Error(), "commit "+bad.Hash.String()+" "+CommitRefusedByValidation)
+	require.Equal(t, verify.RuleValidation, pushRefusal(t, err))
+	require.Contains(t, err.Error(), "commit "+bad.Hash.String()+" "+verify.CommitRefusedByValidation)
 	require.NotContains(t, err.Error(), good.Hash.String())
 }

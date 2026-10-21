@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -197,7 +199,7 @@ func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 	}
 
 	// The collapsed cluster carries BOTH spellings and counts BOTH carriers.
-	var collapsed MotifCluster
+	var collapsed vocab.MotifCluster
 	for _, c := range clusters {
 		if len(c.Members) > 1 {
 			collapsed = c
@@ -243,7 +245,7 @@ func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resolved, 2, "the rebuild reproduces the same two clusters")
 	for _, c := range resolved {
-		var before MotifCluster
+		var before vocab.MotifCluster
 		for _, b := range clusters {
 			if b.ClusterKey == c.ClusterKey {
 				before = b
@@ -261,7 +263,7 @@ func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 	}
 
 	// And carriers resolve for a singleton key.
-	var target MotifCluster
+	var target vocab.MotifCluster
 	for _, c := range clusters {
 		if c.CanonicalID == "silent-fallback" {
 			target = c

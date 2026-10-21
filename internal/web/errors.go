@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
@@ -32,7 +34,7 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error, defaultT
 			invalid.Error(), r.URL.Path)
 		return
 	}
-	if errors.Is(err, store.ErrFactNotLive) {
+	if errors.Is(err, index.ErrFactNotLive) {
 		hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
 			`no live version of this fact on branch "`+branch+`" — it may have been retracted (use the commit-anchored endpoint to read older versions)`,
 			r.URL.Path)

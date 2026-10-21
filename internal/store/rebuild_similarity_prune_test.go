@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,13 +56,13 @@ func TestRebuildGraph_PrunesStaleSimilarityEdges(t *testing.T) {
 	countSimilar := func() int {
 		var n int
 		require.NoError(t, db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeSimilarTo).Scan(&n))
+			`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeSimilarTo).Scan(&n))
 		return n
 	}
 	countDerived := func() int {
 		var n int
 		require.NoError(t, db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&n))
+			`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeDerivedFrom).Scan(&n))
 		return n
 	}
 
@@ -74,13 +76,13 @@ func TestRebuildGraph_PrunesStaleSimilarityEdges(t *testing.T) {
 	// A stale edge between two orphan nodes: no `facts` row refers to them, so
 	// no per-source prune driven by the current fact set would ever visit them.
 	// This is the shape a superseded fact version leaves behind.
-	ghostSrc, err := graphMergeNode(ctx, db, NodeFact,
+	ghostSrc, err := graphMergeNode(ctx, db, index.NodeFact,
 		map[string]string{"path": "kb/gone.md", "blob_hash": "staleblob1"})
 	require.NoError(t, err)
-	ghostTgt, err := graphMergeNode(ctx, db, NodeFact,
+	ghostTgt, err := graphMergeNode(ctx, db, index.NodeFact,
 		map[string]string{"path": "kb/gone2.md", "blob_hash": "staleblob2"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, ghostSrc, ghostTgt, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, db, ghostSrc, ghostTgt, index.EdgeSimilarTo))
 	require.Equal(t, baseSimilar+1, countSimilar(), "stale edge seeded")
 
 	require.NoError(t, svc.si.Rebuild(ctx, branch, nil))
@@ -90,7 +92,7 @@ func TestRebuildGraph_PrunesStaleSimilarityEdges(t *testing.T) {
 	var ghostLeft int
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM edges WHERE type = ? AND source_id = ?`,
-		EdgeSimilarTo, ghostSrc).Scan(&ghostLeft))
+		index.EdgeSimilarTo, ghostSrc).Scan(&ghostLeft))
 	require.Zero(t, ghostLeft, "the stale edge specifically must be gone")
 
 	require.Equal(t, baseDerived, countDerived(),
@@ -147,7 +149,7 @@ func TestRebuildGraph_SimilarityRespectsTopKCap(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, `
 			SELECT COALESCE(MAX(c), 0) FROM (
 				SELECT COUNT(*) c FROM edges WHERE type = ? GROUP BY source_id)`,
-			EdgeSimilarTo).Scan(&n))
+			index.EdgeSimilarTo).Scan(&n))
 		return n
 	}
 	require.Equal(t, maxOutDegree, maxOut(),
@@ -162,10 +164,10 @@ func TestRebuildGraph_SimilarityRespectsTopKCap(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, `
 		SELECT source_id FROM edges WHERE type = ?
 		GROUP BY source_id ORDER BY COUNT(*) DESC LIMIT 1`,
-		EdgeSimilarTo).Scan(&busiest))
+		index.EdgeSimilarTo).Scan(&busiest))
 
 	rows, err := db.QueryContext(ctx,
-		`SELECT node_id FROM node_labels WHERE label = ? AND node_id <> ?`, NodeFact, busiest)
+		`SELECT node_id FROM node_labels WHERE label = ? AND node_id <> ?`, index.NodeFact, busiest)
 	require.NoError(t, err)
 	var targets []int64
 	for rows.Next() {
@@ -177,7 +179,7 @@ func TestRebuildGraph_SimilarityRespectsTopKCap(t *testing.T) {
 	require.NoError(t, rows.Close())
 	require.Len(t, targets, corpus-1)
 	for _, tgt := range targets {
-		require.NoError(t, graphMergeEdge(ctx, db, busiest, tgt, EdgeSimilarTo))
+		require.NoError(t, graphMergeEdge(ctx, db, busiest, tgt, index.EdgeSimilarTo))
 	}
 	require.Greater(t, maxOut(), maxOutDegree, "surplus seeded")
 
@@ -210,7 +212,7 @@ func TestRebuildGraph_SimilarityIsIdempotent(t *testing.T) {
 	pairs := func() []string {
 		rows, err := svc.rh.DB().QueryContext(ctx,
 			`SELECT source_id || '->' || target_id FROM edges WHERE type = ? ORDER BY 1`,
-			EdgeSimilarTo)
+			index.EdgeSimilarTo)
 		require.NoError(t, err)
 		defer rows.Close()
 		var out []string

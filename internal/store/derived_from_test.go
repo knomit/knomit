@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -303,9 +305,9 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
 	// the auto-wired edges interfering with the assertions below.
-	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, index.EdgeDerivedFrom)
 	require.NoError(t, err)
-	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edges WHERE type = ?`, index.EdgeDerivedFrom)
 	require.NoError(t, err)
 
 	// Manually invoke the helper to write the edge with both commits. It is
@@ -373,7 +375,7 @@ func TestUpsert_WritesDerivedFromEdges_PostCommit(t *testing.T) {
 	si := svc.si
 	var count int
 	require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeDerivedFrom).Scan(&count))
 	require.Equal(t, 1, count, "WriteFact should produce one DERIVED_FROM edge for D→E without needing Rebuild")
 }
 
@@ -400,9 +402,9 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
 	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
 	// the auto-wired edges interfering with the assertions below.
-	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, index.EdgeDerivedFrom)
 	require.NoError(t, err)
-	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
+	_, err = si.RepoForTest().DB().Exec(`DELETE FROM edges WHERE type = ?`, index.EdgeDerivedFrom)
 	require.NoError(t, err)
 
 	tx, err := si.RepoForTest().DB().BeginTx(ctx, nil)
@@ -412,7 +414,7 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	require.NoError(t, tx.Commit())
 
 	var count int
-	require.NoError(t, si.RepoForTest().DB().QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
+	require.NoError(t, si.RepoForTest().DB().QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, index.EdgeDerivedFrom).Scan(&count))
 	require.Zero(t, count, "forward-broken ref must not produce any DERIVED_FROM edge")
 }
 

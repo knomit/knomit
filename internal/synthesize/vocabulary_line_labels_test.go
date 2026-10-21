@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +28,7 @@ import (
 // The fix is labelling, not a redefinition: raw df keeps its meaning, and the
 // number the floor actually reads is reported beside it.
 func TestMotifVocabularyHealthLines_ReportsBothPopulations(t *testing.T) {
-	line := strings.Join(motifVocabularyHealthLines(store.MotifVocabularyHealth{
+	line := strings.Join(motifVocabularyHealthLines(vocab.MotifVocabularyHealth{
 		Clusters:           22,
 		Recurring:          3,
 		EpistemicRecurring: 0,
@@ -67,7 +67,7 @@ func TestMotifVocabularyHealthLines_ReportsBothPopulations(t *testing.T) {
 // rewrite — so nothing else in the block may depend on its presence or its
 // position.
 func TestMotifVocabularyHealthLines_CarriesTheDfCaveatAsOneRemovableLine(t *testing.T) {
-	lines := motifVocabularyHealthLines(store.MotifVocabularyHealth{
+	lines := motifVocabularyHealthLines(vocab.MotifVocabularyHealth{
 		Clusters: 22, Recurring: 3, EpistemicRecurring: 1, Mints: 22, Links: 4,
 	})
 	require.Len(t, lines, 2,
@@ -91,5 +91,5 @@ func TestMotifVocabularyHealthLines_CarriesTheDfCaveatAsOneRemovableLine(t *test
 // motifs has no df to be inflated, and a lone caveat with no metrics beside it
 // would send a reader looking for a number that was never printed.
 func TestMotifVocabularyHealthLines_SilentOnAnEmptyVocabulary(t *testing.T) {
-	require.Empty(t, motifVocabularyHealthLines(store.MotifVocabularyHealth{}))
+	require.Empty(t, motifVocabularyHealthLines(vocab.MotifVocabularyHealth{}))
 }

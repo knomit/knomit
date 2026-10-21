@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -427,7 +429,7 @@ func TestWriteLicense_DoesNotEnterTheFactIndex(t *testing.T) {
 		// Limit must be > 0: SearchOptions{} zero-values Limit to 0, which the
 		// query below turns into a literal SQL LIMIT 0 — an always-empty result
 		// that would make both assertions here pass vacuously.
-		res, _, serr := svc.FactQuery().RecentFacts(ctx, ri.AgentBranch(), store.SearchOptions{Limit: 50})
+		res, _, serr := svc.FactQuery().RecentFacts(ctx, ri.AgentBranch(), index.SearchOptions{Limit: 50})
 		require.NoError(t, serr)
 		var sawControlFact bool
 		for _, e := range res {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -315,7 +317,7 @@ func TestHighlights_ImpactCountsDistinctTargetsNotEdgeRows(t *testing.T) {
 		tgtID, err := si.GraphNodeIDByBlobForTest(ctx, p, refBlobs[p])
 		require.NoError(t, err)
 		require.NotZero(t, tgtID)
-		edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, srcID, tgtID, EdgeDerivedFrom)
+		edgeID, err := si.GraphInsertEdgeReturningIDForTest(ctx, srcID, tgtID, index.EdgeDerivedFrom)
 		require.NoError(t, err)
 		require.NoError(t, si.GraphSetEdgePropsForTest(ctx, edgeID, map[string]string{
 			"source_commit": "fake-second-source-commit",
@@ -388,7 +390,7 @@ func TestHighlights_ExcludedOnlyScopeStillHonoursTheAxis(t *testing.T) {
 	svc := seedHighlightFixture(t, branch)
 	forceCommittedAt(t, svc, branch, "kb/o/b.md", 1_800_000_000)
 
-	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o", AxisRecent)
+	res, err := svc.FactQuery().Stats(context.Background(), branch, "kb/o", index.AxisRecent)
 	require.NoError(t, err)
 
 	require.Len(t, res.Highlights, 3)
@@ -445,7 +447,7 @@ func TestHighlights_NarrowCallAgreesWithStats(t *testing.T) {
 	ctx := context.Background()
 
 	for _, scope := range []string{"", "kb/o", "kb/nothing-here"} {
-		for _, axis := range []string{AxisImpact, AxisConfidence, AxisRecent} {
+		for _, axis := range []string{index.AxisImpact, index.AxisConfidence, index.AxisRecent} {
 			t.Run(scope+"/"+axis, func(t *testing.T) {
 				full, err := svc.FactQuery().Stats(ctx, branch, scope, axis)
 				require.NoError(t, err)
@@ -475,9 +477,9 @@ func TestHighlights_NarrowCallUsesTheAxisItIsGiven(t *testing.T) {
 	// it — the narrow call must answer for the axis passed, not for the default.
 	full, err := svc.FactQuery().Stats(ctx, branch, "", "")
 	require.NoError(t, err)
-	other := AxisRecent
-	if full.DefaultAxis == AxisRecent {
-		other = AxisConfidence
+	other := index.AxisRecent
+	if full.DefaultAxis == index.AxisRecent {
+		other = index.AxisConfidence
 	}
 
 	pinned, _, err := svc.FactQuery().Highlights(ctx, branch, "", other)

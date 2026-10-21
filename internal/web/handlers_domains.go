@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -18,7 +20,7 @@ type domainsProvider interface {
 	DomainStats(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]int, error)
 
 	// DomainFacts returns facts filtered by domain.
-	DomainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain string) ([]store.SearchResult, error)
+	DomainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain string) ([]index.SearchResult, error)
 }
 
 // defaultDomainsProvider implements domainsProvider using the store.
@@ -43,16 +45,16 @@ func (defaultDomainsProvider) DomainStats(ctx context.Context, ri *repos.RepoIns
 	return result, err
 }
 
-func (defaultDomainsProvider) DomainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain string) ([]store.SearchResult, error) {
+func (defaultDomainsProvider) DomainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain string) ([]index.SearchResult, error) {
 	var (
-		out []store.SearchResult
+		out []index.SearchResult
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			return
 		}
-		out, err = svc.FactQuery().Search(ctx, branch, store.SearchOptions{
+		out, err = svc.FactQuery().Search(ctx, branch, index.SearchOptions{
 			Domain: []string{domain},
 			Limit:  500,
 		})
@@ -144,7 +146,7 @@ func handleHALDomainFacts(b hal.URLBuilder, provider domainsProvider) http.Handl
 			return
 		}
 		if results == nil {
-			results = []store.SearchResult{}
+			results = []index.SearchResult{}
 		}
 
 		selfURL := b.Branch(repoName, a) + "/domains/" + domainName

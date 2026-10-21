@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
 	"knomit/internal/llm"
@@ -946,7 +948,7 @@ func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Inde
 // incremental one, making the seed pool depend on watermark state.
 //
 // Origin must be copied: see dirtyFacts.
-func factFromSearchResult(sr store.SearchResult) fact.Fact {
+func factFromSearchResult(sr index.SearchResult) fact.Fact {
 	f := fact.NewFact(sr.Path)
 	f.Title = sr.Title
 	f.Body = sr.Body
@@ -1400,7 +1402,7 @@ func (p *Pipeline) startKey() string {
 		Effort   Effort   `json:"effort"`
 		Domain   []string `json:"domain"`
 		Entities []string `json:"entities"`
-	}{p.effort, canonicalScopeList(p.scope.Domain, store.CanonicalizeTag), canonicalScopeList(p.scope.Entities, textnorm.Fold)})
+	}{p.effort, canonicalScopeList(p.scope.Domain, index.CanonicalizeTag), canonicalScopeList(p.scope.Entities, textnorm.Fold)})
 	if err != nil {
 		// Marshalling strings cannot fail; a key nobody matches is the safe
 		// answer if it ever did.

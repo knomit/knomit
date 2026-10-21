@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -249,7 +251,7 @@ func TestHypothesizer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	_, err = p.ContinueSession(ctx, sess.ID, `not json {{{`)
 	require.NoError(t, err, "a malformed discover response must be non-fatal")
 
-	results, err := svc.Search().Search(ctx, "agent/test", store.SearchOptions{Limit: 10})
+	results, err := svc.Search().Search(ctx, "agent/test", index.SearchOptions{Limit: 10})
 	require.NoError(t, err)
 	require.Empty(t, results, "no fact must be written when the discover response is unparseable")
 
@@ -334,7 +336,7 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 	// Count only the PROPOSED fact. The two seeds are also on disk now, so a
 	// bare corpus count would no longer measure what this test is about.
 	// normalizeFactPath rewrites the basename to a uuid, so match on title.
-	results, err := svc.Search().Search(ctx, "agent/test", store.SearchOptions{Limit: 10})
+	results, err := svc.Search().Search(ctx, "agent/test", index.SearchOptions{Limit: 10})
 	require.NoError(t, err)
 	proposed := 0
 	for _, r := range results {

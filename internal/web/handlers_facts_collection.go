@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 
 	knomitfact "knomit/internal/fact"
@@ -20,7 +22,7 @@ const factsTopicPrefix = "kb/"
 
 // factsCollectionProvider is the narrow interface the facts collection handler depends on.
 type factsCollectionProvider interface {
-	RecentFacts(ctx context.Context, ri *repos.RepoInstance, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error)
+	RecentFacts(ctx context.Context, ri *repos.RepoInstance, branch string, opts index.SearchOptions) ([]index.RecentFactEntry, int, error)
 }
 
 // defaultFactsCollectionProvider implements factsCollectionProvider using the store.
@@ -28,10 +30,10 @@ type defaultFactsCollectionProvider struct{}
 
 func (defaultFactsCollectionProvider) RecentFacts(
 	ctx context.Context,
-	ri *repos.RepoInstance, branch string, opts store.SearchOptions,
-) ([]store.RecentFactEntry, int, error) {
+	ri *repos.RepoInstance, branch string, opts index.SearchOptions,
+) ([]index.RecentFactEntry, int, error) {
 	var (
-		out   []store.RecentFactEntry
+		out   []index.RecentFactEntry
 		total int
 		err   error
 	)
@@ -111,7 +113,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			minConfidence = n
 		}
 
-		opts := store.SearchOptions{
+		opts := index.SearchOptions{
 			Path:           path,
 			Text:           qp.Get("q"),
 			Limit:          limit,
@@ -159,7 +161,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 		}
 
 		var (
-			entries []store.RecentFactEntry
+			entries []index.RecentFactEntry
 			total   int
 			err     error
 		)
@@ -171,7 +173,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			}
 		}
 		if entries == nil {
-			entries = []store.RecentFactEntry{}
+			entries = []index.RecentFactEntry{}
 		}
 
 		factsBase := b.Branch(repoName, a) + "/facts"

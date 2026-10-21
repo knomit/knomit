@@ -11,7 +11,7 @@
 // the one shared vcs handle and the facts and index sub-indices, and nothing
 // below it imports it. The Checker is built once per call by the parent
 // (Service.integrity); the Service methods, the test-only tamper helpers and
-// the public names (re-exported by fsck_seam.go) stay in package store.
+// the public names stay in package store.
 //
 // Locking: Verify takes the read lock of every branch it checks up front and
 // holds them for the whole run, so it blocks every writer on those branches

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/index"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // §6's read surfaces. The knob's DEFAULT and its GATING are the parts with
@@ -25,8 +25,8 @@ import (
 // pattern (invariant 2061717e) applied to this knob.
 func TestMotifMatch_SchemaEnumMatchesTheImplementation(t *testing.T) {
 	enum := motifMatchEnum()
-	require.Len(t, enum, len(store.AllMotifMatchTiers))
-	for _, tier := range store.AllMotifMatchTiers {
+	require.Len(t, enum, len(index.AllMotifMatchTiers))
+	for _, tier := range index.AllMotifMatchTiers {
 		require.Contains(t, enum, string(tier))
 	}
 	require.Equal(t, "exact", enum[0], "the strictest tier is listed first and is the default")
@@ -36,7 +36,7 @@ func TestMotifMatch_SchemaEnumMatchesTheImplementation(t *testing.T) {
 func TestMotifMatch_DefaultsToExact(t *testing.T) {
 	tier, err := parseMotifMatch("")
 	require.NoError(t, err)
-	require.Equal(t, store.MotifMatchExact, tier,
+	require.Equal(t, index.MotifMatchExact, tier,
 		"an unspecified tier must be the STRICTEST one — a caller who did not choose "+
 			"must not silently receive the noisiest results")
 }
@@ -55,7 +55,7 @@ func TestMotifMatch_UnknownTierIsRejectedNotDowngraded(t *testing.T) {
 }
 
 func TestMotifMatch_EveryTierParses(t *testing.T) {
-	for _, tier := range store.AllMotifMatchTiers {
+	for _, tier := range index.AllMotifMatchTiers {
 		got, err := parseMotifMatch(string(tier))
 		require.NoErrorf(t, err, "tier %q must parse", tier)
 		require.Equal(t, tier, got)
@@ -65,8 +65,8 @@ func TestMotifMatch_EveryTierParses(t *testing.T) {
 // A motif-only query is a legitimate query: "what else instantiates this
 // mechanism?" is the question the axis exists to answer.
 func TestMotifQuery_MotifAloneCountsAsAFilter(t *testing.T) {
-	require.True(t, hasAnyFilter(store.SearchOptions{Motifs: []string{"silent-fallback"}}))
-	require.False(t, hasAnyFilter(store.SearchOptions{}),
+	require.True(t, hasAnyFilter(index.SearchOptions{Motifs: []string{"silent-fallback"}}))
+	require.False(t, hasAnyFilter(index.SearchOptions{}),
 		"...but an empty query is still an empty query")
 }
 

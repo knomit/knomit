@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -147,7 +149,7 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	// business, not this test's — what matters is that it happens, bounded.
 	declined := map[string]bool{}
 	var health restatementHealth
-	var pairs []store.RestatementPair
+	var pairs []vocab.RestatementPair
 	var err error
 	sessions := 0
 	for ; sessions < throttleWindow; sessions++ {

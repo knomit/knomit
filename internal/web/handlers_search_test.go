@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
@@ -16,15 +18,15 @@ import (
 
 // stubSearchProvider implements searchProvider for tests.
 type stubSearchProvider struct {
-	results []store.SearchResult
+	results []index.SearchResult
 	err     error
 	// diag, when set, is what the stub reports through SearchOptions.Diag.
-	diag *store.SearchDiag
+	diag *index.SearchDiag
 	// lastQuery lets tests assert what query was built
-	lastQuery store.SearchOptions
+	lastQuery index.SearchOptions
 }
 
-func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	s.lastQuery = q
 	if s.diag != nil && q.Diag != nil {
 		*q.Diag = *s.diag
@@ -34,7 +36,7 @@ func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ 
 
 func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
 	provider := &stubSearchProvider{
-		results: []store.SearchResult{
+		results: []index.SearchResult{
 			{
 				FactWithBody: facts.FactWithBody{
 					FactRecord: facts.FactRecord{
@@ -295,7 +297,7 @@ func TestHandleSearch_MotifFilterReachesSearchOptions(t *testing.T) {
 	if !reflect.DeepEqual(provider.lastQuery.Motifs, want) {
 		t.Errorf("Motifs: got %v want %v", provider.lastQuery.Motifs, want)
 	}
-	if provider.lastQuery.MotifMatch != store.MotifMatchStem {
+	if provider.lastQuery.MotifMatch != index.MotifMatchStem {
 		t.Errorf("MotifMatch: got %q want stem", provider.lastQuery.MotifMatch)
 	}
 }
@@ -330,7 +332,7 @@ func TestHandleSearch_LooseMotifTierRejected(t *testing.T) {
 // ran a motif pass).
 func TestHandleSearch_MotifsOnTheWire(t *testing.T) {
 	provider := &stubSearchProvider{
-		results: []store.SearchResult{
+		results: []index.SearchResult{
 			{
 				FactWithBody: facts.FactWithBody{
 					FactRecord: facts.FactRecord{

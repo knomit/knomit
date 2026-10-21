@@ -11,6 +11,9 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
+
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -22,10 +25,10 @@ import (
 // fan-out. It records the path prefix each mount was asked for, so a test can
 // assert the scope reached every mount rather than only that the page rendered.
 type lensMotifsStub struct {
-	clusters map[string][]store.MotifCluster
-	defs     map[string]map[string]store.MotifDefinitionStatus
-	health   map[string]store.MotifVocabularyHealth
-	aliases  map[string]map[string]store.AliasRow
+	clusters map[string][]vocab.MotifCluster
+	defs     map[string]map[string]vocab.MotifDefinitionStatus
+	health   map[string]vocab.MotifVocabularyHealth
+	aliases  map[string]map[string]vocab.AliasRow
 	errRepo  string
 	// errWith overrides what errRepo fails with, so a test can drive the
 	// sentinel-specific error responses rather than only the generic 500.
@@ -36,7 +39,7 @@ type lensMotifsStub struct {
 	lastKeys       map[string][]string
 }
 
-func (s *lensMotifsStub) Clusters(_ context.Context, ri *repos.RepoInstance, _, pathPrefix string) ([]store.MotifCluster, error) {
+func (s *lensMotifsStub) Clusters(_ context.Context, ri *repos.RepoInstance, _, pathPrefix string) ([]vocab.MotifCluster, error) {
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
@@ -50,7 +53,7 @@ func (s *lensMotifsStub) Clusters(_ context.Context, ri *repos.RepoInstance, _, 
 	return s.clusters[ri.Name()], nil
 }
 
-func (s *lensMotifsStub) Definitions(_ context.Context, ri *repos.RepoInstance, _ string, keys []string) (map[string]store.MotifDefinitionStatus, error) {
+func (s *lensMotifsStub) Definitions(_ context.Context, ri *repos.RepoInstance, _ string, keys []string) (map[string]vocab.MotifDefinitionStatus, error) {
 	if s.lastKeys == nil {
 		s.lastKeys = map[string][]string{}
 	}
@@ -61,18 +64,18 @@ func (s *lensMotifsStub) Definitions(_ context.Context, ri *repos.RepoInstance, 
 	return s.defs[ri.Name()], nil
 }
 
-func (s *lensMotifsStub) VocabularyHealth(_ context.Context, ri *repos.RepoInstance, _, pathPrefix string) (store.MotifVocabularyHealth, error) {
+func (s *lensMotifsStub) VocabularyHealth(_ context.Context, ri *repos.RepoInstance, _, pathPrefix string) (vocab.MotifVocabularyHealth, error) {
 	if s.lastHealthPath == nil {
 		s.lastHealthPath = map[string]string{}
 	}
 	s.lastHealthPath[ri.Name()] = pathPrefix
 	if s.errRepo != "" && ri.Name() == s.errRepo {
-		return store.MotifVocabularyHealth{}, errors.New("db on fire")
+		return vocab.MotifVocabularyHealth{}, errors.New("db on fire")
 	}
 	return s.health[ri.Name()], nil
 }
 
-func (s *lensMotifsStub) AliasRows(_ context.Context, ri *repos.RepoInstance, _ string) (map[string]store.AliasRow, error) {
+func (s *lensMotifsStub) AliasRows(_ context.Context, ri *repos.RepoInstance, _ string) (map[string]vocab.AliasRow, error) {
 	if s.errRepo != "" && ri.Name() == s.errRepo {
 		return nil, errors.New("db on fire")
 	}
@@ -104,7 +107,7 @@ func lensMotifsServer(t *testing.T, motifs *lensMotifsStub, facts factsCollectio
 //   - `creep-scope` exists on alpha only → passes through untouched.
 func splitVocabularyStub() *lensMotifsStub {
 	return &lensMotifsStub{
-		clusters: map[string][]store.MotifCluster{
+		clusters: map[string][]vocab.MotifCluster{
 			"alpha": {
 				{ClusterKey: "drift-config", CanonicalID: "config-drift", Members: []string{"config-drift"}, DF: 5, DFTotal: 9},
 				{ClusterKey: "fallback-silent", CanonicalID: "silent-fallback", Members: []string{"quiet-degradation", "silent-fallback"}, DF: 4, DFTotal: 4},
@@ -210,7 +213,7 @@ func TestLensMotifs_LinksAddressTheLens(t *testing.T) {
 // from the pooled totals — never a mean of per-mount ratios.
 func TestLensMotifs_HealthPoolsCountsAndDerivesRatiosOnce(t *testing.T) {
 	stub := splitVocabularyStub()
-	stub.health = map[string]store.MotifVocabularyHealth{
+	stub.health = map[string]vocab.MotifVocabularyHealth{
 		"alpha": {Clusters: 10, Recurring: 2, Mints: 8, Links: 4, EpistemicRecurring: 1},
 		"beta":  {Clusters: 10, Recurring: 8, Mints: 2, Links: 16, EpistemicRecurring: 3},
 	}
@@ -224,7 +227,7 @@ func TestLensMotifs_HealthPoolsCountsAndDerivesRatiosOnce(t *testing.T) {
 	if h.AuthoredEpistemicRecurring != 4 {
 		t.Errorf("authored_epistemic_recurring: got %d, want 4", h.AuthoredEpistemicRecurring)
 	}
-	pooled := store.MotifVocabularyHealth{Clusters: 20, Recurring: 10, Mints: 10, Links: 20, EpistemicRecurring: 4}
+	pooled := vocab.MotifVocabularyHealth{Clusters: 20, Recurring: 10, Mints: 10, Links: 20, EpistemicRecurring: 4}
 	if h.RecurrenceRate != pooled.RecurrenceRate() {
 		t.Errorf("recurrence_rate: got %v, want %v (the rule applied ONCE to pooled totals)",
 			h.RecurrenceRate, pooled.RecurrenceRate())
@@ -298,10 +301,10 @@ func TestLensMotifs_MountErrorFailsTheWholeRequest(t *testing.T) {
 // ?path= — leaves the health block alone.
 func TestLensMotifs_QNarrowsListAcrossMountsButNotHealth(t *testing.T) {
 	stub := splitVocabularyStub()
-	stub.health = map[string]store.MotifVocabularyHealth{
+	stub.health = map[string]vocab.MotifVocabularyHealth{
 		"alpha": {Clusters: 3, Recurring: 1, Mints: 2, Links: 2},
 	}
-	stub.defs = map[string]map[string]store.MotifDefinitionStatus{
+	stub.defs = map[string]map[string]vocab.MotifDefinitionStatus{
 		// The definition lives on the READ mount; a handler that only looks
 		// definitions up on the write repo would miss this match.
 		"beta": {"drift-config": {Definition: "applied state diverges"}},
@@ -321,7 +324,7 @@ func TestLensMotifs_QNarrowsListAcrossMountsButNotHealth(t *testing.T) {
 // a `current` definition beats a `stale` one wherever it lives.
 func TestLensMotifs_FreshestDefinitionWins(t *testing.T) {
 	stub := splitVocabularyStub()
-	stub.defs = map[string]map[string]store.MotifDefinitionStatus{
+	stub.defs = map[string]map[string]vocab.MotifDefinitionStatus{
 		"alpha": {"drift-config": {Definition: "stale wording", Stale: true}},
 		"beta":  {"drift-config": {Definition: "current wording"}},
 	}
@@ -365,8 +368,8 @@ func TestLensMotifs_LimitOverTheCeilingIs400(t *testing.T) {
 // keys, same canonicals, same counts. The merge must be an identity there.
 func TestLensMotifs_LensOfOneIsTheRepoVocabulary(t *testing.T) {
 	stub := &lensMotifsStub{
-		clusters: map[string][]store.MotifCluster{"alpha": threeClusters()},
-		health:   map[string]store.MotifVocabularyHealth{"alpha": {Clusters: 3, Recurring: 1, Mints: 2, Links: 5}},
+		clusters: map[string][]vocab.MotifCluster{"alpha": threeClusters()},
+		health:   map[string]vocab.MotifVocabularyHealth{"alpha": {Clusters: 3, Recurring: 1, Mints: 2, Links: 5}},
 	}
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{motifs: stub}}
@@ -411,16 +414,16 @@ func TestLensMotifs_LensOfOneIsTheRepoVocabulary(t *testing.T) {
 // lensCarriersStub is a per-repo factsCollectionProvider for the carrier
 // preview, recording the SearchOptions each mount was asked for.
 type lensCarriersStub struct {
-	byRepo      map[string][]store.RecentFactEntry
+	byRepo      map[string][]index.RecentFactEntry
 	totalByRepo map[string]int
-	lastOpts    map[string]store.SearchOptions
+	lastOpts    map[string]index.SearchOptions
 }
 
 func (s *lensCarriersStub) RecentFacts(
-	_ context.Context, ri *repos.RepoInstance, _ string, opts store.SearchOptions,
-) ([]store.RecentFactEntry, int, error) {
+	_ context.Context, ri *repos.RepoInstance, _ string, opts index.SearchOptions,
+) ([]index.RecentFactEntry, int, error) {
 	if s.lastOpts == nil {
-		s.lastOpts = map[string]store.SearchOptions{}
+		s.lastOpts = map[string]index.SearchOptions{}
 	}
 	s.lastOpts[ri.Name()] = opts
 	e := s.byRepo[ri.Name()]
@@ -435,7 +438,7 @@ func (s *lensCarriersStub) RecentFacts(
 }
 
 func TestLensMotifCluster_ResolvesByMergedKeyConstituentKeyAndSpelling(t *testing.T) {
-	carriers := &lensCarriersStub{byRepo: map[string][]store.RecentFactEntry{}}
+	carriers := &lensCarriersStub{byRepo: map[string][]index.RecentFactEntry{}}
 	r, _ := lensMotifsServer(t, splitVocabularyStub(), carriers)
 
 	// The merged key, the OTHER mount's constituent key, and a member spelling
@@ -484,7 +487,7 @@ func TestLensMotifCluster_PivotLinkCarriesTheMergedMembers(t *testing.T) {
 		if strings.Join(opts.Motifs, ",") != "quiet-degradation,silent-fallback" {
 			t.Errorf("%s carrier query motifs: got %v, want the merged union", name, opts.Motifs)
 		}
-		if opts.MotifMatch != store.MotifMatchExact {
+		if opts.MotifMatch != index.MotifMatchExact {
 			t.Errorf("%s carrier query tier: got %q, want exact", name, opts.MotifMatch)
 		}
 	}
@@ -495,7 +498,7 @@ func TestLensMotifCluster_PivotLinkCarriesTheMergedMembers(t *testing.T) {
 // read emits must carry the canonical wire path — bare for the write mount,
 // kb://<id12>/… for a read mount — or opening it 404s against the write repo.
 func TestLensMotifCluster_CarriersCarryQualifiedPaths(t *testing.T) {
-	carriers := &lensCarriersStub{byRepo: map[string][]store.RecentFactEntry{
+	carriers := &lensCarriersStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/from-write.md", Title: "write", Type: "observation", CommittedAt: 200}},
 		"beta":  {{Path: "kb/from-read.md", Title: "read", Type: "observation", CommittedAt: 100}},
 	}}
@@ -523,7 +526,7 @@ func TestLensMotifCluster_CarriersCarryQualifiedPaths(t *testing.T) {
 // upstream shares fact UUIDs, so the same repo-relative path arrives from two
 // mounts and the WRITE mount's copy must win exactly once.
 func TestLensMotifCluster_CarrierDedupeKeepsTheWriteCopy(t *testing.T) {
-	carriers := &lensCarriersStub{byRepo: map[string][]store.RecentFactEntry{
+	carriers := &lensCarriersStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": {{Path: "kb/dup.md", Title: "from write", Type: "observation", CommittedAt: 100}},
 		"beta":  {{Path: "kb/dup.md", Title: "from read", Type: "observation", CommittedAt: 300}},
 	}}
@@ -545,7 +548,7 @@ func TestLensMotifCluster_CarrierDedupeKeepsTheWriteCopy(t *testing.T) {
 // never bound the count (kb/invariants/web/collections/count-vs-transfer).
 func TestLensMotifCluster_CarrierCountIsNotBoundedByThePreview(t *testing.T) {
 	carriers := &lensCarriersStub{
-		byRepo: map[string][]store.RecentFactEntry{
+		byRepo: map[string][]index.RecentFactEntry{
 			"alpha": {{Path: "kb/a.md", Title: "a", CommittedAt: 200}},
 			"beta":  {{Path: "kb/b.md", Title: "b", CommittedAt: 100}},
 		},
@@ -567,7 +570,7 @@ func TestLensMotifCluster_CarrierCountIsNotBoundedByThePreview(t *testing.T) {
 // spelling comes from the mount that actually recorded a decision about it.
 func TestLensMotifCluster_AliasesMergeWriteFirst(t *testing.T) {
 	stub := splitVocabularyStub()
-	stub.aliases = map[string]map[string]store.AliasRow{
+	stub.aliases = map[string]map[string]vocab.AliasRow{
 		"alpha": {
 			"config-drift": {ClusterKey: "drift-config", CanonicalID: "config-drift", Method: "mechanical"},
 		},
@@ -630,19 +633,19 @@ func TestLensMotifCluster_IsBranchWideOnEveryMount(t *testing.T) {
 // differently, a term it has never seen resolves to itself, no member's
 // canonical equals it, and the mount contributes nothing.
 type lensPivotFactsStub struct {
-	byRepo map[string][]store.RecentFactEntry
+	byRepo map[string][]index.RecentFactEntry
 	// mu guards lastOpts. The lens SEARCH fan-out calls this stub once per
 	// mount concurrently, so the recording is shared across goroutines — the
 	// production providers are stateless and need no lock. (The facts fan-out
 	// this stub also serves is still serial; the lock is harmless there.)
 	mu       sync.Mutex
-	lastOpts map[string]store.SearchOptions
+	lastOpts map[string]index.SearchOptions
 }
 
-func (s *lensPivotFactsStub) carriers(ri *repos.RepoInstance, opts store.SearchOptions) ([]store.RecentFactEntry, int) {
+func (s *lensPivotFactsStub) carriers(ri *repos.RepoInstance, opts index.SearchOptions) ([]index.RecentFactEntry, int) {
 	s.mu.Lock()
 	if s.lastOpts == nil {
-		s.lastOpts = map[string]store.SearchOptions{}
+		s.lastOpts = map[string]index.SearchOptions{}
 	}
 	s.lastOpts[ri.Name()] = opts
 	s.mu.Unlock()
@@ -650,7 +653,7 @@ func (s *lensPivotFactsStub) carriers(ri *repos.RepoInstance, opts store.SearchO
 	for _, m := range opts.Motifs {
 		want[m] = true
 	}
-	var out []store.RecentFactEntry
+	var out []index.RecentFactEntry
 	for _, e := range s.byRepo[ri.Name()] {
 		for _, m := range e.Motifs {
 			if want[m] {
@@ -663,19 +666,19 @@ func (s *lensPivotFactsStub) carriers(ri *repos.RepoInstance, opts store.SearchO
 }
 
 func (s *lensPivotFactsStub) RecentFacts(
-	_ context.Context, ri *repos.RepoInstance, _ string, opts store.SearchOptions,
-) ([]store.RecentFactEntry, int, error) {
+	_ context.Context, ri *repos.RepoInstance, _ string, opts index.SearchOptions,
+) ([]index.RecentFactEntry, int, error) {
 	out, n := s.carriers(ri, opts)
 	return out, n, nil
 }
 
 func (s *lensPivotFactsStub) Search(
-	_ context.Context, ri *repos.RepoInstance, _ store.Embedder, _ string, opts store.SearchOptions,
-) ([]store.SearchResult, error) {
+	_ context.Context, ri *repos.RepoInstance, _ store.Embedder, _ string, opts index.SearchOptions,
+) ([]index.SearchResult, error) {
 	out, _ := s.carriers(ri, opts)
-	res := make([]store.SearchResult, 0, len(out))
+	res := make([]index.SearchResult, 0, len(out))
 	for _, e := range out {
-		var sr store.SearchResult
+		var sr index.SearchResult
 		sr.Path, sr.Title, sr.Motifs = e.Path, e.Title, e.Motifs
 		res = append(res, sr)
 	}
@@ -687,14 +690,14 @@ func (s *lensPivotFactsStub) Search(
 // two carry `configuration-drifts` and nothing else. splitVocabularyStub says
 // df 5 + 2, so the merged row promises 7.
 func driftCarriersByMount() *lensPivotFactsStub {
-	alpha := make([]store.RecentFactEntry, 0, 5)
+	alpha := make([]index.RecentFactEntry, 0, 5)
 	for i := range 5 {
-		alpha = append(alpha, store.RecentFactEntry{
+		alpha = append(alpha, index.RecentFactEntry{
 			Path: "kb/a" + strconv.Itoa(i) + ".md", Title: "alpha " + strconv.Itoa(i),
 			Motifs: []string{"config-drift"}, CommittedAt: int64(200 + i),
 		})
 	}
-	return &lensPivotFactsStub{byRepo: map[string][]store.RecentFactEntry{
+	return &lensPivotFactsStub{byRepo: map[string][]index.RecentFactEntry{
 		"alpha": alpha,
 		"beta": {
 			{Path: "kb/b0.md", Title: "beta 0", Motifs: []string{"configuration-drifts"}, CommittedAt: 100},
@@ -842,7 +845,7 @@ func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{
-		motifs: &lensMotifsStub{clusters: map[string][]store.MotifCluster{
+		motifs: &lensMotifsStub{clusters: map[string][]vocab.MotifCluster{
 			"alpha": {{ClusterKey: "drift-config", CanonicalID: "config-drift", Members: []string{"config-drift"}, DF: 5, DFTotal: 5}},
 		}},
 		factsCollection: carriers, search: carriers}}
@@ -868,7 +871,7 @@ func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
 // every mount's keys, so checking it would accept exactly this row.
 func TestLensMotifCluster_AliasAttributionIsPerMount(t *testing.T) {
 	stub := &lensMotifsStub{
-		clusters: map[string][]store.MotifCluster{
+		clusters: map[string][]vocab.MotifCluster{
 			// Only alpha contributes the merged cluster.
 			"alpha": {{ClusterKey: "drift-config", CanonicalID: "config-drift",
 				Members: []string{"config-drift", "configuration-drifts"}, DF: 5, DFTotal: 5}},
@@ -876,7 +879,7 @@ func TestLensMotifCluster_AliasAttributionIsPerMount(t *testing.T) {
 			"beta": {{ClusterKey: "creep-scope", CanonicalID: "scope-creep",
 				Members: []string{"scope-creep"}, DF: 2, DFTotal: 2}},
 		},
-		aliases: map[string]map[string]store.AliasRow{
+		aliases: map[string]map[string]vocab.AliasRow{
 			// beta's row for the spelling claims a key beta did not contribute
 			// to this merge. Reading the union's key set would take it.
 			"beta": {"configuration-drifts": {

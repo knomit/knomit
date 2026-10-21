@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -19,16 +21,16 @@ import (
 // rather than in its own interface because it is the same store surface and
 // the same fake in tests.
 type statsProvider interface {
-	Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (store.StatsResult, error)
-	Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]store.Highlight, bool, error)
+	Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error)
+	Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]index.Highlight, bool, error)
 }
 
 // defaultStatsProvider is the production statsProvider.
 type defaultStatsProvider struct{}
 
-func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (store.StatsResult, error) {
+func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error) {
 	var (
-		result store.StatsResult
+		result index.StatsResult
 		err    error
 	)
 	ri.WithRead(func(svc *store.Service) {
@@ -40,9 +42,9 @@ func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, b
 	return result, err
 }
 
-func (defaultStatsProvider) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+func (defaultStatsProvider) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]index.Highlight, bool, error) {
 	var (
-		out      []store.Highlight
+		out      []index.Highlight
 		fallback bool
 		err      error
 	)
@@ -62,7 +64,7 @@ type statsView struct {
 	Domains       map[string]int    `json:"domains"`
 	Entities      map[string]int    `json:"entities"`
 	Types         map[string]int    `json:"types"`
-	Highlights    []store.Highlight `json:"highlights"`
+	Highlights    []index.Highlight `json:"highlights"`
 	DefaultAxis   string            `json:"default_axis"`
 	Links         hal.LinkMap       `json:"_links"`
 }
@@ -100,11 +102,11 @@ func handleHALStats(b hal.URLBuilder, provider statsProvider) http.HandlerFunc {
 		}
 		highlights := result.Highlights
 		if highlights == nil {
-			highlights = []store.Highlight{}
+			highlights = []index.Highlight{}
 		}
 		axis := result.DefaultAxis
 		if axis == "" {
-			axis = store.AxisConfidence
+			axis = index.AxisConfidence
 		}
 
 		view := statsView{

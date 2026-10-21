@@ -939,6 +939,17 @@ type TitleNeighbour struct {
 	Similarity float64
 }
 
+// Restatement pair match kinds: how a standing pair was found.
+const (
+	// MatchPathIdentity: their paths normalise to one identity: the same
+	// segment set, or one path's segments a subset of the other's, after
+	// casefolding, stemming, and ignoring a UUID filename.
+	MatchPathIdentity = "path-identity"
+	// MatchRareToken: they share a token that is rare in THIS corpus's own
+	// token distribution, an identifier in practice.
+	MatchRareToken = "rare-token"
+)
+
 // RestatementVerdict is one judge outcome on a shortlist-originated pair.
 //
 // Resolved, not Merged: a judge that consolidates a restatement by RETRACTING

@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"knomit/internal/store/index"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
@@ -13,15 +15,15 @@ import (
 
 // activityProvider is the narrow interface the activity handler depends on.
 type activityProvider interface {
-	Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (store.ActivityResult, error)
+	Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error)
 }
 
 // defaultActivityProvider implements activityProvider using the store.
 type defaultActivityProvider struct{}
 
-func (defaultActivityProvider) Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (store.ActivityResult, error) {
+func (defaultActivityProvider) Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error) {
 	var (
-		result store.ActivityResult
+		result index.ActivityResult
 		err    error
 	)
 	ri.WithRead(func(svc *store.Service) {

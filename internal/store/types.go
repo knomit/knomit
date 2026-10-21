@@ -28,9 +28,3 @@ type ReplayResult struct {
 	RefsResolvedFromHist int
 	DanglingRefsDropped  int
 }
-
-// FactIter is implemented by FactsIter in this package.
-type FactIter interface {
-	Next() (*FactRow, error)
-	Close() error
-}

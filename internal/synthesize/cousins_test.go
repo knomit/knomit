@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
@@ -147,7 +149,7 @@ func TestCousins_FenceKeepsANonSeedCousinOutOfTheSubgraph(t *testing.T) {
 	// And the unfenced search — the one this fix adds — DOES reach it. Without
 	// this half the test above is satisfied by a corpus where the cousin is
 	// simply not findable at all.
-	hits, err := env.svc.Search().Search(ctx, env.branch, store.SearchOptions{
+	hits, err := env.svc.Search().Search(ctx, env.branch, index.SearchOptions{
 		QueryByPath:   cousinAPath,
 		MinSimilarity: env.dedupThreshold(),
 		Limit:         10,

@@ -58,6 +58,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/dop251/goja"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
@@ -1096,7 +1098,7 @@ func (d *triggerDispatcher) verifyModeOn(blob string, data []byte, readable bool
 		return d.verifyOn
 	}
 	on := false
-	if vs, err := fact.ReadVerifySettings(data); err == nil && vs.Valid && vs.Mode != store.VerifyOff {
+	if vs, err := fact.ReadVerifySettings(data); err == nil && vs.Valid && vs.Mode != verify.VerifyOff {
 		on = true
 	}
 	d.verifyBlob, d.verifyOn = blob, on

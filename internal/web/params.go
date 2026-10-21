@@ -5,7 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"knomit/internal/store"
+	"knomit/internal/store/index"
+
 	"knomit/internal/web/hal"
 )
 
@@ -115,14 +116,14 @@ func selfWithQuery(base string, r *http.Request) string {
 //
 // motif_match without motifs parses fine and stays inert, matching the MCP
 // tool and the store (SearchOptions.MotifMatch does nothing without Motifs).
-func motifParams(w http.ResponseWriter, r *http.Request) (motifs []string, tier store.MotifMatchTier, ok bool) {
+func motifParams(w http.ResponseWriter, r *http.Request) (motifs []string, tier index.MotifMatchTier, ok bool) {
 	qp := r.URL.Query()
 	motifs = splitCSV(qp.Get("motifs"))
 	switch v := qp.Get("motif_match"); v {
 	case "":
-		tier = store.MotifMatchExact
-	case string(store.MotifMatchExact), string(store.MotifMatchStem), string(store.MotifMatchToken2):
-		tier = store.MotifMatchTier(v)
+		tier = index.MotifMatchExact
+	case string(index.MotifMatchExact), string(index.MotifMatchStem), string(index.MotifMatchToken2):
+		tier = index.MotifMatchTier(v)
 	default:
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 			`invalid motif_match value (accepted: "exact", "stem", "token-2")`, r.URL.Path)

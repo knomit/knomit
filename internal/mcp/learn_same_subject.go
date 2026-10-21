@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/embeddings/params"
@@ -17,7 +19,7 @@ import (
 // dependency is what lets the unit tests fake one method instead of the dozen
 // store.FactQuery declares; store.FactQuery satisfies it unchanged.
 type factSearcher interface {
-	Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error)
+	Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error)
 }
 
 // sameSubjectCandidate is one existing fact that shares a subject with an
@@ -111,7 +113,7 @@ func findSameSubjectCandidates(
 		return nil, nil
 	}
 
-	sq := store.SearchOptions{
+	sq := index.SearchOptions{
 		Text:          f.Title + " " + f.Body,
 		MinSimilarity: th.ReflectNovelty,
 		Limit:         limit,
@@ -250,7 +252,7 @@ func sharedAnchors(anchors []string, existing []string) []string {
 	var out []string
 	for _, a := range anchors {
 		for _, e := range existing {
-			if store.EntityTagMatches(e, a) {
+			if index.EntityTagMatches(e, a) {
 				out = append(out, a)
 				break
 			}

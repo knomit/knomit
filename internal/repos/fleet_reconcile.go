@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -66,14 +68,14 @@ func (m *Manager) advertised() fact.Member {
 
 // ownRecordAt reads this instance's member record on branch of the fleet
 // repository, with its blob. found is false when the branch has none.
-func (m *Manager) ownRecordAt(ri *RepoInstance, branch string) (rec store.FleetMember, found bool, err error) {
+func (m *Manager) ownRecordAt(ri *RepoInstance, branch string) (rec fleetrec.Member, found bool, err error) {
 	id := m.AgentID()
 	werr := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			err = errors.New("fleet repository is not open")
 			return
 		}
-		var ms []store.FleetMember
+		var ms []fleetrec.Member
 		ms, err = svc.FleetMembersAt(branch)
 		for _, mem := range ms {
 			if mem.Agent == id {

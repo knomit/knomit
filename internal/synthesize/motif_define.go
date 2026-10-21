@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
@@ -145,7 +147,7 @@ func validateMotifDefinitions(res motifDefineResult, offered []motifDefineItem) 
 func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motifDefineResult, offered []motifDefineItem) error {
 	type route struct {
 		key   string
-		stamp store.DefinitionStamp
+		stamp vocab.DefinitionStamp
 	}
 	keyByName := make(map[string]route, len(offered))
 	for _, it := range offered {
@@ -154,7 +156,7 @@ func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motif
 			// Known tracks whether THIS ITEM carried a membership, so an item
 			// planned by a build that did not yet stamp one falls back to
 			// reading current membership instead of stamping a false empty.
-			stamp: store.DefinitionStamp{Members: it.members, Known: it.membersKnown},
+			stamp: vocab.DefinitionStamp{Members: it.members, Known: it.membersKnown},
 		}
 	}
 	for _, def := range res.Definitions {
@@ -182,7 +184,7 @@ func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motif
 // output. Reported, never read by a branch (MN6): these are the numbers a
 // designer looks at to decide whether the axis is alive, and §3.4's kill switch
 // is a human decision, not an automatic one.
-func motifVocabularyHealthLines(h store.MotifVocabularyHealth) []string {
+func motifVocabularyHealthLines(h vocab.MotifVocabularyHealth) []string {
 	if h.Clusters == 0 {
 		return nil
 	}

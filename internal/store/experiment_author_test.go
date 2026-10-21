@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -241,7 +243,7 @@ func TestCheckRange_ExperimentRangeNamesTheOwningAgent(t *testing.T) {
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}, "main"))
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{fact.OntologyFile: kbOntology(verify.VerifyEnforce)}, "main"))
 	signer := newTestSigner(t)
 	svc.SetSigner(signer)
 	require.NoError(t, svc.Branches().CreateBranch(ctx, testAgentBranch, "main"))
@@ -267,9 +269,9 @@ func TestCheckRange_ExperimentRangeNamesTheOwningAgent(t *testing.T) {
 
 	f := newRangeFixture(t)
 	f.setFleet(map[string]string{"test/m.md": memberFile("test", fact.MemberActive, signer.PublicKey().(ssh.PublicKey))})
-	v, err := CheckRange(RangeInput{KBDir: kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
-	require.Equal(t, VerifyEnforce, v.Mode, "fixture: main's ontology enforces")
+	require.Equal(t, verify.VerifyEnforce, v.Mode, "fixture: main's ontology enforces")
 	require.Equal(t, 6, v.Checked, "fixture: the experiment's two writes, the agent's two, the sync merge and the commit merge are judged")
 	require.Empty(t, v.Refused, "every commit names the owning agent, whose current key signed it")
 	require.Equal(t, 0, v.ExitCode())

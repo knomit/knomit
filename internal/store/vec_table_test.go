@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +21,7 @@ func makeVec(dim int) []float32 {
 
 // seedEmbedIdentity writes meta.embed_model_id / meta.embed_dim, simulating a
 // prior successful Rebuild that persisted the embedding identity.
-func seedEmbedIdentity(t *testing.T, si *searchIndex, modelID string, dim int) {
+func seedEmbedIdentity(t *testing.T, si *index.Index, modelID string, dim int) {
 	t.Helper()
 	ctx := context.Background()
 	_, err := si.RepoForTest().DB().ExecContext(ctx,
@@ -30,14 +32,14 @@ func seedEmbedIdentity(t *testing.T, si *searchIndex, modelID string, dim int) {
 	require.NoError(t, err)
 }
 
-func insertVec(t *testing.T, si *searchIndex, rowid int64, vec []float32) error {
+func insertVec(t *testing.T, si *index.Index, rowid int64, vec []float32) error {
 	t.Helper()
 	_, err := si.RepoForTest().DB().ExecContext(context.Background(),
 		`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`, rowid, float32SliceToBytes(vec))
 	return err
 }
 
-func vecRowCount(t *testing.T, si *searchIndex) int {
+func vecRowCount(t *testing.T, si *index.Index) int {
 	t.Helper()
 	var n int
 	require.NoError(t, si.RepoForTest().DB().QueryRowContext(context.Background(),
@@ -47,7 +49,7 @@ func vecRowCount(t *testing.T, si *searchIndex) int {
 
 // openSI opens a fresh migrated store and returns its searchIndex. Open already
 // creates facts_vec at the default dim via ensureFactsVecDefault.
-func openSI(t *testing.T) *searchIndex {
+func openSI(t *testing.T) *index.Index {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))

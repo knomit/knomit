@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/vocab"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // structuralEnv builds a corpus with a realistic token distribution plus ONE
@@ -79,7 +79,7 @@ func TestStructural_PathPrefixExtension(t *testing.T) {
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
 	env.seedShortlist()
-	require.Equal(t, store.MatchPathIdentity, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"one path's tokens inside the other's is one subject filed at two depths")
 }
 
@@ -94,7 +94,7 @@ func TestStructural_PathSegmentInversion(t *testing.T) {
 		namedFact(b, "Attackers reach GitLab through a directive flaw"),
 	})
 	env.seedShortlist()
-	require.Equal(t, store.MatchPathIdentity, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"the same segments in a different order are the same identity")
 }
 
@@ -118,7 +118,7 @@ func TestStructural_PluralFold(t *testing.T) {
 		namedFact(b, "Honeypots record GitLab exploitation attempts"),
 	})
 	env.seedShortlist()
-	require.Equal(t, store.MatchPathIdentity, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"plural is spelling, not identity")
 }
 
@@ -133,7 +133,7 @@ func TestStructural_SlugVersusUUIDFilename(t *testing.T) {
 		namedFact(b, "Late customer notification on the GitLab advisory"),
 	})
 	env.seedShortlist()
-	require.Equal(t, store.MatchPathIdentity, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"a uuid filename must not block a match its directory already makes")
 }
 
@@ -152,7 +152,7 @@ func TestStructural_RareIdentifierToken(t *testing.T) {
 		namedFact(b, "Check Point flaw CVE-2026-16232 exploited against a handful of customers"),
 	})
 	env.seedShortlist()
-	require.Equal(t, store.MatchRareToken, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchRareToken, pairKindIn(t, env, a, b),
 		"a shared rare identifier is evidence of identity that no path rule reaches")
 }
 
@@ -315,7 +315,7 @@ func TestStructural_NoTitleVectorIsDroppedNotScored(t *testing.T) {
 
 	// ...and once the axis closes, the same corpus yields the pair.
 	env.seedShortlist()
-	require.Equal(t, store.MatchPathIdentity, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"the pair is deferred by a missing vector, never discarded")
 }
 
@@ -339,7 +339,7 @@ func TestStructural_ContainmentWithoutSpecificityIsNotPathIdentity(t *testing.T)
 		namedFact(b, "A second report on CVE-2026-77777"),
 	})
 	env.seedShortlist()
-	require.Equal(t, store.MatchRareToken, pairKindIn(t, env, a, b),
+	require.Equal(t, vocab.MatchRareToken, pairKindIn(t, env, a, b),
 		"containment on the corpus's shared prefix is not a path identity — "+
 			"the shared identifier is what found this pair, and the record must say so")
 }

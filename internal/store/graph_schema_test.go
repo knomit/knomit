@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,11 +63,11 @@ func TestGraphSchema_CascadesFromNodes(t *testing.T) {
 	si, ctx := newGraphTestIndex(t)
 	db := si.RepoForTest().DB()
 
-	a, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
+	a, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "a", "blob_hash": "1"})
 	require.NoError(t, err)
-	b, err := graphMergeNode(ctx, db, NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
+	b, err := graphMergeNode(ctx, db, index.NodeFact, map[string]string{"path": "b", "blob_hash": "2"})
 	require.NoError(t, err)
-	require.NoError(t, graphMergeEdge(ctx, db, a, b, EdgeSimilarTo))
+	require.NoError(t, graphMergeEdge(ctx, db, a, b, index.EdgeSimilarTo))
 
 	count := func(q string, args ...any) int {
 		var n int

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/vocab"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +24,7 @@ func TestMotifDefinitions_UndefinedClustersNeedDefining(t *testing.T) {
 	require.Len(t, need, 2, "every cluster starts undefined")
 
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, need[0].ClusterKey,
-		"A component continues serving after a dependency fails, without signalling.", DefinitionStamp{}))
+		"A component continues serving after a dependency fails, without signalling.", vocab.DefinitionStamp{}))
 
 	need, err = svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -40,7 +42,7 @@ func TestMotifDefinitions_MembershipChangeMakesADefinitionStale(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
 
 	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -70,7 +72,7 @@ func TestMotifDefinitions_RepresentativeFlipDoesNotStaleADefinition(t *testing.T
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "atomic-write")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
 
 	repBefore, err := svc.Motifs().CanonicalID(ctx, branch, "atomic-write")
 	require.NoError(t, err)
@@ -104,8 +106,8 @@ func TestMotifDefinitions_MergedClusterKeepsAnInterimDefinition(t *testing.T) {
 	require.NoError(t, err)
 	keyB, err := svc.Motifs().ClusterKey(ctx, branch, "quiet-degradation")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", DefinitionStamp{}))
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", vocab.DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", vocab.DefinitionStamp{}))
 
 	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
 		"silent-fallback", "quiet-degradation", "both name serving on after a dependency fails"))
@@ -141,7 +143,7 @@ func TestMotifDefinitions_MN3_TouchesNoFact(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
 
 	rec, err = svc.FactQuery().GetByPath(ctx, branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -159,7 +161,7 @@ func TestMotifDefinitions_VanishedClusterIsNotOffered(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "config-drift")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
 
 	// The mechanism leaves the corpus.
 	writeMotifFact(t, svc, branch, "kb/alpha/two.md", []string{"silent-fallback"})
@@ -199,7 +201,7 @@ func TestMotifDefinitions_SameSessionMergeDoesNotMarkAStaleDefinitionCurrent(t *
 	// re-queued — which is what the orphan test below covers. Choosing the
 	// wrong side here made this test fail against a correct fix, which is
 	// exactly how a fixture hides the behaviour it means to check.
-	var target DefinitionTarget
+	var target vocab.DefinitionTarget
 	for _, c := range targets {
 		if c.Name == "quiet-degradation" {
 			target = c
@@ -216,7 +218,7 @@ func TestMotifDefinitions_SameSessionMergeDoesNotMarkAStaleDefinitionCurrent(t *
 	// The definition comes back, authored for what the pass was SHOWN.
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch,
 		target.ClusterKey, "A sentence written for the pre-merge cluster.",
-		DefinitionStamp{Members: target.Members, Known: true}))
+		vocab.DefinitionStamp{Members: target.Members, Known: true}))
 
 	// It must be recognised as stale, because the cluster it describes has
 	// changed underneath it.
@@ -248,8 +250,8 @@ func TestMotifDefinitions_OrphanedRowsAreRetiredOnRebuild(t *testing.T) {
 	require.NoError(t, err)
 	keyB, err := svc.Motifs().ClusterKey(ctx, branch, "quiet-degradation")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", DefinitionStamp{}))
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", vocab.DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", vocab.DefinitionStamp{}))
 
 	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
 		"silent-fallback", "quiet-degradation", "one mechanism"))
@@ -296,7 +298,7 @@ func TestMotifDefinitions_AnEmptyMembershipIsAnAnswerWhenTheCallerSaysSo(t *test
 	// The precondition that makes the two cases distinguishable.
 	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
-	var target DefinitionTarget
+	var target vocab.DefinitionTarget
 	for _, c := range need {
 		if c.ClusterKey == key {
 			target = c
@@ -309,7 +311,7 @@ func TestMotifDefinitions_AnEmptyMembershipIsAnAnswerWhenTheCallerSaysSo(t *test
 	// The caller's answer is "no membership", and it means it.
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key,
 		"A component keeps serving after a dependency fails.",
-		DefinitionStamp{Members: "", Known: true}))
+		vocab.DefinitionStamp{Members: "", Known: true}))
 
 	need, err = svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -337,7 +339,7 @@ func TestMotifDefinitions_NoStampReadsCurrentMembership(t *testing.T) {
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key,
-		"A component keeps serving after a dependency fails.", DefinitionStamp{}))
+		"A component keeps serving after a dependency fails.", vocab.DefinitionStamp{}))
 
 	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -367,9 +369,9 @@ func TestMotifDefinitions_BulkStatusCurrentStaleMissing(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyCurrent,
-		"A component continues serving after a dependency fails.", DefinitionStamp{}))
+		"A component continues serving after a dependency fails.", vocab.DefinitionStamp{}))
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyStale,
-		"Configured state diverges from applied state.", DefinitionStamp{}))
+		"Configured state diverges from applied state.", vocab.DefinitionStamp{}))
 
 	// Membership of keyStale's cluster moves: a new spelling joins mechanically.
 	writeMotifFact(t, svc, branch, "kb/alpha/four.md", []string{"config-drifts"})

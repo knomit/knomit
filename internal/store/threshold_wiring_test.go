@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
@@ -96,7 +98,7 @@ func TestSearch_RecallFloorComesFromModel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Permissive floor (0.40): match (1.0) and near (0.5) pass; far (0.0) does not.
-	permissive, err := svc.Search().Search(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 10})
+	permissive, err := svc.Search().Search(ctx, branch, index.SearchOptions{Text: "match-target alpha", Limit: 10})
 	require.NoError(t, err)
 	got := pathSet(permissive)
 	require.Contains(t, got, "kb/a.md", "match must pass the permissive floor")
@@ -106,14 +108,14 @@ func TestSearch_RecallFloorComesFromModel(t *testing.T) {
 	// Strict floor (0.60), same stored vectors: near (0.5) is now filtered out,
 	// proving the floor is sourced from the embedder, not a constant.
 	svc.SetEmbedder(&floorEmbedder{floor: 0.60})
-	strict, err := svc.Search().Search(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 10})
+	strict, err := svc.Search().Search(ctx, branch, index.SearchOptions{Text: "match-target alpha", Limit: 10})
 	require.NoError(t, err)
 	got = pathSet(strict)
 	require.Contains(t, got, "kb/a.md", "match (cos 1.0) must still pass the strict floor")
 	require.NotContains(t, got, "kb/b.md", "near (cos 0.5) must be filtered by the 0.60 floor")
 }
 
-func pathSet(results []SearchResult) map[string]bool {
+func pathSet(results []index.SearchResult) map[string]bool {
 	out := make(map[string]bool, len(results))
 	for _, r := range results {
 		out[r.Path] = true

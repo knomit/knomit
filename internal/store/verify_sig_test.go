@@ -75,36 +75,36 @@ func TestVerifyCommitSignature_Refusals(t *testing.T) {
 	s := namedSigner(t, "k")
 
 	// Unsigned.
-	if _, err := verify.VerifyCommitSignature(testCommit()); !errors.Is(err, ErrUnsigned) {
+	if _, err := verify.VerifyCommitSignature(testCommit()); !errors.Is(err, verify.ErrUnsigned) {
 		t.Errorf("unsigned: got %v", err)
 	}
 	// PGP (GitHub web-flow).
 	pgp := testCommit()
 	pgp.PGPSignature = "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQ\n-----END PGP SIGNATURE-----"
-	if _, err := verify.VerifyCommitSignature(pgp); !errors.Is(err, ErrNotSSHSIG) {
+	if _, err := verify.VerifyCommitSignature(pgp); !errors.Is(err, verify.ErrNotSSHSIG) {
 		t.Errorf("pgp: got %v", err)
 	}
 	// Tampered payload: the signature covers the message.
 	tampered := signed(t, testCommit(), s)
 	tampered.Message = "learn: something else"
-	if _, err := verify.VerifyCommitSignature(tampered); !errors.Is(err, ErrBadSignature) {
+	if _, err := verify.VerifyCommitSignature(tampered); !errors.Is(err, verify.ErrBadSignature) {
 		t.Errorf("tampered: got %v", err)
 	}
 	// A signature copied from another commit.
 	other := testCommit()
 	other.Message = "other"
 	other.PGPSignature = signed(t, testCommit(), s).PGPSignature
-	if _, err := verify.VerifyCommitSignature(other); !errors.Is(err, ErrBadSignature) {
+	if _, err := verify.VerifyCommitSignature(other); !errors.Is(err, verify.ErrBadSignature) {
 		t.Errorf("transplanted: got %v", err)
 	}
 	// Garbage armor.
 	bad := testCommit()
 	bad.PGPSignature = "-----BEGIN SSH SIGNATURE-----\n!!!\n-----END SSH SIGNATURE-----"
-	if _, err := verify.VerifyCommitSignature(bad); !errors.Is(err, ErrMalformedSig) {
+	if _, err := verify.VerifyCommitSignature(bad); !errors.Is(err, verify.ErrMalformedSig) {
 		t.Errorf("garbage: got %v", err)
 	}
 	// A different namespace (a valid SSHSIG for "file", not "git").
-	if _, err := verify.VerifyCommitSignature(wrongNamespace(t, testCommit(), s)); !errors.Is(err, ErrWrongNamespace) {
+	if _, err := verify.VerifyCommitSignature(wrongNamespace(t, testCommit(), s)); !errors.Is(err, verify.ErrWrongNamespace) {
 		t.Errorf("namespace: got %v", err)
 	}
 }

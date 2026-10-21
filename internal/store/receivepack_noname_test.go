@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"knomit/internal/store/fleetrec"
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
@@ -25,16 +28,16 @@ import (
 // member signed, is refused under enforce with rule not-pusher, and the ref
 // does not move. A push to main is refused whatever is in it.
 func TestReceivePack_BranchNameCarriesNoOwnership(t *testing.T) {
-	h := newPushHost(t, VerifyEnforce, 1)
+	h := newPushHost(t, verify.VerifyEnforce, 1)
 	alpha, beta := newTestSigner(t), newTestSigner(t)
 	alphaFP, _ := pusherOf(t, alpha)
 	betaFP, _ := pusherOf(t, beta)
 	require.NotEqual(t, pki.Short(alphaFP), pki.Short(betaFP), "fixture: distinct fp8s")
-	members := []FleetMember{
+	members := []fleetrec.Member{
 		{Member: fact.Member{Agent: "alpha", State: fact.MemberActive, Key: alpha.PublicKey()}},
 		{Member: fact.Member{Agent: "beta", State: fact.MemberActive, Key: beta.PublicKey()}},
 	}
-	h.setPolicy(PushPolicy{Pusher: alphaFP, OwnBranch: hostBranch, Fleet: h.members(members, nil)})
+	h.setPolicy(gitserve.PushPolicy{Pusher: alphaFP, OwnBranch: hostBranch, Fleet: h.members(members, nil)})
 	p := newPeer(t, h.srv.URL)
 	base := p.head()
 
@@ -56,7 +59,7 @@ func TestReceivePack_BranchNameCarriesNoOwnership(t *testing.T) {
 			objs := h.objects()
 			err := p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+dst)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "refused by verify_signatures=enforce: "+RuleNotPusher)
+			require.Contains(t, err.Error(), "refused by verify_signatures=enforce: "+verify.RuleNotPusher)
 			require.Equal(t, plumbing.ZeroHash, h.ref(dst), "a refused push creates no branch")
 			require.Equal(t, objs, h.objects(), "no object of a refused push is kept")
 
@@ -91,7 +94,7 @@ func TestReceivePack_UpstreamRefusedEvenUnderAgentPrefix(t *testing.T) {
 	upstreamFn := func() string { return upstream }
 	req := packp.NewReferenceUpdateRequest()
 	req.Commands = []*packp.Command{{Name: plumbing.NewBranchReferenceName(upstream), Old: h.ref(upstream), New: h.ref("main")}}
-	pctx := WithPushPolicy(ctx, PushPolicy{Pusher: pushFP, OwnBranch: hostBranch})
+	pctx := gitserve.WithPushPolicy(ctx, gitserve.PushPolicy{Pusher: pushFP, OwnBranch: hostBranch})
 
 	cmd, refusal := gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rh.syncRepo, upstreamFn, req)
 	require.Nil(t, cmd)

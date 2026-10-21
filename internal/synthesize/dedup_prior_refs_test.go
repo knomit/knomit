@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/refs"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 
 	"github.com/stretchr/testify/require"
@@ -23,17 +24,17 @@ import (
 // the real one.
 type fixedPairSearch struct {
 	SearchQuery
-	results []store.SearchResult
+	results []index.SearchResult
 }
 
-func (f *fixedPairSearch) Search(context.Context, string, store.SearchOptions) ([]store.SearchResult, error) {
+func (f *fixedPairSearch) Search(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
 	return f.results, nil
 }
 
 // searchHit is a result above any dedup threshold — dedupCluster divides Score
 // by 100 to get the cosine it compares against the threshold.
-func searchHit(path string) store.SearchResult {
-	return store.SearchResult{
+func searchHit(path string) index.SearchResult {
+	return index.SearchResult{
 		FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: path}},
 		Score:        96,
 	}
@@ -89,7 +90,7 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 	}
 	idx := &fixedPairSearch{
 		SearchQuery: svc.Search(),
-		results: []store.SearchResult{
+		results: []index.SearchResult{
 			searchHit(winnerPath),
 			searchHit(loserPath),
 		},

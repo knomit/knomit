@@ -8,24 +8,25 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
 // stubActivityProvider implements activityProvider for tests.
 type stubActivityProvider struct {
-	result store.ActivityResult
+	result index.ActivityResult
 	err    error
 }
 
-func (s *stubActivityProvider) Activity(_ context.Context, _ *repos.RepoInstance, _, _ string) (store.ActivityResult, error) {
+func (s *stubActivityProvider) Activity(_ context.Context, _ *repos.RepoInstance, _, _ string) (index.ActivityResult, error) {
 	return s.result, s.err
 }
 
 func TestHandleHALActivity_ReturnsHAL(t *testing.T) {
 	provider := &stubActivityProvider{
-		result: store.ActivityResult{
+		result: index.ActivityResult{
 			LastCommit: "2024-01-15T10:00:00Z",
 			Total:      100,
 			Changes7d:  5,

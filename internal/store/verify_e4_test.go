@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -136,9 +138,9 @@ func TestE4(t *testing.T) {
 				require.Equal(t, own.Hash, ref.Hash(), "the own-signed branch must be adopted")
 				return
 			}
-			var fl *ForeignLineageError
+			var fl *verify.ForeignLineageError
 			require.ErrorAs(t, err, &fl, "a foreign lineage must FAIL the create, loudly")
-			require.ErrorIs(t, err, ErrForeignLineage)
+			require.ErrorIs(t, err, verify.ErrForeignLineage)
 			require.Len(t, fl.Refused, 1)
 			require.Contains(t, err.Error(), own.Hash.String()[:8], "the error names the refused commit")
 			requireNoLocalBranches(t, svc, "main", branch)
@@ -166,7 +168,7 @@ func TestE4_PreSigningCommitsAreNotDiscarded(t *testing.T) {
 	o.setBranch(branch, tip)
 
 	svc, err := o.cloneErr(branch, me, nil)
-	var fl *ForeignLineageError
+	var fl *verify.ForeignLineageError
 	require.ErrorAs(t, err, &fl)
 	require.Len(t, fl.Refused, 4, "every refused commit is listed")
 	requireNoLocalBranches(t, svc, "main", branch)
@@ -188,7 +190,7 @@ func TestE4_OwnRecordKeysAreOwn(t *testing.T) {
 	o.setBranch(branch, mine)
 
 	_, err := o.cloneErr(branch, cur, nil)
-	require.ErrorIs(t, err, ErrForeignLineage, "standalone: only the current key is own")
+	require.ErrorIs(t, err, verify.ErrForeignLineage, "standalone: only the current key is own")
 
 	_, err = o.cloneErr(branch, cur, []ssh.PublicKey{old.PublicKey(), cur.PublicKey()})
 	require.NoError(t, err, "the record's earlier key is this instance's own")

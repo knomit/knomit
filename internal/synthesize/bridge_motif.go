@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -227,7 +229,7 @@ func enumerateMotifCandidates(
 	clusters ClusterResult,
 	resolve motifResolver,
 	df motifDFFn,
-	labels store.SubjectLabelDF,
+	labels index.SubjectLabelDF,
 	tier motifMatchTier,
 ) ([]enumeratedMotif, motifEnumHealth) {
 	point := resolveDisjointnessPoint(labels)
@@ -349,7 +351,7 @@ func enumerateMotifCandidates(
 // other must not delete a group of four that is otherwise a genuine bridge.
 // Members are path-sorted first, so which member survives a collision is
 // deterministic rather than a function of map iteration order.
-func disjointMembers(members map[string]factForLLM, labels store.SubjectLabelDF, p disjointnessPoint) []factForLLM {
+func disjointMembers(members map[string]factForLLM, labels index.SubjectLabelDF, p disjointnessPoint) []factForLLM {
 	all := make([]factForLLM, 0, len(members))
 	for _, f := range members {
 		all = append(all, f)
@@ -522,7 +524,7 @@ const (
 )
 
 // laneOf assigns a candidate to its lane.
-func laneOf(paths []string, g store.SimilarityGraph) BridgeLane {
+func laneOf(paths []string, g index.SimilarityGraph) BridgeLane {
 	if g.Density(paths) > 0 {
 		return LaneNear
 	}
@@ -670,7 +672,7 @@ func scoreMotifCandidate(
 	ctx context.Context,
 	cand BridgeSeedSet,
 	lane BridgeLane,
-	g store.SimilarityGraph,
+	g index.SimilarityGraph,
 	idx SearchQuery,
 	branch string,
 	clusterOf map[string]int,
@@ -851,7 +853,7 @@ func buildMotifBridges(
 	eff Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
-	labels store.SubjectLabelDF,
+	labels index.SubjectLabelDF,
 	pairCos pairCosFn,
 ) ([]BridgeSeedSet, []BridgeSeedSet, motifEnumHealth, error) {
 	near, far, _, health, err := buildMotifBridgesWithRows(
@@ -877,7 +879,7 @@ func buildMotifBridgesWithRows(
 	eff Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
-	labels store.SubjectLabelDF,
+	labels index.SubjectLabelDF,
 	pairCos pairCosFn,
 ) ([]BridgeSeedSet, []BridgeSeedSet, []scoredMotifRow, motifEnumHealth, error) {
 	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, pairCos)
@@ -1016,7 +1018,7 @@ func scoreMotifCandidates(
 	eff Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
-	labels store.SubjectLabelDF,
+	labels index.SubjectLabelDF,
 	pairCos pairCosFn,
 ) ([]scoredMotifRow, motifEnumHealth, error) {
 	// A corpus with no motifs costs nothing at all — not one index call. This
@@ -1353,12 +1355,12 @@ func motifResolverFor(ctx context.Context, motifs store.MotifIndex, branch strin
 // disjointness gate. On failure it returns the zero value, whose operating
 // point is STRICT — the conservative direction, and the one that keeps a
 // near-duplicate out rather than letting it through.
-func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) store.SubjectLabelDF {
+func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) index.SubjectLabelDF {
 	labels, err := search.SubjectLabelDF(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).
 			Msg("review: subject-label distribution unreadable; disjointness gate falls back to strict")
-		return store.SubjectLabelDF{}
+		return index.SubjectLabelDF{}
 	}
 	return labels
 }

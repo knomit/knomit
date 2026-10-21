@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -112,8 +114,8 @@ func (f *rangeFixture) setFleet(files map[string]string) {
 	f.ref(f.fleet, "main", f.commit(f.fleet, all, "", nil, parents...))
 }
 
-func (f *rangeFixture) check(mode string) (RangeVerdict, error) {
-	return CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+func (f *rangeFixture) check(mode string) (verify.RangeVerdict, error) {
+	return verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 }
 
 // kbWith builds main (mode set, one unsigned root commit) and a candidate of
@@ -127,7 +129,7 @@ func (f *rangeFixture) kbWith(mode, author string, signer ssh.Signer) *object.Co
 	return c
 }
 
-func refusedRule(t *testing.T, v RangeVerdict) string {
+func refusedRule(t *testing.T, v verify.RangeVerdict) string {
 	t.Helper()
 	require.Len(t, v.Refused, 1, "%+v", v)
 	return v.Refused[0].Rule
@@ -138,8 +140,8 @@ func TestCheckRange_ActiveMemberAdmitted(t *testing.T) {
 	f := newRangeFixture(t)
 	x := namedSigner(t, "x")
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	require.Empty(t, v.Refused)
 	require.Equal(t, 1, v.Checked)
@@ -155,10 +157,10 @@ func TestCheckRange_AuthorMustOwnTheKey(t *testing.T) {
 		"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey()),
 		"agent-y/1.md": memberFile("agent-y", fact.MemberActive, y.PublicKey()),
 	})
-	f.kbWith(VerifyEnforce, "agent-x", y)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", y)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleKeyMismatch, refusedRule(t, v))
+	require.Equal(t, verify.RuleKeyMismatch, refusedRule(t, v))
 	require.Equal(t, 1, v.ExitCode())
 }
 
@@ -168,15 +170,15 @@ func TestCheckRange_NoRecord(t *testing.T) {
 	f := newRangeFixture(t)
 	x := namedSigner(t, "x")
 	f.setFleet(map[string]string{"research-box/1.md": memberFile("research-box", fact.MemberActive, x.PublicKey())})
-	f.kbWith(VerifyEnforce, "someone-else", x)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "someone-else", x)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleNoRecord, refusedRule(t, v))
+	require.Equal(t, verify.RuleNoRecord, refusedRule(t, v))
 
 	f2 := newRangeFixture(t)
 	f2.setFleet(map[string]string{"research-box/1.md": memberFile("research-box", fact.MemberActive, x.PublicKey())})
-	f2.kbWith(VerifyEnforce, "research-box", x)
-	v, err = f2.check(VerifyEnforce)
+	f2.kbWith(verify.VerifyEnforce, "research-box", x)
+	v, err = f2.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	require.Empty(t, v.Refused, "an id with no fp8 pattern must work")
 }
@@ -189,10 +191,10 @@ func TestCheckRange_TwoRecordsOneID(t *testing.T) {
 		"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey()),
 		"agent-x/2.md": memberFile("agent-x", fact.MemberActive, x.PublicKey()),
 	})
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleAmbiguous, refusedRule(t, v))
+	require.Equal(t, verify.RuleAmbiguous, refusedRule(t, v))
 }
 
 // G4: one key as the current key of two records: refused.
@@ -203,10 +205,10 @@ func TestCheckRange_DuplicateKey(t *testing.T) {
 		"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey()),
 		"agent-z/1.md": memberFile("agent-z", fact.MemberActive, x.PublicKey()),
 	})
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleDuplicateKey, refusedRule(t, v))
+	require.Equal(t, verify.RuleDuplicateKey, refusedRule(t, v))
 }
 
 // G5: left and revoked agents get no new acceptance.
@@ -216,10 +218,10 @@ func TestCheckRange_InactiveRefused(t *testing.T) {
 			f := newRangeFixture(t)
 			x := namedSigner(t, "x")
 			f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", state, x.PublicKey())})
-			f.kbWith(VerifyEnforce, "agent-x", x)
-			v, err := f.check(VerifyEnforce)
+			f.kbWith(verify.VerifyEnforce, "agent-x", x)
+			v, err := f.check(verify.VerifyEnforce)
 			require.NoError(t, err)
-			require.Equal(t, RuleInactive, refusedRule(t, v))
+			require.Equal(t, verify.RuleInactive, refusedRule(t, v))
 		})
 	}
 }
@@ -231,13 +233,13 @@ func TestCheckRange_RotationCurrentKeyOnly(t *testing.T) {
 	old, cur := namedSigner(t, "old"), namedSigner(t, "new")
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, old.PublicKey())})
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, cur.PublicKey())})
-	f.kbWith(VerifyEnforce, "agent-x", old)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", old)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleKeyMismatch, refusedRule(t, v))
+	require.Equal(t, verify.RuleKeyMismatch, refusedRule(t, v))
 
-	f.kbWith(VerifyEnforce, "agent-x", cur)
-	v, err = f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", cur)
+	v, err = f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	require.Empty(t, v.Refused)
 }
@@ -247,19 +249,19 @@ func TestCheckRange_UnsignedAndM3(t *testing.T) {
 	f := newRangeFixture(t)
 	x := namedSigner(t, "x")
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
-	f.kbWith(VerifyEnforce, "agent-x", nil)
-	v, err := f.check(VerifyEnforce)
+	f.kbWith(verify.VerifyEnforce, "agent-x", nil)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleSignature, refusedRule(t, v))
+	require.Equal(t, verify.RuleSignature, refusedRule(t, v))
 
-	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	base := map[string]string{fact.OntologyFile: kbOntology(verify.VerifyEnforce)}
 	root := f.commit(f.kb, base, "", nil)
 	f.ref(f.kb, "main", root)
 	a := f.commit(f.kb, with(base, "kb/notes/a.md", "a"), "agent-x", x, root)
 	b := f.commit(f.kb, with(base, "kb/notes/b.md", "b"), "agent-x", x, root)
 	m := f.commit(f.kb, with(base, "kb/notes/a.md", "a", "kb/notes/b.md", "b"), "", nil, a, b)
 	f.ref(f.kb, "cand", m)
-	v, err = f.check(VerifyEnforce)
+	v, err = f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
 	require.Empty(t, v.Refused, "a clean unsigned merge of admitted parents passes M3")
 	require.Equal(t, 3, v.Checked)
@@ -270,9 +272,9 @@ func TestCheckRange_UnsignedAndM3(t *testing.T) {
 func TestCheckRange_OffTouchesNothing(t *testing.T) {
 	f := newRangeFixture(t)
 	f.kbWith("", "agent-x", nil)
-	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
 	require.NoError(t, err)
-	require.Equal(t, VerifyOff, v.Mode)
+	require.Equal(t, verify.VerifyOff, v.Mode)
 	require.Equal(t, 0, v.ExitCode())
 	require.Zero(t, v.Checked)
 }
@@ -283,16 +285,16 @@ func TestCheckRange_OffTouchesNothing(t *testing.T) {
 func TestCheckRange_FleetMissingIsCouldNotRun(t *testing.T) {
 	f := newRangeFixture(t)
 	x := namedSigner(t, "x")
-	f.kbWith(VerifyEnforce, "agent-x", x)
-	_, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
-	require.ErrorIs(t, err, ErrNoFleet)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
+	_, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
+	require.ErrorIs(t, err, verify.ErrNoFleet)
 
-	_, err = CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: t.TempDir(), FleetRev: "main"})
+	_, err = verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand", FleetDir: t.TempDir(), FleetRev: "main"})
 	require.Error(t, err, "an unreadable fleet must not pass")
 
 	f.ref(f.fleet, "main", f.commit(f.fleet, map[string]string{fact.OntologyFile: kbOntology("")}, "", nil))
-	_, err = f.check(VerifyEnforce)
-	require.ErrorIs(t, err, ErrNotFleet)
+	_, err = f.check(verify.VerifyEnforce)
+	require.ErrorIs(t, err, fleetrec.ErrNotFleet)
 }
 
 // G10: a malformed record is skipped (the gate still runs) and logged ONCE
@@ -305,10 +307,10 @@ func TestCheckRange_MalformedRecordSkipped(t *testing.T) {
 		"broken/1.md":   "---\nkind: pragmatic\ntype: policy\n---\n# broken\n\nagent: broken\nstate: paused\n",
 		"agent-x2/1.md": memberFile("agent-x2", fact.MemberActive, namedSigner(t, "x2").PublicKey()),
 	})
-	f.kbWith(VerifyEnforce, "agent-x", x)
+	f.kbWith(verify.VerifyEnforce, "agent-x", x)
 	before := countMalformedLogged()
 	for range 2 {
-		v, err := f.check(VerifyEnforce)
+		v, err := f.check(verify.VerifyEnforce)
 		require.NoError(t, err)
 		require.Empty(t, v.Refused)
 	}
@@ -320,7 +322,7 @@ func countMalformedLogged() int { return fleetrec.MalformedLoggedForTest() }
 // G11: log reports and exits 0; enforce blocks with 1. The literals are the
 // contract a CI job reads.
 func TestCheckRange_ExitCodes(t *testing.T) {
-	for mode, want := range map[string]int{VerifyLog: 0, VerifyEnforce: 1} {
+	for mode, want := range map[string]int{verify.VerifyLog: 0, verify.VerifyEnforce: 1} {
 		t.Run(mode, func(t *testing.T) {
 			f := newRangeFixture(t)
 			x := namedSigner(t, "x")
@@ -340,16 +342,16 @@ func TestCheckRange_UnsignedMergeFailingM3Refused(t *testing.T) {
 	f := newRangeFixture(t)
 	x := namedSigner(t, "x")
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
-	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	base := map[string]string{fact.OntologyFile: kbOntology(verify.VerifyEnforce)}
 	root := f.commit(f.kb, base, "", nil)
 	f.ref(f.kb, "main", root)
 	a := f.commit(f.kb, with(base, "kb/notes/a.md", "a"), "agent-x", x, root)
 	b := f.commit(f.kb, with(base, "kb/notes/b.md", "b"), "agent-x", x, root)
 	m := f.commit(f.kb, with(base, "kb/notes/a.md", "a", "kb/notes/b.md", "b", "kb/notes/smuggled.md", "s"), "", nil, a, b)
 	f.ref(f.kb, "cand", m)
-	v, err := f.check(VerifyEnforce)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleMerge, refusedRule(t, v))
+	require.Equal(t, verify.RuleMerge, refusedRule(t, v))
 	require.Equal(t, m.Hash.String(), v.Refused[0].Commit)
 	require.Equal(t, 1, v.ExitCode())
 }
@@ -361,17 +363,17 @@ func TestCheckRange_ModeFromMainNotCandidate(t *testing.T) {
 	f := newRangeFixture(t)
 	x, stranger := namedSigner(t, "x"), namedSigner(t, "stranger")
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
-	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	base := map[string]string{fact.OntologyFile: kbOntology(verify.VerifyEnforce)}
 	root := f.commit(f.kb, base, "", nil)
 	f.ref(f.kb, "main", root)
-	off := with(base, fact.OntologyFile, kbOntology(VerifyOff))
+	off := with(base, fact.OntologyFile, kbOntology(verify.VerifyOff))
 	c1 := f.commit(f.kb, off, "agent-x", x, root)
 	c2 := f.commit(f.kb, with(off, "kb/notes/s.md", "s"), "agent-stranger", stranger, c1)
 	f.ref(f.kb, "cand", c2)
-	v, err := f.check(VerifyEnforce)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, VerifyEnforce, v.Mode, "main's mode, not the candidate's")
-	require.Equal(t, RuleNoRecord, refusedRule(t, v))
+	require.Equal(t, verify.VerifyEnforce, v.Mode, "main's mode, not the candidate's")
+	require.Equal(t, verify.RuleNoRecord, refusedRule(t, v))
 	require.Equal(t, c2.Hash.String(), v.Refused[0].Commit)
 	require.Equal(t, 1, v.ExitCode())
 }
@@ -385,11 +387,11 @@ func TestCheckRange_MainOffCandidateOnChecksNothing(t *testing.T) {
 	base := map[string]string{fact.OntologyFile: kbOntology("")}
 	root := f.commit(f.kb, base, "", nil)
 	f.ref(f.kb, "main", root)
-	c := f.commit(f.kb, with(base, fact.OntologyFile, kbOntology(VerifyEnforce)), "agent-stranger", stranger, root)
+	c := f.commit(f.kb, with(base, fact.OntologyFile, kbOntology(verify.VerifyEnforce)), "agent-stranger", stranger, root)
 	f.ref(f.kb, "cand", c)
-	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
+	v, err := verify.CheckRange(verify.RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
 	require.NoError(t, err, "no fleet needed: main is off")
-	require.Equal(t, VerifyOff, v.Mode)
+	require.Equal(t, verify.VerifyOff, v.Mode)
 	require.Zero(t, v.Checked)
 	require.Equal(t, 0, v.ExitCode())
 }

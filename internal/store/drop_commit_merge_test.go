@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/store/verify"
+
 	"knomit/internal/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -38,7 +40,7 @@ func (h *pushHost) sideMerge(t *testing.T, files ...string) []plumbing.Hash {
 // other.md is lost -> red.
 func TestDrop_D1_TheCarryingMergesOtherCommitsAreKept(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md", "kb/notes/other.md")
 	replayed, merges, err := h.svc.Remote().DropUnpublishedCommit(ctx, hostBranch, side[0], false)
@@ -58,7 +60,7 @@ func TestDrop_D1_TheCarryingMergesOtherCommitsAreKept(t *testing.T) {
 // experiment's branch was deleted on commit) -> red.
 func TestDrop_D5_ASideForkedAfterTheDroppedCommitKeepsItsWork(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	bad, err := h.svc.rh.CommitFilesForTest(hostBranch, map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
@@ -88,7 +90,7 @@ func TestDrop_D5_ASideForkedAfterTheDroppedCommitKeepsItsWork(t *testing.T) {
 // there -> red.
 func TestDrop_D2_AMergeCannotBeDropped(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	h.sideMerge(t, "kb/notes/bad.md")
 	m := h.ref(hostBranch)
@@ -106,7 +108,7 @@ func TestDrop_D2_AMergeCannotBeDropped(t *testing.T) {
 // agent side's commit -> red.
 func TestDrop_ARemainingCommitOfAnotherAgentRefusesWithOwnOnly(t *testing.T) {
 	ctx := context.Background()
-	h := newPushHost(t, VerifyOff, 0)
+	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 	side := h.sideMerge(t, "kb/notes/bad.md", "kb/notes/other.md") // authored "side"
 	before := h.ref(hostBranch)

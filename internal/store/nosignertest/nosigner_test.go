@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/fsck"
+
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store"
@@ -83,7 +85,7 @@ func TestNoSigner_RefusalLeavesNoObjects(t *testing.T) {
 			t.Fatalf("write %d: got %v, want ErrNoSigner", i, err)
 		}
 	}
-	rep, err := svc.Verify(ctx, store.VerifyOpts{})
+	rep, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +112,7 @@ func TestSignedWrite_LeavesNoUnsignedPreImage(t *testing.T) {
 	if _, err := svc.Facts().DeleteFact(ctx, "agent/test-deadbeef", "kb/notes/a.md", "retract: a"); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := svc.Verify(ctx, store.VerifyOpts{})
+	rep, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +147,7 @@ func TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects(t *testing.T) {
 	if _, err := svc.Facts().WriteFact(ctx, agent, "kb/notes/c.md", factBody, "learn: c", "created"); err != nil {
 		t.Fatal(err)
 	}
-	if rep, err := svc.Verify(ctx, store.VerifyOpts{}); err != nil || !rep.IsStrictlyClean() {
+	if rep, err := svc.Verify(ctx, fsck.VerifyOpts{}); err != nil || !rep.IsStrictlyClean() {
 		t.Fatalf("precondition: clean before the refusals: %v %v", err, rep.Issues)
 	}
 
@@ -156,7 +158,7 @@ func TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects(t *testing.T) {
 	if _, err := svc.Merge().CommitExperiment(ctx, "diverge", nil); !errors.Is(err, store.ErrNoSigner) {
 		t.Fatalf("a non-fast-forward merge without a signer: got %v, want ErrNoSigner", err)
 	}
-	rep, err := svc.Verify(ctx, store.VerifyOpts{})
+	rep, err := svc.Verify(ctx, fsck.VerifyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

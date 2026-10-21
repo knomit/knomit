@@ -5,8 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // scopeLabel returns a human-readable label for the scope filter. The label is
@@ -45,14 +46,14 @@ func factCarriesToken(f factForLLM, token string, kind BridgeKind) bool {
 	}
 	if kind == BridgeEntity || kind == BridgeBoth {
 		for _, e := range f.Entities {
-			if store.EntityTagMatches(e, token) {
+			if index.EntityTagMatches(e, token) {
 				return true
 			}
 		}
 	}
 	if kind == BridgeDomain || kind == BridgeBoth {
 		for _, d := range f.Domain {
-			if store.DomainTagMatches(d, token) {
+			if index.DomainTagMatches(d, token) {
 				return true
 			}
 		}
@@ -107,7 +108,7 @@ func tokensCarriedBy(f factForLLM, kind BridgeKind) []tokenAxis {
 			if e == "" {
 				continue
 			}
-			c := store.CanonicalizeTag(e)
+			c := index.CanonicalizeTag(e)
 			if seen[c] {
 				continue
 			}
@@ -120,7 +121,7 @@ func tokensCarriedBy(f factForLLM, kind BridgeKind) []tokenAxis {
 			if d == "" {
 				continue
 			}
-			c := store.CanonicalizeTag(d)
+			c := index.CanonicalizeTag(d)
 			if seen[c] {
 				continue
 			}
@@ -345,14 +346,14 @@ func buildFilteredBridges(
 			scopeMatch := false
 			if tkind == BridgeDomain {
 				for _, sd := range scope.Domain {
-					if store.DomainTagMatches(tok, sd) {
+					if index.DomainTagMatches(tok, sd) {
 						scopeMatch = true
 						break
 					}
 				}
 			} else if tkind == BridgeEntity {
 				for _, se := range scope.Entities {
-					if store.EntityTagMatches(tok, se) {
+					if index.EntityTagMatches(tok, se) {
 						scopeMatch = true
 						break
 					}

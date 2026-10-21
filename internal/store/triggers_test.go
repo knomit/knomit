@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/verify"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -356,7 +358,7 @@ func TestCommitSignerOf_MatchesSignerFingerprint(t *testing.T) {
 	// An unsigned commit has no signer.
 	restamp(t, svc, "agent/a", nil, fixedTime(3))
 	_, err = svc.FactsRepo().CommitSignerOf(ctx, mustHeadHash(t, svc, "agent/a"))
-	require.ErrorIs(t, err, ErrUnsigned)
+	require.ErrorIs(t, err, verify.ErrUnsigned)
 }
 
 // UpstreamTip is the local main's head (ZeroHash for a branch that does not

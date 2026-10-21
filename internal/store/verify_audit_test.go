@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/fleetrec"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -33,11 +35,11 @@ func TestAudit_ResolvesAgainstRecordHistory(t *testing.T) {
 
 	oldFP, err := verify.KeyFingerprint(old.PublicKey())
 	require.NoError(t, err)
-	rep, err := Audit(AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main", Key: oldFP[:12]})
+	rep, err := verify.Audit(verify.AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main", Key: oldFP[:12]})
 	require.NoError(t, err)
 	require.Equal(t, 4, rep.Commits)
 	require.Len(t, rep.Findings, 1, "%+v", rep.Findings)
-	require.Equal(t, AuditNeverMember, rep.Findings[0].Rule)
+	require.Equal(t, verify.AuditNeverMember, rep.Findings[0].Rule)
 	require.Equal(t, s.Hash.String(), rep.Findings[0].Commit)
 	require.ElementsMatch(t, []string{root.Hash.String(), a.Hash.String()}, rep.KeySigned)
 	require.Equal(t, 1, rep.ExitCode())
@@ -60,13 +62,13 @@ func TestAudit_FlagsRevokedAndOtherAgent(t *testing.T) {
 	c1 := f.commit(f.kb, base, "agent-x", x)
 	c2 := f.commit(f.kb, with(base, "kb/notes/a.md", "a"), "agent-x", y, c1)
 	f.ref(f.kb, "main", c2)
-	rep, err := Audit(AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
+	rep, err := verify.Audit(verify.AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	rules := map[string]string{}
 	for _, r := range rep.Findings {
 		rules[r.Commit] = r.Rule
 	}
-	require.Equal(t, map[string]string{c1.Hash.String(): AuditRevoked, c2.Hash.String(): AuditOtherAgent}, rules)
+	require.Equal(t, map[string]string{c1.Hash.String(): verify.AuditRevoked, c2.Hash.String(): verify.AuditOtherAgent}, rules)
 }
 
 // The audit compares agent ids exactly, as the gate does (round-3 ruling 3,
@@ -82,16 +84,16 @@ func TestAudit_AgentIDsAreExactLikeTheGate(t *testing.T) {
 	f := newRangeFixture(t)
 	k := namedSigner(t, "k")
 	f.setFleet(map[string]string{"Vic/1.md": memberFile("Vic", fact.MemberActive, k.PublicKey())})
-	c := f.kbWith(VerifyEnforce, "vic", k)
+	c := f.kbWith(verify.VerifyEnforce, "vic", k)
 
-	v, err := f.check(VerifyEnforce)
+	v, err := f.check(verify.VerifyEnforce)
 	require.NoError(t, err)
-	require.Equal(t, RuleNoRecord, refusedRule(t, v), "the gate: no record at id vic")
+	require.Equal(t, verify.RuleNoRecord, refusedRule(t, v), "the gate: no record at id vic")
 
 	// The audit walks the whole branch; main's root is unsigned (its own
 	// finding). Only the candidate commit's finding is under test.
-	of := func(rep AuditReport, h string) []Refusal {
-		var out []Refusal
+	of := func(rep verify.AuditReport, h string) []verify.Refusal {
+		var out []verify.Refusal
 		for _, r := range rep.Findings {
 			if r.Commit == h {
 				out = append(out, r)
@@ -99,18 +101,18 @@ func TestAudit_AgentIDsAreExactLikeTheGate(t *testing.T) {
 		}
 		return out
 	}
-	rep, err := Audit(AuditInput{KBDir: f.kbDir, Branch: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
+	rep, err := verify.Audit(verify.AuditInput{KBDir: f.kbDir, Branch: "cand", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	got := of(rep, c.Hash.String())
 	require.Len(t, got, 1, "%+v", rep.Findings)
-	require.Equal(t, AuditOtherAgent, got[0].Rule)
+	require.Equal(t, verify.AuditOtherAgent, got[0].Rule)
 	require.Contains(t, got[0].Reason, `the key belonged to "Vic", the author claims "vic"`)
 
 	// Control: the record's own id is attributed, and not flagged.
 	g := newRangeFixture(t)
 	g.setFleet(map[string]string{"vic/1.md": memberFile("vic", fact.MemberActive, k.PublicKey())})
-	gc := g.kbWith(VerifyEnforce, "vic", k)
-	rep, err = Audit(AuditInput{KBDir: g.kbDir, Branch: "cand", FleetDir: g.fleetDir, FleetRev: "main"})
+	gc := g.kbWith(verify.VerifyEnforce, "vic", k)
+	rep, err = verify.Audit(verify.AuditInput{KBDir: g.kbDir, Branch: "cand", FleetDir: g.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Equal(t, 2, rep.Commits)
 	require.Empty(t, of(rep, gc.Hash.String()), "%+v", rep.Findings)
@@ -146,9 +148,9 @@ func TestAudit_SymlinkedFleetOntologyIsNamedNotNotAFleet(t *testing.T) {
 
 	kc := f.commit(f.kb, map[string]string{fact.OntologyFile: kbOntology("")}, "agent-x", x)
 	f.ref(f.kb, "main", kc)
-	_, err = Audit(AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
+	_, err = verify.Audit(verify.AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.ErrorIs(t, err, fact.ErrSymlinkNotFollowed)
-	require.NotErrorIs(t, err, ErrNotFleet)
+	require.NotErrorIs(t, err, fleetrec.ErrNotFleet)
 	require.Contains(t, err.Error(), fact.OntologyFile+" is a symlink")
 }
 
@@ -159,7 +161,7 @@ func TestAudit_Clean(t *testing.T) {
 	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberLeft, x.PublicKey())})
 	c := f.commit(f.kb, map[string]string{fact.OntologyFile: kbOntology("")}, "agent-x", x)
 	f.ref(f.kb, "main", c)
-	rep, err := Audit(AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
+	rep, err := verify.Audit(verify.AuditInput{KBDir: f.kbDir, Branch: "main", FleetDir: f.fleetDir, FleetRev: "main"})
 	require.NoError(t, err)
 	require.Empty(t, rep.Findings, "a LEFT agent's past commit is attributed, not flagged")
 	require.Equal(t, 0, rep.ExitCode())

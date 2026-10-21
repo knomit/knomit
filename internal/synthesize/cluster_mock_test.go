@@ -3,9 +3,9 @@ package synthesize
 import (
 	"context"
 
-	"go.uber.org/mock/gomock"
+	"knomit/internal/store/index"
 
-	"knomit/internal/store"
+	"go.uber.org/mock/gomock"
 )
 
 // expectScopedClusterPartition wires a MockSearchIndex so ScopedCluster
@@ -23,9 +23,9 @@ import (
 // pool feeds the pool-load Search (no QueryByPath) that BridgeComponentReport
 // issues; pass nil for callers like BuildBackwardBridges that receive their seed
 // pool directly and never issue a pool-load Search.
-func expectScopedClusterPartition(idx *MockSearchIndex, pool []store.SearchResult, comms [][]string) {
+func expectScopedClusterPartition(idx *MockSearchIndex, pool []index.SearchResult, comms [][]string) {
 	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, opts store.SearchOptions) ([]store.SearchResult, error) {
+		DoAndReturn(func(_ context.Context, _ string, opts index.SearchOptions) ([]index.SearchResult, error) {
 			if opts.QueryByPath != "" {
 				return nil, nil // neighbor search: subgraph stays the seed set
 			}

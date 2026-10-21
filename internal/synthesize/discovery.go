@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/index"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -572,7 +574,7 @@ func isDuplicate(ctx context.Context, idx SearchQuery, emb store.Embedder, branc
 	if err != nil {
 		return false, fmt.Errorf("isDuplicate: embed: %w", err)
 	}
-	res, err := idx.Search(ctx, branch, store.SearchOptions{
+	res, err := idx.Search(ctx, branch, index.SearchOptions{
 		QueryVec:      vec,
 		MinSimilarity: threshold,
 		Limit:         1,

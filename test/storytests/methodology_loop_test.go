@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/index"
+
 	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/test/testenv"
@@ -80,7 +82,7 @@ func TestMethodologyLoop_TagInheritancePlumbing(t *testing.T) {
 
 	// Per-fact retrieval against the synth fact surfaces the
 	// methodology with full tag overlap.
-	var matches []store.MethodologyMatch
+	var matches []index.MethodologyMatch
 	agent.WithRead(func(svc *store.Service) {
 		matches, _ = svc.Search().RelevantMethodologyForFact(
 			context.Background(), "main",
