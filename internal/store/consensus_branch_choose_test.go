@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/store/merge"
 )
 
 // bareRemoteWith builds a bare remote holding one commit on each of branches
@@ -198,7 +199,7 @@ func TestReplay_UnsetDefaultBranchIsTheTargetsHead(t *testing.T) {
 
 	iter, err := local.Search().FactsIter(ctx, agent)
 	require.NoError(t, err)
-	_, err = Replay(ctx, local, agent, iter, target, ReplayConfig{Strategy: StrategyLocalWins, AgentBranch: agent, SkipIndexSync: true})
+	_, err = Replay(ctx, local, agent, iter, target, ReplayConfig{Strategy: merge.StrategyLocalWins, AgentBranch: agent, SkipIndexSync: true})
 	require.NoError(t, err)
 
 	repo, err := gogit.Open(target.rh.Storer(), nil)

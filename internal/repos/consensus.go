@@ -53,6 +53,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // consensusHooks are test seams; every field is nil in production.
@@ -332,24 +333,24 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 	m.mu.Unlock()
 
 	res, err := svc.MergeConsensus(ctx, branch, m.agentBranch, tip)
-	var conflict *store.MergeConflictError
-	var private *store.PrivatePathMergeError
+	var conflict *merge.MergeConflictError
+	var private *merge.PrivatePathMergeError
 	var invalid *store.ValidationRefusedError
 	switch {
 	case err == nil:
 		m.mu.Lock()
 		delete(m.refused, branch)
-		if res.Mode == store.ModeMerge {
+		if res.Mode == merge.ModeMerge {
 			m.stats.Merges++
 		}
 		m.mu.Unlock()
-		if res.Mode != store.ModeMerge {
+		if res.Mode != merge.ModeMerge {
 			return false
 		}
 		log.Info().Str("repo", m.repo).Str("branch", branch).Str("into", m.agentBranch).
 			Str("merge_commit", shortHash(res.NewTip)).Msg("consensus: auto-merged a pushed branch")
 		return true
-	case errors.Is(err, store.ErrBranchMoved):
+	case errors.Is(err, merge.ErrBranchMoved):
 		return false // the push that moved it kicked us again
 	case errors.As(err, &conflict):
 		m.refuse(branch, tip, fmt.Sprintf(
@@ -371,7 +372,7 @@ func (m *consensusMerger) mergeOne(ctx context.Context, svc *store.Service, bran
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: %s; the branch's author must fix that fact",
 			branch, shortHash(tipStr), m.agentBranch, invalid.Reason))
-	case errors.Is(err, store.ErrUnrelatedHistories), errors.Is(err, store.ErrNoSigner):
+	case errors.Is(err, merge.ErrUnrelatedHistories), errors.Is(err, store.ErrNoSigner):
 		m.refuse(branch, tip, fmt.Sprintf(
 			"consensus: auto-merge of %s at %s into %s refused: %v; left for a human", branch, shortHash(tipStr), m.agentBranch, err))
 	default:

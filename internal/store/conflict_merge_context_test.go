@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // cmContextFact is cmFact carrying a context map.
@@ -50,7 +51,7 @@ func TestReplay_MergeFacts_ContextPerKeyTrailerNamesKeysOnly(t *testing.T) {
 	f := r.parse(out)
 	require.Equal(t, map[string]any{"task": "t-2", "verdict": "agree"}, f.Context,
 		"task: main's one-sided change; verdict: the more confident side's")
-	lines := TrailerValues(tip.Message, TrailerMerge)
+	lines := merge.TrailerValues(tip.Message, merge.TrailerMerge)
 	require.Len(t, lines, 1, tip.Message)
 	require.Contains(t, lines[0], "decided=confidence,context.verdict")
 	for _, v := range []string{"agree", "disagree", "unsure", "t-2"} {

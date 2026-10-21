@@ -19,6 +19,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/internal/sessions"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/migrate"
 	"knomit/internal/store/remotesync"
 	"knomit/internal/store/vocab"
@@ -332,6 +333,21 @@ func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
 
 // Branches returns the branch index.
 func (s *Service) Branches() BranchIndex { return s.rh }
+
+// Merge is the merge child's handle: branch merges (MergeBranch), the pushed
+// branches report (PushedBranches) and the experiment lifecycle (open, list,
+// commit, sync, rollback, expire). It is the same *merge.Repo the store's own
+// MergePushed, MergeConsensus and the reconcile paths use. Callers import
+// knomit/internal/store/merge for the names it speaks.
+//
+// The handle also exports the lock-assuming merge cores that remotesync calls
+// (MergeIntoBranchLocked, MergeIntoBranchLockedOpts, MergeTreesWithStrategy,
+// MarkExperimentsRewound, FactMergeResolutions): they run without the branch
+// lock and without NotifyCommit ordering of their own, so no code outside
+// internal/store may call them (test/archtest TestStoreMergeCores_OnlyInsideStore).
+// A merge that must happen from outside is MergeBranch, or MergePushed and
+// MergeConsensus on the Service, which take the lock.
+func (s *Service) Merge() *merge.Repo { return s.rh.mergeRepo }
 
 // RootCommit returns the hash of the repo's root commit — the `init: create
 // knowledge base` commit every knomit repo is born with — reached by a

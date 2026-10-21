@@ -20,6 +20,7 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
 )
 
@@ -200,7 +201,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 			require.NoError(t, err)
 			_, err = svc.Facts().DeleteFact(ctx, "main", path, "peer retract")
 			require.NoError(t, err)
-			require.NoError(t, svc.Branches().MergeBranch(ctx, "main", trigAgent, store.StrategyRemoteWins))
+			require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
 			waitTriggerHead(t, ri, head(t, ri))
 			return 0
 		}},
@@ -210,7 +211,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 			_, err := svc.AdvanceLocalUpstream(ctx, trigAgent, "main")
 			require.NoError(t, err)
 			writeDated(t, ri, "main", path, due.Add(3*time.Hour))
-			require.NoError(t, svc.Branches().MergeBranch(ctx, "main", trigAgent, store.StrategyRemoteWins))
+			require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
 			waitTriggerHead(t, ri, head(t, ri))
 			return due.Add(3 * time.Hour).Unix()
 		}},
@@ -701,7 +702,7 @@ func TestDue_NotOnReadOnlySubscribedOrExp(t *testing.T) {
 	_, ri, clock := newDueRepo(t, trig("due", "due", "", ""))
 	svc := testService(t, ri)
 	ctx := context.Background()
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", trigAgent)
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", trigAgent)
 	require.NoError(t, err)
 	writeDated(t, ri, "exp/e", "kb/tasks/in-exp.md", clock.now().Add(-time.Hour))
 	require.Contains(t, dueCandidates(t, ri, "exp/e", farFuture), "kb/tasks/in-exp.md", "fixture: due on exp/e's own view")

@@ -6,13 +6,14 @@ package store
 
 import (
 	"context"
-	"knomit/internal/store/merge"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 func expRwRead(t *testing.T, svc *Service, branch, path string) string {
@@ -32,18 +33,18 @@ func TestExperimentAcrossARewind_SyncSettledPathStaysSettled(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	x := expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/a.md", "A", "exp edit")
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "agent edit")
-	r, err := svc.Experiments().SyncExperiment(ctx, "e")
+	r, err := svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, r.Mode, "setup: a real sync merge")
+	require.Equal(t, merge.ModeMerge, r.Mode, "setup: a real sync merge")
 	require.Contains(t, expRwRead(t, svc, "exp/e", "kb/a.md"), "agent edit", "setup: the sync kept the parent's version")
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "after sync")
 	expRwRewind(t, svc, c1, "kb/u.md")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err, "the sync already settled kb/a.md")
 	require.Contains(t, expRwRead(t, svc, "agent/test", "kb/a.md"), "agent edit")
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/e2.md"))
@@ -58,17 +59,17 @@ func TestExperimentAcrossARewind_OursCannotRevertASyncSettledPath(t *testing.T) 
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/a.md", "A", "exp edit")
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "agent edit")
-	_, err = svc.Experiments().SyncExperiment(ctx, "e")
+	_, err = svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "after sync")
 	expRwRewind(t, svc, c1, "kb/u.md")
 	agentBefore := mustHeadHash(t, svc, "agent/test")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", map[string]Resolution{"kb/a.md": {Side: ResolveSrc}})
+	_, err = svc.Merge().CommitExperiment(ctx, "e", map[string]merge.Resolution{"kb/a.md": {Side: merge.ResolveSrc}})
 	require.ErrorContains(t, err, "did not conflict")
 	require.Equal(t, agentBefore, mustHeadHash(t, svc, "agent/test"))
 	require.Contains(t, expRwRead(t, svc, "agent/test", "kb/a.md"), "agent edit")
@@ -79,18 +80,18 @@ func TestExperimentAcrossARewind_OursCannotRevertASyncSettledPath(t *testing.T) 
 func TestExperimentAcrossARewind_SecretThroughASyncMerge(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e1.md", "E1", "before sync")
 	x := expRwPushSecret(t, svc)
-	r, err := svc.Experiments().SyncExperiment(ctx, "e")
+	r, err := svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, r.Mode, "setup: a real sync merge")
+	require.Equal(t, merge.ModeMerge, r.Mode, "setup: a real sync merge")
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "after sync")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath))
 	require.False(t, reaches(t, svc, "agent/test", x))
@@ -105,7 +106,7 @@ func TestExperimentAcrossARewind_RebuildIsOneSquashedCommit(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "exp two")
@@ -113,9 +114,9 @@ func TestExperimentAcrossARewind_RebuildIsOneSquashedCommit(t *testing.T) {
 	expRwRewind(t, svc, c1, "kb/u.md")
 	parentTip := mustHeadHash(t, svc, "agent/test")
 
-	r, err := svc.Experiments().SyncExperiment(ctx, "e")
+	r, err := svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
-	require.Equal(t, ModeRebase, r.Mode)
+	require.Equal(t, merge.ModeRebase, r.Mode)
 	require.Equal(t, 2, r.NumReplayed)
 	tip, err := svc.rh.Repository().CommitObject(mustHeadHash(t, svc, "exp/e"))
 	require.NoError(t, err)
@@ -130,16 +131,16 @@ func TestExperimentAcrossARewind_NoEmptyCommit(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/e", scrubbedPath, "S", "edited")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
 	expRwRewind(t, svc, c1, "kb/u.md")
 	before := mustHeadHash(t, svc, "agent/test")
 
-	res, err := svc.Experiments().CommitExperiment(ctx, "e", map[string]Resolution{scrubbedPath: {Side: ResolveDst}})
+	res, err := svc.Merge().CommitExperiment(ctx, "e", map[string]merge.Resolution{scrubbedPath: {Side: merge.ResolveDst}})
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode)
+	require.Equal(t, merge.ModeNoop, res.Mode)
 	require.Equal(t, before, mustHeadHash(t, svc, "agent/test"), "nothing to add, so no commit")
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath))
 }
@@ -161,7 +162,7 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 		// The rewind starts now, between the fork and the row. Give it the
 		// time to finish if nothing holds it back.
 		go func() {
-			_, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", StrategyLocalWins)
+			_, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins)
 			done <- err
 		}()
 		select {
@@ -171,7 +172,7 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 		}
 	})
 	t.Cleanup(func() { merge.SetOpenExperimentForkedHookForTest(nil) })
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	merge.SetOpenExperimentForkedHookForTest(nil)
 	require.True(t, hooked, "OpenExperiment must run the hook between the fork and the row")
@@ -184,7 +185,7 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath), "setup: the rewind scrubbed it")
 
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
 	require.False(t, hasFileAt(t, svc, "agent/test", scrubbedPath))
 	require.False(t, reaches(t, svc, "agent/test", x))
@@ -199,15 +200,15 @@ func TestExperimentAcrossARewind_OpenClearsAStaleRecord(t *testing.T) {
 	stale := upstreamCommit(t, svc, c1, "kb/stale.md", "---\ntype: observation\n---\n# S\n\ns\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(merge.ExperimentRewoundRefNameForTest("e"), stale)))
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	_, err = svc.rh.Storer().Reference(merge.ExperimentRewoundRefNameForTest("e"))
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 	writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "agent/test", "kb/w.md", "W", "w")
-	res, err := svc.Experiments().CommitExperiment(ctx, "e", nil)
+	res, err := svc.Merge().CommitExperiment(ctx, "e", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "a plain merge, not a rebuild")
+	require.Equal(t, merge.ModeMerge, res.Mode, "a plain merge, not a rebuild")
 }
 
 // N4: the experiment's pipeline watermarks move with the rebuild: one at the
@@ -216,7 +217,7 @@ func TestExperimentAcrossARewind_PipelineWatermarksFollow(t *testing.T) {
 	ctx := context.Background()
 	svc, c1 := expRwSetup(t)
 	expRwPushSecret(t, svc)
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	mid := writeMergeFact(t, svc, "exp/e", "kb/e.md", "E", "exp")
 	writeMergeFact(t, svc, "exp/e", "kb/e2.md", "E2", "exp two")
@@ -226,7 +227,7 @@ func TestExperimentAcrossARewind_PipelineWatermarksFollow(t *testing.T) {
 	expRwRewind(t, svc, c1, "kb/u.md")
 	parentTip := mustHeadHash(t, svc, "agent/test")
 
-	_, err = svc.Experiments().SyncExperiment(ctx, "e")
+	_, err = svc.Merge().SyncExperiment(ctx, "e")
 	require.NoError(t, err)
 	review, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", "exp/e")
 	require.NoError(t, err)

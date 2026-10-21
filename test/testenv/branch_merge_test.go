@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // TestMergeFrom_FastForward asserts that MergeFrom produces a fast-forward
@@ -20,8 +20,8 @@ func TestMergeFrom_FastForward(t *testing.T) {
 
 	snap := feature.Write("kb/x.md", Fact("x"), "add x on feature")
 
-	merge := main.MergeFrom(feature, store.StrategyLocalWins)
-	require.Equal(t, snap.Commit, merge.Commit, "fast-forward should make main HEAD == feature HEAD")
+	merged := main.MergeFrom(feature, merge.StrategyLocalWins)
+	require.Equal(t, snap.Commit, merged.Commit, "fast-forward should make main HEAD == feature HEAD")
 
 	// Main should now see the fact.
 	main.Head().Fact("kb/x.md").MustExist()
@@ -39,7 +39,7 @@ func TestMergeFrom_ThreeWayDisjointLocalWins(t *testing.T) {
 	main.Write("kb/a.md", Fact("a"), "add a")
 	feature.Write("kb/b.md", Fact("b"), "add b")
 
-	main.MergeFrom(feature, store.StrategyLocalWins)
+	main.MergeFrom(feature, merge.StrategyLocalWins)
 
 	head := main.Head()
 	head.Fact("kb/a.md").MustExist()
@@ -59,7 +59,7 @@ func TestMergeFrom_ThreeWayConflictLocalWins(t *testing.T) {
 	main.Update("kb/x.md", Fact("x").Body("main version"), "main update")
 	feature.Update("kb/x.md", Fact("x").Body("feature version"), "feature update")
 
-	main.MergeFrom(feature, store.StrategyLocalWins)
+	main.MergeFrom(feature, merge.StrategyLocalWins)
 	main.Head().Fact("kb/x.md").Body().MustContain("main version")
 }
 
@@ -76,7 +76,7 @@ func TestMergeFrom_ThreeWayConflictRemoteWins(t *testing.T) {
 	main.Update("kb/x.md", Fact("x").Body("main version"), "main update")
 	feature.Update("kb/x.md", Fact("x").Body("feature version"), "feature update")
 
-	main.MergeFrom(feature, store.StrategyRemoteWins)
+	main.MergeFrom(feature, merge.StrategyRemoteWins)
 	main.Head().Fact("kb/x.md").Body().MustContain("feature version")
 }
 
@@ -91,7 +91,7 @@ func TestMergeFrom_AlreadyMergedNoOp(t *testing.T) {
 	main.Write("kb/a.md", Fact("a"), "add a on main")
 	headBefore := main.Head().Commit
 
-	main.MergeFrom(feature, store.StrategyLocalWins)
+	main.MergeFrom(feature, merge.StrategyLocalWins)
 	require.Equal(t, headBefore, main.Head().Commit, "main HEAD must not move")
 }
 
@@ -109,7 +109,7 @@ func TestMergeFrom_SnapshotCaptured(t *testing.T) {
 	feature.Write("kb/b.md", Fact("b"), "add b")
 
 	stackBefore := len(main.SnapshotsForTest())
-	snap := main.MergeFrom(feature, store.StrategyLocalWins)
+	snap := main.MergeFrom(feature, merge.StrategyLocalWins)
 	require.NotEmpty(t, snap.Commit)
 	require.Equal(t, "C2", snap.Name, "merge should push as the next C<N> snapshot on main")
 	require.Len(t, main.SnapshotsForTest(), stackBefore+1)

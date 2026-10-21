@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // TestGraphAtCommit_ResolvesThroughMergeCommit reproduces the "empty
@@ -35,7 +37,7 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	// fast-forward) that re-touches A and B into main's first-parent history.
 	writeMergeFact(t, svc, "main", "kb/x.md", "x", "diverge")
 
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 	require.NoError(t, svc.IndexManager().Sync(ctx, "main"))
 
 	head, err := svc.Branches().HeadCommit(ctx, "main")

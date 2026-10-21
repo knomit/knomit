@@ -18,7 +18,7 @@ func openTestExperiment(t *testing.T, ri *repos.RepoInstance, name string) strin
 	t.Helper()
 	var branch string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		exp, err := svc.Experiments().OpenExperiment(context.Background(), name, "", ri.AgentBranch())
+		exp, err := svc.Merge().OpenExperiment(context.Background(), name, "", ri.AgentBranch())
 		require.NoError(t, err)
 		branch = exp.Branch()
 	}))
@@ -131,7 +131,7 @@ func TestWriteHandlers_ForeignExperimentIsRefused(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/elsewhere", ri.AgentBranch()))
-		_, err := svc.Experiments().OpenExperiment(context.Background(), "not-mine", "", "agent/elsewhere")
+		_, err := svc.Merge().OpenExperiment(context.Background(), "not-mine", "", "agent/elsewhere")
 		require.NoError(t, err)
 	}))
 

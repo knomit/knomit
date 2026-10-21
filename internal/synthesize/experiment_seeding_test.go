@@ -53,7 +53,7 @@ func TestExperiment_ReviewSeedsOnlyTheDelta(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, agent, agentHead))
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "delta-only", "", agent)
+	exp, err := svc.Merge().OpenExperiment(ctx, "delta-only", "", agent)
 	require.NoError(t, err)
 
 	// Exactly one new fact on the experiment.
@@ -91,7 +91,7 @@ func TestExperiment_ReviewWithoutInheritedWatermarkFullScans(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, agent, agentHead))
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "no-watermark", "", agent)
+	exp, err := svc.Merge().OpenExperiment(ctx, "no-watermark", "", agent)
 	require.NoError(t, err)
 	writeFactOn(t, svc, exp.Branch(), "kb/observations/epsilon.md", "epsilon", fact.Observation)
 

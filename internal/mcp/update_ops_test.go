@@ -13,6 +13,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 const opsSlot = "artifacts/jobs/x/y.md"
@@ -443,7 +444,7 @@ func TestUpdateOps_IfCommitAfterMergeReturnsUsableTip(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
 	seed := writeSlot(t, ctx, svc, "base")
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	_, err := svc.Merge().OpenExperiment(ctx, "e", "", "agent/test")
 	require.NoError(t, err)
 	f := fact.NewFact(opsSlot)
 	f.Title, f.Body, f.Type = "Job state", "experiment side", fact.Observation
@@ -456,7 +457,7 @@ func TestUpdateOps_IfCommitAfterMergeReturnsUsableTip(t *testing.T) {
 	f.Body = "merged by hand"
 	merged, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = svc.Experiments().CommitExperiment(ctx, "e", map[string]store.Resolution{
+	_, err = svc.Merge().CommitExperiment(ctx, "e", map[string]merge.Resolution{
 		opsSlot: {Body: []byte(merged)},
 	})
 	require.NoError(t, err)

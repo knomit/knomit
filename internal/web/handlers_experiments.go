@@ -2,7 +2,7 @@
 // the same store operations knomit_experiment drives over MCP.
 //
 // Deliberately a sibling of the MCP tool rather than a layer over it. Both
-// call store.ExperimentIndex directly, so neither can drift into a different
+// call the merge child's experiment lifecycle (Service.Merge) directly, so neither can drift into a different
 // notion of what "commit" means — the shape the two surfaces must share is the
 // STORE's, not a wrapper's.
 package web
@@ -20,6 +20,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/resolutions"
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/internal/web/hal"
 )
 
@@ -92,7 +93,7 @@ func handleHALExperiments(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 			err  error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
-			list, err = svc.Experiments().ListExperiments(r.Context())
+			list, err = svc.Merge().ListExperiments(r.Context())
 		}); aerr != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable",
 				aerr.Error(), r.URL.Path)
@@ -162,7 +163,7 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 			err error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
-			exp, err = svc.Experiments().OpenExperiment(r.Context(), req.Name, req.Description, ri.AgentBranch())
+			exp, err = svc.Merge().OpenExperiment(r.Context(), req.Name, req.Description, ri.AgentBranch())
 		}); aerr != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
 			return
@@ -229,17 +230,17 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 		}
 
 		var (
-			res store.AgentReconcileResult
+			res merge.AgentReconcileResult
 			err error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			switch action {
 			case "commit":
-				res, err = svc.Experiments().CommitExperiment(r.Context(), name, adjudications)
+				res, err = svc.Merge().CommitExperiment(r.Context(), name, adjudications)
 			case "sync":
-				res, err = svc.Experiments().SyncExperiment(r.Context(), name)
+				res, err = svc.Merge().SyncExperiment(r.Context(), name)
 			case "rollback":
-				err = svc.Experiments().RollbackExperiment(r.Context(), name)
+				err = svc.Merge().RollbackExperiment(r.Context(), name)
 			}
 		}); aerr != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
@@ -262,7 +263,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 			ok  bool
 		)
 		_ = ri.WithRead(func(svc *store.Service) {
-			exp, ok, _ = svc.Experiments().GetExperiment(r.Context(), name)
+			exp, ok, _ = svc.Branches().GetExperiment(r.Context(), name)
 		})
 		if !ok {
 			w.WriteHeader(http.StatusNoContent)
@@ -297,7 +298,7 @@ func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name 
 		err error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
-		exp, ok, err = svc.Experiments().GetExperiment(ctx, name)
+		exp, ok, err = svc.Branches().GetExperiment(ctx, name)
 	}); aerr != nil {
 		return store.Experiment{}, false, aerr
 	}
@@ -311,7 +312,7 @@ func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name 
 // the reason the store's ResolutionSide doc gives: the two surfaces are one
 // feature, and a client that learned the vocabulary from one must not be
 // surprised by the other.
-func decodeResolutions(w http.ResponseWriter, r *http.Request) (map[string]store.Resolution, bool) {
+func decodeResolutions(w http.ResponseWriter, r *http.Request) (map[string]merge.Resolution, bool) {
 	var body struct {
 		Resolutions map[string]json.RawMessage `json:"resolutions"`
 	}
@@ -329,19 +330,19 @@ func decodeResolutions(w http.ResponseWriter, r *http.Request) (map[string]store
 
 // parseResolutions checks the shape of each resolution: "ours", "theirs", or
 // {"body": "..."} with a non-empty body.
-func parseResolutions(resolutions map[string]json.RawMessage) (map[string]store.Resolution, error) {
+func parseResolutions(resolutions map[string]json.RawMessage) (map[string]merge.Resolution, error) {
 	if len(resolutions) == 0 {
 		return nil, nil
 	}
-	out := make(map[string]store.Resolution, len(resolutions))
+	out := make(map[string]merge.Resolution, len(resolutions))
 	for path, raw := range resolutions {
 		var side string
 		if err := json.Unmarshal(raw, &side); err == nil {
 			switch side {
 			case "ours":
-				out[path] = store.Resolution{Side: store.ResolveSrc}
+				out[path] = merge.Resolution{Side: merge.ResolveSrc}
 			case "theirs":
-				out[path] = store.Resolution{Side: store.ResolveDst}
+				out[path] = merge.Resolution{Side: merge.ResolveDst}
 			default:
 				return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}, got %q", path, side)
 			}
@@ -356,13 +357,13 @@ func parseResolutions(resolutions map[string]json.RawMessage) (map[string]store.
 		if *obj.Body == "" {
 			return nil, fmt.Errorf("resolution body for %q is empty; to drop the fact, retract it instead", path)
 		}
-		out[path] = store.Resolution{Body: []byte(*obj.Body)}
+		out[path] = merge.Resolution{Body: []byte(*obj.Body)}
 	}
 	return out, nil
 }
 
 func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, err error) {
-	var conflict *store.MergeConflictError
+	var conflict *merge.MergeConflictError
 	if errors.As(err, &conflict) {
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Experiment has conflicting changes",
 			"both the experiment and the agent branch changed the same fact(s) since the fork; "+
@@ -373,9 +374,9 @@ func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, 
 		return
 	}
 	switch {
-	case errors.Is(err, store.ErrNoSuchExperiment):
+	case errors.Is(err, merge.ErrNoSuchExperiment):
 		hal.WriteProblem(w, http.StatusNotFound, "Experiment not found", err.Error(), r.URL.Path)
-	case errors.Is(err, store.ErrInvalidExperimentName):
+	case errors.Is(err, merge.ErrInvalidExperimentName):
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid experiment name", err.Error(), r.URL.Path)
 	case errors.Is(err, store.ErrOrphanExperimentRef):
 		hal.WriteProblem(w, http.StatusConflict, "Branch already exists", err.Error(), r.URL.Path)

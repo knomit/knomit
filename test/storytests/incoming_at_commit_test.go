@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
 
@@ -167,7 +168,7 @@ func TestIncomingAtCommit_StoryScenarios(t *testing.T) {
 
 		// Merge agent/b into main with StrategyLocalWins. Conflict on E
 		// resolves in main's favour (E stays at cM2 content); F is added.
-		_ = mainB.MergeFrom(fb, store.StrategyLocalWins)
+		_ = mainB.MergeFrom(fb, merge.StrategyLocalWins)
 
 		// Write G on main referencing E. Topologically-correct target is
 		// cM2 (main's active E along first-parent line).

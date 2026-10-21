@@ -23,8 +23,8 @@ import (
 	"knomit/internal/mcp"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 // ---- T-D0: the shipped template's settings, and that it loads as-is
@@ -499,7 +499,7 @@ func TestMission_SameTaskEditedMerges(t *testing.T) {
 	merged := false
 	for _, c := range historyOf(t, h.url) {
 		for _, line := range strings.Split(c.Message, "\n") {
-			if strings.HasPrefix(line, store.TrailerMerge+": "+taskPath+" ") && strings.Contains(line, "strategy=merge ") {
+			if strings.HasPrefix(line, merge.TrailerMerge+": "+taskPath+" ") && strings.Contains(line, "strategy=merge ") {
 				merged = true
 			}
 		}

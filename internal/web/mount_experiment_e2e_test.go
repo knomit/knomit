@@ -153,7 +153,7 @@ func TestMountExperiment_OutOfBandRollbackHealsLazily(t *testing.T) {
 	// Out of band: exactly what the REST rollback and the sweeper do.
 	ri := m.Get("jobA-repo")
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Experiments().RollbackExperiment(context.Background(), "vanishing"))
+		require.NoError(t, svc.Merge().RollbackExperiment(context.Background(), "vanishing"))
 	}))
 
 	learnOn(t, h, mount, sid, "after it vanished")

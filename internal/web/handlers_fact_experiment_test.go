@@ -35,7 +35,7 @@ func newExperimentRESTManager(t *testing.T, name string) (*repos.Manager, *store
 
 func openRESTExperiment(t *testing.T, svc *store.Service, name string) {
 	t.Helper()
-	if _, err := svc.Experiments().OpenExperiment(context.Background(), name, "", "agent/test"); err != nil {
+	if _, err := svc.Merge().OpenExperiment(context.Background(), name, "", "agent/test"); err != nil {
 		t.Fatalf("open experiment: %v", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestHandleFactCreate_RefusesForeignExperimentBranch(t *testing.T) {
 	if err := svc.Branches().CreateBranch(ctx, "agent/elsewhere", "agent/test"); err != nil {
 		t.Fatalf("create branch: %v", err)
 	}
-	if _, err := svc.Experiments().OpenExperiment(ctx, "theirs", "", "agent/elsewhere"); err != nil {
+	if _, err := svc.Merge().OpenExperiment(ctx, "theirs", "", "agent/elsewhere"); err != nil {
 		t.Fatalf("open experiment: %v", err)
 	}
 	// A bare ref in the namespace with no experiments row behind it.
@@ -125,7 +125,7 @@ func TestLensGET_EmbedsTheExperimentWhenTheWriteMemberIsPinnedThere(t *testing.T
 
 	var branch string
 	if err := write.WithRead(func(svc *store.Service) {
-		exp, err := svc.Experiments().OpenExperiment(context.Background(), "lens-pinned", "", agent)
+		exp, err := svc.Merge().OpenExperiment(context.Background(), "lens-pinned", "", agent)
 		if err != nil {
 			t.Fatalf("open experiment: %v", err)
 		}

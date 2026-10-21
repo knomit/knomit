@@ -19,6 +19,7 @@ import (
 
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 )
 
 // Tests for derive-at-index (review rounds 3-4): a commit's path_changes rows
@@ -128,7 +129,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 	}
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/other.md", testFactBody("o", 0.5, nil), "o", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "side", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "side", "main", merge.StrategyLocalWins))
 	tip, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	want := append(reversed(sides), base.CommitHash)
@@ -740,8 +741,8 @@ func TestLiveRevision_EqualsRevisionsBefore(t *testing.T) {
 		}
 		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/o%d.md", k), testFactBody("o", 0.5, nil), "o", "")
 		require.NoError(t, err)
-		require.NoError(t, svc.Branches().MergeBranch(ctx, "agent", "main", StrategyLocalWins))
-		require.NoError(t, svc.Branches().MergeBranch(ctx, "main", "agent", StrategyLocalWins))
+		require.NoError(t, svc.Merge().MergeBranch(ctx, "agent", "main", merge.StrategyLocalWins))
+		require.NoError(t, svc.Merge().MergeBranch(ctx, "main", "agent", merge.StrategyLocalWins))
 	}
 	var all []string
 	rows, err := svc.rh.DB().Query(`SELECT DISTINCT commit_hash FROM branch_commits`)

@@ -16,7 +16,7 @@ func openExperimentOn(t *testing.T, ri *RepoInstance, name, parent string) strin
 	t.Helper()
 	var branch string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		exp, err := svc.Experiments().OpenExperiment(context.Background(), name, "", parent)
+		exp, err := svc.Merge().OpenExperiment(context.Background(), name, "", parent)
 		require.NoError(t, err)
 		branch = exp.Branch()
 	}))

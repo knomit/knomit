@@ -136,7 +136,7 @@ func TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects(t *testing.T) {
 	if _, err := svc.Facts().WriteFact(ctx, agent, "kb/notes/a.md", factBody, "learn: a", "created"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Experiments().OpenExperiment(ctx, "diverge", "", agent); err != nil {
+	if _, err := svc.Merge().OpenExperiment(ctx, "diverge", "", agent); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Facts().WriteFact(ctx, "exp/diverge", "kb/notes/b.md", factBody, "learn: b", "created"); err != nil {
@@ -153,7 +153,7 @@ func TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects(t *testing.T) {
 	if _, err := svc.Facts().DeleteFact(ctx, agent, "kb/notes/a.md", "retract: a"); !errors.Is(err, store.ErrNoSigner) {
 		t.Fatalf("delete without a signer: got %v, want ErrNoSigner", err)
 	}
-	if _, err := svc.Experiments().CommitExperiment(ctx, "diverge", nil); !errors.Is(err, store.ErrNoSigner) {
+	if _, err := svc.Merge().CommitExperiment(ctx, "diverge", nil); !errors.Is(err, store.ErrNoSigner) {
 		t.Fatalf("a non-fast-forward merge without a signer: got %v, want ErrNoSigner", err)
 	}
 	rep, err := svc.Verify(ctx, store.VerifyOpts{})

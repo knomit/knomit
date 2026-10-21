@@ -8,7 +8,7 @@ import (
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 func testRepo() *repos.RepoInstance {
@@ -25,13 +25,13 @@ func testRepo() *repos.RepoInstance {
 func TestNormalize_RefusesEveryResolutionOnADotPath(t *testing.T) {
 	body := []byte("---\ntype: observation\n---\n# Guidance\n\nINJECTED\n")
 	for _, p := range []string{".knomit/guidance/x.md", ".knomit/skills/s/extra.md", "kb/.drafts/x.md", ".github/x.md"} {
-		for name, res := range map[string]store.Resolution{
+		for name, res := range map[string]merge.Resolution{
 			"body":   {Body: body},
-			"ours":   {Side: store.ResolveSrc},
-			"theirs": {Side: store.ResolveDst},
+			"ours":   {Side: merge.ResolveSrc},
+			"theirs": {Side: merge.ResolveDst},
 		} {
 			_, err := Normalize(context.Background(), testRepo(), "agent/test", "exp/x",
-				map[string]store.Resolution{p: res})
+				map[string]merge.Resolution{p: res})
 			require.Errorf(t, err, "%s resolution on %s", name, p)
 			require.Containsf(t, err.Error(), "closed to the fact tools", "%s resolution on %s", name, p)
 		}
@@ -43,6 +43,6 @@ func TestNormalize_RefusesEveryResolutionOnADotPath(t *testing.T) {
 func TestNormalize_ArtifactBodyRefusesContext(t *testing.T) {
 	body := []byte("---\ntype: observation\ncontext: {task: t-1}\n---\n# State\n\nrun 2\n")
 	_, err := Normalize(context.Background(), testRepo(), "agent/test", "exp/x",
-		map[string]store.Resolution{"artifacts/runs/x.md": {Body: body}})
+		map[string]merge.Resolution{"artifacts/runs/x.md": {Body: body}})
 	require.ErrorIs(t, err, knomitfact.ErrContextWithoutOntology)
 }

@@ -23,7 +23,7 @@ import (
 
 // MergeBranch merges src into dst using the given conflict strategy.
 // Thin wrapper around mergeIntoBranch that discards the structured result;
-// preserves the public BranchIndex interface for existing callers.
+// it takes the dst lock itself (callers reach it as Service.Merge().MergeBranch).
 func (rh *Repo) MergeBranch(ctx context.Context, src, dst string, strategy ConflictStrategy) error {
 	_, err := rh.mergeIntoBranch(ctx, src, dst, strategy)
 	return err

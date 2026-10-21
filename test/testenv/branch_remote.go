@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 )
 
 // Push pushes this branch to the repo's configured origin remote. Returns
@@ -51,7 +52,7 @@ func (b *BranchHandle) Sync() store.SyncResult {
 		t.Fatalf("Sync(%s): %v", b.name, syncErr)
 	}
 	// Capture the resulting HEAD as a snapshot if the agent branch advanced.
-	if result.Agent.Mode == store.ModeRebase || result.Agent.Mode == store.ModeFF || result.Agent.Mode == store.ModeMerge {
+	if result.Agent.Mode == merge.ModeRebase || result.Agent.Mode == merge.ModeFF || result.Agent.Mode == merge.ModeMerge {
 		var headHash string
 		var headErr error
 		b.repo.ri.WithRead(func(svc *store.Service) {

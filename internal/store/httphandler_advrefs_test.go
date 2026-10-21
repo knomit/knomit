@@ -176,7 +176,7 @@ func TestGitHandler_DoesNotAdvertiseExperiments(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "agent/host-1", "kb/a.md", testFactBody("a", 0.9, nil), "a", "")
 	require.NoError(t, err)
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "hidden", "", "agent/host-1")
+	exp, err := svc.Merge().OpenExperiment(ctx, "hidden", "", "agent/host-1")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, exp.Branch(), "kb/secret.md", testFactBody("secret", 0.9, nil), "s", "")
 	require.NoError(t, err)

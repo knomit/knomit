@@ -312,7 +312,7 @@ topics:
 	}
 	// One experiment on the target; the update inside it; the commit.
 	svc := target.svc(t)
-	_, err = svc.Experiments().OpenExperiment(context.Background(), "fold-1", "", mHostAgent)
+	_, err = svc.Merge().OpenExperiment(context.Background(), "fold-1", "", mHostAgent)
 	require.NoError(t, err)
 	inExp := &missionNode{name: "T-exp", m: h.m, ri: kbRI, branch: store.ExperimentBranch("fold-1"), tools: h.tools}
 	_, isErr, text = inExp.call(t, "update", map[string]any{"file": hyp, "moment_name": "fold: xcheck-h xcheck-p", "trace": traceOf("fold-1"),
@@ -323,7 +323,7 @@ topics:
 	ctx, err := store.WithAgentTrace(context.Background(), store.Trailers{Trace: "kb", Run: run,
 		Extra: []store.TrailerEntry{{Key: "Mission-Task", Value: "fold-1"}}})
 	require.NoError(t, err)
-	_, err = svc.Experiments().CommitExperiment(ctx, "fold-1", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "fold-1", nil)
 	require.NoError(t, err)
 
 	after := tips(t, target)

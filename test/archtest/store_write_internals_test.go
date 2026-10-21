@@ -279,3 +279,146 @@ func TestFactsRepoTriggerWrites_GuardDiscriminates(t *testing.T) {
 		}
 	}
 }
+
+// mergeCores are the exported methods of merge.Repo that assume the caller
+// already holds the destination branch's lock (MarkExperimentsRewound,
+// FactMergeResolutions and MergeTreesWithStrategy additionally run before or
+// inside the move of a ref, outside the NotifyCommit ordering). They stay
+// exported only because the remotesync child calls them, and Service.Merge
+// hands the *merge.Repo out. MergeBranch (which takes the lock), the
+// experiment lifecycle and PushedBranches are the handle's real surface.
+var mergeCores = map[string]bool{
+	"MergeIntoBranchLocked": true, "MergeIntoBranchLockedOpts": true,
+	"MergeTreesWithStrategy": true, "MarkExperimentsRewound": true,
+	"FactMergeResolutions": true,
+}
+
+// TestStoreMergeCores_OnlyInsideStore (guard C proper, PR E4): handing out
+// *merge.Repo makes the five lock-assuming merge cores callable from every
+// package that holds a Service. This parses every .go file outside
+// internal/store/** (tests included) and fails on any selector of one of them;
+// the host's merges from outside the store go through Service.MergePushed and
+// Service.MergeConsensus, which take the lock.
+//
+// Non-vacuity: at least 500 files outside the store are walked; every one of
+// the five names is still declared on a method in internal/store/merge and
+// still selected by a non-test file elsewhere inside internal/store (the
+// parent's service_merge.go and the remotesync child), so a rename or a move
+// cannot leave the scan matching nothing.
+func TestStoreMergeCores_OnlyInsideStore(t *testing.T) {
+	const minFiles = 500
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	var offenders []string
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+				return filepath.SkipDir
+			}
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") {
+			return nil
+		}
+		scanned++
+		for _, u := range selectorUses(t, fset, path, nil, mergeCores) {
+			offenders = append(offenders, rel+" "+u)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < minFiles {
+		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+	}
+
+	// The expected uses INSIDE the store: every core is still declared in the
+	// merge child and still called from a non-test file elsewhere in the store.
+	declared := map[string]bool{}
+	inside := map[string]bool{}
+	storeRoot := filepath.Join(root, "internal", "store")
+	err = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if perr != nil {
+			return perr
+		}
+		inMerge := filepath.ToSlash(filepath.Dir(path)) == filepath.ToSlash(filepath.Join(storeRoot, "merge"))
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				if inMerge && x.Recv != nil && mergeCores[x.Name.Name] {
+					declared[x.Name.Name] = true
+				}
+			case *ast.SelectorExpr:
+				if !inMerge && mergeCores[x.Sel.Name] {
+					inside[x.Sel.Name] = true
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range mergeCores {
+		if !declared[name] {
+			t.Errorf("internal/store/merge no longer declares a method %s: it was renamed or moved, so this guard checks nothing", name)
+		}
+		if !inside[name] {
+			t.Errorf("no non-test file of internal/store outside the merge package selects %s: the caller moved or was renamed, so this guard's expectations are stale", name)
+		}
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("the merge cores assume the caller holds the destination branch's lock (kb/architecture/store/merge-child/4102d898.md); "+
+			"only internal/store/** may name them, and a merge from outside goes through Service.MergePushed, Service.MergeConsensus or merge.Repo.MergeBranch:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestStoreMergeCores_GuardDiscriminates runs the detector on inline source:
+// calls and method values of each core are flagged, whatever the receiver
+// expression; MergeBranch (the locking merge), a declaration, a comment and a
+// string are not.
+func TestStoreMergeCores_GuardDiscriminates(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"call through the handle", "package p\nfunc f() { svc.Merge().MergeIntoBranchLocked() }", 1},
+		{"opts call", "package p\nfunc f() { m.MergeIntoBranchLockedOpts() }", 1},
+		{"trees", "package p\nfunc f() { m.MergeTreesWithStrategy() }", 1},
+		{"rewound", "package p\nfunc f() { m.MarkExperimentsRewound() }", 1},
+		{"resolutions", "package p\nfunc f() { m.FactMergeResolutions() }", 1},
+		{"method value", "package p\nfunc f() { g := m.MergeIntoBranchLocked; _ = g }", 1},
+		{"locking merge", "package p\nfunc f() { svc.Merge().MergeBranch() }", 0},
+		{"lifecycle", "package p\nfunc f() { svc.Merge().CommitExperiment() }", 0},
+		{"declaration", "package p\ntype R struct{}\nfunc (r *R) MergeIntoBranchLocked() {}", 0},
+		{"comment", "package p\n// MarkExperimentsRewound runs before the rewind\nfunc f() {}", 0},
+		{"string", "package p\nvar s = \"m.FactMergeResolutions()\"", 0},
+	}
+	for _, c := range cases {
+		got := selectorUses(t, token.NewFileSet(), c.name+".go", c.src, mergeCores)
+		if len(got) != c.want {
+			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
+		}
+	}
+}

@@ -100,7 +100,7 @@ func runExperimentSweepLoop(ctx context.Context, acquire func() (*store.Service,
 				return nil, fmt.Errorf("store unavailable: %w", err)
 			}
 			defer release()
-			return svc.Experiments().ExpireExperiments(ctx, cutoff)
+			return svc.Merge().ExpireExperiments(ctx, cutoff)
 		})
 }
 

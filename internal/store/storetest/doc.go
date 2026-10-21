@@ -3,8 +3,9 @@
 // without the index, backdate an experiment, read the raw database. The Service
 // itself carries no test-only method; each function here takes the *Service and
 // does its work through the child package's own seam (vcs, facts, merge,
-// sqlite), which it reaches through a registration hook guarded by mustBeTest
-// in that child.
+// sqlite). The vcs repo is reached through a registration hook guarded by
+// mustBeTest; the facts index and merge repo are the handles Service.Facts and
+// Service.Merge already hand out.
 //
 // This is a test package, not an API. Three things keep it out of production:
 //

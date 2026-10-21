@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/merge"
 )
 
 // Review tests for PR #511 (written by the reviewer; asserts adjusted to the
@@ -87,7 +88,7 @@ func TestReceivePack_CrissCrossThenNewerMainAccepted(t *testing.T) {
 	ontBefore := h.branchFiles("main")[fact.OntologyFile]
 	res, err := h.svc.MergePushed(ctx, branch, "main", c2.Hash, "")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	require.Equal(t, ontBefore, h.branchFiles("main")[fact.OntologyFile])
 	require.Contains(t, h.branchFiles("main"), "kb/notes/y.md")
 }
@@ -126,9 +127,9 @@ func TestReceivePack_AdoptedHostHeldTipMergeRefused(t *testing.T) {
 	agentTip := h.ref(hostBranch)
 	knomitBefore := knomitTreeHash(t, h, hostBranch)
 	_, err = h.svc.MergePushed(ctx, branch, hostBranch, lc.Hash, "")
-	var pe *PrivatePathMergeError
+	var pe *merge.PrivatePathMergeError
 	require.ErrorAs(t, err, &pe)
-	require.ErrorIs(t, err, ErrPrivatePathMerge)
+	require.ErrorIs(t, err, merge.ErrPrivatePathMerge)
 	require.Equal(t, []string{fact.OntologyFile}, pe.Paths)
 	require.Equal(t, agentTip, h.ref(hostBranch))
 	require.Equal(t, knomitBefore, knomitTreeHash(t, h, hostBranch))

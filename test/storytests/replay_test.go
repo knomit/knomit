@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
 
@@ -41,7 +42,7 @@ func TestReplay_LocalWinsPrefersLocal(t *testing.T) {
 	dst.Update("kb/x.md", testenv.Fact("x").Body("v2 local"), "local v2")
 	src.Update("kb/x.md", testenv.Fact("x").Body("v3 remote"), "remote v3")
 
-	dst.MergeFrom(src, store.StrategyLocalWins)
+	dst.MergeFrom(src, merge.StrategyLocalWins)
 	dst.Head().Fact("kb/x.md").Body().MustContain("v2 local")
 }
 
@@ -60,7 +61,7 @@ func TestReplay_RemoteWinsPrefersRemote(t *testing.T) {
 	dst.Update("kb/x.md", testenv.Fact("x").Body("v2 local"), "local v2")
 	src.Update("kb/x.md", testenv.Fact("x").Body("v3 remote"), "remote v3")
 
-	dst.MergeFrom(src, store.StrategyRemoteWins)
+	dst.MergeFrom(src, merge.StrategyRemoteWins)
 	dst.Head().Fact("kb/x.md").Body().MustContain("v3 remote")
 }
 
@@ -85,7 +86,7 @@ func TestReplay_LocalWinsDoesNotDropOverwrittenHistory(t *testing.T) {
 	dst.Update("kb/x.md", testenv.Fact("x").Body("v2 local"), "local v2")
 	srcHead := src.Update("kb/x.md", testenv.Fact("x").Body("v3 remote"), "remote v3")
 
-	dst.MergeFrom(src, store.StrategyLocalWins)
+	dst.MergeFrom(src, merge.StrategyLocalWins)
 
 	// dst HEAD has v2 (local wins).
 	dst.Head().Fact("kb/x.md").Body().MustContain("v2 local")
@@ -107,7 +108,7 @@ func TestReplay_RemoteWinsAppliesDeletes(t *testing.T) {
 
 	src.Delete("kb/x.md", "src deletes x")
 
-	dst.MergeFrom(src, store.StrategyRemoteWins)
+	dst.MergeFrom(src, merge.StrategyRemoteWins)
 	dst.Head().Fact("kb/x.md").MustNotExist()
 }
 
@@ -127,7 +128,7 @@ func TestReplay_LocalWinsIgnoresRemoteDeletes(t *testing.T) {
 	dst.Update("kb/x.md", testenv.Fact("x").Body("dst modification"), "dst update")
 	src.Delete("kb/x.md", "src deletes x")
 
-	dst.MergeFrom(src, store.StrategyLocalWins)
+	dst.MergeFrom(src, merge.StrategyLocalWins)
 	// dst's modification survives.
 	dst.Head().Fact("kb/x.md").Body().MustContain("dst modification")
 }
@@ -139,7 +140,7 @@ func TestReplay_LocalWinsIgnoresRemoteDeletes(t *testing.T) {
 // file. Both strategies merge to a result containing both A and B.
 func TestReplay_DisjointChangesBothApply(t *testing.T) {
 	t.Log("D6: dst adds A, src adds B (disjoint), both strategies produce a result with both facts")
-	for _, strat := range []store.ConflictStrategy{store.StrategyLocalWins, store.StrategyRemoteWins} {
+	for _, strat := range []merge.ConflictStrategy{merge.StrategyLocalWins, merge.StrategyRemoteWins} {
 		t.Run(string(strat), func(sub *testing.T) {
 			sb := testenv.NewStoryboard(sub)
 			repo := sb.Repo("alpha")
@@ -175,7 +176,7 @@ func TestReplay_ResultIsIntegral(t *testing.T) {
 	src.Write("kb/s1.md", testenv.Fact("s1"), "src adds s1")
 	src.Update("kb/a.md", testenv.Fact("a").Confidence(0.6), "src updates a")
 
-	dst.MergeFrom(src, store.StrategyLocalWins)
+	dst.MergeFrom(src, merge.StrategyLocalWins)
 
 	rep := repo.VerifyWith(store.VerifyOpts{Deep: true})
 	require.True(t, rep.IsStrictlyClean(), "post-merge repo must be strictly clean: %v", rep.Issues)

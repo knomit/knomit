@@ -242,7 +242,7 @@ func branchExperiment(ri *repos.RepoInstance, branch string, expiryDays int) map
 	// the writable flag above — which is what actually gates the UI — has
 	// already been answered by the same classification.
 	if err := ri.WithRead(func(svc *store.Service) {
-		exp, found, _ = svc.Experiments().GetExperiment(context.Background(), name)
+		exp, found, _ = svc.Branches().GetExperiment(context.Background(), name)
 	}); err != nil || !found {
 		return nil
 	}

@@ -489,7 +489,7 @@ func (ri *RepoInstance) writableExperiment(branch string) bool {
 	}
 	writable := false
 	if err := ri.WithRead(func(svc *store.Service) {
-		exp, found, err := svc.Experiments().GetExperiment(context.Background(), name)
+		exp, found, err := svc.Branches().GetExperiment(context.Background(), name)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name()).Str("branch", branch).
 				Msg("write eligibility: experiment lookup failed; refusing the write")

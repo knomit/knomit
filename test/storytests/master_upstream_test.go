@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store"
+	"knomit/internal/store/merge"
 	"knomit/test/testenv"
 )
 
@@ -68,7 +69,7 @@ func TestReconcile_G11_MasterUpstreamEndToEnd(t *testing.T) {
 	// origin/master and reconcileAgentMerge merges from local master.
 	remote.WriteMain("kb/promoted.md", testenv.Fact("promoted"), "promoted on master")
 	syncRes := agent.Sync()
-	require.Contains(t, []store.Mode{store.ModeMerge, store.ModeFF}, syncRes.Agent.Mode,
+	require.Contains(t, []merge.Mode{merge.ModeMerge, merge.ModeFF}, syncRes.Agent.Mode,
 		"post-push master advance must take the merge/ff path")
 
 	postAgent := a.Branch("agent/test")

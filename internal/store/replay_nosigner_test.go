@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/merge"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,7 @@ func TestReplayCommit_NoSignerLeavesNoObjects(t *testing.T) {
 	t.Cleanup(func() { vcs.SetTestFallbackSigner(fallbackTestSigner()) })
 	svc.SetSigner(nil)
 
-	_, err = svc.rh.ReconcileAgentForTest(context.Background(), "agent/test", "main", StrategyLocalWins, true)
+	_, err = svc.rh.ReconcileAgentForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins, true)
 	require.True(t, errors.Is(err, ErrNoSigner), "a signer-less replay must be ErrNoSigner, got %v", err)
 	after, err := svc.Verify(context.Background(), VerifyOpts{})
 	require.NoError(t, err)

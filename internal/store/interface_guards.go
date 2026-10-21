@@ -16,7 +16,6 @@ import (
 // so this file stays under the rule rather than being exempted from it.
 
 var _ BranchIndex = (*repoHandler)(nil)
-var _ ExperimentIndex = (*repoHandler)(nil)
 
 var _ PipelineIndex = (*sessions.PipelineIndex)(nil)
 var _ RemoteIndex = (*remotesync.Index)(nil)

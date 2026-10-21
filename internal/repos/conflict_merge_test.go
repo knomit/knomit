@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/merge"
 )
 
 const sharedPath = "kb/tasks/shared.md"
@@ -90,7 +90,7 @@ func TestConflictMerge_PeerSyncsFirst(t *testing.T) {
 	p.round(t)
 	peerTip := headCommit(t, p.ri, cPeerAgent)
 	require.Len(t, peerTip.Parents, 2, "the peer's sync wrote a merge commit")
-	merges := store.TrailerValues(peerTip.Message, store.TrailerMerge)
+	merges := merge.TrailerValues(peerTip.Message, merge.TrailerMerge)
 	require.Len(t, merges, 1, peerTip.Message)
 	require.True(t, strings.HasPrefix(merges[0], sharedPath+" strategy=merge "), merges[0])
 	merged := parseShared(t, peerContent(t, p))
@@ -99,7 +99,7 @@ func TestConflictMerge_PeerSyncsFirst(t *testing.T) {
 
 	res, err := h.svc(t).MergePushed(context.Background(), cPeerAgent, cHostAgent, peerTip.Hash, "")
 	require.NoError(t, err, "the host's merge is clean: the base moved to its own tip")
-	require.Equal(t, store.ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	h.advance(t)
 	require.Equal(t, peerContent(t, p), h.content(t, cHostAgent, sharedPath))
 	require.Equal(t, peerContent(t, p), h.content(t, h.upstream(t), sharedPath))
@@ -136,7 +136,7 @@ func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
 	require.Equal(t, 1, s.Merges)
 	mc := headCommit(t, h.ri, cHostAgent)
 	require.Contains(t, mc.Message, "(conflicts:merge/consensus)", "facts set; state absent under auto → consensus")
-	require.Len(t, store.TrailerValues(mc.Message, store.TrailerMerge), 1, mc.Message)
+	require.Len(t, merge.TrailerValues(mc.Message, merge.TrailerMerge), 1, mc.Message)
 	hostF := h.content(t, cHostAgent, sharedPath)
 	merged := parseShared(t, hostF)
 	require.Equal(t, "peer body", merged.Body)
@@ -190,7 +190,7 @@ func TestConflictMerge_RetractionWins(t *testing.T) {
 			require.Zero(t, h.stats().Refused)
 
 			mc := headCommit(t, h.ri, cHostAgent)
-			lines := store.TrailerValues(mc.Message, store.TrailerMerge)
+			lines := merge.TrailerValues(mc.Message, merge.TrailerMerge)
 			require.Len(t, lines, 1, mc.Message)
 			require.Contains(t, lines[0], "out=none "+wantDropped+" decided=delete")
 			require.False(t, h.has(t, cHostAgent, sharedPath), "the retraction wins on the host")
@@ -241,8 +241,8 @@ func TestConflictMerge_ExplicitOff_IsToday_Recorded(t *testing.T) {
 	p.round(t)
 	peerTip := headCommit(t, p.ri, cPeerAgent)
 	require.Contains(t, peerTip.Message, "(local_wins)")
-	require.Empty(t, store.TrailerValues(peerTip.Message, store.TrailerMerge))
-	conflicts := store.TrailerValues(peerTip.Message, store.TrailerConflict)
+	require.Empty(t, merge.TrailerValues(peerTip.Message, merge.TrailerMerge))
+	conflicts := merge.TrailerValues(peerTip.Message, merge.TrailerConflict)
 	require.Len(t, conflicts, 1, peerTip.Message)
 	require.True(t, strings.HasPrefix(conflicts[0], sharedPath+" kept=dst dropped=src-modify strategy=local_wins "), conflicts[0])
 

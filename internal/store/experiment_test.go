@@ -11,6 +11,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"knomit/internal/store/merge"
 )
 
 // Experiments are forked from an AGENT branch, so these fixtures name the
@@ -104,7 +106,7 @@ func TestOpenExperiment_ForksFromParentAndRecordsIt(t *testing.T) {
 	parentHead, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "widen-gate", "trying a wider gate", testAgentBranch)
+	exp, err := svc.Merge().OpenExperiment(ctx, "widen-gate", "trying a wider gate", testAgentBranch)
 	require.NoError(t, err)
 
 	require.Equal(t, "widen-gate", exp.Name)
@@ -118,7 +120,7 @@ func TestOpenExperiment_ForksFromParentAndRecordsIt(t *testing.T) {
 	require.Equal(t, parentHead, expHead, "the new ref must start at the parent's tip")
 
 	// The row is the record — reading it back is what eligibility will do.
-	got, ok, err := svc.Experiments().GetExperiment(ctx, "widen-gate")
+	got, ok, err := svc.Branches().GetExperiment(ctx, "widen-gate")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, testAgentBranch, got.Parent)
@@ -140,7 +142,7 @@ func TestOpenExperiment_CopiesPipelineWatermarks(t *testing.T) {
 	// A watermark on an unrelated branch must NOT be dragged along.
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", "main", "cccc3333"))
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "seeded", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "seeded", "", testAgentBranch)
 	require.NoError(t, err)
 
 	review, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", "exp/seeded")
@@ -163,7 +165,7 @@ func TestOpenExperiment_ResumesWithoutReforking(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	first, err := svc.Experiments().OpenExperiment(ctx, "resume-me", "first note", testAgentBranch)
+	first, err := svc.Merge().OpenExperiment(ctx, "resume-me", "first note", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/resume-me", "kb/only-here.md", "only here", "body")
 	expHead, err := svc.Branches().HeadCommit(ctx, "exp/resume-me")
@@ -172,7 +174,7 @@ func TestOpenExperiment_ResumesWithoutReforking(t *testing.T) {
 	// The parent moves on underneath the experiment.
 	writeMergeFact(t, svc, testAgentBranch, "kb/moved-on.md", "moved on", "body")
 
-	second, err := svc.Experiments().OpenExperiment(ctx, "resume-me", "second note", testAgentBranch)
+	second, err := svc.Merge().OpenExperiment(ctx, "resume-me", "second note", testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, first.ForkCommit, second.ForkCommit, "resume must not re-fork")
 	require.Equal(t, "second note", second.Description, "resume updates the description")
@@ -184,7 +186,7 @@ func TestOpenExperiment_ResumesWithoutReforking(t *testing.T) {
 
 	// An empty description on resume LEAVES the stored one — it is not a
 	// silent erase of the note the agent wrote when it opened the experiment.
-	third, err := svc.Experiments().OpenExperiment(ctx, "resume-me", "", testAgentBranch)
+	third, err := svc.Merge().OpenExperiment(ctx, "resume-me", "", testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, "second note", third.Description)
 }
@@ -198,9 +200,9 @@ func TestOpenExperiment_RejectsBadNames(t *testing.T) {
 	svc := newExperimentTestStore(t)
 
 	for _, bad := range []string{"", "Widen-Gate", "widen gate", "widen_gate", "-widen", "widen-", "widen--gate", "exp/widen", "../escape"} {
-		_, err := svc.Experiments().OpenExperiment(ctx, bad, "", testAgentBranch)
+		_, err := svc.Merge().OpenExperiment(ctx, bad, "", testAgentBranch)
 		require.Error(t, err, "name %q must be refused", bad)
-		require.ErrorIs(t, err, ErrInvalidExperimentName, "name %q", bad)
+		require.ErrorIs(t, err, merge.ErrInvalidExperimentName, "name %q", bad)
 	}
 	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM experiments`))
 	branches, err := svc.Branches().ListBranches(ctx)
@@ -217,18 +219,18 @@ func TestCommitExperiment_MergesAndDeletes(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "landing", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "landing", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/landing", "kb/from-exp.md", "from exp", "body")
 
-	res, err := svc.Experiments().CommitExperiment(ctx, "landing", nil)
+	res, err := svc.Merge().CommitExperiment(ctx, "landing", nil)
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode, "no parent movement since the fork: this is a fast-forward")
+	require.Equal(t, merge.ModeFF, res.Mode, "no parent movement since the fork: this is a fast-forward")
 
 	content := readExperimentFact(t, svc, testAgentBranch, "kb/from-exp.md")
 	require.Contains(t, content, "from exp", "the experiment's fact must be on the parent after commit")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "landing")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "landing")
 	require.NoError(t, err)
 	require.False(t, ok, "the experiment row is gone after a successful commit")
 
@@ -247,7 +249,7 @@ func TestCommitExperiment_RefusesOnConflict(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "clashing", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "clashing", "", testAgentBranch)
 	require.NoError(t, err)
 
 	// Both sides edit the SAME path relative to the fork point, plus one
@@ -263,10 +265,10 @@ func TestCommitExperiment_RefusesOnConflict(t *testing.T) {
 	require.NoError(t, err)
 	commitsBefore := countRows(t, svc, `SELECT count(*) FROM branch_commits`)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "clashing", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "clashing", nil)
 	require.Error(t, err)
 
-	var conflict *MergeConflictError
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict, "the refusal must be a typed conflict error")
 	require.Equal(t, []string{"kb/base.md"}, conflict.Paths,
 		"exactly the conflicting path, not every path the merge looked at")
@@ -280,7 +282,7 @@ func TestCommitExperiment_RefusesOnConflict(t *testing.T) {
 	require.Equal(t, commitsBefore, countRows(t, svc, `SELECT count(*) FROM branch_commits`),
 		"a refused commit must append no branch_commits row")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "clashing")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "clashing")
 	require.NoError(t, err)
 	require.True(t, ok, "a refused commit leaves the experiment in place")
 
@@ -296,18 +298,18 @@ func TestSyncExperiment_AgentWinsThenCommitSucceeds(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "reconciling", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "reconciling", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/reconciling", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, "exp/reconciling", "kb/exp-only.md", "exp only", "kept through sync")
 	writeMergeFact(t, svc, testAgentBranch, "kb/base.md", "base", "agent rewrite")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "reconciling", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "reconciling", nil)
 	require.Error(t, err, "precondition: the commit is refused")
 
-	syncRes, err := svc.Experiments().SyncExperiment(ctx, "reconciling")
+	syncRes, err := svc.Merge().SyncExperiment(ctx, "reconciling")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, syncRes.Mode)
+	require.Equal(t, merge.ModeMerge, syncRes.Mode)
 
 	// Agent-branch-wins on the conflicting path...
 	onExp := readExperimentFact(t, svc, "exp/reconciling", "kb/base.md")
@@ -317,10 +319,10 @@ func TestSyncExperiment_AgentWinsThenCommitSucceeds(t *testing.T) {
 	kept := readExperimentFact(t, svc, "exp/reconciling", "kb/exp-only.md")
 	require.Contains(t, kept, "kept through sync")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "reconciling", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "reconciling", nil)
 	require.NoError(t, err, "after sync there is no conflict left, so the commit lands")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "reconciling")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "reconciling")
 	require.NoError(t, err)
 	require.False(t, ok)
 
@@ -341,7 +343,7 @@ func TestRollbackExperiment_RemovesEveryTrace(t *testing.T) {
 	svc := newExperimentTestStore(t)
 
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", testAgentBranch, "aaaa1111"))
-	_, err := svc.Experiments().OpenExperiment(ctx, "throwaway", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "throwaway", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/throwaway", "kb/scratch.md", "scratch", "body")
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", "exp/throwaway", "dddd4444"))
@@ -350,9 +352,9 @@ func TestRollbackExperiment_RemovesEveryTrace(t *testing.T) {
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/throwaway").Scan(&branchID))
 	require.Positive(t, countRows(t, svc, `SELECT count(*) FROM branch_facts WHERE branch_id = ?`, branchID))
 
-	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "throwaway"))
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "throwaway"))
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "throwaway")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "throwaway")
 	require.NoError(t, err)
 	require.False(t, ok, "the experiment row is gone")
 	_, err = svc.Branches().HeadCommit(ctx, "exp/throwaway")
@@ -383,12 +385,12 @@ func TestRollbackExperiment_ReusedNameForksClean(t *testing.T) {
 	svc := newExperimentTestStore(t)
 
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", testAgentBranch, "aaaa1111"))
-	_, err := svc.Experiments().OpenExperiment(ctx, "recycled", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "recycled", "", testAgentBranch)
 	require.NoError(t, err)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", "exp/recycled", "dddd4444"))
-	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "recycled"))
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "recycled"))
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "recycled", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "recycled", "", testAgentBranch)
 	require.NoError(t, err)
 
 	wm, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", "exp/recycled")
@@ -418,16 +420,16 @@ func TestExperimentCommits_AreSigned(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, guard.PGPSignature, "precondition: the test signer is installed")
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "signed", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "signed", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/signed", "kb/base.md", "base", "experiment rewrite")
 	writeMergeFact(t, svc, testAgentBranch, "kb/other.md", "other", "body")
 
 	// A three-way merge onto the experiment (sync) synthesizes a commit —
 	// that is the one this path adds, so that is the one to check.
-	res, err := svc.Experiments().SyncExperiment(ctx, "signed")
+	res, err := svc.Merge().SyncExperiment(ctx, "signed")
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode, "precondition: a real merge commit was synthesized")
+	require.Equal(t, merge.ModeMerge, res.Mode, "precondition: a real merge commit was synthesized")
 
 	hash, err := svc.Branches().HeadCommit(ctx, "exp/signed")
 	require.NoError(t, err)
@@ -443,14 +445,14 @@ func TestNotifyCommit_RefreshesExperimentActivity(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "busy", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "busy", "", testAgentBranch)
 	require.NoError(t, err)
 	old := time.Now().Add(-90 * 24 * time.Hour)
 	setExperimentActivity(t, svc, "busy", old)
 
 	writeMergeFact(t, svc, "exp/busy", "kb/new.md", "new", "body")
 
-	got, ok, err := svc.Experiments().GetExperiment(ctx, "busy")
+	got, ok, err := svc.Branches().GetExperiment(ctx, "busy")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Greater(t, got.LastActivityAt.Unix(), old.Unix()+1,
@@ -465,14 +467,14 @@ func TestNotifyCommit_ParentWriteDoesNotRefresh(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "idle", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "idle", "", testAgentBranch)
 	require.NoError(t, err)
 	old := time.Now().Add(-90 * 24 * time.Hour).Truncate(time.Second)
 	setExperimentActivity(t, svc, "idle", old)
 
 	writeMergeFact(t, svc, testAgentBranch, "kb/parent-work.md", "parent work", "body")
 
-	got, ok, err := svc.Experiments().GetExperiment(ctx, "idle")
+	got, ok, err := svc.Branches().GetExperiment(ctx, "idle")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, old.Unix(), got.LastActivityAt.Unix(),
@@ -485,25 +487,25 @@ func TestExpireExperiments_DropsOldKeepsYoung(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "stale", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "stale", "", testAgentBranch)
 	require.NoError(t, err)
-	_, err = svc.Experiments().OpenExperiment(ctx, "fresh", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "fresh", "", testAgentBranch)
 	require.NoError(t, err)
 
 	setExperimentActivity(t, svc, "stale", time.Now().Add(-40*24*time.Hour))
 	setExperimentActivity(t, svc, "fresh", time.Now().Add(-2*24*time.Hour))
 
-	dropped, err := svc.Experiments().ExpireExperiments(ctx, time.Now().Add(-30*24*time.Hour))
+	dropped, err := svc.Merge().ExpireExperiments(ctx, time.Now().Add(-30*24*time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, []string{"stale"}, dropped, "exactly the expired one")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "stale")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "stale")
 	require.NoError(t, err)
 	require.False(t, ok)
 	_, err = svc.Branches().HeadCommit(ctx, "exp/stale")
 	require.Error(t, err, "expiry is a rollback: the ref goes too")
 
-	_, ok, err = svc.Experiments().GetExperiment(ctx, "fresh")
+	_, ok, err = svc.Branches().GetExperiment(ctx, "fresh")
 	require.NoError(t, err)
 	require.True(t, ok, "a younger experiment survives the same sweep")
 	_, err = svc.Branches().HeadCommit(ctx, "exp/fresh")
@@ -516,12 +518,12 @@ func TestListExperiments_ReportsRecordedFields(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "beta", "second", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "beta", "second", testAgentBranch)
 	require.NoError(t, err)
-	_, err = svc.Experiments().OpenExperiment(ctx, "alpha", "first", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "alpha", "first", testAgentBranch)
 	require.NoError(t, err)
 
-	list, err := svc.Experiments().ListExperiments(ctx)
+	list, err := svc.Merge().ListExperiments(ctx)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	require.Equal(t, "alpha", list[0].Name, "listed by name so the order is stable")
@@ -538,11 +540,11 @@ func TestExperimentOps_UnknownNameIsTyped(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().CommitExperiment(ctx, "ghost", nil)
-	require.ErrorIs(t, err, ErrNoSuchExperiment)
-	_, err = svc.Experiments().SyncExperiment(ctx, "ghost")
-	require.ErrorIs(t, err, ErrNoSuchExperiment)
-	require.ErrorIs(t, svc.Experiments().RollbackExperiment(ctx, "ghost"), ErrNoSuchExperiment)
+	_, err := svc.Merge().CommitExperiment(ctx, "ghost", nil)
+	require.ErrorIs(t, err, merge.ErrNoSuchExperiment)
+	_, err = svc.Merge().SyncExperiment(ctx, "ghost")
+	require.ErrorIs(t, err, merge.ErrNoSuchExperiment)
+	require.ErrorIs(t, svc.Merge().RollbackExperiment(ctx, "ghost"), merge.ErrNoSuchExperiment)
 }
 
 // TestReconcile_DoesNotTouchExperiments: an experiment is local work in
@@ -558,7 +560,7 @@ func TestReconcile_DoesNotTouchExperiments(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "in-progress", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "in-progress", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/in-progress", "kb/wip.md", "wip", "not ready for anyone")
 	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/in-progress")
@@ -574,7 +576,7 @@ func TestReconcile_DoesNotTouchExperiments(t *testing.T) {
 
 	res, err := svc.AdvanceLocalUpstream(ctx, testAgentBranch, "main")
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode, "precondition: the tick did real work")
+	require.Equal(t, merge.ModeFF, res.Mode, "precondition: the tick did real work")
 
 	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
@@ -605,7 +607,7 @@ func TestCommitExperiment_RefusesStaleParent(t *testing.T) {
 	svc := newExperimentTestStore(t)
 
 	// Forked from agent/test, which this database owned at the time.
-	_, err := svc.Experiments().OpenExperiment(ctx, "orphaned", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "orphaned", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/orphaned", "kb/from-orphan.md", "from orphan", "body")
 
@@ -620,7 +622,7 @@ func TestCommitExperiment_RefusesStaleParent(t *testing.T) {
 	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
 	require.NoError(t, err)
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "orphaned", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "orphaned", nil)
 	require.ErrorIs(t, err, ErrStaleExperimentParent)
 	require.Contains(t, err.Error(), testAgentBranch, "the error names the recorded parent")
 	require.Contains(t, err.Error(), "agent/successor", "and the branch that owns the database now")
@@ -635,7 +637,7 @@ func TestCommitExperiment_RefusesStaleParent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expBefore, expAfter, "the experiment is untouched")
 
-	_, ok, err := svc.Experiments().GetExperiment(ctx, "orphaned")
+	_, ok, err := svc.Branches().GetExperiment(ctx, "orphaned")
 	require.NoError(t, err)
 	require.True(t, ok, "and still present — a refusal is not a rollback")
 }
@@ -647,7 +649,7 @@ func TestSyncExperiment_RefusesStaleParent(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "orphaned", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "orphaned", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, testAgentBranch, "kb/moved-on.md", "moved on", "body")
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/successor", testAgentBranch))
@@ -656,7 +658,7 @@ func TestSyncExperiment_RefusesStaleParent(t *testing.T) {
 	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
 	require.NoError(t, err)
 
-	_, err = svc.Experiments().SyncExperiment(ctx, "orphaned")
+	_, err = svc.Merge().SyncExperiment(ctx, "orphaned")
 	require.ErrorIs(t, err, ErrStaleExperimentParent)
 
 	expAfter, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
@@ -672,11 +674,11 @@ func TestCommitExperiment_OwnerMatchesIsAllowed(t *testing.T) {
 	svc := newExperimentTestStore(t)
 	require.NoError(t, svc.Branches().SetAgentBranchOwner(ctx, testAgentBranch))
 
-	_, err := svc.Experiments().OpenExperiment(ctx, "current", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "current", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/current", "kb/landing.md", "landing", "body")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "current", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "current", nil)
 	require.NoError(t, err, "a recorded owner that MATCHES the parent must not block the commit")
 
 	content := readExperimentFact(t, svc, testAgentBranch, "kb/landing.md")
@@ -697,11 +699,11 @@ func TestCommitExperiment_UnrecordedOwnerIsAllowed(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, owner, "fixture precondition: this database has no recorded owner")
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "unstamped", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "unstamped", "", testAgentBranch)
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "exp/unstamped", "kb/unstamped.md", "unstamped", "body")
 
-	_, err = svc.Experiments().CommitExperiment(ctx, "unstamped", nil)
+	_, err = svc.Merge().CommitExperiment(ctx, "unstamped", nil)
 	require.NoError(t, err, "an UNKNOWN owner is not a mismatch")
 }
 
@@ -725,7 +727,7 @@ func TestOpenExperiment_RefusesOrphanRef(t *testing.T) {
 	// ...and a parent that has since moved on.
 	writeMergeFact(t, svc, testAgentBranch, "kb/newer.md", "newer", "body")
 
-	_, err = svc.Experiments().OpenExperiment(ctx, "orphan", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "orphan", "", testAgentBranch)
 	require.ErrorIs(t, err, ErrOrphanExperimentRef)
 	require.Contains(t, err.Error(), "exp/orphan", "the error names the ref standing in the way")
 
@@ -746,7 +748,7 @@ func TestOpenExperiment_ForkCommitIsTheNewBranchTip(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
 
-	exp, err := svc.Experiments().OpenExperiment(ctx, "anchored", "", testAgentBranch)
+	exp, err := svc.Merge().OpenExperiment(ctx, "anchored", "", testAgentBranch)
 	require.NoError(t, err)
 
 	branchTip, err := svc.Branches().HeadCommit(ctx, exp.Branch())
@@ -760,7 +762,7 @@ func TestOpenExperiment_ForkCommitIsTheNewBranchTip(t *testing.T) {
 		"which, with nothing racing, is also the parent's tip at creation")
 
 	// The stored row agrees with what the call returned.
-	got, ok, err := svc.Experiments().GetExperiment(ctx, "anchored")
+	got, ok, err := svc.Branches().GetExperiment(ctx, "anchored")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, branchTip, got.ForkCommit)
@@ -786,7 +788,7 @@ func TestRollbackExperiment_CleansAnOrphanRef(t *testing.T) {
 	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM experiments WHERE name = ?`, "half-open"),
 		"fixture precondition: there is no record, only a ref")
 
-	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "half-open"),
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "half-open"),
 		"rollback must clean an orphan ref rather than refuse it")
 
 	_, err := svc.Branches().HeadCommit(ctx, "exp/half-open")
@@ -815,15 +817,15 @@ func TestRollbackExperiment_OrphanThenReopenSucceeds(t *testing.T) {
 	writeOnOrphanRef(t, svc, "retry-me", "kb/stale.md", "stale", "work from the dead open")
 
 	// Refused while the orphan stands...
-	_, err := svc.Experiments().OpenExperiment(ctx, "retry-me", "", testAgentBranch)
+	_, err := svc.Merge().OpenExperiment(ctx, "retry-me", "", testAgentBranch)
 	require.ErrorIs(t, err, ErrOrphanExperimentRef)
 
 	// ...rolled back, then it opens cleanly.
-	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "retry-me"))
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "retry-me"))
 
 	parentTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
 	require.NoError(t, err)
-	exp, err := svc.Experiments().OpenExperiment(ctx, "retry-me", "second try", testAgentBranch)
+	exp, err := svc.Merge().OpenExperiment(ctx, "retry-me", "second try", testAgentBranch)
 	require.NoError(t, err)
 	require.Equal(t, parentTip, exp.ForkCommit, "the reopened experiment forks from the parent's tip")
 	require.Equal(t, "second try", exp.Description)
@@ -838,5 +840,5 @@ func TestRollbackExperiment_OrphanThenReopenSucceeds(t *testing.T) {
 func TestRollbackExperiment_NeitherRefNorRowIsStillNotFound(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)
-	require.ErrorIs(t, svc.Experiments().RollbackExperiment(ctx, "nope"), ErrNoSuchExperiment)
+	require.ErrorIs(t, svc.Merge().RollbackExperiment(ctx, "nope"), merge.ErrNoSuchExperiment)
 }

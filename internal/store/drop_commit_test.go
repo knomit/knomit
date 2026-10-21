@@ -67,13 +67,13 @@ func TestDrop_ReplaysMergesAndLeavesOutTheOneThatBroughtTheDroppedCommit(t *test
 	h := newPushHost(t, VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
 
-	ex, err := h.svc.Experiments().OpenExperiment(ctx, "e1", "d", hostBranch)
+	ex, err := h.svc.Merge().OpenExperiment(ctx, "e1", "d", hostBranch)
 	require.NoError(t, err)
 	_, err = h.svc.Facts().WriteFact(ctx, ex.Branch(), "kb/notes/exp.md", testFactBody("exp", 0.9, nil), "exp", "created")
 	require.NoError(t, err)
 	_, err = h.svc.Facts().WriteFact(ctx, hostBranch, "kb/notes/a.md", testFactBody("a", 0.9, nil), "a", "created")
 	require.NoError(t, err)
-	_, err = h.svc.Experiments().CommitExperiment(ctx, "e1", nil)
+	_, err = h.svc.Merge().CommitExperiment(ctx, "e1", nil)
 	require.NoError(t, err)
 	require.Contains(t, h.branchFiles(hostBranch), "kb/notes/exp.md", "fixture: the experiment is merged")
 

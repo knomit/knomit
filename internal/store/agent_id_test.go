@@ -30,7 +30,7 @@ func TestCommitAuthor_IsThePersistedAgentIDNotTheBranchName(t *testing.T) {
 	content := "---\ntype: observation\n---\n# a\n\nbody\n"
 	_, err = svc.Facts().WriteFact(ctx, testAgentBranch, "kb/a.md", content, "learn: a", "learn")
 	require.NoError(t, err)
-	_, err = svc.Experiments().OpenExperiment(ctx, "e", "", testAgentBranch)
+	_, err = svc.Merge().OpenExperiment(ctx, "e", "", testAgentBranch)
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "exp/e", "kb/b.md", content, "learn: b", "learn")
 	require.NoError(t, err)

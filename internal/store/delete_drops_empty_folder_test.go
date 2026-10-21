@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // #375: knomit's deletes write trees the way git does — a folder whose last
@@ -111,7 +113,7 @@ func TestMergeBranch_SrcDeleteDropsEmptiedFolder(t *testing.T) {
 	require.NoError(t, err)
 	writeMergeFact(t, svc, "main", "kb/other/more.md", "more", "body")
 
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 
 	require.False(t, folderPresent(t, svc, "main", "kb/lane"), "the merge drops the folder src emptied")
 	require.True(t, folderPresent(t, svc, "main", "kb/other"))

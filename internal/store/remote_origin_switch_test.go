@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/store/merge"
 	"knomit/internal/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -103,7 +104,7 @@ func TestSync_SwitchToAnOriginBehindDropsNothing(t *testing.T) {
 
 			swPoint(t, svc, fileuri.New(b))
 			res := wmSync(t, svc)
-			require.NotEqual(t, ModeRebase, res.Agent.Mode, "synced normally, not rebuilt")
+			require.NotEqual(t, merge.ModeRebase, res.Agent.Mode, "synced normally, not rebuilt")
 			require.True(t, reachableFrom(t, svc, "agent/test", f), "f is kept as it is")
 			require.True(t, reachableFrom(t, svc, "agent/test", w), "w is kept as it is")
 			wmPush(t, svc)
@@ -128,8 +129,8 @@ func TestSync_SwitchToADivergedOriginMergesNormally(t *testing.T) {
 
 	swPoint(t, svc, fileuri.New(b))
 	res := wmSync(t, svc)
-	require.Equal(t, ModeRewound, res.Main.Mode, "setup: local main moved to B's")
-	require.NotEqual(t, ModeRebase, res.Agent.Mode)
+	require.Equal(t, merge.ModeRewound, res.Main.Mode, "setup: local main moved to B's")
+	require.NotEqual(t, merge.ModeRebase, res.Agent.Mode)
 	require.True(t, reachableFrom(t, svc, "agent/test", f))
 	require.True(t, reachableFrom(t, svc, "agent/test", w))
 	require.True(t, hasFileAt(t, svc, "agent/test", "kb/b-own.md"), "B's main is merged in")
@@ -160,7 +161,7 @@ func TestSync_SwitchToAnUnrelatedOriginKeepsTheExistingRules(t *testing.T) {
 
 	swPoint(t, svc, fileuri.New(b))
 	res := wmSync(t, svc)
-	require.Equal(t, ModeNoop, res.Agent.Mode, "the existing disjoint rule: the branch stays as it is")
+	require.Equal(t, merge.ModeNoop, res.Agent.Mode, "the existing disjoint rule: the branch stays as it is")
 	require.Equal(t, tip, mustHeadHash(t, svc, "agent/test"))
 }
 
@@ -203,7 +204,7 @@ func TestSync_SameOriginMovedBackStillRewinds(t *testing.T) {
 	f := swConsumeOwn(t, svc, a)
 	wmSetOriginMain(t, a, r)
 	res := wmSync(t, svc)
-	require.Equal(t, ModeRewound, res.Main.Mode)
+	require.Equal(t, merge.ModeRewound, res.Main.Mode)
 	require.False(t, reachableFrom(t, svc, "agent/test", f), "the removed f stays removed")
 	wmPush(t, svc)
 	require.False(t, swBareHasFile(t, a, "agent/test", "kb/own.md"), "not pushed back")

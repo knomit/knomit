@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // countIndexedFacts returns the number of branch_facts rows for branch — i.e.
@@ -75,7 +77,7 @@ func TestReplay_SkipIndexSync(t *testing.T) {
 		iter, err := local.Search().FactsIter(ctx, agent)
 		require.NoError(t, err)
 		_, err = Replay(ctx, local, agent, iter, clone, ReplayConfig{
-			Strategy:      StrategyLocalWins,
+			Strategy:      merge.StrategyLocalWins,
 			AgentBranch:   agent,
 			DefaultBranch: "main",
 			SkipIndexSync: skip,

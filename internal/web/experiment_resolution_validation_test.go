@@ -52,7 +52,7 @@ func conflictedFact(t *testing.T, m *repos.Manager, expName string) string {
 		_, err := svc.Facts().WriteFact(ctx, "agent/test", path, body("original"), "seed", "learn")
 		require.NoError(t, err)
 
-		_, err = svc.Experiments().OpenExperiment(ctx, expName, "", "agent/test")
+		_, err = svc.Merge().OpenExperiment(ctx, expName, "", "agent/test")
 		require.NoError(t, err)
 
 		// Both sides change the same path relative to the fork point.
@@ -204,7 +204,7 @@ func conflictedFactWithRefs(t *testing.T, m *repos.Manager, expName string, fork
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		_, err := svc.Facts().WriteFact(ctx, "agent/test", path, body("original", fork), "seed", "learn")
 		require.NoError(t, err)
-		_, err = svc.Experiments().OpenExperiment(ctx, expName, "", "agent/test")
+		_, err = svc.Merge().OpenExperiment(ctx, expName, "", "agent/test")
 		require.NoError(t, err)
 		_, err = svc.Facts().WriteFact(ctx, store.ExperimentBranch(expName), path,
 			body("changed in the experiment", exp), "exp edit", "update")
@@ -268,7 +268,7 @@ func TestResolutionBody_FreshLegacySrcRefIsRefused(t *testing.T) {
 
 	ri := m.Get(resolutionRepo)
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, ok, err := svc.Experiments().GetExperiment(context.Background(), "freshlegacy")
+		_, ok, err := svc.Branches().GetExperiment(context.Background(), "freshlegacy")
 		require.NoError(t, err)
 		require.True(t, ok, "a refused resolution performs no commit")
 	}))
@@ -290,7 +290,7 @@ func TestResolutionBody_REST_RunsTheFullUpdateChain(t *testing.T) {
 			// And nothing was committed: the experiment survives a refusal.
 			ri := m.Get(resolutionRepo)
 			require.NoError(t, ri.WithRead(func(svc *store.Service) {
-				_, ok, err := svc.Experiments().GetExperiment(context.Background(), "restbad")
+				_, ok, err := svc.Branches().GetExperiment(context.Background(), "restbad")
 				require.NoError(t, err)
 				require.True(t, ok, "a rejected resolution must not delete the experiment")
 			}))
@@ -330,7 +330,7 @@ func TestResolutionBody_GoodBodyIsAcceptedAndSerialized(t *testing.T) {
 	ri := m.Get(resolutionRepo)
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		ctx := context.Background()
-		_, ok, err := svc.Experiments().GetExperiment(ctx, "goodbody")
+		_, ok, err := svc.Branches().GetExperiment(ctx, "goodbody")
 		require.NoError(t, err)
 		require.False(t, ok, "a resolved commit deletes the experiment")
 

@@ -12,6 +12,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // newChangesService opens a fresh store with "main" as the consensus branch and
@@ -330,7 +332,7 @@ func TestChangesUnder_DeletionSurvivesFastForwardOverOlderCommit(t *testing.T) {
 
 	res, err := svc.AdvanceLocalUpstream(ctx, "agent/a", "main")
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode, "fixture: main must FAST-FORWARD to y, the path that hides x")
+	require.Equal(t, merge.ModeFF, res.Mode, "fixture: main must FAST-FORWARD to y, the path that hides x")
 	tip, err := svc.rh.ResolveRef(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, y, tip.String())

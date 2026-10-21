@@ -184,7 +184,6 @@ type RemoteIndex interface {
 // BranchIndex is the interface for branch lifecycle operations. Implemented by *repoHandler.
 type BranchIndex interface {
 	EnsureBranch(ctx context.Context, name, gitRef string) (int64, error)
-	MergeBranch(ctx context.Context, src, dst string, strategy ConflictStrategy) error
 	DropBranch(ctx context.Context, name string) error
 	ListBranches(ctx context.Context) ([]Branch, error)
 	CreateBranch(ctx context.Context, branch, fromBranch string) error
@@ -195,33 +194,11 @@ type BranchIndex interface {
 	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	HeadCommitInfo(ctx context.Context, branch string) (hash string, committedAt time.Time, err error)
-}
-
-// ExperimentIndex is the experiment lifecycle surface: fork, commit, sync,
-// rollback, expire. Implemented by *repoHandler, which already owns the git
-// storer, the branch lock and the merge helpers every one of these needs.
-type ExperimentIndex interface {
-	// OpenExperiment creates the experiment from parent if absent, else
-	// resumes it (updating a non-empty description).
-	OpenExperiment(ctx context.Context, name, description, parent string) (Experiment, error)
-	// GetExperiment reads one record. The bool separates "no such experiment"
-	// from a read failure — eligibility must not treat the latter as an answer.
+	// GetExperiment reads one experiment record (a vcs read; the lifecycle
+	// itself is merge.Repo, reached as Service.Merge). The bool separates "no
+	// such experiment" from a read failure: eligibility must not treat the
+	// latter as an answer.
 	GetExperiment(ctx context.Context, name string) (Experiment, bool, error)
-	ListExperiments(ctx context.Context) ([]Experiment, error)
-	// CommitExperiment merges the experiment into its recorded parent and
-	// deletes it. Returns *MergeConflictError, having changed nothing, when
-	// both sides edited the same path.
-	// resolutions adjudicates paths that would otherwise be refused, keyed by
-	// fact path. Nil is the ordinary commit: any conflict refuses.
-	CommitExperiment(ctx context.Context, name string, resolutions map[string]Resolution) (AgentReconcileResult, error)
-	// SyncExperiment merges the recorded parent into the experiment,
-	// parent-wins on conflicting paths.
-	SyncExperiment(ctx context.Context, name string) (AgentReconcileResult, error)
-	RollbackExperiment(ctx context.Context, name string) error
-	// ExpireExperiments rolls back everything idle since before cutoff and
-	// returns what it dropped. A per-experiment failure is joined into the
-	// error and does not stop the sweep.
-	ExpireExperiments(ctx context.Context, cutoff time.Time) ([]string, error)
 }
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.

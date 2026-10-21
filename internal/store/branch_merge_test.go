@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/merge"
 )
 
 // All tests use the same setup: a fresh store with a "main" branch holding
@@ -53,7 +55,7 @@ func TestMergeBranch_SameHashNoOp(t *testing.T) {
 
 	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "feature", "main"))
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	verifyMergeClean(t, svc, "main")
 }
@@ -70,7 +72,7 @@ func TestMergeBranch_AlreadyMergedNoOp(t *testing.T) {
 	beforeHash, err := svc.Branches().HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	afterHash, err := svc.Branches().HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
@@ -87,7 +89,7 @@ func TestMergeBranch_FastForward(t *testing.T) {
 	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "feature", "main"))
 	srcHash := writeMergeFact(t, svc, "feature", "kb/a.md", "a", "body")
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	mainHead, err := svc.Branches().HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
@@ -105,7 +107,7 @@ func TestMergeBranch_FastForward(t *testing.T) {
 // Both strategies should produce the same result (no conflicts).
 func TestMergeBranch_ThreeWayDisjointChanges(t *testing.T) {
 	t.Log("Scenario: main adds A, feature adds B — three-way merge yields both under both strategies")
-	for _, strat := range []ConflictStrategy{StrategyLocalWins, StrategyRemoteWins} {
+	for _, strat := range []merge.ConflictStrategy{merge.StrategyLocalWins, merge.StrategyRemoteWins} {
 		t.Run(string(strat), func(t *testing.T) {
 			svc := newMergeTestStore(t)
 			require.NoError(t, svc.Branches().CreateBranch(context.Background(), "feature", "main"))
@@ -113,7 +115,7 @@ func TestMergeBranch_ThreeWayDisjointChanges(t *testing.T) {
 			writeMergeFact(t, svc, "main", "kb/a.md", "a", "a body")
 			writeMergeFact(t, svc, "feature", "kb/b.md", "b", "b body")
 
-			require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", strat))
+			require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", strat))
 
 			resA, err := svc.Facts().ReadFact(context.Background(), "main", "kb/a.md", nil)
 			require.NoError(t, err)
@@ -139,7 +141,7 @@ func TestMergeBranch_ThreeWayConflictLocalWins(t *testing.T) {
 	writeMergeFact(t, svc, "main", "kb/x.md", "x", "main version")
 	writeMergeFact(t, svc, "feature", "kb/x.md", "x", "feature version")
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	res, err := svc.Facts().ReadFact(context.Background(), "main", "kb/x.md", nil)
 	require.NoError(t, err)
@@ -160,7 +162,7 @@ func TestMergeBranch_ThreeWayConflictRemoteWins(t *testing.T) {
 	writeMergeFact(t, svc, "main", "kb/x.md", "x", "main version")
 	writeMergeFact(t, svc, "feature", "kb/x.md", "x", "feature version")
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyRemoteWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyRemoteWins))
 
 	res, err := svc.Facts().ReadFact(context.Background(), "main", "kb/x.md", nil)
 	require.NoError(t, err)
@@ -181,7 +183,7 @@ func TestMergeBranch_DeletedOnSrcNonConflict(t *testing.T) {
 	_, err := svc.Facts().DeleteFact(context.Background(), "feature", "kb/x.md", "drop x")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	_, err = svc.Facts().ReadFact(context.Background(), "main", "kb/x.md", nil)
 	require.Error(t, err, "kb/x.md should be gone after merging the delete")
@@ -201,7 +203,7 @@ func TestMergeBranch_DeletedOnSrcConflictLocalWins(t *testing.T) {
 	_, err := svc.Facts().DeleteFact(context.Background(), "feature", "kb/x.md", "drop x")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	res, err := svc.Facts().ReadFact(context.Background(), "main", "kb/x.md", nil)
 	require.NoError(t, err, "kb/x.md should still exist because main's modification wins")
@@ -220,7 +222,7 @@ func TestMergeBranch_MergeCommitHasTwoParents(t *testing.T) {
 	dstHashBefore := writeMergeFact(t, svc, "main", "kb/a.md", "a", "main fact")
 	srcHash := writeMergeFact(t, svc, "feature", "kb/b.md", "b", "feature fact")
 
-	require.NoError(t, svc.Branches().MergeBranch(context.Background(), "feature", "main", StrategyLocalWins))
+	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "feature", "main", merge.StrategyLocalWins))
 
 	mergeHashStr, err := svc.Branches().HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
@@ -239,7 +241,7 @@ func TestMergeBranch_MergeCommitHasTwoParents(t *testing.T) {
 func TestMergeBranch_MissingSrcReturnsError(t *testing.T) {
 	t.Log("Scenario: MergeBranch(nonexistent, main) returns an error, does not panic")
 	svc := newMergeTestStore(t)
-	err := svc.Branches().MergeBranch(context.Background(), "does-not-exist", "main", StrategyLocalWins)
+	err := svc.Merge().MergeBranch(context.Background(), "does-not-exist", "main", merge.StrategyLocalWins)
 	require.Error(t, err)
 }
 
@@ -251,9 +253,9 @@ func TestMergeIntoBranch_NoopWhenSrcAncestorOfDst(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// main and agent both at init commit; src=main, dst=agent → no-op.
-	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", StrategyLocalWins)
+	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
 	require.NoError(t, err)
-	require.Equal(t, ModeNoop, res.Mode)
+	require.Equal(t, merge.ModeNoop, res.Mode)
 }
 
 func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
@@ -265,9 +267,9 @@ func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
 
 	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
-	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", StrategyLocalWins)
+	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
 	require.NoError(t, err)
-	require.Equal(t, ModeFF, res.Mode)
+	require.Equal(t, merge.ModeFF, res.Mode)
 	require.Equal(t, mainHash, res.NewTip)
 	require.Equal(t, plumbing.NewHash(mainHash), mustHeadHash(t, svc, "agent/test"))
 }
@@ -286,9 +288,9 @@ func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
 	preAgentTip := mustHeadHash(t, svc, "agent/test")
 	preMainTip := mustHeadHash(t, svc, "main")
 
-	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", StrategyLocalWins)
+	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
 	require.NoError(t, err)
-	require.Equal(t, ModeMerge, res.Mode)
+	require.Equal(t, merge.ModeMerge, res.Mode)
 	require.NotEmpty(t, res.NewTip)
 
 	newTip, err := svc.rh.Repository().CommitObject(plumbing.NewHash(res.NewTip))
@@ -311,7 +313,7 @@ func TestMergeBranch_RefuseCleanMergeStillLands(t *testing.T) {
 	writeMergeFact(t, svc, "feature", "kb/from-feature.md", "from feature", "body")
 	writeMergeFact(t, svc, "main", "kb/from-main.md", "from main", "body")
 
-	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyRefuse))
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyRefuse))
 
 	got, err := svc.Facts().ReadFact(ctx, "main", "kb/from-feature.md", nil)
 	require.NoError(t, err)
@@ -348,9 +350,9 @@ func TestMergeBranch_RefuseReportsEveryConflictAndWritesNothing(t *testing.T) {
 	before, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
-	err = svc.Branches().MergeBranch(ctx, "feature", "main", StrategyRefuse)
+	err = svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyRefuse)
 	require.Error(t, err)
-	var conflict *MergeConflictError
+	var conflict *merge.MergeConflictError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, []string{"kb/both-add.md", "kb/both-modify.md", "kb/src-deletes.md"}, conflict.Paths,
 		"all three conflict shapes are reported in one pass, sorted")
@@ -379,7 +381,7 @@ func TestMergeBranch_RefuseReportsEveryConflictAndWritesNothing(t *testing.T) {
 // distinct non-empty value, or it becomes StrategyLocalWins and resolves the
 // conflict it was asked to refuse.
 func TestMergeBranch_RefuseIsNotDowngradedToLocalWins(t *testing.T) {
-	require.NotEmpty(t, string(StrategyRefuse))
-	require.NotEqual(t, StrategyLocalWins, StrategyRefuse)
-	require.NotEqual(t, StrategyRemoteWins, StrategyRefuse)
+	require.NotEmpty(t, string(merge.StrategyRefuse))
+	require.NotEqual(t, merge.StrategyLocalWins, merge.StrategyRefuse)
+	require.NotEqual(t, merge.StrategyRemoteWins, merge.StrategyRefuse)
 }

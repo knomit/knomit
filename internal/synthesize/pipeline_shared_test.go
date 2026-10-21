@@ -186,7 +186,7 @@ func TestPipeline_OnBranch_SessionIsBoundToThatBranch(t *testing.T) {
 			svc, ri := newHypothesizeTestRepo(t)
 			ctx := context.Background()
 
-			exp, err := svc.Experiments().OpenExperiment(ctx, "bound-here", "", ri.AgentBranch())
+			exp, err := svc.Merge().OpenExperiment(ctx, "bound-here", "", ri.AgentBranch())
 			require.NoError(t, err)
 			require.NotEqual(t, ri.AgentBranch(), exp.Branch())
 
