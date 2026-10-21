@@ -18,9 +18,9 @@ import (
 	"sort"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 )
 
 // ScoredMotifBridge is one enumerated motif bridge candidate — SERVED OR
@@ -194,9 +194,9 @@ const motifReportPopulation = "live epistemic facts on the branch, projected and
 // Read-only: it opens nothing, writes nothing, and plans no work.
 func MotifComponentReport(
 	ctx context.Context,
-	idx SearchQuery,
-	motifs store.MotifIndex,
-	abstraction store.AbstractionIndex,
+	idx *index.Facade,
+	motifs *vocab.MotifIndex,
+	abstraction *vocab.AbstractionIndex,
 	branch string,
 	localRepoID string,
 	eff Effort,

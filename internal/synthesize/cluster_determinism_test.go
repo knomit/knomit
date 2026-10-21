@@ -63,8 +63,7 @@ func TestScopedCluster_NodeOrderIsSorted(t *testing.T) {
 // to SubgraphEdges — the exact ordering that becomes Louvain's node numbering.
 func capturePathOrder(t *testing.T) []string {
 	t.Helper()
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/x"
 
 	seeds := make([]factForLLM, 0, determinismSeedCount)
@@ -78,10 +77,10 @@ func capturePathOrder(t *testing.T) []string {
 		})
 	}
 
-	idx.EXPECT().Search(gomock.Any(), branch, gomock.Any()).Return(nil, nil).AnyTimes()
+	scripted(idx).Search(gomock.Any(), branch, gomock.Any()).Return(nil, nil).AnyTimes()
 
 	var captured []string
-	idx.EXPECT().SubgraphEdges(gomock.Any(), gomock.Any()).
+	scripted(idx).SubgraphEdges(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) ([][2]string, error) {
 			captured = append([]string(nil), paths...)
 			return nil, nil

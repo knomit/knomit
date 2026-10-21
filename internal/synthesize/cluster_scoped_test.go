@@ -14,8 +14,7 @@ import (
 // grouping. The connected pair forms a cluster; the isolated seed falls below
 // minCommunitySize and is dropped.
 func TestScopedCluster_GroupsBySubgraphEdges(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "agent/x"
 
@@ -26,9 +25,9 @@ func TestScopedCluster_GroupsBySubgraphEdges(t *testing.T) {
 	}
 
 	// No neighbors: the subgraph is exactly the seed set.
-	idx.EXPECT().Search(gomock.Any(), branch, gomock.Any()).Return(nil, nil).AnyTimes()
+	scripted(idx).Search(gomock.Any(), branch, gomock.Any()).Return(nil, nil).AnyTimes()
 	// a–b are similar; c is isolated.
-	idx.EXPECT().SubgraphEdges(gomock.Any(), gomock.Any()).
+	scripted(idx).SubgraphEdges(gomock.Any(), gomock.Any()).
 		Return([][2]string{{"kb/a.md", "kb/b.md"}}, nil).Times(1)
 
 	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, 2, testNeighborKinds, nil, branch)

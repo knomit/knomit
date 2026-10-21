@@ -210,17 +210,17 @@ func TestDerivationGap_ThreeMembers_OnePairLinked(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 
 	// revdeps("a.md") = {b.md} → pair (a,b) is linked (b ∈ revdeps(a)).
 	// revdeps("b.md") = {} → no additional links from b's side.
 	// revdeps("c.md") = {} → c links to nobody.
 	// Pairs: (a,b)=linked, (a,c)=unlinked, (b,c)=unlinked → 2 unlinked / 3 total = 2/3.
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "a.md").
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "a.md").
 		Return(map[string]struct{}{"b.md": {}}, nil).Times(1)
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "b.md").
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "b.md").
 		Return(map[string]struct{}{}, nil).Times(1)
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "c.md").
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "c.md").
 		Return(map[string]struct{}{}, nil).Times(1)
 
 	members := []string{"a.md", "b.md", "c.md"}
@@ -241,7 +241,7 @@ func TestDerivationGap_LessThanTwoMembers(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// No expectations set — any call to idx would fail the test.
 
 	got, err := derivationGap(context.Background(), []string{"a.md"}, idx)
@@ -267,11 +267,11 @@ func TestDerivationGap_ErrorPropagation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	boom := errors.New("index unavailable")
 	// At least one call will error; use AnyTimes so order of member iteration
 	// doesn't matter (implementation fetches in slice order, first error wins).
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(nil, boom).AnyTimes()
 
 	_, err := derivationGap(context.Background(), []string{"x.md", "y.md"}, idx)
@@ -287,8 +287,8 @@ func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().TokenDF(gomock.Any(), "main", "auth", "entity").Return(1, nil).Times(1)
+	idx := newScriptedSearch(t)
+	scripted(idx).TokenDF(gomock.Any(), "main", "auth", "entity").Return(1, nil).Times(1)
 
 	got, err := specificity(context.Background(), "main", "auth", "entity", idx)
 	if err != nil {
@@ -306,8 +306,8 @@ func TestSpecificity_DF4_Returns0_25(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().TokenDF(gomock.Any(), "main", "cache", "domain").Return(4, nil).Times(1)
+	idx := newScriptedSearch(t)
+	scripted(idx).TokenDF(gomock.Any(), "main", "cache", "domain").Return(4, nil).Times(1)
 
 	got, err := specificity(context.Background(), "main", "cache", "domain", idx)
 	if err != nil {
@@ -326,8 +326,8 @@ func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().TokenDF(gomock.Any(), "main", "rare", "entity").Return(0, nil).Times(1)
+	idx := newScriptedSearch(t)
+	scripted(idx).TokenDF(gomock.Any(), "main", "rare", "entity").Return(0, nil).Times(1)
 
 	got, err := specificity(context.Background(), "main", "rare", "entity", idx)
 	if err != nil {
@@ -345,9 +345,9 @@ func TestSpecificity_ErrorPropagation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	boom := errors.New("token df unavailable")
-	idx.EXPECT().TokenDF(gomock.Any(), "main", "tok", "domain").Return(0, boom).Times(1)
+	scripted(idx).TokenDF(gomock.Any(), "main", "tok", "domain").Return(0, boom).Times(1)
 
 	_, err := specificity(context.Background(), "main", "tok", "domain", idx)
 	if !errors.Is(err, boom) {
@@ -370,18 +370,18 @@ func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	paths := []string{"kb/a.md", "kb/b.md"}
 	clusterOf := map[string]int{"kb/a.md": 0, "kb/b.md": 1}
 	g := index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
 
 	// No derivation links between members → Gap = 1.0.
-	idx.EXPECT().ReverseDependentPaths(ctx, "kb/a.md").
+	scripted(idx).ReverseDependentPaths(ctx, "kb/a.md").
 		Return(map[string]struct{}{}, nil).Times(1)
-	idx.EXPECT().ReverseDependentPaths(ctx, "kb/b.md").
+	scripted(idx).ReverseDependentPaths(ctx, "kb/b.md").
 		Return(map[string]struct{}{}, nil).Times(1)
 	// TokenDF for entity kind (BridgeEntity → token used as-is).
-	idx.EXPECT().TokenDF(ctx, "branch/test", "bridgeTok", string(BridgeEntity)).
+	scripted(idx).TokenDF(ctx, "branch/test", "bridgeTok", string(BridgeEntity)).
 		Return(2, nil).Times(1)
 
 	cfg := QualityConfig{
@@ -430,13 +430,13 @@ func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	paths := []string{"kb/x.md", "kb/y.md"}
 	clusterOf := map[string]int{"kb/x.md": 0, "kb/y.md": 1}
 	g := index.NewSimilarityGraph([][2]string{{"kb/x.md", "kb/y.md"}})
 
 	boom := errors.New("revdeps unavailable")
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).
+	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).
 		Return(nil, boom).AnyTimes()
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
@@ -454,14 +454,14 @@ func TestScoreBridgeCandidate_ErrorPropagation_Specificity(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// Only one member → derivationGap returns (0, nil) without calling idx.
 	paths := []string{"kb/z.md"}
 	clusterOf := map[string]int{"kb/z.md": 0}
 	g := index.NewSimilarityGraph(nil)
 
 	boom := errors.New("tokendf unavailable")
-	idx.EXPECT().TokenDF(ctx, gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(idx).TokenDF(ctx, gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(0, boom).Times(1)
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
 
 	"github.com/rs/zerolog/log"
 
@@ -552,20 +553,13 @@ type pairCosFn func(ctx context.Context, paths []string) ([]float64, error)
 // (store.EmbedderThresholds), never a number of this file's own — a novelty
 // signal calibrated against a different threshold from the gate it describes
 // would be measuring nothing anybody acts on.
-func dedupThresholdFor(idx SearchQuery) (float64, bool) {
-	// A caller with no embedder but with the corpus's model identity — the
-	// calibrate surface — supplies the threshold itself. Structural, so no
-	// signature has to thread it through four layers, and it cannot be
-	// confused with "there is an embedder".
-	if s, ok := idx.(interface {
-		MotifDedupThreshold() (float64, bool)
-	}); ok {
-		return s.MotifDedupThreshold()
-	}
-	if e, ok := idx.(interface{ Embedder() store.Embedder }); ok {
-		if emb := e.Embedder(); emb != nil {
-			return emb.Thresholds().Dedup, true
-		}
+func dedupThresholdFor(cfg QualityConfig) (float64, bool) {
+	// The caller supplies the threshold itself (the calibrate surface opens a
+	// store with no embedder but knows the corpus's model identity). It rides
+	// QualityConfig rather than the search handle, so "the caller knows it"
+	// cannot be confused with "there is an embedder".
+	if cfg.OverDedupKnown {
+		return cfg.OverDedupAt, true
 	}
 	// UNKNOWN, not defaulted (review finding M-5). params.Defaults() is nomic's
 	// geometry; every corpus in this campaign is embeddinggemma, whose Dedup is
@@ -673,7 +667,7 @@ func scoreMotifCandidate(
 	cand BridgeSeedSet,
 	lane BridgeLane,
 	g index.SimilarityGraph,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	clusterOf map[string]int,
 	cfg QualityConfig,
@@ -698,7 +692,7 @@ func scoreMotifCandidate(
 	// §8's novelty signals. Computed for EVERY candidate, on both lanes and
 	// whether or not it is kept, because `calibrate bridges` is about the
 	// distribution the scorer sees rather than the slice it serves.
-	dedup, dedupKnown := dedupThresholdFor(idx)
+	dedup, dedupKnown := dedupThresholdFor(cfg)
 	nov, err := noveltyOf(ctx, cand.Members, paths, pairCos, dedup, dedupKnown)
 	if err != nil {
 		return comp, 0, false, err
@@ -733,7 +727,7 @@ func scoreMotifCandidate(
 // would be strengthened by one author's phrasing habit rather than by a second
 // regularity. Terms are summed in sorted order so the float accumulation is
 // identical run to run.
-func sharedMotifSpecificity(ctx context.Context, idx SearchQuery, branch string, cand BridgeSeedSet, resolve motifResolver) (float64, error) {
+func sharedMotifSpecificity(ctx context.Context, idx *index.Facade, branch string, cand BridgeSeedSet, resolve motifResolver) (float64, error) {
 	if len(cand.Members) == 0 {
 		return 0, nil
 	}
@@ -846,7 +840,7 @@ func motifSubBudget(e Effort) (near, far int) {
 // the motif-free short circuit below, not an effort check.
 func buildMotifBridges(
 	ctx context.Context,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	seeds []factForLLM,
 	clusters ClusterResult,
@@ -872,7 +866,7 @@ func buildMotifBridges(
 // saw (review finding M-4).
 func buildMotifBridgesWithRows(
 	ctx context.Context,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	seeds []factForLLM,
 	clusters ClusterResult,
@@ -1011,7 +1005,7 @@ const (
 // that measures them.
 func scoreMotifCandidates(
 	ctx context.Context,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	seeds []factForLLM,
 	clusters ClusterResult,
@@ -1329,7 +1323,7 @@ func enqueueDiscover(ctx context.Context, d Deps, sess *store.PipelineSession, p
 // Read ONCE: the resolver is called per motif per fact, and a per-call query
 // would turn enumeration into a round-trip storm over a table that does not
 // change mid-session.
-func motifResolverFor(ctx context.Context, motifs store.MotifIndex, branch string) motifResolver {
+func motifResolverFor(ctx context.Context, motifs *vocab.MotifIndex, branch string) motifResolver {
 	table, err := motifs.AliasTable(ctx, branch)
 	if err != nil {
 		// Degrade, but never silently: without the table every spelling is its
@@ -1355,7 +1349,7 @@ func motifResolverFor(ctx context.Context, motifs store.MotifIndex, branch strin
 // disjointness gate. On failure it returns the zero value, whose operating
 // point is STRICT — the conservative direction, and the one that keeps a
 // near-duplicate out rather than letting it through.
-func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) index.SubjectLabelDF {
+func subjectLabelsFor(ctx context.Context, search *index.Facade, branch string) index.SubjectLabelDF {
 	labels, err := search.SubjectLabelDF(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).
@@ -1370,7 +1364,7 @@ func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) in
 // The far lane cannot get them from the SIMILAR_TO graph — that graph is empty
 // there by definition — so this reaches for the vectors the graph was built
 // from.
-func pairCosFor(abstraction store.AbstractionIndex, branch string) pairCosFn {
+func pairCosFor(abstraction *vocab.AbstractionIndex, branch string) pairCosFn {
 	return func(ctx context.Context, paths []string) ([]float64, error) {
 		ids, err := abstraction.FactIDsByPath(ctx, branch, paths)
 		if err != nil {

@@ -83,8 +83,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 // TestBridgeSeeds_NormalEffortEmpty asserts that EffortNormal returns (nil, nil) —
 // the discovery engine never engages. Retargeted to buildScoredBridges (Task 16).
 func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// No expectations: any idx call would fail the test.
 	a := makeFact("a.md", "authored", nil, []string{"auth"})
 	b := makeFact("b.md", "authored", nil, []string{"auth"})
@@ -134,16 +133,15 @@ func manyCrossClusterSeeds(n int) ([]factForLLM, ClusterResult) {
 	return seeds, ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
 }
 
-// cohesiveMockIdx returns a MockSearchIndex where every SimilarityAdjacency
+// cohesiveMockIdx returns a scripted search index where every SimilarityAdjacency
 // call returns a fully-connected graph (all pairs connected), every
 // ReverseDependentPaths returns an empty set, and every TokenDF returns 1.
 // This ensures buildScoredBridges keeps all candidates (cohesion == 1 ≥ CohFloor,
 // gap == 1, spec == 1), so budget truncation tests aren't confounded by gate drops.
-func cohesiveMockIdx(t *testing.T) *MockSearchIndex {
+func cohesiveMockIdx(t *testing.T) *index.Facade {
 	t.Helper()
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	idx := newScriptedSearch(t)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			pairs := make([][2]string, 0, len(paths)*(len(paths)-1)/2)
 			for i := 0; i < len(paths); i++ {
@@ -153,9 +151,9 @@ func cohesiveMockIdx(t *testing.T) *MockSearchIndex {
 			}
 			return index.NewSimilarityGraph(pairs), nil
 		}).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(idx).TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(1, nil).AnyTimes()
 	return idx
 }
@@ -298,11 +296,11 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 	synthFacts := []fact.Fact{mk("kb/a.md"), mk("kb/b.md")}
 
-	m := NewMockSearchIndex(gomock.NewController(t))
+	m := newScriptedSearch(t)
 	// a,b cluster apart → their shared tokens form cross-community bridges.
 	expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
 	// Scoring expectations: cohesive graph (a↔b connected), no reverse deps, df=1.
-	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	scripted(m).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			pairs := make([][2]string, 0)
 			for i := 0; i < len(paths); i++ {
@@ -312,9 +310,9 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 			}
 			return index.NewSimilarityGraph(pairs), nil
 		}).AnyTimes()
-	m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(m).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
-	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(m).TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(1, nil).AnyTimes()
 
 	// Entity kind: only the shared ENTITY token bridges.
@@ -447,15 +445,15 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	const wantResolution = 2.0
 	const wantMinCommunity = 2
 
-	m := NewMockSearchIndex(gomock.NewController(t))
+	m := newScriptedSearch(t)
 	// a,b cluster apart so "shared" bridges across communities.
 	expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
 	// Scoring expectations for the cross-community candidate.
-	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	scripted(m).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		Return(index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}}), nil).AnyTimes()
-	m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(m).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
-	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(m).TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(1, nil).AnyTimes()
 
 	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testNeighborKinds, testCfg, ScopeFilter{})
@@ -495,8 +493,7 @@ var testCfg = QualityConfig{
 // EffortNormal gate: buildScoredBridges must return (nil, nil) without calling
 // any idx method.
 func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// No expectations — any call to idx would fail the test.
 
 	seeds := []factForLLM{
@@ -515,8 +512,7 @@ func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
 // TestBuildScoredBridges_SmallCohesiveCrossCommToken emits a bridge for a
 // small (<= MaxMembers) cross-community token with high cohesion.
 func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "main"
 
@@ -530,9 +526,9 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 
 	// a↔b connected → cohesion = 1.0 (≥ CohFloor=0.5) — passes the gate.
 	g := index.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	scripted(idx).TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -549,8 +545,7 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 // cross-community token with cohesion < CohFloor is dropped (not included in
 // the output at all, since buildScoredBridges only emits kept bridges).
 func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "main"
 
@@ -564,9 +559,9 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 
 	// No edges → cohesion = 0 < CohFloor=0.5 → gate fires → not kept.
 	g := index.NewSimilarityGraph(nil)
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	scripted(idx).TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -577,8 +572,7 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 // with > MaxMembers members is reshaped: the cohesive cross-community subset is
 // kept and the incoherent remainder is discarded.
 func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "main"
 
@@ -607,9 +601,9 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 	}
 	g := index.NewSimilarityGraph(cohesivePairs)
 
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	scripted(idx).TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -633,8 +627,7 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 // oversized group where reshape finds no cross-community connected pair yields
 // no bridge (candidate dropped).
 func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "main"
 
@@ -653,7 +646,7 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 
 	// No edges → reshape can find no cross-community connected pair → drops candidate.
 	g := index.NewSimilarityGraph(nil)
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -663,8 +656,7 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 // TestBuildScoredBridges_QDescOrder verifies that multiple bridges are ranked
 // by Q descending, then Token ascending on ties.
 func TestBuildScoredBridges_QDescOrder(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "main"
 
@@ -688,7 +680,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 	}
 
 	// All pairs connected → cohesion = 1.0 for any pair-sized group.
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).
+	scripted(idx).SimilarityAdjacency(ctx, gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			pairs := make([][2]string, 0)
 			for i := 0; i < len(paths); i++ {
@@ -698,10 +690,10 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 			}
 			return index.NewSimilarityGraph(pairs), nil
 		}).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	// alpha: df=1, beta: df=2
-	idx.EXPECT().TokenDF(ctx, branch, "alpha", string(BridgeEntity)).Return(1, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, "beta", string(BridgeEntity)).Return(2, nil).AnyTimes()
+	scripted(idx).TokenDF(ctx, branch, "alpha", string(BridgeEntity)).Return(1, nil).AnyTimes()
+	scripted(idx).TokenDF(ctx, branch, "beta", string(BridgeEntity)).Return(2, nil).AnyTimes()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -718,8 +710,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 // Written BEFORE the production wiring is changed (TDD: proves the invariant
 // survives the switch). The test fails if the effort gate is bypassed.
 func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// No expectations: any idx call fails the test.
 
 	seeds := []factForLLM{
@@ -887,8 +878,7 @@ func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 // TestBuildScoredBridges_Determinism verifies that two identical calls produce
 // identical ordering and member sets.
 func TestBuildScoredBridges_Determinism(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	ctx := context.Background()
 	branch := "main"
 
@@ -901,9 +891,9 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 	}
 
 	g := index.NewSimilarityGraph([][2]string{{"p.md", "q.md"}})
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	scripted(idx).TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
 
 	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})

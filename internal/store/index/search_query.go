@@ -885,6 +885,14 @@ func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string 
 }
 
 func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
+	if ov := fq.ov; ov != nil && ov.Search != nil {
+		return ov.Search(fq.search)(ctx, branch, q)
+	}
+	return fq.search(ctx, branch, q)
+}
+
+// search is Search without the test override.
+func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)

@@ -309,7 +309,7 @@ func applyDiscoveredProposals(
 	ctx context.Context,
 	gs *facts.Index,
 	sysFiles *facts.Repo,
-	idx SearchQuery,
+	idx *index.Facade,
 	emb store.Embedder,
 	payload DiscoverWorkPayload,
 	proposals []DiscoveredFact,
@@ -336,7 +336,7 @@ func applyDiscoveredProposals(
 		seedPaths[m.File] = struct{}{}
 	}
 
-	gate := writeGate(localRepoID, idx, sysFiles, branch)
+	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, branch)
 
 	var written []string
 	for _, p := range proposals {
@@ -566,7 +566,7 @@ func refsCiteSeedSubset(refs []string, seedPaths map[string]struct{}, localRepoI
 // isDuplicate computes the document embedding for the proposal and reports
 // whether the live corpus already contains a fact within DedupThreshold cosine
 // similarity. When emb is nil (embeddings disabled), the gate is a no-op.
-func isDuplicate(ctx context.Context, idx SearchQuery, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
+func isDuplicate(ctx context.Context, idx *index.Facade, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
 	if emb == nil {
 		return false, nil
 	}

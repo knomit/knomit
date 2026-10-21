@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/store/index"
 )
 
 // The prune→distill progression (knomit#135).
@@ -372,10 +373,15 @@ func TestProgression_ShortlistItemPromotesNothingThroughApply(t *testing.T) {
 // Failing the edge read is not a contrivance — it is a path ScopedCluster
 // documents and handles, and it groups the subgraph by category directory,
 // which for a single-directory fixture is exactly one cluster.
-type edgeReadFails struct{ SearchQuery }
-
-func (edgeReadFails) SubgraphEdges(context.Context, []string) ([][2]string, error) {
-	return nil, errors.New("test: forced subgraph edge-read failure")
+func edgeReadFails(t *testing.T, svc *store.Service) *index.Facade {
+	t.Helper()
+	idx := svc.Search()
+	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
+		SubgraphEdges: func(context.Context, []string) ([][2]string, error) {
+			return nil, errors.New("test: forced subgraph edge-read failure")
+		},
+	}))
+	return idx
 }
 
 // planFixture seeds n facts in ONE directory and plans a session over them with
@@ -400,7 +406,7 @@ func planFixture(t *testing.T, n int) (*restatementEnv, *store.PipelineSession, 
 	_, markErr := env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
 	require.NoError(t, markErr)
 	d := env.deps()
-	d.Search = edgeReadFails{env.svc.Search()}
+	d.Search = edgeReadFails(t, env.svc)
 	require.NoError(t, reviewStrategy{}.Plan(ctx, d, sess, seeds))
 
 	items, err := env.svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
@@ -462,7 +468,7 @@ func TestProgression_PlanStillEnqueuesTheRemainder(t *testing.T) {
 	_, markErr := env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
 	require.NoError(t, markErr)
 	d := env.deps()
-	d.Search = edgeReadFails{env.svc.Search()}
+	d.Search = edgeReadFails(t, env.svc)
 	require.NoError(t, reviewStrategy{}.Plan(ctx, d, sess, seeds))
 
 	items, err := env.svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)

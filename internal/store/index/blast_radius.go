@@ -72,6 +72,9 @@ SELECT DISTINCT np.value
 // Membership among live members is the consumer's responsibility.
 // It is a thin exported wrapper over the private reverseDependentPaths.
 func (gs *GraphStore) ReverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
+	if ov := gs.ov; ov != nil && ov.ReverseDependentPaths != nil {
+		return ov.ReverseDependentPaths(ctx, path)
+	}
 	return gs.reverseDependentPaths(ctx, path)
 }
 

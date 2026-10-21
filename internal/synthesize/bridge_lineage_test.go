@@ -277,10 +277,10 @@ func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 		g := index.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
 		clusters := ClusterResult{Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}}}
 
-		idx := NewMockSearchIndex(ctrl)
-		idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"a.md", "b.md"})).
+		idx := newScriptedSearch(t)
+		scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"a.md", "b.md"})).
 			Return(g, nil).AnyTimes()
-		idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 			Return(map[string]struct{}{}, nil).AnyTimes()
 
 		out, err := buildFilteredBridges(context.Background(), idx, "main", seeds, clusters,
@@ -389,9 +389,9 @@ func TestBridgeLineage_BackwardProjectionExcludesLineagePair(t *testing.T) {
 
 	run := func(t *testing.T, facts []fact.Fact) []BridgeSeedSet {
 		t.Helper()
-		m := NewMockSearchIndex(gomock.NewController(t))
+		m := newScriptedSearch(t)
 		expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
-		m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+		scripted(m).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 			DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 				pairs := make([][2]string, 0)
 				for i := 0; i < len(paths); i++ {
@@ -401,9 +401,9 @@ func TestBridgeLineage_BackwardProjectionExcludesLineagePair(t *testing.T) {
 				}
 				return index.NewSimilarityGraph(pairs), nil
 			}).AnyTimes()
-		m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+		scripted(m).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 			Return(map[string]struct{}{}, nil).AnyTimes()
-		m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		scripted(m).TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(1, nil).AnyTimes()
 
 		out, err := BuildBackwardBridges(ctx, m, facts, "agent/test", testLocalRepoID,

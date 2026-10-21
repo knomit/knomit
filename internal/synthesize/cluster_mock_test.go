@@ -8,7 +8,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// expectScopedClusterPartition wires a MockSearchIndex so ScopedCluster
+// expectScopedClusterPartition wires a scripted search index so ScopedCluster
 // reproduces the given community partition in-process, replacing the old
 // CachedClusterFacts mock seam now that clustering is scoped+in-process.
 //
@@ -23,15 +23,15 @@ import (
 // pool feeds the pool-load Search (no QueryByPath) that BridgeComponentReport
 // issues; pass nil for callers like BuildBackwardBridges that receive their seed
 // pool directly and never issue a pool-load Search.
-func expectScopedClusterPartition(idx *MockSearchIndex, pool []index.SearchResult, comms [][]string) {
-	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).
+func expectScopedClusterPartition(idx *index.Facade, pool []index.SearchResult, comms [][]string) {
+	scripted(idx).Search(gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, _ string, opts index.SearchOptions) ([]index.SearchResult, error) {
 			if opts.QueryByPath != "" {
 				return nil, nil // neighbor search: subgraph stays the seed set
 			}
 			return pool, nil // pool-load search
 		}).AnyTimes()
-	idx.EXPECT().SubgraphEdges(gomock.Any(), gomock.Any()).
+	scripted(idx).SubgraphEdges(gomock.Any(), gomock.Any()).
 		Return(intraCommunityEdges(comms), nil).AnyTimes()
 }
 

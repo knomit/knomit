@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store"
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -136,44 +137,60 @@ func requireUnfilteredSearchFinds(t *testing.T, env *restatementEnv, from, want 
 // exactly one thing: which paths the neighbour search let into the subgraph.
 // The tests also pass resolution 1.0, because the production 4.0 splits even a
 // connected 2-node graph.
-type completeEdges struct{ SearchQuery }
-
-func (c completeEdges) SubgraphEdges(_ context.Context, paths []string) ([][2]string, error) {
-	sorted := append([]string(nil), paths...)
-	sort.Strings(sorted)
-	var out [][2]string
-	for i := range sorted {
-		for j := i + 1; j < len(sorted); j++ {
-			out = append(out, [2]string{sorted[i], sorted[j]})
-		}
-	}
-	return out, nil
+func completeEdges(t *testing.T, svc *store.Service) *index.Facade {
+	t.Helper()
+	idx := svc.Search()
+	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
+		SubgraphEdges: func(_ context.Context, paths []string) ([][2]string, error) {
+			sorted := append([]string(nil), paths...)
+			sort.Strings(sorted)
+			var out [][2]string
+			for i := range sorted {
+				for j := i + 1; j < len(sorted); j++ {
+					out = append(out, [2]string{sorted[i], sorted[j]})
+				}
+			}
+			return out, nil
+		},
+	}))
+	return idx
 }
 
 // recordingSearch records every path a QueryByPath search returned, and the
 // kinds it asked for, so a test can say what a caller's neighbour searches
 // could possibly have put into a cluster.
 type recordingSearch struct {
-	SearchQuery
 	mu       sync.Mutex
 	returned map[string]bool
 	kinds    [][]string
 }
 
-func (r *recordingSearch) Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
-	res, err := r.SearchQuery.Search(ctx, branch, q)
-	if q.QueryByPath != "" {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if r.returned == nil {
-			r.returned = map[string]bool{}
-		}
-		for _, h := range res {
-			r.returned[h.Path] = true
-		}
-		r.kinds = append(r.kinds, append([]string(nil), q.IncludeKinds...))
-	}
-	return res, err
+// recordSearch wraps svc's real Search so every call is recorded, and returns
+// svc's *index.Facade with the wrapper installed until the test ends.
+func recordSearch(t *testing.T, svc *store.Service) (*index.Facade, *recordingSearch) {
+	t.Helper()
+	r := &recordingSearch{}
+	idx := svc.Search()
+	t.Cleanup(idx.SetOverridesForTest(index.Overrides{
+		Search: func(next index.SearchFunc) index.SearchFunc {
+			return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+				res, err := next(ctx, branch, q)
+				if q.QueryByPath != "" {
+					r.mu.Lock()
+					defer r.mu.Unlock()
+					if r.returned == nil {
+						r.returned = map[string]bool{}
+					}
+					for _, h := range res {
+						r.returned[h.Path] = true
+					}
+					r.kinds = append(r.kinds, append([]string(nil), q.IncludeKinds...))
+				}
+				return res, err
+			}
+		},
+	}))
+	return idx, r
 }
 
 func clusterPaths(clusters [][]factForLLM) map[string]bool {
@@ -200,7 +217,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, index.SearchOptions{Path: kindDir})
 		require.Equal(t, []string{"epistemic"}, env.ri.ClusterNeighborKinds())
 
-		clusters, err := ScopedCluster(ctx, seeds(), completeEdges{env.svc.Search()},
+		clusters, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc),
 			1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
 		require.NoError(t, err)
 		require.True(t, clustersHoldTogether(clusters, kindObs, kindObs2),
@@ -211,7 +228,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("widened list admits it as a neighbour", func(t *testing.T) {
 		env := kindEnv(t, widenedNeighborKinds)
-		clusters, err := ScopedCluster(ctx, seeds(), completeEdges{env.svc.Search()},
+		clusters, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc),
 			1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
 		require.NoError(t, err)
 		require.True(t, clusterPaths(clusters)[kindPol],
@@ -228,7 +245,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("empty list is refused, not read as every kind", func(t *testing.T) {
 		env := kindEnv(t, nil)
-		_, err := ScopedCluster(ctx, seeds(), completeEdges{env.svc.Search()}, 1.0, 2, nil, nil, env.branch)
+		_, err := ScopedCluster(ctx, seeds(), completeEdges(t, env.svc), 1.0, 2, nil, nil, env.branch)
 		require.ErrorContains(t, err, "neighbour kinds must not be empty")
 	})
 }
@@ -263,7 +280,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 		// review_strategy hands it over.
 		env := kindEnv(t, widenedNeighborKinds)
 		clusters, err := ScopedCluster(ctx, []factForLLM{epistemicSeed(kindObs), epistemicSeed(kindObs2)},
-			completeEdges{env.svc.Search()}, 1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
+			completeEdges(t, env.svc), 1.0, 2, env.ri.ClusterNeighborKinds(), nil, env.branch)
 		require.NoError(t, err)
 		var mixed []factForLLM
 		for _, c := range clusters {
@@ -297,9 +314,9 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 
 	t.Run("search asks for epistemic only whatever the config says", func(t *testing.T) {
 		env := kindEnv(t, widenedNeighborKinds)
-		rec := &recordingSearch{SearchQuery: env.svc.Search()}
+		recIdx, rec := recordSearch(t, env.svc)
 		_, err := dedupCluster(ctx, []factForLLM{epistemicSeed(kindObs), epistemicSeed(kindObs2)},
-			env.svc.Facts(), env.svc.FactsRepo(), rec, env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
+			env.svc.Facts(), env.svc.FactsRepo(), recIdx, env.dedupThreshold(), reviewTool, func(ProgressEvent) {}, env.branch, testLocalRepoID)
 		require.NoError(t, err)
 		require.NotEmpty(t, rec.kinds)
 		for _, k := range rec.kinds {
@@ -385,8 +402,8 @@ func TestNeighborKinds_BackwardBridgesThreadTheList(t *testing.T) {
 			synth = append(synth, f)
 		}
 		requireUnfilteredSearchFinds(t, env, kindObs, kindPol, index.SearchOptions{Path: kindDir})
-		rec := &recordingSearch{SearchQuery: env.svc.Search()}
-		_, err := BuildBackwardBridges(ctx, rec, synth, env.branch, testLocalRepoID, EffortHigh,
+		recIdx, rec := recordSearch(t, env.svc)
+		_, err := BuildBackwardBridges(ctx, recIdx, synth, env.branch, testLocalRepoID, EffortHigh,
 			BridgeBoth, 1.0, 2, env.ri.ClusterNeighborKinds(), QualityConfigFromRepo(env.ri), ScopeFilter{})
 		require.NoError(t, err)
 		require.NotEmpty(t, rec.kinds, "PREMISE: the bridge path must have run neighbour searches")

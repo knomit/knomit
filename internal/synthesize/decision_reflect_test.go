@@ -16,22 +16,22 @@ import (
 	"knomit/internal/store/facts"
 )
 
-// stubSearch returns a MockSearchIndex whose Search returns the given
+// stubSearch returns a scripted search index whose Search returns the given
 // hits regardless of query. Used to drive the novelty check
-// deterministically without spinning up an embedder. Other SearchIndex
-// methods aren't called by ApplyReflectDecisions — leaving them
+// deterministically without spinning up an embedder. Other index
+// reads aren't called by ApplyReflectDecisions — leaving them
 // unstubbed means an unexpected call would fail the test, which is the
 // contract we want.
-func stubSearch(t *testing.T, hits []index.SearchResult) *MockSearchIndex {
+func stubSearch(t *testing.T, hits []index.SearchResult) *index.Facade {
 	t.Helper()
-	m := NewMockSearchIndex(gomock.NewController(t))
-	m.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(hits, nil).AnyTimes()
+	m := newScriptedSearch(t)
+	scripted(m).Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(hits, nil).AnyTimes()
 	// FactExistsAt is the ref gate's resolver: reinforce adds a methodology ref
 	// to each transition fact, and a NEW ref must resolve. These fixtures write
 	// the methodology for real, so it does — the mock reports what the store
 	// would. (The refs each transition already carried are exempt and never
 	// reach here; see the refs gate's temporal contract.)
-	m.EXPECT().FactExistsAt(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(m).FactExistsAt(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(true, nil).AnyTimes()
 	return m
 }

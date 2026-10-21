@@ -98,8 +98,9 @@ func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
 // phase. The abstraction axis is review-time derived state, and a query or
 // learn call that consulted it would be paying review's costs on the hot path.
 //
-// Structurally enforced as well as asserted: AbstractionIndex is deliberately
-// NOT part of the SearchIndex composite that mcp and web depend on.
+// Structurally enforced as well as asserted: *vocab.AbstractionIndex is
+// deliberately NOT part of the *index.Facade composite that mcp and web depend
+// on, and service.go is the only parent file that names it (Service.Abstraction).
 func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// Whole packages, not a list of filenames. The first version of this test
 	// named five files and skipped any that had been renamed, so it would have
@@ -136,8 +137,10 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 			if strings.HasSuffix(base, "_test.go") {
 				continue
 			}
-			// The axis lives in the store, so its own implementation and the
-			// interface that declares it are the legitimate mentions. Matched by
+			// The axis lives in the store, so its own implementation, the
+			// vector tables it reads and the Service accessor that hands it out
+			// are the legitimate mentions (interfaces.go, which used to declare the
+			// AbstractionIndex interface, was dropped in E8: it names nothing now). Matched by
 			// path RELATIVE to the store, so a same-named file in a child
 			// package (e.g. internal/sqlite/service.go) is NOT allowlisted.
 			rel, err := filepath.Rel(pkg, path)
@@ -151,7 +154,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 				// (vocab.DropBranchReviewState via SetOnDropBranchRows), so vcs
 				// names none of these tables.
 				switch filepath.ToSlash(rel) {
-				case "vocab/abstraction.go", "interfaces.go", "index/vec_table.go", "service.go":
+				case "vocab/abstraction.go", "index/vec_table.go", "service.go":
 					continue
 				}
 			}

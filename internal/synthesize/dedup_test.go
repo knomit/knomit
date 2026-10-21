@@ -13,10 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ctxCapturingSearchIndex is a minimal SearchIndex stub that records
-// the first context passed to Search and returns ctx.Err() if the
-// context is canceled. All other interface methods would panic if
-// invoked (they aren't, by dedupCluster's call shape).
+// ctxCapture records the first context passed to Search, and how many calls
+// there were. The Search it is installed over returns ctx.Err() if the context
+// is canceled, and nothing otherwise.
 //
 // mu is load-bearing, not decoration: dedupCluster fans Search out across
 // one goroutine per cluster member (errgroup, limit
@@ -24,33 +23,46 @@ import (
 // concurrently. Unguarded they raced each other, failing the ENTIRE
 // package under -race for anyone running the detector — knomit#133. The
 // production side guards its own shared state with exactly this shape;
-// a double that does not is violating the contract every real
-// store.SearchIndex meets, not exposing a defect in dedupCluster.
+// an override that does not is violating the contract the real
+// Search meets, not exposing a defect in dedupCluster.
 //
 // Readers do NOT need the lock: dedupCluster calls g.Wait() before every
 // return, which orders all of the writes above before anything the test
 // goroutine does afterwards.
-type ctxCapturingSearchIndex struct {
-	store.SearchIndex
+type ctxCapture struct {
 	mu     sync.Mutex
 	called int
 	gotCtx context.Context
 }
 
-func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
-	s.mu.Lock()
-	s.called++
-	// First write wins. The doc comment above has always promised "the
-	// first context passed to Search"; last-write-wins never actually
-	// delivered it, and with a fan-out there is no defined last.
-	if s.gotCtx == nil {
-		s.gotCtx = ctx
-	}
-	s.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, nil
+// captureSearchCtx opens a real in-memory store and overrides its Search with
+// the capturing one, so dedupCluster is driven through the real *index.Facade.
+func captureSearchCtx(t *testing.T) (*index.Facade, *ctxCapture) {
+	t.Helper()
+	svc, err := store.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	c := &ctxCapture{}
+	t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{
+		Search: func(index.SearchFunc) index.SearchFunc {
+			return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+				c.mu.Lock()
+				c.called++
+				// First write wins. The doc comment above has always promised "the
+				// first context passed to Search"; last-write-wins never actually
+				// delivered it, and with a fan-out there is no defined last.
+				if c.gotCtx == nil {
+					c.gotCtx = ctx
+				}
+				c.mu.Unlock()
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return nil, nil
+			}
+		},
+	}))
+	return svc.Search(), c
 }
 
 // TestDedupCluster_NoEmbedderDependency regresses the optimization where
@@ -63,7 +75,7 @@ func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q i
 //
 // Behavioral coverage: a cluster with fewer than 2 members is a no-op —
 // dedupCluster returns it unchanged before touching the facts index,
-// SearchIndex, or anything else. That's the cheapest exercise of the new
+// the search index, or anything else. That's the cheapest exercise of the new
 // signature without needing a real store stood up.
 func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
 	cases := []struct {
@@ -80,7 +92,7 @@ func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
 				tc.cluster,
 				nil, // facts.Index — never reached for len(cluster) < 2
 				nil, // facts.Repo — never reached
-				nil, // SearchQuery — never reached
+				nil, // *index.Facade — never reached
 				0.92,
 				"test",
 				func(ProgressEvent) {},
@@ -111,7 +123,7 @@ func TestDedupCluster_RespectsContextCancellation(t *testing.T) {
 		{File: "kb/a.md", Title: "a", Body: "ba"},
 		{File: "kb/b.md", Title: "b", Body: "bb"},
 	}
-	idx := &ctxCapturingSearchIndex{}
+	idx, cap := captureSearchCtx(t)
 
 	_, err := dedupCluster(ctx, cluster, nil, nil, idx, 0.92, "test", func(ProgressEvent) {}, "agent/test", bareRefFixture)
 	if err == nil {
@@ -120,15 +132,15 @@ func TestDedupCluster_RespectsContextCancellation(t *testing.T) {
 	if !errorsIs(err, context.Canceled) {
 		t.Errorf("dedupCluster err = %v, want context.Canceled wrapped", err)
 	}
-	if idx.called == 0 {
+	if cap.called == 0 {
 		t.Fatal("idx.Search was never invoked — ctx propagation cannot be verified")
 	}
-	if idx.gotCtx == nil {
+	if cap.gotCtx == nil {
 		t.Fatal("idx.gotCtx not captured")
 	}
 	// The captured ctx must carry the cancellation — proves the same
 	// ctx tree was threaded down, not a fresh context.Background().
-	if idx.gotCtx.Err() == nil {
+	if cap.gotCtx.Err() == nil {
 		t.Error("idx received a ctx without cancellation — dedupCluster used context.Background()")
 	}
 }
@@ -184,13 +196,10 @@ func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 		{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 	}
-	idx := &fixedPairSearch{
-		SearchQuery: svc.Search(),
-		results: []index.SearchResult{
-			searchHit(winnerPath),
-			searchHit(loserPath),
-		},
-	}
+	idx := fixedPairSearch(t, svc, []index.SearchResult{
+		searchHit(winnerPath),
+		searchHit(loserPath),
+	})
 
 	var warnings []string
 	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",

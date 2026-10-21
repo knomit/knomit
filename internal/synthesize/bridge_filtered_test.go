@@ -305,7 +305,7 @@ func TestBuildFilteredBridges_EffortNormal_NilNoIdx(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// NO expectations set — any idx call would cause the mock to fail.
 
 	seeds, clusters, _ := buildTwoClusterSeeds()
@@ -332,16 +332,16 @@ func TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges(t *testing.T) {
 
 	seeds, clusters, g := buildTwoClusterSeeds()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// SimilarityAdjacency is called once with all 4 paths (sorted).
 	// ReverseDependentPaths is called for each unique path (derivationGap).
 	allPaths := []string{"a.md", "b.md", "c.md", "d.md"}
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil)
 	emptyRevdeps := map[string]struct{}{}
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "a.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "b.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "c.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "d.md").Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "a.md").Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "b.md").Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "c.md").Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "d.md").Return(emptyRevdeps, nil).AnyTimes()
 
 	scope := ScopeFilter{Domain: []string{"auth"}} // scope is "auth"
 
@@ -417,11 +417,11 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 	// Only e↔f are connected; g2, h2 have no edges → reshape finds {e,f} first.
 	g := index.NewSimilarityGraph([][2]string{{"e.md", "f.md"}})
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	allPaths := []string{"e.md", "f.md", "g2.md", "h2.md"}
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil)
 	emptyRevdeps := map[string]struct{}{}
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(emptyRevdeps, nil).AnyTimes()
 
 	// Scope is "billing" (domain) — so "billing" shared token is scope-excluded.
 	// "Stripe" is entity (df=2 in pool of 4, rarer than billing df=4) and not in
@@ -480,11 +480,11 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 	}
 	g := index.NewSimilarityGraph([][2]string{{"g.md", "h.md"}})
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"g.md", "h.md"})).Return(g, nil)
+	idx := newScriptedSearch(t)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"g.md", "h.md"})).Return(g, nil)
 	emptyRevdeps := map[string]struct{}{}
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "g.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "h.md").Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "g.md").Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), "h.md").Return(emptyRevdeps, nil).AnyTimes()
 
 	scope := ScopeFilter{Domain: []string{"auth"}} // "auth" is the scope
 
@@ -512,10 +512,10 @@ func TestBuildFilteredBridges_Determinism(t *testing.T) {
 	allPaths := []string{"a.md", "b.md", "c.md", "d.md"}
 	emptyRevdeps := map[string]struct{}{}
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// Two calls to buildFilteredBridges → each calls SimilarityAdjacency once.
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil).Times(2)
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(emptyRevdeps, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil).Times(2)
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(emptyRevdeps, nil).AnyTimes()
 
 	scope := ScopeFilter{}
 
@@ -557,8 +557,8 @@ func TestBuildFilteredBridges_SimilarityAdjacencyError(t *testing.T) {
 	seeds, clusters, _ := buildTwoClusterSeeds()
 	wantErr := errors.New("adjacency failed")
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(index.SimilarityGraph{}, wantErr)
+	idx := newScriptedSearch(t)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(index.SimilarityGraph{}, wantErr)
 
 	_, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,
@@ -584,9 +584,9 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 	g := index.NewSimilarityGraph([][2]string{{"x.md", "y.md"}})
 	wantErr := errors.New("revdeps failed")
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil)
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(nil, wantErr).AnyTimes()
+	idx := newScriptedSearch(t)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil)
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(nil, wantErr).AnyTimes()
 
 	_, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,
@@ -619,8 +619,8 @@ func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
 		{"q.md", "r.md"}, {"q.md", "s.md"}, {"r.md", "s.md"},
 	})
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil)
+	idx := newScriptedSearch(t)
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil)
 	// No ReverseDependentPaths expected since no subset passes reshape.
 
 	got, err := buildFilteredBridges(
@@ -641,7 +641,7 @@ func TestBuildFilteredBridges_DiscoveredOriginExcluded(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	// No idx calls expected because the pool has < 2 non-discovered facts.
 
 	seeds := []factForLLM{

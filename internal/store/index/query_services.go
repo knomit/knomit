@@ -11,21 +11,31 @@ import "knomit/internal/store/internal/vcs"
 //
 // See .claude/plans/2026-07-21-p1.3-store-decomposition-design.md.
 
-// FactQuery implements store.FactQuery: fact read/search/existence queries.
-type FactQuery struct{ rh *vcs.Repo }
+// FactQuery is the fact read/search/existence queries.
+type FactQuery struct {
+	rh *vcs.Repo
+	// ov is the test-only override set of SetOverridesForTest; nil in
+	// production.
+	ov *Overrides
+}
 
-// GraphStore implements store.GraphStore: DERIVED_FROM / SIMILAR_TO graph queries.
-type GraphStore struct{ rh *vcs.Repo }
+// GraphStore is the DERIVED_FROM / SIMILAR_TO graph queries.
+type GraphStore struct {
+	rh *vcs.Repo
+	// ov is the test-only override set of SetOverridesForTest; nil in
+	// production.
+	ov *Overrides
+}
 
-// HistoryQuery implements store.HistoryQuery: commit-log / revision history queries.
+// HistoryQuery is the commit-log / revision history queries.
 type HistoryQuery struct{ rh *vcs.Repo }
 
-// MethodologyMatcher implements store.MethodologyMatcher: methodology-fact matching.
+// MethodologyMatcher is methodology-fact matching.
 type MethodologyMatcher struct{ rh *vcs.Repo }
 
-// Facade composes the four sub-services into the SearchIndex composite
+// Facade composes the four sub-services into the search composite
 // returned by Service.Search(). Method promotion from the embedded pointers is
-// what makes it satisfy every SearchIndex method; it holds no state of its own.
+// what makes it answer every query method; it holds no state of its own.
 type Facade struct {
 	*FactQuery
 	*GraphStore

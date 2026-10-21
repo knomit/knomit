@@ -98,7 +98,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	// Build a mock idx with expectations for buildFilteredBridges.
 	// buildFilteredBridges calls SimilarityAdjacency and derivationGap
 	// (via ReverseDependentPaths). It does NOT call TokenDF (that's buildScoredBridges).
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 
 	// Clustering (Search + SubgraphEdges) is driven by ScopedCluster (the cluster
 	// step, not by buildFilteredBridges itself).  The real svc.Search() is used for clustering;
@@ -203,8 +203,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 // Direct unit: call buildFilteredBridges and verify BridgeSeedSet, then
 // simulate the payload-construction path to confirm ScopeLabel assignment.
 func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 
 	seeds := []factForLLM{
 		makeFact("kb/auth/a.md", "authored", []string{"auth"}, []string{"permissions"}),
@@ -217,8 +216,8 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 
 	// buildFilteredBridges calls SimilarityAdjacency (no TokenDF — filtered path).
 	g := index.NewSimilarityGraph([][2]string{{"kb/auth/a.md", "kb/auth/b.md"}})
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil).AnyTimes()
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
 	// buildFilteredBridges must NOT call TokenDF — no expectation set.
 
 	filteredCfg := QualityConfig{

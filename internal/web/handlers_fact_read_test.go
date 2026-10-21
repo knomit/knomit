@@ -48,7 +48,7 @@ func (s *stubFactReader) Read(_ context.Context, _ *repos.RepoInstance, _ hal.An
 // Exists ignores the anchor (ri, branch, commit) and consults the test's
 // pre-seeded path → bool map. Sufficient for handler-level tests that
 // exercise wiring; commit-anchored historical semantics are covered by
-// store-level tests for SearchIndex.FactExistsAt.
+// store-level tests for FactQuery.FactExistsAt.
 func (s *stubFactReader) Exists(_ context.Context, _ *repos.RepoInstance, _ string, path, _ string) bool {
 	return s.exists[path]
 }

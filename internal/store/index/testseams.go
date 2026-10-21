@@ -228,3 +228,33 @@ func GraphDetachDeleteNodeForTest(ctx context.Context, ex storegit.CtxExecer, no
 	mustBeTest("GraphDetachDeleteNodeForTest")
 	return graphDetachDeleteNode(ctx, ex, nodeID)
 }
+
+// SearchFunc is the signature of FactQuery.Search.
+type SearchFunc = func(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
+
+// Overrides replaces individual read-service methods for a test that needs a
+// hand-made answer (a similarity graph, a canned search hit, a forced read
+// failure) the test corpus cannot produce. A nil field leaves the real method
+// in place. Search is a wrapper: it receives the real method, so a test can
+// observe the real answer or substitute its own; every other field replaces
+// the method outright.
+type Overrides struct {
+	Search                func(next SearchFunc) SearchFunc
+	FactExistsAt          func(ctx context.Context, branch, path, commit string) (bool, error)
+	SimilarityAdjacency   func(ctx context.Context, paths []string) (SimilarityGraph, error)
+	ReverseDependentPaths func(ctx context.Context, path string) (map[string]struct{}, error)
+	TokenDF               func(ctx context.Context, branch, token, kind string) (int, error)
+	SubgraphEdges         func(ctx context.Context, paths []string) ([][2]string, error)
+}
+
+// SetOverridesForTest installs o on the query services this Facade composes
+// (and so on the accessors Service.FactQuery and Service.GraphStore, which
+// hand out the same services) and returns a func that restores the previous
+// set. Install it before any concurrent use and restore it after. It panics
+// outside a test binary.
+func (f *Facade) SetOverridesForTest(o Overrides) (restore func()) {
+	mustBeTest("SetOverridesForTest")
+	prevF, prevG := f.FactQuery.ov, f.GraphStore.ov
+	f.FactQuery.ov, f.GraphStore.ov = &o, &o
+	return func() { f.FactQuery.ov, f.GraphStore.ov = prevF, prevG }
+}

@@ -17,7 +17,7 @@ import (
 
 // factSearcher is the single FactQuery method this stage needs. Narrowing the
 // dependency is what lets the unit tests fake one method instead of the dozen
-// store.FactQuery declares; store.FactQuery satisfies it unchanged.
+// index.FactQuery declares; *index.FactQuery satisfies it unchanged.
 type factSearcher interface {
 	Search(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error)
 }

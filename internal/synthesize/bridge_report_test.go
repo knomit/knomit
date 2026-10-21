@@ -39,7 +39,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/test"
 
 	// Two synthesis facts in different clusters sharing entity "bridgeTok".
@@ -67,7 +67,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	// SimilarityAdjacency: for bridgeTok members (a,b) → return graph with a↔b edge.
 	// For singleClusterTok: enumerateBridgeCandidates won't produce a candidate (same community),
 	// but allow AnyTimes to not over-constrain.
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			for _, p := range paths {
 				if p == "kb/a.md" {
@@ -78,11 +78,11 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 		}).AnyTimes()
 
 	// ReverseDependentPaths: no links → gap = 1.0
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
 
 	// TokenDF: bridgeTok appears in 2 docs
-	idx.EXPECT().TokenDF(gomock.Any(), branch, gomock.Any(), gomock.Any()).
+	scripted(idx).TokenDF(gomock.Any(), branch, gomock.Any(), gomock.Any()).
 		Return(2, nil).AnyTimes()
 
 	cfg := QualityConfig{
@@ -122,7 +122,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/test"
 
 	// Two facts sharing entity "shared" but both in community 0 → no bridge.
@@ -165,7 +165,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/test"
 
 	// Two facts sharing entity "gappy" in DIFFERENT communities → a real
@@ -182,11 +182,11 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	})
 
 	// No SIMILAR_TO edges between members → cohesion 0 < CohFloor (0.5).
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		Return(index.NewSimilarityGraph(nil), nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(idx).TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(2, nil).AnyTimes()
 
 	cfg := QualityConfig{
@@ -222,7 +222,7 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/test"
 
 	// Two tokens across different clusters: "alpha" (cohesive) and "beta" (not cohesive)
@@ -239,7 +239,7 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 	})
 
 	// alpha has edges → cohesion 1.0; beta has no edges → cohesion 0 (gated out by CohFloor=0.5)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
 			for _, p := range paths {
 				if p == "kb/a1.md" {
@@ -249,9 +249,9 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 			return index.NewSimilarityGraph(nil), nil
 		}).AnyTimes()
 
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
+	scripted(idx).ReverseDependentPaths(gomock.Any(), gomock.Any()).
 		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	scripted(idx).TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(2, nil).AnyTimes()
 
 	cfg := QualityConfig{
@@ -286,7 +286,7 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/test"
 
 	searchResults := []index.SearchResult{
@@ -299,7 +299,7 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 		{"kb/a.md"},
 		{"kb/b.md"},
 	})
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
+	scripted(idx).SimilarityAdjacency(gomock.Any(), gomock.Any()).
 		Return(index.SimilarityGraph{}, boom).AnyTimes()
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
@@ -316,7 +316,7 @@ func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	idx := NewMockSearchIndex(ctrl)
+	idx := newScriptedSearch(t)
 	branch := "agent/test"
 
 	searchResults := []index.SearchResult{
