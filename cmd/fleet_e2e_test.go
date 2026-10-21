@@ -202,14 +202,7 @@ func TestFleetE2E_Forge(t *testing.T) {
 	charlie := newFleetNode(t, dir, "charlie", allow)
 	until := func(what string, cond func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(20 * time.Second)
-		for !cond() {
-			if time.Now().After(deadline) {
-				t.Fatalf("the master's rounds never brought %s", what)
-			}
-			alpha.round(t)
-			time.Sleep(50 * time.Millisecond)
-		}
+		untilMasterRounds(t, alpha, what, cond)
 	}
 	joinAnswer(t, bravo, alpha, "none")
 	joinAnswer(t, charlie, alpha, "none")

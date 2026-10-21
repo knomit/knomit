@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
@@ -190,17 +189,10 @@ func TestFleetLeave_ForgeJoinIsPendingThenAcceptedAndLeaveRevokes(t *testing.T) 
 	}
 	bravo := newFleetNode(t, dir, "bravo", allow)
 
-	// until runs the master's round until cond holds on the forge.
+	// until runs the master's rounds until cond holds on the forge.
 	until := func(what string, cond func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(20 * time.Second)
-		for !cond() {
-			if time.Now().After(deadline) {
-				t.Fatalf("the master's rounds never brought %s", what)
-			}
-			alpha.round(t)
-			time.Sleep(50 * time.Millisecond)
-		}
+		untilMasterRounds(t, alpha, what, cond)
 	}
 
 	if st := joinAnswer(t, bravo, alpha, "none"); st.State != repos.FleetRegistered || st.RecordState != repos.RecordPending {

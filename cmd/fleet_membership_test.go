@@ -188,6 +188,27 @@ func (n *fleetNode) round(t *testing.T) {
 	}
 }
 
+// maxMasterRounds bounds untilMasterRounds. The convergences the fleet e2e
+// tests wait for take at most two master rounds (measured: 0 to 2), so ten is
+// a hang detector for a broken duty, not a time budget.
+const maxMasterRounds = 10
+
+// untilMasterRounds runs master's rounds until cond holds, failing after
+// maxMasterRounds of them. It is bounded by ROUNDS, not by the clock: the
+// property is that the master's rounds bring the change within a handful of
+// them, and a round's duration says nothing about that. A wall-clock deadline
+// failed on a loaded machine, where a slow round can spend it alone. A round
+// that hangs is caught by go test -timeout.
+func untilMasterRounds(t *testing.T, master *fleetNode, what string, cond func() bool) {
+	t.Helper()
+	for rounds := 0; !cond(); rounds++ {
+		if rounds == maxMasterRounds {
+			t.Fatalf("the master's %d rounds never brought %s", maxMasterRounds, what)
+		}
+		master.round(t)
+	}
+}
+
 // join enrolls n with master m's API-level enroll and joins m's fleet.
 func (n *fleetNode) join(t *testing.T, m *fleetNode) {
 	t.Helper()
