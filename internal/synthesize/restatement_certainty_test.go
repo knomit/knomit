@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // The pair used throughout this file: two facts about one event, filed under
@@ -64,7 +64,7 @@ func certainPairIsAboveTheFloor(t *testing.T, env *restatementEnv) {
 	vecs, err := env.svc.Abstraction().BodyVectorsByFactID(context.Background(),
 		[]int64{ids[certainAPath], ids[certainBPath]})
 	require.NoError(t, err)
-	cos := store.CosineSim(vecs[ids[certainAPath]], vecs[ids[certainBPath]])
+	cos := model.CosineSim(vecs[ids[certainAPath]], vecs[ids[certainBPath]])
 	require.GreaterOrEqual(t, cos, env.dedupThreshold(),
 		"fixture must sit at or above the mechanical dedup floor, or these tests measure nothing")
 }

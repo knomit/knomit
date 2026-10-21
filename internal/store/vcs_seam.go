@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 
-	"knomit/internal/embeddings/params"
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
@@ -31,8 +30,9 @@ type factsRepo = facts.Repo
 // on the commit path depends on this wrapper — NotifyCommit, the branch
 // locks and commit authoring run entirely inside the child, as before.
 //
-// The names callers outside store use are re-exported below unchanged, so
-// the public surface of package store does not move.
+// The plain data types and sentinels callers outside store use live in
+// store/model, which vcs and the callers import directly; nothing is
+// re-exported here but TestFallbackAgentID, below.
 
 // mergeRepo names the embedded merge.Repo field (the alias keeps it apart from
 // the embedded *vcs.Repo's `Repo`). A parent-private name, not an export.
@@ -64,112 +64,8 @@ func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: mr, syncRepo: remotesync.NewRepo(mr, r)}
 }
 
-// Types.
-type (
-	Accept          = vcs.Accept
-	AcceptList      = vcs.AcceptList
-	BatchEmbedder   = vcs.BatchEmbedder
-	Branch          = vcs.Branch
-	ChangesQuery    = vcs.ChangesQuery
-	ChangesResult   = vcs.ChangesResult
-	ChangesScope    = vcs.ChangesScope
-	Embedder        = vcs.Embedder
-	Experiment      = vcs.Experiment
-	IndexManager    = vcs.IndexManager
-	PathChange      = vcs.PathChange
-	RebuildProgress = vcs.RebuildProgress
-	RevisionDiff    = vcs.RevisionDiff
-	RevisionMeta    = vcs.RevisionMeta
-	TrailerEntry    = vcs.TrailerEntry
-	Trailers        = vcs.Trailers
-)
-
-// Constants.
-const (
-	ChangeAdded           = vcs.ChangeAdded
-	ChangeDeleted         = vcs.ChangeDeleted
-	ChangeModified        = vcs.ChangeModified
-	ExperimentPrefix      = vcs.ExperimentPrefix
-	TrailerCause          = vcs.TrailerCause
-	TrailerRun            = vcs.TrailerRun
-	TrailerTemplate       = vcs.TrailerTemplate
-	TrailerTemplateSource = vcs.TrailerTemplateSource
-	TrailerTrace          = vcs.TrailerTrace
-	TrailerTrigger        = vcs.TrailerTrigger
-)
-
-// Sentinel errors: the same values, so errors.Is matches across the seam.
-var (
-	ErrBranchNotFound        = vcs.ErrBranchNotFound
-	ErrHistoryChanged        = vcs.ErrHistoryChanged
-	ErrInvalidChangesCursor  = vcs.ErrInvalidChangesCursor
-	ErrInvalidPrefix         = vcs.ErrInvalidPrefix
-	ErrNoAgentID             = vcs.ErrNoAgentID
-	ErrNoConsensusBranch     = vcs.ErrNoConsensusBranch
-	ErrNoSigner              = vcs.ErrNoSigner
-	ErrOrphanExperimentRef   = vcs.ErrOrphanExperimentRef
-	ErrPathNotFound          = vcs.ErrPathNotFound
-	ErrSinceNotBehind        = vcs.ErrSinceNotBehind
-	ErrStaleExperimentParent = vcs.ErrStaleExperimentParent
-	ErrTraceOverride         = vcs.ErrTraceOverride
-	ErrTraceTrigger          = vcs.ErrTraceTrigger
-	ErrUnknownSince          = vcs.ErrUnknownSince
-)
-
-// ExperimentBranch is vcs.ExperimentBranch.
-func ExperimentBranch(name string) string { return vcs.ExperimentBranch(name) }
-
-// IsExperimentBranch is vcs.IsExperimentBranch.
-func IsExperimentBranch(branch string) bool { return vcs.IsExperimentBranch(branch) }
-
-// ExperimentNameOf is vcs.ExperimentNameOf.
-func ExperimentNameOf(branch string) (string, bool) { return vcs.ExperimentNameOf(branch) }
-
-// IsRoleBranch is vcs.IsRoleBranch.
-func IsRoleBranch(branch string) bool { return vcs.IsRoleBranch(branch) }
-
-// ChooseConsensusBranch is vcs.ChooseConsensusBranch.
-func ChooseConsensusBranch(requested, head string, branches []string) string {
-	return vcs.ChooseConsensusBranch(requested, head, branches)
-}
-
-// NormalizeChangesPrefix is vcs.NormalizeChangesPrefix.
-func NormalizeChangesPrefix(ontologyRoot, prefix string) (string, error) {
-	return vcs.NormalizeChangesPrefix(ontologyRoot, prefix)
-}
-
-// EncodeChangesCursor is vcs.EncodeChangesCursor.
-func EncodeChangesCursor(scope ChangesScope, since, head, prefix, after string) string {
-	return vcs.EncodeChangesCursor(scope, since, head, prefix, after)
-}
-
-// DecodeChangesCursor is vcs.DecodeChangesCursor.
-func DecodeChangesCursor(s string) (ChangesQuery, ChangesScope, error) {
-	return vcs.DecodeChangesCursor(s)
-}
-
-// ChangesBookmark is vcs.ChangesBookmark.
-func ChangesBookmark(repo12, head string) string { return vcs.ChangesBookmark(repo12, head) }
-
-// ParseChangesSince is vcs.ParseChangesSince.
-func ParseChangesSince(since string) (repo, commit string, err error) {
-	return vcs.ParseChangesSince(since)
-}
-
-// EmbedderThresholds is vcs.EmbedderThresholds.
-func EmbedderThresholds(emb Embedder) params.Thresholds { return vcs.EmbedderThresholds(emb) }
-
-// TrailerValue is vcs.TrailerValue.
-func TrailerValue(message, key string) string { return vcs.TrailerValue(message, key) }
-
-// WithTrailers is vcs.WithTrailers.
-func WithTrailers(ctx context.Context, t Trailers) context.Context { return vcs.WithTrailers(ctx, t) }
-
-// WithAgentTrace is vcs.WithAgentTrace.
-func WithAgentTrace(ctx context.Context, t Trailers) (context.Context, error) {
-	return vcs.WithAgentTrace(ctx, t)
-}
-
 // TestFallbackAgentID is vcs.TestFallbackAgentID (the read side; it returns
-// "" outside a test binary).
+// "" outside a test binary). It stays a forward because the installed fallback
+// is vcs package state, which model (a leaf) cannot hold; repos.Manager and
+// web tests call it.
 func TestFallbackAgentID(branch string) string { return vcs.TestFallbackAgentID(branch) }

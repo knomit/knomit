@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -36,7 +38,7 @@ func dfFact(typ, title, body string, conf float64, distinctFrom []any) map[strin
 
 // dfSeed writes the original hypothesis (seed marker, cosine 1.0 with itself)
 // and returns its path.
-func dfSeed(t *testing.T, ctx context.Context, emb store.BatchEmbedder, typ string) string {
+func dfSeed(t *testing.T, ctx context.Context, emb model.BatchEmbedder, typ string) string {
 	t.Helper()
 	r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("seed", dfFact(typ,
 		"Anthropic IPO launch happens in October 2026",
@@ -53,7 +55,7 @@ func dfRead(t *testing.T, svc *store.Service, path string) string {
 	return string(rd.Content)
 }
 
-func dfLearn(t *testing.T, ctx context.Context, emb store.BatchEmbedder, f map[string]any) *mcpgo.CallToolResult {
+func dfLearn(t *testing.T, ctx context.Context, emb model.BatchEmbedder, f map[string]any) *mcpgo.CallToolResult {
 	t.Helper()
 	r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("probe", f))
 	require.NoError(t, err)

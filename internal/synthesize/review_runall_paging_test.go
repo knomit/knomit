@@ -6,10 +6,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/llm"
-	"knomit/internal/store"
 )
 
 // RunAll and paging.
@@ -153,12 +154,12 @@ type renderCountingStrategy struct {
 	payloads *atomic.Int64
 }
 
-func (s renderCountingStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) (*WorkItemView, error) {
+func (s renderCountingStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error) {
 	s.renders.Add(1)
 	return s.reviewStrategy.Render(ctx, d, sess, item)
 }
 
-func (s renderCountingStrategy) RenderPayload(item *store.PipelineWorkItem) (string, error) {
+func (s renderCountingStrategy) RenderPayload(item *model.PipelineWorkItem) (string, error) {
 	s.payloads.Add(1)
 	return s.reviewStrategy.RenderPayload(item)
 }
@@ -223,7 +224,7 @@ func TestPaging_LaterPagesDoNotRerenderThePrompt(t *testing.T) {
 // rather than emit a page with no content.
 func TestRenderPayload_EmptyForStepsThatInterpolateTheirPayload(t *testing.T) {
 	for _, step := range []string{"reflect", "discover"} {
-		got, err := reviewStrategy{}.RenderPayload(&store.PipelineWorkItem{
+		got, err := reviewStrategy{}.RenderPayload(&model.PipelineWorkItem{
 			ID: 3, StepType: step, FactsJSON: `[{"path":"kb/a.md"}]`,
 		})
 		require.NoErrorf(t, err, "step %s", step)

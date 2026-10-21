@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // #349: the agent's `trace` argument, handler half. Every refusal is driven
@@ -196,7 +197,7 @@ func TestTrace_BoundsAccepted(t *testing.T) {
 		"\nKey-0: v\nKey-1: v\nKey-2: v\nKey-3: v\nKey-4: v\n" + key32 + ": " + val128 +
 		"\nSigned-off-by: A Person <a@example.com>\nTicket: ABC-12: with a colon and spaces\n"
 	require.Equal(t, want, messageOf(t, ri, hash))
-	require.Equal(t, traceRun, store.TrailerValue(messageOf(t, ri, hash), store.TrailerRun))
+	require.Equal(t, traceRun, model.TrailerValue(messageOf(t, ri, hash), model.TrailerRun))
 
 	// An empty object is a trace with no entries: nothing is stamped.
 	text, isErr = callHandler(t, LearnHandler(), ctx, learnWithTrace("empty", map[string]any{}))
@@ -271,7 +272,7 @@ func TestTrace_HypothesizeAnswerStampsItsWrite(t *testing.T) {
 		require.NoError(t, err)
 		_, err = svc.Pipeline().MarkPipelineSessionPlanned(context.Background(), sess.ID)
 		require.NoError(t, err)
-		require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+		require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 			SessionID: sess.ID, StepType: "discover", ClusterKey: "discover-bwd-0", Priority: -100,
 			FactsJSON: `{"direction":"forward","bridge":{"token":"auth","kind":"entity","members":[{"path":"kb/seedone.md"},{"path":"kb/seedtwo.md"}]}}`,
 		}))
@@ -309,7 +310,7 @@ func TestTrace_HypothesizeAnswerStampsItsWrite(t *testing.T) {
 // would claim a repo was created from a template it never came from.
 // SABOTAGE: allow either key in knomitTraceEntry → red.
 func TestTrace_RefusesTemplateTrailerKeys(t *testing.T) {
-	for _, key := range []string{store.TrailerTemplate, store.TrailerTemplateSource, "knomit-template", "KNOMIT-TEMPLATE-SOURCE"} {
+	for _, key := range []string{model.TrailerTemplate, model.TrailerTemplateSource, "knomit-template", "KNOMIT-TEMPLATE-SOURCE"} {
 		_, err := parseTrace(map[string]any{key: "kb://abc@def"})
 		require.Error(t, err, key)
 	}

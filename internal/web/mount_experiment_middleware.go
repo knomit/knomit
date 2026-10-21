@@ -4,11 +4,12 @@ import (
 	"context"
 	"net/http"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/client/sessions"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // MountExperimentMiddleware puts a URL-SCOPED MCP session inside the experiment
@@ -124,7 +125,7 @@ func applyMountExperiment(ctx context.Context, m *repos.Manager, store_ *session
 		return ctx
 	}
 
-	expBranch := store.ExperimentBranch(name)
+	expBranch := model.ExperimentBranch(name)
 	write := b.Write()
 	if write == nil || !write.WritableBranch(expBranch) {
 		// Gone, or no longer ours. Fall back and SAY SO — being moved without

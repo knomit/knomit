@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -61,7 +63,7 @@ func TestReviewer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	}
 	pj, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID:  res.SessionID,
 		StepType:   "discover",
 		ClusterKey: "discover-inject",
@@ -109,7 +111,7 @@ func TestReviewer_EmptyDiscoverResponse_AnswersItem(t *testing.T) {
 	}
 	pj, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "discover",
 		ClusterKey: "discover-empty",

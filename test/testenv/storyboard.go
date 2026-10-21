@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/fsck"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -24,7 +26,7 @@ import (
 // defaults: AutoVerify and VerifyDeep both true, DeterministicEmbedder
 // as the embedder.
 type StoryboardOpts struct {
-	Embedder   store.BatchEmbedder // nil → DeterministicEmbedder
+	Embedder   model.BatchEmbedder // nil → DeterministicEmbedder
 	AutoVerify bool                // default true
 	VerifyDeep bool                // default true
 	// MethodologyMinScore overrides the per-repo methodology threshold
@@ -40,7 +42,7 @@ type StoryboardOpts struct {
 type Storyboard struct {
 	t                   *testing.T
 	homeDir             string
-	embedder            store.BatchEmbedder
+	embedder            model.BatchEmbedder
 	auto                bool
 	deep                bool
 	methodologyMinScore *float64
@@ -679,7 +681,7 @@ func (r *RepoHandle) Restart() {
 // a config change to a new embedding model. The next index open (setupIndex →
 // NeedsRebuild) detects the embedding-identity change and re-embeds the corpus.
 // Like Restart, all existing BranchHandle references become stale afterward.
-func (r *RepoHandle) RestartWithEmbedder(e store.BatchEmbedder) {
+func (r *RepoHandle) RestartWithEmbedder(e model.BatchEmbedder) {
 	r.sb.embedder = e
 	r.Restart()
 }

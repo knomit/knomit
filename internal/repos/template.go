@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -79,8 +81,8 @@ type ResolvedTemplate struct {
 }
 
 // Trailers is the provenance stamped on the commit that writes the template.
-func (rt *ResolvedTemplate) Trailers() store.Trailers {
-	return store.Trailers{
+func (rt *ResolvedTemplate) Trailers() model.Trailers {
+	return model.Trailers{
 		Template:       rt.Ref.Name,
 		TemplateSource: "kb://" + rt.SourceID + "@" + rt.Commit.String(),
 	}

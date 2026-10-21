@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
@@ -201,7 +203,7 @@ func mergedFactPath(t *testing.T, result *mcpgo.CallToolResult) string {
 // newPrinciplesTestRepo opens an on-disk store wired with the real
 // CodeOntology (which carries the principles validation rules) and a
 // length-based mock embedder so dedup is deterministic.
-func newPrinciplesTestRepo(t *testing.T) (*store.Service, context.Context, store.BatchEmbedder) {
+func newPrinciplesTestRepo(t *testing.T) (*store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))

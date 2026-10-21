@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -200,12 +202,12 @@ func commitMessage(t *testing.T, ri *RepoInstance, h string) string {
 	return info.Message
 }
 
-func trailersOf(t *testing.T, ri *RepoInstance, h string) store.Trailers {
+func trailersOf(t *testing.T, ri *RepoInstance, h string) model.Trailers {
 	t.Helper()
 	msg := commitMessage(t, ri, h)
-	return store.Trailers{
-		Trace: store.TrailerValue(msg, store.TrailerTrace), Cause: store.TrailerValue(msg, store.TrailerCause),
-		Trigger: store.TrailerValue(msg, store.TrailerTrigger), Run: store.TrailerValue(msg, store.TrailerRun),
+	return model.Trailers{
+		Trace: model.TrailerValue(msg, model.TrailerTrace), Cause: model.TrailerValue(msg, model.TrailerCause),
+		Trigger: model.TrailerValue(msg, model.TrailerTrigger), Run: model.TrailerValue(msg, model.TrailerRun),
 	}
 }
 
@@ -430,12 +432,12 @@ func TestScript_TrailersStamped(t *testing.T) {
 	for _, h := range commits[1:] {
 		msg := commitMessage(t, ri, h)
 		require.True(t, strings.HasSuffix(msg, "\n\nKnomit-Trace: "+c0+"\nKnomit-Cause: "+c0+"\nKnomit-Trigger: t1\n"), "%q", msg)
-		require.Equal(t, store.Trailers{Trace: c0, Cause: c0, Trigger: "t1"}, trailersOf(t, ri, h))
+		require.Equal(t, model.Trailers{Trace: c0, Cause: c0, Trigger: "t1"}, trailersOf(t, ri, h))
 		sig, err := testService(t, ri).FactsRepo().CommitSignerOf(context.Background(), plumbing.NewHash(h))
 		require.NoError(t, err)
 		require.Equal(t, testService(t, ri).FactsRepo().SignerFingerprint(), sig.Fingerprint)
 	}
-	require.Equal(t, store.Trailers{}, trailersOf(t, ri, c0), "the firing commit itself carries none")
+	require.Equal(t, model.Trailers{}, trailersOf(t, ri, c0), "the firing commit itself carries none")
 }
 
 // ---- T5, T6, T9: the trace
@@ -452,19 +454,19 @@ func TestScript_TraceDerivation(t *testing.T) {
 	before := settle(t, ri)
 	traced := writeMsg(t, ri, trigAgent, "kb/tasks/in/traced.md", "learn: traced\n\nKnomit-Trace: story-x\n")
 	settle(t, ri)
-	require.Equal(t, store.Trailers{Trace: "story-x", Cause: traced, Trigger: "t1"}, trailersOf(t, ri, head(t, ri)))
+	require.Equal(t, model.Trailers{Trace: "story-x", Cause: traced, Trigger: "t1"}, trailersOf(t, ri, head(t, ri)))
 
 	before = settle(t, ri)
 	signal := "---\nkind: pragmatic\ntype: signal\nconfidence: 0.8\nsources: 1\nentities: [task-7f3a9c]\n---\n# A task\n\ndo it\n"
 	r, err := svc.Facts().WriteFact(context.Background(), trigAgent, "kb/tasks/in/task.md", signal, "learn: task", "learn")
 	require.NoError(t, err)
 	settle(t, ri)
-	require.Equal(t, store.Trailers{Trace: "task-7f3a9c", Cause: r.CommitHash, Trigger: "t1"}, trailersOf(t, ri, head(t, ri)))
+	require.Equal(t, model.Trailers{Trace: "task-7f3a9c", Cause: r.CommitHash, Trigger: "t1"}, trailersOf(t, ri, head(t, ri)))
 	_ = before
 
 	plain := writeOn(t, ri, trigAgent, "kb/tasks/in/plain.md")
 	settle(t, ri)
-	require.Equal(t, store.Trailers{Trace: plain, Cause: plain, Trigger: "t1"}, trailersOf(t, ri, head(t, ri)))
+	require.Equal(t, model.Trailers{Trace: plain, Cause: plain, Trigger: "t1"}, trailersOf(t, ri, head(t, ri)))
 
 	byPath := map[string]string{}
 	for _, f := range firesOf(t, ri, "t1") {
@@ -492,14 +494,14 @@ func TestScript_ChainAcrossTriggers(t *testing.T) {
 	commits := commitsAfter(t, ri, before)
 	require.Len(t, commits, 3, "a, then b by t1, then c by t2")
 	c1, c2 := commits[1], commits[2]
-	require.Equal(t, store.Trailers{Trace: c0, Cause: c0, Trigger: "t1"}, trailersOf(t, ri, c1))
-	require.Equal(t, store.Trailers{Trace: c0, Cause: c1, Trigger: "t2"}, trailersOf(t, ri, c2))
+	require.Equal(t, model.Trailers{Trace: c0, Cause: c0, Trigger: "t1"}, trailersOf(t, ri, c1))
+	require.Equal(t, model.Trailers{Trace: c0, Cause: c1, Trigger: "t2"}, trailersOf(t, ri, c2))
 
 	// An ordinary write, and a merge commit bringing a peer's write through
 	// main: neither is stamped.
 	svc := testService(t, ri)
 	plain := writeOn(t, ri, trigAgent, "kb/other/plain.md")
-	require.Equal(t, store.Trailers{}, trailersOf(t, ri, plain))
+	require.Equal(t, model.Trailers{}, trailersOf(t, ri, plain))
 	svc.SetSigner(testsigner.Named("peer"))
 	writeOn(t, ri, "main", "kb/other/peer.md")
 	svc.SetSigner(nil)
@@ -1135,7 +1137,7 @@ knomit.emit(out);`)
 
 // AgentTraceJoinsTheStory [T10, Reading A]: a session's write that carries an
 // agent trace (Knomit-Trace, -Cause, -Run and an own key, as the MCP `trace`
-// argument stamps it through store.WithAgentTrace) fires a `do: script`
+// argument stamps it through model.WithAgentTrace) fires a `do: script`
 // trigger; the fire's change.trace is the agent's Knomit-Trace, and the
 // script's write carries Trace = that trace, Cause = the session's commit,
 // Trigger = the rule — knomit's own set, with none of the agent's Run or own
@@ -1146,9 +1148,9 @@ func TestScript_AgentTraceJoinsTheStory(t *testing.T) {
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "learn"))
 	putScript(t, ri, "learn", `knomit.learn({topic: "tasks", category: "out", title: "for " + change.path + " in " + change.trace});`)
 	before := settle(t, ri)
-	agentCtx, err := store.WithAgentTrace(context.Background(), store.Trailers{
+	agentCtx, err := model.WithAgentTrace(context.Background(), model.Trailers{
 		Trace: "task-7f3a", Cause: strings.Repeat("a", 40), Run: "run-" + strings.Repeat("b", 32),
-		Extra: []store.TrailerEntry{{Key: "Ticket", Value: "ABC-12"}},
+		Extra: []model.TrailerEntry{{Key: "Ticket", Value: "ABC-12"}},
 	})
 	require.NoError(t, err)
 	r, err := testService(t, ri).Facts().WriteFact(agentCtx, trigAgent, "kb/tasks/in/session.md", factBody("session"), "learn: session work", "learn")
@@ -1159,7 +1161,7 @@ func TestScript_AgentTraceJoinsTheStory(t *testing.T) {
 	commits := commitsAfter(t, ri, before)
 	require.Equal(t, []string{session}, commits[:1])
 	require.Len(t, commits, 2, "the session's write and the script's")
-	require.Equal(t, store.Trailers{Trace: "task-7f3a", Cause: session, Trigger: "t1"}, trailersOf(t, ri, commits[1]))
+	require.Equal(t, model.Trailers{Trace: "task-7f3a", Cause: session, Trigger: "t1"}, trailersOf(t, ri, commits[1]))
 	msg := commitMessage(t, ri, commits[1])
 	require.NotContains(t, msg, "Knomit-Run", "knomit's set is its own; the agent's entries are not carried")
 	require.NotContains(t, msg, "Ticket")

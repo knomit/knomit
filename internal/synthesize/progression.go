@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rs/zerolog/log"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/rs/zerolog/log"
 )
 
 // Prune-then-distill progression (knomit#135).
@@ -107,7 +107,7 @@ func pruneVerdictCertifiesDistinct(result PruneResult, inputPaths []string) bool
 // about redundancy between two specific facts and NOT the claim that some
 // group is a coherent subject worth synthesizing upward from. Promoting one
 // would hand distill a pair the clusterer never grouped.
-func promotesToDistill(item *store.PipelineWorkItem) bool {
+func promotesToDistill(item *model.PipelineWorkItem) bool {
 	return item != nil &&
 		item.StepType == "prune" &&
 		!strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix)
@@ -142,8 +142,8 @@ func promotesToDistill(item *store.PipelineWorkItem) bool {
 func promoteClusterToDistill(
 	ctx context.Context,
 	d Deps,
-	sess *store.PipelineSession,
-	item *store.PipelineWorkItem,
+	sess *model.PipelineSession,
+	item *model.PipelineWorkItem,
 ) {
 	var facts []factForLLM
 	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
@@ -171,7 +171,7 @@ func promoteClusterToDistill(
 		//
 		// Priority 0.0 matches every other depth-0 distill item, which is what
 		// puts it behind the prune items still queued.
-		if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "distill",
 			ClusterKey: fmt.Sprintf("%s%s-%d", promotedDistillKeyPrefix, item.ClusterKey, ci),
@@ -203,7 +203,7 @@ func promoteClusterToDistill(
 // on it is indistinguishable from a cluster the progression forgot, and the
 // whole point of #135 is that distill NOT running is now a designed outcome
 // rather than an omission.
-func recordProgressionStop(sess *store.PipelineSession, item *store.PipelineWorkItem, stats *ReviewStats) {
+func recordProgressionStop(sess *model.PipelineSession, item *model.PipelineWorkItem, stats *ReviewStats) {
 	if sess == nil || item == nil {
 		return
 	}

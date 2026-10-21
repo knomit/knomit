@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/go-chi/chi/v5"
@@ -18,7 +20,6 @@ import (
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -127,7 +128,7 @@ type lensFactsResponse struct {
 // the handler fails the request ONCE, up front, instead of letting every mount
 // repeat the same failing inference. nil with a nil error means no text or no
 // embedder: each mount then embeds for itself.
-func lensQueryVec(ctx context.Context, emb store.Embedder, text string) ([]float32, error) {
+func lensQueryVec(ctx context.Context, emb model.Embedder, text string) ([]float32, error) {
 	if text == "" || emb == nil {
 		return nil, nil
 	}
@@ -149,7 +150,7 @@ func lensQueryVec(ctx context.Context, emb store.Embedder, text string) ([]float
 // federate.ReadTargetsFor, fetch each mount's RecentFacts at its pinned branch,
 // dedupe by repo-relative path (the write mount's copy wins), merge by
 // committed_at across mounts, and qualify read-mount paths (kb://<id12>/…).
-func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider, emb store.Embedder) http.HandlerFunc {
+func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider, emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -812,7 +813,7 @@ func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float6
 // the facts collection dedupes. A shadowed copy is dropped even when it ranks
 // higher in the fused order than the winner. Read-mount paths are qualified
 // (kb://<id12>/…); each row carries its source {repo,id,branch}.
-func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP motifsProvider) http.HandlerFunc {
+func handleHALLensSearch(provider searchProvider, emb model.Embedder, motifsP motifsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()

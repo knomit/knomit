@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/gitserve"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -133,7 +135,7 @@ func (h *cHost) advance(t *testing.T) {
 func (h *cHost) tip(t *testing.T, branch string) string {
 	t.Helper()
 	c, err := h.svc(t).Branches().HeadCommit(context.Background(), branch)
-	if errors.Is(err, store.ErrBranchNotFound) {
+	if errors.Is(err, model.ErrBranchNotFound) {
 		return ""
 	}
 	require.NoError(t, err)

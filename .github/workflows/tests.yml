@@ -479,6 +479,14 @@ jobs:
         # package per leg (synthesize, store, repos) at 40m. PR (full=false):
         # the ubuntu leg alone.
         #
+        # The windows repos package is two legs, split by `args`: the
+        # TestMission_* e2e family (~146 s of the package's ~538 s on the
+        # runner, kb fact 5ecb85a6) runs under -run=^TestMission, everything
+        # else under -skip=^TestMission. The same anchored pattern on both
+        # sides means each top-level test, with its subtests, runs in exactly
+        # one of the two. `args` is unquoted on purpose (no shell
+        # metacharacters), and absent on every other leg (expands to nothing).
+        #
         # EVERY entry is a RECURSIVE pattern (`...`). A bare `./internal/x/`
         # names exactly one package, so a child package created under it would
         # be run by no leg on any OS (kb gotcha 663ba6f0). Each subtree is named
@@ -486,7 +494,7 @@ jobs:
         # runs once per leg that already ran its parent.
         include: >-
           ${{ fromJSON(inputs.full
-          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/store/...","timeout":"40m"},{"leg":"windows-2025 repos","os":"windows-2025","packages":"./internal/repos/...","timeout":"40m"}]'
+          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/store/...","timeout":"40m"},{"leg":"windows-2025 repos mission","os":"windows-2025","packages":"./internal/repos/...","args":"-run=^TestMission","timeout":"40m"},{"leg":"windows-2025 repos rest","os":"windows-2025","packages":"./internal/repos/...","args":"-skip=^TestMission","timeout":"40m"}]'
           || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"}]') }}
     runs-on: ${{ matrix.os }}
     # Deliberately looser than the -timeout below, for the reason race.yml
@@ -508,7 +516,7 @@ jobs:
       - name: go test ${{ matrix.packages }}
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh slow -timeout ${{ matrix.timeout }} ${{ matrix.packages }}
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh slow -timeout ${{ matrix.timeout }} ${{ matrix.args }} ${{ matrix.packages }}
 
       # Same guard as build-test, one stream per leg. store, repos and
       # synthesize run only here on Windows, and a fault in any of them

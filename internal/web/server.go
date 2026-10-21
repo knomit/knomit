@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"net/http"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -36,7 +38,7 @@ type Server struct {
 	// opens it.
 	ClientSessions *sessions.Store
 	LLMAdapter     llm.LLMAdapter      // nil if no LLM configured
-	Embedder       store.BatchEmbedder // nil if unavailable
+	Embedder       model.BatchEmbedder // nil if unavailable
 
 	// Logs is the in-process log tap that GET /api/v1/logs/events streams
 	// from: a bounded ring of recent lines plus a live fan-out. Set by
@@ -285,9 +287,9 @@ func (s *Server) Handler() http.Handler {
 // defaultBranchesLister reads the branch list from a repo's store via
 // WithRead. Returns nil, nil if the store is unavailable (e.g. the repo is
 // still opening) so handlers can distinguish "no data yet" from "error".
-func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]store.Branch, error) {
+func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error) {
 	var (
-		out []store.Branch
+		out []model.Branch
 		err error
 	)
 	ri.WithRead(func(svc *store.Service) {

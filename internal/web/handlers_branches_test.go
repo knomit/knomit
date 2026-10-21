@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -17,10 +19,10 @@ import (
 // because they should never be called from these tests.
 type stubBranchLister struct {
 	store.BranchIndex
-	branches []store.Branch
+	branches []model.Branch
 }
 
-func (s *stubBranchLister) ListBranches(_ context.Context) ([]store.Branch, error) {
+func (s *stubBranchLister) ListBranches(_ context.Context) ([]model.Branch, error) {
 	return s.branches, nil
 }
 
@@ -33,7 +35,7 @@ func (s *stubBranchLister) ListBranches(_ context.Context) ([]store.Branch, erro
 //
 // TODO(plan-02): replace this shim with a proper mock once uber-go/mock
 // generation is wired up for store interfaces.
-func newTestRepoWithBranches(_ *testing.T, _ []store.Branch) *repos.RepoInstance {
+func newTestRepoWithBranches(_ *testing.T, _ []model.Branch) *repos.RepoInstance {
 	return &repos.RepoInstance{}
 }
 
@@ -43,8 +45,8 @@ func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 	s := &Server{
 		Manager: m,
 		providers: storeProviders{
-			branchesLister: func(_ context.Context, _ *repos.RepoInstance) ([]store.Branch, error) {
-				return []store.Branch{
+			branchesLister: func(_ context.Context, _ *repos.RepoInstance) ([]model.Branch, error) {
+				return []model.Branch{
 					{Name: "agent/test"},
 					{Name: "main"},
 				}, nil

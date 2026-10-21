@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -22,7 +24,6 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -229,9 +230,9 @@ func TestCreateFromTemplate_CopiesTreeSignedWithTrailers(t *testing.T) {
 		"the content commit's tree must be the template folder, byte for byte, case kept")
 
 	msg := gitIn(t, dir, "log", "-1", "--format=%B", content)
-	require.Equal(t, "mission", store.TrailerValue(msg, store.TrailerTemplate))
-	require.Equal(t, "kb://"+srcID+"@"+srcTip.String(), store.TrailerValue(msg, store.TrailerTemplateSource))
-	require.NotContains(t, store.TrailerValue(msg, store.TrailerTemplateSource), "playbooks",
+	require.Equal(t, "mission", model.TrailerValue(msg, model.TrailerTemplate))
+	require.Equal(t, "kb://"+srcID+"@"+srcTip.String(), model.TrailerValue(msg, model.TrailerTemplateSource))
+	require.NotContains(t, model.TrailerValue(msg, model.TrailerTemplateSource), "playbooks",
 		"the source is recorded by ID, never by name")
 
 	key, signed, err := testsigner.CommitSignerKey(dir, content)
@@ -604,7 +605,7 @@ func TestCreateFromTemplate_InitializeWritesTreeOnAgentBranchOnly(t *testing.T) 
 
 	agent := "refs/heads/" + tmplAgent
 	msg := gitOut(t, bare, "log", "-1", "--format=%B", agent)
-	require.Equal(t, "mission", store.TrailerValue(msg, store.TrailerTemplate))
+	require.Equal(t, "mission", model.TrailerValue(msg, model.TrailerTemplate))
 	got := treeBlobs(t, bare, agent)
 	for p, blob := range templateDirBlobs(t, "mission") {
 		require.Equal(t, blob, got[p], "%s on the pushed agent branch", p)

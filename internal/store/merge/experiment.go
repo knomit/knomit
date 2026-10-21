@@ -21,11 +21,12 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/store/internal/sqlite"
-	"knomit/internal/store/internal/vcs"
 )
 
 // MaxExperimentNameLen bounds the name so a ref path stays sane and an
@@ -180,32 +181,32 @@ var testHookOpenExperimentForked func()
 // do by omission.
 //
 // A name whose ref exists with NO row is neither: it is refused with
-// vcs.ErrOrphanExperimentRef. "Resume" means resuming a recorded experiment, and
+// model.ErrOrphanExperimentRef. "Resume" means resuming a recorded experiment, and
 // a ref without a record is precisely the case where we cannot say what we
 // would be resuming.
-func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent string) (vcs.Experiment, error) {
+func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent string) (model.Experiment, error) {
 	if err := validateExperimentName(name); err != nil {
-		return vcs.Experiment{}, err
+		return model.Experiment{}, err
 	}
 	if parent == "" {
-		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: parent branch is required", name)
+		return model.Experiment{}, fmt.Errorf("OpenExperiment %q: parent branch is required", name)
 	}
 
 	if existing, ok, err := rh.vr.GetExperiment(ctx, name); err != nil {
-		return vcs.Experiment{}, err
+		return model.Experiment{}, err
 	} else if ok {
 		if description == "" || description == existing.Description {
 			return existing, nil
 		}
 		if _, err := sqlite.Conn(ctx, rh.vr.DB()).ExecContext(ctx,
 			`UPDATE experiments SET description = ? WHERE name = ?`, description, name); err != nil {
-			return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: update description: %w", name, err)
+			return model.Experiment{}, fmt.Errorf("OpenExperiment %q: update description: %w", name, err)
 		}
 		existing.Description = description
 		return existing, nil
 	}
 
-	branch := vcs.ExperimentBranch(name)
+	branch := model.ExperimentBranch(name)
 	// REFUSE an orphan ref rather than adopt it. We are past the resume path,
 	// so there is no record for this name — and CreateBranch NO-OPS when the
 	// ref already exists, which would leave the caller holding a branch that
@@ -214,14 +215,14 @@ func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent st
 	// CreateBranch and the INSERT, and a hand-made ref. Both want a human,
 	// not a silent adoption.
 	if existing, err := rh.vr.HeadCommit(ctx, branch); err == nil && existing != "" {
-		return vcs.Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
+		return model.Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
 			"roll back %q and open it again, or pick another name",
-			vcs.ErrOrphanExperimentRef, branch, shortHash(existing), name)
+			model.ErrOrphanExperimentRef, branch, shortHash(existing), name)
 	}
 	// A rewind record left by an experiment of the same name (a drop that
 	// failed after its branch went) must not make the new one look rewound.
 	if err := rh.clearExperimentRewound(name); err != nil {
-		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: clear stale rewind record: %w", name, err)
+		return model.Experiment{}, fmt.Errorf("OpenExperiment %q: clear stale rewind record: %w", name, err)
 	}
 	// The PARENT'S LOCK is held from the fork to the experiments row. A rewind
 	// records the experiments it finds as ROWS (MarkExperimentsRewound, under
@@ -231,7 +232,7 @@ func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent st
 	unlockParent := rh.vr.LockBranch(parent)
 	defer unlockParent()
 	if err := rh.vr.CreateBranch(ctx, branch, parent); err != nil {
-		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
+		return model.Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
 	}
 	if testHookOpenExperimentForked != nil {
 		testHookOpenExperimentForked()
@@ -242,7 +243,7 @@ func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent st
 	// starts.
 	forkCommit, err := rh.vr.HeadCommit(ctx, branch)
 	if err != nil {
-		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: resolve new branch %q: %w", name, branch, err)
+		return model.Experiment{}, fmt.Errorf("OpenExperiment %q: resolve new branch %q: %w", name, branch, err)
 	}
 	// Inherit every tool's watermark, not just review's: hypothesize keys its
 	// own row under the same branch and would otherwise full-scan too.
@@ -250,7 +251,7 @@ func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent st
 		INSERT OR IGNORE INTO pipeline_watermarks (tool, branch, commit_hash)
 		SELECT tool, ?, commit_hash FROM pipeline_watermarks WHERE branch = ?`,
 		branch, parent); err != nil {
-		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: inherit pipeline watermarks: %w", name, err)
+		return model.Experiment{}, fmt.Errorf("OpenExperiment %q: inherit pipeline watermarks: %w", name, err)
 	}
 
 	now := time.Now()
@@ -258,13 +259,13 @@ func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent st
 		INSERT INTO experiments (name, description, parent_branch, fork_commit, created_at, last_activity_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		name, description, parent, forkCommit, now.Unix(), now.Unix()); err != nil {
-		return vcs.Experiment{}, fmt.Errorf("OpenExperiment %q: record experiment: %w", name, err)
+		return model.Experiment{}, fmt.Errorf("OpenExperiment %q: record experiment: %w", name, err)
 	}
 
 	log.Info().Str("experiment", name).Str("parent", parent).
 		Str("fork", shortHash(forkCommit)).Msg("experiment opened")
 
-	return vcs.Experiment{
+	return model.Experiment{
 		Name:           name,
 		Description:    description,
 		Parent:         parent,
@@ -276,7 +277,7 @@ func (rh *Repo) OpenExperiment(ctx context.Context, name, description, parent st
 
 // ListExperiments returns every experiment in this repo, ordered by name so
 // the listing is stable for a UI and for a test.
-func (rh *Repo) ListExperiments(ctx context.Context) ([]vcs.Experiment, error) {
+func (rh *Repo) ListExperiments(ctx context.Context) ([]model.Experiment, error) {
 	rows, err := sqlite.Conn(ctx, rh.vr.DB()).QueryContext(ctx, `
 		SELECT name, description, parent_branch, fork_commit, created_at, last_activity_at
 		FROM experiments ORDER BY name`)
@@ -285,10 +286,10 @@ func (rh *Repo) ListExperiments(ctx context.Context) ([]vcs.Experiment, error) {
 	}
 	defer rows.Close()
 
-	var out []vcs.Experiment
+	var out []model.Experiment
 	for rows.Next() {
 		var (
-			e          vcs.Experiment
+			e          model.Experiment
 			created    int64
 			lastActive int64
 		)
@@ -370,7 +371,7 @@ func (rh *Repo) CommitExperiment(ctx context.Context, name string, resolutions m
 	// (rebuildRewoundExperiment), under both locks, so a commit never merges
 	// back what the rewind scrubbed. The rebuild consumes the resolutions; the
 	// merge after it is then a fast-forward.
-	opts.Trace = vcs.TrailersFromContext(ctx)
+	opts.Trace = model.TrailersFromContext(ctx)
 	unlockParent := rh.vr.LockBranch(exp.Parent)
 	unlockExp := rh.vr.LockBranch(exp.Branch())
 	rebuilt, _, settled, err := rh.rebuildRewoundExperiment(ctx, exp, strategy, resolutions, opts)
@@ -431,7 +432,7 @@ func (rh *Repo) SyncExperiment(ctx context.Context, name string) (AgentReconcile
 	// keeps the scrubbed content in the experiment, but the record stays and
 	// the next commit or sync rebuilds from it (its base is still where the
 	// experiment met the old branch), so nothing leaks.
-	o := MergeOpts{Trace: vcs.TrailersFromContext(ctx)}
+	o := MergeOpts{Trace: model.TrailersFromContext(ctx)}
 	recorded := false
 	if _, err := rh.vr.Storer().Reference(experimentRewoundRefName(exp.Name)); err == nil {
 		recorded = true
@@ -502,14 +503,14 @@ func (rh *Repo) RollbackExperiment(ctx context.Context, name string) error {
 	if err := validateExperimentName(name); err != nil {
 		return err
 	}
-	branch := vcs.ExperimentBranch(name)
+	branch := model.ExperimentBranch(name)
 	head, herr := rh.vr.HeadCommit(ctx, branch)
 	if herr != nil || head == "" {
 		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
 	}
 	// Same teardown as a recorded experiment — the leftovers are the same
 	// leftovers, and the delete of the (absent) experiments row is a no-op.
-	if err := rh.dropExperiment(ctx, vcs.Experiment{Name: name}); err != nil {
+	if err := rh.dropExperiment(ctx, model.Experiment{Name: name}); err != nil {
 		return fmt.Errorf("RollbackExperiment %q: clean orphan ref: %w", name, err)
 	}
 	log.Info().Str("experiment", name).Str("was_at", shortHash(head)).
@@ -565,7 +566,7 @@ func (rh *Repo) ExpireExperiments(ctx context.Context, cutoff time.Time) ([]stri
 // so this teardown owns them. Leaving them behind is not inert: a later
 // experiment reusing the name inherits a watermark pointing at a commit its
 // branch has never contained, and its first review seeds nothing at all.
-func (rh *Repo) dropExperiment(ctx context.Context, exp vcs.Experiment) error {
+func (rh *Repo) dropExperiment(ctx context.Context, exp model.Experiment) error {
 	branch := exp.Branch()
 	if err := rh.vr.DropBranch(ctx, branch); err != nil {
 		return fmt.Errorf("drop experiment branch: %w", err)

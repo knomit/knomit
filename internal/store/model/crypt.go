@@ -1,4 +1,4 @@
-package sqlite
+package model
 
 import (
 	"crypto/aes"

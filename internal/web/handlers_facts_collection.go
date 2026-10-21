@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/go-chi/chi/v5"
@@ -244,7 +246,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 // deletes out here would make the caller's filter quietly differ from the
 // diff it names.
 func experimentChangedPaths(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch string) ([]string, bool) {
-	name, isExp := store.ExperimentNameOf(branch)
+	name, isExp := model.ExperimentNameOf(branch)
 	if !isExp {
 		hal.WriteProblem(w, http.StatusBadRequest, "Not an experiment",
 			"since_fork narrows a list to what an experiment changed since it forked; branch "+
@@ -254,7 +256,7 @@ func experimentChangedPaths(w http.ResponseWriter, r *http.Request, ri *repos.Re
 	}
 
 	var (
-		exp   store.Experiment
+		exp   model.Experiment
 		found bool
 		paths []string
 		err   error

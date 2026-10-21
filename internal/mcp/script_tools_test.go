@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // The script tool set (F07 PR 3), handler half: the SAME closures the MCP
@@ -21,10 +22,10 @@ import (
 // allows here, which is what proves the refusal is the host's.
 
 // scriptCtx is the ctx the host hands the tool set.
-func scriptCtx(t *testing.T, ri *repos.RepoInstance, tr store.Trailers) context.Context {
+func scriptCtx(t *testing.T, ri *repos.RepoInstance, tr model.Trailers) context.Context {
 	t.Helper()
 	ctx := repos.WithBinding(context.Background(), repos.NewBindingOfRepo(ri, "agent/test"))
-	return store.WithTrailers(ctx, tr)
+	return model.WithTrailers(ctx, tr)
 }
 
 func callScript(t *testing.T, tools repos.ScriptTools, ctx context.Context, tool string, args map[string]any) (map[string]any, string, bool) {
@@ -54,7 +55,7 @@ func messageOf(t *testing.T, ri *repos.RepoInstance, hash string) string {
 func TestScriptTools_HostFunctionsReachTheHandlers(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	tools := NewScriptTools(nil)
-	ctx := scriptCtx(t, ri, store.Trailers{})
+	ctx := scriptCtx(t, ri, model.Trailers{})
 
 	learned, _, isErr := callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:t1",
@@ -101,7 +102,7 @@ func TestScriptTools_SameCodePathAsMCP(t *testing.T) {
 	require.NoError(t, err)
 	ri := newLearnTestRepo(t, ontology)
 	tools := NewScriptTools(nil)
-	ctx := scriptCtx(t, ri, store.Trailers{Trace: "t", Cause: strings.Repeat("c", 40), Trigger: "t1"})
+	ctx := scriptCtx(t, ri, model.Trailers{Trace: "t", Cause: strings.Repeat("c", 40), Trigger: "t1"})
 	headBefore := headOf(t, ri, "agent/test")
 
 	_, text, isErr := callScript(t, tools, ctx, "learn", map[string]any{
@@ -166,7 +167,7 @@ func TestScriptTools_TrailersThroughUnchangedHandlers(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	tools := NewScriptTools(nil)
 	cause := strings.Repeat("c", 40)
-	ctx := scriptCtx(t, ri, store.Trailers{Trace: "story-1", Cause: cause, Trigger: "inbox"})
+	ctx := scriptCtx(t, ri, model.Trailers{Trace: "story-1", Cause: cause, Trigger: "inbox"})
 	want := "\n\nKnomit-Trace: story-1\nKnomit-Cause: " + cause + "\nKnomit-Trigger: inbox\n"
 
 	learned, _, isErr := callScript(t, tools, ctx, "learn", map[string]any{
@@ -189,7 +190,7 @@ func TestScriptTools_TrailersThroughUnchangedHandlers(t *testing.T) {
 	require.True(t, strings.HasSuffix(messageOf(t, ri, rt["commit"].(string)), want))
 
 	// Without a set on the ctx the same handler stamps nothing.
-	plain, _, isErr := callScript(t, tools, scriptCtx(t, ri, store.Trailers{}), "learn", map[string]any{
+	plain, _, isErr := callScript(t, tools, scriptCtx(t, ri, model.Trailers{}), "learn", map[string]any{
 		"moment_name": "plain",
 		"facts": []any{map[string]any{"topic": "architecture", "category": "scripts/host", "title": "Plain",
 			"body": "body", "confidence": 0.8, "sources": 1}},
@@ -210,7 +211,7 @@ func TestScriptTools_TrailersThroughUnchangedHandlers(t *testing.T) {
 // Sabotage: drop applyTrace from ExperimentHandler (red: the open runs).
 func TestExperimentHandler_AgentTraceRefusedOnKnomitsSet(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
-	ctx := scriptCtx(t, ri, store.Trailers{Trace: "story-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"})
+	ctx := scriptCtx(t, ri, model.Trailers{Trace: "story-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"})
 	for _, trace := range []map[string]any{{"Knomit-Trace": "other-story"}, {}} {
 		text, isErr := callHandler(t, ExperimentHandler(nil), ctx, map[string]any{"action": "open", "name": "from-a-host", "trace": trace})
 		require.True(t, isErr, text)
@@ -222,7 +223,7 @@ func TestExperimentHandler_AgentTraceRefusedOnKnomitsSet(t *testing.T) {
 func TestScriptTools_AgentTraceRefusedOnKnomitsSet(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	tools := NewScriptTools(nil)
-	ctx := scriptCtx(t, ri, store.Trailers{Trace: "story-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"})
+	ctx := scriptCtx(t, ri, model.Trailers{Trace: "story-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"})
 	learned, _, isErr := callScript(t, tools, ctx, "learn", map[string]any{
 		"moment_name": "trigger:inbox",
 		"facts": []any{map[string]any{"topic": "architecture", "category": "scripts/host", "title": "Stamped by knomit",

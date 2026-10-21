@@ -21,6 +21,7 @@ import (
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
 	"knomit/internal/store/migrate"
+	"knomit/internal/store/model"
 	"knomit/internal/store/remotesync"
 	"knomit/internal/store/vocab"
 )
@@ -219,7 +220,7 @@ func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
 		return fmt.Errorf("ConfigureRemote: repository not initialised")
 	}
 	if upstreamMain == "" {
-		return fmt.Errorf("ConfigureRemote: %w", ErrNoConsensusBranch)
+		return fmt.Errorf("ConfigureRemote: %w", model.ErrNoConsensusBranch)
 	}
 	return s.rh.ConfigureRemote(url, upstreamMain, agentBranch)
 }
@@ -301,10 +302,10 @@ func (s *Service) Abstraction() *vocab.AbstractionIndex { return s.ax }
 func (s *Service) Motifs() *vocab.MotifIndex { return s.mo }
 
 // IndexManager returns the IndexManager for search index lifecycle operations.
-func (s *Service) IndexManager() IndexManager { return s.si }
+func (s *Service) IndexManager() model.IndexManager { return s.si }
 
 // SetEmbedder configures the embedder used by the search index for vector operations.
-func (s *Service) SetEmbedder(e BatchEmbedder) { s.rh.SetEmbedder(e) }
+func (s *Service) SetEmbedder(e model.BatchEmbedder) { s.rh.SetEmbedder(e) }
 
 // Pipeline returns the PipelineIndex for pipeline session management.
 func (s *Service) Pipeline() PipelineIndex { return s.pi }

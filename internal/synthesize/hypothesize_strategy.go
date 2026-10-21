@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
@@ -100,7 +102,7 @@ func (hypothesizeStrategy) AcceptSeed(f fact.Fact) bool {
 //
 // branch comes off sess, never off d.RI: the session is already bound to the
 // branch it was created against.
-func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSession, seeds []fact.Fact) error {
+func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSession, seeds []fact.Fact) error {
 	branch := sess.Branch
 
 	for i, f := range seeds {
@@ -108,7 +110,7 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *store.Pipelin
 		if err != nil {
 			return wrapf(hypothesizeTool, err, "marshal synthesis fact %d", i)
 		}
-		item := store.PipelineWorkItem{
+		item := model.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "hypothesize",
 			ClusterKey: fmt.Sprintf("synth-%d", i),
@@ -170,7 +172,7 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *store.Pipelin
 // and is otherwise inert — nothing ever enqueues an item during the reflect
 // phase, so handlePhase("reflect","done") finds an empty queue and falls
 // straight through to completion.
-func (hypothesizeStrategy) OnPhaseAdvance(context.Context, Deps, *store.PipelineSession, string, string) error {
+func (hypothesizeStrategy) OnPhaseAdvance(context.Context, Deps, *model.PipelineSession, string, string) error {
 	return nil
 }
 
@@ -267,7 +269,7 @@ func enqueueBackwardBridgeItems(ctx context.Context, d Deps, sessionID string, s
 		// WITHIN the discover band while guaranteeing every discover item stays
 		// strictly negative — a large BlastRadius can no longer flip the priority
 		// positive and leapfrog the standard items (the old -100+rank bug).
-		if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID:  sessionID,
 			StepType:   "discover",
 			ClusterKey: fmt.Sprintf("discover-bwd-%d", i),
@@ -303,7 +305,7 @@ type hypothesizeDecision struct {
 // agent does its work through other tools (knomit_learn) and the item is a pure
 // acknowledgement that it has moved on. An empty answer is therefore legitimate
 // and normalizes to the acknowledgement placeholder rather than being rejected.
-func (hypothesizeStrategy) Decode(item *store.PipelineWorkItem, response string) (any, string, error) {
+func (hypothesizeStrategy) Decode(item *model.PipelineWorkItem, response string) (any, string, error) {
 	normalized := response
 	if normalized == "" {
 		normalized = acknowledgedResponse
@@ -337,7 +339,7 @@ func (hypothesizeStrategy) Decode(item *store.PipelineWorkItem, response string)
 // The per-fact "hypothesize" step mutates nothing: any hypothesis the agent
 // decided to write it wrote itself through knomit_learn, outside this session.
 // Only the discover step has anything to apply.
-func (hypothesizeStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem, decision any) error {
+func (hypothesizeStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error {
 	dec, ok := decision.(*hypothesizeDecision)
 	if !ok {
 		return errf(hypothesizeTool, "apply: unexpected decision type %T", decision)
@@ -357,7 +359,7 @@ func (hypothesizeStrategy) Apply(ctx context.Context, d Deps, sess *store.Pipeli
 // Neither step type carries a response schema: a hypothesize item is answered
 // with a bare acknowledgement, and the discover prompt embeds its own output
 // contract.
-func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) (*WorkItemView, error) {
+func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error) {
 	branch := sess.Branch
 
 	switch item.StepType {

@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/rs/zerolog/log"
-
-	"knomit/internal/store"
 )
 
 // Blind definition authoring (blueprint §3.2): one glossary sentence per motif
@@ -226,7 +226,7 @@ type motifDefineHealth struct {
 	Offered int
 }
 
-func recordMotifDefineHealth(sess *store.PipelineSession, h motifDefineHealth) {
+func recordMotifDefineHealth(sess *model.PipelineSession, h motifDefineHealth) {
 	if sess == nil {
 		return
 	}
@@ -242,7 +242,7 @@ func recordMotifDefineHealth(sess *store.PipelineSession, h motifDefineHealth) {
 }
 
 // planMotifDefineWork enqueues at most one definition item per session.
-func planMotifDefineWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) error {
+func planMotifDefineWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) error {
 	targets, err := d.Motifs.ClustersNeedingDefinition(ctx, branch)
 	if err != nil {
 		return nil // an addition to review; degrade rather than fail the session
@@ -279,7 +279,7 @@ func planMotifDefineWork(ctx context.Context, d Deps, sess *store.PipelineSessio
 	if err != nil {
 		return wrapf(reviewTool, err, "motif define: marshal names")
 	}
-	return d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   motifDefineStepType,
 		ClusterKey: "motif-define",

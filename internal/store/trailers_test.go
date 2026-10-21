@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -36,8 +38,8 @@ func trailerStore(t *testing.T) *Service {
 func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 	svc := trailerStore(t)
 	ctx := context.Background()
-	set := Trailers{Trace: "t-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"}
-	stamped := WithTrailers(ctx, set)
+	set := model.Trailers{Trace: "t-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"}
+	stamped := model.WithTrailers(ctx, set)
 	want := "\n\nKnomit-Trace: t-1\nKnomit-Cause: " + strings.Repeat("c", 40) + "\nKnomit-Trigger: inbox\n"
 
 	// Site 1: WriteFact → writeFileExact.
@@ -49,7 +51,7 @@ func TestWithTrailers_StampedAtThreeSitesInsideTheSignature(t *testing.T) {
 		return info.Message
 	}
 	require.Equal(t, "learn: a"+want, msgOf(r.CommitHash))
-	require.Equal(t, "inbox", TrailerValue(msgOf(r.CommitHash), TrailerTrigger))
+	require.Equal(t, "inbox", model.TrailerValue(msgOf(r.CommitHash), model.TrailerTrigger))
 
 	// Site 3: BatchWriteFacts → batchWriteLocked.
 	bh, _, err := svc.Facts().BatchWriteFacts(stamped, "agent/test", map[string]string{"kb/t/b.md": trailerFactBody}, nil, "learn: b", "learn")
@@ -90,9 +92,9 @@ func TestWithAgentTrace_RefusesOverKnomitsSet(t *testing.T) {
 	svc := trailerStore(t)
 	ctx := context.Background()
 	run := "run-" + strings.Repeat("d", 32)
-	agent := Trailers{Trace: "task-7", Run: run, Extra: []TrailerEntry{{Key: "Ticket", Value: "ABC-12"}}}
+	agent := model.Trailers{Trace: "task-7", Run: run, Extra: []model.TrailerEntry{{Key: "Ticket", Value: "ABC-12"}}}
 
-	stamped, err := WithAgentTrace(ctx, agent)
+	stamped, err := model.WithAgentTrace(ctx, agent)
 	require.NoError(t, err)
 	r, err := svc.Facts().WriteFact(stamped, "agent/test", "kb/t/a.md", trailerFactBody, "learn: a", "learn")
 	require.NoError(t, err)
@@ -100,20 +102,20 @@ func TestWithAgentTrace_RefusesOverKnomitsSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "learn: a\n\nKnomit-Trace: task-7\nKnomit-Run: "+run+"\nTicket: ABC-12\n", info.Message)
 
-	knomits := Trailers{Trace: "story", Cause: strings.Repeat("c", 40), Trigger: "inbox"}
-	host := WithTrailers(ctx, knomits)
-	got, err := WithAgentTrace(host, agent)
-	require.ErrorIs(t, err, ErrTraceOverride)
-	require.Equal(t, knomits, vcs.TrailersFromContext(got), "knomit's set is untouched")
-	_, err = WithAgentTrace(host, Trailers{})
-	require.ErrorIs(t, err, ErrTraceOverride, "a passed trace is refused on a host write even when empty")
+	knomits := model.Trailers{Trace: "story", Cause: strings.Repeat("c", 40), Trigger: "inbox"}
+	host := model.WithTrailers(ctx, knomits)
+	got, err := model.WithAgentTrace(host, agent)
+	require.ErrorIs(t, err, model.ErrTraceOverride)
+	require.Equal(t, knomits, model.TrailersFromContext(got), "knomit's set is untouched")
+	_, err = model.WithAgentTrace(host, model.Trailers{})
+	require.ErrorIs(t, err, model.ErrTraceOverride, "a passed trace is refused on a host write even when empty")
 
-	_, err = WithAgentTrace(ctx, Trailers{Trigger: "wake"})
-	require.ErrorIs(t, err, ErrTraceTrigger)
+	_, err = model.WithAgentTrace(ctx, model.Trailers{Trigger: "wake"})
+	require.ErrorIs(t, err, model.ErrTraceTrigger)
 
-	plain, err := WithAgentTrace(ctx, Trailers{})
+	plain, err := model.WithAgentTrace(ctx, model.Trailers{})
 	require.NoError(t, err)
-	require.True(t, vcs.TrailersFromContext(plain).IsZero())
+	require.True(t, model.TrailersFromContext(plain).IsZero())
 	set := vcs.HasTrailersForTest(plain)
 	require.False(t, set, "a zero agent set attaches nothing")
 }

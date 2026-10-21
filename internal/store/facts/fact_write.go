@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"knomit/internal/store/model"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -174,7 +176,7 @@ func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, mess
 	}
 	// The causal-trace trailers (F07): stamped here, on the message the
 	// builder signs, when the caller's ctx carries a set; nothing otherwise.
-	message = vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx))
+	message = model.AppendTrailers(message, model.TrailersFromContext(ctx))
 	newCommitHash, newBlobHash, err := vcs.WriteFileToStore(fi.rh.vr.Storer(), signer, headHash, path, content, message, author, committer)
 	if err != nil {
 		return "", "", err
@@ -228,13 +230,13 @@ func (fi *Index) deleteFile(ctx context.Context, branch, path, message, operatio
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		// Wrapped as vcs.ErrPathNotFound — the same sentinel ReadFileWithHash
+		// Wrapped as model.ErrPathNotFound — the same sentinel ReadFileWithHash
 		// wraps for a missing read — so a caller one layer up (the REST
 		// DELETE handler) can tell "nothing there" from a real backend
 		// failure and answer 404, exactly as a GET of the same missing path
 		// already does, instead of a bare error string that falls through
 		// writeStoreError's default 500.
-		return "", fmt.Errorf("DeleteFile: %q: %w", path, vcs.ErrPathNotFound)
+		return "", fmt.Errorf("DeleteFile: %q: %w", path, model.ErrPathNotFound)
 	}
 
 	signer, err := fi.rh.vr.CommitSigner()
@@ -245,7 +247,7 @@ func (fi *Index) deleteFile(ctx context.Context, branch, path, message, operatio
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: %w", err)
 	}
-	message = vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx)) // see writeFileExact
+	message = model.AppendTrailers(message, model.TrailersFromContext(ctx)) // see writeFileExact
 	newCommitHash, err := vcs.DeleteFileFromStore(fi.rh.vr.Storer(), signer, headHash, path, message, author, committer)
 	if err != nil {
 		return "", err
@@ -485,7 +487,7 @@ func (fi *Index) batchWriteLocked(ctx context.Context, branch string, files map[
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
-		Message:   vcs.AppendTrailers(message, vcs.TrailersFromContext(ctx)), // see writeFileExact
+		Message:   model.AppendTrailers(message, model.TrailersFromContext(ctx)), // see writeFileExact
 		TreeHash:  currentRootHash,
 	}
 	if parentHash != plumbing.ZeroHash {

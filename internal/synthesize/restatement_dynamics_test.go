@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/store"
 )
 
 // Multi-session dynamics.
@@ -236,7 +236,7 @@ func TestDynamics_DecliningSessionsKeepOfferingNewPairs(t *testing.T) {
 
 type sessionOutcome struct {
 	sessionID        string
-	restatementItems []store.PipelineWorkItem
+	restatementItems []model.PipelineWorkItem
 	health           []string
 }
 

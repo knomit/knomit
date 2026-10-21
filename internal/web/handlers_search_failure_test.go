@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"knomit/internal/embeddings/params"
@@ -96,7 +98,7 @@ func realRepo(t *testing.T, emb failEmb) (*repos.RepoInstance, *store.Service) {
 // behaviour on a store failure is what is under test (not a stub's).
 type storeBackedProvider struct{ svc *store.Service }
 
-func (p storeBackedProvider) Search(ctx context.Context, _ *repos.RepoInstance, _ store.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
+func (p storeBackedProvider) Search(ctx context.Context, _ *repos.RepoInstance, _ model.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
 	return p.svc.FactQuery().Search(ctx, "agent/test", q)
 }
 
@@ -165,7 +167,7 @@ func TestLensSearchAndFacts_EmbedFailureFailsOnceUpFront(t *testing.T) {
 // back empty.
 type diagSearchProvider struct{ d index.SearchDiag }
 
-func (p diagSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
+func (p diagSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ model.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
 	if q.Diag != nil {
 		*q.Diag = p.d
 	}

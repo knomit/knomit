@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
 )
 
@@ -17,18 +18,18 @@ import (
 // one. Sabotage: AppendTrailers instead (red: the record is no longer the
 // last paragraph, TrailerValues reads nothing).
 func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
-	tr := Trailers{Trace: "task-1", Run: "run-" + "0123456789abcdef0123456789abcdef"}
+	tr := model.Trailers{Trace: "task-1", Run: "run-" + "0123456789abcdef0123456789abcdef"}
 	withRecord := merge.AppendTrailerLines("merge: exp/x into agent/a (refuse)", []string{merge.TrailerMerge + ": kb/a.md src", merge.TrailerMerge + ": kb/b.md dst"})
-	got := vcs.AppendTrailersToParagraph(withRecord, tr)
+	got := model.AppendTrailersToParagraph(withRecord, tr)
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\n"+
 		"Knomit-Merge: kb/a.md src\nKnomit-Merge: kb/b.md dst\n"+
 		"Knomit-Trace: task-1\nKnomit-Run: run-0123456789abcdef0123456789abcdef\n", got)
 	require.Len(t, merge.TrailerValues(got, merge.TrailerMerge), 2, "the record is still read")
-	require.Equal(t, "task-1", TrailerValue(got, TrailerTrace))
+	require.Equal(t, "task-1", model.TrailerValue(got, model.TrailerTrace))
 
-	plain := vcs.AppendTrailersToParagraph("merge: exp/x into agent/a (refuse)", tr)
+	plain := model.AppendTrailersToParagraph("merge: exp/x into agent/a (refuse)", tr)
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\nKnomit-Trace: task-1\nKnomit-Run: run-0123456789abcdef0123456789abcdef\n", plain)
-	require.Equal(t, "merge: m", vcs.AppendTrailersToParagraph("merge: m", Trailers{}), "no set: unchanged")
+	require.Equal(t, "merge: m", model.AppendTrailersToParagraph("merge: m", model.Trailers{}), "no set: unchanged")
 }
 
 // Only an experiment's OWN merge reads the ctx trace: a plain merge
@@ -38,7 +39,7 @@ func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
 // merge (red: the plain merge is stamped).
 func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	svc := newExperimentTestStore(t)
-	ctx, err := WithAgentTrace(context.Background(), Trailers{Trace: "task-2"})
+	ctx, err := model.WithAgentTrace(context.Background(), model.Trailers{Trace: "task-2"})
 	require.NoError(t, err)
 	msgOf := func(branch string) string {
 		h, err := svc.Branches().HeadCommit(ctx, branch)
@@ -55,7 +56,7 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	require.NoError(t, svc.rh.MergeBranch(ctx, "agent/peer", testAgentBranch, merge.StrategyLocalWins))
 	plain := msgOf(testAgentBranch)
 	require.Contains(t, plain, "merge: agent/peer into", "fixture: a merge commit was written")
-	require.Empty(t, TrailerValue(plain, TrailerTrace), "a transport merge is never stamped: %q", plain)
+	require.Empty(t, model.TrailerValue(plain, model.TrailerTrace), "a transport merge is never stamped: %q", plain)
 
 	// The experiment's own merge, under the same ctx.
 	_, err = svc.Merge().OpenExperiment(context.Background(), "own", "", testAgentBranch)
@@ -65,5 +66,5 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	res, err := svc.Merge().CommitExperiment(ctx, "own", nil)
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Mode)
-	require.Equal(t, "task-2", TrailerValue(msgOf(testAgentBranch), TrailerTrace))
+	require.Equal(t, "task-2", model.TrailerValue(msgOf(testAgentBranch), model.TrailerTrace))
 }

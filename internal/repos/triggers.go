@@ -58,6 +58,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/verify"
 
 	"github.com/dop251/goja"
@@ -1167,9 +1169,9 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 	if info, err := cr.tr.CommitInfo(ctx, commit); err == nil {
 		m.ok = true
 		m.id = info.AuthorName
-		m.trace = store.TrailerValue(info.Message, store.TrailerTrace)
-		m.cause = store.TrailerValue(info.Message, store.TrailerCause)
-		m.trigger = store.TrailerValue(info.Message, store.TrailerTrigger)
+		m.trace = model.TrailerValue(info.Message, model.TrailerTrace)
+		m.cause = model.TrailerValue(info.Message, model.TrailerCause)
+		m.trigger = model.TrailerValue(info.Message, model.TrailerTrigger)
 		m.kind = "human"
 		switch {
 		case strings.HasSuffix(info.AuthorEmail, "@agents.knomit.io"):
@@ -1451,9 +1453,9 @@ func nameStates(set *fact.TriggerSet) map[string]string {
 
 func episodeOf(change string) string {
 	switch change {
-	case store.ChangeAdded:
+	case model.ChangeAdded:
 		return fact.TriggerOnLearn
-	case store.ChangeDeleted:
+	case model.ChangeDeleted:
 		return fact.TriggerOnRetract
 	default:
 		return fact.TriggerOnUpdate

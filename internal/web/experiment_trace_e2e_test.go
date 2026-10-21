@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/repos"
@@ -59,7 +61,7 @@ func TestExperimentTrace_E2E_StampsItsMergesOnly(t *testing.T) {
 	require.False(t, isErr, text)
 	require.Equal(t, before, headIn(t, m, "jobA-repo", "exp/traced"), "open makes no commit")
 	_, factHash := learnTraced(t, call, handle, "Experiment fact", tr, "")
-	require.Equal(t, "task-9", store.TrailerValue(commitMessageIn(t, m, "jobA-repo", factHash), store.TrailerTrace),
+	require.Equal(t, "task-9", model.TrailerValue(commitMessageIn(t, m, "jobA-repo", factHash), model.TrailerTrace),
 		"fixture: the fact commit carries its own write's trace")
 
 	writeAgentSide(t, m, "jobA-repo", "kb/architecture/side/one.md")
@@ -74,8 +76,8 @@ func TestExperimentTrace_E2E_StampsItsMergesOnly(t *testing.T) {
 	require.False(t, isErr, text)
 	commitMsg := commitMessageIn(t, m, "jobA-repo", headIn(t, m, "jobA-repo", agent))
 	require.True(t, strings.HasPrefix(commitMsg, "merge: exp/traced into "+agent), "fixture: commit wrote a merge commit: %q", commitMsg)
-	require.Equal(t, "task-9", store.TrailerValue(commitMsg, store.TrailerTrace))
-	require.Equal(t, e2eRun, store.TrailerValue(commitMsg, store.TrailerRun))
+	require.Equal(t, "task-9", model.TrailerValue(commitMsg, model.TrailerTrace))
+	require.Equal(t, e2eRun, model.TrailerValue(commitMsg, model.TrailerRun))
 
 	// Fast-forward: no new commit, so nothing new to stamp.
 	_, text, isErr = callExperiment(t, h, unscopedMount, sid, fmt.Sprintf(`{"binding":%q,"action":"open","name":"ff"%s}`, handle, traceJSON(tr)))

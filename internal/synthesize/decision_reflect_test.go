@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -270,7 +272,7 @@ func TestApplyReflect_AcceptsAllEmpty(t *testing.T) {
 
 // newReflectTestEnv stands up a fresh on-disk Service with one repo and a
 // pipeline session ready for reflect-application tests.
-func newReflectTestEnv(t *testing.T) (*store.Service, *store.PipelineSession) {
+func newReflectTestEnv(t *testing.T) (*store.Service, *model.PipelineSession) {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))

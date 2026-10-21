@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
@@ -126,7 +128,7 @@ func (ri *Index) AdmitPeerBranch(ctx context.Context, branch, own string, tip pl
 func (ri *Index) MainHistory(ctx context.Context) (*MainHistory, error) {
 	upstream := ri.UpstreamBranch()
 	if upstream == "" {
-		return nil, fmt.Errorf("MainHistory: %w", vcs.ErrNoConsensusBranch)
+		return nil, fmt.Errorf("MainHistory: %w", model.ErrNoConsensusBranch)
 	}
 	return ri.readMainHistory(ctx, upstream)
 }
@@ -165,7 +167,7 @@ func (ri *Index) readMainHistory(ctx context.Context, upstream string) (*MainHis
 func (ri *Index) JudgePeerBranch(ctx context.Context, branch, own string, tip plumbing.Hash, main *MainHistory) (string, error) {
 	upstream := ri.UpstreamBranch()
 	if upstream == "" {
-		return "", fmt.Errorf("JudgePeerBranch: %w", vcs.ErrNoConsensusBranch)
+		return "", fmt.Errorf("JudgePeerBranch: %w", model.ErrNoConsensusBranch)
 	}
 	rh := ri.rh
 	switch {

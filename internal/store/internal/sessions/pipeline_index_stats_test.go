@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,16 +28,16 @@ func TestAddPipelineSessionStats_Accumulates(t *testing.T) {
 
 	got, err := pi.GetPipelineSession(ctx, sess.ID)
 	require.NoError(t, err)
-	require.Equal(t, PipelineSessionStats{}, got.Stats, "a new session starts at zero")
+	require.Equal(t, model.PipelineSessionStats{}, got.Stats, "a new session starts at zero")
 
 	require.NoError(t, pi.AddPipelineSessionStats(ctx, sess.ID,
-		PipelineSessionStats{Pruned: 2, Merged: 1}))
+		model.PipelineSessionStats{Pruned: 2, Merged: 1}))
 	require.NoError(t, pi.AddPipelineSessionStats(ctx, sess.ID,
-		PipelineSessionStats{Updated: 3, Synthesized: 4, Pruned: 1}))
+		model.PipelineSessionStats{Updated: 3, Synthesized: 4, Pruned: 1}))
 
 	got, err = pi.GetPipelineSession(ctx, sess.ID)
 	require.NoError(t, err)
-	require.Equal(t, PipelineSessionStats{Pruned: 3, Merged: 1, Updated: 3, Synthesized: 4},
+	require.Equal(t, model.PipelineSessionStats{Pruned: 3, Merged: 1, Updated: 3, Synthesized: 4},
 		got.Stats, "each call must add its delta to the running total")
 }
 
@@ -57,7 +59,7 @@ func TestAddPipelineSessionStats_ConcurrentAddsAllLand(t *testing.T) {
 	for i := range callers {
 		go func() {
 			defer wg.Done()
-			errs[i] = pi.AddPipelineSessionStats(ctx, sess.ID, PipelineSessionStats{Synthesized: 1})
+			errs[i] = pi.AddPipelineSessionStats(ctx, sess.ID, model.PipelineSessionStats{Synthesized: 1})
 		}()
 	}
 	wg.Wait()

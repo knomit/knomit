@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -175,8 +177,8 @@ func TestHypothesizeRender_GuidanceBetweenMethodologyAndWorkflow(t *testing.T) {
 	for _, branch := range []string{"agent/test", "exp/some-experiment"} {
 		synth, _ := json.Marshal(map[string]any{"path": "kb/forecast/x/a.md", "title": "S", "type": "synthesis"})
 		v, err := hypothesizeStrategy{}.Render(ctx, Deps{RI: ri},
-			&store.PipelineSession{ID: "s", Branch: branch},
-			&store.PipelineWorkItem{StepType: "hypothesize", FactsJSON: string(synth)})
+			&model.PipelineSession{ID: "s", Branch: branch},
+			&model.PipelineWorkItem{StepType: "hypothesize", FactsJSON: string(synth)})
 		require.NoError(t, err)
 		p := v.Prompt
 		require.True(t, strings.HasPrefix(p, "REPOSITORY GUIDANCE (ontology at main@"), p)
@@ -190,8 +192,8 @@ func TestHypothesizeRender_GuidanceBetweenMethodologyAndWorkflow(t *testing.T) {
 		// prompt is exactly the pre-F23 one.
 		synth, _ = json.Marshal(map[string]any{"path": "kb/ops/a.md", "title": "S", "type": "synthesis"})
 		v, err = hypothesizeStrategy{}.Render(ctx, Deps{RI: ri},
-			&store.PipelineSession{ID: "s", Branch: branch},
-			&store.PipelineWorkItem{StepType: "hypothesize", FactsJSON: string(synth)})
+			&model.PipelineSession{ID: "s", Branch: branch},
+			&model.PipelineWorkItem{StepType: "hypothesize", FactsJSON: string(synth)})
 		require.NoError(t, err)
 		require.Equal(t, hypothesizeWorkflowPlain, v.Prompt)
 	}
@@ -219,9 +221,9 @@ func TestReviewRender_GuidanceBeforeFactData(t *testing.T) {
 	transitions, _ := json.Marshal([]hypothesisTransition{
 		{Path: "kb/forecast/h.md", OriginalType: "hypothesis", Action: "promoted", Detail: "TRANSITION-DETAIL"},
 	})
-	sess := &store.PipelineSession{ID: "s", Branch: "agent/test"}
+	sess := &model.PipelineSession{ID: "s", Branch: "agent/test"}
 	for step, payload := range map[string]string{"prune": string(factsJSON), "distill": string(factsJSON), "reflect": string(transitions)} {
-		v, err := reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &store.PipelineWorkItem{StepType: step, FactsJSON: payload, ClusterKey: "distill-c0-0"})
+		v, err := reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: step, FactsJSON: payload, ClusterKey: "distill-c0-0"})
 		require.NoError(t, err, step)
 		p := v.Prompt
 		h := strings.Index(p, "REPOSITORY GUIDANCE (ontology at main@")
@@ -244,10 +246,10 @@ func TestReviewRender_GuidanceBeforeFactData(t *testing.T) {
 	}
 
 	// Motif and discover steps get no guidance.
-	v, err := reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &store.PipelineWorkItem{StepType: motifAliasStepType, FactsJSON: "[]"})
+	v, err := reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: motifAliasStepType, FactsJSON: "[]"})
 	require.NoError(t, err)
 	require.NotContains(t, v.Prompt, "REPOSITORY GUIDANCE")
-	v, err = reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &store.PipelineWorkItem{StepType: "discover", FactsJSON: "{}"})
+	v, err = reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: "discover", FactsJSON: "{}"})
 	require.NoError(t, err)
 	require.NotContains(t, v.Prompt, "REPOSITORY GUIDANCE")
 }

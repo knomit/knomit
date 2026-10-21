@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/fsck"
 
 	"golang.org/x/crypto/ssh"
@@ -39,12 +41,12 @@ func openRepo(t *testing.T) *store.Service {
 const factBody = "---\ntype: observation\nconfidence: 0.9\ndomain: [test]\n---\n# t\n\nbody\n"
 
 // TestNoSigner_AuthoredWritesAreRefused: every authored write path refuses
-// with store.ErrNoSigner instead of committing unsigned (F09 PR 2).
+// with model.ErrNoSigner instead of committing unsigned (F09 PR 2).
 func TestNoSigner_AuthoredWritesAreRefused(t *testing.T) {
 	svc := openRepo(t)
 	ctx := context.Background()
 	_, err := svc.Facts().WriteFact(ctx, "agent/test-deadbeef", "kb/notes/a.md", factBody, "learn: a", "created")
-	if !errors.Is(err, store.ErrNoSigner) {
+	if !errors.Is(err, model.ErrNoSigner) {
 		t.Fatalf("WriteFact without a signer: got %v, want ErrNoSigner", err)
 	}
 }
@@ -81,7 +83,7 @@ func TestNoSigner_RefusalLeavesNoObjects(t *testing.T) {
 			return err
 		},
 	} {
-		if err := write(); !errors.Is(err, store.ErrNoSigner) {
+		if err := write(); !errors.Is(err, model.ErrNoSigner) {
 			t.Fatalf("write %d: got %v, want ErrNoSigner", i, err)
 		}
 	}
@@ -152,10 +154,10 @@ func TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects(t *testing.T) {
 	}
 
 	svc.SetSigner(nil)
-	if _, err := svc.Facts().DeleteFact(ctx, agent, "kb/notes/a.md", "retract: a"); !errors.Is(err, store.ErrNoSigner) {
+	if _, err := svc.Facts().DeleteFact(ctx, agent, "kb/notes/a.md", "retract: a"); !errors.Is(err, model.ErrNoSigner) {
 		t.Fatalf("delete without a signer: got %v, want ErrNoSigner", err)
 	}
-	if _, err := svc.Merge().CommitExperiment(ctx, "diverge", nil); !errors.Is(err, store.ErrNoSigner) {
+	if _, err := svc.Merge().CommitExperiment(ctx, "diverge", nil); !errors.Is(err, model.ErrNoSigner) {
 		t.Fatalf("a non-fast-forward merge without a signer: got %v, want ErrNoSigner", err)
 	}
 	rep, err := svc.Verify(ctx, fsck.VerifyOpts{})

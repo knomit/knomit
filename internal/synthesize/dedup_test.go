@@ -64,7 +64,7 @@ func captureSearchCtx(t *testing.T) (*index.Facade, *ctxCapture) {
 }
 
 // TestDedupCluster_NoEmbedderDependency regresses the optimization where
-// dedupCluster used to take an `embedders ...store.Embedder` variadic and
+// dedupCluster used to take an `embedders ...model.Embedder` variadic and
 // run ONNX inference on every cluster member's title+body — even though
 // each fact already has a 768-dim vector in facts_vec. The function now
 // resolves vectors via SearchOptions.QueryByPath (a SQL subquery in the

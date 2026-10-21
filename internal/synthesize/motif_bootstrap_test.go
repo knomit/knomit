@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 // FROM NOTHING (roadmap lesson 7).
@@ -146,8 +146,8 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 }
 
 // pipelineSessionFor rebuilds the session record Render needs.
-func pipelineSessionFor(env *restatementEnv, id string) store.PipelineSession {
-	return store.PipelineSession{ID: id, Branch: env.branch}
+func pipelineSessionFor(env *restatementEnv, id string) model.PipelineSession {
+	return model.PipelineSession{ID: id, Branch: env.branch}
 }
 
 // What the ENGINE SERVES, not what Render returns.

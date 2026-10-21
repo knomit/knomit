@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/verify"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -140,7 +142,7 @@ func runVerifyAccept(cmd *cobra.Command, args []string, repoName, note string, l
 // checkout's origin names as its default (refs/remotes/origin/HEAD, which
 // `git clone` sets and `git remote set-head origin --auto` sets in a CI
 // checkout), as origin/<branch>. It is refused when origin/HEAD is not set or
-// names an agent, experiment or generated branch (store.IsRoleBranch): the
+// names an agent, experiment or generated branch (model.IsRoleBranch): the
 // gate must never check a candidate against a guessed upstream.
 func originHeadUpstream(dir string) (string, error) {
 	repo, err := gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{DetectDotGit: true})
@@ -157,7 +159,7 @@ func originHeadUpstream(dir string) (string, error) {
 		return "", fmt.Errorf("--upstream not given and origin/HEAD points outside origin (%s): pass --upstream", target)
 	}
 	branch := strings.TrimPrefix(target, prefix)
-	if store.IsRoleBranch(branch) {
+	if model.IsRoleBranch(branch) {
 		return "", fmt.Errorf("--upstream not given and origin/HEAD names %q, which is not a consensus branch: pass --upstream", branch)
 	}
 	return "origin/" + branch, nil

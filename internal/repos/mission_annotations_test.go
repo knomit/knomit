@@ -10,11 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/testsupport/playbooks"
 )
@@ -314,14 +315,14 @@ topics:
 	svc := target.svc(t)
 	_, err = svc.Merge().OpenExperiment(context.Background(), "fold-1", "", mHostAgent)
 	require.NoError(t, err)
-	inExp := &missionNode{name: "T-exp", m: h.m, ri: kbRI, branch: store.ExperimentBranch("fold-1"), tools: h.tools}
+	inExp := &missionNode{name: "T-exp", m: h.m, ri: kbRI, branch: model.ExperimentBranch("fold-1"), tools: h.tools}
 	_, isErr, text = inExp.call(t, "update", map[string]any{"file": hyp, "moment_name": "fold: xcheck-h xcheck-p", "trace": traceOf("fold-1"),
 		"updates": map[string]any{"confidence": 0.5}, "ops": []any{map[string]any{"op": "append", "text": "Cross-checked: one corroboration, one contradiction."}}})
 	require.False(t, isErr, text)
 	require.Equal(t, before[mHostAgent], tips(t, target)[mHostAgent], "fixture: the fold's work waits in its experiment")
 	// The commit carries the fold's trace too, as the skill's call does.
-	ctx, err := store.WithAgentTrace(context.Background(), store.Trailers{Trace: "kb", Run: run,
-		Extra: []store.TrailerEntry{{Key: "Mission-Task", Value: "fold-1"}}})
+	ctx, err := model.WithAgentTrace(context.Background(), model.Trailers{Trace: "kb", Run: run,
+		Extra: []model.TrailerEntry{{Key: "Mission-Task", Value: "fold-1"}}})
 	require.NoError(t, err)
 	_, err = svc.Merge().CommitExperiment(ctx, "fold-1", nil)
 	require.NoError(t, err)
@@ -331,8 +332,8 @@ topics:
 	added := newCommits(t, target, before[mHostAgent], after[mHostAgent])
 	require.NotEmpty(t, added)
 	for _, c := range added {
-		require.Equal(t, "fold-1", store.TrailerValue(c.Message, "Mission-Task"), "only the fold wrote the target: %q", c.Message)
-		require.Equal(t, "kb", store.TrailerValue(c.Message, store.TrailerTrace), "stamped with the mission: %q", c.Message)
+		require.Equal(t, "fold-1", model.TrailerValue(c.Message, "Mission-Task"), "only the fold wrote the target: %q", c.Message)
+		require.Equal(t, "kb", model.TrailerValue(c.Message, model.TrailerTrace), "stamped with the mission: %q", c.Message)
 	}
 
 	// History: the hypothesis's earlier revision and the fold's change.

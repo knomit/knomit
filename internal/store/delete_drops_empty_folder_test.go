@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/fsck"
+	"knomit/internal/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -92,7 +93,7 @@ func TestDelete_SameLastFactTwice(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.Facts().DeleteFact(ctx, "main", "kb/x/y/only.md", "again")
-	require.ErrorIs(t, err, ErrPathNotFound, "DeleteFact keeps its own existence check, wrapped as ErrPathNotFound (F25 follow-up) so a REST DELETE of a missing path can answer 404 instead of 500")
+	require.ErrorIs(t, err, model.ErrPathNotFound, "DeleteFact keeps its own existence check, wrapped as ErrPathNotFound (F25 follow-up) so a REST DELETE of a missing path can answer 404 instead of 500")
 	after, err := svc.Branches().HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, head, after, "a refused DeleteFact writes nothing")

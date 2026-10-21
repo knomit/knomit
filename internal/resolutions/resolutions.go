@@ -38,6 +38,8 @@ import (
 	"slices"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
@@ -182,7 +184,7 @@ func normalizeOne(
 // versions carried is not existence-checked again, the same way knomit_update
 // never re-checks a ref the fact already had (historical-not-current).
 //
-// A version that does not exist (store.ErrPathNotFound) contributes nothing —
+// A version that does not exist (model.ErrPathNotFound) contributes nothing —
 // a path added on one side only, or not yet present at the fork. Any OTHER
 // read error fails the resolution rather than shrinking prior: a smaller prior
 // would refuse refs the fact legitimately carries and blame the resolver.
@@ -201,7 +203,7 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 			opts   *facts.ReadFactOpts
 		}
 		var versions []version
-		if name, ok := strings.CutPrefix(experiment, store.ExperimentPrefix); ok {
+		if name, ok := strings.CutPrefix(experiment, model.ExperimentPrefix); ok {
 			exp, found, err := svc.Branches().GetExperiment(ctx, name)
 			if err != nil {
 				outErr = fmt.Errorf("resolution for %q: read experiment: %w", file, err)
@@ -218,7 +220,7 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 		}
 		for _, v := range versions {
 			res, err := svc.Facts().ReadFact(ctx, v.branch, file, v.opts)
-			if errors.Is(err, store.ErrPathNotFound) {
+			if errors.Is(err, model.ErrPathNotFound) {
 				continue
 			}
 			if err != nil {

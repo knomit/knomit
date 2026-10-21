@@ -4,6 +4,8 @@ package mcp
 import (
 	"context"
 
+	"knomit/internal/store/model"
+
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
@@ -11,7 +13,6 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/platform/reqinfo"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // NewServer creates the single knomit MCP server instance. Tools are shared
@@ -28,14 +29,14 @@ import (
 // Review clustering runs in-process over the per-review subgraph via the
 // per-repo index.GraphStore (SubgraphEdges) — no cluster cache or background
 // warmer is involved.
-func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...store.BatchEmbedder) *server.MCPServer {
+func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...model.BatchEmbedder) *server.MCPServer {
 	return newServer(nil, defaultOntologyRoot, mgr, readOnly, grants, embedders...)
 }
 
 // newServer is NewServer with extra mcp-go options appended after knomit's
 // own. Only tests pass any: a pagination limit, so the prompt layer's
 // cursor-clearing is falsifiable (knomit itself configures none).
-func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...store.BatchEmbedder) *server.MCPServer {
+func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...model.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	// Skills (F08 PR C): ONE source, so the prompts and knomit_skill share
 	// the parse cache and the WARN-once record.
@@ -164,13 +165,13 @@ type toolReg struct {
 }
 
 // toolRegistrations is the full catalog in registration order.
-func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
+func toolRegistrations(mgr *repos.Manager, embedders ...model.BatchEmbedder) []toolReg {
 	return toolRegistrationsWith(newSkillSource(), mgr, embedders...)
 }
 
 // toolRegistrationsWith is toolRegistrations over a given skill source, the
 // one the server's prompt layer shares.
-func toolRegistrationsWith(skills *skillSource, mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
+func toolRegistrationsWith(skills *skillSource, mgr *repos.Manager, embedders ...model.BatchEmbedder) []toolReg {
 	return []toolReg{
 		{learnTool(), LearnHandler(embedders...), true, gateRequired},
 		{queryTool(), QueryHandler(embedders...), false, gateRequired},

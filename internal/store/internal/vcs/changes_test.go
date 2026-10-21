@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +30,7 @@ func TestNormalizeChangesPrefix(t *testing.T) {
 
 	for _, bad := range []string{"../x", "tasks/../x", "tasks/.drafts", ".knomit/inbox", "tasks//a"} {
 		_, err := NormalizeChangesPrefix("kb", bad)
-		require.ErrorIs(t, err, ErrInvalidPrefix, bad)
+		require.ErrorIs(t, err, model.ErrInvalidPrefix, bad)
 	}
 }
 
@@ -36,42 +38,42 @@ func TestNormalizeChangesPrefix(t *testing.T) {
 // either (or both) was never minted and is refused.
 func TestChangesCursor_ScopeRoundTrips(t *testing.T) {
 	head := "0123456789abcdef0123456789abcdef01234567"
-	scope := ChangesScope{Repo: "aaaaaaaaaaaa", Branch: "exp/x"}
-	q, got, err := DecodeChangesCursor(EncodeChangesCursor(scope, "s", head, "tasks/a", "kb/tasks/a/t1.md"))
+	scope := model.ChangesScope{Repo: "aaaaaaaaaaaa", Branch: "exp/x"}
+	q, got, err := model.DecodeChangesCursor(model.EncodeChangesCursor(scope, "s", head, "tasks/a", "kb/tasks/a/t1.md"))
 	require.NoError(t, err)
 	require.Equal(t, scope, got)
-	require.Equal(t, ChangesQuery{Since: "s", Head: head, Prefix: "tasks/a", After: "kb/tasks/a/t1.md"}, q)
+	require.Equal(t, model.ChangesQuery{Since: "s", Head: head, Prefix: "tasks/a", After: "kb/tasks/a/t1.md"}, q)
 
 	noScope := base64.RawURLEncoding.EncodeToString([]byte(`{"h":"` + head + `","a":"kb/x.md"}`))
-	_, _, err = DecodeChangesCursor(noScope)
-	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+	_, _, err = model.DecodeChangesCursor(noScope)
+	require.ErrorIs(t, err, model.ErrInvalidChangesCursor)
 
 	noRepo := base64.RawURLEncoding.EncodeToString([]byte(`{"b":"main","h":"` + head + `","a":"kb/x.md"}`))
-	_, _, err = DecodeChangesCursor(noRepo)
-	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+	_, _, err = model.DecodeChangesCursor(noRepo)
+	require.ErrorIs(t, err, model.ErrInvalidChangesCursor)
 
 	half := base64.RawURLEncoding.EncodeToString([]byte(`{"r":"aaaaaaaaaaaa","h":"` + head + `","a":"kb/x.md"}`))
-	_, _, err = DecodeChangesCursor(half)
-	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+	_, _, err = model.DecodeChangesCursor(half)
+	require.ErrorIs(t, err, model.ErrInvalidChangesCursor)
 }
 
 // since takes the bookmark form or a bare commit; a malformed repo half is
 // ErrUnknownSince, never an empty page.
 func TestParseChangesSince(t *testing.T) {
 	head := "0123456789abcdef0123456789abcdef01234567"
-	repo, commit, err := ParseChangesSince(ChangesBookmark("AAAAAAAAAAAA", head))
+	repo, commit, err := model.ParseChangesSince(model.ChangesBookmark("AAAAAAAAAAAA", head))
 	require.NoError(t, err)
 	require.Equal(t, "aaaaaaaaaaaa", repo)
 	require.Equal(t, head, commit)
 
-	repo, commit, err = ParseChangesSince(head)
+	repo, commit, err = model.ParseChangesSince(head)
 	require.NoError(t, err)
 	require.Empty(t, repo, "a bare commit names no repo")
 	require.Equal(t, head, commit)
 
 	for _, bad := range []string{"core:" + head, "aaaaaaaaaaaaa:" + head, ":" + head,
 		"aaaaaaaaaaaa:", "aaaaaaaaaaaa:abc", "aaaaaaaaaaaa:" + head + "0", "aaaaaaaaaaaa:" + head[:39] + "z"} {
-		_, _, err = ParseChangesSince(bad)
-		require.ErrorIs(t, err, ErrUnknownSince, bad)
+		_, _, err = model.ParseChangesSince(bad)
+		require.ErrorIs(t, err, model.ErrUnknownSince, bad)
 	}
 }

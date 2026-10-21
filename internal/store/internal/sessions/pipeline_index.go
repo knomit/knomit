@@ -3,118 +3,14 @@ package sessions
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
 	"knomit/internal/store/internal/sqlite"
+	"knomit/internal/store/model"
 )
-
-// PipelineSession represents an active pipeline session for a tool on a branch.
-//
-// Status tracks lifecycle (active|completed|abandoned). Phase tracks
-// workflow position inside an active session: "work" (prune/distill items
-// being processed), "reflect" (single reflect item enqueued/being served),
-// or "done" (all items including reflect answered, ready for completion).
-// Phase is what makes the reviewer stateless across MCP calls — see
-// AdvancePipelineSessionPhase for the CAS guarantee.
-type PipelineSession struct {
-	ID     string
-	Tool   string
-	Branch string
-	Status string // "active", "completed", "abandoned"
-	Phase  string // "work", "reflect", "done"
-	Scoped bool   // true when session was started with a scope filter active
-	Stats  PipelineSessionStats
-	// Health carries corpus-health descriptor lines recorded while planning the
-	// session. IN MEMORY ONLY — it is written and read inside the same
-	// StartSession call, so it is deliberately not a column: nothing needs it
-	// after the turn that produced it.
-	Health []string
-	// Abandoned is the id of the active session this one DISPLACED at creation,
-	// if there was one, and AbandonedCreatedBy is that session's own
-	// correlation handle. IN MEMORY ONLY, like Health, and set by
-	// CreatePipelineSession alone — they describe one moment, not a stored
-	// property of the row.
-	//
-	// Starting a session abandons any active session for the same tool+branch.
-	// That is deliberate (one session per tool per branch) but it was silent on
-	// both sides: the winner did not know it took the slot, and the loser found
-	// out only when its next answer was rejected as "not active" — after it had
-	// composed one (knomit#113 / #121 residue).
-	Abandoned string
-	// AbandonedCreatedBy carries the displaced session's created_by, read in
-	// the same statement that finds it. The id alone tells the winner THAT it
-	// took someone's slot; the handle tells it WHOSE, which is the answer a
-	// resuming caller actually needs and the only one available from state
-	// (knomit#123). Empty when nothing was displaced, and equally when the
-	// displaced session was opened in-process and carried no handle.
-	AbandonedCreatedBy string
-	// CreatedBy is the correlation handle for whoever opened this session —
-	// NOT an identity, NOT authentication. See the column comment in
-	// session_schema.sql: over MCP the value derives from a client-supplied,
-	// server-unverified session id, so it records what the opening call SAID,
-	// not who the caller WAS. Empty for in-process callers (knomit#123).
-	//
-	// Unlike Scoped, this is known at insert time, so it rides the INSERT
-	// rather than a follow-up UPDATE: a crash between two writes would leave
-	// exactly the unattributable row this column exists to prevent.
-	CreatedBy string
-	// StartKey is what a later start must match to resume this session; see
-	// the start_key column. Empty for an in-process start.
-	StartKey string
-	// Planning is set by every create and cleared once its start has planned
-	// the work and rendered the first item (MarkPipelineSessionPlanned).
-	Planning bool
-	// Advancing is set by a won phase advance until its phase hook returns
-	// (FinishPipelineSessionAdvance).
-	Advancing bool
-	CreatedAt string
-	UpdatedAt string
-	// LastUsedAt is the heartbeat the idle reaper and the resume window read:
-	// bumped whenever the session serves a work item.
-	LastUsedAt string
-}
-
-// ErrPipelineSlotChanged is returned by CreatePipelineSessionReplacing when
-// the active session for the tool+branch is not the one the caller decided to
-// replace: another start got there between the caller's read and its write.
-// Nothing was written; the caller re-reads the slot and decides again.
-var ErrPipelineSlotChanged = errors.New("the active pipeline session changed")
-
-// PipelineSessionStats are the running totals of what a session's applied work
-// items actually changed in the corpus.
-//
-// They live on the session row rather than on the engine because the engine is
-// per-call stateless: the MCP handler constructs a fresh Reviewer for every
-// continue call, so counters held on that struct would be discarded between
-// items (see invariants/synthesize/per-call-objects-no-session-state).
-//
-// This is deliberately a store-owned struct rather than synthesize.ReviewStats:
-// store cannot import synthesize (synthesize imports store), and the wire-facing
-// ReviewStats belongs to the tool result, not to the DB row. Callers convert at
-// the boundary — the two shapes are the same four counters by design.
-type PipelineSessionStats struct {
-	Pruned      int
-	Merged      int
-	Updated     int
-	Synthesized int
-}
-
-// PipelineWorkItem represents a single work item within a pipeline session.
-type PipelineWorkItem struct {
-	ID         int64
-	SessionID  string
-	StepType   string // "prune", "distill", "reflect", "hypothesize", etc.
-	ClusterKey string
-	FactsJSON  string
-	Response   *string // nil until answered
-	Priority   float64
-	Depth      int // RAPTOR depth level (0 = initial)
-	CreatedAt  string
-}
 
 // PipelineIndex spans two databases. Watermark methods (durable progress: how
 // far review/hypothesize has processed git history) use the MAIN db (db).
@@ -164,7 +60,7 @@ func (pi *PipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 // it is the request boundary's job (internal/mcp/actor.go), which is the only
 // layer that knows what the claim is made of. Empty is a legitimate value: an
 // in-process caller has no request to attribute to.
-func (pi *PipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error) {
+func (pi *PipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*model.PipelineSession, error) {
 	return pi.createPipelineSession(ctx, tool, branch, createdBy, "", anyActive, time.Time{})
 }
 
@@ -178,11 +74,11 @@ const anyActive = "\x00any"
 // last_used_at to be before it, for a displacement decided on staleness. Any other active session fails the call with
 // ErrPipelineSlotChanged and writes nothing, so a caller that decided from a
 // read of the slot never displaces a session it did not see.
-func (pi *PipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
+func (pi *PipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*model.PipelineSession, error) {
 	return pi.createPipelineSession(ctx, tool, branch, createdBy, startKey, replace, idleBefore)
 }
 
-func (pi *PipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
+func (pi *PipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*model.PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
@@ -226,14 +122,14 @@ func (pi *PipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 		return nil, fmt.Errorf("CreatePipelineSession find active: %w", err)
 	}
 	if replace != anyActive && abandoned != replace {
-		return nil, ErrPipelineSlotChanged
+		return nil, model.ErrPipelineSlotChanged
 	}
 	// Displacing as stale: re-check the staleness here, under the write lock.
 	// A session used again since the caller's read is live and stays.
 	if abandoned != "" && !idleBefore.IsZero() {
 		lastUsed, perr := time.Parse(time.RFC3339, abandonedLastUsed)
 		if perr == nil && !lastUsed.Before(idleBefore) {
-			return nil, ErrPipelineSlotChanged
+			return nil, model.ErrPipelineSlotChanged
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -243,7 +139,7 @@ func (pi *PipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 		return nil, fmt.Errorf("CreatePipelineSession abandon: %w", err)
 	}
 
-	s := &PipelineSession{
+	s := &model.PipelineSession{
 		ID:                 uuid.New().String(),
 		Tool:               tool,
 		Branch:             branch,
@@ -277,8 +173,8 @@ const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created
 		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
 		        created_at, updated_at, last_used_at`
 
-func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
-	var s PipelineSession
+func scanPipelineSession(row *sql.Row) (*model.PipelineSession, error) {
+	var s model.PipelineSession
 	var scoped, planning, advancing int
 	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &planning, &advancing,
 		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
@@ -293,7 +189,7 @@ func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 }
 
 // GetPipelineSession returns the session with the given ID, or nil if not found.
-func (pi *PipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
+func (pi *PipelineIndex) GetPipelineSession(ctx context.Context, id string) (*model.PipelineSession, error) {
 	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
 		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions WHERE id = ?`, id))
 	if err == sql.ErrNoRows {
@@ -307,7 +203,7 @@ func (pi *PipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 
 // ActivePipelineSession returns the tool+branch's active session, or nil when
 // there is none.
-func (pi *PipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
+func (pi *PipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*model.PipelineSession, error) {
 	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
 		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions
 		 WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`, tool, branch))
@@ -472,7 +368,7 @@ func (pi *PipelineIndex) CompletePipelineSession(ctx context.Context, id string)
 }
 
 // InsertPipelineWorkItem inserts a new work item into the pipeline_work_items table.
-func (pi *PipelineIndex) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error {
+func (pi *PipelineIndex) InsertPipelineWorkItem(ctx context.Context, item model.PipelineWorkItem) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,
 		`INSERT INTO pipeline_work_items(session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at)
@@ -487,7 +383,7 @@ func (pi *PipelineIndex) InsertPipelineWorkItem(ctx context.Context, item Pipeli
 
 // NextPipelineWorkItem returns the highest-priority unanswered work item for the given
 // session, or nil if all items have been answered.
-func (pi *PipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error) {
+func (pi *PipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*model.PipelineWorkItem, error) {
 	// Heartbeat: serving work keeps the session alive against the idle reaper.
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := pi.sessionDB.ExecContext(ctx,
@@ -503,7 +399,7 @@ func (pi *PipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 	// different items, so a client answering "the current item" may be answering
 	// a different row than the one it was shown. Ordering by the insertion-ordered
 	// rowid makes the peek a deterministic function of queue state.
-	var item PipelineWorkItem
+	var item model.PipelineWorkItem
 	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM pipeline_work_items
@@ -555,7 +451,7 @@ func (pi *PipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, r
 // Running totals live on the row, not on the engine: the MCP handler builds a
 // fresh Reviewer per continue call, so there is no in-memory home for them (see
 // invariants/synthesize/per-call-objects-no-session-state).
-func (pi *PipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error {
+func (pi *PipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s model.PipelineSessionStats) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions
@@ -591,7 +487,7 @@ func (pi *PipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID st
 // PendingPipelineWorkItems returns this session's unanswered items in queue
 // order — the same ordering NextPipelineWorkItem serves, so a caller iterating
 // them sees the queue as the agent will.
-func (pi *PipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error) {
+func (pi *PipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]model.PipelineWorkItem, error) {
 	rows, err := pi.sessionDB.QueryContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM pipeline_work_items
@@ -602,9 +498,9 @@ func (pi *PipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []PipelineWorkItem
+	var out []model.PipelineWorkItem
 	for rows.Next() {
-		var item PipelineWorkItem
+		var item model.PipelineWorkItem
 		if err := rows.Scan(&item.ID, &item.SessionID, &item.StepType, &item.ClusterKey,
 			&item.FactsJSON, &item.Response, &item.Priority, &item.Depth, &item.CreatedAt); err != nil {
 			return nil, fmt.Errorf("PendingPipelineWorkItems scan: %w", err)

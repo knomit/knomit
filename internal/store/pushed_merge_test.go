@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 	"knomit/internal/store/verify"
 )
 
@@ -369,5 +370,5 @@ func TestOntologyAt(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got, "read at THAT branch's tip, not another's")
 	_, err = f.svc.OntologyAt(ctx, "no-such-branch")
-	require.ErrorIs(t, err, ErrBranchNotFound)
+	require.ErrorIs(t, err, model.ErrBranchNotFound)
 }

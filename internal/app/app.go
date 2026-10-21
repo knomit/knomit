@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -26,7 +28,6 @@ import (
 	"knomit/internal/platform/memlimit"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web"
 )
 
@@ -79,7 +80,7 @@ type Options struct {
 	// (cmd/serve, tools/desktop) sets it; embeddings stay mandatory there,
 	// because nil takes the production path and that path still fails the
 	// boot when no embedder can be built (TestNew_EmbedderRequired).
-	Embedder store.BatchEmbedder
+	Embedder model.BatchEmbedder
 	// NoOAuth leaves the OAuth issuer unbuilt even when [oauth] is
 	// configured. The desktop sets it (F19 phase 3b, W3): it never opens the
 	// OAuth listener — only `knomit serve` does — so no request could ever
@@ -153,7 +154,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// silently write vectorless facts and mis-tune retrieval, so failure to
 	// build one is fatal rather than a degraded mode. Options.Embedder is the
 	// one exception, and it is a test seam, not a degraded mode: see its doc.
-	var embedder store.BatchEmbedder
+	var embedder model.BatchEmbedder
 	if opts.Embedder != nil {
 		embedder = opts.Embedder
 		log.Warn().Str("model", embedder.ID()).Int("dim", embedder.Dim()).

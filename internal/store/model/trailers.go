@@ -1,4 +1,4 @@
-package vcs
+package model
 
 import (
 	"context"
@@ -147,6 +147,14 @@ func WithAgentTrace(ctx context.Context, t Trailers) (context.Context, error) {
 func TrailersFromContext(ctx context.Context) Trailers {
 	t, _ := ctx.Value(trailersCtxKey{}).(Trailers)
 	return t
+}
+
+// HasTrailers reports whether ctx carries a Trailers value at all, even a zero
+// one (TrailersFromContext cannot tell the two apart). It exists for the vcs
+// test seam HasTrailersForTest.
+func HasTrailers(ctx context.Context) bool {
+	_, set := ctx.Value(trailersCtxKey{}).(Trailers)
+	return set
 }
 
 // AppendTrailers returns message with the non-empty keys of t appended as the

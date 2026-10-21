@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -58,7 +60,7 @@ func newResumeFixture(t *testing.T) *resumeFixture {
 
 // planningSession creates the row a start creates before it has planned: the
 // slot is taken, the start key matches, and nothing is queued yet.
-func (f *resumeFixture) planningSession(t *testing.T) *store.PipelineSession {
+func (f *resumeFixture) planningSession(t *testing.T) *model.PipelineSession {
 	t.Helper()
 	sess, err := f.svc.Pipeline().CreatePipelineSessionReplacing(context.Background(),
 		"review", resumeBranch, "mcp-session:planner", f.r.p.startKey(), "", time.Time{})
@@ -68,7 +70,7 @@ func (f *resumeFixture) planningSession(t *testing.T) *store.PipelineSession {
 
 func (f *resumeFixture) backdate(t *testing.T, id string, d time.Duration) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", store.SessionDBPathFor(f.dbPath)+"?_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", model.SessionDBPathFor(f.dbPath)+"?_busy_timeout=5000")
 	require.NoError(t, err)
 	defer db.Close()
 	_, err = db.Exec(`UPDATE pipeline_sessions SET last_used_at = ? WHERE id = ?`,
@@ -289,7 +291,7 @@ func TestApplying_ItemBeingAppliedHoldsThePhase(t *testing.T) {
 		require.Equal(t, "work", sess.Phase)
 
 		// The apply enqueues a follow-up, as a distill that synthesizes does.
-		require.NoError(t, f.svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		require.NoError(t, f.svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID: res.SessionID, StepType: pending[0].StepType, ClusterKey: "follow-up",
 			FactsJSON: pending[0].FactsJSON, Priority: -1, Depth: 1,
 		}))

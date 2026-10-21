@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -17,7 +19,7 @@ import (
 // newOriginTestRepo opens a fresh store with no ontology (so any topic is
 // writable) and a deterministic embedder, returning the service and a
 // repo-scoped context for driving LearnHandler.
-func newOriginTestRepo(t *testing.T) (*store.Service, context.Context, store.BatchEmbedder) {
+func newOriginTestRepo(t *testing.T) (*store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))

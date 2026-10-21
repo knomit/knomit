@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
@@ -397,7 +399,7 @@ func (s *Checker) indexedBranches(ctx context.Context) (map[string]bool, error) 
 func (s *Checker) reportUnindexedBranches(skipped []string) []IntegrityIssue {
 	var issues []IntegrityIssue
 	for _, br := range skipped {
-		if !vcs.IsGeneratedRef(br) {
+		if !model.IsGeneratedRef(br) {
 			continue
 		}
 		issues = append(issues, IntegrityIssue{
@@ -442,7 +444,7 @@ func (s *Checker) PruneGeneratedRefs(ctx context.Context) (PruneResult, error) {
 	}
 	var targets []plumbing.ReferenceName
 	if err := iter.ForEach(func(ref *plumbing.Reference) error {
-		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && vcs.IsGeneratedRef(name) {
+		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok && model.IsGeneratedRef(name) {
 			targets = append(targets, ref.Name())
 		}
 		return nil

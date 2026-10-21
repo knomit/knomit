@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/google/uuid"
 )
 
@@ -20,41 +22,15 @@ type ToolIndex struct {
 	db *sql.DB
 }
 
-// ToolSession represents a paginated tool session for a branch.
-type ToolSession struct {
-	ID         string
-	Tool       string
-	Branch     string
-	PathPrefix string
-	Binding    string
-	ReadSet    string
-	LastCommit string
-	Status     string // "active", "completed", "abandoned"
-	CreatedAt  string
-	UpdatedAt  string
-}
-
-// QueueItem represents a single item in a tool session's work queue. SortKey is
-// the SQL-orderable consume order (breadth-first depth for explain/explore;
-// rank index for query). State is an optional per-item JSON payload (query
-// stores the frozen rank score here; the fact body is re-read from path+commit
-// on resume, so the snapshot carries no body text).
-type QueueItem struct {
-	Path       string
-	CommitHash string
-	SortKey    int
-	State      string
-}
-
 // CreateToolSession creates a new tool session for the given tool, branch, path
 // prefix, binding, and read-set fingerprint. The binding pins the cursor to one
 // binding's identity and readSet pins its read set (each mount at its branch);
 // resume through another binding, or against a re-pinned read set, is rejected
 // (lenses RFC §7.3).
-func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error) {
+func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*model.ToolSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	s := &ToolSession{
+	s := &model.ToolSession{
 		ID:         uuid.New().String(),
 		Tool:       tool,
 		Branch:     branch,
@@ -78,8 +54,8 @@ func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 }
 
 // GetToolSession returns the session with the given ID, or nil if not found.
-func (ti *ToolIndex) GetToolSession(ctx context.Context, id string) (*ToolSession, error) {
-	var s ToolSession
+func (ti *ToolIndex) GetToolSession(ctx context.Context, id string) (*model.ToolSession, error) {
+	var s model.ToolSession
 	err := ti.db.QueryRowContext(ctx,
 		`SELECT id, tool, branch, path_prefix, binding, read_set, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
 	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.Binding, &s.ReadSet, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
@@ -156,7 +132,7 @@ func (ti *ToolIndex) AddSeenPaths(ctx context.Context, sessionID string, paths [
 }
 
 // EnqueuePaths batch-inserts items into the tool_queue for a session, ignoring duplicates.
-func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error {
+func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items []model.QueueItem) error {
 	tx, err := ti.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("EnqueuePaths begin: %w", err)
@@ -185,7 +161,7 @@ func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items [
 // queue, ordered by sort_key ASC then rowid ASC (breadth-first for explain;
 // rank order for query). It also bumps the session's last_used_at in the same
 // transaction so an actively-paged session is never reaped as idle.
-func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error) {
+func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]model.QueueItem, error) {
 	tx, err := ti.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
@@ -203,11 +179,11 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 		return nil, fmt.Errorf("DequeuePaths select: %w", err)
 	}
 
-	var items []QueueItem
+	var items []model.QueueItem
 	var rowIDs []int64
 	for rows.Next() {
 		var rowID int64
-		var item QueueItem
+		var item model.QueueItem
 		if err := rows.Scan(&rowID, &item.Path, &item.CommitHash, &item.SortKey, &item.State); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("DequeuePaths scan: %w", err)

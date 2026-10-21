@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
@@ -23,7 +25,6 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
-	"knomit/internal/store"
 )
 
 // motifMatchTier is the §4 stage-1 matching tier, bound to the effort dial.
@@ -550,7 +551,7 @@ type pairCosFn func(ctx context.Context, paths []string) ([]float64, error)
 // dedupThresholdFor reads the dedup cosine OverDedup is measured against.
 //
 // It is the model-dependent threshold discovery's own duplicate check uses
-// (store.EmbedderThresholds), never a number of this file's own — a novelty
+// (model.EmbedderThresholds), never a number of this file's own — a novelty
 // signal calibrated against a different threshold from the gate it describes
 // would be measuring nothing anybody acts on.
 func dedupThresholdFor(cfg QualityConfig) (float64, bool) {
@@ -1301,12 +1302,12 @@ func rankAndCap(in []enumeratedMotif, budget int) ([]BridgeSeedSet, int) {
 // enqueueDiscover writes one discover work item. One definition, so the
 // entity/domain path and both motif lanes cannot drift apart in how an item is
 // shaped, keyed, or prioritised.
-func enqueueDiscover(ctx context.Context, d Deps, sess *store.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
+func enqueueDiscover(ctx context.Context, d Deps, sess *model.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return wrapf(reviewTool, err, "marshal discover payload %s", clusterKey)
 	}
-	if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "discover",
 		ClusterKey: clusterKey,

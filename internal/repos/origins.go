@@ -16,9 +16,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/rs/zerolog/log"
 )
 
 // Origin modes. Sync is the default and what every clone/initialize repo has.
@@ -44,7 +44,7 @@ type Origin struct {
 // Origins persists per-repo remote connection config in control.db.
 type Origins struct {
 	db    *sql.DB
-	crypt *store.Crypt
+	crypt *model.Crypt
 }
 
 // OpenOrigins returns an accessor over db (the Registry's handle, already
@@ -57,7 +57,7 @@ type Origins struct {
 // error must NOT read that as "the table is there" — that guarantee comes from
 // controlUp having run on db, which is why Manager.Start calls this only after
 // the registry is up.
-func OpenOrigins(db *sql.DB, crypt *store.Crypt) *Origins {
+func OpenOrigins(db *sql.DB, crypt *model.Crypt) *Origins {
 	return &Origins{db: db, crypt: crypt}
 }
 
@@ -116,7 +116,7 @@ func (o *Origins) Set(uid string, org Origin) error {
 	// without one would make every later sync reconcile against a name nobody
 	// chose, so it is refused rather than filled in.
 	if org.Branch == "" {
-		return fmt.Errorf("origins set: %w", store.ErrNoConsensusBranch)
+		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
 	}
 	stored := org.AuthToken
 	if org.AuthToken != "" {
@@ -173,7 +173,7 @@ func (o *Origins) Set(uid string, org Origin) error {
 // permanently inconsistent.
 func (o *Origins) SetBranch(uid, branch string) error {
 	if branch == "" {
-		return fmt.Errorf("origins set branch: %w", store.ErrNoConsensusBranch)
+		return fmt.Errorf("origins set branch: %w", model.ErrNoConsensusBranch)
 	}
 	res, err := o.db.Exec(`UPDATE repo_origins SET branch = ? WHERE repo_uid = ?`, branch, uid)
 	if err != nil {

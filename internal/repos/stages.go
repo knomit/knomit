@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -703,7 +705,7 @@ type healBranch struct {
 // failed; an upstream-only failure is logged but not fatal — the sync loop
 // owns upstream convergence. Nothing here re-arms a retry: Rebuild drops a
 // failed branch's schema version key, so it reports stale again next time.
-func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []healBranch, progress store.RebuildProgress) (ok bool) {
+func healIndexBranches(ctx context.Context, im model.IndexManager, repo string, branches []healBranch, progress model.RebuildProgress) (ok bool) {
 	healFailed := false
 	for i, branch := range branches {
 		if branch.stale {

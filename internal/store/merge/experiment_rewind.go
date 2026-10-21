@@ -50,6 +50,8 @@ import (
 	"errors"
 	"fmt"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
@@ -126,7 +128,7 @@ func (rh *Repo) clearExperimentRewound(name string) error {
 // for a plain merge.
 //
 // Caller holds LockBranch(exp.Parent) and LockBranch(exp.Branch()).
-func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o MergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
+func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp model.Experiment, strategy ConflictStrategy, resolutions map[string]Resolution, o MergeOpts) (rebuilt bool, squashed int, settled []SettledPath, err error) {
 	rec, err := rh.vr.Storer().Reference(experimentRewoundRefName(exp.Name))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, 0, nil, nil
@@ -282,7 +284,7 @@ func (rh *Repo) rebuildRewoundExperiment(ctx context.Context, exp vcs.Experiment
 		nc := &object.Commit{
 			Author:       author,
 			Committer:    committer,
-			Message:      vcs.AppendTrailersToParagraph(AppendTrailerLines(msg, trailers), o.Trace),
+			Message:      model.AppendTrailersToParagraph(AppendTrailerLines(msg, trailers), o.Trace),
 			TreeHash:     tree,
 			ParentHashes: []plumbing.Hash{parentTip},
 		}

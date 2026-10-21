@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/model"
 )
 
 // newBatchTestService opens a fresh initialised store for the batch tests.
@@ -50,7 +51,7 @@ func TestBatchWriteFacts_WriteAndDeleteShareOneCommit(t *testing.T) {
 	require.NoError(t, err, "batched write must be readable")
 
 	_, err = facts.ReadFact(ctx, "main", "kb/old.md", nil)
-	require.True(t, errors.Is(err, ErrPathNotFound),
+	require.True(t, errors.Is(err, model.ErrPathNotFound),
 		"batched delete must remove the fact, got %v", err)
 
 	// One commit, not two: the batch commit's parent is the seed commit.
@@ -81,7 +82,7 @@ func TestBatchWriteFacts_DeleteOnlyBatch(t *testing.T) {
 	_, err = facts.ReadFact(ctx, "main", "kb/keep.md", nil)
 	require.NoError(t, err, "untouched fact must survive a delete-only batch")
 	_, err = facts.ReadFact(ctx, "main", "kb/drop.md", nil)
-	require.True(t, errors.Is(err, ErrPathNotFound), "expected deletion, got %v", err)
+	require.True(t, errors.Is(err, model.ErrPathNotFound), "expected deletion, got %v", err)
 }
 
 // TestBatchWriteFacts_EmptyBatchIsNoOp: an all-empty call must not mint a
@@ -145,7 +146,7 @@ func TestBatchWriteFacts_DeleteFailureCommitsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, head, "a failed batch must not move the branch")
 	_, err = facts.ReadFact(ctx, "main", "kb/b.md", nil)
-	require.True(t, errors.Is(err, ErrPathNotFound),
+	require.True(t, errors.Is(err, model.ErrPathNotFound),
 		"a failed batch must not leave the write committed, got %v", err)
 }
 

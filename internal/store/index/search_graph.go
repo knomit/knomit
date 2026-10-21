@@ -8,11 +8,12 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store/facts"
 	storegit "knomit/internal/store/git"
-	"knomit/internal/store/internal/vcs"
 )
 
 // ── Explain ───────────────────────────────────────────────────────────────────
@@ -379,7 +380,7 @@ func (si *Index) graphBuildSimilarityEdges(ctx context.Context, path, blobHash s
 	}
 	rows.Close()
 
-	simFloor := vcs.EmbedderThresholds(si.rh.Embedder()).SimilarTo
+	simFloor := model.EmbedderThresholds(si.rh.Embedder()).SimilarTo
 
 	// Replace this version's outgoing SIMILAR_TO edges atomically. The delete
 	// and the re-merge must land in one transaction: run bare, a concurrent

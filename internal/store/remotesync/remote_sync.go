@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/model"
+
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -213,7 +215,7 @@ func (ri *Index) sync(ctx context.Context, agentBranch string, auth transport.Au
 	// reconcile steps below never see an empty name.
 	upstreamMain := remote.Branch
 	if upstreamMain == "" {
-		return SyncResult{}, fmt.Errorf("Sync: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
+		return SyncResult{}, fmt.Errorf("Sync: the origin has no branch: %w", model.ErrNoConsensusBranch)
 	}
 
 	// Hold the config READ lock across the origin existence check and the fetch.
@@ -521,7 +523,7 @@ func (ri *Index) PublishUpstream(ctx context.Context, from string, auth transpor
 	}
 	upstream := remote.Branch
 	if upstream == "" {
-		return PushResult{}, fmt.Errorf("PublishUpstream: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
+		return PushResult{}, fmt.Errorf("PublishUpstream: the origin has no branch: %w", model.ErrNoConsensusBranch)
 	}
 	if from == "" || from == upstream {
 		return PushResult{}, fmt.Errorf("PublishUpstream: %q is not a branch to publish to %q", from, upstream)
@@ -793,7 +795,7 @@ func (ri *Index) PublishUpstreamChange(ctx context.Context, from, path string, c
 	}
 	upstream := remote.Branch
 	if upstream == "" {
-		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: the origin has no branch: %w", vcs.ErrNoConsensusBranch)
+		return plumbing.ZeroHash, fmt.Errorf("PublishUpstreamChange: the origin has no branch: %w", model.ErrNoConsensusBranch)
 	}
 	rh := ri.rh
 	signer, err := rh.vr.CommitSigner()

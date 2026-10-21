@@ -55,6 +55,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/dop251/goja"
 	"github.com/rs/zerolog/log"
 
@@ -361,7 +363,7 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 	hostCtx := WithBinding(budget, NewBindingOfRepo(d.ri, d.branch))
 	// The recipe's own writes also carry its run id (#349, decision 4), so
 	// one `--grep='^Knomit-Run: <id>'` finds everything a run did.
-	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: j.p.trace, Cause: j.p.commit, Trigger: j.p.trig.Name, Run: j.id})
+	hostCtx = model.WithTrailers(hostCtx, model.Trailers{Trace: j.p.trace, Cause: j.p.commit, Trigger: j.p.trig.Name, Run: j.id})
 	h := &scriptHost{d: d, p: j.p, cs: &compiledScript{script: "recipe " + j.cr.name, blob: j.cr.rev}, ctx: hostCtx,
 		globals: j.globals, rangeFrom: j.row.RangeFrom, rangeTo: j.row.RangeTo, onRow: d.addLate}
 	x := &recipeExec{ctx: hostCtx, env: func(ctx context.Context) ([]string, error) { return d.recipeEnv(ctx, j) }}

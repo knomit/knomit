@@ -11,13 +11,14 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 )
 
@@ -130,7 +131,7 @@ type DiscoveryGates struct {
 func DiscoveryGatesFor(ri *repos.RepoInstance, dir DiscoverDirection) DiscoveryGates {
 	g := DiscoveryGates{
 		ConfidenceThreshold: ri.DiscoveryConfidenceThreshold(),
-		DedupThreshold:      store.EmbedderThresholds(ri.Embedder()).Dedup,
+		DedupThreshold:      model.EmbedderThresholds(ri.Embedder()).Dedup,
 	}
 	if dir == DiscoverBackward {
 		g.BlastRadiusThreshold = ri.DiscoveryBlastRadiusThreshold()
@@ -310,7 +311,7 @@ func applyDiscoveredProposals(
 	gs *facts.Index,
 	sysFiles *facts.Repo,
 	idx *index.Facade,
-	emb store.Embedder,
+	emb model.Embedder,
 	payload DiscoverWorkPayload,
 	proposals []DiscoveredFact,
 	gates DiscoveryGates,
@@ -566,7 +567,7 @@ func refsCiteSeedSubset(refs []string, seedPaths map[string]struct{}, localRepoI
 // isDuplicate computes the document embedding for the proposal and reports
 // whether the live corpus already contains a fact within DedupThreshold cosine
 // similarity. When emb is nil (embeddings disabled), the gate is a no-op.
-func isDuplicate(ctx context.Context, idx *index.Facade, emb store.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
+func isDuplicate(ctx context.Context, idx *index.Facade, emb model.Embedder, branch string, f fact.Fact, threshold float64) (bool, error) {
 	if emb == nil {
 		return false, nil
 	}

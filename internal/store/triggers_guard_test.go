@@ -52,7 +52,7 @@ var triggersAllowedCalls = map[string][]string{
 		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
 		"append", "len", "make", "min",
 	},
-	"internal/vcs/trailers.go": {
+	"model/trailers.go": {
 		// the reader, and the ctx transport of the trailer set (WithTrailers is
 		// read by the three fact builders in fact_write.go, never here)
 		"strings.TrimRight", "strings.LastIndex", "strings.Split", "strings.Cut", "strings.EqualFold", "strings.TrimSpace",

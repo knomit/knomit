@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
 
@@ -343,7 +344,7 @@ func checkSameSubjectCollisions(
 	paths []string,
 	touched map[int]bool,
 	vecs [][]float32,
-	emb store.BatchEmbedder,
+	emb model.BatchEmbedder,
 	retracting map[string]bool,
 ) error {
 	// distinct_from is validated even when nothing would have been refused: a
@@ -367,7 +368,7 @@ func checkSameSubjectCollisions(
 
 	// TWO STRUCTURAL EXITS, both logged so a silently-disabled gate is visible.
 	//
-	// (1) No embedder. Same nil predicate store.EmbedderThresholds treats as
+	// (1) No embedder. Same nil predicate model.EmbedderThresholds treats as
 	// "embeddings disabled". There is nothing to compare and no model whose
 	// geometry would apply.
 	if emb == nil {

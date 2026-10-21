@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
+	"knomit/internal/store/model"
 
-	"knomit/internal/store"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // VerifyAccepts is this instance's F09 accept list, a tenant of control.db
-// (verify_accepted, control migration 000013). See store.AcceptList for what
+// (verify_accepted, control migration 000013). See model.AcceptList for what
 // an accept waives, and does not.
 type VerifyAccepts struct{ db *sql.DB }
 
@@ -34,15 +34,15 @@ func (a *VerifyAccepts) Add(commit plumbing.Hash, repoUID, note string) error {
 }
 
 // List returns every waiver, newest first.
-func (a *VerifyAccepts) List() ([]store.Accept, error) {
+func (a *VerifyAccepts) List() ([]model.Accept, error) {
 	rows, err := a.db.Query(`SELECT commit_hash, COALESCE(repo_uid, ''), note FROM verify_accepted ORDER BY accepted_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("verify accept list: %w", err)
 	}
 	defer rows.Close()
-	var out []store.Accept
+	var out []model.Accept
 	for rows.Next() {
-		var x store.Accept
+		var x model.Accept
 		if err := rows.Scan(&x.Commit, &x.RepoUID, &x.Note); err != nil {
 			return nil, err
 		}
@@ -53,7 +53,7 @@ func (a *VerifyAccepts) List() ([]store.Accept, error) {
 
 // For binds the list to one repository: a waiver matches when it names that
 // repository or no repository. A nil receiver is the empty list.
-func (a *VerifyAccepts) For(repoUID string) store.AcceptList {
+func (a *VerifyAccepts) For(repoUID string) model.AcceptList {
 	if a == nil {
 		return nil
 	}
@@ -65,8 +65,8 @@ type acceptsFor struct {
 	uid string
 }
 
-func (f acceptsFor) Lookup(commit plumbing.Hash) (store.Accept, bool) {
-	var x store.Accept
+func (f acceptsFor) Lookup(commit plumbing.Hash) (model.Accept, bool) {
+	var x model.Accept
 	err := f.db.QueryRow(
 		`SELECT commit_hash, COALESCE(repo_uid, ''), note FROM verify_accepted
 		  WHERE commit_hash = ? AND (repo_uid IS NULL OR repo_uid = ?)`,
@@ -74,7 +74,7 @@ func (f acceptsFor) Lookup(commit plumbing.Hash) (store.Accept, bool) {
 	if err != nil {
 		// No row, or any read failure: not accepted. A waiver that cannot be
 		// read waives nothing.
-		return store.Accept{}, false
+		return model.Accept{}, false
 	}
 	return x, true
 }

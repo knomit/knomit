@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
 	"knomit/internal/store/verify"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -157,11 +158,11 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 		before, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
 		_, err = svc.Facts().WriteFact(ctx, "exp/ghost", "kb/x.md", content, "learn: x", "learn")
-		require.ErrorIs(t, err, ErrOrphanExperimentRef)
+		require.ErrorIs(t, err, model.ErrOrphanExperimentRef)
 		_, err = svc.Facts().DeleteFact(ctx, "exp/ghost", "kb/base.md", "retract(x): kb/base.md")
-		require.ErrorIs(t, err, ErrOrphanExperimentRef)
+		require.ErrorIs(t, err, model.ErrOrphanExperimentRef)
 		_, _, err = svc.Facts().BatchWriteFacts(ctx, "exp/ghost", map[string]string{"kb/y.md": content}, nil, "move: y", "move")
-		require.ErrorIs(t, err, ErrOrphanExperimentRef)
+		require.ErrorIs(t, err, model.ErrOrphanExperimentRef)
 		after, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
 		require.Equal(t, before, after, "a refused write moves nothing")
@@ -177,10 +178,10 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 		before, err := svc.Branches().HeadCommit(ctx, "exp/stale")
 		require.NoError(t, err)
 		_, err = svc.Facts().WriteFact(ctx, "exp/stale", "kb/x.md", content, "learn: x", "learn")
-		require.ErrorIs(t, err, ErrStaleExperimentParent)
+		require.ErrorIs(t, err, model.ErrStaleExperimentParent)
 		// The sync merge commit is refused the same way (its own gate first).
 		_, err = svc.Merge().SyncExperiment(ctx, "stale")
-		require.ErrorIs(t, err, ErrStaleExperimentParent)
+		require.ErrorIs(t, err, model.ErrStaleExperimentParent)
 		after, err := svc.Branches().HeadCommit(ctx, "exp/stale")
 		require.NoError(t, err)
 		require.Equal(t, before, after, "a refused write moves nothing")
@@ -197,7 +198,7 @@ func TestExperimentCommits_NoOwnerNoWrite(t *testing.T) {
 		before, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
 		_, err = svc.rh.MergeIntoBranchForTest(ctx, testAgentBranch, "exp/ghost", merge.StrategyRemoteWins)
-		require.ErrorIs(t, err, ErrOrphanExperimentRef)
+		require.ErrorIs(t, err, model.ErrOrphanExperimentRef)
 		after, err := svc.Branches().HeadCommit(ctx, "exp/ghost")
 		require.NoError(t, err)
 		require.Equal(t, before, after)

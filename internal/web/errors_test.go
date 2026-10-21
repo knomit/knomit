@@ -8,13 +8,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/store/model"
 )
 
 func TestWriteStoreError_BranchNotFound_Returns404(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/repos/r/branches/x/topics", nil)
-	err := fmt.Errorf("ListDir: ref: %w", store.ErrBranchNotFound)
+	err := fmt.Errorf("ListDir: ref: %w", model.ErrBranchNotFound)
 
 	writeStoreError(w, r, err, "Failed to list topics", "x")
 

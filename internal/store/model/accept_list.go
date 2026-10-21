@@ -1,4 +1,4 @@
-package vcs
+package model
 
 import (
 	"github.com/go-git/go-git/v5/plumbing"

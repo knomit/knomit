@@ -15,6 +15,7 @@ import (
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/model"
 )
 
 // Replay copies local facts into a target service's agent branch.
@@ -31,7 +32,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter *index
 		// guess.
 		b, err := target.Branches().DefaultBranch(ctx)
 		if err != nil || b == "" {
-			return nil, fmt.Errorf("Replay: DefaultBranch not set and the target has no HEAD branch: %w", ErrNoConsensusBranch)
+			return nil, fmt.Errorf("Replay: DefaultBranch not set and the target has no HEAD branch: %w", model.ErrNoConsensusBranch)
 		}
 		cfg.DefaultBranch = b
 	}

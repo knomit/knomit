@@ -8,8 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
@@ -298,7 +299,7 @@ func TestHandleTopicNode_UnknownRepo_Returns404(t *testing.T) {
 
 func TestHandleTopics_MissingBranch_Returns404(t *testing.T) {
 	lister := &stubTopicLister{
-		listErr: fmt.Errorf("ListDir: ref: %w", store.ErrBranchNotFound),
+		listErr: fmt.Errorf("ListDir: ref: %w", model.ErrBranchNotFound),
 	}
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),

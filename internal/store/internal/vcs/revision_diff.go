@@ -6,16 +6,8 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/model"
 )
-
-// RevisionDiff is a revision's delta from the content it was edited from.
-// Each field is present only when it changed; a nil RevisionDiff means "no
-// tracked change" (e.g. the fact's creation, which has no predecessor).
-// Stored as JSON in path_changes.diff and returned by knomit_explain as-is.
-type RevisionDiff struct {
-	Confidence []float64 `json:"confidence,omitempty"` // [old, new]
-	Body       string    `json:"body,omitempty"`       // smaller of unified diff vs "+N/-M"
-}
 
 // minUnifiedDiffLen bounds the shortest unified diff difflib can produce from
 // below: a hunk header ("@@ -1 +1 @@\n", 12 bytes) plus at least one changed
@@ -59,11 +51,11 @@ func bodyDelta(a, b string) string {
 
 // revisionDelta computes the diff from prev → cur. nil when there is no
 // predecessor or nothing tracked changed.
-func revisionDelta(prev *fact.Fact, cur fact.Fact) *RevisionDiff {
+func revisionDelta(prev *fact.Fact, cur fact.Fact) *model.RevisionDiff {
 	if prev == nil {
 		return nil
 	}
-	d := &RevisionDiff{}
+	d := &model.RevisionDiff{}
 	changed := false
 	if prev.Confidence != cur.Confidence {
 		d.Confidence = []float64{prev.Confidence, cur.Confidence}

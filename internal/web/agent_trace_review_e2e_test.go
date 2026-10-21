@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -217,7 +219,7 @@ func itemPaths(t *testing.T, e *reviewE2E, turn reviewTurn) []string {
 	t.Helper()
 	pending, err := e.svc.Pipeline().PendingPipelineWorkItems(context.Background(), turn.SessionID)
 	require.NoError(t, err)
-	var item *store.PipelineWorkItem
+	var item *model.PipelineWorkItem
 	for i := range pending {
 		if pending[i].ID == turn.Item.ID {
 			item = &pending[i]

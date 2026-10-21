@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/model"
 
 	"github.com/stretchr/testify/require"
 
@@ -64,9 +65,9 @@ func (e *floorEmbedder) Thresholds() params.Thresholds {
 // thresholds without a nil check: a nil embedder yields the historical defaults
 // rather than panicking, and a real embedder's values pass through unchanged.
 func TestEmbedderThresholds_NilSafe(t *testing.T) {
-	require.Equal(t, params.Defaults(), EmbedderThresholds(nil),
+	require.Equal(t, params.Defaults(), model.EmbedderThresholds(nil),
 		"nil embedder must fall back to params.Defaults()")
-	require.Equal(t, 0.83, EmbedderThresholds(&floorEmbedder{floor: 0.83}).SearchFloor,
+	require.Equal(t, 0.83, model.EmbedderThresholds(&floorEmbedder{floor: 0.83}).SearchFloor,
 		"a configured embedder's thresholds must pass through")
 }
 

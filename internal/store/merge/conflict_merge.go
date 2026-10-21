@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
@@ -439,7 +441,7 @@ var conflictsLogged sync.Map
 func (rh *Repo) ConflictsStrategy(ctx context.Context, branch string) (ConflictStrategy, bool) {
 	h, err := rh.vr.ResolveRef(ctx, branch)
 	if err != nil {
-		if !errors.Is(err, vcs.ErrBranchNotFound) {
+		if !errors.Is(err, model.ErrBranchNotFound) {
 			log.Warn().Err(err).Str("branch", branch).Msg("conflicts: cannot resolve the consensus branch; read as off")
 		}
 		return "", false
@@ -492,7 +494,7 @@ func AppendTrailerLines(message string, lines []string) string {
 		last = msg[i+2:]
 	}
 	sep := "\n\n"
-	if last != msg && vcs.IsTrailerParagraph(last) {
+	if last != msg && model.IsTrailerParagraph(last) {
 		sep = "\n"
 	}
 	return msg + sep + strings.Join(sorted, "\n") + "\n"

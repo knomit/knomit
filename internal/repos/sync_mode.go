@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
@@ -105,7 +107,7 @@ func (m *syncMode) readSettings(ctx context.Context) fact.SyncSettings {
 	}
 	data, at, err := m.read(ctx)
 	if err != nil {
-		if errors.Is(err, store.ErrBranchNotFound) || ctx.Err() != nil {
+		if errors.Is(err, model.ErrBranchNotFound) || ctx.Err() != nil {
 			return fact.SyncAbsent() // no consensus branch yet, or stopping
 		}
 		m.warnOnce("ontology:"+err.Error(), fmt.Sprintf("sync: read the ontology at %s: %v; read as interval", at, err))

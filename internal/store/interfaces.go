@@ -3,13 +3,15 @@ package store
 import (
 	"context"
 	"time"
+
+	"knomit/internal/store/model"
 )
 
 // BranchIndex is the interface for branch lifecycle operations. Implemented by *repoHandler.
 type BranchIndex interface {
 	EnsureBranch(ctx context.Context, name, gitRef string) (int64, error)
 	DropBranch(ctx context.Context, name string) error
-	ListBranches(ctx context.Context) ([]Branch, error)
+	ListBranches(ctx context.Context) ([]model.Branch, error)
 	CreateBranch(ctx context.Context, branch, fromBranch string) error
 	DefaultBranch(ctx context.Context) (string, error)
 	SetDefaultBranch(branch string) error
@@ -22,30 +24,30 @@ type BranchIndex interface {
 	// itself is merge.Repo, reached as Service.Merge). The bool separates "no
 	// such experiment" from a read failure: eligibility must not treat the
 	// latter as an answer.
-	GetExperiment(ctx context.Context, name string) (Experiment, bool, error)
+	GetExperiment(ctx context.Context, name string) (model.Experiment, bool, error)
 }
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.
 type ToolSessionIndex interface {
-	CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*ToolSession, error)
-	GetToolSession(ctx context.Context, id string) (*ToolSession, error)
+	CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*model.ToolSession, error)
+	GetToolSession(ctx context.Context, id string) (*model.ToolSession, error)
 	UpdateToolSession(ctx context.Context, id, lastCommit, status string) error
 	GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error)
 	AddSeenPaths(ctx context.Context, sessionID string, paths []string) error
-	EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error
-	DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error)
+	EnqueuePaths(ctx context.Context, sessionID string, items []model.QueueItem) error
+	DequeuePaths(ctx context.Context, sessionID string, limit int) ([]model.QueueItem, error)
 	QueueSize(ctx context.Context, sessionID string) (int, error)
 }
 
 // PipelineIndex is the interface for pipeline session management. Implemented by *pipelineIndex.
 type PipelineIndex interface {
-	CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error)
+	CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*model.PipelineSession, error)
 	// CreatePipelineSessionReplacing is CreatePipelineSession that abandons
 	// only the named active session ("" meaning none), and otherwise fails
 	// with ErrPipelineSlotChanged without writing.
-	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error)
-	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
-	ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
+	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*model.PipelineSession, error)
+	GetPipelineSession(ctx context.Context, id string) (*model.PipelineSession, error)
+	ActivePipelineSession(ctx context.Context, tool, branch string) (*model.PipelineSession, error)
 	// ResumePipelineSession bumps an active, planned session's heartbeat for a
 	// resuming caller; false when it is no longer resumable.
 	ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error)
@@ -64,8 +66,8 @@ type PipelineIndex interface {
 	// advance; false otherwise, in which case nothing of the completion may
 	// follow.
 	CompletePipelineSession(ctx context.Context, id string) (completed bool, err error)
-	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
-	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
+	InsertPipelineWorkItem(ctx context.Context, item model.PipelineWorkItem) error
+	NextPipelineWorkItem(ctx context.Context, sessionID string) (*model.PipelineWorkItem, error)
 	// AnswerPipelineWorkItem atomically claims and answers an item.
 	// claimed=false means another caller already answered it — a benign
 	// no-op. Only the claim winner may apply the response's mutations.
@@ -81,14 +83,14 @@ type PipelineIndex interface {
 	// AddPipelineSessionStats accumulates an applied item's corpus-change
 	// counts onto the session row, which is where a per-call-stateless
 	// engine's running totals have to live.
-	AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error
+	AddPipelineSessionStats(ctx context.Context, id string, s model.PipelineSessionStats) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
 	// PendingPipelineWorkItems returns this session's UNANSWERED items, in
 	// queue order. It exists for the mid-session refresh: an item's payload is
 	// materialised when the session is planned, so a merge applied later in the
 	// same session leaves every still-queued item describing a corpus that no
 	// longer exists.
-	PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error)
+	PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]model.PipelineWorkItem, error)
 
 	// AnsweredDistillResponses returns the raw stored responses of this
 	// session's ANSWERED distill items — the complement of the method above,

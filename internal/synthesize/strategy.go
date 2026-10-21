@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
@@ -42,7 +44,7 @@ import (
 // (see Pipeline.deps) so a single call never sees two different Services.
 //
 // Deps deliberately carries NO branch and NO session: a strategy reads the
-// branch off the *store.PipelineSession it is handed, because that is the
+// branch off the *model.PipelineSession it is handed, because that is the
 // branch the session was bound to at creation. See
 // invariants/synthesize/session-branch-binding — nothing below StartSession
 // may consult RI.AgentBranch().
@@ -79,7 +81,7 @@ type pagedStrategy interface {
 	// RequireCompletion rejects an answer to a multi-page item that does not
 	// carry proof the agent read every page. Called before Decode and before
 	// the claim, so returning an error leaves the item retryable.
-	RequireCompletion(item *store.PipelineWorkItem, completionToken string) error
+	RequireCompletion(item *model.PipelineWorkItem, completionToken string) error
 
 	// RenderPayload produces ONLY the payload a paged item ships beside its
 	// prompt — byte-for-byte what Render would put in WorkItemView.Facts,
@@ -98,7 +100,7 @@ type pagedStrategy interface {
 	//
 	// Returns "" for a step type that has no payload to ship beside its
 	// prompt; the engine then falls back to a full Render.
-	RenderPayload(item *store.PipelineWorkItem) (string, error)
+	RenderPayload(item *model.PipelineWorkItem) (string, error)
 }
 
 // WorkItemView is a strategy's rendering of one work item: what the agent is
@@ -223,13 +225,13 @@ type Strategy interface {
 	// exactly once, inside StartSession, after the session row exists. The
 	// engine handles the empty-pool case (immediate completion) before
 	// calling Plan, so implementations may assume len(seeds) > 0.
-	Plan(ctx context.Context, d Deps, sess *store.PipelineSession, seeds []fact.Fact) error
+	Plan(ctx context.Context, d Deps, sess *model.PipelineSession, seeds []fact.Fact) error
 
 	// OnPhaseAdvance runs for the winner of a phase CAS, and only for the
 	// winner — so an insert made here happens at most once per session per
 	// transition. A losing CAS is a benign no-op and never reaches this hook
 	// (architecture/store/pipeline-session-phase-cas).
-	OnPhaseAdvance(ctx context.Context, d Deps, sess *store.PipelineSession, from, to string) error
+	OnPhaseAdvance(ctx context.Context, d Deps, sess *model.PipelineSession, from, to string) error
 
 	// Decode parses and validates a response against its item. It MUST be
 	// pure — no store access, no mutation — because the engine runs it BEFORE
@@ -239,7 +241,7 @@ type Strategy interface {
 	// normalized is the text actually persisted as the item's response, which
 	// lets a strategy store a placeholder for an answer with no content. It
 	// must be non-empty, since the claim CAS keys on `response IS NULL`.
-	Decode(item *store.PipelineWorkItem, response string) (decision any, normalized string, err error)
+	Decode(item *model.PipelineWorkItem, response string) (decision any, normalized string, err error)
 
 	// Apply performs the mutations a decoded response calls for. It runs only
 	// after the claim CAS was won, so it executes at most once per item. An
@@ -247,11 +249,11 @@ type Strategy interface {
 	// Pipeline.ContinueSessionForItem for why that is the safe direction.
 	//
 	// decision is exactly the value this strategy's own Decode returned.
-	Apply(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem, decision any) error
+	Apply(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error
 
 	// Render builds the agent-facing view of an item. Pure presentation: the
 	// engine decides whether to render or to advance the phase.
-	Render(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) (*WorkItemView, error)
+	Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error)
 }
 
 // standingWorkStrategy is implemented by a strategy that owns work triggered by
@@ -281,7 +283,7 @@ type standingWorkStrategy interface {
 	// (knomit#122c).
 	//
 	// It is called ONLY on unscoped sessions; see planStandingWork.
-	PlanStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) (planned bool, health []string, err error)
+	PlanStandingWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) (planned bool, health []string, err error)
 }
 
 // ── shared "discover" step ────────────────────────────────────────────────
@@ -315,7 +317,7 @@ type discoverDecision struct {
 // A malformed *payload* IS fatal, unlike a malformed response: the payload is
 // server-written, so failing to read it back means the queue is corrupt, not
 // that the agent answered badly.
-func decodeDiscoverStep(tool string, item *store.PipelineWorkItem, response string) (*discoverDecision, error) {
+func decodeDiscoverStep(tool string, item *model.PipelineWorkItem, response string) (*discoverDecision, error) {
 	var payload DiscoverWorkPayload
 	if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 		return nil, wrapf(tool, err, "unmarshal discover payload")
@@ -339,7 +341,7 @@ func decodeDiscoverStep(tool string, item *store.PipelineWorkItem, response stri
 // proposals are dropped, good ones land.
 //
 // The branch comes from sess.Branch, never from d.RI.AgentBranch().
-func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.PipelineSession, dec *discoverDecision) error {
+func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *model.PipelineSession, dec *discoverDecision) error {
 	if !dec.parsed {
 		return nil
 	}
@@ -386,7 +388,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 		}
 		// Deliberately NOT counted into ReviewStats. Reinforcement creates no
 		// fact, so counting it as Synthesized would overstate what the session
-		// added; and store.PipelineSessionStats has no column of its own for
+		// added; and model.PipelineSessionStats has no column of its own for
 		// it, so a new ReviewStats field would be dropped silently by
 		// recordStats — recorded-looking and gone. It surfaces as a
 		// detail-discover progress event per fact, and as this line.

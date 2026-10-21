@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
@@ -87,7 +89,7 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 // repeat the same failing inference. A nil vector with a nil error means "no
 // text" or "no embedder handed in": each mount then embeds for itself (and a
 // mount with no embedder at all keeps the store's documented empty result).
-func fanoutQueryVec(ctx context.Context, emb store.Embedder, text string) ([]float32, error) {
+func fanoutQueryVec(ctx context.Context, emb model.Embedder, text string) ([]float32, error) {
 	if text == "" || emb == nil {
 		return nil, nil
 	}

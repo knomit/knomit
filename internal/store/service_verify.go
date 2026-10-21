@@ -6,6 +6,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/model"
 )
 
 // CommitExists reports whether this repository's object store holds commit h.
@@ -28,7 +29,7 @@ func (s *Service) CommitAgent(h plumbing.Hash) string {
 
 // SetAcceptList installs the accept list, bound to this repository. Like
 // SetSigner it must be re-applied on every store reopen.
-func (s *Service) SetAcceptList(a AcceptList) { s.rh.SetAcceptList(a) }
+func (s *Service) SetAcceptList(a model.AcceptList) { s.rh.SetAcceptList(a) }
 
 // SetOwnKeys installs the source of this instance's historical keys (its
 // fleet member record's versions) for E4. Re-applied on every store reopen,

@@ -26,6 +26,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/repos"
@@ -56,7 +58,7 @@ func conflictedFact(t *testing.T, m *repos.Manager, expName string) string {
 		require.NoError(t, err)
 
 		// Both sides change the same path relative to the fork point.
-		_, err = svc.Facts().WriteFact(ctx, store.ExperimentBranch(expName), path,
+		_, err = svc.Facts().WriteFact(ctx, model.ExperimentBranch(expName), path,
 			body("changed in the experiment"), "exp edit", "update")
 		require.NoError(t, err)
 		_, err = svc.Facts().WriteFact(ctx, "agent/test", path,
@@ -86,7 +88,7 @@ func commitViaREST(t *testing.T, h http.Handler, expName, path, factBody string)
 func commitViaMCP(t *testing.T, h http.Handler, expName, path, factBody string) (string, bool) {
 	t.Helper()
 	mount := "/repos/" + resolutionRepo + "/branches/" + strings.ReplaceAll(
-		store.ExperimentBranch(expName), "/", ":") + "/mcp"
+		model.ExperimentBranch(expName), "/", ":") + "/mcp"
 	sid := initAt(t, h, mount)
 	args, err := json.Marshal(map[string]any{
 		"action":      "commit",
@@ -206,7 +208,7 @@ func conflictedFactWithRefs(t *testing.T, m *repos.Manager, expName string, fork
 		require.NoError(t, err)
 		_, err = svc.Merge().OpenExperiment(ctx, expName, "", "agent/test")
 		require.NoError(t, err)
-		_, err = svc.Facts().WriteFact(ctx, store.ExperimentBranch(expName), path,
+		_, err = svc.Facts().WriteFact(ctx, model.ExperimentBranch(expName), path,
 			body("changed in the experiment", exp), "exp edit", "update")
 		require.NoError(t, err)
 		_, err = svc.Facts().WriteFact(ctx, "agent/test", path,

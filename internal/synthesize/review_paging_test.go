@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -46,7 +48,7 @@ func pagingCorpus(t *testing.T, facts int, bodyBytes int) (*Reviewer, *store.Ser
 
 // currentDistillItem returns the first unanswered distill item on the session,
 // draining anything ahead of it.
-func currentDistillItem(t *testing.T, svc *store.Service, sessionID string) *store.PipelineWorkItem {
+func currentDistillItem(t *testing.T, svc *store.Service, sessionID string) *model.PipelineWorkItem {
 	t.Helper()
 	ctx := context.Background()
 	for i := 0; i < 200; i++ {

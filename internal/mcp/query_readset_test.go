@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -155,7 +157,7 @@ func TestQueryResume_RetriesPastUnreadableWindow(t *testing.T) {
 		sess, cerr := ts.CreateToolSession(context.Background(), "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
 		require.NoError(t, cerr)
 		sessID = sess.ID
-		require.NoError(t, ts.EnqueuePaths(context.Background(), sess.ID, []store.QueueItem{
+		require.NoError(t, ts.EnqueuePaths(context.Background(), sess.ID, []model.QueueItem{
 			{Path: "kb/observations/testing/bogus0.md", CommitHash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", SortKey: 0, State: string(state)},
 			{Path: "kb/observations/testing/bogus1.md", CommitHash: "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeec0ff", SortKey: 1, State: string(state)},
 			{Path: readablePath, CommitHash: readableCommit, SortKey: 2, State: string(state)},

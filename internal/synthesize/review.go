@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"knomit/internal/store/model"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
@@ -317,13 +319,13 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Inde
 
 // nextItem dispatches on the session's persistent phase and returns the
 // review-shaped result.
-func (r *Reviewer) nextItem(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
+func (r *Reviewer) nextItem(ctx context.Context, sess *model.PipelineSession) (*ReviewResult, error) {
 	return reviewResult(r.p.nextItem(ctx, sess))
 }
 
 // completeSession marks the session done and (unless the session row says it
 // was scoped) advances the review watermark.
-func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
+func (r *Reviewer) completeSession(ctx context.Context, sess *model.PipelineSession) (*ReviewResult, error) {
 	return reviewResult(r.p.completeSession(ctx, sess))
 }
 

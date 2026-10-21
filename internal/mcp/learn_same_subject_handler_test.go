@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -97,7 +99,7 @@ func angleFor(cosine float64) float64 { return math.Acos(cosine) }
 
 // newSameSubjectRepo wires a repo whose embedder reports th and places the seed
 // at cosine 1.0 with itself and `probeCosine` with the probe fact.
-func newSameSubjectRepo(t *testing.T, modelID string, th params.Thresholds, probeCosine float64) (*store.Service, context.Context, store.BatchEmbedder) {
+func newSameSubjectRepo(t *testing.T, modelID string, th params.Thresholds, probeCosine float64) (*store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	emb := newAngleEmbedder(t, modelID, th, map[string]float64{
 		seedMarker:  0,
@@ -106,12 +108,12 @@ func newSameSubjectRepo(t *testing.T, modelID string, th params.Thresholds, prob
 	return newRepoWithEmbedder(t, emb)
 }
 
-func newRepoWithEmbedder(t *testing.T, emb store.BatchEmbedder) (*store.Service, context.Context, store.BatchEmbedder) {
+func newRepoWithEmbedder(t *testing.T, emb model.BatchEmbedder) (*store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	return newRepoWithEmbedderOntology(t, emb, fact.CodeOntology())
 }
 
-func newRepoWithEmbedderOntology(t *testing.T, emb store.BatchEmbedder, ontology *fact.Ontology) (*store.Service, context.Context, store.BatchEmbedder) {
+func newRepoWithEmbedderOntology(t *testing.T, emb model.BatchEmbedder, ontology *fact.Ontology) (*store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
@@ -159,7 +161,7 @@ func sameSubjectLearnReq(moment, topic, category, title, body string, entities [
 }
 
 // seedRampFact writes the existing fact every collision case collides with.
-func seedRampFact(t *testing.T, ctx context.Context, emb store.BatchEmbedder) string {
+func seedRampFact(t *testing.T, ctx context.Context, emb model.BatchEmbedder) string {
 	t.Helper()
 	r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
 		"seed", "decisions", "accepted/ramp/ai-index",

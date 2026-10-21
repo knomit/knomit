@@ -8,10 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
@@ -213,8 +214,8 @@ type pagedRowState struct {
 // embedding the query itself, which is what this handler did before. Variadic
 // for the same reason LearnHandler is: the embedder is optional, and callers
 // that have none (tests, embeddings-disabled builds) pass nothing.
-func QueryHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	var emb store.Embedder
+func QueryHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var emb model.Embedder
 	if len(embedders) > 0 && embedders[0] != nil {
 		emb = embedders[0]
 	}
@@ -292,7 +293,7 @@ func mountLabel(rt repos.ReadTarget) string {
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
-func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb store.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb model.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q, err := parseQueryFilters(req)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -410,14 +411,14 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
-	items := make([]store.QueueItem, len(order))
+	items := make([]model.QueueItem, len(order))
 	for i, ref := range order {
 		e := lists[ref.Mount][ref.Rank]
 		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt, AsOf: q.Now.Unix()})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
-		items[i] = store.QueueItem{
+		items[i] = model.QueueItem{
 			Path:       wirePath(b, targets[ref.Mount].RT, e.Path),
 			CommitHash: e.CommitHash,
 			SortKey:    i,
@@ -632,7 +633,7 @@ func snapshotClock(st pagedRowState) time.Time {
 // parallel, fuses the per-mount ranked lists with reciprocal rank fusion,
 // returns the first page, and (only when the fused set exceeds one page)
 // snapshots the remainder into the write repo's session DB with WIRE paths.
-func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb store.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb model.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q, err := parseQueryFilters(req)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -740,7 +741,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
-	items := make([]store.QueueItem, 0, len(order)-pageSize)
+	items := make([]model.QueueItem, 0, len(order)-pageSize)
 	for i := pageSize; i < len(order); i++ {
 		ref := order[i]
 		r := lists[ref.Mount][ref.Rank]
@@ -751,7 +752,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
-		items = append(items, store.QueueItem{
+		items = append(items, model.QueueItem{
 			Path:       wirePath(b, targets[ref.Mount].RT, r.Path),
 			CommitHash: r.CommitHash,
 			SortKey:    i,

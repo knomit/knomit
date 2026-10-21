@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -139,7 +141,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	}
 	pj, merr := json.Marshal(payload)
 	require.NoError(t, merr)
-	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID:  res.SessionID,
 		StepType:   "discover",
 		ClusterKey: "discover-scoped",

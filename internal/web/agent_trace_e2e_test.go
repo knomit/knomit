@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -119,8 +121,8 @@ func TestAgentTrace_E2E_StampsEachWriteAndNothingWithout(t *testing.T) {
 		for name, msg := range map[string]string{"learn": learnMsg, "update": updateMsg, "move": moveMsg, "retract": retractMsg} {
 			if traced {
 				require.Equal(t, bare[name]+want, msg, "%s: the tool's message plus exactly the trace paragraph", name)
-				require.Equal(t, "task-7f3a", store.TrailerValue(msg, store.TrailerTrace), name)
-				require.Equal(t, e2eRun, store.TrailerValue(msg, store.TrailerRun), name)
+				require.Equal(t, "task-7f3a", model.TrailerValue(msg, model.TrailerTrace), name)
+				require.Equal(t, e2eRun, model.TrailerValue(msg, model.TrailerRun), name)
 			} else {
 				require.Equal(t, bare[name], msg, "%s: D-mint — no trace passed, no paragraph of any kind", name)
 			}
@@ -170,11 +172,11 @@ func TestAgentTrace_E2E_ParallelTasksOnOneSession(t *testing.T) {
 	require.Len(t, got, 2*perTask)
 	for _, w := range got {
 		msg := commitMessageIn(t, m, "jobA-repo", w.hash)
-		require.Equal(t, w.task, store.TrailerValue(msg, store.TrailerTrace), "%q", msg)
+		require.Equal(t, w.task, model.TrailerValue(msg, model.TrailerTrace), "%q", msg)
 		if w.task == "" {
 			require.NotContains(t, msg, "\n\n", "an untraced write carries no paragraph of any kind: %q", msg)
 		} else {
-			require.True(t, strings.HasPrefix(store.TrailerValue(msg, "Step"), w.task+"-"), "%q", msg)
+			require.True(t, strings.HasPrefix(model.TrailerValue(msg, "Step"), w.task+"-"), "%q", msg)
 		}
 	}
 }

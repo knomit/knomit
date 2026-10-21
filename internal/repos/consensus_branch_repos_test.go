@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -57,13 +59,13 @@ func TestOrigins_RefuseAnEmptyBranch(t *testing.T) {
 	r, o := openTestOrigins(t, testCrypt(t))
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
 
-	require.ErrorIs(t, o.Set("u1", Origin{URL: "https://example.test/kb.git"}), store.ErrNoConsensusBranch)
+	require.ErrorIs(t, o.Set("u1", Origin{URL: "https://example.test/kb.git"}), model.ErrNoConsensusBranch)
 	got, err := o.Get("u1")
 	require.NoError(t, err)
 	require.Nil(t, got, "nothing is stored for a refused write")
 
 	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "trunk"}))
-	require.ErrorIs(t, o.SetBranch("u1", ""), store.ErrNoConsensusBranch)
+	require.ErrorIs(t, o.SetBranch("u1", ""), model.ErrNoConsensusBranch)
 	got, err = o.Get("u1")
 	require.NoError(t, err)
 	require.Equal(t, "trunk", got.Branch, "the stored branch is unchanged")

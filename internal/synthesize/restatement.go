@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/vocab"
 
 	"github.com/rs/zerolog/log"
-
-	"knomit/internal/store"
 )
 
 // The consolidation-scope fix.
@@ -884,7 +884,7 @@ func pairTouchesScope(ctx context.Context, d Deps, branch string, p vocab.Restat
 // restate- items in a fully-drained 48-item queue. The number was not wrong
 // about what it counted — it counted SELECTION and was read as SERVICE, and
 // nothing in the output could tell the two apart.
-func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, pairs []vocab.RestatementPair) (served, dropped int, err error) {
+func enqueueRestatementItems(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, pairs []vocab.RestatementPair) (served, dropped int, err error) {
 	for i, p := range pairs {
 		facts := make([]factForLLM, 0, 2)
 		for _, path := range []string{p.APath, p.BPath} {
@@ -928,7 +928,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 		if err != nil {
 			return served, dropped, wrapf(reviewTool, err, "shortlist: marshal pair %d", i)
 		}
-		if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "prune",
 			ClusterKey: fmt.Sprintf("%s%d", restatementClusterKeyPrefix, i),
@@ -970,7 +970,7 @@ func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
 // candidates and a health line saying so": this mechanism is an ADDITION to
 // consolidation, and a corpus whose axis cannot be built should still get its
 // ordinary review rather than an error.
-func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, clusters [][]factForLLM) error {
+func planRestatementShortlist(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, clusters [][]factForLLM) error {
 	// health is emitted on EVERY path, including the failures below. The error
 	// path is exactly where "the shortlist found nothing" has to stay
 	// distinguishable from "the shortlist could not run" — a silent skip on a
@@ -1183,7 +1183,7 @@ func probeSuffix(h restatementHealth) string {
 // Called once per session, so this is behaviourally identical for the
 // shortlist itself. TestMotifAliasHealth_CoexistsWithRestatementLines covers
 // the interaction.
-func recordRestatementHealth(sess *store.PipelineSession, h restatementHealth) {
+func recordRestatementHealth(sess *model.PipelineSession, h restatementHealth) {
 	if sess == nil {
 		return
 	}
@@ -1206,7 +1206,7 @@ type judgedPair struct {
 //
 // Called BEFORE the decisions are applied, because applying them can rewrite a
 // fact, and a rewritten fact is a new row with a new id.
-func resolveShortlistPair(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) *judgedPair {
+func resolveShortlistPair(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) *judgedPair {
 	if !strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix) {
 		return nil
 	}
@@ -1236,7 +1236,7 @@ func resolveShortlistPair(ctx context.Context, d Deps, sess *store.PipelineSessi
 //
 // A confidence "update" is deliberately NOT a resolution: it leaves both facts
 // standing, so the redundancy this pair was offered for is still there.
-func recordShortlistVerdict(ctx context.Context, d Deps, sess *store.PipelineSession, judged *judgedPair, res *PruneResult) {
+func recordShortlistVerdict(ctx context.Context, d Deps, sess *model.PipelineSession, judged *judgedPair, res *PruneResult) {
 	if judged == nil || res == nil {
 		return
 	}
@@ -1423,7 +1423,7 @@ func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64
 		p := vocab.RestatementPair{
 			APath: titles[m.a].Path, BPath: titles[m.b].Path,
 			AFactID: m.a, BFactID: m.b,
-			TitleCos:  store.CosineSim(va, vb),
+			TitleCos:  model.CosineSim(va, vb),
 			MatchKind: m.kind,
 		}
 		if p.BPath < p.APath {

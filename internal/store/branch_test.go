@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/store/internal/vcs"
+	"knomit/internal/store/model"
 )
 
 func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
@@ -24,7 +25,7 @@ func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for missing ref, got nil")
 	}
-	if !errors.Is(err, ErrBranchNotFound) {
+	if !errors.Is(err, model.ErrBranchNotFound) {
 		t.Errorf("error should wrap ErrBranchNotFound, got: %v", err)
 	}
 	// Preserve the underlying go-git error for introspection.
@@ -44,7 +45,7 @@ func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for missing branch, got nil")
 	}
-	if !errors.Is(err, ErrBranchNotFound) {
+	if !errors.Is(err, model.ErrBranchNotFound) {
 		t.Errorf("error should wrap ErrBranchNotFound, got: %v", err)
 	}
 }

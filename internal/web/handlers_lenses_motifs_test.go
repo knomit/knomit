@@ -11,12 +11,13 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -673,7 +674,7 @@ func (s *lensPivotFactsStub) RecentFacts(
 }
 
 func (s *lensPivotFactsStub) Search(
-	_ context.Context, ri *repos.RepoInstance, _ store.Embedder, _ string, opts index.SearchOptions,
+	_ context.Context, ri *repos.RepoInstance, _ model.Embedder, _ string, opts index.SearchOptions,
 ) ([]index.SearchResult, error) {
 	out, _ := s.carriers(ri, opts)
 	res := make([]index.SearchResult, 0, len(out))
@@ -899,13 +900,13 @@ func TestLensMotifCluster_AliasAttributionIsPerMount(t *testing.T) {
 
 // The widening reads every mount, so a mount pinned to a deleted branch fails
 // there — and the 404 it produces has to NAME that branch. writeStoreError
-// renders store.ErrBranchNotFound as `no branch named "<branch>"`, so a
+// renders model.ErrBranchNotFound as `no branch named "<branch>"`, so a
 // fan-out that dropped the branch on its way out would print the message with
 // the one word it exists to carry missing.
 func TestLensFacts_MotifWideningNamesTheFailingMountsBranch(t *testing.T) {
 	motifs := splitVocabularyStub()
 	motifs.errRepo = "beta"
-	motifs.errWith = store.ErrBranchNotFound
+	motifs.errWith = model.ErrBranchNotFound
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{

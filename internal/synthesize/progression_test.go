@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store/model"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
@@ -22,7 +24,7 @@ import (
 // two facts was still distilled from the pre-merge grouping, which is how
 // synthesis fabricated corroboration out of one claim recorded twice.
 
-func pruneItem(clusterKey string, paths ...string) *store.PipelineWorkItem {
+func pruneItem(clusterKey string, paths ...string) *model.PipelineWorkItem {
 	facts := make([]factForLLM, 0, len(paths))
 	for _, p := range paths {
 		facts = append(facts, factForLLM{File: p, Title: "t " + p, Body: "b " + p, Type: "observation"})
@@ -31,7 +33,7 @@ func pruneItem(clusterKey string, paths ...string) *store.PipelineWorkItem {
 	if err != nil {
 		panic(err)
 	}
-	return &store.PipelineWorkItem{
+	return &model.PipelineWorkItem{
 		StepType: "prune", ClusterKey: clusterKey, FactsJSON: string(payload),
 	}
 }
@@ -151,8 +153,8 @@ func TestProgression_ShortlistItemsDoNotPromote(t *testing.T) {
 // arm, but the predicate states it too, so a future caller cannot widen it by
 // accident.
 func TestProgression_NonPruneItemsDoNotPromote(t *testing.T) {
-	require.False(t, promotesToDistill(&store.PipelineWorkItem{StepType: "distill", ClusterKey: "distill-c0"}))
-	require.False(t, promotesToDistill(&store.PipelineWorkItem{StepType: "discover", ClusterKey: "discover-0"}))
+	require.False(t, promotesToDistill(&model.PipelineWorkItem{StepType: "distill", ClusterKey: "distill-c0"}))
+	require.False(t, promotesToDistill(&model.PipelineWorkItem{StepType: "discover", ClusterKey: "discover-0"}))
 	require.False(t, promotesToDistill(nil))
 }
 
@@ -210,14 +212,14 @@ func TestProgression_PromotedKeyIsDistinguishable(t *testing.T) {
 func TestProgression_StopIsStatedNotInferred(t *testing.T) {
 	item := pruneItem("cluster-1", "kb/a.md", "kb/b.md")
 
-	acted := &store.PipelineSession{}
+	acted := &model.PipelineSession{}
 	recordProgressionStop(acted, item, &ReviewStats{Merged: 1})
 	require.Len(t, acted.Health, 1)
 	require.Contains(t, acted.Health[0], "ACTED on")
 	require.Contains(t, acted.Health[0], "NEXT session",
 		"the line must say where the cluster went, not merely that it stopped")
 
-	silent := &store.PipelineSession{}
+	silent := &model.PipelineSession{}
 	recordProgressionStop(silent, item, &ReviewStats{})
 	require.Len(t, silent.Health, 1)
 	require.Contains(t, silent.Health[0], "not promoted")
@@ -240,7 +242,7 @@ func TestProgression_StopIsStatedNotInferred(t *testing.T) {
 // forms in this harness (the same wall knomit#149 hit), so a Plan-driven
 // fixture would produce no prune item and every assertion below would pass
 // vacuously against an empty queue.
-func progressionEnv(t *testing.T, clusterKey string) (*restatementEnv, *Pipeline, *store.PipelineSession) {
+func progressionEnv(t *testing.T, clusterKey string) (*restatementEnv, *Pipeline, *model.PipelineSession) {
 	t.Helper()
 	ctx := context.Background()
 	env := newRestatementEnv(t, 0)
@@ -258,7 +260,7 @@ func progressionEnv(t *testing.T, clusterKey string) (*restatementEnv, *Pipeline
 	}
 	payload, err := json.Marshal(facts)
 	require.NoError(t, err)
-	require.NoError(t, env.svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+	require.NoError(t, env.svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: clusterKey,
 		FactsJSON: string(payload), Priority: 2,
 	}))
@@ -267,11 +269,11 @@ func progressionEnv(t *testing.T, clusterKey string) (*restatementEnv, *Pipeline
 	return env, p, sess
 }
 
-func promotedItems(t *testing.T, env *restatementEnv, sessionID string) []store.PipelineWorkItem {
+func promotedItems(t *testing.T, env *restatementEnv, sessionID string) []model.PipelineWorkItem {
 	t.Helper()
 	items, err := env.svc.Pipeline().PendingPipelineWorkItems(context.Background(), sessionID)
 	require.NoError(t, err)
-	var out []store.PipelineWorkItem
+	var out []model.PipelineWorkItem
 	for _, it := range items {
 		if strings.HasPrefix(it.ClusterKey, promotedDistillKeyPrefix) {
 			out = append(out, it)
@@ -383,7 +385,7 @@ func edgeReadFails(t *testing.T, svc *store.Service) *index.Facade {
 
 // planFixture seeds n facts in ONE directory and plans a session over them with
 // clustering forced through the fallback.
-func planFixture(t *testing.T, n int) (*restatementEnv, *store.PipelineSession, []store.PipelineWorkItem) {
+func planFixture(t *testing.T, n int) (*restatementEnv, *model.PipelineSession, []model.PipelineWorkItem) {
 	t.Helper()
 	ctx := context.Background()
 	env := newRestatementEnv(t, 0)
@@ -411,7 +413,7 @@ func planFixture(t *testing.T, n int) (*restatementEnv, *store.PipelineSession, 
 	return env, sess, items
 }
 
-func keysWithPrefix(items []store.PipelineWorkItem, prefix string) []string {
+func keysWithPrefix(items []model.PipelineWorkItem, prefix string) []string {
 	var out []string
 	for _, it := range items {
 		if strings.HasPrefix(it.ClusterKey, prefix) {
