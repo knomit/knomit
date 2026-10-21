@@ -18,22 +18,28 @@ import (
 func TestFleetRecordWriters_OnlyFleetCallers(t *testing.T) {
 	writers := map[string]bool{"writeRecord": true, "writeOwnRecord": true, "refreshOwnRecord": true, "fleetBootReconcile": true, "startFleetBootReconcile": true}
 	allowed := map[string]bool{"fleet.go": true, "fleet_create.go": true, "fleet_membership.go": true, "fleet_reconcile.go": true, "manager.go": true}
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// WALKED, not globbed: a writer call in a child package of internal/repos
+	// would otherwise be invisible. Keys are slash paths relative to this
+	// directory, so `allowed` names only the top-level files and a child's file
+	// is `dir/file.go`.
 	var sites []string
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(name)
+	walked := 0
+	err := filepath.WalkDir(".", func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
+		}
+		name := filepath.ToSlash(p)
+		if d.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		walked++
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return err
 		}
 		f, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			if c, ok := n.(*ast.CallExpr); ok {
@@ -46,6 +52,13 @@ func TestFleetRecordWriters_OnlyFleetCallers(t *testing.T) {
 			}
 			return true
 		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if walked <= 20 {
+		t.Fatalf("the guard walked only %d files: it is not reading its subject", walked)
 	}
 	sort.Strings(sites)
 	// The exact call sites: a new one (a second automatic writer) must be a
