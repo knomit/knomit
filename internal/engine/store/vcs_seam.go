@@ -13,8 +13,9 @@ import (
 // layer every cluster above it reaches UP to — branches, commits, the branch
 // locks, signing, trailers, the commit log and path history.
 //
-// repoHandler EMBEDS *vcs.Repo (the one documented embed, allowlisted in
-// TestStoreTypes_DoNotEmbedStorePackageTypes), so the parent calls the child's
+// repoHandler EMBEDS *vcs.Repo (one of the embeds allowlisted in
+// TestStoreTypes_DoNotEmbedStorePackageTypes, with the gitserve host's own
+// *vcs.Repo and index.SearchResult's facts.FactWithBody), so the parent calls the child's
 // exported methods by promotion (rh.LockBranch, rh.NotifyCommit, rh.DB(), ...).
 // The facts, merge and remotesync children are NOT embedded: Service holds
 // them as the named fields fr, mr and rr, so a call to one of their methods

@@ -66,7 +66,7 @@ func TestIndex_SkipsFilesOutsideOntologyRoot(t *testing.T) {
 		"rebuild must not re-admit files outside the ontology root")
 
 	// The whole point: the tree and the index agree, so Verify is clean.
-	report, err := svc.Verify(ctx, fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	for _, iss := range report.Issues {
 		require.NotEqual(t, fsck.CategoryFactsCoherence, iss.Category,
@@ -155,7 +155,7 @@ func TestIndex_SkipsPrivatePathsUnderOntologyRoot(t *testing.T) {
 	require.Equal(t, []string{"kb/obs/real.md"}, indexedPaths(t, svc, "agent/a"),
 		"rebuild must not re-admit a private path")
 
-	report, err := svc.Verify(ctx, fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	for _, iss := range report.Issues {
 		require.NotEqual(t, fsck.CategoryFactsCoherence, iss.Category,

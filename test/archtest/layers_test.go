@@ -155,8 +155,8 @@ var sameLayerEdges = map[string]bool{
 	"engine/store/gitserve -> engine/store/merge":        true,
 	"engine/store/gitserve -> engine/store/remotesync":   true,
 	"engine/store/gitserve -> engine/store/verify":       true,
-	// The fsck child (the integrity checker behind Service.Verify and
-	// PruneGeneratedRefs) sits at the top of the store's child order (proposal
+	// The fsck child (the integrity checker behind Service.Integrity()
+	// Verify and PruneGeneratedRefs) sits at the top of the store's child order (proposal
 	// 4.3: fsck -> everything above): it reads the one *vcs.Repo and the two
 	// sub-indices its checks need, the fact index for the fact-format check and
 	// the search index for the parity and embedding checks. Nothing in the
@@ -339,11 +339,13 @@ func TestLayersDetectsViolations(t *testing.T) {
 		p + "edge/mcp":               {p + "testsupport/testsigner"}, // exempt dependency
 		p + "platform/hostguard":     {"knomit/tools/bridge"},        // launders: the outside package imports knomit
 		p + "edge/web":               {"knomit/web"},                 // fine: outside leaf (imports nothing from knomit)
+		p + "app/wire":               {"knomit/tools/ghost"},         // outside package missing from the listing
 		"knomit/tools/bridge":        {p + "foundation/config"},
 		"knomit/web":                 {"embed"},
 	}
 	got := layerViolations(graph, nil)
 	want := []string{
+		p + "app/wire imports knomit/tools/ghost: outside package is not in the listing",
 		p + "corpus/refs imports " + p + "corpus/repos: unlisted same-layer edge in corpus (corpus/refs -> corpus/repos)",
 		p + "domain/fact (domain) imports " + p + "engine/store (engine): upward import",
 		p + "mystery: maps to no layer (put it inside a layer directory)",
@@ -354,8 +356,8 @@ func TestLayersDetectsViolations(t *testing.T) {
 	}
 	// Listing the edge makes it pass; the rest is unchanged.
 	got = layerViolations(graph, map[string]bool{"corpus/refs -> corpus/repos": true})
-	if len(got) != 3 {
-		t.Fatalf("with corpus/refs -> corpus/repos allowed want 3 violations, got %q", got)
+	if len(got) != 4 {
+		t.Fatalf("with corpus/refs -> corpus/repos allowed want 4 violations, got %q", got)
 	}
 	// Layer-directory rule.
 	if r, _, ok := layerOf(p + "domain/anything"); !ok || r != layerDomain {
@@ -422,10 +424,13 @@ func TestLayers(t *testing.T) {
 		t.Logf("[%s] checked %d packages", c.name, len(graph))
 	}
 	// Structural floor: every internal/ directory with a .go file is a package
-	// some configuration must have listed.
+	// some configuration must have listed. A directory whose .go files are all
+	// excluded from every configuration (for instance every file is
+	// `//go:build ignore`) fails here too, and no configuration can fix that:
+	// the message says so.
 	for _, dir := range internalGoDirs(t, "../../internal") {
 		if !listed[internalPrefix+dir] {
-			t.Errorf("internal/%s holds .go files but no configuration lists it as a package — add a configuration that builds it", dir)
+			t.Errorf("internal/%s holds .go files but no configuration lists it as a package — either a configuration that builds it is missing from this test, or every .go file there is excluded from every build (for instance `//go:build ignore`), in which case it is not a package: move the files out of internal/ or give the directory a buildable file", dir)
 		}
 	}
 	for pkg := range listed {
@@ -442,6 +447,9 @@ func TestLayers(t *testing.T) {
 
 // internalGoDirs returns, relative to root, every directory that contains a
 // .go file, skipping testdata and directories whose name starts with "_" or ".".
+// It looks at file names only, not build constraints, so a directory whose files
+// are all `//go:build ignore` is returned although no configuration lists it as a
+// package; TestLayers' structural floor reports that case.
 func internalGoDirs(t *testing.T, root string) []string {
 	t.Helper()
 	var dirs []string

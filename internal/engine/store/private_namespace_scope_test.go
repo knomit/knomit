@@ -66,7 +66,7 @@ func TestPrivateNamespaceIsNotAFactPath(t *testing.T) {
 
 	// The whole point: Verify's expected set must agree, or job state surfaces
 	// as a ghost branch_facts row on the next integrity run.
-	report, err := svc.Verify(ctx, fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	for _, iss := range report.Issues {
 		require.NotEqual(t, fsck.CategoryFactsCoherence, iss.Category,

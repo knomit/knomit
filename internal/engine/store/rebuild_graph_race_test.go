@@ -56,7 +56,7 @@ func TestRebuild_GraphSnapshotDoesNotResurrectAConcurrentCrossBranchDelete(t *te
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
 	require.True(t, fired, "the hook must have run, else nothing was raced")
 
-	report, err := svc.Verify(ctx, fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "a cross-branch delete during Rebuild must not leave a live node without a facts row: %v", report.Issues)
 }

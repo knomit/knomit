@@ -202,7 +202,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 	ctx := context.Background()
 	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback", "config-drift"})
 
-	clean, err := svc.Verify(ctx, fsck.VerifyOpts{})
+	clean, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.Empty(t, derivedTableIssues(clean),
 		"a healthy repo must report no derived-table issues, or the test below proves nothing")
@@ -213,7 +213,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 		`DELETE FROM fact_motifs WHERE motif = 'config-drift'`)
 	require.NoError(t, err)
 
-	drifted, err := svc.Verify(ctx, fsck.VerifyOpts{})
+	drifted, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	issues := derivedTableIssues(drifted)
 	require.NotEmpty(t, issues, "a lost junction row must be reported")
@@ -224,7 +224,7 @@ func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
 		`INSERT INTO fact_motifs(fact_id, motif) SELECT id, 'never-authored' FROM facts LIMIT 1`)
 	require.NoError(t, err)
 
-	both, err := svc.Verify(ctx, fsck.VerifyOpts{})
+	both, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	var details []string
 	for _, i := range derivedTableIssues(both) {
@@ -256,7 +256,7 @@ func TestVerify_DetectsMotifOrphans(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
+	report, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	var found bool
 	for _, i := range derivedTableIssues(report) {

@@ -44,7 +44,7 @@ func writeMergeFact(t *testing.T, svc *Service, branch, path, title, body string
 func verifyMergeClean(t *testing.T, svc *Service, dst string) {
 	t.Helper()
 	require.NoError(t, svc.IndexManager().Sync(context.Background(), dst))
-	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "integrity issues: %v", report.Issues)
 }

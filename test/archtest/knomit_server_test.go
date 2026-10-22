@@ -73,8 +73,10 @@ func TestNoRetiredServerVariable(t *testing.T) {
 // is chosen is pinned by the tests beside internal/app/listeners.go.
 //
 // References are found with go/ast (a selector named SetServerAddress, called
-// or taken as a method value), so a comment naming the method does not count;
-// internal/corpus/repos, which DEFINES it, is excluded.
+// or taken as a method value), so a comment naming the method does not count,
+// and neither does the method's own declaration in internal/corpus/repos (a
+// declaration is not a selector). No directory is excluded: a call from inside
+// repos would be a second path too.
 func TestOnlyServeRecordsItsAddress(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
@@ -95,9 +97,6 @@ func TestOnlyServeRecordsItsAddress(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
-		if strings.HasPrefix(rel, "internal/corpus/repos/") {
-			return nil
-		}
 		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", rel, err)
