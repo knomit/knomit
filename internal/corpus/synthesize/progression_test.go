@@ -368,7 +368,7 @@ func TestProgression_ShortlistItemPromotesNothingThroughApply(t *testing.T) {
 // fallback, which is the only way to get a real cluster out of this harness.
 //
 // At the production Louvain resolution no community survives
-// graph.filterSmallClusters on a test-sized corpus — measured at 4, 8, 15 and 30
+// graph's small-cluster filter on a test-sized corpus — measured at 4, 8, 15 and 30
 // tightly-grouped facts, all yielding zero clusters, which is the same wall
 // knomit#149 hit. Without a cluster there is no clustered distill group, so a
 // test of the promotion GATE would pass against a queue that never had a

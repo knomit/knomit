@@ -609,7 +609,7 @@ func isRemainderItem(clusterKey string) bool {
 // Two properties of ScopedCluster's output make "just iterate clusters" wrong,
 // and this function exists to reconcile them with the seed pool:
 //
-//   - graph.filterSmallClusters DROPS every community below minCommunitySize, so a
+//   - graph's small-cluster filter DROPS every community below minCommunitySize, so a
 //     seed that clusters alone is absent from clusters entirely. Grouping
 //     straight off that output would silently exclude it from synthesis — no
 //     error, no counter, indistinguishable from "nothing to synthesize". That

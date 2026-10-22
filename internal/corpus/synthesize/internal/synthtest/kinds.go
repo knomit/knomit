@@ -113,7 +113,7 @@ func RequireUnfilteredSearchFinds(t *testing.T, env *RestatementEnv, from, want 
 // CompleteEdges seeds the SIMILAR_TO edges the test store does not build. With
 // none, the real SubgraphEdges returns none; Louvain then
 // returns one SINGLETON per node — non-empty, so ScopedCluster's category
-// fallback never fires — and graph.filterSmallClusters drops every singleton: ZERO
+// fallback never fires — and graph's small-cluster filter drops every singleton: ZERO
 // clusters, over which a "pol is in no cluster" assertion is vacuous. Every
 // pair of the store's facts gets an edge instead (through the graph test seams,
 // so the real SubgraphEdges reads them back), so membership is decided by

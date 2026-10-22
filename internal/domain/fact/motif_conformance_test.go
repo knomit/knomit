@@ -454,13 +454,26 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 // needing one written under deadline.
 func TestMN2_NoLLMInMotifCode(t *testing.T) {
 	sources := goSources(t)
-	for _, rel := range []string{
+	targets := []string{
 		"internal/domain/fact/motif.go", "internal/domain/fact/textnorm/textnorm.go",
 		// Phase 3's enumeration and its gate. The detector stays mechanical:
 		// the connected agent is the only reasoner in the read path, and it
 		// already exists (cf455b8f).
 		"internal/corpus/synthesize/bridge_motif.go", "internal/corpus/synthesize/motif_disjoint.go",
-	} {
+	}
+	// The motif child is scanned as a DIRECTORY, not by name: it plans work
+	// items for the LLM step but must reach no model itself, and a file added
+	// to it later is covered without anyone remembering to list it.
+	const motifChild = "internal/corpus/synthesize/motif/"
+	childFiles := 0
+	for rel := range sources {
+		if strings.HasPrefix(rel, motifChild) {
+			targets = append(targets, rel)
+			childFiles++
+		}
+	}
+	require.Positivef(t, childFiles, "MN2: no non-test Go files found under %s — the scan is not reading the motif child", motifChild)
+	for _, rel := range targets {
 		src, ok := sources[rel]
 		require.Truef(t, ok, "MN2 target %s is missing", rel)
 		lower := strings.ToLower(src)

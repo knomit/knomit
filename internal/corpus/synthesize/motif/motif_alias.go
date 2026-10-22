@@ -2,8 +2,8 @@
 // session: alias-resolution pair selection and its judge (motif_alias.go) and
 // the blind definition pass (motif_define.go). Neither calls a model: they
 // plan work items and apply decoded answers, and write only derived vocabulary
-// state. The parent gates them at effort >= medium and owns the prompts and the strategy that
-// routes the answers.
+// state. The parent gates them at effort >= medium and owns the
+// prompts and the strategy that routes the answers.
 package motif
 
 import (

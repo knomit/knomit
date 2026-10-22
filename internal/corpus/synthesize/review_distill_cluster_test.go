@@ -29,7 +29,7 @@ import (
 // count. But two properties of ScopedCluster make the naive "iterate clusters"
 // version wrong, and both tests below exist to pin them:
 //
-//   - graph.filterSmallClusters DROPS any community below minCommunitySize, so a seed
+//   - graph's small-cluster filter DROPS any community below minCommunitySize, so a seed
 //     that clusters alone would silently vanish from synthesis.
 //   - clusters contain NEIGHBOURS, not just seeds — ScopedCluster pulls the top
 //     10 search hits per seed into the subgraph, and the review path passes no
@@ -125,7 +125,7 @@ func collectDistillItems(t *testing.T, svc *store.Service, sessionID string) map
 // grouping. Whatever partition Plan chooses, the union of the depth-0 distill
 // items must be exactly the seed pool: no seed dropped, no seed duplicated.
 //
-// The drop half is the one that bites. graph.filterSmallClusters removes communities
+// The drop half is the one that bites. graph's small-cluster filter removes communities
 // below minCommunitySize, so grouping straight off ScopedCluster's output would
 // silently exclude any seed that clusters alone — invisible in the summary,
 // invisible in the response, and indistinguishable from "there was nothing to
@@ -178,7 +178,7 @@ func seedsNamed(names ...string) []step.FactForLLM {
 //
 // Through a session it cannot be observed at all in a unit environment: with no
 // embeddings there are no SIMILAR_TO edges, Louvain returns every fact as its
-// own community, and graph.filterSmallClusters removes all of them — so clusters
+// own community, and graph's small-cluster filter removes all of them — so clusters
 // arrives empty and everything legitimately lands in the remainder. That is
 // correct degradation, not a bug, but it means cluster-boundary behaviour has
 // to be exercised at the function.
