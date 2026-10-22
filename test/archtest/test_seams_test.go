@@ -205,52 +205,109 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 	}
 }
 
-// faultHookSetters are the per-owner fail-only read hooks the web tests use to
-// make a read fail on one store.Service. Each is a *ForTest door declared in
-// its owner's testseams.go, so B2 (the walk above) already keeps production
-// source from naming it; the list makes that explicit and fails if one is
-// renamed or moved out of a testseams.go, where the guard would stop covering it.
-var faultHookSetters = []string{
-	"SetReadFaultForTest",     // index.Facade, vocab.MotifIndex
-	"SetReadFactFaultForTest", // facts.Index
-	"SetListDirFaultForTest",  // facts.Index
-	"SetWriteFaultForTest",    // facts.Index
+// faultHook identifies one per-owner fail-only read hook by the package that
+// owns it, its receiver type and its name. The name alone is not enough:
+// SetReadFaultForTest exists on both index.Facade and vocab.MotifIndex, and a
+// check by name would stay green when one of the two left its testseams.go.
+type faultHook struct{ pkg, recv, name string }
+
+// faultHookSetters are the hooks the web tests use to make a read or write fail
+// on one store.Service. Each is a *ForTest door that must be declared in its
+// owner's internal/engine/store/<pkg>/testseams.go, so B2 (the walk above)
+// keeps production source from naming it.
+var faultHookSetters = []faultHook{
+	{"index", "Facade", "SetReadFaultForTest"},
+	{"vocab", "MotifIndex", "SetReadFaultForTest"},
+	{"facts", "Index", "SetReadFactFaultForTest"},
+	{"facts", "Index", "SetListDirFaultForTest"},
+	{"facts", "Index", "SetWriteFaultForTest"},
+	{"facts", "Index", "SetDeleteFaultForTest"},
 }
 
-// TestFaultHookSettersDeclaredInTestseams: every setter in faultHookSetters is
-// declared in a testseams.go under internal/engine/store (the only files B2
-// lets name a seam), calls mustBeTest, and matches the seam pattern.
+// recvTypeName is the receiver's type name of a method, "" for a function.
+func recvTypeName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return ""
+	}
+	t := fn.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// startsWithMustBeTest reports whether the first statement of body is the call
+// mustBeTest("<name>").
+func startsWithMustBeTest(body *ast.BlockStmt, name string) bool {
+	if body == nil || len(body.List) == 0 {
+		return false
+	}
+	es, ok := body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := es.X.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	fun, ok := call.Fun.(*ast.Ident)
+	if !ok || fun.Name != "mustBeTest" {
+		return false
+	}
+	lit, ok := call.Args[0].(*ast.BasicLit)
+	return ok && lit.Value == strconv.Quote(name)
+}
+
+// TestFaultHookSettersDeclaredInTestseams: every hook in faultHookSetters is
+// declared exactly once, as a method on its receiver, in
+// internal/engine/store/<pkg>/testseams.go, and starts with mustBeTest(name).
+// A declaration of any listed setter NAME in another non-test file under
+// internal/engine/store/** fails: moving a setter out of testseams.go would take
+// it out of the only files B2 lets name a seam, and its mustBeTest with it.
 func TestFaultHookSettersDeclaredInTestseams(t *testing.T) {
 	root := moduleRoot(t)
-	declared := map[string][]string{} // setter -> files declaring it
+	storeDir := filepath.Join(root, "internal", "engine", "store")
+	names := map[string]bool{}
+	for _, h := range faultHookSetters {
+		names[h.name] = true
+		if !testSeamName.MatchString(h.name) {
+			t.Errorf("%s does not match the seam pattern, so B2 would not flag a production use", h.name)
+		}
+	}
+	found := map[faultHook]int{}
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(filepath.Join(root, "internal", "engine", "store"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(path) != "testseams.go" {
+	err := filepath.WalkDir(storeDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
 		}
-		src, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
-		f, perr := parser.ParseFile(fset, path, src, 0)
+		f, perr := parser.ParseFile(fset, path, nil, 0)
 		if perr != nil {
 			return perr
 		}
+		rel, _ := filepath.Rel(storeDir, path)
+		rel = filepath.ToSlash(rel)
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
+			if !ok || !names[fn.Name.Name] {
 				continue
 			}
+			h := faultHook{pkg: filepath.ToSlash(filepath.Dir(rel)), recv: recvTypeName(fn), name: fn.Name.Name}
+			listed := false
 			for _, want := range faultHookSetters {
-				if fn.Name.Name != want {
-					continue
+				if want == h {
+					listed = true
 				}
-				body := string(src[fset.Position(fn.Body.Pos()).Offset:fset.Position(fn.Body.End()).Offset])
-				if !strings.Contains(body, `mustBeTest("`+want+`")`) {
-					t.Errorf("%s: %s does not call mustBeTest(%q)", path, want, want)
-				}
-				rel, _ := filepath.Rel(root, path)
-				declared[want] = append(declared[want], filepath.ToSlash(rel))
+			}
+			if !listed || filepath.Base(rel) != "testseams.go" {
+				t.Errorf("%s declares %s.%s(%s): a fault-hook setter must be a listed (package, receiver, name) declared in its owner's testseams.go", rel, h.pkg, h.recv, h.name)
+				continue
+			}
+			found[h]++
+			if !startsWithMustBeTest(fn.Body, h.name) {
+				t.Errorf("%s: %s.%s must start with mustBeTest(%q)", rel, h.recv, h.name, h.name)
 			}
 		}
 		return nil
@@ -258,12 +315,9 @@ func TestFaultHookSettersDeclaredInTestseams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range faultHookSetters {
-		if !testSeamName.MatchString(want) {
-			t.Errorf("%s does not match the seam pattern, so B2 would not flag a production use", want)
-		}
-		if len(declared[want]) == 0 {
-			t.Errorf("%s is declared in no internal/engine/store/**/testseams.go: it moved, or was renamed", want)
+	for _, h := range faultHookSetters {
+		if found[h] != 1 {
+			t.Errorf("%s.%s.%s is declared %d times in internal/engine/store/%s/testseams.go, want exactly 1: it moved, was renamed, or its receiver changed", h.pkg, h.recv, h.name, found[h], h.pkg)
 		}
 	}
 }
@@ -289,8 +343,8 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 	}
 	// The per-owner fail-only read hooks: production naming one is a path to a
 	// read that fails on demand.
-	for _, name := range faultHookSetters {
-		flagged["fault hook "+name] = src("func f(s S) { _ = s.X()." + name + "(nil) }\n")
+	for _, h := range faultHookSetters {
+		flagged["fault hook "+h.pkg+"."+h.recv+"."+h.name] = src("func f(s S) { _ = s.X()." + h.name + "(nil) }\n")
 	}
 	for name, s := range flagged {
 		if got := seamUses(t, token.NewFileSet(), name+".go", s); len(got) == 0 {

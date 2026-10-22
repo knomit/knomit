@@ -71,13 +71,13 @@ func (mm *MethodologyMatcher) probe(m string) error { return probeOf(mm.ov.Load(
 // chose for the named read, or nil. Unlike probe its result is RETURNED by the
 // read, before any work. With no fault installed (always, in production) it is
 // one atomic load.
-func (fq *FactQuery) failRead(m string) error { return faultOf(fq.fault.Load(), m) }
+func (fq *FactQuery) failRead(m ReadName) error { return faultOf(fq.fault.Load(), m) }
 
-func (gs *GraphStore) failRead(m string) error { return faultOf(gs.fault.Load(), m) }
+func (gs *GraphStore) failRead(m ReadName) error { return faultOf(gs.fault.Load(), m) }
 
-func (hq *HistoryQuery) failRead(m string) error { return faultOf(hq.fault.Load(), m) }
+func (hq *HistoryQuery) failRead(m ReadName) error { return faultOf(hq.fault.Load(), m) }
 
-func faultOf(f *ReadFault, m string) error {
+func faultOf(f *ReadFault, m ReadName) error {
 	if f == nil {
 		return nil
 	}

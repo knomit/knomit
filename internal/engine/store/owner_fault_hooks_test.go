@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 )
 
 // The per-owner fail-only read hooks: index.Facade.SetReadFaultForTest,
@@ -44,23 +45,23 @@ func TestIndexReadFault_FailsExactlyTheNamedReadOnExactlyThatService(t *testing.
 	head, err := a.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
-	reads := map[string]func(*Service) error{
-		"Stats":    func(s *Service) error { _, err := s.Search().Stats(ctx, "main", "", ""); return err },
-		"Activity": func(s *Service) error { _, err := s.Search().Activity(ctx, "main", faultPath); return err },
-		"Completions": func(s *Service) error {
+	reads := map[index.ReadName]func(*Service) error{
+		index.ReadStats:    func(s *Service) error { _, err := s.Search().Stats(ctx, "main", "", ""); return err },
+		index.ReadActivity: func(s *Service) error { _, err := s.Search().Activity(ctx, "main", faultPath); return err },
+		index.ReadCompletions: func(s *Service) error {
 			_, err := s.Search().Completions(ctx, "main", "domain", "", 5)
 			return err
 		},
-		"RecentFacts": func(s *Service) error {
+		index.ReadRecentFacts: func(s *Service) error {
 			_, _, err := s.Search().RecentFacts(ctx, "main", index.SearchOptions{Limit: 5})
 			return err
 		},
-		"Search": func(s *Service) error {
+		index.ReadSearch: func(s *Service) error {
 			_, err := s.Search().Search(ctx, "main", index.SearchOptions{Limit: 5})
 			return err
 		},
-		"ExplainFact": func(s *Service) error { _, err := s.Search().ExplainFact(ctx, "main", faultPath); return err },
-		"FactLiveAtCommit": func(s *Service) error {
+		index.ReadExplainFact: func(s *Service) error { _, err := s.Search().ExplainFact(ctx, "main", faultPath); return err },
+		index.ReadFactLiveAtCommit: func(s *Service) error {
 			_, err := s.Search().FactLiveAtCommit(ctx, "main", faultPath, head)
 			return err
 		},
@@ -68,13 +69,13 @@ func TestIndexReadFault_FailsExactlyTheNamedReadOnExactlyThatService(t *testing.
 	require.Len(t, reads, 7)
 
 	for name, read := range reads {
-		t.Run(name, func(t *testing.T) {
+		t.Run(string(name), func(t *testing.T) {
 			// Unset: the real read runs and succeeds on both services.
 			require.NoError(t, read(a))
 			require.NoError(t, read(b))
 
-			var seen []string
-			restore := a.Search().SetReadFaultForTest(func(method string) error {
+			var seen []index.ReadName
+			restore := a.Search().SetReadFaultForTest(func(method index.ReadName) error {
 				seen = append(seen, method)
 				if method == name {
 					return errInjected
@@ -101,12 +102,12 @@ func TestIndexReadFault_FailsExactlyTheNamedReadOnExactlyThatService(t *testing.
 func TestIndexReadFault_NilResultAndNilHook(t *testing.T) {
 	ctx := context.Background()
 	svc := faultService(t)
-	restore := svc.Search().SetReadFaultForTest(func(string) error { return nil })
+	restore := svc.Search().SetReadFaultForTest(func(index.ReadName) error { return nil })
 	defer restore()
 	_, err := svc.Search().Stats(ctx, "main", "", "")
 	require.NoError(t, err)
 
-	svc.Search().SetReadFaultForTest(func(string) error { return errInjected })
+	svc.Search().SetReadFaultForTest(func(index.ReadName) error { return errInjected })
 	svc.Search().SetReadFaultForTest(nil)
 	_, err = svc.Search().Stats(ctx, "main", "", "")
 	require.NoError(t, err, "a nil hook removes the fault")
@@ -117,8 +118,8 @@ func TestIndexReadFault_NilResultAndNilHook(t *testing.T) {
 func TestIndexReadFault_NestedSearchFailsTextRecentFacts(t *testing.T) {
 	ctx := context.Background()
 	svc := faultService(t)
-	defer svc.Search().SetReadFaultForTest(func(m string) error {
-		if m == "Search" {
+	defer svc.Search().SetReadFaultForTest(func(m index.ReadName) error {
+		if m == index.ReadSearch {
 			return errInjected
 		}
 		return nil
@@ -146,8 +147,8 @@ func TestIndexReadFault_ComposesWithOverridesObserverThatSleeps(t *testing.T) {
 		time.Sleep(delay)
 		return nil
 	}})()
-	defer svc.Search().SetReadFaultForTest(func(m string) error {
-		if m == "Stats" {
+	defer svc.Search().SetReadFaultForTest(func(m index.ReadName) error {
+		if m == index.ReadStats {
 			return errInjected
 		}
 		return nil
@@ -249,22 +250,22 @@ func TestFactsWriteFault(t *testing.T) {
 func TestVocabReadFault(t *testing.T) {
 	ctx := context.Background()
 	a, b := faultService(t), faultService(t)
-	reads := map[string]func(*Service) error{
-		"ClustersUnder": func(s *Service) error { _, err := s.Motifs().ClustersUnder(ctx, "main", ""); return err },
-		"Definitions": func(s *Service) error {
+	reads := map[vocab.ReadName]func(*Service) error{
+		vocab.ReadClustersUnder: func(s *Service) error { _, err := s.Motifs().ClustersUnder(ctx, "main", ""); return err },
+		vocab.ReadDefinitions: func(s *Service) error {
 			_, err := s.Motifs().Definitions(ctx, "main", []string{"x"})
 			return err
 		},
-		"VocabularyHealthUnder": func(s *Service) error {
+		vocab.ReadVocabularyHealthUnder: func(s *Service) error {
 			_, err := s.Motifs().VocabularyHealthUnder(ctx, "main", "")
 			return err
 		},
-		"AliasRows": func(s *Service) error { _, err := s.Motifs().AliasRows(ctx, "main"); return err },
+		vocab.ReadAliasRows: func(s *Service) error { _, err := s.Motifs().AliasRows(ctx, "main"); return err },
 	}
 	for name, read := range reads {
-		t.Run(name, func(t *testing.T) {
+		t.Run(string(name), func(t *testing.T) {
 			require.NoError(t, read(a))
-			restore := a.Motifs().SetReadFaultForTest(func(method string) error {
+			restore := a.Motifs().SetReadFaultForTest(func(method vocab.ReadName) error {
 				if method == name {
 					return errInjected
 				}
@@ -281,4 +282,31 @@ func TestVocabReadFault(t *testing.T) {
 			require.NoError(t, read(a))
 		})
 	}
+}
+
+// A restore func puts back the hook that was installed before, not nil, so
+// nested installs unwind in order.
+func TestFaultRestoreIsThePreviousHook(t *testing.T) {
+	ctx := context.Background()
+	svc := faultService(t)
+	list := func() error { _, err := svc.Facts().ListDir(ctx, "main", "kb"); return err }
+	errOuter := errors.New("outer")
+	restoreOuter := svc.Facts().SetListDirFaultForTest(func(string) error { return errOuter })
+	restoreInner := svc.Facts().SetListDirFaultForTest(func(string) error { return errInjected })
+	require.ErrorIs(t, list(), errInjected)
+	restoreInner()
+	require.ErrorIs(t, list(), errOuter, "restoring the inner hook brings back the outer one")
+	restoreOuter()
+	require.NoError(t, list())
+
+	vouter := svc.Motifs().SetReadFaultForTest(func(vocab.ReadName) error { return errOuter })
+	vinner := svc.Motifs().SetReadFaultForTest(func(vocab.ReadName) error { return errInjected })
+	_, err := svc.Motifs().AliasRows(ctx, "main")
+	require.ErrorIs(t, err, errInjected)
+	vinner()
+	_, err = svc.Motifs().AliasRows(ctx, "main")
+	require.ErrorIs(t, err, errOuter)
+	vouter()
+	_, err = svc.Motifs().AliasRows(ctx, "main")
+	require.NoError(t, err)
 }

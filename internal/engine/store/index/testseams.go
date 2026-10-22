@@ -273,10 +273,26 @@ type Overrides struct {
 	SubgraphEdges func(ctx context.Context, paths []string) ([][2]string, error)
 }
 
-// ReadFault is the hook of SetReadFaultForTest: it is called with the method
-// name of a faultable read and returns the error that read must return, or nil
-// to let it run.
-type ReadFault func(method string) error
+// ReadName names a read SetReadFaultForTest can fail. It is a distinct type
+// with one constant per faultable read, so a mistyped name is a compile error
+// and not a fault that silently never fires.
+type ReadName string
+
+// The reads SetReadFaultForTest can fail.
+const (
+	ReadStats            ReadName = "Stats"
+	ReadActivity         ReadName = "Activity"
+	ReadCompletions      ReadName = "Completions"
+	ReadRecentFacts      ReadName = "RecentFacts"
+	ReadSearch           ReadName = "Search"
+	ReadExplainFact      ReadName = "ExplainFact"
+	ReadFactLiveAtCommit ReadName = "FactLiveAtCommit"
+)
+
+// ReadFault is the hook of SetReadFaultForTest: it is called with the name of a
+// faultable read and returns the error that read must return, or nil to let it
+// run.
+type ReadFault func(read ReadName) error
 
 // SetReadFaultForTest makes a read return fault(method) instead of running,
 // when fault returns an error; a nil result lets the read through, and a nil
@@ -292,6 +308,12 @@ type ReadFault func(method string) error
 // Search. The hook is installed on this Facade's query services, that is on one
 // store.Service; another Service is unaffected. It panics outside a test
 // binary; the returned func restores the previous hook.
+//
+// The hook closure may run on several goroutines at once (the lens fan-out
+// reads every mount concurrently), so a closure that records anything must be
+// goroutine-safe. Match on the exact ReadName and assert the injected error's
+// identity (a distinct sentinel or message), not only a status, so a test
+// cannot pass for the wrong reason.
 func (f *Facade) SetReadFaultForTest(fault ReadFault) (restore func()) {
 	mustBeTest("SetReadFaultForTest")
 	var p *ReadFault

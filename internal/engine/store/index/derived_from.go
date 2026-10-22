@@ -135,7 +135,7 @@ func (fq *FactQuery) FactExistsAt(ctx context.Context, branch, path, commit stri
 // ancestry of `commit`. Errors propagate.
 func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error) {
 	fq.probe("FactLiveAtCommit")
-	if err := fq.failRead("FactLiveAtCommit"); err != nil {
+	if err := fq.failRead(ReadFactLiveAtCommit); err != nil {
 		return false, err
 	}
 	if commit == "" {

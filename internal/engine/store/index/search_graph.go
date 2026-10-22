@@ -40,7 +40,7 @@ type ExplainResult struct {
 // paths on a single underlying query.
 func (gs *GraphStore) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
 	gs.probe("ExplainFact")
-	if err := gs.failRead("ExplainFact"); err != nil {
+	if err := gs.failRead(ReadExplainFact); err != nil {
 		return ExplainResult{}, err
 	}
 	branchID, err := gs.rh.BranchID(ctx, branch)

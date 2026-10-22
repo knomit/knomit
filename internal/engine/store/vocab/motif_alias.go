@@ -37,15 +37,15 @@ type MotifIndex struct {
 	rh *vcs.Repo
 	// fault is the failure-injection hook of SetReadFaultForTest
 	// (testseams.go); nil in production, where nothing can set it.
-	fault atomic.Pointer[func(method string) error]
+	fault atomic.Pointer[func(read ReadName) error]
 }
 
 // failRead returns the error the test-only read fault chose for the named
 // read, or nil. With no fault installed (always, in production) it is one
 // atomic load.
-func (mi *MotifIndex) failRead(method string) error {
+func (mi *MotifIndex) failRead(read ReadName) error {
 	if h := mi.fault.Load(); h != nil {
-		return (*h)(method)
+		return (*h)(read)
 	}
 	return nil
 }
@@ -498,7 +498,7 @@ func (mi *MotifIndex) clusterMembership(ctx context.Context, branchID int64) (ma
 
 // AliasRows returns the full alias table with its audit columns.
 func (mi *MotifIndex) AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error) {
-	if err := mi.failRead("AliasRows"); err != nil {
+	if err := mi.failRead(ReadAliasRows); err != nil {
 		return nil, err
 	}
 	branchID, err := mi.rh.BranchID(ctx, branch)
@@ -674,7 +674,7 @@ func (mi *MotifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 // the unscoped call computes them, and the prefix decides only which clusters
 // survive and what number each shows.
 func (mi *MotifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error) {
-	if err := mi.failRead("ClustersUnder"); err != nil {
+	if err := mi.failRead(ReadClustersUnder); err != nil {
 		return nil, err
 	}
 	branchID, err := mi.rh.BranchID(ctx, branch)
