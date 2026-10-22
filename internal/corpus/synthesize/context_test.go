@@ -260,10 +260,19 @@ func TestPrompts_NeverInterpolateContext(t *testing.T) {
 		}
 	}
 
-	// step/types.go holds FactForLLM and WorkItemContent, which 13a moved out of
-	// review_strategy.go and prompt_review.go: the projection that carries
-	// Context into the prompt payload stays under this scan.
-	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go", "step/types.go"}
+	// Every non-test file of step/ is scanned, not a named one: step holds the
+	// shared prompt payload vocabulary (FactForLLM and WorkItemContent moved there
+	// in 13a, carrying Context into the payload), so a new step file is where a
+	// leak would appear. The glob is non-vacuous: step must have files.
+	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go"}
+	stepFiles, err := filepath.Glob(filepath.Join("step", "*.go"))
+	require.NoError(t, err)
+	for _, f := range stepFiles {
+		if !strings.HasSuffix(f, "_test.go") {
+			builders = append(builders, filepath.ToSlash(f))
+		}
+	}
+	require.Greater(t, len(builders), 5, "fixture: the step files must be found")
 	for _, name := range builders {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, name, nil, 0)

@@ -327,7 +327,7 @@ func (e *GraphEnv) SeedResults(results []index.SearchResult) *GraphEnv {
 // these communities.
 func (e *GraphEnv) Partition(comms [][]string) *GraphEnv {
 	OverridesOf(e.T, e.Idx()).SubgraphEdges(func(context.Context, []string) ([][2]string, error) {
-		return IntraCommunityEdges(comms), nil
+		return intraCommunityEdges(comms), nil
 	})
 	return e
 }
@@ -346,11 +346,11 @@ func (e *GraphEnv) SeedFacts(fs ...fact.Fact) *GraphEnv {
 	return e
 }
 
-// IntraCommunityEdges returns a star of SIMILAR_TO edges within each community
+// intraCommunityEdges returns a star of SIMILAR_TO edges within each community
 // (first member linked to the rest) and no cross-community edge, so Louvain
 // recovers exactly the given partition. Singleton communities contribute no
 // edge.
-func IntraCommunityEdges(comms [][]string) [][2]string {
+func intraCommunityEdges(comms [][]string) [][2]string {
 	var edges [][2]string
 	for _, c := range comms {
 		for i := 1; i < len(c); i++ {

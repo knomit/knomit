@@ -232,12 +232,13 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			delivered, err := json.MarshalIndent(out, "", "  ")
 			require.NoError(t, err)
 			envelope := len(delivered) - deliveredFactsLen(out.Item.Facts)
-			t.Logf("%s: envelope %d of %d", tc.name, envelope, step.PageEnvelopeReserveBytes)
+			reserve := step.MaxDeliveredItemBytes - step.MaxPageFactBytes
+			t.Logf("%s: envelope %d of %d", tc.name, envelope, reserve)
 
-			require.LessOrEqualf(t, envelope, step.PageEnvelopeReserveBytes,
+			require.LessOrEqualf(t, envelope, reserve,
 				"%s: the non-facts part of a delivered page is %d bytes, over the %d reserved for it; "+
-					"maxPageFactBytes is derived by subtracting that reserve, so it now over-promises",
-				tc.name, envelope, step.PageEnvelopeReserveBytes)
+					"step.MaxPageFactBytes is derived by subtracting that reserve, so it now over-promises",
+				tc.name, envelope, reserve)
 		})
 	}
 }

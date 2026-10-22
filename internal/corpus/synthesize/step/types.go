@@ -229,7 +229,7 @@ func ParsePruneResponse(text string) (PruneResult, error) {
 // something this package may assume.
 const MaxDeliveredItemBytes = 32 * 1024
 
-// PageEnvelopeReserveBytes reserves everything on a delivered page that is not
+// pageEnvelopeReserveBytes reserves everything on a delivered page that is not
 // facts: the prompt, the response schema, the paging fields, and the
 // ReviewResult envelope around them. Page 1 is the tight case — it alone
 // carries the prompt and schema — so later pages simply run with more slack.
@@ -266,7 +266,7 @@ const MaxDeliveredItemBytes = 32 * 1024
 // multi-page distill remainder at 12,432 bytes (a single-page one is 12,302),
 // over 12 KiB; the reserve is 12.5 KiB, leaving 368. Trim prose before raising
 // it again, and re-measure.
-const PageEnvelopeReserveBytes = 12*1024 + 512
+const pageEnvelopeReserveBytes = 12*1024 + 512
 
 // MaxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
 // — after the indentation json.MarshalIndent applies in internal/edge/mcp/review.go,
@@ -280,7 +280,7 @@ const PageEnvelopeReserveBytes = 12*1024 + 512
 // delivered 33.5 KB, at 200 B bodies 40.6 KB, at 50 B bodies 46.4 KB — all
 // against a 32 KiB cap, which is the original defect reproduced at a different
 // fact size. deliveredFactsLen measures the artifact instead of predicting it.
-const MaxPageFactBytes = MaxDeliveredItemBytes - PageEnvelopeReserveBytes
+const MaxPageFactBytes = MaxDeliveredItemBytes - pageEnvelopeReserveBytes
 
 // MaxItemBytes bounds what ONE work item holds — i.e. what the agent must
 // accumulate across pages before answering. This is the second of the two

@@ -96,7 +96,7 @@ func HashVector(text string) []float32 {
 		seed = seed*6364136223846793005 + 1442695040888963407
 		v[i] = float32(int64(seed>>33)%2000-1000) / 1000
 	}
-	Normalize(v)
+	normalize(v)
 	return v
 }
 
@@ -109,7 +109,7 @@ func AxisVector(angle float64) []float32 {
 	return v
 }
 
-func Normalize(v []float32) {
+func normalize(v []float32) {
 	var sum float64
 	for _, x := range v {
 		sum += float64(x) * float64(x)
