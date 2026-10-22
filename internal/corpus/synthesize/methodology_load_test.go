@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -64,7 +65,7 @@ func TestLoadDistillMethodology_InjectsWhenRelevant(t *testing.T) {
 		[]string{"meta", "reasoning", "methodology", "security"},
 		[]string{"Anthropic"})
 
-	facts := []factForLLM{
+	facts := []step.FactForLLM{
 		{File: "kb/synth/a.md", Title: "A", Body: "first body", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 		{File: "kb/synth/b.md", Title: "B", Body: "second body", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 	}
@@ -84,7 +85,7 @@ func TestLoadDistillMethodology_InjectsWhenRelevant(t *testing.T) {
 // block omits the entire wrapper text.
 func TestLoadDistillMethodology_EmptyWhenNoMethodologyExists(t *testing.T) {
 	r, _ := newReviewerForMethodologyTest(t, 0.0)
-	facts := []factForLLM{
+	facts := []step.FactForLLM{
 		{File: "kb/synth/a.md", Title: "A", Body: "x", Type: "synthesis", Domain: []string{"security"}},
 	}
 	require.Equal(t, "", r.loadDistillMethodology(context.Background(), "agent/test", facts))
@@ -104,7 +105,7 @@ func TestLoadDistillMethodology_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	section := r.loadDistillMethodology(ctx, "agent/test", []factForLLM{
+	section := r.loadDistillMethodology(ctx, "agent/test", []step.FactForLLM{
 		{File: "kb/synth/a.md", Title: "A", Body: "x", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 	})
 	require.Equal(t, "", section, "canceled context must yield empty section, not partial results")
@@ -163,7 +164,7 @@ func TestLoadReflectMethodology_EmptyOnEmptyTransitions(t *testing.T) {
 // and omits the entire wrapper when the section is empty (no orphan
 // heading).
 func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
-	facts := []factForLLM{{File: "kb/x.md", Title: "X", Body: "y", Type: "synthesis"}}
+	facts := []step.FactForLLM{{File: "kb/x.md", Title: "X", Body: "y", Type: "synthesis"}}
 	bullets := "• score=0.50  Lesson  (kb/meta/reasoning/lesson.md)\n"
 
 	content, err := RenderDistillWorkItem(facts, "kb", bullets, false)
@@ -220,7 +221,7 @@ func TestLoadDistillMethodology_ThresholdComparesAgainstScore_NotTagOrVector(t *
 		[]string{"meta", "reasoning", "methodology", "security"},
 		nil)
 
-	facts := []factForLLM{
+	facts := []step.FactForLLM{
 		{File: "kb/synth/a.md", Title: "A", Body: "x", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 		{File: "kb/synth/b.md", Title: "B", Body: "y", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 	}

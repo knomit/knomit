@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/vocab"
 
 	"github.com/stretchr/testify/require"
@@ -36,12 +38,12 @@ const structuralFiller = 404
 // The count cannot simply be lowered. shortlistBudget is derived from corpus
 // size, and TestStructural_AllowanceSurvivesAFullOrdinaryBand and its
 // neighbours assert behaviour that only appears once the band is full.
-func structuralEnv(t *testing.T, pair [2]struct{ Path, Title string }) *restatementEnv {
+func structuralEnv(t *testing.T, pair [2]struct{ Path, Title string }) *synthtest.RestatementEnv {
 	t.Helper()
-	env := newRestatementEnv(t, 0)
-	env.writeFiller(structuralFiller)
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFiller(structuralFiller)
 	for _, f := range pair {
-		env.writeFact(f.Path, f.Title, "a body about the event")
+		env.WriteFact(f.Path, f.Title, "a body about the event")
 	}
 	return env
 }
@@ -51,9 +53,9 @@ func namedFact(path, title string) struct{ Path, Title string } {
 }
 
 // pairKindIn returns the stored match kind for a pair, or "" if it never stood.
-func pairKindIn(t *testing.T, env *restatementEnv, a, b string) string {
+func pairKindIn(t *testing.T, env *synthtest.RestatementEnv, a, b string) string {
 	t.Helper()
-	pairs, err := env.svc.Abstraction().RestatementPairsByRank(context.Background(), env.branch, 100_000)
+	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(context.Background(), env.Branch, 100_000)
 	require.NoError(t, err)
 	for _, p := range pairs {
 		if (p.APath == a && p.BPath == b) || (p.APath == b && p.BPath == a) {
@@ -78,7 +80,7 @@ func TestStructural_PathPrefixExtension(t *testing.T) {
 		namedFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload"),
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"one path's tokens inside the other's is one subject filed at two depths")
 }
@@ -93,7 +95,7 @@ func TestStructural_PathSegmentInversion(t *testing.T) {
 		namedFact(a, "GitLab directive flaw exploited within days"),
 		namedFact(b, "Attackers reach GitLab through a directive flaw"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"the same segments in a different order are the same identity")
 }
@@ -117,7 +119,7 @@ func TestStructural_PluralFold(t *testing.T) {
 		namedFact(a, "GitLab honeypot traffic climbs after disclosure"),
 		namedFact(b, "Honeypots record GitLab exploitation attempts"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"plural is spelling, not identity")
 }
@@ -132,7 +134,7 @@ func TestStructural_SlugVersusUUIDFilename(t *testing.T) {
 		namedFact(a, "GitLab advisory reaches customers late"),
 		namedFact(b, "Late customer notification on the GitLab advisory"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"a uuid filename must not block a match its directory already makes")
 }
@@ -151,7 +153,7 @@ func TestStructural_RareIdentifierToken(t *testing.T) {
 		namedFact(a, "SmartConsole authentication bypass CVE-2026-16232 under active exploitation"),
 		namedFact(b, "Check Point flaw CVE-2026-16232 exploited against a handful of customers"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchRareToken, pairKindIn(t, env, a, b),
 		"a shared rare identifier is evidence of identity that no path rule reaches")
 }
@@ -170,7 +172,7 @@ func TestStructural_CommonIdentifierTokenIsNotEvidence(t *testing.T) {
 		namedFact(a, "Storage shipments fell in 2026"),
 		namedFact(b, "Procurement rules changed in 2026"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, "", pairKindIn(t, env, a, b),
 		"a token the whole corpus carries says nothing about identity")
 }
@@ -186,7 +188,7 @@ func TestStructural_SharedGenericPrefixIsNotIdentity(t *testing.T) {
 		namedFact(a, "One note about a widget"),
 		namedFact(b, "Another note about a different widget"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, "", pairKindIn(t, env, a, b),
 		"the prefix the whole corpus shares is not an identity claim")
 }
@@ -207,10 +209,10 @@ func TestStructural_ReachesTheJudge(t *testing.T) {
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
 
-	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	d := env.Deps()
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.branch, nil))
+	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.Branch, nil))
 
 	// The fixture must actually budget more than one slot, or the reservation
 	// under test does not exist.
@@ -242,23 +244,23 @@ func TestStructural_AllowanceSurvivesAFullOrdinaryBand(t *testing.T) {
 		namedFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload"),
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 
-	d := env.deps()
+	d := env.Deps()
 	budget := shortlistBudget(structuralFiller + 2)
-	ordinary, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, budget*shortlistOverfetch)
+	ordinary, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, budget*shortlistOverfetch)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(ordinary), budget,
 		"fixture must supply enough title-ranked pairs to fill the budget alone, "+
 			"or the reservation is not being tested")
 
-	pairs, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, structuralFiller+2)
+	pairs, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, structuralFiller+2)
 	require.NoError(t, err)
 	require.Positive(t, h.StructuralOffered,
 		"the allowance must be spent even when the ordinary band could have filled the budget")
 	require.LessOrEqual(t, h.StructuralOffered, structuralAllowance,
 		"the allowance bounds the route; an unbounded sweep would drown the session")
-	require.True(t, containsPair(pairs, a, b))
+	require.True(t, synthtest.ContainsPair(pairs, a, b))
 	require.Len(t, pairs, budget+h.StructuralOffered,
 		"the allowance ADDS to the budget, it does not spend from it — the ordinary "+
 			"band must still get every slot the throttle funded")
@@ -282,24 +284,24 @@ func TestStructural_NoTitleVectorIsDroppedNotScored(t *testing.T) {
 	a := "kb/technology/security/vulnerabilities/cisco/1e8287a2.md"
 	b := "kb/technology/security/vulnerabilities/networking/cisco/bfbb31b8.md"
 
-	emb := &restatementEmbedder{perBatchDelay: 40 * time.Millisecond}
-	env := newRestatementEnvWith(t, 0, emb)
-	env.writeFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload", "body")
+	emb := &synthtest.RestatementEmbedder{PerBatchDelay: 40 * time.Millisecond}
+	env := synthtest.NewRestatementEnvWith(t, 0, emb)
+	env.WriteFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload", "body")
 	for i := range titleBackfillBatch * 2 {
-		env.writeFact(fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1),
+		env.WriteFact(fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1),
 			fmt.Sprintf("Filler note 2026 about widget %d", 1000+i), "an unrelated body")
 	}
-	env.writeFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload", "body")
+	env.WriteFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload", "body")
 
 	// One batch fits in the budget; the rest of the corpus does not.
-	d := env.deps()
-	have, total, err := ensureTitleVectors(ctx, d, env.branch, time.Millisecond)
+	d := env.Deps()
+	have, total, err := ensureTitleVectors(ctx, d, env.Branch, time.Millisecond)
 	require.NoError(t, err)
 	require.Greater(t, have, 0, "fixture needs SOME facts on the axis")
 	require.Less(t, have, total,
 		"fixture needs a PARTIAL axis, or the drop under test is never reached")
 
-	onAxis, err := env.svc.Abstraction().LiveEpistemicFactsOnAxis(ctx, env.branch)
+	onAxis, err := env.Svc.Abstraction().LiveEpistemicFactsOnAxis(ctx, env.Branch)
 	require.NoError(t, err)
 	byPath := map[string]bool{}
 	for _, p := range onAxis {
@@ -308,13 +310,13 @@ func TestStructural_NoTitleVectorIsDroppedNotScored(t *testing.T) {
 	require.True(t, byPath[a], "fixture: the first twin must be on the axis")
 	require.False(t, byPath[b], "fixture: the second twin must NOT be on the axis")
 
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.Equal(t, "", pairKindIn(t, env, a, b),
 		"a pair that cannot be scored on the title axis must not be stored with an invented score")
 
 	// ...and once the axis closes, the same corpus yields the pair.
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchPathIdentity, pairKindIn(t, env, a, b),
 		"the pair is deferred by a missing vector, never discarded")
 }
@@ -338,7 +340,7 @@ func TestStructural_ContainmentWithoutSpecificityIsNotPathIdentity(t *testing.T)
 		namedFact(a, "One report on CVE-2026-77777"),
 		namedFact(b, "A second report on CVE-2026-77777"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 	require.Equal(t, vocab.MatchRareToken, pairKindIn(t, env, a, b),
 		"containment on the corpus's shared prefix is not a path identity — "+
 			"the shared identifier is what found this pair, and the record must say so")

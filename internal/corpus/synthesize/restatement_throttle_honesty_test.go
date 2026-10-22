@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -51,7 +53,7 @@ func healthLineSaysProbing(sess *model.PipelineSession) bool {
 
 func itemPairPaths(t *testing.T, factsJSON string) (string, string) {
 	t.Helper()
-	var facts []factForLLM
+	var facts []step.FactForLLM
 	require.NoError(t, json.Unmarshal([]byte(factsJSON), &facts))
 	require.Len(t, facts, 2, "a shortlist work item carries exactly the pair")
 	return facts[0].File, facts[1].File
@@ -61,10 +63,10 @@ func itemPairPaths(t *testing.T, factsJSON string) (string, string) {
 // without going through selection — what defunds a corpus is the verdict
 // history, and building it directly keeps the fixture independent of whatever
 // selection happens to offer.
-func defundCorpus(t *testing.T, env *restatementEnv) {
+func defundCorpus(t *testing.T, env *synthtest.RestatementEnv) {
 	t.Helper()
 	for i := range throttleMinVerdicts {
-		env.recordVerdict(fmt.Sprintf("kb/f%d.md", 2*i), fmt.Sprintf("kb/f%d.md", 2*i+1), false)
+		env.RecordVerdict(fmt.Sprintf("kb/f%d.md", 2*i), fmt.Sprintf("kb/f%d.md", 2*i+1), false)
 	}
 }
 
@@ -77,10 +79,10 @@ func defundCorpus(t *testing.T, env *restatementEnv) {
 // wrong turn, since it looks like "half-defunded" — this is what catches it.
 func TestThrottle_UnprovenDoesNotGateSpending(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 600)
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 600)
+	seedShortlist(env)
 
-	basePairs, baseHealth, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+	basePairs, baseHealth, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 	require.NoError(t, err)
 	require.Equal(t, throttleOptimistic, baseHealth.ThrottleState, "no verdicts yet")
 
@@ -95,10 +97,10 @@ func TestThrottle_UnprovenDoesNotGateSpending(t *testing.T) {
 	require.Positive(t, judged)
 	require.Less(t, judged, throttleMinVerdicts)
 	for i := range judged {
-		env.recordVerdict(basePairs[i].APath, basePairs[i].BPath, false)
+		env.RecordVerdict(basePairs[i].APath, basePairs[i].BPath, false)
 	}
 
-	pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+	pairs, health, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 	require.NoError(t, err)
 	require.Equal(t, throttleUnproven, health.ThrottleState,
 		"judged with nothing resolved, below the floor, is its own state")
@@ -114,12 +116,12 @@ func TestThrottle_UnprovenDoesNotGateSpending(t *testing.T) {
 // without its real denominator, and this one was decorative.
 func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 600)
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 600)
+	seedShortlist(env)
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
+	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 
 	line := throttleHealthLine(sess)
 	require.NotEmpty(t, line, "no throttle line rendered — every assertion below would be vacuous")
@@ -130,19 +132,19 @@ func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 	// And it tracks the REAL count rather than being pinned to zero: judge a
 	// number that is neither 0 nor throttleWindow, so the assertion pins WHICH
 	// value the denominator took, not merely that it moved (the X2 rule).
-	pairs, _, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+	pairs, _, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 	require.NoError(t, err)
 	judged := throttleMinVerdicts - 2
 	require.GreaterOrEqual(t, len(pairs), judged, "fixture must offer enough pairs to judge")
 	require.NotEqual(t, throttleWindow, judged)
 	require.NotZero(t, judged)
 	for i := range judged {
-		env.recordVerdict(pairs[i].APath, pairs[i].BPath, false)
+		env.RecordVerdict(pairs[i].APath, pairs[i].BPath, false)
 	}
 
-	sess2, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess2, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess2, env.branch, nil))
+	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess2, env.Branch, nil))
 	require.Contains(t, throttleHealthLine(sess2), fmt.Sprintf("over last %d judged", judged))
 }
 
@@ -158,8 +160,8 @@ func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 // a slower rate, which is exactly what the probe exists to prevent.
 func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 600)
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 600)
+	seedShortlist(env)
 	defundCorpus(t, env)
 
 	// An unservable pair, ranked above anything this corpus produced on its
@@ -171,8 +173,8 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// also marks those facts uncovered, and planRestatementShortlist refreshes
 	// the cache before selecting, so the organic pairs come straight back.
 	// Out-rank, do not clear.
-	ids := env.liveFactIDs()
-	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
+	ids := env.LiveFactIDs()
+	require.NoError(t, env.Svc.Abstraction().ReplaceRestatementPairs(ctx, env.Branch, nil,
 		[]vocab.RestatementPair{{
 			APath: "kb/f100.md", BPath: "kb/gone.md",
 			AFactID: ids["kb/f100.md"], BFactID: 999999,
@@ -183,10 +185,10 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// unservable pair; it must NOT be recorded as having probed.
 	dropped := 0
 	for range throttleProbeInterval {
-		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+		sess, serr := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 		require.NoError(t, serr)
-		require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
-		require.Empty(t, env.workItems(sess.ID), "nothing servable can reach the queue")
+		require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+		require.Empty(t, env.WorkItems(sess.ID), "nothing servable can reach the queue")
 		if strings.Contains(emittedHealthLine(sess), "dropped unserved") {
 			dropped++
 			require.False(t, healthLineSaysProbing(sess),
@@ -203,17 +205,17 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// SERVABLE pair available and the very next session must probe. Under the
 	// old code the dropped session consumed the slot, so this session would be
 	// silent and the corpus would wait another full interval for nothing.
-	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
+	require.NoError(t, env.Svc.Abstraction().ReplaceRestatementPairs(ctx, env.Branch, nil,
 		[]vocab.RestatementPair{{
 			APath: "kb/f101.md", BPath: "kb/f102.md",
 			AFactID: ids["kb/f101.md"], BFactID: ids["kb/f102.md"],
 			TitleCos: 0.9999,
 		}}, nil))
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
+	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 	require.True(t, healthLineSaysProbing(sess),
 		"the probe budget was still owed, not burned on a session that served nothing")
-	require.Len(t, env.workItems(sess.ID), 1, "a probe is one slot")
+	require.Len(t, env.WorkItems(sess.ID), 1, "a probe is one slot")
 }

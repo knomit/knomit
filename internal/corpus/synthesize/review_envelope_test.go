@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -136,7 +137,7 @@ func TestReviewer_DiscoverWrites_CountedInSummary(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/technology/a.md", Title: "A"},
 				{File: "kb/technology/b.md", Title: "B"},
 			},
@@ -179,11 +180,11 @@ func TestReviewer_DiscoverWrites_CountedInSummary(t *testing.T) {
 // the envelope invariant is that a schema's `required` list is inert unless the
 // parser probes the raw object, and only "synthesize" is probed.
 func TestParseDistillResponse_DeclinedReasonOptional(t *testing.T) {
-	old, err := parseDistillResponse(`{"synthesize": [], "retract": []}`)
+	old, err := step.ParseDistillResponse(`{"synthesize": [], "retract": []}`)
 	require.NoError(t, err)
 	require.Empty(t, old.DeclinedReason)
 
-	withReason, err := parseDistillResponse(`{"synthesize": [], "retract": [], "declined_reason": "rest-bucket-incoherent", "declined_note": "sixty facts, four domains"}`)
+	withReason, err := step.ParseDistillResponse(`{"synthesize": [], "retract": [], "declined_reason": "rest-bucket-incoherent", "declined_note": "sixty facts, four domains"}`)
 	require.NoError(t, err)
 	require.Equal(t, "rest-bucket-incoherent", withReason.DeclinedReason)
 	require.Equal(t, "sixty facts, four domains", withReason.DeclinedNote)
@@ -193,7 +194,7 @@ func TestParseDistillResponse_DeclinedReasonOptional(t *testing.T) {
 // enum lives in the schema, so a future prompt can add a value without a
 // parser change, and a health line counting it will simply show the new key.
 func TestParseDistillResponse_UnknownDeclinedReasonKept(t *testing.T) {
-	res, err := parseDistillResponse(`{"synthesize": [], "declined_reason": "some-future-reason"}`)
+	res, err := step.ParseDistillResponse(`{"synthesize": [], "declined_reason": "some-future-reason"}`)
 	require.NoError(t, err)
 	require.Equal(t, "some-future-reason", res.DeclinedReason)
 }

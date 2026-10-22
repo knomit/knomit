@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,12 +25,12 @@ import (
 // returns nil, the loop breaks with one fact, and the candidate evaporates.
 func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 3)
-	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
+	env := synthtest.NewRestatementEnv(t, 3)
+	d := env.Deps()
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
 
-	ids := env.factIDs()
+	ids := env.FactIDs()
 	pairs := []vocab.RestatementPair{
 		// Servable: both halves resolve.
 		{AFactID: ids["kb/f0.md"], BFactID: ids["kb/f1.md"], APath: "kb/f0.md", BPath: "kb/f1.md"},
@@ -37,7 +38,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 		{AFactID: ids["kb/f2.md"], BFactID: 999999, APath: "kb/f2.md", BPath: "kb/gone.md"},
 	}
 
-	served, dropped, err := enqueueRestatementItems(ctx, d, sess, env.branch, pairs)
+	served, dropped, err := enqueueRestatementItems(ctx, d, sess, env.Branch, pairs)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, served,
@@ -46,7 +47,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 		"the unservable candidate must be COUNTED, not silently skipped")
 
 	// And the queue agrees with the number: exactly one restate- item exists.
-	items := env.workItems(sess.ID)
+	items := env.WorkItems(sess.ID)
 	var restate int
 	for _, it := range items {
 		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
@@ -113,16 +114,16 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	// 400 buys two slots, and two top-ranked pairs fill them: one unservable
 	// (so a drop is exercised) and one servable (so the served count is
 	// NON-ZERO and the equality means something).
-	env := newRestatementEnv(t, 400)
-	env.seedShortlist()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
+	env := synthtest.NewRestatementEnv(t, 400)
+	seedShortlist(env)
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
 
 	// Both ranked above anything the corpus produced on its own, so selection
 	// cannot help but pick them. The unservable one is core's situation: a
 	// computed candidate whose half is gone by the time the queue is built.
-	ids := env.factIDs()
-	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
+	ids := env.FactIDs()
+	require.NoError(t, env.Svc.Abstraction().ReplaceRestatementPairs(ctx, env.Branch, nil,
 		[]vocab.RestatementPair{
 			{
 				APath: "kb/f0.md", BPath: "kb/gone.md",
@@ -136,7 +137,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 			},
 		}, nil))
 
-	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
+	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 
 	// What the operator reads.
 	var emitted string
@@ -149,7 +150,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 
 	// What is actually in the queue.
 	var restate int
-	for _, it := range env.workItems(sess.ID) {
+	for _, it := range env.WorkItems(sess.ID) {
 		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
 			restate++
 		}

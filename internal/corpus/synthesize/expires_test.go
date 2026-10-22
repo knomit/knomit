@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
 
@@ -44,18 +46,18 @@ func expiresOf(t *testing.T, svc *store.Service, branch, path string) string {
 // merge writes a NEW fact from its members, so there is no survivor and the
 // merged fact has no expires. Each member's date is named in a warn.
 func TestApplyPruneDecisions_MergedFactCarriesNoExpires(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 	seedDated(t, svc, branch, "kb/technology/a.md", fact.Observation, expA)
 	seedDated(t, svc, branch, "kb/technology/b.md", fact.Hypothesis, expB)
 
-	sink, warns := collectWarns()
-	merges := []MergeEntry{{
+	sink, warns := synthtest.CollectWarns()
+	merges := []step.MergeEntry{{
 		Paths:  []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
+		Merged: step.MergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
 	}}
 	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"review-test", sink, branch, bareRefFixture, "kb", nil)
+		"review-test", sink, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "fixture: the merge must have happened")
 
@@ -75,14 +77,14 @@ func TestApplyPruneDecisions_MergedFactCarriesNoExpires(t *testing.T) {
 
 // TestApplyPruneDecisions_UndatedMembersNoWarn: nothing to report → no warn.
 func TestApplyPruneDecisions_UndatedMembersNoWarn(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	seedDated(t, svc, branch, "kb/technology/a.md", fact.Observation, "")
 	seedDated(t, svc, branch, "kb/technology/b.md", fact.Observation, "")
-	sink, warns := collectWarns()
-	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
+	sink, warns := synthtest.CollectWarns()
+	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []step.MergeEntry{{
 		Paths:  []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
-	}}, "review-test", sink, branch, bareRefFixture, "kb", nil)
+		Merged: step.MergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
+	}}, "review-test", sink, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	for _, w := range *warns {
 		require.NotContains(t, w, "expires not carried")
@@ -92,16 +94,16 @@ func TestApplyPruneDecisions_UndatedMembersNoWarn(t *testing.T) {
 // TestApplyDistillDecisions_NewClaimInheritsNoExpires: a distilled synthesis
 // is a new claim over inputs that stay alive with their own dates.
 func TestApplyDistillDecisions_NewClaimInheritsNoExpires(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	seedDated(t, svc, branch, "kb/technology/a.md", fact.Hypothesis, expA)
 	seedDated(t, svc, branch, "kb/technology/b.md", fact.Observation, expB)
-	df := distillFact{
+	df := step.DistillFact{
 		Path: "kb/technology/synth.md", Title: "S", Body: "distilled", Type: "synthesis",
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 	require.Equal(t, "", expiresOf(t, svc, branch, written[0].Path))
@@ -116,14 +118,14 @@ func TestApplyReflectDecisions_NewMethodologyInheritsNoExpires(t *testing.T) {
 	seedDated(t, svc, branch, "kb/technology/a.md", fact.Hypothesis, expA)
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "review", branch, "")
 	require.NoError(t, err)
-	result := ReflectResult{Propose: []ProposeEntry{{
+	result := step.ReflectResult{Propose: []step.ProposeEntry{{
 		TopicPath: "meta/reasoning", Title: "M", Body: "a methodology",
 		NoveltyArgument: "nothing like it exists", Confidence: 0.8,
 		TransitionPaths: []string{"kb/technology/a.md"},
 		Refs:            []string{"kb/technology/a.md"},
 	}}}
 	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess,
-		bareRefFixture, ri.OntologyRoot(), 0.95, nil))
+		synthtest.BareRefFixture, ri.OntologyRoot(), 0.95, nil))
 	found := methodologyFactPaths(t, svc, branch)
 	require.Len(t, found, 1, "precondition: the propose arm must have written one methodology")
 	require.Equal(t, "", expiresOf(t, svc, branch, found[0]))
@@ -140,7 +142,7 @@ func TestApplyDiscoveredProposals_NewClaimInheritsNoExpires(t *testing.T) {
 		Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
 	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 	require.Equal(t, "", readFactForTest(t, svc, branch, written[0]).Expires)
@@ -159,8 +161,8 @@ func TestDedupCluster_WinnerKeepsItsOwnExpires(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			emb := &restatementEmbedder{vectorFor: func(string) []float32 { return axisVector(0) }}
-			env := newRestatementEnvWith(t, 0, emb)
+			emb := &synthtest.RestatementEmbedder{VectorFor: func(string) []float32 { return synthtest.AxisVector(0) }}
+			env := synthtest.NewRestatementEnvWith(t, 0, emb)
 			const winnerPath, loserPath = "kb/alpha/winner.md", "kb/alpha/loser.md"
 			write := func(path, title string, conf float64, exp string) {
 				f := fact.NewFact(path)
@@ -169,22 +171,22 @@ func TestDedupCluster_WinnerKeepsItsOwnExpires(t *testing.T) {
 				f.Confidence, f.Sources, f.Expires = conf, 1, exp
 				body, err := fact.SerializeFact(f)
 				require.NoError(t, err)
-				_, err = env.svc.Facts().WriteFact(ctx, env.branch, path, body, "write", "test")
+				_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, path, body, "write", "test")
 				require.NoError(t, err)
 			}
 			write(winnerPath, "Widget fails closed", 0.9, tc.winnerExp)
 			write(loserPath, "Widget fails closed again", 0.5, tc.loserExp)
-			cluster := []factForLLM{
+			cluster := []step.FactForLLM{
 				{File: winnerPath, Kind: "epistemic", Title: "Widget fails closed", Body: "recording", Type: "observation", Confidence: 0.9, Sources: 1},
 				{File: loserPath, Kind: "epistemic", Title: "Widget fails closed again", Body: "recording", Type: "observation", Confidence: 0.5, Sources: 1},
 			}
-			d := env.deps()
-			surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
-				env.dedupThreshold(), reviewTool, d.OnProgress, env.branch, fact.ID12(env.ri.ID()))
+			d := env.Deps()
+			surviving, err := dedupCluster(ctx, cluster, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+				env.DedupThreshold(), step.ReviewTool, d.OnProgress, env.Branch, fact.ID12(env.RI.ID()))
 			require.NoError(t, err)
 			require.Len(t, surviving, 1, "fixture: the pair must have merged")
 			require.Equal(t, winnerPath, surviving[0].File)
-			require.Equal(t, tc.want, expiresOf(t, env.svc, env.branch, winnerPath))
+			require.Equal(t, tc.want, expiresOf(t, env.Svc, env.Branch, winnerPath))
 		})
 	}
 }

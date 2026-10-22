@@ -27,6 +27,7 @@ import (
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/llm"
 )
 
@@ -59,8 +60,8 @@ type Reviewer struct {
 // ScopedCluster clusters the review subgraph in-process via
 // Facade.SubgraphEdges on the per-repo Service; no cluster cache is
 // threaded through the synthesize layer.
-func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
-	return NewReviewerWithEffort(ri, onProgress, DefaultEffort)
+func NewReviewer(ri *repos.RepoInstance, onProgress func(step.ProgressEvent)) *Reviewer {
+	return NewReviewerWithEffort(ri, onProgress, step.DefaultEffort)
 }
 
 // NewReviewerWithEffort is the explicit-effort form. Empty effort defaults to
@@ -69,26 +70,26 @@ func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Review
 // discovery, not panics).
 //
 // Use NewReviewerWithOptions to also pass a ScopeFilter.
-func NewReviewerWithEffort(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort) *Reviewer {
-	return NewReviewerWithOptions(ri, onProgress, effort, ScopeFilter{})
+func NewReviewerWithEffort(ri *repos.RepoInstance, onProgress func(step.ProgressEvent), effort step.Effort) *Reviewer {
+	return NewReviewerWithOptions(ri, onProgress, effort, step.ScopeFilter{})
 }
 
 // NewReviewerWithOptions is the full form: effort + optional scope filter,
 // reviewing the repo's own agent branch.
-func NewReviewerWithOptions(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter) *Reviewer {
+func NewReviewerWithOptions(ri *repos.RepoInstance, onProgress func(step.ProgressEvent), effort step.Effort, scope step.ScopeFilter) *Reviewer {
 	return NewReviewerOnBranch(ri, onProgress, effort, scope, "")
 }
 
 // NewReviewerOnBranch reviews an explicit branch — the caller's resolved write
 // branch, so a session bound to an experiment reviews the experiment and
 // advances the experiment's watermark. Empty means the repo's agent branch.
-func NewReviewerOnBranch(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter, branch string) *Reviewer {
+func NewReviewerOnBranch(ri *repos.RepoInstance, onProgress func(step.ProgressEvent), effort step.Effort, scope step.ScopeFilter, branch string) *Reviewer {
 	return &Reviewer{ri: ri, p: NewPipelineOnBranch(ri, onProgress, effort, scope, reviewStrategy{}, branch)}
 }
 
 // Effort returns the discovery dial this Reviewer was constructed with.
 // Exposed so the MCP layer can log/expose the resolved effort back to clients.
-func (r *Reviewer) Effort() Effort { return r.p.Effort() }
+func (r *Reviewer) Effort() step.Effort { return r.p.Effort() }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
@@ -102,18 +103,18 @@ func (r *Reviewer) Effort() Effort { return r.p.Effort() }
 // It displaces any active session on the branch unconditionally. The
 // knomit_review handler uses StartOrResumeSession; this form is used by
 // tests and in-process callers that own the branch.
-func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
+func (r *Reviewer) StartSession(ctx context.Context) (*step.ReviewResult, error) {
 	return reviewResult(r.p.StartSession(ctx))
 }
 
 // Current serves the session's outstanding item again, from page 1.
-func (r *Reviewer) Current(ctx context.Context, sessionID string) (*ReviewResult, error) {
+func (r *Reviewer) Current(ctx context.Context, sessionID string) (*step.ReviewResult, error) {
 	return reviewResult(r.p.Current(ctx, sessionID))
 }
 
 // StartOrResumeSession starts a review session, or resumes the live one on
 // the same branch; see Pipeline.StartOrResumeSession.
-func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) (*ReviewResult, error) {
+func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) (*step.ReviewResult, error) {
 	return reviewResult(r.p.StartOrResumeSession(ctx, opts))
 }
 
@@ -123,7 +124,7 @@ func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 // Equivalent to ContinueSessionForItem with itemID 0 (no item assertion).
 // Kept as the plain form because most callers — RunAll, the tests, and any
 // client that predates the item_id wire field — have no id to assert.
-func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
+func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*step.ReviewResult, error) {
 	return reviewResult(r.p.ContinueSession(ctx, sessionID, response))
 }
 
@@ -131,14 +132,14 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 // the response belongs to work item itemID. Pass 0 to skip the assertion.
 // See Pipeline.ContinueSessionForItem for the peek → decode → claim → apply
 // ordering and why it is ordered that way.
-func (r *Reviewer) ContinueSessionForItem(ctx context.Context, sessionID, response string, itemID int64) (*ReviewResult, error) {
+func (r *Reviewer) ContinueSessionForItem(ctx context.Context, sessionID, response string, itemID int64) (*step.ReviewResult, error) {
 	return reviewResult(r.p.ContinueSessionForItem(ctx, sessionID, response, itemID))
 }
 
 // ContinueSessionForItemPaged is ContinueSessionForItem carrying the
 // completion token read off a multi-page item's final page. Single-page items
 // ignore it, so passing "" is correct for every caller that never paged.
-func (r *Reviewer) ContinueSessionForItemPaged(ctx context.Context, sessionID, response string, itemID int64, completionToken string) (*ReviewResult, error) {
+func (r *Reviewer) ContinueSessionForItemPaged(ctx context.Context, sessionID, response string, itemID int64, completionToken string) (*step.ReviewResult, error) {
 	return reviewResult(r.p.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, completionToken))
 }
 
@@ -153,7 +154,7 @@ func (r *Reviewer) ContinueSessionForItemPaged(ctx context.Context, sessionID, r
 // itemID is asserted when non-zero, for the same reason ContinueSessionForItem
 // asserts it: paging a different item than the agent believes it is reading
 // would assemble one synthesis out of two items' facts.
-func (r *Reviewer) PageItem(ctx context.Context, sessionID string, itemID int64, page int) (*ReviewResult, error) {
+func (r *Reviewer) PageItem(ctx context.Context, sessionID string, itemID int64, page int) (*step.ReviewResult, error) {
 	res, err := r.p.CurrentItem(ctx, sessionID, itemID, page)
 	if err != nil {
 		return nil, err
@@ -174,7 +175,7 @@ func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // interchangeable. FactsJSON is the raw STORED row, dropped here — hypothesize
 // echoes that one back verbatim, review does not. Facts is what the strategy
 // chose to RENDER beside the prompt, and it becomes ReviewItem.Facts.
-func reviewResult(res *PipelineResult, err error) (*ReviewResult, error) {
+func reviewResult(res *step.PipelineResult, err error) (*step.ReviewResult, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -188,11 +189,11 @@ func reviewResult(res *PipelineResult, err error) (*ReviewResult, error) {
 // job) want the whole item, and only the MCP wire has a per-result size limit.
 // Slicing in Render would have handed RunAll one page and silently dropped the
 // rest — the model would receive instructions about facts it was never shown.
-func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
+func reviewResultPage(res *step.PipelineResult, page int) (*step.ReviewResult, error) {
 	if res == nil {
 		return nil, nil
 	}
-	out := &ReviewResult{
+	out := &step.ReviewResult{
 		SessionID: res.SessionID,
 		// Identity and displacement cross the engine→wire boundary here. The
 		// engine struct is the source of a copy; this projection is what a
@@ -212,7 +213,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		return out, nil
 	}
 
-	out.Item = &ReviewItem{
+	out.Item = &step.ReviewItem{
 		ID:         res.Item.ID,
 		Type:       res.Item.Type,
 		ClusterKey: res.Item.ClusterKey,
@@ -279,10 +280,10 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 	// the failure mode is the one this whole area keeps hitting — the client
 	// spills the result to disk and the agent sees nothing, with no error
 	// anywhere. Say so in the log instead.
-	if delivered, err := json.MarshalIndent(out, "", "  "); err == nil && len(delivered) > maxDeliveredItemBytes {
+	if delivered, err := json.MarshalIndent(out, "", "  "); err == nil && len(delivered) > step.MaxDeliveredItemBytes {
 		log.Warn().Int64("item", res.Item.ID).Str("type", res.Item.Type).
 			Int("page", page).Int("pages", len(pages)).
-			Int("bytes", len(delivered)).Int("limit", maxDeliveredItemBytes).
+			Int("bytes", len(delivered)).Int("limit", step.MaxDeliveredItemBytes).
 			Msg("review: delivered page exceeds the tool-result budget; the client may reject it — check for an oversized single fact or an overlong prompt")
 	}
 	return out, nil
@@ -306,7 +307,7 @@ func (r *Reviewer) storeIndices() (*facts.Index, *index.Facade, *sessions.Pipeli
 // dirtyFacts returns the review seed facts (changed since watermark, or the
 // whole epistemic corpus on a full scan), projected onto the prompt-facing
 // shape the review path works in.
-func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx *index.Facade, pipelineIdx *sessions.PipelineIndex) ([]factForLLM, error) {
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx *index.Facade, pipelineIdx *sessions.PipelineIndex) ([]step.FactForLLM, error) {
 	seeds, _, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, err
@@ -314,24 +315,24 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Inde
 	if seeds == nil {
 		return nil, nil
 	}
-	return factsForLLM(seeds, fact.ID12(r.ri.ID())), nil
+	return step.FactsForLLM(seeds, fact.ID12(r.ri.ID())), nil
 }
 
 // nextItem dispatches on the session's persistent phase and returns the
 // review-shaped result.
-func (r *Reviewer) nextItem(ctx context.Context, sess *model.PipelineSession) (*ReviewResult, error) {
+func (r *Reviewer) nextItem(ctx context.Context, sess *model.PipelineSession) (*step.ReviewResult, error) {
 	return reviewResult(r.p.nextItem(ctx, sess))
 }
 
 // completeSession marks the session done and (unless the session row says it
 // was scoped) advances the review watermark.
-func (r *Reviewer) completeSession(ctx context.Context, sess *model.PipelineSession) (*ReviewResult, error) {
+func (r *Reviewer) completeSession(ctx context.Context, sess *model.PipelineSession) (*step.ReviewResult, error) {
 	return reviewResult(r.p.completeSession(ctx, sess))
 }
 
 // loadDistillMethodology retrieves methodology relevant to a distill item's
 // input facts. branch is required (no implicit AgentBranch fallback).
-func (r *Reviewer) loadDistillMethodology(ctx context.Context, branch string, facts []factForLLM) string {
+func (r *Reviewer) loadDistillMethodology(ctx context.Context, branch string, facts []step.FactForLLM) string {
 	return distillMethodologySection(ctx, r.p.ri, branch, facts)
 }
 
@@ -342,13 +343,13 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, branch string, tr
 }
 
 // compile-time assertion that the review strategy satisfies the engine seam.
-var _ Strategy = reviewStrategy{}
+var _ step.Strategy = reviewStrategy{}
 
 // ReviewNext is a review result's `next` line: what to call now, naming the
 // session_id. On the unscoped endpoint it also says to pass the binding and
 // that the binding is not the session. It rides every page, inside the page
 // envelope reserve, so it is kept short.
-func ReviewNext(res *ReviewResult, unscoped bool) string {
+func ReviewNext(res *step.ReviewResult, unscoped bool) string {
 	if res.Done {
 		return "Session finished. Do not call knomit_review with this session_id again."
 	}

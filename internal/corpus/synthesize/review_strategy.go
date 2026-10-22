@@ -26,6 +26,7 @@ import (
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
@@ -37,7 +38,7 @@ import (
 // pipeline: dedup/prune, distill, optional discovery, and reflect.
 type reviewStrategy struct{}
 
-func (reviewStrategy) Tool() string { return reviewTool }
+func (reviewStrategy) Tool() string { return step.ReviewTool }
 
 // SeedQuery scans the whole corpus, epistemic facts only.
 //
@@ -89,7 +90,7 @@ func (reviewStrategy) AcceptSeed(f fact.Fact) bool {
 // it explicitly names the general-freeze reading as a misreading that once
 // blocked a legitimate uniform fix. A health line costs no discovery and
 // produces no facts.
-func recordVocabularySkipHealth(sess *model.PipelineSession, effort Effort) {
+func recordVocabularySkipHealth(sess *model.PipelineSession, effort step.Effort) {
 	if sess == nil || effort.MaintainsVocabulary() {
 		return
 	}
@@ -118,7 +119,7 @@ func recordVocabularySkipHealth(sess *model.PipelineSession, effort Effort) {
 // "does the corpus have work?" and then, separately, planned it — two
 // statements that could drift apart. This plans, then reports what it planned,
 // so the health line and the queue cannot disagree.
-func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) (bool, []string, error) {
+func (reviewStrategy) PlanStandingWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) (bool, []string, error) {
 	before := len(sess.Health)
 	// nil clusters: an empty dirty set clusters to nothing, so there is no
 	// co-membership to exclude against. That is not a degradation — the
@@ -135,7 +136,7 @@ func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *model.
 	// dishonesty this whole campaign is about.
 	items, err := d.Pipeline.PendingPipelineWorkItems(ctx, sess.ID)
 	if err != nil {
-		return false, nil, wrapf(reviewTool, err, "standing work: read pending items")
+		return false, nil, step.Wrapf(step.ReviewTool, err, "standing work: read pending items")
 	}
 	pending := len(items)
 	// The shortlist's own health lines were hung on the session by
@@ -158,15 +159,15 @@ func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *model.
 //
 // branch comes off sess, never off d.RI: by the time Plan runs, the session is
 // already bound to the branch it was created against.
-func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSession, seeds []fact.Fact) error {
+func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.PipelineSession, seeds []fact.Fact) error {
 	branch := sess.Branch
-	llmSeeds := factsForLLM(seeds, fact.ID12(d.RI.ID()))
+	llmSeeds := step.FactsForLLM(seeds, fact.ID12(d.RI.ID()))
 
 	// Build scoped clusters.
 	t := time.Now()
 	clusters, err := ScopedCluster(ctx, llmSeeds, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, branch)
 	if err != nil {
-		return wrapf(reviewTool, err, "cluster")
+		return step.Wrapf(step.ReviewTool, err, "cluster")
 	}
 	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
@@ -175,9 +176,9 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 	t = time.Now()
 	dedupThreshold := model.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {
-		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Files, d.Search, dedupThreshold, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
+		surviving, err := dedupCluster(ctx, clusters[i], d.Facts, d.Files, d.Search, dedupThreshold, step.ReviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()))
 		if err != nil {
-			return wrapf(reviewTool, err, "dedup cluster %d", i)
+			return step.Wrapf(step.ReviewTool, err, "dedup cluster %d", i)
 		}
 		clusters[i] = surviving
 	}
@@ -185,7 +186,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 
 	// Filter to clusters with > 1 fact (nothing for the LLM to reason about
 	// with just one).
-	var pruneClusters [][]factForLLM
+	var pruneClusters [][]step.FactForLLM
 	for _, c := range clusters {
 		if len(c) > 1 {
 			pruneClusters = append(pruneClusters, c)
@@ -225,7 +226,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 	for i, cluster := range pruneClusters {
 		factsJSON, err := json.Marshal(cluster)
 		if err != nil {
-			return wrapf(reviewTool, err, "marshal cluster %d", i)
+			return step.Wrapf(step.ReviewTool, err, "marshal cluster %d", i)
 		}
 		// Prune stays unchunked, so nothing bounds a cluster except what Louvain
 		// happened to produce. Paging makes an oversized one DELIVERABLE — it
@@ -234,9 +235,9 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 		// reason over even though every page fits. Say so rather than letting a
 		// degraded merge pass silently: the whole failure class this area keeps
 		// hitting is caps that nothing reports.
-		if len(factsJSON) > maxItemBytes {
+		if len(factsJSON) > step.MaxItemBytes {
 			log.Warn().Str("session", sess.ID).Str("cluster", fmt.Sprintf("cluster-%d", i)).
-				Int("facts", len(cluster)).Int("bytes", len(factsJSON)).Int("limit", maxItemBytes).
+				Int("facts", len(cluster)).Int("bytes", len(factsJSON)).Int("limit", step.MaxItemBytes).
 				Msg("review: prune cluster exceeds maxItemBytes; it will page, but merge quality may suffer — consider raising clustering resolution")
 		}
 		item := model.PipelineWorkItem{
@@ -247,7 +248,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 			Priority:   float64(len(cluster)),
 		}
 		if err := d.Pipeline.InsertPipelineWorkItem(ctx, item); err != nil {
-			return wrapf(reviewTool, err, "insert prune item")
+			return step.Wrapf(step.ReviewTool, err, "insert prune item")
 		}
 	}
 
@@ -272,7 +273,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 	// no pairs but cost nothing to pass; clusterCoMembership unions pairs, so
 	// the overlap between the two slices is harmless.
 	if err := planRestatementShortlist(ctx, d, sess, branch,
-		append(append([][]factForLLM{}, clusters...), pruneClusters...)); err != nil {
+		append(append([][]step.FactForLLM{}, clusters...), pruneClusters...)); err != nil {
 		return err
 	}
 
@@ -383,10 +384,10 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 				// only if the judge certifies the cluster distinct.
 				continue
 			}
-			for ci, chunk := range chunkFacts(group.Facts, maxItemBytes) {
+			for ci, chunk := range step.ChunkFacts(group.Facts, step.MaxItemBytes) {
 				factsJSON, err := json.Marshal(chunk)
 				if err != nil {
-					return wrapf(reviewTool, err, "marshal seeds for distill group %s chunk %d", group.Key, ci)
+					return step.Wrapf(step.ReviewTool, err, "marshal seeds for distill group %s chunk %d", group.Key, ci)
 				}
 				item := model.PipelineWorkItem{
 					SessionID:  sess.ID,
@@ -396,7 +397,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 					Priority:   0.0,
 				}
 				if err := d.Pipeline.InsertPipelineWorkItem(ctx, item); err != nil {
-					return wrapf(reviewTool, err, "insert distill item %s-%d", group.Key, ci)
+					return step.Wrapf(step.ReviewTool, err, "insert distill item %s-%d", group.Key, ci)
 				}
 			}
 		}
@@ -442,7 +443,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 		bridges, err = buildScoredBridges(ctx, d.Search, branch, llmSeeds, cr, bridgeKind, d.Effort, cfg, d.Scope)
 	}
 	if err != nil {
-		return wrapf(reviewTool, err, "build bridges")
+		return step.Wrapf(step.ReviewTool, err, "build bridges")
 	}
 	sl := scopeLabel(d.Scope)
 	rank := 0
@@ -512,7 +513,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 		Int("motif_far", len(farMotif)).
 		Str("effort", string(d.Effort)).
 		Msg("review: work planned")
-	d.OnProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(llmSeeds), len(bridges))})
+	d.OnProgress(step.ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(llmSeeds), len(bridges))})
 
 	return nil
 }
@@ -560,13 +561,13 @@ func (reviewStrategy) RenderPayload(item *model.PipelineWorkItem) (string, error
 	if !pagedStepTypes[item.StepType] {
 		return "", nil
 	}
-	var facts []factForLLM
+	var facts []step.FactForLLM
 	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-		return "", wrapf(reviewTool, err, "unmarshal facts for page")
+		return "", step.Wrapf(step.ReviewTool, err, "unmarshal facts for page")
 	}
 	b, err := json.Marshal(facts)
 	if err != nil {
-		return "", wrapf(reviewTool, err, "marshal facts for page")
+		return "", step.Wrapf(step.ReviewTool, err, "marshal facts for page")
 	}
 	return string(b), nil
 }
@@ -575,7 +576,7 @@ func (reviewStrategy) RenderPayload(item *model.PipelineWorkItem) (string, error
 // set of seeds plus the key its work items are named after.
 type distillGroup struct {
 	Key   string
-	Facts []factForLLM
+	Facts []step.FactForLLM
 	// Remainder marks the group of seeds that landed in NO multi-seed cluster.
 	//
 	// It is the one group with no corresponding prune item, so it is the one
@@ -624,7 +625,7 @@ func isRemainderItem(clusterKey string) bool {
 // nothing to synthesize across — collect into a trailing remainder group rather
 // than being dropped. A one-fact remainder costs one no-op round trip; a
 // dropped seed costs a fact nobody knows is missing.
-func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
+func distillGroups(seeds []step.FactForLLM, clusters [][]step.FactForLLM) []distillGroup {
 	isSeed := make(map[string]bool, len(seeds))
 	for _, s := range seeds {
 		isSeed[s.File] = true
@@ -633,7 +634,7 @@ func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
 	claimed := make(map[string]bool, len(seeds))
 	var groups []distillGroup
 	for _, c := range clusters {
-		var g []factForLLM
+		var g []step.FactForLLM
 		for _, f := range c {
 			if isSeed[f.File] && !claimed[f.File] {
 				claimed[f.File] = true
@@ -654,7 +655,7 @@ func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
 	// Iterate seeds, not the claimed map: order must not depend on map
 	// iteration, or the same corpus would produce different work items run to
 	// run and the chunk boundaries would wander with it.
-	var remainder []factForLLM
+	var remainder []step.FactForLLM
 	for _, s := range seeds {
 		if !claimed[s.File] {
 			remainder = append(remainder, s)
@@ -668,7 +669,7 @@ func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
 
 // OnPhaseAdvance hooks the work→reflect transition to enqueue the session's
 // single reflect item. reflect→done needs nothing.
-func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d Deps, sess *model.PipelineSession, from, to string) error {
+func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d step.Deps, sess *model.PipelineSession, from, to string) error {
 	if from != "work" || to != "reflect" {
 		return nil
 	}
@@ -680,7 +681,7 @@ func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d Deps, sess *model.Pi
 // the work→reflect CAS, which is what guarantees at-most-once insertion. A
 // failure to detect transitions is logged but not fatal — the session still
 // advances (matching the pre-extraction tolerance).
-func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *model.PipelineSession) error {
+func maybeEnqueueReflectItem(ctx context.Context, d step.Deps, sess *model.PipelineSession) error {
 	transitions, err := findHypothesisTransitions(ctx, d, sess)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sess.ID).Msg("review: failed to find hypothesis transitions")
@@ -691,14 +692,14 @@ func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *model.PipelineSe
 	}
 	transJSON, err := json.Marshal(transitions)
 	if err != nil {
-		return wrapf(reviewTool, err, "marshal transitions")
+		return step.Wrapf(step.ReviewTool, err, "marshal transitions")
 	}
 	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "reflect",
 		ClusterKey: "reflect",
 		FactsJSON:  string(transJSON),
-		Priority:   reflectPriority,
+		Priority:   step.ReflectPriority,
 	})
 }
 
@@ -714,7 +715,7 @@ func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *model.PipelineSe
 // after. This mirrors the backward (hypothesize) path's `-100 - i`, which was
 // written to avoid the same "a large rank flips the priority positive" bug.
 func forwardDiscoverPriority(rank int) float64 {
-	return forwardDiscoverPriorityBase - float64(rank)
+	return step.ForwardDiscoverPriorityBase - float64(rank)
 }
 
 // ── decode ────────────────────────────────────────────────────────────────
@@ -726,9 +727,9 @@ func forwardDiscoverPriority(rank int) float64 {
 //
 // Exactly one field is populated, selected by the item's step type.
 type itemDecision struct {
-	reflect  *ReflectResult
-	prune    *PruneResult
-	distill  *DistillResult
+	reflect  *step.ReflectResult
+	prune    *step.PruneResult
+	distill  *step.DistillResult
 	discover *discoverDecision
 	// motifAlias carries the vocabulary judge's verdicts (blueprint §3.1).
 	motifAlias *motifAliasResult
@@ -751,74 +752,74 @@ func (reviewStrategy) Decode(item *model.PipelineWorkItem, response string) (any
 	case "reflect":
 		var transitions []hypothesisTransition
 		if err := json.Unmarshal([]byte(item.FactsJSON), &transitions); err != nil {
-			return nil, "", wrapf(reviewTool, err, "unmarshal transitions")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "unmarshal transitions")
 		}
 		transitionPaths := make([]string, len(transitions))
 		for i, t := range transitions {
 			transitionPaths[i] = t.Path
 		}
-		parsed, err := parseReflectResponse(response)
+		parsed, err := step.ParseReflectResponse(response)
 		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "parse reflect response")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "parse reflect response")
 		}
-		if err := validateReflectResponse(parsed, transitionPaths, reflectProposeCap()); err != nil {
-			return nil, "", wrapf(reviewTool, err, "validate reflect")
+		if err := step.ValidateReflectResponse(parsed, transitionPaths, reflectProposeCap()); err != nil {
+			return nil, "", step.Wrapf(step.ReviewTool, err, "validate reflect")
 		}
 		return &itemDecision{reflect: &parsed}, response, nil
 
 	case "prune":
-		inputPaths, err := itemInputPaths(item)
+		inputPaths, err := step.ItemInputPaths(item)
 		if err != nil {
 			return nil, "", err
 		}
-		result, err := parsePruneResponse(response)
+		result, err := step.ParsePruneResponse(response)
 		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "parse prune response")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "parse prune response")
 		}
-		if err := validatePrunePaths(result, inputPaths); err != nil {
-			return nil, "", wrapf(reviewTool, err, "validate prune")
+		if err := step.ValidatePrunePaths(result, inputPaths); err != nil {
+			return nil, "", step.Wrapf(step.ReviewTool, err, "validate prune")
 		}
 		return &itemDecision{prune: &result}, response, nil
 
 	case "distill":
-		inputPaths, err := itemInputPaths(item)
+		inputPaths, err := step.ItemInputPaths(item)
 		if err != nil {
 			return nil, "", err
 		}
-		result, err := parseDistillResponse(response)
+		result, err := step.ParseDistillResponse(response)
 		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "parse distill response")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "parse distill response")
 		}
-		if err := validateDistillPaths(result, inputPaths); err != nil {
-			return nil, "", wrapf(reviewTool, err, "validate distill")
+		if err := step.ValidateDistillPaths(result, inputPaths); err != nil {
+			return nil, "", step.Wrapf(step.ReviewTool, err, "validate distill")
 		}
 		return &itemDecision{distill: &result}, response, nil
 
 	case motifAliasStepType:
 		var offered []motifJudgeItem
 		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
-			return nil, "", wrapf(reviewTool, err, "unmarshal motif alias pairs")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "unmarshal motif alias pairs")
 		}
 		result, err := parseMotifAliasResponse(response)
 		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "parse motif alias response")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "parse motif alias response")
 		}
 		if err := validateMotifAliasVerdicts(result, offered); err != nil {
-			return nil, "", wrapf(reviewTool, err, "validate motif alias")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "validate motif alias")
 		}
 		return &itemDecision{motifAlias: &result}, response, nil
 
 	case motifDefineStepType:
 		offered, err := motifDefineItemsFromPayload(item.FactsJSON)
 		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "unmarshal motif define names")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "unmarshal motif define names")
 		}
 		result, err := parseMotifDefineResponse(response)
 		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "parse motif define response")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "parse motif define response")
 		}
 		if err := validateMotifDefinitions(result, offered); err != nil {
-			return nil, "", wrapf(reviewTool, err, "validate motif define")
+			return nil, "", step.Wrapf(step.ReviewTool, err, "validate motif define")
 		}
 		return &itemDecision{motifDefine: &result, motifDefineOffered: offered}, response, nil
 
@@ -835,14 +836,14 @@ func (reviewStrategy) Decode(item *model.PipelineWorkItem, response string) (any
 		if strings.TrimSpace(response) == "" {
 			return &itemDecision{discover: &discoverDecision{}}, acknowledgedResponse, nil
 		}
-		dd, err := decodeDiscoverStep(reviewTool, item, response)
+		dd, err := decodeDiscoverStep(step.ReviewTool, item, response)
 		if err != nil {
 			return nil, "", err
 		}
 		return &itemDecision{discover: dd}, response, nil
 
 	default:
-		return nil, "", errf(reviewTool, "unknown step type %q", item.StepType)
+		return nil, "", step.Errf(step.ReviewTool, "unknown step type %q", item.StepType)
 	}
 }
 
@@ -852,10 +853,10 @@ func (reviewStrategy) Decode(item *model.PipelineWorkItem, response string) (any
 // after the item's claim CAS was won, so it executes at most once per item. An
 // error here surfaces to the caller with the item already consumed — see
 // Pipeline.ContinueSessionForItem for why that tradeoff is the safe direction.
-func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error {
+func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error {
 	dec, ok := decision.(*itemDecision)
 	if !ok {
-		return errf(reviewTool, "apply: unexpected decision type %T", decision)
+		return step.Errf(step.ReviewTool, "apply: unexpected decision type %T", decision)
 	}
 
 	// Use the session's recorded branch — the session was bound to that
@@ -866,7 +867,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSes
 	case "reflect":
 		if err := ApplyReflectDecisions(ctx, d.Facts, d.Files, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
 			d.RI.OntologyRoot(), reflectNoveltyThreshold(model.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
-			return wrapf(reviewTool, err, "apply reflect")
+			return step.Wrapf(step.ReviewTool, err, "apply reflect")
 		}
 
 	case "prune":
@@ -876,11 +877,11 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSes
 		// Returns nil for ordinary cluster items.
 		judged := resolveShortlistPair(ctx, d, sess, item)
 
-		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Files, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.RI.Ontology())
+		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Files, d.Search, dec.prune.Decisions, dec.prune.Merges, step.ReviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.RI.Ontology())
 		if err != nil {
-			return wrapf(reviewTool, err, "apply prune")
+			return step.Wrapf(step.ReviewTool, err, "apply prune")
 		}
-		recordStats(ctx, reviewTool, d, sess, stats)
+		recordStats(ctx, step.ReviewTool, d, sess, stats)
 		// Bring the REST of this session's queue back into agreement with the
 		// corpus the merge just changed. Every still-queued item was
 		// materialised during Plan, so without this the session goes on to
@@ -912,7 +913,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSes
 		// verdict that has LANDED; enqueueing before the mutations committed
 		// would promote on an answer that could still fail to apply.
 		if promotesToDistill(item) {
-			inputPaths, perr := itemInputPaths(item)
+			inputPaths, perr := step.ItemInputPaths(item)
 			switch {
 			case perr != nil:
 				log.Warn().Err(perr).Str("session", sess.ID).Str("cluster", item.ClusterKey).
@@ -925,11 +926,11 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSes
 		}
 
 	case "distill":
-		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Files, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
+		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Files, d.Search, dec.distill.Synthesize, dec.distill.Retract, step.ReviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
-			return wrapf(reviewTool, err, "apply distill")
+			return step.Wrapf(step.ReviewTool, err, "apply distill")
 		}
-		recordStats(ctx, reviewTool, d, sess, stats)
+		recordStats(ctx, step.ReviewTool, d, sess, stats)
 		// Distill retires facts too, and the queue it leaves stale is not its
 		// own: measured live, a distill's subsumed facts sat in prune and
 		// discover items queued in the same session. Staleness is a property of
@@ -942,19 +943,19 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSes
 
 	case motifAliasStepType:
 		if err := applyMotifAliasVerdicts(ctx, d, branch, *dec.motifAlias); err != nil {
-			return wrapf(reviewTool, err, "apply motif alias")
+			return step.Wrapf(step.ReviewTool, err, "apply motif alias")
 		}
 
 	case motifDefineStepType:
 		if err := applyMotifDefinitions(ctx, d, branch, *dec.motifDefine, dec.motifDefineOffered); err != nil {
-			return wrapf(reviewTool, err, "apply motif define")
+			return step.Wrapf(step.ReviewTool, err, "apply motif define")
 		}
 
 	case "discover":
-		return applyDiscoverStep(ctx, reviewTool, d, sess, dec.discover)
+		return applyDiscoverStep(ctx, step.ReviewTool, d, sess, dec.discover)
 
 	default:
-		return errf(reviewTool, "unknown step type %q", item.StepType)
+		return step.Errf(step.ReviewTool, "unknown step type %q", item.StepType)
 	}
 	return nil
 }
@@ -971,19 +972,19 @@ const maxRaptorDepth = 3
 // not correctness.
 func enqueueRaptorFollowups(
 	ctx context.Context,
-	d Deps,
+	d step.Deps,
 	sess *model.PipelineSession,
 	item *model.PipelineWorkItem,
-	writtenFacts []distillFact,
+	writtenFacts []step.DistillFact,
 ) {
 	if len(writtenFacts) == 0 || item.Depth >= maxRaptorDepth {
 		return
 	}
 
 	// Build factForLLM from the written (normalized-path) facts for clustering.
-	newFacts := make([]factForLLM, 0, len(writtenFacts))
+	newFacts := make([]step.FactForLLM, 0, len(writtenFacts))
 	for _, df := range writtenFacts {
-		newFacts = append(newFacts, factForLLM{
+		newFacts = append(newFacts, step.FactForLLM{
 			File: df.Path, Title: df.Title, Body: df.Body,
 			// distillFact carries no Kind and is written epistemic
 			// (decision.go), so epistemic is what the written fact IS, not a
@@ -1007,7 +1008,7 @@ func enqueueRaptorFollowups(
 		// exceed one prompt. Priority stays -nextDepth for every chunk of a
 		// given depth, so depth ordering is preserved and equal-priority chunks
 		// fall back to NextPipelineWorkItem's `id ASC` tiebreak.
-		for chi, chunk := range chunkFacts(cluster, maxItemBytes) {
+		for chi, chunk := range step.ChunkFacts(cluster, step.MaxItemBytes) {
 			factsJSON, _ := json.Marshal(chunk)
 			wItem := model.PipelineWorkItem{
 				SessionID:  sess.ID,
@@ -1032,24 +1033,24 @@ func enqueueRaptorFollowups(
 // Render builds the prompt and response schema for one review work item.
 // Pure presentation; the engine decides whether to call this or advance the
 // phase, and attaches the item id and progress counts afterwards.
-func (reviewStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error) {
+func (reviewStrategy) Render(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*step.WorkItemView, error) {
 	branch := sess.Branch
 	ontologyRoot := d.RI.OntologyRoot()
 
-	var content *WorkItemContent
+	var content *step.WorkItemContent
 	var err error
 	switch item.StepType {
 	case "prune":
-		var facts []factForLLM
+		var facts []step.FactForLLM
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-			return nil, wrapf(reviewTool, err, "unmarshal facts for prompt")
+			return nil, step.Wrapf(step.ReviewTool, err, "unmarshal facts for prompt")
 		}
 		content, err = renderPruneWorkItem(facts, ontologyRoot,
 			reviewGuidanceSection(consensusGuidance(ctx, d.RI), ontologyRoot, factPathsOf(facts)))
 	case "distill":
-		var facts []factForLLM
+		var facts []step.FactForLLM
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-			return nil, wrapf(reviewTool, err, "unmarshal facts for prompt")
+			return nil, step.Wrapf(step.ReviewTool, err, "unmarshal facts for prompt")
 		}
 		applicableMethodology := distillMethodologySection(ctx, d.RI, branch, facts)
 		content, err = renderDistillWorkItem(facts, ontologyRoot, applicableMethodology, isRemainderItem(item.ClusterKey),
@@ -1066,17 +1067,17 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSe
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
-			return nil, wrapf(reviewTool, uerr, "unmarshal discover payload for prompt")
+			return nil, step.Wrapf(step.ReviewTool, uerr, "unmarshal discover payload for prompt")
 		}
 		content = RenderDiscoverWorkItem(payload, ontologyRoot)
 	default:
-		return nil, errf(reviewTool, "unknown step type %q", item.StepType)
+		return nil, step.Errf(step.ReviewTool, "unknown step type %q", item.StepType)
 	}
 	if err != nil {
-		return nil, wrapf(reviewTool, err, "render %s prompt", item.StepType)
+		return nil, step.Wrapf(step.ReviewTool, err, "render %s prompt", item.StepType)
 	}
 
-	return &WorkItemView{
+	return &step.WorkItemView{
 		Type:           item.StepType,
 		Prompt:         content.Prompt,
 		ResponseSchema: content.ResponseSchema,
@@ -1156,7 +1157,7 @@ func reflectMethodologySection(ctx context.Context, ri *repos.RepoInstance, bran
 // (logged) or when no methodology matches.
 //
 // branch is required (no implicit AgentBranch fallback).
-func distillMethodologySection(ctx context.Context, ri *repos.RepoInstance, branch string, facts []factForLLM) string {
+func distillMethodologySection(ctx context.Context, ri *repos.RepoInstance, branch string, facts []step.FactForLLM) string {
 	if len(facts) == 0 {
 		return ""
 	}
@@ -1231,14 +1232,14 @@ type hypothesisTransition struct {
 // retracted, or had their confidence changed during the given review
 // session. All branch reads use sess.Branch — the session's recorded
 // branch — so the diff is consistent with the session's scope.
-func findHypothesisTransitions(ctx context.Context, d Deps, sess *model.PipelineSession) ([]hypothesisTransition, error) {
+func findHypothesisTransitions(ctx context.Context, d step.Deps, sess *model.PipelineSession) ([]hypothesisTransition, error) {
 	gs := d.Facts
 	branch := sess.Branch
 
 	// Read the watermark set at the end of the previous session.
 	// Since we haven't advanced it yet (that happens in completeSession),
 	// all commits between here and HEAD are changes made during this session.
-	watermark, err := d.Pipeline.GetPipelineWatermark(ctx, reviewTool, branch)
+	watermark, err := d.Pipeline.GetPipelineWatermark(ctx, step.ReviewTool, branch)
 	if err != nil || watermark == "" {
 		return nil, err
 	}

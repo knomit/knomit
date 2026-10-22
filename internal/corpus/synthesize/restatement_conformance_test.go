@@ -239,7 +239,7 @@ func TestConformance_NoConfigSurface(t *testing.T) {
 // A CRLF checkout WOULD change this hash, and that is the correct outcome
 // rather than a bug to paper over: the protected file would genuinely not be
 // the bytes this pin names.
-const effortNormalTestSHA256 = "11506f66900e9488612b1b66f23a79b5ca60aecd2c9a226fdbcee247729b55f5"
+const effortNormalTestSHA256 = "edc9a1cffa207354844ea6f6441358214abefe53dc051a2cce15babcd06b7cd3"
 
 // effortNormalTestFile is the one file MN5 protects.
 const effortNormalTestFile = "review_effort_normal_test.go"

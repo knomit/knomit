@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestValidateOutputPath_RejectsOutsideOntologyRoot(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateOutputPath(tc.path, tc.ontologyRoot)
+			err := step.ValidateOutputPath(tc.path, tc.ontologyRoot)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("validateOutputPath(%q, %q) err = %v, wantErr = %v", tc.path, tc.ontologyRoot, err, tc.wantErr)
 			}
@@ -78,7 +79,7 @@ func TestValidateOutputType_RejectsEmptyOrInvalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateOutputType(tc.typ)
+			err := step.ValidateOutputType(tc.typ)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("validateOutputType(%q) err = %v, wantErr = %v", tc.typ, err, tc.wantErr)
 			}

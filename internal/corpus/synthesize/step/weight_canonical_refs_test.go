@@ -1,7 +1,9 @@
-package synthesize
+package step_test
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,10 +33,10 @@ func TestLocalFactRefPaths_CanonicalSelfQualifiedIsLocal(t *testing.T) {
 	}
 	require.Equal(t,
 		[]string{"kb/technology/bare.md", "kb/technology/canonical.md"},
-		localFactRefPaths(in, localID),
+		step.LocalFactRefPaths(in, localID),
 		"a self-qualified ref is a local edge and must be returned by repo-relative path")
 
-	require.Equal(t, []string{"kb/technology/bare.md"}, localFactRefPaths(in, ""),
+	require.Equal(t, []string{"kb/technology/bare.md"}, step.LocalFactRefPaths(in, ""),
 		"with no identity a kb:// ref reads as foreign — which is why the id must be threaded")
 }
 
@@ -44,14 +46,14 @@ func TestLocalFactRefPaths_CanonicalSelfQualifiedIsLocal(t *testing.T) {
 // and the two stop matching.
 func TestLineageWalk_FollowsCanonicalSelfQualifiedRefs(t *testing.T) {
 	ctx := context.Background()
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 
 	root, err := svc.RootCommit(ctx, branch)
 	require.NoError(t, err)
 	localRepoID := fact.ID12(root)
 
 	// Ground truth: one observation carrying the actual corroborations.
-	seedFactWithSources(t, svc, branch, "kb/technology/ground.md", 4)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/ground.md", 4)
 
 	// Two derived facts over the SAME ground truth, differing only in how their
 	// ref is spelled.
@@ -60,9 +62,9 @@ func TestLineageWalk_FollowsCanonicalSelfQualifiedRefs(t *testing.T) {
 	seedDerivedCiting(t, svc, branch, "kb/technology/derived-canon.md",
 		fact.QualifyKBPath(localRepoID, "kb/technology/ground.md"))
 
-	bare := computeWeight(ctx, svc.Facts(), branch, localRepoID,
+	bare := step.ComputeWeight(ctx, svc.Facts(), branch, localRepoID,
 		[]string{"kb/technology/derived-bare.md"})
-	canon := computeWeight(ctx, svc.Facts(), branch, localRepoID,
+	canon := step.ComputeWeight(ctx, svc.Facts(), branch, localRepoID,
 		[]string{"kb/technology/derived-canon.md"})
 
 	require.Greater(t, bare, 0.0, "the bare-ref lineage must resolve (control)")

@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
@@ -60,7 +61,7 @@ const minBridgeMembers = 2
 // Per-item failures warn and skip that item (conventions/synthesize/write-paths/
 // failure-isolation): a payload that cannot be decoded is one stale item, and
 // losing the whole refresh over it would strand every other item too.
-func refreshInFlightItems(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, stats *ReviewStats) error {
+func refreshInFlightItems(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string, stats *step.ReviewStats) error {
 	if sess == nil || stats == nil {
 		return nil
 	}
@@ -80,7 +81,7 @@ func refreshInFlightItems(ctx context.Context, d Deps, sess *model.PipelineSessi
 
 	items, err := d.Pipeline.PendingPipelineWorkItems(ctx, sess.ID)
 	if err != nil {
-		return wrapf(reviewTool, err, "in-flight refresh: read pending items")
+		return step.Wrapf(step.ReviewTool, err, "in-flight refresh: read pending items")
 	}
 
 	var updated, dropped int
@@ -122,7 +123,7 @@ func refreshInFlightItems(ctx context.Context, d Deps, sess *model.PipelineSessi
 			Msg("review: in-flight work items refreshed after a mid-session retirement")
 		// Reported, not merely logged: an item that silently vanishes from the
 		// queue is indistinguishable from one that was never planned.
-		d.OnProgress(ProgressEvent{Phase: "detail-refresh", Message: fmt.Sprintf(
+		d.OnProgress(step.ProgressEvent{Phase: "detail-refresh", Message: fmt.Sprintf(
 			"in-flight refresh: %d fact(s) retired and %d changed mid-session — "+
 				"%d queued item(s) rewritten, %d dropped",
 			len(stats.Retired), len(stats.Rewritten), updated, dropped)})
@@ -163,7 +164,7 @@ const (
 // passes, which name motifs rather than facts — fall through unchanged. That
 // is not an oversight to be tidied later: a pass whose payload cannot name a
 // retired fact has nothing to reconcile.
-func refreshedPayload(ctx context.Context, d Deps, branch string, item model.PipelineWorkItem, m mutation) (refreshAction, string, error) {
+func refreshedPayload(ctx context.Context, d step.Deps, branch string, item model.PipelineWorkItem, m mutation) (refreshAction, string, error) {
 	switch item.StepType {
 	case "prune":
 		// Cluster prunes and shortlist pairs share this shape, and share the
@@ -200,8 +201,8 @@ func refreshedPayload(ctx context.Context, d Deps, branch string, item model.Pip
 
 // refreshFactList reconciles a plain []factForLLM payload against one apply's
 // mutations, deleting the item when too little is left to judge.
-func refreshFactList(ctx context.Context, d Deps, branch, factsJSON string, m mutation, floor int) (refreshAction, string, error) {
-	var facts []factForLLM
+func refreshFactList(ctx context.Context, d step.Deps, branch, factsJSON string, m mutation, floor int) (refreshAction, string, error) {
+	var facts []step.FactForLLM
 	if err := json.Unmarshal([]byte(factsJSON), &facts); err != nil {
 		return refreshUnchanged, "", fmt.Errorf("decode fact list payload: %w", err)
 	}
@@ -231,8 +232,8 @@ func refreshFactList(ctx context.Context, d Deps, branch, factsJSON string, m mu
 // is the conservative direction: showing a stale snapshot costs one imprecise
 // judgement, while dropping a member the corpus may still hold silently
 // shrinks the question.
-func reconcileMembers(ctx context.Context, d Deps, branch string, facts []factForLLM, m mutation) (kept []factForLLM, dropped, rewritten int) {
-	kept = make([]factForLLM, 0, len(facts))
+func reconcileMembers(ctx context.Context, d step.Deps, branch string, facts []step.FactForLLM, m mutation) (kept []step.FactForLLM, dropped, rewritten int) {
+	kept = make([]step.FactForLLM, 0, len(facts))
 	for _, f := range facts {
 		if _, dead := m.gone[f.File]; dead {
 			dropped++
@@ -253,12 +254,12 @@ func reconcileMembers(ctx context.Context, d Deps, branch string, facts []factFo
 // liveMember re-reads one member from the index, in the same field mapping the
 // planner uses (enqueueRestatementItems). Motifs are carried too: a member's
 // motifs steer the distill enrichment line and the bridge specificity score.
-func liveMember(ctx context.Context, d Deps, branch string, stale factForLLM) (factForLLM, bool) {
+func liveMember(ctx context.Context, d step.Deps, branch string, stale step.FactForLLM) (step.FactForLLM, bool) {
 	rec, err := d.Search.GetByPath(ctx, branch, stale.File)
 	if err != nil || rec == nil {
 		return stale, false
 	}
-	return factForLLM{
+	return step.FactForLLM{
 		File:       rec.Path,
 		Title:      rec.Title,
 		Body:       rec.Body,

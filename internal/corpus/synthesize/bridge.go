@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
@@ -17,7 +18,7 @@ import (
 //     noise facts bridging via a shared token still span communities).
 //   - Seeds absent from both clusters and noise also get unique synthetic
 //     negative ids (prevents collision with real community 0).
-func bridgePathCommunities(seeds []factForLLM, clusters ClusterResult) map[string]int {
+func bridgePathCommunities(seeds []step.FactForLLM, clusters ClusterResult) map[string]int {
 	pathCom := make(map[string]int)
 	for cid, paths := range clusters.Clusters {
 		for _, p := range paths {
@@ -117,11 +118,11 @@ func entityAxisRankOnlyLine() string {
 // (design §3b — "effort governs how deep/wide within the bounded pool"). A
 // scoped pool is usually small enough that high (48) captures all of it, while
 // medium (12) deliberately takes a lighter pass.
-func effortBudget(e Effort) int {
+func effortBudget(e step.Effort) int {
 	switch e {
-	case EffortMedium:
+	case step.EffortMedium:
 		return 12
-	case EffortHigh:
+	case step.EffortHigh:
 		return 48
 	}
 	return 0
@@ -141,7 +142,7 @@ func effortBudget(e Effort) int {
 // (effortBudget(EffortHigh) < maxBridgeSeeds) is asserted by
 // TestEffortBudget_StaysBelowPriorityBand, which fails loudly the day someone
 // raises the budget past the band width.
-const maxBridgeSeeds = forwardDiscoverPriorityBase - reflectPriority
+const maxBridgeSeeds = step.ForwardDiscoverPriorityBase - step.ReflectPriority
 
 // BridgeSeedSet is a small group of related facts plus the structural token
 // that bridges them. The discovery prompt presents this set verbatim and asks
@@ -155,7 +156,7 @@ type BridgeSeedSet struct {
 	Kind BridgeKind `json:"kind"`
 	// Members is the heterogeneous fact slice — at least two distinct
 	// community ids represented.
-	Members []factForLLM `json:"members"`
+	Members []step.FactForLLM `json:"members"`
 	// Q is the weighted quality score (cohesion + derivation-gap + specificity)
 	// computed by buildScoredBridges. Used for ranking; zero when the
 	// candidate was dropped by a gate (never appears in returned slices).
@@ -188,7 +189,7 @@ type BridgeSeedSet struct {
 //
 // This is the enumeration engine used by buildScoredBridges (quality/Q path)
 // and BridgeComponentReport (calibrate/diagnostic tool).
-func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind BridgeKind, scope ScopeFilter) []BridgeSeedSet {
+func enumerateBridgeCandidates(seeds []step.FactForLLM, clusters ClusterResult, kind BridgeKind, scope step.ScopeFilter) []BridgeSeedSet {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -202,7 +203,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 	repForm := map[string]string{}
 
 	// path → fact for fast lookup; excludes §7 discovered facts.
-	byPath := make(map[string]factForLLM, len(seeds))
+	byPath := make(map[string]step.FactForLLM, len(seeds))
 	for _, f := range seeds {
 		// §7 idempotency: discovered facts are never seeds.
 		if f.Origin == string(fact.Discovered) {
@@ -238,11 +239,11 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 	// For each token, collect carrying facts and check community span.
 	// Use a per-token path-set to deduplicate facts that carry the same
 	// token on both their Domain and Entities fields. Keys are canonical.
-	tokenMembersByPath := map[string]map[string]factForLLM{}
+	tokenMembersByPath := map[string]map[string]step.FactForLLM{}
 	for _, f := range byPath {
 		addMember := func(canon string) {
 			if tokenMembersByPath[canon] == nil {
-				tokenMembersByPath[canon] = make(map[string]factForLLM)
+				tokenMembersByPath[canon] = make(map[string]step.FactForLLM)
 			}
 			tokenMembersByPath[canon][f.File] = f
 		}
@@ -294,7 +295,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 			}
 		}
 
-		members := make([]factForLLM, 0, len(pathMap))
+		members := make([]step.FactForLLM, 0, len(pathMap))
 		for _, f := range pathMap {
 			members = append(members, f)
 		}
@@ -339,12 +340,12 @@ func buildScoredBridges(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	clusters ClusterResult,
 	kind BridgeKind,
-	eff Effort,
+	eff step.Effort,
 	cfg QualityConfig,
-	scope ScopeFilter,
+	scope step.ScopeFilter,
 ) ([]BridgeSeedSet, error) {
 	if !eff.Discovers() {
 		return nil, nil
@@ -361,7 +362,7 @@ func buildScoredBridges(
 	// byPath allows fast reconstruction of factForLLM from a path after reshape.
 	// Exclude discovered-origin facts to mirror enumerateBridgeCandidates's §7
 	// idempotency exclusion (they never appear in candidates anyway).
-	byPath := make(map[string]factForLLM, len(seeds))
+	byPath := make(map[string]step.FactForLLM, len(seeds))
 	for _, f := range seeds {
 		if f.Origin == string(fact.Discovered) {
 			continue
@@ -399,7 +400,7 @@ func buildScoredBridges(
 		}
 
 		// Rebuild factForLLM slice for the surviving paths (path-sorted).
-		members := make([]factForLLM, 0, len(paths))
+		members := make([]step.FactForLLM, 0, len(paths))
 		for _, p := range paths {
 			if f, ok := byPath[p]; ok {
 				members = append(members, f)
@@ -455,22 +456,22 @@ func BuildBackwardBridges(
 	synthFacts []fact.Fact,
 	branch string,
 	localRepoID string,
-	effort Effort,
+	effort step.Effort,
 	kind BridgeKind,
 	resolution float64,
 	minCommunitySize int,
 	neighborKinds []string,
 	cfg QualityConfig,
-	scope ScopeFilter,
+	scope step.ScopeFilter,
 ) ([]BridgeSeedSet, error) {
 	if !effort.Discovers() || len(synthFacts) < 2 {
 		return nil, nil
 	}
 	// Reduce synthFacts to factForLLM with origin so the idempotency filter
 	// can run.
-	seeds := make([]factForLLM, 0, len(synthFacts))
+	seeds := make([]step.FactForLLM, 0, len(synthFacts))
 	for _, f := range synthFacts {
-		seeds = append(seeds, factForLLM{
+		seeds = append(seeds, step.FactForLLM{
 			File:        f.Path(),
 			Title:       f.Title,
 			Body:        f.Body,
@@ -481,10 +482,10 @@ func BuildBackwardBridges(
 			Confidence:  f.Confidence,
 			Sources:     f.Sources,
 			Origin:      string(f.Origin),
-			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
+			LineageRefs: step.LocalFactRefPaths(f.Refs, localRepoID),
 		})
 	}
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(ProgressEvent) {}, branch)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}

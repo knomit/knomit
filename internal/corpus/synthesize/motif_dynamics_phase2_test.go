@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -28,12 +30,12 @@ import (
 // vocabSession runs one review session at an effort that maintains the
 // vocabulary. runSession uses EffortNormal, where all three motif passes are
 // deliberately skipped (MN5), so it cannot exercise any of this.
-func (e *restatementEnv) vocabSession() sessionOutcome {
-	e.t.Helper()
-	res, err := NewReviewerWithOptions(e.ri, nil, EffortMedium, ScopeFilter{}).StartSession(context.Background())
-	require.NoError(e.t, err)
+func vocabSession(e *synthtest.RestatementEnv) sessionOutcome {
+	e.T.Helper()
+	res, err := NewReviewerWithOptions(e.RI, nil, step.EffortMedium, step.ScopeFilter{}).StartSession(context.Background())
+	require.NoError(e.T, err)
 	out := sessionOutcome{sessionID: res.SessionID, health: res.Health}
-	for _, item := range e.workItems(res.SessionID) {
+	for _, item := range e.WorkItems(res.SessionID) {
 		out.restatementItems = append(out.restatementItems, item)
 	}
 	return out
@@ -56,50 +58,50 @@ func (o sessionOutcome) itemsOfType(step string) []model.PipelineWorkItem {
 // must not move at all.
 func TestPhase2Dynamics_ClusterIdentitySurvivesAGrowingVocabulary(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// "write-atomic" leads on df, so the representative NAME differs from the
 	// cluster KEY. Without that difference the test cannot tell them apart —
 	// the first version used a cluster whose name and key were the same string,
 	// and passed with cluster_key sabotaged to follow the representative.
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "body a", []string{"write-atomic"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "body b", []string{"write-atomic"})
-	env.writeFactWithMotifs("kb/c.md", "Charlie", "body c", []string{"atomic-write"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "body a", []string{"write-atomic"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "body b", []string{"write-atomic"})
+	env.WriteFactWithMotifs("kb/c.md", "Charlie", "body c", []string{"atomic-write"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	keyBefore, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "write-atomic")
+	keyBefore, err := env.Svc.Motifs().ClusterKey(ctx, env.Branch, "write-atomic")
 	require.NoError(t, err)
-	repBefore, err := env.svc.Motifs().CanonicalID(ctx, env.branch, "write-atomic")
+	repBefore, err := env.Svc.Motifs().CanonicalID(ctx, env.Branch, "write-atomic")
 	require.NoError(t, err)
 	require.Equal(t, "write-atomic", repBefore)
 	require.NotEqual(t, repBefore, keyBefore,
 		"precondition: name and key must differ, or this test cannot tell them apart")
 
 	// Session 2: unrelated vocabulary grows around the cluster.
-	env.writeFactWithMotifs("kb/n1.md", "New one", "body n1", []string{"unrelated-alpha-shape"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-	keyNow, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "write-atomic")
+	env.WriteFactWithMotifs("kb/n1.md", "New one", "body n1", []string{"unrelated-alpha-shape"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
+	keyNow, err := env.Svc.Motifs().ClusterKey(ctx, env.Branch, "write-atomic")
 	require.NoError(t, err)
 	require.Equal(t, keyBefore, keyNow, "unrelated vocabulary must not move a cluster key")
 
 	// Session 3: usage shifts INSIDE the cluster, flipping the representative.
 	// This is the case that distinguishes the two identities, and the one a
 	// definition keyed to the representative would be orphaned by.
-	env.writeFactWithMotifs("kb/d.md", "Delta", "body d", []string{"atomic-write"})
-	env.writeFactWithMotifs("kb/e.md", "Echo", "body e", []string{"atomic-write"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env.WriteFactWithMotifs("kb/d.md", "Delta", "body d", []string{"atomic-write"})
+	env.WriteFactWithMotifs("kb/e.md", "Echo", "body e", []string{"atomic-write"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	repAfter, err := env.svc.Motifs().CanonicalID(ctx, env.branch, "write-atomic")
+	repAfter, err := env.Svc.Motifs().CanonicalID(ctx, env.Branch, "write-atomic")
 	require.NoError(t, err)
 	require.NotEqual(t, repBefore, repAfter,
 		"precondition: the fixture must actually flip the representative")
 
-	keyAfter, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "write-atomic")
+	keyAfter, err := env.Svc.Motifs().ClusterKey(ctx, env.Branch, "write-atomic")
 	require.NoError(t, err)
 	require.Equal(t, keyBefore, keyAfter,
 		"the cluster KEY must not move when the representative does — across sessions, "+
 			"which is where a definition or a verdict would silently lose its anchor")
 
-	clusters, err := env.svc.Motifs().Clusters(ctx, env.branch)
+	clusters, err := env.Svc.Motifs().Clusters(ctx, env.Branch)
 	require.NoError(t, err)
 	require.Len(t, clusters, 2, "one aliased cluster plus the unrelated one")
 }
@@ -109,33 +111,33 @@ func TestPhase2Dynamics_ClusterIdentitySurvivesAGrowingVocabulary(t *testing.T) 
 // membership moves, because the judge was answering about a different cluster.
 func TestPhase2Dynamics_VerdictBindsUntilMembershipMoves(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "body a", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "body b", []string{"config-drift"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-	require.NoError(t, env.svc.Motifs().RecordJudgeDecline(ctx, env.branch,
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "body a", []string{"silent-fallback"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "body b", []string{"config-drift"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
+	require.NoError(t, env.Svc.Motifs().RecordJudgeDecline(ctx, env.Branch,
 		"silent-fallback", "config-drift"))
 
-	keyA, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "silent-fallback")
+	keyA, err := env.Svc.Motifs().ClusterKey(ctx, env.Branch, "silent-fallback")
 	require.NoError(t, err)
-	keyB, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "config-drift")
+	keyB, err := env.Svc.Motifs().ClusterKey(ctx, env.Branch, "config-drift")
 	require.NoError(t, err)
 	want := pairKeyForTest(keyA, keyB)
 
 	// Two further sessions change nothing about either cluster. The verdict
 	// must keep binding, or the pass re-litigates settled questions forever.
 	for i := range 2 {
-		env.writeFact(fmt.Sprintf("kb/noise%d.md", i), "Noise", "unrelated body")
-		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-		answered, err := env.svc.Motifs().AnsweredPairs(ctx, env.branch)
+		env.WriteFact(fmt.Sprintf("kb/noise%d.md", i), "Noise", "unrelated body")
+		require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
+		answered, err := env.Svc.Motifs().AnsweredPairs(ctx, env.Branch)
 		require.NoError(t, err)
 		require.Containsf(t, answered, want, "session %d let a settled verdict lapse", i)
 	}
 
 	// Now a new spelling joins one cluster. It covers more than the judge saw.
-	env.writeFactWithMotifs("kb/c.md", "Charlie", "body c", []string{"silent-fallbacks"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-	answered, err := env.svc.Motifs().AnsweredPairs(ctx, env.branch)
+	env.WriteFactWithMotifs("kb/c.md", "Charlie", "body c", []string{"silent-fallbacks"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
+	answered, err := env.Svc.Motifs().AnsweredPairs(ctx, env.Branch)
 	require.NoError(t, err)
 	require.NotContains(t, answered, want,
 		"a cluster that gained a member is not the cluster the judge declined")
@@ -146,20 +148,20 @@ func TestPhase2Dynamics_VerdictBindsUntilMembershipMoves(t *testing.T) {
 // restate the same sentence forever.
 func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "body a", []string{"silent-fallback"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "body a", []string{"silent-fallback"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	key, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "silent-fallback")
+	key, err := env.Svc.Motifs().ClusterKey(ctx, env.Branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
+	require.NoError(t, env.Svc.Motifs().PutDefinition(ctx, env.Branch, key, "A generic sentence.", vocab.DefinitionStamp{}))
 
 	// Sessions 2 and 3: unrelated corpus growth. The definition must stay off
 	// the queue.
 	for i := range 2 {
-		env.writeFact(fmt.Sprintf("kb/noise%d.md", i), "Noise", "unrelated body")
-		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-		need, err := env.svc.Motifs().ClustersNeedingDefinition(ctx, env.branch)
+		env.WriteFact(fmt.Sprintf("kb/noise%d.md", i), "Noise", "unrelated body")
+		require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
+		need, err := env.Svc.Motifs().ClustersNeedingDefinition(ctx, env.Branch)
 		require.NoError(t, err)
 		for _, c := range need {
 			require.NotEqualf(t, key, c.ClusterKey,
@@ -169,10 +171,10 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 
 	// Session 4: the cluster gains a spelling. Now it must be re-queued — and
 	// must KEEP its interim sentence rather than gapping.
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "body b", []string{"silent-fallbacks"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "body b", []string{"silent-fallbacks"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	need, err := env.svc.Motifs().ClustersNeedingDefinition(ctx, env.branch)
+	need, err := env.Svc.Motifs().ClustersNeedingDefinition(ctx, env.Branch)
 	require.NoError(t, err)
 	var queued *vocab.DefinitionTarget
 	for i := range need {
@@ -184,7 +186,7 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 	require.Equal(t, "A generic sentence.", queued.Interim,
 		"...carrying its interim definition, so the cluster is never left gapped")
 
-	def, ok, err := env.svc.Motifs().Definition(ctx, env.branch, key)
+	def, ok, err := env.Svc.Motifs().Definition(ctx, env.Branch, key)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotEmpty(t, def, "the standing definition is still served while stale")
@@ -204,20 +206,20 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 // to an identical value would still be touching authored data.
 func TestPhase2Dynamics_AuthoredMotifSurvivesLaterSessions(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/authored.md", "Authored", "body", []string{"silent-fallback"})
-	env.writeFact("kb/bare.md", "Bare", "body")
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithMotifs("kb/authored.md", "Authored", "body", []string{"silent-fallback"})
+	env.WriteFact("kb/bare.md", "Bare", "body")
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	before, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/authored.md")
+	before, err := env.Svc.FactQuery().GetByPath(ctx, env.Branch, "kb/authored.md")
 	require.NoError(t, err)
 
 	for range 3 {
-		env.vocabSession()
-		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+		vocabSession(env)
+		require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 	}
 
-	after, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/authored.md")
+	after, err := env.Svc.FactQuery().GetByPath(ctx, env.Branch, "kb/authored.md")
 	require.NoError(t, err)
 	require.Equal(t, []string{"silent-fallback"}, after.Motifs,
 		"an authored motif must survive every later session untouched")
@@ -229,15 +231,15 @@ func TestPhase2Dynamics_AuthoredMotifSurvivesLaterSessions(t *testing.T) {
 // lines makes a broken subsystem indistinguishable from a clean corpus.
 func TestPhase2Dynamics_HealthReportsEverySubsystemEverySession(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	for i := range 6 {
-		env.writeFactWithMotifs(fmt.Sprintf("kb/f%d.md", i), fmt.Sprintf("Fact %d", i),
+		env.WriteFactWithMotifs(fmt.Sprintf("kb/f%d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("body %d", i), []string{"silent-fallback"})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
 	for session := range 3 {
-		out := env.vocabSession()
+		out := vocabSession(env)
 		joined := strings.Join(out.health, "\n")
 		for _, want := range []string{
 			"abstraction coverage",       // phase 0
@@ -249,7 +251,7 @@ func TestPhase2Dynamics_HealthReportsEverySubsystemEverySession(t *testing.T) {
 				"session %d lost the %q health line — a subsystem that reports nothing "+
 					"is indistinguishable from one that found nothing", session, want)
 		}
-		env.writeFact(fmt.Sprintf("kb/extra%d.md", session), "Extra", "body")
+		env.WriteFact(fmt.Sprintf("kb/extra%d.md", session), "Extra", "body")
 	}
 }
 

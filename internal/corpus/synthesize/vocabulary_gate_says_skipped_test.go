@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -34,7 +35,7 @@ import (
 // PRODUCES". A descriptor line costs no discovery and produces no facts, and
 // the invariant explicitly names the general-freeze reading as a MISREADING
 // that once blocked a legitimate uniform fix.
-func newEffortTestReviewer(t *testing.T, effort Effort) *Reviewer {
+func newEffortTestReviewer(t *testing.T, effort step.Effort) *Reviewer {
 	t.Helper()
 	const branch = "agent/test"
 	dir := t.TempDir()
@@ -65,13 +66,13 @@ func newEffortTestReviewer(t *testing.T, effort Effort) *Reviewer {
 		Svc:          svc,
 		OntologyRoot: "kb",
 	})
-	return NewReviewerWithOptions(ri, nil, effort, ScopeFilter{})
+	return NewReviewerWithOptions(ri, nil, effort, step.ScopeFilter{})
 }
 
 // At normal effort the gate closes, and the session must SAY the passes were
 // skipped and why.
 func TestPlan_NormalEffortStatesThatVocabularyPassesWereSkipped(t *testing.T) {
-	r := newEffortTestReviewer(t, EffortNormal)
+	r := newEffortTestReviewer(t, step.EffortNormal)
 
 	res, err := r.StartSession(context.Background())
 	require.NoError(t, err)
@@ -95,7 +96,7 @@ func TestPlan_NormalEffortStatesThatVocabularyPassesWereSkipped(t *testing.T) {
 // This is the control, and it is what makes the assertion above mean
 // "reported when true" rather than "always printed".
 func TestPlan_MediumEffortDoesNotClaimASkip(t *testing.T) {
-	r := newEffortTestReviewer(t, EffortMedium)
+	r := newEffortTestReviewer(t, step.EffortMedium)
 
 	res, err := r.StartSession(context.Background())
 	require.NoError(t, err)
@@ -111,14 +112,14 @@ func TestPlan_MediumEffortDoesNotClaimASkip(t *testing.T) {
 // closed and stays silent when it is open.
 func TestRecordVocabularySkipHealth_SpeaksOnlyWhenTheGateIsClosed(t *testing.T) {
 	closed := &model.PipelineSession{}
-	recordVocabularySkipHealth(closed, EffortNormal)
+	recordVocabularySkipHealth(closed, step.EffortNormal)
 	require.Len(t, closed.Health, 1, "the closed gate is stated")
-	require.Contains(t, closed.Health[0], string(EffortNormal),
+	require.Contains(t, closed.Health[0], string(step.EffortNormal),
 		"the line names the effort it was called at, so a reader can tell which "+
 			"dial to move")
 
 	open := &model.PipelineSession{}
-	recordVocabularySkipHealth(open, EffortMedium)
+	recordVocabularySkipHealth(open, step.EffortMedium)
 	require.Empty(t, open.Health,
 		"an OPEN gate says nothing here — the passes report for themselves, and "+
 			"a skip line beside their output would contradict it")

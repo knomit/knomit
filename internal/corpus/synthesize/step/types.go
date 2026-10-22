@@ -1,6 +1,9 @@
-// Package synthesize — shared types and helpers used across synthesis steps
-// (prune, distill, decision, dedup, validation, review).
-package synthesize
+// Package step is the vocabulary the synthesize engine and its strategies share:
+// the Strategy seam and Deps, the work-item and result types, effort and scope,
+// the LLM response parsers and validators, the evidence-weight computation and
+// the write-side ref gate. It imports nothing from synthesize itself, so the
+// packages split out of synthesize can all depend on it.
+package step
 
 import (
 	"encoding/json"
@@ -18,11 +21,11 @@ type ProgressEvent struct {
 	Message string
 }
 
-// flexStrings unmarshals from either a JSON string ("x") or array (["x","y"]).
+// FlexStrings unmarshals from either a JSON string ("x") or array (["x","y"]).
 // Small LLMs sometimes return a bare string where an array is expected.
-type flexStrings []string
+type FlexStrings []string
 
-func (f *flexStrings) UnmarshalJSON(b []byte) error {
+func (f *FlexStrings) UnmarshalJSON(b []byte) error {
 	// Try array first.
 	var arr []string
 	if err := json.Unmarshal(b, &arr); err == nil {
@@ -49,30 +52,30 @@ type PruneDecision struct {
 	Confidence float64 `json:"confidence,omitempty"`
 }
 
-// mergedFact is the embedded merged fact object from the LLM response.
-type mergedFact struct {
+// MergedFact is the embedded merged fact object from the LLM response.
+type MergedFact struct {
 	Path       string      `json:"path"`
 	Title      string      `json:"title"`
 	Body       string      `json:"body"`
 	Type       string      `json:"type"`
-	Domain     flexStrings `json:"domain"`
+	Domain     FlexStrings `json:"domain"`
 	Confidence float64     `json:"confidence"`
 	Sources    int         `json:"sources"`
-	Entities   flexStrings `json:"entities"`
-	Refs       flexStrings `json:"refs"`
+	Entities   FlexStrings `json:"entities"`
+	Refs       FlexStrings `json:"refs"`
 	// Motifs is OPTIONAL and its absence is meaningful: §2.1 says zero is
 	// correct. That is why it gets no requireResponseKey probe — the probe
 	// exists for ENVELOPE keys, where a missing key means content was lost
 	// under a wrong name (invariant 51d85fcd). Here a missing key means the
 	// merged claim exemplifies no regularity its members named, which is a
 	// legitimate answer and the commonest one.
-	Motifs flexStrings `json:"motifs"`
+	Motifs FlexStrings `json:"motifs"`
 }
 
 // MergeEntry groups source paths with the merged replacement fact.
 type MergeEntry struct {
 	Paths  []string   `json:"paths"`
-	Merged mergedFact `json:"merged"`
+	Merged MergedFact `json:"merged"`
 }
 
 // PruneResult is the full JSON response from the LLM prune call.
@@ -81,7 +84,7 @@ type PruneResult struct {
 	Merges    []MergeEntry    `json:"merges"`
 }
 
-// factForLLM is the subset of fact fields sent to the LLM.
+// FactForLLM is the subset of fact fields sent to the LLM.
 // The Path field uses json:"path" to match the output schema (PruneDecision.Path,
 // distillFact.Path) so small models don't have to map between field names.
 //
@@ -89,7 +92,7 @@ type PruneResult struct {
 // exclude facts that were themselves discovered — Plan 03 §7 idempotency: a
 // discovered fact must never become the seed for another discovery, otherwise
 // the engine drifts away from the human-authored substrate.
-type factForLLM struct {
+type FactForLLM struct {
 	File     string   `json:"path"`
 	Title    string   `json:"title"`
 	Body     string   `json:"body"`
@@ -140,8 +143,8 @@ type factForLLM struct {
 	LineageRefs []string `json:"-"`
 }
 
-// extractJSON strips optional markdown code fences from LLM output.
-func extractJSON(text string) string {
+// ExtractJSON strips optional markdown code fences from LLM output.
+func ExtractJSON(text string) string {
 	text = strings.TrimSpace(text)
 	// Strip <think>...</think> blocks (used by small models for chain-of-thought)
 	if idx := strings.Index(text, "</think>"); idx >= 0 {
@@ -161,7 +164,7 @@ func extractJSON(text string) string {
 	return text
 }
 
-// requireResponseKey enforces the `required` list that a work item's
+// RequireResponseKey enforces the `required` list that a work item's
 // response_schema already advertises. encoding/json silently drops keys it
 // does not recognise, so a response that carried its content under the wrong
 // name — {"facts": [...]} against a distill item, say — unmarshalled into a
@@ -177,7 +180,7 @@ func extractJSON(text string) string {
 // A raw payload that is not a JSON object at all yields nil here; the typed
 // unmarshal the caller already ran is the authority on malformed input, and
 // its message is the more useful one.
-func requireResponseKey(raw, key string) error {
+func RequireResponseKey(raw, key string) error {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
 		return nil
@@ -196,20 +199,20 @@ func requireResponseKey(raw, key string) error {
 	return fmt.Errorf("response is missing required key %q; got: %s", key, strings.Join(got, ", "))
 }
 
-// parsePruneResponse parses the LLM JSON response for a prune step.
-func parsePruneResponse(text string) (PruneResult, error) {
-	raw := extractJSON(text)
+// ParsePruneResponse parses the LLM JSON response for a prune step.
+func ParsePruneResponse(text string) (PruneResult, error) {
+	raw := ExtractJSON(text)
 	var result PruneResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w (raw: %.200s)", err, raw)
 	}
-	if err := requireResponseKey(raw, "decisions"); err != nil {
+	if err := RequireResponseKey(raw, "decisions"); err != nil {
 		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w", err)
 	}
 	return result, nil
 }
 
-// maxDeliveredItemBytes bounds ONE delivered PAGE — the whole marshalled
+// MaxDeliveredItemBytes bounds ONE delivered PAGE — the whole marshalled
 // ReviewResult as internal/edge/mcp/review.go returns it, not just its facts.
 //
 // This is the budget that actually binds, and naming it is the point. The
@@ -224,7 +227,7 @@ func parsePruneResponse(text string) (PruneResult, error) {
 // MAX_MCP_OUTPUT_TOKENS to 25,000 — leaves headroom for fact bodies that grow
 // over time. Raising MAX_MCP_OUTPUT_TOKENS is a per-user harness setting, never
 // something this package may assume.
-const maxDeliveredItemBytes = 32 * 1024
+const MaxDeliveredItemBytes = 32 * 1024
 
 // pageEnvelopeReserveBytes reserves everything on a delivered page that is not
 // facts: the prompt, the response schema, the paging fields, and the
@@ -265,7 +268,7 @@ const maxDeliveredItemBytes = 32 * 1024
 // it again, and re-measure.
 const pageEnvelopeReserveBytes = 12*1024 + 512
 
-// maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
+// MaxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
 // — after the indentation json.MarshalIndent applies in internal/edge/mcp/review.go,
 // not in the compact form the store holds.
 //
@@ -277,12 +280,12 @@ const pageEnvelopeReserveBytes = 12*1024 + 512
 // delivered 33.5 KB, at 200 B bodies 40.6 KB, at 50 B bodies 46.4 KB — all
 // against a 32 KiB cap, which is the original defect reproduced at a different
 // fact size. deliveredFactsLen measures the artifact instead of predicting it.
-const maxPageFactBytes = maxDeliveredItemBytes - pageEnvelopeReserveBytes
+const MaxPageFactBytes = MaxDeliveredItemBytes - pageEnvelopeReserveBytes
 
-// maxItemBytes bounds what ONE work item holds — i.e. what the agent must
+// MaxItemBytes bounds what ONE work item holds — i.e. what the agent must
 // accumulate across pages before answering. This is the second of the two
 // budgets whose conflation was the original defect: maxPageFactBytes is a
-// TRANSPORT limit (client-side, what fits in one tool result), maxItemBytes is
+// TRANSPORT limit (client-side, what fits in one tool result), MaxItemBytes is
 // a COGNITION limit (model-side, what can be reasoned over at once).
 //
 // Paging is what let them separate. Before it, an item shipped in a single
@@ -297,15 +300,15 @@ const maxPageFactBytes = maxDeliveredItemBytes - pageEnvelopeReserveBytes
 // the transport limit it genuinely differs per deployment: this package
 // accommodates small local models that cannot hold what a long-context hosted
 // model can, however small each page is.
-const maxItemBytes = 256 * 1024
+const MaxItemBytes = 256 * 1024
 
-// chunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
+// ChunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
 //
 // A single fact larger than maxBytes still gets its own chunk (it cannot be
 // split further), so the bound is best-effort for pathological facts.
-func chunkFacts(facts []factForLLM, maxBytes int) [][]factForLLM {
-	var chunks [][]factForLLM
-	var current []factForLLM
+func ChunkFacts(facts []FactForLLM, maxBytes int) [][]FactForLLM {
+	var chunks [][]FactForLLM
+	var current []FactForLLM
 	currentSize := 0
 
 	for _, f := range facts {
@@ -438,7 +441,7 @@ type ReviewProgress struct {
 
 // DistillResult is the LLM JSON response for a distill step.
 type DistillResult struct {
-	Synthesize []distillFact `json:"synthesize"`
+	Synthesize []DistillFact `json:"synthesize"`
 	Retract    []string      `json:"retract"`
 
 	// SubgroupsConsidered records the sub-groups weighed inside an unclustered
@@ -466,28 +469,28 @@ type distillSubgroup struct {
 	Synthesized bool     `json:"synthesized"`
 }
 
-// distillFact is a synthesized fact returned by the LLM in a distill step.
-type distillFact struct {
+// DistillFact is a synthesized fact returned by the LLM in a distill step.
+type DistillFact struct {
 	Path       string      `json:"path"`
 	Title      string      `json:"title"`
 	Body       string      `json:"body"`
 	Type       string      `json:"type"`
-	Domain     flexStrings `json:"domain"`
+	Domain     FlexStrings `json:"domain"`
 	Confidence float64     `json:"confidence"`
-	Entities   flexStrings `json:"entities"`
-	Refs       flexStrings `json:"refs"`
+	Entities   FlexStrings `json:"entities"`
+	Refs       FlexStrings `json:"refs"`
 	// Optional; absence means none. See mergedFact.Motifs.
-	Motifs flexStrings `json:"motifs"`
+	Motifs FlexStrings `json:"motifs"`
 }
 
-// parseDistillResponse parses the LLM JSON response for a distill step.
-func parseDistillResponse(text string) (DistillResult, error) {
-	raw := extractJSON(text)
+// ParseDistillResponse parses the LLM JSON response for a distill step.
+func ParseDistillResponse(text string) (DistillResult, error) {
+	raw := ExtractJSON(text)
 	var result DistillResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w (raw: %.200s)", err, raw)
 	}
-	if err := requireResponseKey(raw, "synthesize"); err != nil {
+	if err := RequireResponseKey(raw, "synthesize"); err != nil {
 		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w", err)
 	}
 	return result, nil
@@ -527,22 +530,22 @@ type ReinforceEntry struct {
 type ProposeEntry struct {
 	Title           string      `json:"title"`
 	Body            string      `json:"body"`
-	Domain          flexStrings `json:"domain"`
-	Entities        flexStrings `json:"entities"`
+	Domain          FlexStrings `json:"domain"`
+	Entities        FlexStrings `json:"entities"`
 	TopicPath       string      `json:"topic_path"`
 	Confidence      float64     `json:"confidence"`
-	Refs            flexStrings `json:"refs"`
+	Refs            FlexStrings `json:"refs"`
 	TransitionPaths []string    `json:"transition_paths"`
 	NoveltyArgument string      `json:"novelty_argument"`
 }
 
-// parseReflectResponse parses the LLM JSON response for a reflect step.
+// ParseReflectResponse parses the LLM JSON response for a reflect step.
 // It accepts code-fenced output (extractJSON strips fences and <think>
 // blocks) and returns a structurally-typed result; semantic validation
 // (cap, transition-path scope, novelty, etc.) lives in
 // validateReflectResponse and ApplyReflectDecisions.
-func parseReflectResponse(text string) (ReflectResult, error) {
-	raw := extractJSON(text)
+func ParseReflectResponse(text string) (ReflectResult, error) {
+	raw := ExtractJSON(text)
 	var result ReflectResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return ReflectResult{}, fmt.Errorf("parseReflectResponse: %w (raw: %.200s)", err, raw)
@@ -586,22 +589,22 @@ type WorkItemContent struct {
 	Facts string `json:"facts,omitempty"`
 }
 
-// wrapf and errf give every engine error a consistent `<tool>: <what>` prefix.
+// Wrapf and errf give every engine error a consistent `<tool>: <what>` prefix.
 // The tool name is a runtime value now that one engine serves several tools,
 // so the prefix cannot be a string literal the way it was in review.go.
-func wrapf(tool string, err error, format string, args ...any) error {
+func Wrapf(tool string, err error, format string, args ...any) error {
 	return fmt.Errorf("%s: %s: %w", tool, fmt.Sprintf(format, args...), err)
 }
 
-func errf(tool string, format string, args ...any) error {
+func Errf(tool string, format string, args ...any) error {
 	return fmt.Errorf("%s: %s", tool, fmt.Sprintf(format, args...))
 }
 
-// reviewTool is the pipeline_sessions.tool value and watermark key. It is also
+// ReviewTool is the pipeline_sessions.tool value and watermark key. It is also
 // the recipe name threaded into decision application, so the two cannot drift.
-const reviewTool = "review"
+const ReviewTool = "review"
 
-// reflectPriority is the fixed priority of the single "reflect" work item. It
+// ReflectPriority is the fixed priority of the single "reflect" work item. It
 // is the floor of a REVIEW session's negative-priority band: forward "discover"
 // items must stay strictly above it so they run before reflect. maxBridgeSeeds
 // (bridge.go) caps the discover queue so the rank-derived priority can never
@@ -613,22 +616,22 @@ const reviewTool = "review"
 // package-wide there are items at and below this value. That is not a
 // collision: hypothesize never enqueues a reflect item, so the two bands never
 // coexist in one session's queue.
-const reflectPriority = -100
+const ReflectPriority = -100
 
-// forwardDiscoverPriorityBase places forward "discover" work items just below
+// ForwardDiscoverPriorityBase places forward "discover" work items just below
 // the standard prune (priority = cluster size) and distill (priority 0) band,
 // but above reflect (reflectPriority), so discovery stays low-priority
 // enrichment that runs after the grounded maintenance work.
-const forwardDiscoverPriorityBase = -10
+const ForwardDiscoverPriorityBase = -10
 
-// itemInputPaths unmarshals a prune/distill item's fact payload and returns
+// ItemInputPaths unmarshals a prune/distill item's fact payload and returns
 // the paths the response is allowed to reference. Validating against these —
 // not against the whole corpus — is what stops a response from acting on
 // facts its item never showed the agent.
-func itemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
-	var facts []factForLLM
+func ItemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
+	var facts []FactForLLM
 	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-		return nil, wrapf(reviewTool, err, "unmarshal facts")
+		return nil, Wrapf(ReviewTool, err, "unmarshal facts")
 	}
 	paths := make([]string, len(facts))
 	for i, f := range facts {
@@ -637,7 +640,7 @@ func itemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
 	return paths, nil
 }
 
-// factsForLLM projects the engine's canonical seed type onto the prompt-facing
+// FactsForLLM projects the engine's canonical seed type onto the prompt-facing
 // shape the review path clusters, chunks, and marshals.
 //
 // The projection is total: factForLLM's fields are a strict subset of
@@ -650,10 +653,10 @@ func itemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
 // canonical (kb://<own-id>/<path>), so classifying them with an empty id reads
 // every local citation as foreign and hands the lineage exclusion an empty set
 // to work from.
-func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
-	out := make([]factForLLM, 0, len(seeds))
+func FactsForLLM(seeds []fact.Fact, localRepoID string) []FactForLLM {
+	out := make([]FactForLLM, 0, len(seeds))
 	for _, f := range seeds {
-		out = append(out, factForLLM{
+		out = append(out, FactForLLM{
 			File:        f.Path(),
 			Title:       f.Title,
 			Body:        f.Body,
@@ -665,14 +668,14 @@ func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
 			Confidence:  f.Confidence,
 			Sources:     f.Sources,
 			Origin:      string(f.Origin),
-			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
+			LineageRefs: LocalFactRefPaths(f.Refs, localRepoID),
 			Context:     f.Context,
 		})
 	}
 	return out
 }
 
-// factFromSearchResult projects a search hit into a fact.Fact so the full-scan
+// FactFromSearchResult projects a search hit into a fact.Fact so the full-scan
 // seed path yields the same type as the incremental (fact.ParseFact) path.
 //
 // Kind is normalized the way fact.ParseFact normalizes it — an absent kind
@@ -681,7 +684,7 @@ func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
 // incremental one, making the seed pool depend on watermark state.
 //
 // Origin must be copied: see dirtyFacts.
-func factFromSearchResult(sr index.SearchResult) fact.Fact {
+func FactFromSearchResult(sr index.SearchResult) fact.Fact {
 	f := fact.NewFact(sr.Path)
 	f.Title = sr.Title
 	f.Body = sr.Body

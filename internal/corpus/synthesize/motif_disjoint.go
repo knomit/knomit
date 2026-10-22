@@ -23,6 +23,7 @@ package synthesize
 import (
 	"sort"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
@@ -150,7 +151,7 @@ func resolveDisjointnessPoint(d index.SubjectLabelDF) disjointnessPoint {
 // uses — so the question "does this pair share a subject?" and the question
 // "does this motif restate its own fact's subject?" cannot be answered from two
 // different vocabularies.
-func subjectDisjoint(a, b factForLLM, d index.SubjectLabelDF, p disjointnessPoint) bool {
+func subjectDisjoint(a, b step.FactForLLM, d index.SubjectLabelDF, p disjointnessPoint) bool {
 	at := fact.SubjectTokens(a.Entities, a.Domain, a.File)
 	bt := fact.SubjectTokens(b.Entities, b.Domain, b.File)
 	for tok := range at {

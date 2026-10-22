@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -104,7 +105,7 @@ func collectDistillItems(t *testing.T, svc *store.Service, sessionID string) map
 			break
 		}
 		if item.StepType == "distill" && item.Depth == 0 {
-			var facts []factForLLM
+			var facts []step.FactForLLM
 			require.NoError(t, json.Unmarshal([]byte(item.FactsJSON), &facts),
 				"distill item %q payload is not a fact array", item.ClusterKey)
 			paths := make([]string, 0, len(facts))
@@ -164,10 +165,10 @@ func groupPaths(g distillGroup) []string {
 	return out
 }
 
-func seedsNamed(names ...string) []factForLLM {
-	out := make([]factForLLM, 0, len(names))
+func seedsNamed(names ...string) []step.FactForLLM {
+	out := make([]step.FactForLLM, 0, len(names))
 	for _, n := range names {
-		out = append(out, factForLLM{File: n, Title: n, Body: "b", Type: "observation"})
+		out = append(out, step.FactForLLM{File: n, Title: n, Body: "b", Type: "observation"})
 	}
 	return out
 }
@@ -188,7 +189,7 @@ func seedsNamed(names ...string) []factForLLM {
 func TestDistillGroups_PartitionsByClusterAndExcludesNeighbours(t *testing.T) {
 	seeds := seedsNamed("kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md", "kb/e.md")
 
-	clusters := [][]factForLLM{
+	clusters := [][]step.FactForLLM{
 		// A neighbour the search pulled in — in the cluster, never a seed.
 		append(seedsNamed("kb/a.md", "kb/b.md"), seedsNamed("kb/neighbour.md")...),
 		seedsNamed("kb/c.md", "kb/d.md"),
@@ -213,7 +214,7 @@ func TestDistillGroups_PartitionsByClusterAndExcludesNeighbours(t *testing.T) {
 // synthesis silently, so it must reappear in the remainder.
 func TestDistillGroups_LoneSeedInClusterFallsToRemainder(t *testing.T) {
 	seeds := seedsNamed("kb/a.md", "kb/b.md", "kb/c.md")
-	clusters := [][]factForLLM{
+	clusters := [][]step.FactForLLM{
 		seedsNamed("kb/a.md", "kb/b.md"),
 		// c clusters only with non-seed neighbours.
 		append(seedsNamed("kb/c.md"), seedsNamed("kb/n1.md", "kb/n2.md")...),

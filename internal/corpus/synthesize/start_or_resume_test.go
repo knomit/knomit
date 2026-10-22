@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -169,7 +170,7 @@ func TestStartOrResume_AfterPlanningResumes(t *testing.T) {
 }
 
 // answerFor is a well-formed answer to the item a start served.
-func answerFor(t *testing.T, res *ReviewResult) string {
+func answerFor(t *testing.T, res *step.ReviewResult) string {
 	t.Helper()
 	require.NotNil(t, res.Item)
 	switch res.Item.Type {
@@ -253,14 +254,14 @@ func TestCurrent_ServesTheOutstandingItemWithoutAdvancing(t *testing.T) {
 // repetition do not make two scopes different.
 func TestStartKey_IgnoresCaseOrderAndRepeats(t *testing.T) {
 	key := func(domain, entities []string) string {
-		return (&Pipeline{effort: EffortNormal, scope: ScopeFilter{Domain: domain, Entities: entities}}).startKey()
+		return (&Pipeline{effort: step.EffortNormal, scope: step.ScopeFilter{Domain: domain, Entities: entities}}).startKey()
 	}
 	require.Equal(t,
 		key([]string{"mcp", "store"}, []string{"knomit_review"}),
 		key([]string{"Store", "MCP", "mcp"}, []string{"KNOMIT_REVIEW", "knomit_review"}))
 	require.NotEqual(t, key([]string{"mcp"}, nil), key([]string{"store"}, nil))
 	require.NotEqual(t, key(nil, nil),
-		(&Pipeline{effort: EffortHigh}).startKey(), "effort is part of the key")
+		(&Pipeline{effort: step.EffortHigh}).startKey(), "effort is part of the key")
 }
 
 // An item that has been claimed but not yet applied is still outstanding. A
@@ -383,7 +384,7 @@ func TestStartOrResume_StillPlanningOffersTakeover(t *testing.T) {
 // equals two values, and it folds tags exactly as the scope filter does.
 func TestStartKey_EncodesListsAndFoldsLikeTheFilter(t *testing.T) {
 	key := func(domain, entities []string) string {
-		return (&Pipeline{effort: EffortNormal, scope: ScopeFilter{Domain: domain, Entities: entities}}).startKey()
+		return (&Pipeline{effort: step.EffortNormal, scope: step.ScopeFilter{Domain: domain, Entities: entities}}).startKey()
 	}
 	require.NotEqual(t, key([]string{"a,b"}, nil), key([]string{"a", "b"}, nil))
 	require.NotEqual(t, key(nil, []string{"a,b"}), key(nil, []string{"a", "b"}))

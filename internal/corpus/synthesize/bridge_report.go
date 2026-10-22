@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 )
 
@@ -51,7 +52,7 @@ func BridgeComponentReport(
 	branch string,
 	localRepoID string,
 	kind BridgeKind,
-	eff Effort,
+	eff step.Effort,
 	resolution float64,
 	minCommunitySize int,
 	neighborKinds []string,
@@ -65,9 +66,9 @@ func BridgeComponentReport(
 	if err != nil {
 		return nil, err
 	}
-	seeds := make([]factForLLM, 0, len(results))
+	seeds := make([]step.FactForLLM, 0, len(results))
 	for _, r := range results {
-		seeds = append(seeds, factForLLM{
+		seeds = append(seeds, step.FactForLLM{
 			File:        r.Path,
 			Title:       r.Title,
 			Body:        r.Body,
@@ -78,14 +79,14 @@ func BridgeComponentReport(
 			Confidence:  r.Confidence,
 			Sources:     r.Sources,
 			Origin:      r.Origin,
-			LineageRefs: localFactRefPaths(r.Refs, localRepoID),
+			LineageRefs: step.LocalFactRefPaths(r.Refs, localRepoID),
 		})
 	}
 
 	// 2. Cluster the pool to get community assignments. Same in-process scoped
 	// clustering the production pipeline uses (ScopedCluster → Louvain over
 	// idx.SubgraphEdges), adapted to ClusterResult for the bridge engine.
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(ProgressEvent) {}, branch)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func BridgeComponentReport(
 	if !eff.Discovers() {
 		return nil, nil
 	}
-	cands := enumerateBridgeCandidates(seeds, cr, kind, ScopeFilter{})
+	cands := enumerateBridgeCandidates(seeds, cr, kind, step.ScopeFilter{})
 	if len(cands) == 0 {
 		return nil, nil
 	}

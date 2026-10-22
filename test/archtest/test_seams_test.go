@@ -24,12 +24,15 @@ var testSeamName = regexp.MustCompile(`^(?:[A-Z]\w*ForTest|Testing[A-Z]\w*)$`)
 
 // seamAllowed reports whether the module-root-relative, slash-separated file
 // may import storetest and name a test seam: storetest itself, the test trees
-// (test/, internal/testsupport/) and the testseams.go file of any store
+// (test/, internal/testsupport/), the synthesize tree's test-support package
+// (internal/corpus/synthesize/internal/synthtest/, which TestHarnessNotLinkedIntoShippedBinaries
+// keeps out of every shipped binary) and the testseams.go file of any store
 // package, which is where a child defines its seams and its registration hook.
 func seamAllowed(rel string) bool {
 	switch {
 	case strings.HasPrefix(rel, "internal/engine/store/storetest/"),
 		strings.HasPrefix(rel, "test/"),
+		strings.HasPrefix(rel, "internal/corpus/synthesize/internal/synthtest/"),
 		strings.HasPrefix(rel, "internal/testsupport/"):
 		return true
 	case strings.HasPrefix(rel, "internal/engine/store/") && filepath.Base(rel) == "testseams.go":
@@ -200,7 +203,7 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("production source must not import storetest or use a *ForTest / Testing* door "+
-			"(allowed: internal/engine/store/storetest, test/, internal/testsupport/, internal/engine/store/**/testseams.go):\n  %s",
+			"(allowed: internal/engine/store/storetest, test/, internal/testsupport/, internal/corpus/synthesize/internal/synthtest/, internal/engine/store/**/testseams.go):\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
 }

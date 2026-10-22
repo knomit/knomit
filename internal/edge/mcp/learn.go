@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/refs"
 	"knomit/internal/corpus/repos"
-	"knomit/internal/corpus/synthesize"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/facts"
 
@@ -456,7 +456,7 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 //
 // Nothing downstream loses information. localEvidenceRefs already dropped the
 // self-path so it could not inflate evidence weight, and the recursive ref
-// walks in internal/corpus/synthesize/weight.go absorb it as a back-edge — the ref was
+// walks in internal/corpus/synthesize/step/weight.go absorb it as a back-edge — the ref was
 // discarded by every consumer that read it.
 //
 // localRepoID is needed to CLASSIFY, not to decorate: refs arrive bare from the
@@ -954,7 +954,7 @@ func computeEvidenceWeights(ctx context.Context, s mcpStore, writeBranch, localR
 		if len(localRefs) == 0 {
 			continue
 		}
-		w := synthesize.ComputeEvidenceWeight(ctx, s.facts, writeBranch, localRepoID, localRefs)
+		w := step.ComputeEvidenceWeight(ctx, s.facts, writeBranch, localRepoID, localRefs)
 		if w <= 0 || w == f.EvidenceWeight {
 			continue
 		}

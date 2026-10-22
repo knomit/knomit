@@ -3,6 +3,7 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"os"
 	"strings"
 	"testing"
@@ -44,7 +45,7 @@ func TestFarLaneDemo_RenderTheShipPrompt(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: motif,
 			Kind:  BridgeMotif,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{
 					File:  "kb/gotchas/ai/agents/coding-agents/ui-testing/77b3e628.md",
 					Title: "An agent testing a UI will cheat by executing JavaScript instead of clicking, and its test plan will invent app paths that do not exist",

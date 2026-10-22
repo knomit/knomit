@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -71,7 +72,7 @@ func TestSeedScan_ReportsPathScopeAndWatermark(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
 
-		r.p.scope = ScopeFilter{Domain: []string{"technology"}}
+		r.p.scope = step.ScopeFilter{Domain: []string{"technology"}}
 
 		gs, idx, pipelineIdx, _ := r.storeIndices()
 		_, scan, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)

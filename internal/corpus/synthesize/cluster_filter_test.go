@@ -1,13 +1,16 @@
 package synthesize
 
-import "testing"
+import (
+	"knomit/internal/corpus/synthesize/step"
+	"testing"
+)
 
 // TestFilterSmallClusters_HonoursMinCommunitySize regresses PR #70 review
 // finding #4: filterSmallClusters hardcoded "len(c) > 1", so the category
 // fallback paths ignored the configurable min_community_size knob. It must now
 // drop clusters smaller than the configured minimum.
 func TestFilterSmallClusters_HonoursMinCommunitySize(t *testing.T) {
-	clusters := [][]factForLLM{
+	clusters := [][]step.FactForLLM{
 		{{File: "a"}},                           // size 1
 		{{File: "b"}, {File: "c"}},              // size 2
 		{{File: "d"}, {File: "e"}, {File: "f"}}, // size 3

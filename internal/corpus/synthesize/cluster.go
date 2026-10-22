@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/rs/zerolog/log"
@@ -39,15 +40,15 @@ const (
 // 3. Run Louvain (gonum) over the subgraph's SIMILAR_TO edges (idx.SubgraphEdges) in-process
 // 4. Fallback to grouping by category path if the edge read fails or yields no clusters
 func ScopedCluster(ctx context.Context,
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	idx *index.Facade,
 	resolution float64,
 	minCommunitySize int,
 	neighborKinds []string,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 	agentBranch string,
 	excludeTypes ...string,
-) ([][]factForLLM, error) {
+) ([][]step.FactForLLM, error) {
 	if len(seeds) == 0 {
 		return nil, nil
 	}
@@ -56,11 +57,11 @@ func ScopedCluster(ctx context.Context,
 	}
 
 	if onProgress == nil {
-		onProgress = func(ProgressEvent) {}
+		onProgress = func(step.ProgressEvent) {}
 	}
 
 	// Build lookup from path to fact, starting with seeds.
-	factByPath := make(map[string]factForLLM, len(seeds)*2)
+	factByPath := make(map[string]step.FactForLLM, len(seeds)*2)
 	for _, s := range seeds {
 		factByPath[s.File] = s
 	}
@@ -104,7 +105,7 @@ func ScopedCluster(ctx context.Context,
 			for _, r := range results {
 				subgraph[r.Path] = true
 				if _, exists := factByPath[r.Path]; !exists {
-					factByPath[r.Path] = factForLLM{
+					factByPath[r.Path] = step.FactForLLM{
 						File: r.Path, Title: r.Title, Body: r.Body,
 						Type: r.Type, Kind: r.Kind, Domain: r.Domain, Entities: r.Entities,
 						Motifs: r.Motifs, Confidence: r.Confidence, Sources: r.Sources,
@@ -121,7 +122,7 @@ func ScopedCluster(ctx context.Context,
 		return nil, err
 	}
 
-	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering: subgraph built"})
+	onProgress(step.ProgressEvent{Phase: "cluster", Message: "scoped clustering: subgraph built"})
 
 	// Step 2: Run Louvain over JUST this subgraph, in-process. The clustering
 	// the reviewer needs is "group these changed facts + neighbours by mutual
@@ -164,14 +165,14 @@ func ScopedCluster(ctx context.Context,
 	edges, err := idx.SubgraphEdges(ctx, paths)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: subgraph edge read failed, falling back to category grouping")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "edge read failed, using category fallback"})
+		onProgress(step.ProgressEvent{Phase: "cluster", Message: "edge read failed, using category fallback"})
 		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
 	// Map each Louvain community of paths back to the facts the reviewer holds.
-	var clusters [][]factForLLM
+	var clusters [][]step.FactForLLM
 	for _, group := range louvainCommunities(paths, edges, resolution) {
-		var fg []factForLLM
+		var fg []step.FactForLLM
 		for _, p := range group {
 			if f, ok := factByPath[p]; ok {
 				fg = append(fg, f)
@@ -184,11 +185,11 @@ func ScopedCluster(ctx context.Context,
 
 	if len(clusters) == 0 {
 		log.Debug().Msg("scoped-cluster: no clusters in subgraph, falling back to category grouping")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters in subgraph, using category fallback"})
+		onProgress(step.ProgressEvent{Phase: "cluster", Message: "no clusters in subgraph, using category fallback"})
 		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
-	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering complete"})
+	onProgress(step.ProgressEvent{Phase: "cluster", Message: "scoped clustering complete"})
 	return filterSmallClusters(clusters, minCommunitySize), nil
 }
 
@@ -199,13 +200,13 @@ func categoryDir(p string) string {
 }
 
 // groupByCategory groups facts by their parent directory.
-func groupByCategory(facts []factForLLM) [][]factForLLM {
-	groups := make(map[string][]factForLLM)
+func groupByCategory(facts []step.FactForLLM) [][]step.FactForLLM {
+	groups := make(map[string][]step.FactForLLM)
 	for _, f := range facts {
 		cat := categoryDir(f.File)
 		groups[cat] = append(groups[cat], f)
 	}
-	result := make([][]factForLLM, 0, len(groups))
+	result := make([][]step.FactForLLM, 0, len(groups))
 	for _, g := range groups {
 		result = append(result, g)
 	}
@@ -213,8 +214,8 @@ func groupByCategory(facts []factForLLM) [][]factForLLM {
 }
 
 // subgraphFacts returns factForLLM values for all paths in the subgraph set.
-func subgraphFacts(subgraph map[string]bool, factByPath map[string]factForLLM) []factForLLM {
-	facts := make([]factForLLM, 0, len(subgraph))
+func subgraphFacts(subgraph map[string]bool, factByPath map[string]step.FactForLLM) []step.FactForLLM {
+	facts := make([]step.FactForLLM, 0, len(subgraph))
 	for p := range subgraph {
 		if f, ok := factByPath[p]; ok {
 			facts = append(facts, f)
@@ -226,8 +227,8 @@ func subgraphFacts(subgraph map[string]bool, factByPath map[string]factForLLM) [
 // filterSmallClusters removes clusters smaller than minCommunitySize, honouring
 // the configured cluster minimum so the category-fallback paths drop the same
 // small communities the Louvain path does (rather than a hardcoded "< 2").
-func filterSmallClusters(clusters [][]factForLLM, minCommunitySize int) [][]factForLLM {
-	var out [][]factForLLM
+func filterSmallClusters(clusters [][]step.FactForLLM, minCommunitySize int) [][]step.FactForLLM {
+	var out [][]step.FactForLLM
 	for _, c := range clusters {
 		if len(c) >= minCommunitySize {
 			out = append(out, c)

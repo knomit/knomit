@@ -3,8 +3,10 @@ package synthesize
 import (
 	"context"
 	"errors"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -50,9 +52,9 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	// cross-community bridge, singleClusterTok ({c,d}) does not. a↔b are
 	// similar (a real SIMILAR_TO edge) → cohesion = 1.0 (one pair, one edge);
 	// nothing cites anything → gap = 1.0; bridgeTok is carried by 2 live facts.
-	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/a.md", "kb/c.md", "kb/d.md"}, {"kb/b.md"}}).
-		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedResults(searchResults).
+		Partition([][]string{{"kb/a.md", "kb/c.md", "kb/d.md"}, {"kb/b.md"}}).
+		Similar([2]string{"kb/a.md", "kb/b.md"}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").Idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -63,7 +65,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, testNeighborKinds, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, step.EffortHigh, 1.0, 1, synthtest.DefaultNeighborKinds, cfg)
 	require.NoError(t, err)
 
 	// At least one result: bridgeTok bridge should be kept
@@ -100,9 +102,9 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 	// x,y in one community → their shared token is not a cross-community bridge,
 	// so the scoring reads (SimilarityAdjacency, ReverseDependentPaths, TokenDF)
 	// MUST NEVER happen: the strict policy allows only the clustering reads.
-	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/x.md", "kb/y.md"}}).idx()
-	guardReads(t, idx, readPolicy{Allow: []string{"Search", "SubgraphEdges"}})
+	idx := synthtest.NewGraphEnv(t, branch).SeedResults(searchResults).
+		Partition([][]string{{"kb/x.md", "kb/y.md"}}).Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"Search", "SubgraphEdges"}})
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -113,7 +115,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, testNeighborKinds, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, step.EffortHigh, 1.0, 1, synthtest.DefaultNeighborKinds, cfg)
 	require.NoError(t, err)
 	require.Empty(t, results, "same-community token yields no bridge candidates")
 }
@@ -135,8 +137,8 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	}
 	// p,q in distinct communities → their shared token bridges, but with no
 	// SIMILAR_TO edge between them cohesion is 0 and the candidate is gated out.
-	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/p.md"}, {"kb/q.md"}}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedResults(searchResults).
+		Partition([][]string{{"kb/p.md"}, {"kb/q.md"}}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").Idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5, // cohesion 0 fails this gate
@@ -147,7 +149,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, testNeighborKinds, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, step.EffortHigh, 1.0, 1, synthtest.DefaultNeighborKinds, cfg)
 	require.NoError(t, err)
 
 	// The candidate IS produced (cross-community) but gated by CohFloor.
@@ -179,9 +181,9 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 	}
 
 	// alpha has an edge → cohesion 1.0; beta has none → cohesion 0 (gated out by CohFloor=0.5)
-	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/a1.md", "kb/b1.md"}, {"kb/a2.md", "kb/b2.md"}}).
-		similar([2]string{"kb/a1.md", "kb/a2.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedResults(searchResults).
+		Partition([][]string{{"kb/a1.md", "kb/b1.md"}, {"kb/a2.md", "kb/b2.md"}}).
+		Similar([2]string{"kb/a1.md", "kb/a2.md"}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").Idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5, // beta (cohesion=0) gated out
@@ -192,7 +194,7 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, testNeighborKinds, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, step.EffortHigh, 1.0, 1, synthtest.DefaultNeighborKinds, cfg)
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 
@@ -220,13 +222,13 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 	}
 	boom := errors.New("adjacency unavailable")
 
-	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).idx()
-	guardReads(t, idx, readPolicy{AllowAll: true, Fail: map[string]error{"SimilarityAdjacency": boom}})
+	idx := synthtest.NewGraphEnv(t, branch).SeedResults(searchResults).
+		Partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{AllowAll: true, Fail: map[string]error{"SimilarityAdjacency": boom}})
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 
-	_, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, testNeighborKinds, cfg)
+	_, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, step.EffortHigh, 1.0, 1, synthtest.DefaultNeighborKinds, cfg)
 	require.Error(t, err)
 	require.ErrorIs(t, err, boom)
 }
@@ -243,12 +245,12 @@ func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	}
 	// ScopedCluster runs before the effort gate, so its reads happen; the scoring
 	// reads must NOT happen at normal effort (the strict policy fails on them).
-	idx := newGraphEnv(t, branch).seedResults(searchResults).
-		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).idx()
-	guardReads(t, idx, readPolicy{Allow: []string{"Search", "SubgraphEdges"}})
+	idx := synthtest.NewGraphEnv(t, branch).SeedResults(searchResults).
+		Partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"Search", "SubgraphEdges"}})
 
 	cfg := QualityConfig{CohFloor: 0.5, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
-	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortNormal, 1.0, 1, testNeighborKinds, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, step.EffortNormal, 1.0, 1, synthtest.DefaultNeighborKinds, cfg)
 	require.NoError(t, err)
 	require.Empty(t, results, "EffortNormal must return empty results (effort gate returns early)")
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -101,11 +102,11 @@ type motifDefineResult struct {
 // object, and a response under the wrong key would apply as a silent no-op).
 func parseMotifDefineResponse(raw string) (motifDefineResult, error) {
 	var out motifDefineResult
-	text := extractJSON(raw)
+	text := step.ExtractJSON(raw)
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return out, fmt.Errorf("parse motif define response: %w", err)
 	}
-	if err := requireResponseKey(text, "definitions"); err != nil {
+	if err := step.RequireResponseKey(text, "definitions"); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -144,7 +145,7 @@ func validateMotifDefinitions(res motifDefineResult, offered []motifDefineItem) 
 // between the item being rendered and answered — that is exactly what
 // canonical_id does — and storing by name would then write the sentence
 // against a cluster nobody asked about.
-func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motifDefineResult, offered []motifDefineItem) error {
+func applyMotifDefinitions(ctx context.Context, d step.Deps, branch string, res motifDefineResult, offered []motifDefineItem) error {
 	type route struct {
 		key   string
 		stamp vocab.DefinitionStamp
@@ -242,7 +243,7 @@ func recordMotifDefineHealth(sess *model.PipelineSession, h motifDefineHealth) {
 }
 
 // planMotifDefineWork enqueues at most one definition item per session.
-func planMotifDefineWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) error {
+func planMotifDefineWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) error {
 	targets, err := d.Motifs.ClustersNeedingDefinition(ctx, branch)
 	if err != nil {
 		return nil // an addition to review; degrade rather than fail the session
@@ -277,7 +278,7 @@ func planMotifDefineWork(ctx context.Context, d Deps, sess *model.PipelineSessio
 	health.Offered = len(items)
 	payload, err := json.Marshal(motifDefinePayload(items))
 	if err != nil {
-		return wrapf(reviewTool, err, "motif define: marshal names")
+		return step.Wrapf(step.ReviewTool, err, "motif define: marshal names")
 	}
 	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
@@ -353,7 +354,7 @@ func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
 // about the corpus's own habits, and recurrence is exactly such a habit — the
 // question "are we naming the same mechanisms as each other" is a methodology
 // question, not a fact-level one.
-func motifVocabularySection(ctx context.Context, d Deps, branch string) string {
+func motifVocabularySection(ctx context.Context, d step.Deps, branch string) string {
 	if d.Motifs == nil {
 		return ""
 	}

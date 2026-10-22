@@ -1,4 +1,4 @@
-package synthesize
+package step
 
 import (
 	"fmt"
@@ -15,10 +15,10 @@ var validPruneActions = map[string]bool{
 	"keep": true, "retract": true, "update": true,
 }
 
-// validatePrunePaths checks that all decision paths and merge source paths
+// ValidatePrunePaths checks that all decision paths and merge source paths
 // reference facts that were actually sent to the LLM, that actions are valid,
 // and that merges are well-formed. Returns an error on the first violation.
-func validatePrunePaths(r PruneResult, inputPaths []string) error {
+func ValidatePrunePaths(r PruneResult, inputPaths []string) error {
 	valid := make(map[string]bool, len(inputPaths))
 	for _, p := range inputPaths {
 		valid[p] = true
@@ -49,9 +49,9 @@ func validatePrunePaths(r PruneResult, inputPaths []string) error {
 	return nil
 }
 
-// validateDistillPaths checks that all retract paths reference facts that were
+// ValidateDistillPaths checks that all retract paths reference facts that were
 // actually sent to the LLM.
-func validateDistillPaths(r DistillResult, inputPaths []string) error {
+func ValidateDistillPaths(r DistillResult, inputPaths []string) error {
 	valid := make(map[string]bool, len(inputPaths))
 	for _, p := range inputPaths {
 		valid[p] = true
@@ -64,7 +64,7 @@ func validateDistillPaths(r DistillResult, inputPaths []string) error {
 	return nil
 }
 
-// validateReflectResponse runs the structural checks for a reflect step.
+// ValidateReflectResponse runs the structural checks for a reflect step.
 // DB-backed checks (reinforce path resolves to type=methodology; propose
 // novelty against existing methodology embeddings; topic_path under the
 // configured ontology root) live in ApplyReflectDecisions because they
@@ -74,7 +74,7 @@ func validateDistillPaths(r DistillResult, inputPaths []string) error {
 // for; reinforce/propose may only reference paths in this set. proposeCap
 // is the maximum number of new methodologies the agent may propose in one
 // reflect — defaults to 1 for the first revision; configurable via env.
-func validateReflectResponse(r ReflectResult, transitionPaths []string, proposeCap int) error {
+func ValidateReflectResponse(r ReflectResult, transitionPaths []string, proposeCap int) error {
 	if proposeCap < 0 {
 		proposeCap = 0
 	}
@@ -133,7 +133,7 @@ func validateReflectResponse(r ReflectResult, transitionPaths []string, proposeC
 	return nil
 }
 
-// normalizeFactPath replaces the filename component of a path with an 8-char
+// NormalizeFactPath replaces the filename component of a path with an 8-char
 // UUID, matching the convention used by learn. This prevents LLM-generated
 // filenames (e.g. "chrome-extension-threat-surface-2026.md") from clashing
 // with each other or with learn-generated facts. Directory case is normalised
@@ -147,17 +147,17 @@ func validateReflectResponse(r ReflectResult, transitionPaths []string, proposeC
 // "kb/" prefix, did not find it, and every merge, distill, propose and
 // emergent-fact write was rejected — silently, as a warning on the progress
 // channel rather than an error, so synthesis simply produced nothing.
-func normalizeFactPath(p string) string {
+func NormalizeFactPath(p string) string {
 	id := uuid.New().String()[:8]
 	return path.Dir(p) + "/" + id + ".md"
 }
 
-// validateOutputPath rejects LLM-emitted fact paths that don't live under
+// ValidateOutputPath rejects LLM-emitted fact paths that don't live under
 // the configured ontology root. Returns nil on success or a descriptive
 // error suitable for the onProgress warn channel. Paths are compared
 // case-insensitively because fact.NewFact lowercases all paths
 // unconditionally before persisting.
-func validateOutputPath(path, ontologyRoot string) error {
+func ValidateOutputPath(path, ontologyRoot string) error {
 	root := strings.TrimRight(ontologyRoot, "/")
 	if root == "" {
 		return fmt.Errorf("ontology root not configured")
@@ -177,12 +177,12 @@ func validateOutputPath(path, ontologyRoot string) error {
 	return nil
 }
 
-// validateOutputType rejects LLM-emitted facts with empty or invalid
+// ValidateOutputType rejects LLM-emitted facts with empty or invalid
 // epistemic type. Returns nil on success. Empty type is the most common
 // failure (LLM omits the field) and historically slipped through to disk
 // as `type:` blanks; the API silently masked these by defaulting to
 // "observation" on read, hiding the bug.
-func validateOutputType(t string) error {
+func ValidateOutputType(t string) error {
 	if t == "" {
 		return fmt.Errorf("epistemic type is empty")
 	}

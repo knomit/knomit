@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/index"
@@ -54,21 +55,21 @@ func applyReinforcements(
 	rs []FactReinforcement,
 	branch string,
 	localRepoID string,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 ) []string {
 	if onProgress == nil {
-		onProgress = func(ProgressEvent) {}
+		onProgress = func(step.ProgressEvent) {}
 	}
 	seedPaths := make(map[string]struct{}, len(payload.Bridge.Members))
 	for _, m := range payload.Bridge.Members {
 		seedPaths[m.File] = struct{}{}
 	}
-	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, branch)
+	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, branch)
 
 	var written []string
 	for _, r := range rs {
 		reject := func(format string, args ...any) {
-			onProgress(ProgressEvent{Phase: "warn",
+			onProgress(step.ProgressEvent{Phase: "warn",
 				Message: "reinforce rejected: " + fmt.Sprintf(format, args...)})
 		}
 
@@ -170,7 +171,7 @@ func applyReinforcements(
 		// function knew how refs are spelled and the other did not.
 		seeds, extras, _ := splitSeedRefs(r.Refs, seedPaths, localRepoID)
 		if len(extras) > 0 {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"reinforce %s: discarded %d ref(s) naming facts outside the bridge: %s",
 				r.Path, len(extras), strings.Join(extras, ", "))})
 		}
@@ -206,7 +207,7 @@ func applyReinforcements(
 			// Recording it again would turn `sources` into a count of how often
 			// the fact was LOOKED at rather than how often it was independently
 			// derived.
-			onProgress(ProgressEvent{Phase: "detail-discover",
+			onProgress(step.ProgressEvent{Phase: "detail-discover",
 				Message: "reinforce skipped (already derived from these seeds): " + r.Path})
 			continue
 		}
@@ -223,8 +224,8 @@ func applyReinforcements(
 
 		f.Refs = newRefs
 		f.Sources++
-		f.EvidenceWeight = computeWeight(ctx, gs, branch, localRepoID,
-			localFactRefPaths(newRefs, localRepoID))
+		f.EvidenceWeight = step.ComputeWeight(ctx, gs, branch, localRepoID,
+			step.LocalFactRefPaths(newRefs, localRepoID))
 
 		content, err := fact.SerializeFact(f)
 		if err != nil {
@@ -237,7 +238,7 @@ func applyReinforcements(
 			reject("%s write: %v", r.Path, err)
 			continue
 		}
-		onProgress(ProgressEvent{Phase: "detail-discover", Message: "reinforce " + f.Path()})
+		onProgress(step.ProgressEvent{Phase: "detail-discover", Message: "reinforce " + f.Path()})
 		written = append(written, f.Path())
 	}
 	return written

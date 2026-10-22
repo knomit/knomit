@@ -7,6 +7,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,15 +71,15 @@ func contextWarn(warns []string) string {
 //
 // SABOTAGE: take the union instead of the agreement → verdict lands → red.
 func TestApplyPruneDecisions_ContextKeepsOnlyAgreedKeys(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	seedWithContext(t, svc, branch, "kb/verdicts/a.md", 0.8, map[string]any{"task": "t-17", "verdict": "agree"})
 	seedWithContext(t, svc, branch, "kb/verdicts/b.md", 0.8, map[string]any{"task": "t-17", "verdict": "disagree"})
 	seedWithContext(t, svc, branch, "kb/verdicts/c.md", 0.8, map[string]any{"task": "t-17", "verdict": "agree"})
-	sink, warns := collectWarns()
-	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
+	sink, warns := synthtest.CollectWarns()
+	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []step.MergeEntry{{
 		Paths:  []string{"kb/verdicts/a.md", "kb/verdicts/b.md", "kb/verdicts/c.md"},
-		Merged: mergedFact{Path: "kb/verdicts/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
-	}}, "review-test", sink, branch, bareRefFixture, "kb", synthOntology(t))
+		Merged: step.MergedFact{Path: "kb/verdicts/m.md", Title: "Merged", Body: "merged body", Type: "observation"},
+	}}, "review-test", sink, branch, synthtest.BareRefFixture, "kb", synthOntology(t))
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "fixture: the merge must have happened")
 
@@ -102,14 +104,14 @@ func TestApplyPruneDecisions_ContextAgreedButUndeclaredAtTarget(t *testing.T) {
 		{"no ontology", "kb/verdicts/m.md", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, branch := newSourcesTestRepo(t)
+			svc, branch := synthtest.NewSourcesTestRepo(t)
 			seedWithContext(t, svc, branch, "kb/verdicts/a.md", 0.8, map[string]any{"task": "t-17"})
 			seedWithContext(t, svc, branch, "kb/verdicts/b.md", 0.8, map[string]any{"task": "t-17"})
-			sink, warns := collectWarns()
-			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
+			sink, warns := synthtest.CollectWarns()
+			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []step.MergeEntry{{
 				Paths:  []string{"kb/verdicts/a.md", "kb/verdicts/b.md"},
-				Merged: mergedFact{Path: tc.target, Title: "Merged", Body: "merged body", Type: "observation"},
-			}}, "review-test", sink, branch, bareRefFixture, "kb", tc.o)
+				Merged: step.MergedFact{Path: tc.target, Title: "Merged", Body: "merged body", Type: "observation"},
+			}}, "review-test", sink, branch, synthtest.BareRefFixture, "kb", tc.o)
 			require.NoError(t, err)
 			require.Equal(t, 1, stats.Merged)
 			merged := readFactForTest(t, svc, branch, mergedFactPath(t, svc, branch, "Merged"))
@@ -122,11 +124,11 @@ func TestApplyPruneDecisions_ContextAgreedButUndeclaredAtTarget(t *testing.T) {
 // C3: review's confidence-only rewrite (a prune "update") re-serializes the
 // fact it parsed, and keeps its context.
 func TestApplyPruneDecisions_ConfidenceUpdateKeepsContext(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	seedWithContext(t, svc, branch, "kb/verdicts/a.md", 0.8, map[string]any{"task": "t-17", "verdict": "agree"})
 	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		[]PruneDecision{{Path: "kb/verdicts/a.md", Action: "update", Confidence: 0.42}}, nil,
-		"review-test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
+		[]step.PruneDecision{{Path: "kb/verdicts/a.md", Action: "update", Confidence: 0.42}}, nil,
+		"review-test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Contains(t, stats.Rewritten, "kb/verdicts/a.md", "fixture: the update must have been applied")
 	got := readFactForTest(t, svc, branch, "kb/verdicts/a.md")
@@ -137,14 +139,14 @@ func TestApplyPruneDecisions_ConfidenceUpdateKeepsContext(t *testing.T) {
 // A fact whose context arrived malformed via git is not rewritten by a review
 // confidence change (the rewrite would delete the map): skipped, with a warn.
 func TestApplyPruneDecisions_ConfidenceUpdateSkipsMalformedContext(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	raw := "---\ntype: observation\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\ncontext: {task: [t-17]}\n---\n# M\n\nbody\n"
 	_, err := svc.Facts().WriteFact(context.Background(), branch, "kb/verdicts/m.md", raw, "sync", "")
 	require.NoError(t, err)
-	sink, warns := collectWarns()
+	sink, warns := synthtest.CollectWarns()
 	stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		[]PruneDecision{{Path: "kb/verdicts/m.md", Action: "update", Confidence: 0.42}}, nil,
-		"review-test", sink, branch, bareRefFixture, "kb", nil)
+		[]step.PruneDecision{{Path: "kb/verdicts/m.md", Action: "update", Confidence: 0.42}}, nil,
+		"review-test", sink, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.Updated)
 	require.Contains(t, strings.Join(*warns, "\n"), "update kb/verdicts/m.md skipped: its context is malformed")
@@ -157,16 +159,16 @@ func TestApplyPruneDecisions_ConfidenceUpdateSkipsMalformedContext(t *testing.T)
 // keys appear.
 func TestDedupCluster_ContextIsTheWinnersWholeMap(t *testing.T) {
 	ctx := context.Background()
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	const winnerPath, loserPath = "kb/technology/winner.md", "kb/technology/loser.md"
 	seedWithContext(t, svc, branch, winnerPath, 0.9, map[string]any{"task": "t-1"})
 	seedWithContext(t, svc, branch, loserPath, 0.5, map[string]any{"task": "t-2", "verdict": "agree"})
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
 	idx := fixedPairSearch(t, svc, []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)})
-	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test", func(ProgressEvent) {}, branch, bareRefFixture)
+	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, surviving, 1)
 	require.Equal(t, winnerPath, surviving[0].File, "fixture: the more confident fact wins")
@@ -175,15 +177,15 @@ func TestDedupCluster_ContextIsTheWinnersWholeMap(t *testing.T) {
 
 // Distill writes a NEW claim; it inherits nothing from its inputs.
 func TestApplyDistillDecisions_NewClaimInheritsNoContext(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	seedWithContext(t, svc, branch, "kb/verdicts/a.md", 0.8, map[string]any{"task": "t-17"})
 	seedWithContext(t, svc, branch, "kb/verdicts/b.md", 0.8, map[string]any{"task": "t-17"})
-	df := distillFact{
+	df := step.DistillFact{
 		Path: "kb/verdicts/synth.md", Title: "S", Body: "distilled", Type: "synthesis",
 		Domain: []string{"verdicts"}, Confidence: 0.9, Refs: []string{"kb/verdicts/a.md", "kb/verdicts/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 	require.Nil(t, readFactForTest(t, svc, branch, written[0].Path).Context)
@@ -196,7 +198,7 @@ func TestWorkItems_CarryContextAsFactData(t *testing.T) {
 	f.Title, f.Body, f.Type, f.Confidence, f.Sources = "V", "body", fact.Observation, 0.8, 1
 	f.Context = map[string]any{"task": "t-17", "verdict": "disagree"}
 
-	members, err := json.Marshal(factsForLLM([]fact.Fact{f}, bareRefFixture))
+	members, err := json.Marshal(step.FactsForLLM([]fact.Fact{f}, synthtest.BareRefFixture))
 	require.NoError(t, err)
 	require.Contains(t, string(members), `"context":{"task":"t-17","verdict":"disagree"}`, "prune/distill member")
 
@@ -206,7 +208,7 @@ func TestWorkItems_CarryContextAsFactData(t *testing.T) {
 
 	plain := f
 	plain.Context = nil
-	none, err := json.Marshal(factsForLLM([]fact.Fact{plain}, bareRefFixture))
+	none, err := json.Marshal(step.FactsForLLM([]fact.Fact{plain}, synthtest.BareRefFixture))
 	require.NoError(t, err)
 	require.NotContains(t, string(none), "context", "omitted when empty: context-free payloads are byte-identical")
 }
@@ -219,9 +221,9 @@ func TestFactPages_CountContext(t *testing.T) {
 	for i := 0; i < fact.MaxContextKeys; i++ {
 		maxCtx[fmt.Sprintf("key_%02d", i)] = strings.Repeat("v", fact.MaxContextValueBytes)
 	}
-	var with, without []factForLLM
+	var with, without []step.FactForLLM
 	for i := 0; i < 12; i++ {
-		f := factForLLM{File: fmt.Sprintf("kb/v/%02d.md", i), Title: "T", Body: "body", Type: "observation", Kind: "epistemic", Confidence: 0.8, Sources: 1}
+		f := step.FactForLLM{File: fmt.Sprintf("kb/v/%02d.md", i), Title: "T", Body: "body", Type: "observation", Kind: "epistemic", Confidence: 0.8, Sources: 1}
 		without = append(without, f)
 		f.Context = maxCtx
 		with = append(with, f)
@@ -258,10 +260,19 @@ func TestPrompts_NeverInterpolateContext(t *testing.T) {
 		}
 	}
 
-	// types.go holds factsForLLM and WorkItemContent, which 13a moved out of
-	// review_strategy.go and prompt_review.go: the projection that carries
-	// Context into the prompt payload stays under this scan.
-	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go", "types.go"}
+	// Every non-test file of step/ is scanned, not a named one: step holds the
+	// shared prompt payload vocabulary (FactForLLM and WorkItemContent moved there
+	// in 13a, carrying Context into the payload), so a new step file is where a
+	// leak would appear. The glob is non-vacuous: step must have files.
+	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go"}
+	stepFiles, err := filepath.Glob(filepath.Join("step", "*.go"))
+	require.NoError(t, err)
+	for _, f := range stepFiles {
+		if !strings.HasSuffix(f, "_test.go") {
+			builders = append(builders, filepath.ToSlash(f))
+		}
+	}
+	require.Greater(t, len(builders), 5, "fixture: the step files must be found")
 	for _, name := range builders {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, name, nil, 0)

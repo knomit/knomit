@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
 	"knomit/internal/engine/store"
@@ -26,7 +28,7 @@ func TestRenderDiscoverPrompt_DefaultToNo(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "auth",
 			Kind:  BridgeEntity,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "a.md", Title: "A"},
 				{File: "b.md", Title: "B"},
 			},
@@ -73,7 +75,7 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "x",
 			Kind:  BridgeEntity,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 				{File: "kb/b.md", Title: "B"},
 			},
@@ -84,7 +86,7 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 		{Path: "kb/at.md", Title: "at", Body: "at", Type: "synthesis", Domain: []string{"x"}, Confidence: 0.6, Refs: []string{"kb/a.md", "kb/b.md"}},
 	}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, gates, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, gates, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "only the proposal at-threshold should survive: %v", written)
 	// Path normalization rewrites the basename to a UUID; the surviving fact is
@@ -120,7 +122,7 @@ func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
 	// Refs cite one seed of the two offered → below the floor, reject.
@@ -128,7 +130,7 @@ func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 		Path: "kb/skipped.md", Title: "x", Body: "x", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "a proposal citing one seed of two must be rejected")
 }
@@ -150,7 +152,7 @@ func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
 	props := []DiscoveredFact{{
@@ -158,7 +160,7 @@ func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 
@@ -186,7 +188,7 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
 	// Try to write a hypothesis on the forward path → rejected.
@@ -194,7 +196,7 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 		Path: "kb/bad.md", Title: "h", Body: "h", Type: "hypothesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "type/direction mismatch must reject the proposal")
 }
@@ -207,7 +209,7 @@ func TestRenderDiscoverPrompt_TokenPresent_ContainsBridgeTokenLine(t *testing.T)
 		Bridge: BridgeSeedSet{
 			Token: "auth",
 			Kind:  BridgeEntity,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 			},
 		},
@@ -236,7 +238,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "",
 			Kind:  BridgeDomain,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A", Body: "body a"},
 				{File: "kb/b.md", Title: "B"},
 			},
@@ -256,7 +258,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "auth", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}},
 		},
 	}
 	require.Equal(t, extractResponseSchemaLine(renderDiscoverPrompt(tokenPresent, "kb")),
@@ -275,10 +277,10 @@ func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
 		name    string
 		payload DiscoverWorkPayload
 	}{
-		{"forward-token", DiscoverWorkPayload{Direction: DiscoverForward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
-		{"backward-token", DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
-		{"forward-scoped", DiscoverWorkPayload{Direction: DiscoverForward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
-		{"backward-scoped", DiscoverWorkPayload{Direction: DiscoverBackward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []factForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"forward-token", DiscoverWorkPayload{Direction: DiscoverForward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"backward-token", DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"forward-scoped", DiscoverWorkPayload{Direction: DiscoverForward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"backward-scoped", DiscoverWorkPayload{Direction: DiscoverBackward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
 	}
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {
@@ -299,7 +301,7 @@ func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
 // requires setting that origin and citing the cluster sources.
 func TestRenderDistillWorkItem_MandatesDistilledOrigin(t *testing.T) {
 	wic, err := RenderDistillWorkItem(
-		[]factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+		[]step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		"kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, wic.Prompt, "origin: distilled",
@@ -317,7 +319,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "",
 			Kind:  BridgeDomain,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 			},
 		},
@@ -335,7 +337,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
 		Direction: DiscoverBackward,
 		Bridge: BridgeSeedSet{
 			Token: "auth", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}},
 		},
 	}
 	require.Equal(t, extractResponseSchemaLine(renderDiscoverPrompt(tokenPresent, "kb")),
@@ -351,7 +353,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_NoScopeLabel_FallsBack(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "",
 			Kind:  BridgeDomain,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 			},
 		},
@@ -407,7 +409,7 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 		Direction: DiscoverBackward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
 	props := []DiscoveredFact{{
@@ -416,12 +418,12 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 	}}
 
 	// Threshold=1 → reject (a and b have zero dependents).
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 1}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 1}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "backward proposal must be rejected when seed has no live dependents")
 
 	// Threshold=0 → accept.
-	written, err = applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, bareRefFixture, "kb", nil)
+	written, err = applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "with threshold=0 the proposal should land: %v", written)
 }
@@ -458,7 +460,7 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "auth",
 			Kind:  BridgeEntity,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 				{File: "kb/b.md", Title: "B"},
 			},
@@ -477,14 +479,14 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 	}
 	gates := DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 0.9}
 	var warnings []string
-	onProgress := func(e ProgressEvent) {
+	onProgress := func(e step.ProgressEvent) {
 		if e.Phase == "warn" {
 			warnings = append(warnings, e.Message)
 		}
 	}
 
 	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		mockEmb, payload, proposals, gates, branch, bareRefFixture, "kb", onProgress)
+		mockEmb, payload, proposals, gates, branch, synthtest.BareRefFixture, "kb", onProgress)
 	require.NoError(t, err)
 	require.Len(t, written, 1,
 		"proposal must survive an embedder error: embed error ≠ duplicate; got warnings: %v", warnings)
@@ -513,14 +515,14 @@ func TestApplyDiscoveredProposals_NoEmbedder_NoDedup(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
 	props := []DiscoveredFact{{
 		Path: "kb/d.md", Title: "d", Body: "d", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 999}, branch, bareRefFixture, "kb", nil)
+	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 999}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/embeddings"
 	"knomit/internal/engine/store"
 )
@@ -64,7 +65,7 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 		Embedder:     emb,
 		OntologyRoot: "kb",
 	})
-	d := Deps{
+	d := step.Deps{
 		RI:          ri,
 		Facts:       svc.Facts(),
 		Files:       svc.FactsRepo(),
@@ -72,8 +73,8 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 		Pipeline:    svc.Pipeline(),
 		HeadCommit:  svc.HeadCommit,
 		Abstraction: svc.Abstraction(),
-		Effort:      EffortNormal,
-		OnProgress:  func(ProgressEvent) {},
+		Effort:      step.EffortNormal,
+		OnProgress:  func(step.ProgressEvent) {},
 	}
 
 	// Fill the axis. In production this spreads over sessions under the latency

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -80,11 +81,11 @@ func TestReviewQualifyGate_EntityBridgesAreNotEnqueued(t *testing.T) {
 	}
 
 	// (1) FIXTURE CHECK — these seeds really do form an entity/domain bridge.
-	llm := factsForLLM(seeds, testLocalRepoID)
+	llm := step.FactsForLLM(seeds, testLocalRepoID)
 	clusters := ClusterResult{Clusters: map[int][]string{
 		0: {paths[0], paths[1]}, 1: {paths[2], paths[3]},
 	}}
-	cands := enumerateBridgeCandidates(llm, clusters, BridgeBoth, ScopeFilter{})
+	cands := enumerateBridgeCandidates(llm, clusters, BridgeBoth, step.ScopeFilter{})
 	_, wouldBridge := containsToken(cands, "auth")
 	require.True(t, wouldBridge,
 		"fixture check: this corpus DOES produce a domain bridge — without this, "+
@@ -94,7 +95,7 @@ func TestReviewQualifyGate_EntityBridgesAreNotEnqueued(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "test", AgentBranch: branch, Svc: svc, OntologyRoot: "kb",
 	})
-	r := NewReviewerWithEffort(ri, nil, EffortHigh)
+	r := NewReviewerWithEffort(ri, nil, step.EffortHigh)
 
 	res, err := r.StartSession(ctx)
 	require.NoError(t, err)
@@ -179,7 +180,7 @@ func TestMotifRankLess_IsSharedByBothRankPaths(t *testing.T) {
 	mk := func(token string, q, ent float64) enumeratedMotif {
 		return enumeratedMotif{
 			BridgeSeedSet: BridgeSeedSet{Token: token, Kind: BridgeMotif, Q: q,
-				Members: []factForLLM{{File: token + "-x.md"}, {File: token + "-y.md"}}},
+				Members: []step.FactForLLM{{File: token + "-x.md"}, {File: token + "-y.md"}}},
 			entOverlap: ent,
 		}
 	}
@@ -240,7 +241,7 @@ func TestMotifRankLess_EntityOverlapIsPopulatedByTheBuilder(t *testing.T) {
 	// cut, so the disjointness gate ignores it and both members survive.
 	labels := labelsWith(200, map[string]int{"gartner": 100})
 
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		// Group "a-shared": both members carry the umbrella entity.
 		{File: "kb/alpha/1.md", Motifs: []string{"a-shared-shape"}, Entities: []string{"Gartner"}},
 		{File: "kb/beta/2.md", Motifs: []string{"a-shared-shape"}, Entities: []string{"Gartner"}},
@@ -262,7 +263,7 @@ func TestMotifRankLess_EntityOverlapIsPopulatedByTheBuilder(t *testing.T) {
 	}}
 
 	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil),
-		"main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		"main", seeds, clusters, step.EffortHigh, motifQualityConfig(),
 		identityResolver, labels, nil)
 	require.NoError(t, err)
 
@@ -295,7 +296,7 @@ func TestMotifRankLess_EntityOverlapIsPopulatedByTheBuilder(t *testing.T) {
 		}
 	}
 	near, far, _, err = buildMotifBridges(context.Background(), motifIdx(t, seeds, nil),
-		"main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		"main", seeds, clusters, step.EffortHigh, motifQualityConfig(),
 		identityResolver, labels, nil)
 	require.NoError(t, err)
 	served = append(append([]BridgeSeedSet{}, near...), far...)
@@ -333,18 +334,18 @@ func TestHypothesizeQualifyGate_BackwardBridgesAreNotEnqueued(t *testing.T) {
 	// FIXTURE CHECK — the same pool really does enumerate a domain bridge.
 	// Without it, "no discover items" would be indistinguishable from "these
 	// four facts never formed a candidate".
-	llm := make([]factForLLM, 0, len(paths))
+	llm := make([]step.FactForLLM, 0, len(paths))
 	for _, p := range paths {
-		llm = append(llm, factForLLM{File: p, Domain: []string{"auth"}, Origin: "authored"})
+		llm = append(llm, step.FactForLLM{File: p, Domain: []string{"auth"}, Origin: "authored"})
 	}
 	cands := enumerateBridgeCandidates(llm, ClusterResult{Clusters: map[int][]string{
 		0: {paths[0], paths[1]}, 1: {paths[2], paths[3]},
-	}}, BridgeBoth, ScopeFilter{})
+	}}, BridgeBoth, step.ScopeFilter{})
 	_, wouldBridge := containsToken(cands, "auth")
 	require.True(t, wouldBridge,
 		"fixture check: this synthesis pool DOES enumerate a domain bridge")
 
-	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})
+	p := NewHypothesizer(ri, nil, step.EffortHigh, step.ScopeFilter{})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, res.SessionID)

@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"knomit/internal/engine/store/index"
@@ -51,24 +53,24 @@ func TestDedupCluster_SurvivorDoesNotCiteItself(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			svc, branch := newSourcesTestRepo(t)
+			svc, branch := synthtest.NewSourcesTestRepo(t)
 
 			// The winner is picked on confidence; they must differ, or "the
 			// winner survived" is a coin toss.
 			const winnerConf, loserConf = 0.9, 0.5
-			seedOriginFact(t, svc, branch, liveRef, fact.Observation, fact.Authored, 0.7, 1, nil)
-			seedOriginFact(t, svc, branch, winnerPath, fact.Observation, fact.Authored, winnerConf, 1, nil)
-			seedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, loserConf, 1,
+			synthtest.SeedOriginFact(t, svc, branch, liveRef, fact.Observation, fact.Authored, 0.7, 1, nil)
+			synthtest.SeedOriginFact(t, svc, branch, winnerPath, fact.Observation, fact.Authored, winnerConf, 1, nil)
+			synthtest.SeedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, loserConf, 1,
 				[]string{tc.loserCites, liveRef})
 
-			cluster := []factForLLM{
+			cluster := []step.FactForLLM{
 				{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
 				{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 			}
 			idx := fixedPairSearch(t, svc, []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)})
 
 			surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
-				func(ProgressEvent) {}, branch, selfRefRepoID)
+				func(step.ProgressEvent) {}, branch, selfRefRepoID)
 			require.NoError(t, err)
 			require.Len(t, surviving, 1)
 			require.Equal(t, winnerPath, surviving[0].File)

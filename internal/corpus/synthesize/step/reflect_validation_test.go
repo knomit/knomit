@@ -1,4 +1,4 @@
-package synthesize
+package step
 
 import (
 	"strings"
@@ -188,7 +188,7 @@ func TestValidateReflectResponse(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateReflectResponse(tc.result, transitions, cap)
+			err := ValidateReflectResponse(tc.result, transitions, cap)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("expected nil err, got: %v", err)
@@ -209,7 +209,7 @@ func TestValidateReflectResponse(t *testing.T) {
 // pattern where models wrap JSON in ```json ... ``` fences.
 func TestParseReflectResponse_StripsCodeFences(t *testing.T) {
 	raw := "```json\n{\"reasoning\":\"x\",\"reinforce\":[],\"propose\":[]}\n```"
-	r, err := parseReflectResponse(raw)
+	r, err := ParseReflectResponse(raw)
 	if err != nil {
 		t.Fatalf("parse err: %v", err)
 	}

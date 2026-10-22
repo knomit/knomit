@@ -2,19 +2,21 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
 // reinforceEnv is a real store holding two seed facts, one unrelated fact the
 // target already cites, and the target itself.
 type reinforceEnv struct {
-	*restatementEnv
+	*synthtest.RestatementEnv
 	payload DiscoverWorkPayload
 	repoID  string
 }
@@ -28,7 +30,7 @@ const (
 
 func newReinforceEnv(t *testing.T) *reinforceEnv {
 	t.Helper()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	ctx := context.Background()
 
 	write := func(path, title string, refs []string, sources int) {
@@ -41,7 +43,7 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 		f.Refs = refs
 		content, err := fact.SerializeFact(f)
 		require.NoError(t, err)
-		_, err = env.svc.Facts().WriteFact(ctx, env.branch, path, content, "write "+path, "test")
+		_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, path, content, "write "+path, "test")
 		require.NoError(t, err)
 	}
 
@@ -66,19 +68,19 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 	target.Refs = []string{existingRef}
 	content, err := fact.SerializeFact(target)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(ctx, env.branch, reinforcePath, content, "write target", "test")
+	_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, reinforcePath, content, "write target", "test")
 	require.NoError(t, err)
 
 	return &reinforceEnv{
-		restatementEnv: env,
-		repoID:         fact.ID12(env.ri.ID()),
+		RestatementEnv: env,
+		repoID:         fact.ID12(env.RI.ID()),
 		payload: DiscoverWorkPayload{
 			Direction: DiscoverBackward,
 			Lane:      LaneFar,
 			Bridge: BridgeSeedSet{
 				Token: "measure-becomes-target",
 				Kind:  BridgeMotif,
-				Members: []factForLLM{
+				Members: []step.FactForLLM{
 					{File: seedOnePath}, {File: seedTwoPath},
 				},
 			},
@@ -87,17 +89,17 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 }
 
 func (e *reinforceEnv) apply(rs ...FactReinforcement) []string {
-	e.t.Helper()
-	return applyReinforcements(context.Background(), e.svc.Facts(), e.svc.FactsRepo(), e.svc.Search(),
-		e.payload, rs, e.branch, e.repoID, func(ProgressEvent) {})
+	e.T.Helper()
+	return applyReinforcements(context.Background(), e.Svc.Facts(), e.Svc.FactsRepo(), e.Svc.Search(),
+		e.payload, rs, e.Branch, e.repoID, func(step.ProgressEvent) {})
 }
 
 func (e *reinforceEnv) read(path string) fact.Fact {
-	e.t.Helper()
-	res, err := e.svc.Facts().ReadFact(context.Background(), e.branch, path, nil)
-	require.NoError(e.t, err)
+	e.T.Helper()
+	res, err := e.Svc.Facts().ReadFact(context.Background(), e.Branch, path, nil)
+	require.NoError(e.T, err)
 	f, err := fact.ParseFact(path, res.Content)
-	require.NoError(e.t, err)
+	require.NoError(e.T, err)
 	return f
 }
 
@@ -105,7 +107,7 @@ func goodReinforcement() FactReinforcement {
 	return FactReinforcement{
 		Path:   reinforcePath,
 		Reason: "Both state that the verifier sits inside the agent's reachable action space.",
-		Refs:   flexStrings{seedOnePath, seedTwoPath},
+		Refs:   step.FlexStrings{seedOnePath, seedTwoPath},
 	}
 }
 
@@ -176,10 +178,10 @@ func TestApplyReinforcements_RefsGateIsLiveOnThisPath(t *testing.T) {
 	before := env.read(reinforcePath)
 
 	const ghost = "kb/gotchas/never/existed.md"
-	env.payload.Bridge.Members = append(env.payload.Bridge.Members, factForLLM{File: ghost})
+	env.payload.Bridge.Members = append(env.payload.Bridge.Members, step.FactForLLM{File: ghost})
 
 	r := goodReinforcement()
-	r.Refs = flexStrings{seedOnePath, seedTwoPath, ghost}
+	r.Refs = step.FlexStrings{seedOnePath, seedTwoPath, ghost}
 
 	require.Empty(t, env.apply(r),
 		"a seed that resolves to nothing must refuse the write, not be written as a broken edge")
@@ -212,7 +214,7 @@ func TestApplyReinforcements_RejectsFewerThanTwoCitedSeeds(t *testing.T) {
 	before := env.read(reinforcePath)
 
 	r := goodReinforcement()
-	r.Refs = flexStrings{seedOnePath}
+	r.Refs = step.FlexStrings{seedOnePath}
 	require.Empty(t, env.apply(r))
 	require.Equal(t, before.Sources, env.read(reinforcePath).Sources)
 }
@@ -269,12 +271,12 @@ func TestApplyReinforcements_ADifferentDerivationStillCounts(t *testing.T) {
 	f.Sources = 1
 	content, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(context.Background(), env.branch, seedThree, content, "write", "test")
+	_, err = env.Svc.Facts().WriteFact(context.Background(), env.Branch, seedThree, content, "write", "test")
 	require.NoError(t, err)
 
-	env.payload.Bridge.Members = append(env.payload.Bridge.Members, factForLLM{File: seedThree})
+	env.payload.Bridge.Members = append(env.payload.Bridge.Members, step.FactForLLM{File: seedThree})
 	r := goodReinforcement()
-	r.Refs = flexStrings{seedOnePath, seedTwoPath, seedThree}
+	r.Refs = step.FlexStrings{seedOnePath, seedTwoPath, seedThree}
 
 	require.Equal(t, []string{reinforcePath}, env.apply(r))
 	after := env.read(reinforcePath)
@@ -292,9 +294,9 @@ func contains(ref, path string) bool {
 // storedBytes reads the fact exactly as the corpus holds it. The guard below
 // compares THESE, not parsed structs — see the test's own comment for why.
 func (e *reinforceEnv) storedBytes(path string) string {
-	e.t.Helper()
-	res, err := e.svc.Facts().ReadFact(context.Background(), e.branch, path, nil)
-	require.NoError(e.t, err)
+	e.T.Helper()
+	res, err := e.Svc.Facts().ReadFact(context.Background(), e.Branch, path, nil)
+	require.NoError(e.T, err)
 	return res.Content
 }
 
@@ -355,7 +357,7 @@ func TestApplyReinforcements_SkipsALossyTarget(t *testing.T) {
 	lossy := strings.Replace(env.storedBytes(reinforcePath),
 		"motifs: [measure-becomes-target]", "motifs: [measure-becomes-target, legacy]", 1)
 	require.Contains(t, lossy, ", legacy]", "precondition: the fixture planted the motif")
-	_, err := env.svc.Facts().WriteFact(context.Background(), env.branch, reinforcePath,
+	_, err := env.Svc.Facts().WriteFact(context.Background(), env.Branch, reinforcePath,
 		lossy, "plant legacy motif", "test")
 	require.NoError(t, err)
 
@@ -370,9 +372,9 @@ func TestApplyReinforcements_SkipsALossyTarget(t *testing.T) {
 	// asserted: "rewritten outside the permitted lines" would send a reader
 	// hunting a formatting problem instead of a deleted motif.
 	var warnings []string
-	applyReinforcements(context.Background(), env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
-		env.payload, []FactReinforcement{goodReinforcement()}, env.branch, env.repoID,
-		func(e ProgressEvent) {
+	applyReinforcements(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+		env.payload, []FactReinforcement{goodReinforcement()}, env.Branch, env.repoID,
+		func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
 				warnings = append(warnings, e.Message)
 			}
@@ -393,7 +395,7 @@ func TestApplyReinforcements_PermitsAnOriginMaterialisingToTheParseDefault(t *te
 	elided := env.storedBytes(reinforcePath)
 	require.Contains(t, elided, "origin: distilled", "precondition: the fixture has one to remove")
 	elided = strings.Replace(elided, "origin: distilled\n", "", 1)
-	_, err := env.svc.Facts().WriteFact(context.Background(), env.branch, reinforcePath,
+	_, err := env.Svc.Facts().WriteFact(context.Background(), env.Branch, reinforcePath,
 		elided, "elide origin", "test")
 	require.NoError(t, err)
 	require.Equal(t, fact.Distilled, env.read(reinforcePath).Origin,
@@ -471,11 +473,11 @@ func TestApplyReinforcements_DiscardsRefsBeyondTheSeeds(t *testing.T) {
 	f.Sources = 1
 	content, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(context.Background(), env.branch, unrelated, content, "write", "test")
+	_, err = env.Svc.Facts().WriteFact(context.Background(), env.Branch, unrelated, content, "write", "test")
 	require.NoError(t, err)
 
 	r := goodReinforcement()
-	r.Refs = flexStrings{seedOnePath, seedTwoPath, unrelated}
+	r.Refs = step.FlexStrings{seedOnePath, seedTwoPath, unrelated}
 
 	require.Equal(t, []string{reinforcePath}, env.apply(r), "the reinforcement still lands")
 
@@ -507,8 +509,8 @@ func TestApplyReinforcements_DoesNotRewriteExistingRefs(t *testing.T) {
 // that something did.
 func warnsOf(env *reinforceEnv, rs ...FactReinforcement) ([]string, []string) {
 	var warns []string
-	written := applyReinforcements(context.Background(), env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
-		env.payload, rs, env.branch, env.repoID, func(e ProgressEvent) {
+	written := applyReinforcements(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+		env.payload, rs, env.Branch, env.repoID, func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
 				warns = append(warns, e.Message)
 			}
@@ -541,7 +543,7 @@ func TestApplyReinforcements_SkipsAnIllegalTypeOriginPairing(t *testing.T) {
 	raw := "---\ntype: observation\ndomain: [evaluation]\nconfidence: 0.75\nsources: 1\n" +
 		"origin: discovered\nentities: [verifier gaming]\nrefs: [" + existingRef + "]\n---\n" +
 		"# The verifier is inside the agent's action space\n\nBody text.\n"
-	_, err := env.svc.Facts().WriteFact(context.Background(), env.branch, reinforcePath, raw, "plant", "test")
+	_, err := env.Svc.Facts().WriteFact(context.Background(), env.Branch, reinforcePath, raw, "plant", "test")
 	require.NoError(t, err)
 
 	// PRECONDITIONS, asserted rather than logged. If ParseFact ever stops
@@ -580,14 +582,14 @@ func TestApplyReinforcements_BarePriorRefAndCanonicalSeedAreTheSameRef(t *testin
 	target.Refs = []string{seedOnePath, seedTwoPath} // bare, as an older fact may carry them
 	content, err := fact.SerializeFact(target)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(ctx, env.branch, reinforcePath, content, "bare seed refs", "test")
+	_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, reinforcePath, content, "bare seed refs", "test")
 	require.NoError(t, err)
 	before := env.read(reinforcePath)
 	require.Equal(t, []string{seedOnePath, seedTwoPath}, before.Refs, "fixture must keep the bare spelling")
 
 	canon := func(p string) string { return "kb://" + env.repoID + "/" + p }
 	r := goodReinforcement()
-	r.Refs = flexStrings{canon(seedOnePath), canon(seedTwoPath)}
+	r.Refs = step.FlexStrings{canon(seedOnePath), canon(seedTwoPath)}
 
 	require.Empty(t, env.apply(r), "both seeds are already derivation paths, spelled differently")
 	after := env.read(reinforcePath)

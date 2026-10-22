@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
@@ -79,7 +80,7 @@ const promotedDistillKeyPrefix = "distill-promoted-"
 //     satisfied by a judge that classified one fact out of five. Partial
 //     coverage is silence for the rest, which is condition 2 again at a
 //     different granularity.
-func pruneVerdictCertifiesDistinct(result PruneResult, inputPaths []string) bool {
+func pruneVerdictCertifiesDistinct(result step.PruneResult, inputPaths []string) bool {
 	if len(result.Merges) > 0 || len(result.Decisions) == 0 {
 		return false
 	}
@@ -141,11 +142,11 @@ func promotesToDistill(item *model.PipelineWorkItem) bool {
 // the same reason.
 func promoteClusterToDistill(
 	ctx context.Context,
-	d Deps,
+	d step.Deps,
 	sess *model.PipelineSession,
 	item *model.PipelineWorkItem,
 ) {
-	var facts []factForLLM
+	var facts []step.FactForLLM
 	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 		log.Warn().Err(err).Str("session", sess.ID).Str("cluster", item.ClusterKey).
 			Msg("review: certified-distinct cluster could not be decoded for promotion")
@@ -158,7 +159,7 @@ func promoteClusterToDistill(
 	}
 
 	enqueued := 0
-	for ci, chunk := range chunkFacts(facts, maxItemBytes) {
+	for ci, chunk := range step.ChunkFacts(facts, step.MaxItemBytes) {
 		payload, err := json.Marshal(chunk)
 		if err != nil {
 			log.Warn().Err(err).Str("session", sess.ID).Str("cluster", item.ClusterKey).
@@ -203,7 +204,7 @@ func promoteClusterToDistill(
 // on it is indistinguishable from a cluster the progression forgot, and the
 // whole point of #135 is that distill NOT running is now a designed outcome
 // rather than an omission.
-func recordProgressionStop(sess *model.PipelineSession, item *model.PipelineWorkItem, stats *ReviewStats) {
+func recordProgressionStop(sess *model.PipelineSession, item *model.PipelineWorkItem, stats *step.ReviewStats) {
 	if sess == nil || item == nil {
 		return
 	}

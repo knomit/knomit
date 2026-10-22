@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,10 +31,10 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 	// A merge whose merged.type is "hypothesis" must be rejected with a
 	// warn — the merged fact is NOT written and source facts are NOT
 	// deleted (because the merge never committed).
-	merges := []MergeEntry{
+	merges := []step.MergeEntry{
 		{
 			Paths: []string{"kb/synth/a.md", "kb/synth/b.md"},
-			Merged: mergedFact{
+			Merged: step.MergedFact{
 				Path:  "kb/synth/merged.md",
 				Title: "Merged hypothesis",
 				Body:  "claim",
@@ -42,7 +44,7 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 	}
 
 	var warns []string
-	onProgress := func(e ProgressEvent) {
+	onProgress := func(e step.ProgressEvent) {
 		if e.Phase == "warn" {
 			warns = append(warns, e.Message)
 		}
@@ -58,7 +60,7 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 		"review-test",
 		onProgress,
 		"agent/test",
-		bareRefFixture,
+		synthtest.BareRefFixture,
 		"kb",
 		nil,
 	)
@@ -92,10 +94,10 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	merges := []MergeEntry{
+	merges := []step.MergeEntry{
 		{
 			Paths: []string{}, // no source facts to delete (keeps the test minimal)
-			Merged: mergedFact{
+			Merged: step.MergedFact{
 				Path:  "kb/synth/merged.md",
 				Title: "Merged synthesis",
 				Body:  "summary",
@@ -105,7 +107,7 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	}
 
 	var warns []string
-	onProgress := func(e ProgressEvent) {
+	onProgress := func(e step.ProgressEvent) {
 		if e.Phase == "warn" {
 			warns = append(warns, e.Message)
 		}
@@ -120,7 +122,7 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 		"review-test",
 		onProgress,
 		"agent/test",
-		bareRefFixture,
+		synthtest.BareRefFixture,
 		"kb",
 		nil,
 	)

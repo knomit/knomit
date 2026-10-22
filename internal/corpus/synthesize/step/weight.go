@@ -1,4 +1,4 @@
-package synthesize
+package step
 
 import (
 	"context"
@@ -49,7 +49,7 @@ var DefaultWeightStrategy WeightStrategy = SumProductNorm{}
 // confident it is.
 const derivedSourcesFloor = 1
 
-// computeTransfer reads each source path from git once and returns the three
+// ComputeTransfer reads each source path from git once and returns the three
 // numbers a TRANSFER-type write needs: the normalized evidence weight, the
 // pooled corroboration count, and how many sources were actually readable.
 //
@@ -71,13 +71,13 @@ const derivedSourcesFloor = 1
 // reads nothing and reports a fact resting on no evidence at all. readable is
 // returned so a destructive caller can tell "these facts had no corroborations"
 // apart from "I could not read the facts I am about to delete".
-func computeTransfer(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) (weight float64, pooled int, readable int) {
+func ComputeTransfer(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) (weight float64, pooled int, readable int) {
 	// pooled and readable describe the DIRECT sources only — those are the
 	// facts a merge is about to delete, and the lineage beneath them is not
 	// being deleted with them. The weight, by contrast, composes through that
 	// lineage (collectEvidence).
 	for _, p := range sourcePaths {
-		f, ok := readFactAt(ctx, gs, agentBranch, p)
+		f, ok := ReadFactAt(ctx, gs, agentBranch, p)
 		if !ok {
 			continue
 		}
@@ -174,7 +174,7 @@ func collectEvidence(ctx context.Context, gs *facts.Index, agentBranch, localRep
 		onStack[key] = true
 		defer func() { onStack[key] = false }()
 
-		f, ok := readFactAt(ctx, gs, agentBranch, path)
+		f, ok := ReadFactAt(ctx, gs, agentBranch, path)
 		if !ok {
 			resolved[key] = false
 			return false
@@ -221,13 +221,13 @@ func collectEvidence(ctx context.Context, gs *facts.Index, agentBranch, localRep
 // cross-repo kb:// refs name nothing walkable here, and a self-ref (appended
 // as merge lineage) is a back-edge the on-stack guard absorbs anyway.
 func localLineageRefs(f fact.Fact, localRepoID string) []string {
-	return localFactRefPaths(f.Refs, localRepoID)
+	return LocalFactRefPaths(f.Refs, localRepoID)
 }
 
-// readFactAt reads and parses one fact, reporting whether it resolved. A
+// ReadFactAt reads and parses one fact, reporting whether it resolved. A
 // source that cannot be read or parsed contributes nothing — the same
 // tolerance the pre-walk implementation had.
-func readFactAt(ctx context.Context, gs *facts.Index, agentBranch, path string) (fact.Fact, bool) {
+func ReadFactAt(ctx context.Context, gs *facts.Index, agentBranch, path string) (fact.Fact, bool) {
 	readResult, err := gs.ReadFact(ctx, agentBranch, path, nil)
 	if err != nil {
 		return fact.Fact{}, false
@@ -239,11 +239,11 @@ func readFactAt(ctx context.Context, gs *facts.Index, agentBranch, path string) 
 	return f, true
 }
 
-// computeWeight returns only the evidence weight, for SHARE-type writes: a
+// ComputeWeight returns only the evidence weight, for SHARE-type writes: a
 // derivation whose sources stay alive sets its own sources to 1 and has no
 // count to pool (see computeTransfer for why).
-func computeWeight(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) float64 {
-	w, _, _ := computeTransfer(ctx, gs, agentBranch, localRepoID, sourcePaths)
+func ComputeWeight(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) float64 {
+	w, _, _ := ComputeTransfer(ctx, gs, agentBranch, localRepoID, sourcePaths)
 	return w
 }
 
@@ -253,10 +253,10 @@ func computeWeight(ctx context.Context, gs *facts.Index, agentBranch, localRepoI
 // same provenance weight the auto-apply pipeline would have computed.
 // sourcePaths must be local fact paths.
 func ComputeEvidenceWeight(ctx context.Context, gs *facts.Index, agentBranch, localRepoID string, sourcePaths []string) float64 {
-	return computeWeight(ctx, gs, agentBranch, localRepoID, sourcePaths)
+	return ComputeWeight(ctx, gs, agentBranch, localRepoID, sourcePaths)
 }
 
-// localFactRefPaths is the subset of refs naming a fact in THIS repository, as
+// LocalFactRefPaths is the subset of refs naming a fact in THIS repository, as
 // repo-relative paths — the edges a lineage walk or weight computation may
 // follow. It consumes fact.ClassifyRef so synthesize cannot drift from the edge
 // builder, replay, explain, or the fact API.
@@ -271,7 +271,7 @@ func ComputeEvidenceWeight(ctx context.Context, gs *facts.Index, agentBranch, lo
 // foreign: the lineage walk would find no ancestors and every derived fact
 // would silently fall back to its own mass instead of composing through its
 // sources.
-func localFactRefPaths(refs []string, localRepoID string) []string {
+func LocalFactRefPaths(refs []string, localRepoID string) []string {
 	var out []string
 	for _, r := range refs {
 		if c := fact.ClassifyRef(r, localRepoID); c.Kind == fact.RefLocalFact {

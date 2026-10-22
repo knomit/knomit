@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -50,13 +51,13 @@ var (
 
 // loadCanonCorpus reads one source corpus out of the harness labels file and
 // projects it into the shape enumeration consumes.
-func loadCanonCorpus(t *testing.T, corpus string) []factForLLM {
+func loadCanonCorpus(t *testing.T, corpus string) []step.FactForLLM {
 	t.Helper()
 	f, err := os.Open(modroot.Path(t, filepath.FromSlash(trainCanonPath)))
 	require.NoError(t, err, "harness fixture missing — this acceptance cannot run")
 	defer f.Close()
 
-	var out []factForLLM
+	var out []step.FactForLLM
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 1<<22)
 	for sc.Scan() {
@@ -66,7 +67,7 @@ func loadCanonCorpus(t *testing.T, corpus string) []factForLLM {
 		if !strings.HasPrefix(row.Key, prefix) {
 			continue
 		}
-		out = append(out, factForLLM{
+		out = append(out, step.FactForLLM{
 			File:     strings.TrimPrefix(row.Key, prefix),
 			Domain:   quotedList(reDomain, row.Input),
 			Entities: quotedList(reEntities, row.Input),
@@ -119,7 +120,7 @@ func quotedList(re *regexp.Regexp, input string) []string {
 
 // labelsFor computes the corpus's own subject-label distribution the way
 // store.SubjectLabelDF does — same tokeniser, same one-set-per-fact counting.
-func labelsFor(facts []factForLLM) index.SubjectLabelDF {
+func labelsFor(facts []step.FactForLLM) index.SubjectLabelDF {
 	d := index.SubjectLabelDF{DF: map[string]int{}, LiveFacts: len(facts)}
 	for _, f := range facts {
 		for tok := range fact.SubjectTokens(f.Entities, f.Domain, f.File) {
@@ -130,7 +131,7 @@ func labelsFor(facts []factForLLM) index.SubjectLabelDF {
 }
 
 // motifDFFor counts carriers per canonical motif over the corpus.
-func motifDFFor(facts []factForLLM) motifDFFn {
+func motifDFFor(facts []step.FactForLLM) motifDFFn {
 	counts := map[string]int{}
 	for _, f := range facts {
 		seen := map[string]struct{}{}
@@ -458,7 +459,7 @@ func TestMotifMeasurement_WriteSupplementaryHarnessPack(t *testing.T) {
 	kept, _ := suppressContained(cands)
 	require.NotEmpty(t, kept)
 
-	byPath := map[string]factForLLM{}
+	byPath := map[string]step.FactForLLM{}
 	for _, f := range facts {
 		byPath[f.File] = f
 	}
@@ -487,7 +488,7 @@ func TestMotifMeasurement_WriteSupplementaryHarnessPack(t *testing.T) {
 		if len(g.Members) < 2 {
 			continue
 		}
-		ms := append([]factForLLM(nil), g.Members...)
+		ms := append([]step.FactForLLM(nil), g.Members...)
 		sort.Slice(ms, func(i, j int) bool { return ms[i].File < ms[j].File })
 		a, b := ms[0], ms[1]
 		id := fmt.Sprintf("S%03d", len(pack)+1)

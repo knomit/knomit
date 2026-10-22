@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -121,31 +122,32 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 		return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
 	}
 	var files []string
-	// minDirs is the directory floor per root: the store already has children,
-	// so its walk must reach them; the other roots have none yet, and their
-	// floor rises with their first child (>1 once one exists). found is
-	// asserted positive for every root.
+	// The walk must reach every package directory of each root. The expected
+	// set is DERIVED from `go list` (every package of the module under the root
+	// that has non-test Go files), never a count: a count is a measured constant
+	// that drifts as children are added or removed and under-asserts silently.
+	// found is also asserted positive for every root.
 	roots := []struct {
-		dir     string
-		minDirs int
+		dir string
 	}{
 		// Resolved from the module root, not by "../sibling": a layer move
 		// changes both the depth and the sibling names, and a relative path
 		// would break (or, worse, narrow) the scan with it.
-		{modroot.Path(t, "internal", "edge", "mcp"), 1},
-		{modroot.Path(t, "internal", "corpus", "synthesize"), 1},
-		{modroot.Path(t, "internal", "edge", "web"), 1},
-		{modroot.Path(t, "internal", "engine", "store"), 5},
-		{modroot.Path(t, "internal", "corpus", "repos"), 1},
+		{modroot.Path(t, "internal", "edge", "mcp")},
+		{modroot.Path(t, "internal", "corpus", "synthesize")},
+		{modroot.Path(t, "internal", "edge", "web")},
+		{modroot.Path(t, "internal", "engine", "store")},
+		{modroot.Path(t, "internal", "corpus", "repos")},
 	}
 	for _, root := range roots {
-		found, dirs := 0, 0
+		found := 0
+		visited := map[string]bool{}
 		require.NoErrorf(t, filepath.WalkDir(root.dir, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if d.IsDir() {
-				dirs++
+				visited[filepath.Clean(p)] = true
 				return nil
 			}
 			if nonTest(d.Name()) {
@@ -158,7 +160,15 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 		// a broken relative path, and a scan over zero files reports success just
 		// as loudly as a scan that found no violations.
 		require.Positivef(t, found, "no Go sources found under %s — the scan is not reading its subject", root.dir)
-		require.GreaterOrEqualf(t, dirs, root.minDirs, "the walk of %s saw %d directories: its children are not being reached", root.dir, dirs)
+		rootRel, relErr := filepath.Rel(modroot.Path(t), root.dir)
+		require.NoError(t, relErr)
+		listed, lerr := exec.Command("go", "list", "-f", "{{if .GoFiles}}{{.Dir}}{{end}}", "knomit/"+filepath.ToSlash(rootRel)+"/...").Output()
+		require.NoErrorf(t, lerr, "go list under %s", root.dir)
+		expected := strings.Fields(string(listed))
+		require.NotEmptyf(t, expected, "go list found no packages under %s: the expected set is empty", root.dir)
+		for _, dir := range expected {
+			require.Truef(t, visited[filepath.Clean(dir)], "the walk of %s did not visit package directory %s: its children are not being reached", root.dir, dir)
+		}
 		// Non-vacuous per directory: every directory under the root that has
 		// non-test Go files must have contributed them. The walk above and this
 		// glob read each directory by different routes, so a walk that stops

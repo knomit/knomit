@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"errors"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -210,12 +211,12 @@ func TestDerivationGap_ThreeMembers_OnePairLinked(t *testing.T) {
 	// kb/b.md cites kb/a.md, so the real reverse dependents of a are {b} and of
 	// b and c are {}. Pairs: (a,b)=linked, (a,c)=unlinked, (b,c)=unlinked →
 	// 2 unlinked / 3 total = 2/3.
-	idx := newGraphEnv(t, "main").seed(
-		seedFact{path: "kb/a.md"},
-		seedFact{path: "kb/b.md", refs: []string{"kb/a.md"}},
-		seedFact{path: "kb/c.md"},
-	).idx()
-	reads := guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"}})
+	idx := synthtest.NewGraphEnv(t, "main").Seed(
+		synthtest.SeedFact{Path: "kb/a.md"},
+		synthtest.SeedFact{Path: "kb/b.md", Refs: []string{"kb/a.md"}},
+		synthtest.SeedFact{Path: "kb/c.md"},
+	).Idx()
+	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"ReverseDependentPaths"}})
 
 	members := []string{"kb/a.md", "kb/b.md", "kb/c.md"}
 	got, err := derivationGap(context.Background(), members, idx)
@@ -233,8 +234,8 @@ func TestDerivationGap_ThreeMembers_OnePairLinked(t *testing.T) {
 // TestDerivationGap_LessThanTwoMembers verifies that fewer than 2 members
 // returns 0, nil without calling the index.
 func TestDerivationGap_LessThanTwoMembers(t *testing.T) {
-	idx := newGraphEnv(t, "main").idx()
-	guardReads(t, idx, readPolicy{}) // no read of any kind is allowed
+	idx := synthtest.NewGraphEnv(t, "main").Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{}) // no read of any kind is allowed
 
 	got, err := derivationGap(context.Background(), []string{"a.md"}, idx)
 	if err != nil {
@@ -256,9 +257,9 @@ func TestDerivationGap_LessThanTwoMembers(t *testing.T) {
 // TestDerivationGap_ErrorPropagation verifies the first error from
 // ReverseDependentPaths is returned immediately.
 func TestDerivationGap_ErrorPropagation(t *testing.T) {
-	idx := newGraphEnv(t, "main").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Idx()
 	boom := errors.New("index unavailable")
-	guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"},
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"ReverseDependentPaths"},
 		Fail: map[string]error{"ReverseDependentPaths": boom}})
 
 	_, err := derivationGap(context.Background(), []string{"x.md", "y.md"}, idx)
@@ -275,12 +276,12 @@ func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
 	// DOMAIN "auth": a read of the wrong kind (domain df 3, spec 1/3) or of the
 	// wrong token or branch (df 0 or an error) cannot also come out as 1.0
 	// through a df of 1.
-	idx := newGraphEnv(t, "main").seed(
-		seedFact{path: "kb/one.md", entities: []string{"auth"}},
-		seedFact{path: "kb/d1.md", domains: []string{"auth"}},
-		seedFact{path: "kb/d2.md", domains: []string{"auth"}},
-		seedFact{path: "kb/d3.md", domains: []string{"auth"}},
-	).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(
+		synthtest.SeedFact{Path: "kb/one.md", Entities: []string{"auth"}},
+		synthtest.SeedFact{Path: "kb/d1.md", Domains: []string{"auth"}},
+		synthtest.SeedFact{Path: "kb/d2.md", Domains: []string{"auth"}},
+		synthtest.SeedFact{Path: "kb/d3.md", Domains: []string{"auth"}},
+	).Allow("TokenDF").Idx()
 
 	// The exact read: entity "auth" on "main" is carried by exactly one fact,
 	// the domain "auth" by three (so the kind matters), and another branch has
@@ -307,13 +308,13 @@ func TestSpecificity_DF1_ReturnsOne(t *testing.T) {
 // TestSpecificity_DF4_Returns0_25 verifies df=4 → spec=0.25.
 func TestSpecificity_DF4_Returns0_25(t *testing.T) {
 	// Four live facts carry the domain.
-	idx := newGraphEnv(t, "main").seed(
-		seedFact{path: "kb/c1.md", domains: []string{"cache"}},
-		seedFact{path: "kb/c2.md", domains: []string{"cache"}},
-		seedFact{path: "kb/c3.md", domains: []string{"cache"}},
-		seedFact{path: "kb/c4.md", domains: []string{"cache"}},
-		seedFact{path: "kb/d1.md", domains: []string{"other"}},
-	).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(
+		synthtest.SeedFact{Path: "kb/c1.md", Domains: []string{"cache"}},
+		synthtest.SeedFact{Path: "kb/c2.md", Domains: []string{"cache"}},
+		synthtest.SeedFact{Path: "kb/c3.md", Domains: []string{"cache"}},
+		synthtest.SeedFact{Path: "kb/c4.md", Domains: []string{"cache"}},
+		synthtest.SeedFact{Path: "kb/d1.md", Domains: []string{"other"}},
+	).Allow("TokenDF").Idx()
 
 	got, err := specificity(context.Background(), "main", "cache", "domain", idx)
 	if err != nil {
@@ -330,7 +331,7 @@ func TestSpecificity_DF4_Returns0_25(t *testing.T) {
 // yielding spec=1.0.
 func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
 	// No live fact carries the entity: the real document frequency is 0.
-	idx := newGraphEnv(t, "main").seed(seedFact{path: "kb/x.md", entities: []string{"common"}}).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(synthtest.SeedFact{Path: "kb/x.md", Entities: []string{"common"}}).Allow("TokenDF").Idx()
 
 	got, err := specificity(context.Background(), "main", "rare", "entity", idx)
 	if err != nil {
@@ -345,9 +346,9 @@ func TestSpecificity_DF0_ReturnsOne(t *testing.T) {
 
 // TestSpecificity_ErrorPropagation verifies TokenDF errors are returned as-is.
 func TestSpecificity_ErrorPropagation(t *testing.T) {
-	idx := newGraphEnv(t, "main").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Idx()
 	boom := errors.New("token df unavailable")
-	guardReads(t, idx, readPolicy{Allow: []string{"TokenDF"}, Fail: map[string]error{"TokenDF": boom}})
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"TokenDF"}, Fail: map[string]error{"TokenDF": boom}})
 
 	_, err := specificity(context.Background(), "main", "tok", "domain", idx)
 	if !errors.Is(err, boom) {
@@ -373,11 +374,11 @@ func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 
 	// No derivation links between members → Gap = 1.0 (nothing cites anything).
 	// Two live facts carry the entity "bridgeTok" → df 2, Spec 0.5.
-	idx := newGraphEnv(t, "branch/test").seed(
-		seedFact{path: "kb/a.md", entities: []string{"bridgeTok"}},
-		seedFact{path: "kb/b.md", entities: []string{"bridgeTok"}},
-	).idx()
-	reads := guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths", "TokenDF"}})
+	idx := synthtest.NewGraphEnv(t, "branch/test").Seed(
+		synthtest.SeedFact{Path: "kb/a.md", Entities: []string{"bridgeTok"}},
+		synthtest.SeedFact{Path: "kb/b.md", Entities: []string{"bridgeTok"}},
+	).Idx()
+	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"ReverseDependentPaths", "TokenDF"}})
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -424,13 +425,13 @@ func TestScoreBridgeCandidate_CrossCommunity_Kept(t *testing.T) {
 // scoreBridgeCandidate.
 func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
 	ctx := context.Background()
-	idx := newGraphEnv(t, "branch/test").idx()
+	idx := synthtest.NewGraphEnv(t, "branch/test").Idx()
 	paths := []string{"kb/x.md", "kb/y.md"}
 	clusterOf := map[string]int{"kb/x.md": 0, "kb/y.md": 1}
 	g := index.NewSimilarityGraph([][2]string{{"kb/x.md", "kb/y.md"}})
 
 	boom := errors.New("revdeps unavailable")
-	guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"},
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"ReverseDependentPaths"},
 		Fail: map[string]error{"ReverseDependentPaths": boom}})
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
@@ -445,14 +446,14 @@ func TestScoreBridgeCandidate_ErrorPropagation_DerivationGap(t *testing.T) {
 // from TokenDF (inside specificity) is propagated by scoreBridgeCandidate.
 func TestScoreBridgeCandidate_ErrorPropagation_Specificity(t *testing.T) {
 	ctx := context.Background()
-	idx := newGraphEnv(t, "branch/test").idx()
+	idx := synthtest.NewGraphEnv(t, "branch/test").Idx()
 	// Only one member → derivationGap returns (0, nil) without reading the index.
 	paths := []string{"kb/z.md"}
 	clusterOf := map[string]int{"kb/z.md": 0}
 	g := index.NewSimilarityGraph(nil)
 
 	boom := errors.New("tokendf unavailable")
-	guardReads(t, idx, readPolicy{Allow: []string{"TokenDF"}, Fail: map[string]error{"TokenDF": boom}})
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"TokenDF"}, Fail: map[string]error{"TokenDF": boom}})
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 

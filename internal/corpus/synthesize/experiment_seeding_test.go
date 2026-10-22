@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -51,7 +52,7 @@ func TestExperiment_ReviewSeedsOnlyTheDelta(t *testing.T) {
 	}
 	agentHead, err := svc.HeadCommit(ctx, agent)
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, agent, agentHead))
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, step.ReviewTool, agent, agentHead))
 
 	exp, err := svc.Merge().OpenExperiment(ctx, "delta-only", "", agent)
 	require.NoError(t, err)
@@ -63,7 +64,7 @@ func TestExperiment_ReviewSeedsOnlyTheDelta(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, corpus, "precondition: the experiment sees the four inherited facts plus its own")
 
-	p := NewReviewerOnBranch(ri, nil, EffortNormal, ScopeFilter{}, exp.Branch()).p
+	p := NewReviewerOnBranch(ri, nil, step.EffortNormal, step.ScopeFilter{}, exp.Branch()).p
 	seeds, scan, err := p.dirtyFacts(ctx, exp.Branch(), svc.Facts(), svc.Search(), svc.Pipeline())
 	require.NoError(t, err)
 
@@ -89,16 +90,16 @@ func TestExperiment_ReviewWithoutInheritedWatermarkFullScans(t *testing.T) {
 	}
 	agentHead, err := svc.HeadCommit(ctx, agent)
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, agent, agentHead))
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, step.ReviewTool, agent, agentHead))
 
 	exp, err := svc.Merge().OpenExperiment(ctx, "no-watermark", "", agent)
 	require.NoError(t, err)
 	writeFactOn(t, svc, exp.Branch(), "kb/observations/epsilon.md", "epsilon", fact.Observation)
 
 	// Undo the inheritance the fork performed.
-	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, reviewTool, exp.Branch(), ""))
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, step.ReviewTool, exp.Branch(), ""))
 
-	p := NewReviewerOnBranch(ri, nil, EffortNormal, ScopeFilter{}, exp.Branch()).p
+	p := NewReviewerOnBranch(ri, nil, step.EffortNormal, step.ScopeFilter{}, exp.Branch()).p
 	seeds, scan, err := p.dirtyFacts(ctx, exp.Branch(), svc.Facts(), svc.Search(), svc.Pipeline())
 	require.NoError(t, err)
 

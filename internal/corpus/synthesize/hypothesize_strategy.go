@@ -33,6 +33,7 @@ import (
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 
@@ -55,14 +56,14 @@ const hypothesizeTool = "hypothesize"
 // Unlike review, hypothesize has no facade type wrapping the engine — its MCP
 // layer projects PipelineResult straight onto the HypothesizeResult wire shape,
 // so there is nothing for a facade to add. Callers drive *Pipeline directly.
-func NewHypothesizer(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter) *Pipeline {
+func NewHypothesizer(ri *repos.RepoInstance, onProgress func(step.ProgressEvent), effort step.Effort, scope step.ScopeFilter) *Pipeline {
 	return NewHypothesizerOnBranch(ri, onProgress, effort, scope, "")
 }
 
 // NewHypothesizerOnBranch is NewHypothesizer against an explicit branch — the
 // caller's resolved write branch, so a session bound to an experiment
 // hypothesizes there. Empty means the repo's agent branch.
-func NewHypothesizerOnBranch(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter, branch string) *Pipeline {
+func NewHypothesizerOnBranch(ri *repos.RepoInstance, onProgress func(step.ProgressEvent), effort step.Effort, scope step.ScopeFilter, branch string) *Pipeline {
 	return NewPipelineOnBranch(ri, onProgress, effort, scope, hypothesizeStrategy{}, branch)
 }
 
@@ -102,13 +103,13 @@ func (hypothesizeStrategy) AcceptSeed(f fact.Fact) bool {
 //
 // branch comes off sess, never off d.RI: the session is already bound to the
 // branch it was created against.
-func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSession, seeds []fact.Fact) error {
+func (hypothesizeStrategy) Plan(ctx context.Context, d step.Deps, sess *model.PipelineSession, seeds []fact.Fact) error {
 	branch := sess.Branch
 
 	for i, f := range seeds {
 		factJSON, err := json.Marshal(f)
 		if err != nil {
-			return wrapf(hypothesizeTool, err, "marshal synthesis fact %d", i)
+			return step.Wrapf(hypothesizeTool, err, "marshal synthesis fact %d", i)
 		}
 		item := model.PipelineWorkItem{
 			SessionID:  sess.ID,
@@ -118,7 +119,7 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *model.Pipelin
 			Priority:   float64(len(seeds) - i),
 		}
 		if err := d.Pipeline.InsertPipelineWorkItem(ctx, item); err != nil {
-			return wrapf(hypothesizeTool, err, "insert work item")
+			return step.Wrapf(hypothesizeTool, err, "insert work item")
 		}
 	}
 
@@ -158,7 +159,7 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *model.Pipelin
 
 	log.Info().Str("session", sess.ID).Int("seeds", len(seeds)).
 		Str("effort", string(d.Effort)).Msg("hypothesize: work planned")
-	d.OnProgress(ProgressEvent{
+	d.OnProgress(step.ProgressEvent{
 		Phase:   "hypothesize-start",
 		Message: fmt.Sprintf("session %s: %d synthesis facts", sess.ID, len(seeds)),
 	})
@@ -172,7 +173,7 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *model.Pipelin
 // and is otherwise inert — nothing ever enqueues an item during the reflect
 // phase, so handlePhase("reflect","done") finds an empty queue and falls
 // straight through to completion.
-func (hypothesizeStrategy) OnPhaseAdvance(context.Context, Deps, *model.PipelineSession, string, string) error {
+func (hypothesizeStrategy) OnPhaseAdvance(context.Context, step.Deps, *model.PipelineSession, string, string) error {
 	return nil
 }
 
@@ -208,7 +209,7 @@ func backwardDiscoverPriority(rank int) float64 {
 // resolution and minCommunitySize all come from the same per-repo config the
 // forward (review) path uses, so both discovery directions honour the same axis
 // selection AND the same community partition, with nothing hardcoded.
-func enqueueBackwardBridgeItems(ctx context.Context, d Deps, sessionID string, seeds []fact.Fact, branch string) error {
+func enqueueBackwardBridgeItems(ctx context.Context, d step.Deps, sessionID string, seeds []fact.Fact, branch string) error {
 	bridges, err := BuildBackwardBridges(ctx, d.Search, seeds, branch, fact.ID12(d.RI.ID()), d.Effort,
 		BridgeKindFromString(d.RI.DiscoveryBridge()), d.RI.ClusterResolution(),
 		d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), QualityConfigFromRepo(d.RI), d.Scope)
@@ -260,7 +261,7 @@ func enqueueBackwardBridgeItems(ctx context.Context, d Deps, sessionID string, s
 		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: rb.b, ScopeLabel: sl}
 		payloadJSON, mErr := json.Marshal(payload)
 		if mErr != nil {
-			return wrapf(hypothesizeTool, mErr, "marshal backward discover %d", i)
+			return step.Wrapf(hypothesizeTool, mErr, "marshal backward discover %d", i)
 		}
 		// Discover items must run AFTER the whole per-fact hypothesize loop,
 		// whose items carry positive priorities (NextPipelineWorkItem orders
@@ -276,7 +277,7 @@ func enqueueBackwardBridgeItems(ctx context.Context, d Deps, sessionID string, s
 			FactsJSON:  string(payloadJSON),
 			Priority:   backwardDiscoverPriority(i),
 		}); err != nil {
-			return wrapf(hypothesizeTool, err, "insert backward discover %d", i)
+			return step.Wrapf(hypothesizeTool, err, "insert backward discover %d", i)
 		}
 	}
 	return nil
@@ -329,7 +330,7 @@ func (hypothesizeStrategy) Decode(item *model.PipelineWorkItem, response string)
 		return &hypothesizeDecision{discover: dd}, normalized, nil
 
 	default:
-		return nil, "", errf(hypothesizeTool, "unknown step type %q", item.StepType)
+		return nil, "", step.Errf(hypothesizeTool, "unknown step type %q", item.StepType)
 	}
 }
 
@@ -339,10 +340,10 @@ func (hypothesizeStrategy) Decode(item *model.PipelineWorkItem, response string)
 // The per-fact "hypothesize" step mutates nothing: any hypothesis the agent
 // decided to write it wrote itself through knomit_learn, outside this session.
 // Only the discover step has anything to apply.
-func (hypothesizeStrategy) Apply(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error {
+func (hypothesizeStrategy) Apply(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem, decision any) error {
 	dec, ok := decision.(*hypothesizeDecision)
 	if !ok {
-		return errf(hypothesizeTool, "apply: unexpected decision type %T", decision)
+		return step.Errf(hypothesizeTool, "apply: unexpected decision type %T", decision)
 	}
 	if dec.discover == nil {
 		return nil
@@ -359,7 +360,7 @@ func (hypothesizeStrategy) Apply(ctx context.Context, d Deps, sess *model.Pipeli
 // Neither step type carries a response schema: a hypothesize item is answered
 // with a bare acknowledgement, and the discover prompt embeds its own output
 // contract.
-func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error) {
+func (hypothesizeStrategy) Render(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*step.WorkItemView, error) {
 	branch := sess.Branch
 
 	switch item.StepType {
@@ -372,7 +373,7 @@ func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *model.Pipel
 			log.Warn().Err(err).Str("session", sess.ID).
 				Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
 		}
-		return &WorkItemView{
+		return &step.WorkItemView{
 			Type: "hypothesize",
 			Prompt: buildHypothesizeInstructions(ctx, d.RI, branch, synthFact.Path(),
 				hypothesizeGuidanceSection(consensusGuidance(ctx, d.RI), d.RI.OntologyRoot(), synthFact.Path())),
@@ -381,15 +382,15 @@ func (hypothesizeStrategy) Render(ctx context.Context, d Deps, sess *model.Pipel
 	case "discover":
 		var payload DiscoverWorkPayload
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
-			return nil, wrapf(hypothesizeTool, err, "unmarshal discover payload for prompt")
+			return nil, step.Wrapf(hypothesizeTool, err, "unmarshal discover payload for prompt")
 		}
-		return &WorkItemView{
+		return &step.WorkItemView{
 			Type:   "discover",
 			Prompt: RenderDiscoverWorkItem(payload, d.RI.OntologyRoot()).Prompt,
 		}, nil
 
 	default:
-		return nil, errf(hypothesizeTool, "unknown step type %q", item.StepType)
+		return nil, step.Errf(hypothesizeTool, "unknown step type %q", item.StepType)
 	}
 }
 
@@ -506,4 +507,4 @@ func hypothesizeMethodologySection(ctx context.Context, ri *repos.RepoInstance, 
 }
 
 // compile-time assertion that the hypothesize strategy satisfies the engine seam.
-var _ Strategy = hypothesizeStrategy{}
+var _ step.Strategy = hypothesizeStrategy{}

@@ -3,6 +3,7 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"strings"
 )
@@ -88,13 +89,13 @@ const distillResponseSchema = `{
 // backstop beneath it. Shipping facts structurally is what lets an oversized
 // cluster be delivered across pages while the merge decision still sees all of
 // it: the delivery splits, the decision does not.
-func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
+func RenderPruneWorkItem(facts []step.FactForLLM, ontologyRoot string) (*step.WorkItemContent, error) {
 	return renderPruneWorkItem(facts, ontologyRoot, "")
 }
 
 // renderPruneWorkItem is RenderPruneWorkItem with the repository guidance
 // section (F23; "" for none).
-func renderPruneWorkItem(facts []factForLLM, ontologyRoot, guidance string) (*WorkItemContent, error) {
+func renderPruneWorkItem(facts []step.FactForLLM, ontologyRoot, guidance string) (*step.WorkItemContent, error) {
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
@@ -105,7 +106,7 @@ func renderPruneWorkItem(facts []factForLLM, ontologyRoot, guidance string) (*Wo
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
 
-	return &WorkItemContent{
+	return &step.WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: pruneResponseSchema,
 		Facts:          string(factsJSON),
@@ -159,13 +160,13 @@ const reflectResponseSchema = `{
 // RenderReflectWorkItem renders a reflect prompt for hypothesis transition
 // review. existingMethodology is the pre-formatted methodology section to
 // inject; pass an empty string when none is relevant.
-func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary string) (*WorkItemContent, error) {
+func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary string) (*step.WorkItemContent, error) {
 	return renderReflectWorkItem(transitionsJSON, ontologyRoot, existingMethodology, motifVocabulary, "")
 }
 
 // renderReflectWorkItem is RenderReflectWorkItem with the repository guidance
 // section (F23; "" for none).
-func renderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary, guidance string) (*WorkItemContent, error) {
+func renderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary, guidance string) (*step.WorkItemContent, error) {
 	prompt, err := RenderTemplate("reflect", "user", PromptData{
 		Facts:               string(transitionsJSON),
 		OntologyRoot:        ontologyRoot,
@@ -176,7 +177,7 @@ func renderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 	if err != nil {
 		return nil, fmt.Errorf("render reflect work item: %w", err)
 	}
-	return &WorkItemContent{
+	return &step.WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: reflectResponseSchema,
 	}, nil
@@ -192,13 +193,13 @@ func renderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 // line-based reader can window it), and every quote inside it is escaped twice
 // on the wire. Compact, not indented: it ships as structural JSON now, and the
 // delivering envelope does its own formatting.
-func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string, remainder bool) (*WorkItemContent, error) {
+func RenderDistillWorkItem(facts []step.FactForLLM, ontologyRoot, applicableMethodology string, remainder bool) (*step.WorkItemContent, error) {
 	return renderDistillWorkItem(facts, ontologyRoot, applicableMethodology, remainder, "")
 }
 
 // renderDistillWorkItem is RenderDistillWorkItem with the repository guidance
 // section (F23; "" for none).
-func renderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string, remainder bool, guidance string) (*WorkItemContent, error) {
+func renderDistillWorkItem(facts []step.FactForLLM, ontologyRoot, applicableMethodology string, remainder bool, guidance string) (*step.WorkItemContent, error) {
 	shared := sharedClusterMotifs(facts)
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
@@ -216,7 +217,7 @@ func renderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 		return nil, fmt.Errorf("render distill work item: %w", err)
 	}
 
-	return &WorkItemContent{
+	return &step.WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: distillResponseSchema,
 		Facts:          string(factsJSON),
@@ -231,12 +232,12 @@ func renderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 // legitimately contain corpus vocabulary — the vocabulary is in the payload,
 // not in the template, so the MN1 enumeration over prompt TEMPLATES stays a
 // clean check.
-func RenderMotifAliasWorkItem(factsJSON string) (*WorkItemContent, error) {
+func RenderMotifAliasWorkItem(factsJSON string) (*step.WorkItemContent, error) {
 	prompt, err := RenderTemplate("motif_alias", "user", PromptData{})
 	if err != nil {
 		return nil, fmt.Errorf("render motif alias work item: %w", err)
 	}
-	return &WorkItemContent{
+	return &step.WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: motifAliasResponseSchema,
 		// The pairs themselves. The prompt says they ride here; omitting them
@@ -250,12 +251,12 @@ func RenderMotifAliasWorkItem(factsJSON string) (*WorkItemContent, error) {
 // Takes no arguments for the same reason RenderMotifAliasWorkItem does: the
 // names ride in the work item's `facts` field, so the TEMPLATE carries no
 // corpus vocabulary and the MN1 enumeration over templates stays a clean check.
-func RenderMotifDefineWorkItem(factsJSON string) (*WorkItemContent, error) {
+func RenderMotifDefineWorkItem(factsJSON string) (*step.WorkItemContent, error) {
 	prompt, err := RenderTemplate("motif_define", "user", PromptData{})
 	if err != nil {
 		return nil, fmt.Errorf("render motif define work item: %w", err)
 	}
-	return &WorkItemContent{
+	return &step.WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: motifDefineResponseSchema,
 		Facts:          factsJSON,
@@ -282,7 +283,7 @@ func RenderMotifDefineWorkItem(factsJSON string) (*WorkItemContent, error) {
 // through; the cost of missing two spellings of one mechanism is a slightly
 // thinner hint, and the alternative is threading a store read into a pure
 // render function for a line that is free context either way.
-func sharedClusterMotifs(facts []factForLLM) string {
+func sharedClusterMotifs(facts []step.FactForLLM) string {
 	count := map[string]int{}
 	for _, f := range facts {
 		seen := map[string]struct{}{}

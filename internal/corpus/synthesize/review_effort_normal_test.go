@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -62,7 +63,7 @@ func TestReviewer_NormalEffort_DefaultPath(t *testing.T) {
 
 	// Legacy constructor — must resolve to normal.
 	r := NewReviewer(ri, nil)
-	require.Equal(t, EffortNormal, r.Effort(), "NewReviewer must default to EffortNormal")
+	require.Equal(t, step.EffortNormal, r.Effort(), "NewReviewer must default to EffortNormal")
 
 	res, err := r.StartSession(context.Background())
 	require.NoError(t, err)
@@ -109,6 +110,6 @@ func TestReviewer_HighEffort_Accessor(t *testing.T) {
 		OntologyRoot: "kb",
 	})
 
-	r := NewReviewerWithEffort(ri, nil, EffortHigh)
-	require.Equal(t, EffortHigh, r.Effort())
+	r := NewReviewerWithEffort(ri, nil, step.EffortHigh)
+	require.Equal(t, step.EffortHigh, r.Effort())
 }

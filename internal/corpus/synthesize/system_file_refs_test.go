@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -93,8 +95,8 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 	ctx := context.Background()
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "review", sfSide, "")
 	require.NoError(t, err)
-	propose := func(title string, refs ...string) ReflectResult {
-		return ReflectResult{Propose: []ProposeEntry{{
+	propose := func(title string, refs ...string) step.ReflectResult {
+		return step.ReflectResult{Propose: []step.ProposeEntry{{
 			TopicPath: "meta/reasoning", Title: title, Body: "a methodology " + title,
 			NoveltyArgument: "nothing like it exists", Confidence: 0.8,
 			TransitionPaths: []string{"kb/technology/a.md"},
@@ -128,18 +130,18 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 // Sabotage: as for reflect.
 func TestApplyDistillDecisions_SystemFileRefs(t *testing.T) {
 	svc := systemFileSynthRepo(t)
-	synth := func(name string, refs ...string) distillFact {
-		return distillFact{
+	synth := func(name string, refs ...string) step.DistillFact {
+		return step.DistillFact{
 			Path: "kb/technology/" + name + ".md", Title: "S " + name, Body: "distilled " + name, Type: "synthesis",
 			Domain: []string{"technology"}, Confidence: 0.9,
 			Refs: append([]string{"kb/technology/a.md", "kb/technology/b.md"}, refs...),
 		}
 	}
-	in := []distillFact{synth("good", sfGood...)}
+	in := []step.DistillFact{synth("good", sfGood...)}
 	for i, bad := range sfBad {
 		in = append(in, synth("bad"+string(rune('a'+i)), bad))
 	}
-	sink, warns := collectWarns()
+	sink, warns := synthtest.CollectWarns()
 	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), in, nil,
 		"test", sink, sfSide, sfRepoID, "kb")
 	require.NoError(t, err)
@@ -172,11 +174,11 @@ func TestApplyPruneDecisions_MergeSystemFileRefs(t *testing.T) {
 			for _, m := range members {
 				require.Empty(t, readFactForTest(t, svc, sfSide, m).Refs, "fixture: no member carries the ref, so prior cannot exempt it")
 			}
-			sink, warns := collectWarns()
-			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []MergeEntry{{
+			sink, warns := synthtest.CollectWarns()
+			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []step.MergeEntry{{
 				Paths: members,
-				Merged: mergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation",
-					Refs: flexStrings{tc.ref}},
+				Merged: step.MergedFact{Path: "kb/technology/m.md", Title: "Merged", Body: "merged body", Type: "observation",
+					Refs: step.FlexStrings{tc.ref}},
 			}}, "review-test", sink, sfSide, sfRepoID, "kb", nil)
 			require.NoError(t, err)
 			if tc.good {
@@ -195,13 +197,13 @@ func TestApplyPruneDecisions_MergeSystemFileRefs(t *testing.T) {
 }
 
 // TestSynthesize_OneRefGateConstructor: every ref gate in this package is
-// built by writeGate, so none can be built without the .knomit/ file
-// resolver. A refs.New outside ref_gate.go fails the build here.
+// built by step.WriteGate, so none can be built without the .knomit/ file
+// resolver. A refs.New outside step/ref_gate.go fails the build here.
 func TestSynthesize_OneRefGateConstructor(t *testing.T) {
 	// WALKED, not read flat: a child package of synthesize would otherwise sit
 	// outside the scan while the test stayed green. The exemption is keyed by
-	// the slash path relative to this directory, so only the top-level
-	// ref_gate.go is exempt, never a same-named file in a child.
+	// the slash path relative to this directory, so only step/ref_gate.go is
+	// exempt, never a same-named file elsewhere in the tree.
 	ctor := regexp.MustCompile(`\brefs\.New\(`)
 	var hits []string
 	scanned := 0
@@ -217,7 +219,7 @@ func TestSynthesize_OneRefGateConstructor(t *testing.T) {
 			return nil
 		}
 		scanned++
-		if key == "ref_gate.go" {
+		if key == "step/ref_gate.go" {
 			return nil
 		}
 		src, err := os.ReadFile(p)
@@ -230,8 +232,8 @@ func TestSynthesize_OneRefGateConstructor(t *testing.T) {
 	// Non-vacuity: the walk read the package, and the one permitted
 	// constructor is still where the exemption says it is.
 	require.Greater(t, scanned, 20, "the guard must actually have walked the package")
-	exempt, err := os.ReadFile("ref_gate.go")
+	exempt, err := os.ReadFile("step/ref_gate.go")
 	require.NoError(t, err)
-	require.Truef(t, ctor.Match(exempt), "ref_gate.go no longer calls refs.New: the exemption key is stale")
-	require.Empty(t, hits, "build synthesize ref gates with writeGate, not refs.New")
+	require.Truef(t, ctor.Match(exempt), "step/ref_gate.go no longer calls refs.New: the exemption key is stale")
+	require.Empty(t, hits, "build synthesize ref gates with step.WriteGate, not refs.New")
 }

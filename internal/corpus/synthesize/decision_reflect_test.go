@@ -2,10 +2,12 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -27,7 +29,7 @@ import (
 func stubSearch(t *testing.T, svc *store.Service, hits []index.SearchResult) *index.Facade {
 	t.Helper()
 	idx := svc.Search()
-	overridesOf(t, idx).search(func(index.SearchFunc) index.SearchFunc {
+	synthtest.OverridesOf(t, idx).Search(func(index.SearchFunc) index.SearchFunc {
 		return func(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
 			return hits, nil
 		}
@@ -55,9 +57,9 @@ func TestApplyReflect_AppliesReinforce(t *testing.T) {
 	writeFactForTest(t, svc, branch, h1Path, "H1", "transition fact 1", fact.Principle, nil, nil)
 	writeFactForTest(t, svc, branch, h2Path, "H2", "transition fact 2", fact.Principle, nil, nil)
 
-	result := ReflectResult{
+	result := step.ReflectResult{
 		Reasoning: "h1 and h2 both fit m",
-		Reinforce: []ReinforceEntry{{
+		Reinforce: []step.ReinforceEntry{{
 			MethodologyPath: methPath,
 			TransitionPaths: []string{h1Path, h2Path},
 			Rationale:       "same pattern in both",
@@ -65,7 +67,7 @@ func TestApplyReflect_AppliesReinforce(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
-		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+		result, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
 	require.Contains(t, readRefsForTest(t, svc, branch, h1Path), methPath,
@@ -88,8 +90,8 @@ func TestApplyReflect_ReinforceIsIdempotent(t *testing.T) {
 	writeMethodologyForTest(t, svc, branch, methPath, "M", "Body")
 	writeFactForTest(t, svc, branch, transPath, "H1", "transition", fact.Principle, nil, nil)
 
-	result := ReflectResult{
-		Reinforce: []ReinforceEntry{{
+	result := step.ReflectResult{
+		Reinforce: []step.ReinforceEntry{{
 			MethodologyPath: methPath,
 			TransitionPaths: []string{transPath},
 			Rationale:       "x",
@@ -98,7 +100,7 @@ func TestApplyReflect_ReinforceIsIdempotent(t *testing.T) {
 
 	for range 3 {
 		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
-			result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+			result, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 		require.NoError(t, err)
 	}
 
@@ -121,21 +123,21 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 	ctx := context.Background()
 	branch := sess.Branch
 
-	result := ReflectResult{
+	result := step.ReflectResult{
 		Reasoning: "this lesson is new",
-		Propose: []ProposeEntry{{
+		Propose: []step.ProposeEntry{{
 			Title:           "Verify embeddings before trusting them",
 			Body:            "When ranking by similarity, confirm embeddings exist; tag-only fallback hides drift.",
 			TopicPath:       "meta/reasoning",
 			Confidence:      0.7,
 			TransitionPaths: []string{"kb/h1.md"},
 			NoveltyArgument: "no existing methodology covers embedding-fallback hygiene",
-			Domain:          flexStrings{"meta", "reasoning", "methodology"},
+			Domain:          step.FlexStrings{"meta", "reasoning", "methodology"},
 		}},
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
-		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+		result, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
 	// Locate the written fact via search; assert it's of type=methodology.
@@ -176,9 +178,9 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 		Score: 91.0, // 0.91 cosine — well above the 0.85 threshold
 	}})
 
-	result := ReflectResult{
+	result := step.ReflectResult{
 		Reasoning: "thought it was new",
-		Propose: []ProposeEntry{{
+		Propose: []step.ProposeEntry{{
 			Title:           "Already on file (rephrased)",
 			Body:            "Same lesson, different words",
 			TopicPath:       "meta/reasoning",
@@ -189,7 +191,7 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stub,
-		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+		result, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), conflictPath, "rejection must name the conflicting methodology so the agent can reinforce it")
 	require.Contains(t, strings.ToLower(err.Error()), "similar")
@@ -210,8 +212,8 @@ func TestApplyReflect_RejectsReinforceUnknownPath(t *testing.T) {
 	svc, sess := newReflectTestEnv(t)
 	ctx := context.Background()
 
-	result := ReflectResult{
-		Reinforce: []ReinforceEntry{{
+	result := step.ReflectResult{
+		Reinforce: []step.ReinforceEntry{{
 			MethodologyPath: "kb/meta/reasoning/does-not-exist.md",
 			TransitionPaths: []string{"kb/h1.md"},
 			Rationale:       "x",
@@ -219,7 +221,7 @@ func TestApplyReflect_RejectsReinforceUnknownPath(t *testing.T) {
 	}
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
-		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+		result, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does-not-exist.md")
 }
@@ -243,8 +245,8 @@ func TestApplyReflect_RejectsReinforceNonMethodologyTarget(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, sess.Branch, obsPath, body, "seed-observation", "")
 	require.NoError(t, err)
 
-	result := ReflectResult{
-		Reinforce: []ReinforceEntry{{
+	result := step.ReflectResult{
+		Reinforce: []step.ReinforceEntry{{
 			MethodologyPath: obsPath,
 			TransitionPaths: []string{"kb/h1.md"},
 			Rationale:       "x",
@@ -252,7 +254,7 @@ func TestApplyReflect_RejectsReinforceNonMethodologyTarget(t *testing.T) {
 	}
 
 	err = ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
-		result, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+		result, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "methodology")
 	require.Contains(t, err.Error(), obsPath)
@@ -266,7 +268,7 @@ func TestApplyReflect_AcceptsAllEmpty(t *testing.T) {
 	ctx := context.Background()
 
 	err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
-		ReflectResult{Reasoning: "no lessons today"}, sess, bareRefFixture, "kb", reflectTestThreshold, nil)
+		step.ReflectResult{Reasoning: "no lessons today"}, sess, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 }
 

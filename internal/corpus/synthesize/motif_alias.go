@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -129,7 +130,7 @@ type motifAliasHealth struct {
 // Degrades to "no pairs" rather than failing a session at every step. Alias
 // resolution is an addition to review; a corpus that cannot embed its
 // vocabulary should still get its ordinary pass.
-func selectMotifJudgePairs(ctx context.Context, d Deps, branch string) ([]motifJudgePair, motifAliasHealth, error) {
+func selectMotifJudgePairs(ctx context.Context, d step.Deps, branch string) ([]motifJudgePair, motifAliasHealth, error) {
 	var h motifAliasHealth
 
 	clusters, err := d.Motifs.Clusters(ctx, branch)
@@ -199,7 +200,7 @@ func selectMotifJudgePairs(ctx context.Context, d Deps, branch string) ([]motifJ
 	all := make([]scored, 0, scanned*(scanned-1)/2)
 	for i := range scanned {
 		for j := i + 1; j < scanned; j++ {
-			all = append(all, scored{i, j, dot(vecs[i], vecs[j])})
+			all = append(all, scored{i, j, step.Dot(vecs[i], vecs[j])})
 		}
 	}
 	if len(all) == 0 {
@@ -367,11 +368,11 @@ type motifAliasResult struct {
 // work gone. Presence on the raw object is what makes that loud and retryable.
 func parseMotifAliasResponse(raw string) (motifAliasResult, error) {
 	var out motifAliasResult
-	text := extractJSON(raw)
+	text := step.ExtractJSON(raw)
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return out, fmt.Errorf("parse motif alias response: %w", err)
 	}
-	if err := requireResponseKey(text, "verdicts"); err != nil {
+	if err := step.RequireResponseKey(text, "verdicts"); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -411,7 +412,7 @@ func validateMotifAliasVerdicts(res motifAliasResult, offered []motifJudgeItem) 
 // A verdict that fails to record does not fail the item: the rest of the batch
 // is still good work, and the pair will simply be offered again. Losing a whole
 // batch to one bad row is the worse trade.
-func applyMotifAliasVerdicts(ctx context.Context, d Deps, branch string, res motifAliasResult) error {
+func applyMotifAliasVerdicts(ctx context.Context, d step.Deps, branch string, res motifAliasResult) error {
 	for _, v := range res.Verdicts {
 		var err error
 		if v.SameMechanism {
@@ -448,7 +449,7 @@ func applyMotifAliasVerdicts(ctx context.Context, d Deps, branch string, res mot
 // Degrades to "no item" rather than failing the session, and records health on
 // every path — a corpus whose vocabulary could not be read must not look like
 // one with nothing to resolve.
-func planMotifAliasWork(ctx context.Context, d Deps, sess *model.PipelineSession, branch string) error {
+func planMotifAliasWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) error {
 	pairs, health, err := selectMotifJudgePairs(ctx, d, branch)
 	recordMotifAliasHealth(sess, health)
 	if err != nil || len(pairs) == 0 {
@@ -467,7 +468,7 @@ func planMotifAliasWork(ctx context.Context, d Deps, sess *model.PipelineSession
 	}
 	payload, err := json.Marshal(items)
 	if err != nil {
-		return wrapf(reviewTool, err, "motif alias: marshal pairs")
+		return step.Wrapf(step.ReviewTool, err, "motif alias: marshal pairs")
 	}
 	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,

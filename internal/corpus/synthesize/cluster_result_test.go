@@ -1,6 +1,9 @@
 package synthesize
 
-import "testing"
+import (
+	"knomit/internal/corpus/synthesize/step"
+	"testing"
+)
 
 func TestClusterResultClusterOf(t *testing.T) {
 	cr := ClusterResult{Clusters: map[int][]string{0: {"a", "b"}, 1: {"c"}}, Noise: []string{"d", "e"}}
@@ -17,7 +20,7 @@ func TestClusterResultClusterOf(t *testing.T) {
 }
 
 func TestClusterResultFromGroups(t *testing.T) {
-	groups := [][]factForLLM{
+	groups := [][]step.FactForLLM{
 		{{File: "a"}, {File: "b"}},
 		{{File: "c"}},
 	}

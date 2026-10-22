@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -211,7 +212,7 @@ func reviewGuidanceSection(g *repos.ConsensusGuidance, ontologyRoot string, fact
 }
 
 // factPathsOf is the paths of a prune or distill item's facts.
-func factPathsOf(facts []factForLLM) []string {
+func factPathsOf(facts []step.FactForLLM) []string {
 	out := make([]string, 0, len(facts))
 	for _, f := range facts {
 		out = append(out, f.File)

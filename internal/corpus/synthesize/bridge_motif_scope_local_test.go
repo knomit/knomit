@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
 
@@ -86,7 +87,7 @@ func TestMotifBridgeHealthLines_InactiveLinePromisesNoFutureActivation(t *testin
 // that is where the count must come from — a Seeds field left at zero would
 // make the line say "among 0 seed facts" on a pool that had plenty.
 func TestMotifActive_RecordsThePoolItDecidedOver(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"lone-shape"}},
 		{File: "kb/b/2.md", Motifs: []string{"lone-shape"}},
 		{File: "kb/c/3.md", Motifs: []string{"other-shape"}},
@@ -104,14 +105,14 @@ func TestMotifActive_RecordsThePoolItDecidedOver(t *testing.T) {
 // called directly. This is the wiring half: a Seeds field that only the unit
 // test ever sets would leave the shipped line saying "among 0 seed facts".
 func TestBuildMotifBridges_BelowFloorLineCarriesTheSeedCount(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"lone-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"lone-shape"}, Entities: []string{"Beta"}},
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
 	_, _, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
-		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+		seeds, clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	require.False(t, health.Activation.Active, "precondition: below the floor")
 

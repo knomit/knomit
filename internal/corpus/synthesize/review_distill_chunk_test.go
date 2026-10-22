@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -81,12 +82,12 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 			break
 		}
 		if item.StepType == "distill" {
-			require.LessOrEqual(t, len(item.FactsJSON), maxItemBytes,
+			require.LessOrEqual(t, len(item.FactsJSON), step.MaxItemBytes,
 				"distill item %q payload exceeds maxItemBytes", item.ClusterKey)
 
 			// The payload must still be a well-formed fact list — chunking splits
 			// between facts, never inside one.
-			var facts []factForLLM
+			var facts []step.FactForLLM
 			require.NoError(t, json.Unmarshal([]byte(item.FactsJSON), &facts),
 				"distill item %q payload is not a fact array", item.ClusterKey)
 			require.NotEmpty(t, facts, "distill item %q is empty", item.ClusterKey)

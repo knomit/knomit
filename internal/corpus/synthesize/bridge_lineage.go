@@ -3,6 +3,7 @@ package synthesize
 import (
 	"sort"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -40,12 +41,12 @@ func canonFactPath(p string) string {
 // b's path is among a's local refs, or a's among b's. Either direction counts:
 // a parent seeded beside its child is the same circularity as a child seeded
 // beside its parent.
-func lineagePair(a, b factForLLM) bool {
+func lineagePair(a, b step.FactForLLM) bool {
 	return cites(a, b) || cites(b, a)
 }
 
 // cites reports whether src's local refs name dst's path.
-func cites(src, dst factForLLM) bool {
+func cites(src, dst step.FactForLLM) bool {
 	want := canonFactPath(dst.File)
 	if want == "" {
 		return false
@@ -71,15 +72,15 @@ func cites(src, dst factForLLM) bool {
 // Callers must run this BEFORE any separation (community-span) check: dropping
 // a member can collapse the span, and a group that only spanned two
 // communities via the parent it just lost is not a bridge.
-func lineageDisjointMembers(members []factForLLM) ([]factForLLM, int) {
+func lineageDisjointMembers(members []step.FactForLLM) ([]step.FactForLLM, int) {
 	if len(members) < 2 {
 		return members, 0
 	}
-	ordered := make([]factForLLM, len(members))
+	ordered := make([]step.FactForLLM, len(members))
 	copy(ordered, members)
 	sortByPath(ordered)
 
-	kept := make([]factForLLM, 0, len(ordered))
+	kept := make([]step.FactForLLM, 0, len(ordered))
 	for _, cand := range ordered {
 		ok := true
 		for _, k := range kept {
@@ -99,18 +100,18 @@ func lineageDisjointMembers(members []factForLLM) ([]factForLLM, int) {
 // bridge engine that drops members greedily needs the same deterministic
 // starting order, or which member survives a collision becomes a function of
 // map iteration order.
-func sortByPath(in []factForLLM) {
+func sortByPath(in []step.FactForLLM) {
 	sort.SliceStable(in, func(i, j int) bool { return in[i].File < in[j].File })
 }
 
 // lineageDisjointMembersMap is lineageDisjointMembers over the path→fact map
 // shape the motif enumerator carries its groups in, returning the same shape so
 // the gates downstream of it are unchanged.
-func lineageDisjointMembersMap(members map[string]factForLLM) map[string]factForLLM {
+func lineageDisjointMembersMap(members map[string]step.FactForLLM) map[string]step.FactForLLM {
 	if len(members) < 2 {
 		return members
 	}
-	all := make([]factForLLM, 0, len(members))
+	all := make([]step.FactForLLM, 0, len(members))
 	for _, f := range members {
 		all = append(all, f)
 	}
@@ -118,7 +119,7 @@ func lineageDisjointMembersMap(members map[string]factForLLM) map[string]factFor
 	if dropped == 0 {
 		return members
 	}
-	out := make(map[string]factForLLM, len(kept))
+	out := make(map[string]step.FactForLLM, len(kept))
 	for _, f := range kept {
 		out[f.File] = f
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -70,9 +71,9 @@ func TestSubjectDisjoint_RejectsTheNearDuplicatePair(t *testing.T) {
 	require.LessOrEqual(t, labels.DF["cognition"], p.Cut, "the rare entity must sit below the cut")
 	require.Greater(t, labels.DF["agent"], p.Cut, "the common tag must sit above it")
 
-	a := factForLLM{File: "kb/technology/ai/agents/1.md",
+	a := step.FactForLLM{File: "kb/technology/ai/agents/1.md",
 		Entities: []string{"Cognition", "Devin"}, Domain: []string{"agents"}}
-	b := factForLLM{File: "kb/technology/ai/agents/2.md",
+	b := step.FactForLLM{File: "kb/technology/ai/agents/2.md",
 		Entities: []string{"Cognition", "Devin"}, Domain: []string{"agents"}}
 
 	require.False(t, subjectDisjoint(a, b, labels, p),
@@ -94,9 +95,9 @@ func TestSubjectDisjoint_AdmitsAPairSharingOnlyACommonTag(t *testing.T) {
 		"precondition: it is admitted by the GRADED path, not by the umbrella exclusion")
 	require.LessOrEqual(t, labels.DF["cognition"], p.Cut, "precondition: the unshared entities are rare")
 
-	a := factForLLM{File: "kb/gotchas/ai/uitesting/1.md",
+	a := step.FactForLLM{File: "kb/gotchas/ai/uitesting/1.md",
 		Entities: []string{"Cognition"}, Domain: []string{"evaluation"}}
-	b := factForLLM{File: "kb/technology/ai/rewardhacking/2.md",
+	b := step.FactForLLM{File: "kb/technology/ai/rewardhacking/2.md",
 		Entities: []string{"RLHF"}, Domain: []string{"evaluation"}}
 
 	require.True(t, subjectDisjoint(a, b, labels, p),
@@ -111,8 +112,8 @@ func TestSubjectDisjoint_UmbrellaLabelNeverBlocks(t *testing.T) {
 	p := resolveDisjointnessPoint(labels)
 	require.Greater(t, labels.DF["agent"], p.Umbrella, "precondition: the shared tag is an umbrella")
 
-	a := factForLLM{File: "kb/alpha/1.md", Domain: []string{"agents"}, Entities: []string{"Alpha"}}
-	b := factForLLM{File: "kb/beta/2.md", Domain: []string{"agents"}, Entities: []string{"Beta"}}
+	a := step.FactForLLM{File: "kb/alpha/1.md", Domain: []string{"agents"}, Entities: []string{"Alpha"}}
+	b := step.FactForLLM{File: "kb/beta/2.md", Domain: []string{"agents"}, Entities: []string{"Beta"}}
 	require.True(t, subjectDisjoint(a, b, labels, p))
 }
 
@@ -132,8 +133,8 @@ func TestSubjectDisjoint_FallsBackToStrictBelowTheFloor(t *testing.T) {
 	require.LessOrEqual(t, labels.DF["evaluation"], p.Umbrella,
 		"precondition: the shared label is NOT an umbrella, so strict is what blocks it")
 
-	a := factForLLM{File: "kb/alpha/1.md", Domain: []string{"evaluation"}, Entities: []string{"Alpha"}}
-	b := factForLLM{File: "kb/beta/2.md", Domain: []string{"evaluation"}}
+	a := step.FactForLLM{File: "kb/alpha/1.md", Domain: []string{"evaluation"}, Entities: []string{"Alpha"}}
+	b := step.FactForLLM{File: "kb/beta/2.md", Domain: []string{"evaluation"}}
 	require.False(t, subjectDisjoint(a, b, labels, p),
 		"strict blocks on a shared label the graded path would have admitted")
 
@@ -166,14 +167,14 @@ func TestSubjectDisjoint_StrictExcludesOnlyUniversalLabels(t *testing.T) {
 		"precondition: the other shared label is NOT universal")
 
 	// Sharing only the root: admitted, because the root says nothing.
-	rootOnly := factForLLM{File: "kb/alpha/1.md", Entities: []string{"Alpha"}}
-	rootOnly2 := factForLLM{File: "kb/beta/2.md", Entities: []string{"Beta"}}
+	rootOnly := step.FactForLLM{File: "kb/alpha/1.md", Entities: []string{"Alpha"}}
+	rootOnly2 := step.FactForLLM{File: "kb/beta/2.md", Entities: []string{"Beta"}}
 	require.True(t, subjectDisjoint(rootOnly, rootOnly2, labels, p))
 
 	// Sharing a non-universal label: blocked, because strict blocks on
 	// everything else — including labels the 20% ratio would have excused.
-	a := factForLLM{File: "kb/alpha/1.md", Domain: []string{"evaluation"}, Entities: []string{"Alpha"}}
-	b := factForLLM{File: "kb/beta/2.md", Domain: []string{"evaluation"}}
+	a := step.FactForLLM{File: "kb/alpha/1.md", Domain: []string{"evaluation"}, Entities: []string{"Alpha"}}
+	b := step.FactForLLM{File: "kb/beta/2.md", Domain: []string{"evaluation"}}
 	require.False(t, subjectDisjoint(a, b, labels, p))
 }
 
@@ -186,8 +187,8 @@ func TestSubjectDisjoint_StrictIsNotANoOpOnTinyCorpora(t *testing.T) {
 	require.Greater(t, labels.DF["cognition"], p.Umbrella,
 		"precondition: at six facts even a two-carrier entity clears the 20%% cut")
 
-	a := factForLLM{File: "kb/alpha/1.md", Entities: []string{"Cognition"}}
-	b := factForLLM{File: "kb/beta/2.md", Entities: []string{"Cognition"}}
+	a := step.FactForLLM{File: "kb/alpha/1.md", Entities: []string{"Cognition"}}
+	b := step.FactForLLM{File: "kb/beta/2.md", Entities: []string{"Cognition"}}
 	require.False(t, subjectDisjoint(a, b, labels, p),
 		"two facts about the same rare entity must not bridge, however small the corpus")
 }
@@ -201,8 +202,8 @@ func TestSubjectDisjoint_PathTokensAreSubjectClaims(t *testing.T) {
 	p := resolveDisjointnessPoint(labels)
 	require.LessOrEqual(t, labels.DF["resolver"], p.Cut)
 
-	a := factForLLM{File: "kb/gotchas/store/resolver/1.md"}
-	b := factForLLM{File: "kb/incidents/store/resolver/2.md"}
+	a := step.FactForLLM{File: "kb/gotchas/store/resolver/1.md"}
+	b := step.FactForLLM{File: "kb/incidents/store/resolver/2.md"}
 	require.False(t, subjectDisjoint(a, b, labels, p))
 }
 
@@ -214,8 +215,8 @@ func TestSubjectDisjoint_UnknownLabelIsTreatedAsSpecific(t *testing.T) {
 	labels := labelsWith(200, nil)
 	p := resolveDisjointnessPoint(labels)
 
-	a := factForLLM{File: "kb/alpha/1.md", Entities: []string{"Unmapped Thing"}}
-	b := factForLLM{File: "kb/beta/2.md", Entities: []string{"Unmapped Thing"}}
+	a := step.FactForLLM{File: "kb/alpha/1.md", Entities: []string{"Unmapped Thing"}}
+	b := step.FactForLLM{File: "kb/beta/2.md", Entities: []string{"Unmapped Thing"}}
 	require.Zero(t, labels.DF["unmapped"], "precondition: the shared token is unknown here")
 	require.False(t, subjectDisjoint(a, b, labels, p))
 }
@@ -300,8 +301,8 @@ func TestSubjectDisjoint_DegenerateBandStillBlocksASharedRareEntity(t *testing.T
 	p := resolveDisjointnessPoint(d)
 	require.True(t, p.Strict, "precondition: this fixture is in the degenerate band")
 
-	a := factForLLM{File: "kb/gotchas/uitesting/x.md", Entities: []string{"Cognition"}}
-	b := factForLLM{File: "kb/technology/benchmarks/y.md", Entities: []string{"Cognition"}}
+	a := step.FactForLLM{File: "kb/gotchas/uitesting/x.md", Entities: []string{"Cognition"}}
+	b := step.FactForLLM{File: "kb/technology/benchmarks/y.md", Entities: []string{"Cognition"}}
 	require.False(t, subjectDisjoint(a, b, d, p),
 		"a shared rare entity is one subject, whatever the percentile came back as")
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -25,10 +26,10 @@ import (
 // keeps the DECISION whole, which is exactly what chunking could not do. Prune
 // therefore has more to gain from paging than distill did.
 
-func bigPruneFacts(n, bodyBytes int) []factForLLM {
-	facts := make([]factForLLM, 0, n)
+func bigPruneFacts(n, bodyBytes int) []step.FactForLLM {
+	facts := make([]step.FactForLLM, 0, n)
 	for i := 0; i < n; i++ {
-		facts = append(facts, factForLLM{
+		facts = append(facts, step.FactForLLM{
 			File:       fmt.Sprintf("kb/architecture/prune/fact-%03d.md", i),
 			Title:      fmt.Sprintf("prune fact %03d", i),
 			Body:       strings.Repeat("y", bodyBytes),
@@ -45,7 +46,7 @@ func bigPruneFacts(n, bodyBytes int) []factForLLM {
 // serialized into the prompt STRING cannot be sliced, so prune could not page
 // until its facts moved beside the prompt the way distill's did.
 func TestRenderPruneWorkItem_FactsAreStructural(t *testing.T) {
-	facts := []factForLLM{{
+	facts := []step.FactForLLM{{
 		File:       "kb/architecture/prune/only.md",
 		Title:      "the only fact",
 		Body:       "PRUNE-SENTINEL-must-not-appear-inside-the-prompt",
@@ -62,7 +63,7 @@ func TestRenderPruneWorkItem_FactsAreStructural(t *testing.T) {
 		"prune fact bodies must not be serialized into the prompt string")
 	require.NotEmpty(t, content.Facts, "prune must carry its facts as a structured field")
 
-	var round []factForLLM
+	var round []step.FactForLLM
 	require.NoError(t, json.Unmarshal([]byte(content.Facts), &round))
 	require.Len(t, round, 1)
 	require.Equal(t, "PRUNE-SENTINEL-must-not-appear-inside-the-prompt", round[0].Body,
@@ -83,9 +84,9 @@ func TestPaging_LargePruneClusterPagesAndRequiresToken(t *testing.T) {
 	content, err := RenderPruneWorkItem(facts, "kb")
 	require.NoError(t, err)
 
-	res := &PipelineResult{
+	res := &step.PipelineResult{
 		SessionID: "sess",
-		Item: &PipelineItem{
+		Item: &step.PipelineItem{
 			ID: 7, Type: "prune",
 			Prompt: content.Prompt, ResponseSchema: content.ResponseSchema,
 			Facts: content.Facts, FactsJSON: content.Facts,
@@ -104,7 +105,7 @@ func TestPaging_LargePruneClusterPagesAndRequiresToken(t *testing.T) {
 	for p := 1; p <= first.Item.Pages; p++ {
 		page, perr := reviewResultPage(res, p)
 		require.NoError(t, perr)
-		var pf []factForLLM
+		var pf []step.FactForLLM
 		require.NoError(t, json.Unmarshal(page.Item.Facts, &pf))
 		for _, f := range pf {
 			seen = append(seen, f.File)
@@ -148,7 +149,7 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 	}
 	reflectJSON, err := json.Marshal(transitions)
 	require.NoError(t, err)
-	require.Greater(t, len(reflectJSON), maxPageFactBytes,
+	require.Greater(t, len(reflectJSON), step.MaxPageFactBytes,
 		"precondition: the reflect payload must be big enough to page if anything paged it")
 
 	discoverJSON, err := json.Marshal(DiscoverWorkPayload{
@@ -156,7 +157,7 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 		Bridge:    BridgeSeedSet{Token: "x", Kind: BridgeEntity, Members: bigPruneFacts(40, 3*1024)},
 	})
 	require.NoError(t, err)
-	require.Greater(t, len(discoverJSON), maxPageFactBytes)
+	require.Greater(t, len(discoverJSON), step.MaxPageFactBytes)
 
 	for _, tc := range []struct {
 		step    string

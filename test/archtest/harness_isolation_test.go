@@ -27,6 +27,12 @@ var forbidden = []string{
 	// too, and TestTestSeamsNotReachedFromProduction keeps production source
 	// from importing it.
 	"knomit/internal/engine/store/storetest",
+	// The synthesize tree's shared test fixtures (store repos, embedder
+	// stand-ins, environment builders). It imports "testing" and is meant for
+	// _test.go files only; living under synthesize/internal/ keeps every package
+	// outside the tree from importing it, and this keeps the package out of every
+	// shipped binary even if a production file inside the tree ever did.
+	"knomit/internal/corpus/synthesize/internal/synthtest",
 }
 
 // shippedGroups are the module's real binaries (main packages), grouped by the

@@ -2,10 +2,12 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -25,7 +27,7 @@ import (
 // weightedDedupFact writes a fact carrying an explicit evidence_weight, placed
 // at a chosen point on the embedding axis so the pair is a mechanical
 // near-duplicate by construction rather than by luck.
-func weightedDedupFact(t *testing.T, env *restatementEnv, path, title, body string, conf float64, sources int, weight float64) {
+func weightedDedupFact(t *testing.T, env *synthtest.RestatementEnv, path, title, body string, conf float64, sources int, weight float64) {
 	t.Helper()
 	f := fact.NewFact(path)
 	f.Title = title
@@ -41,7 +43,7 @@ func weightedDedupFact(t *testing.T, env *restatementEnv, path, title, body stri
 	require.NoError(t, err)
 	require.Contains(t, rendered, "evidence_weight:",
 		"fixture: the fact must actually be written with a weight")
-	_, err = env.svc.Facts().WriteFact(context.Background(), env.branch, f.Path(), rendered,
+	_, err = env.Svc.Facts().WriteFact(context.Background(), env.Branch, f.Path(), rendered,
 		"write "+path, "test")
 	require.NoError(t, err)
 }
@@ -51,8 +53,8 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 
 	// Both facts land on the same point of the axis, so the mechanical gate
 	// sees a near-duplicate pair with certainty.
-	emb := &restatementEmbedder{vectorFor: func(string) []float32 { return axisVector(0) }}
-	env := newRestatementEnvWith(t, 0, emb)
+	emb := &synthtest.RestatementEmbedder{VectorFor: func(string) []float32 { return synthtest.AxisVector(0) }}
+	env := synthtest.NewRestatementEnvWith(t, 0, emb)
 
 	const winnerPath = "kb/alpha/winner.md"
 	const loserPath = "kb/alpha/loser.md"
@@ -62,7 +64,7 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 	weightedDedupFact(t, env, winnerPath, "Widget fails closed", "one recording", 0.9, 2, staleWeight)
 	weightedDedupFact(t, env, loserPath, "Widget fails closed again", "another recording", 0.5, 3, 0.15)
 
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: winnerPath, Kind: "epistemic", Title: "Widget fails closed", Body: "one recording",
 			Type: "observation", Confidence: 0.9, Sources: 2},
 		{File: loserPath, Kind: "epistemic", Title: "Widget fails closed again", Body: "another recording",
@@ -74,10 +76,10 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 	// stale one" is too weak — a recompute over the WINNER ALONE also clears
 	// that bar, and the first draft of this test passed under exactly that
 	// sabotage. What has to be pinned is that the recompute POOLED both facts.
-	localID := fact.ID12(env.ri.ID())
-	pooledWeight, _, _ := computeTransfer(ctx, env.svc.Facts(), env.branch, localID,
+	localID := fact.ID12(env.RI.ID())
+	pooledWeight, _, _ := step.ComputeTransfer(ctx, env.Svc.Facts(), env.Branch, localID,
 		[]string{winnerPath, loserPath})
-	winnerOnlyWeight, _, _ := computeTransfer(ctx, env.svc.Facts(), env.branch, localID,
+	winnerOnlyWeight, _, _ := step.ComputeTransfer(ctx, env.Svc.Facts(), env.Branch, localID,
 		[]string{winnerPath})
 	require.Greater(t, pooledWeight, winnerOnlyWeight,
 		"fixture: pooling must move the weight, or this test cannot tell a pooled "+
@@ -86,9 +88,9 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 		"fixture: even the WRONG answer beats the stale value, which is why "+
 			"'greater than stale' is not the assertion")
 
-	d := env.deps()
-	surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
-		env.dedupThreshold(), reviewTool, d.OnProgress, env.branch, fact.ID12(env.ri.ID()))
+	d := env.Deps()
+	surviving, err := dedupCluster(ctx, cluster, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+		env.DedupThreshold(), step.ReviewTool, d.OnProgress, env.Branch, fact.ID12(env.RI.ID()))
 	require.NoError(t, err)
 
 	// PRECONDITION, asserted: the merge actually happened. Without this the
@@ -99,7 +101,7 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 		"fixture: the merge must have POOLED the sources (2+3) — that is what makes the "+
 			"pre-merge weight stale")
 
-	read, err := env.svc.Facts().ReadFact(ctx, env.branch, winnerPath, nil)
+	read, err := env.Svc.Facts().ReadFact(ctx, env.Branch, winnerPath, nil)
 	require.NoError(t, err)
 	merged, err := fact.ParseFact(winnerPath, read.Content)
 	require.NoError(t, err)

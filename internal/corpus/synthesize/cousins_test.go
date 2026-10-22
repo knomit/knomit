@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -44,37 +46,37 @@ const (
 // cosine exactly, and files them as COUSINS: `network-security` and
 // `network-appliances` are siblings, so neither path is a prefix of the other
 // and the fence makes them mutually unreachable.
-func cousinEnv(t *testing.T, filler int) *restatementEnv {
+func cousinEnv(t *testing.T, filler int) *synthtest.RestatementEnv {
 	t.Helper()
 	titleB := cousinTitle + " (weekly recap)"
 	bodyB := cousinBody + " Filed a second time."
-	emb := &restatementEmbedder{vectorFor: func(text string) []float32 {
+	emb := &synthtest.RestatementEmbedder{VectorFor: func(text string) []float32 {
 		switch text {
 		case cousinTitle:
-			return axisVector(0)
+			return synthtest.AxisVector(0)
 		case titleB:
-			return axisVector(0.02)
+			return synthtest.AxisVector(0.02)
 		case cousinTitle + " " + cousinBody:
-			return axisVector(0.01)
+			return synthtest.AxisVector(0.01)
 		case titleB + " " + bodyB:
-			return axisVector(0.03)
+			return synthtest.AxisVector(0.03)
 		case cousinSiblingTitle:
-			return axisVector(0.04)
+			return synthtest.AxisVector(0.04)
 		case cousinSiblingTitle + " " + cousinBody:
-			return axisVector(0.05)
+			return synthtest.AxisVector(0.05)
 		}
 		return nil
 	}}
-	env := newRestatementEnvWith(t, 0, emb)
+	env := synthtest.NewRestatementEnvWith(t, 0, emb)
 	for i := range filler {
-		env.writeFact(
+		env.WriteFact(
 			fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1),
 			fmt.Sprintf("Filler note 2026 about widget %d", 1000+i),
 			"an unrelated body")
 	}
-	env.writeFact(cousinAPath, cousinTitle, cousinBody)
-	env.writeFact(cousinSiblingPath, cousinSiblingTitle, cousinBody)
-	env.writeFact(cousinBPath, titleB, bodyB)
+	env.WriteFact(cousinAPath, cousinTitle, cousinBody)
+	env.WriteFact(cousinSiblingPath, cousinSiblingTitle, cousinBody)
+	env.WriteFact(cousinBPath, titleB, bodyB)
 	return env
 }
 
@@ -82,17 +84,17 @@ func cousinEnv(t *testing.T, filler int) *restatementEnv {
 // fixture chosen to make a test discriminate is a claim and an unasserted claim
 // is how a test ends up measuring nothing (the campaign's fixture-vacuity
 // lesson).
-func cousinFixtureIsSound(t *testing.T, env *restatementEnv) {
+func cousinFixtureIsSound(t *testing.T, env *synthtest.RestatementEnv) {
 	t.Helper()
 	// (1) The pair really is above the mechanical dedup floor. Below it, the
 	// search in joinCousinsForPrune would not return the cousin at all and
 	// every test here would pass or fail for the wrong reason.
-	ids := env.liveFactIDs()
-	vecs, err := env.svc.Abstraction().BodyVectorsByFactID(context.Background(),
+	ids := env.LiveFactIDs()
+	vecs, err := env.Svc.Abstraction().BodyVectorsByFactID(context.Background(),
 		[]int64{ids[cousinAPath], ids[cousinBPath]})
 	require.NoError(t, err)
 	cos := model.CosineSim(vecs[ids[cousinAPath]], vecs[ids[cousinBPath]])
-	require.GreaterOrEqual(t, cos, env.dedupThreshold(),
+	require.GreaterOrEqual(t, cos, env.DedupThreshold(),
 		"fixture must sit at or above the mechanical dedup floor")
 
 	// (2) They really are COUSINS — neither path is a prefix of the other, so
@@ -125,7 +127,7 @@ func TestCousins_FenceKeepsANonSeedCousinOutOfTheSubgraph(t *testing.T) {
 	// Seeds = everything EXCEPT the cousin. This is the measured shape: the
 	// second twin sat in the leftover bucket, not in the seed set that built
 	// any prune cluster.
-	var seeds []factForLLM
+	var seeds []step.FactForLLM
 	for _, f := range allFactsForLLM(t, env) {
 		if f.File != cousinBPath {
 			seeds = append(seeds, f)
@@ -133,8 +135,8 @@ func TestCousins_FenceKeepsANonSeedCousinOutOfTheSubgraph(t *testing.T) {
 	}
 	require.NotEmpty(t, seeds)
 
-	clusters, err := ScopedCluster(ctx, seeds, env.svc.Search(),
-		env.ri.ClusterResolution(), env.ri.ClusterMinCommunitySize(), env.ri.ClusterNeighborKinds(), func(ProgressEvent) {}, env.branch)
+	clusters, err := ScopedCluster(ctx, seeds, env.Svc.Search(),
+		env.RI.ClusterResolution(), env.RI.ClusterMinCommunitySize(), env.RI.ClusterNeighborKinds(), func(step.ProgressEvent) {}, env.Branch)
 	require.NoError(t, err)
 	for _, c := range clusters {
 		for _, f := range c {
@@ -149,9 +151,9 @@ func TestCousins_FenceKeepsANonSeedCousinOutOfTheSubgraph(t *testing.T) {
 	// And the unfenced search — the one this fix adds — DOES reach it. Without
 	// this half the test above is satisfied by a corpus where the cousin is
 	// simply not findable at all.
-	hits, err := env.svc.Search().Search(ctx, env.branch, index.SearchOptions{
+	hits, err := env.Svc.Search().Search(ctx, env.Branch, index.SearchOptions{
 		QueryByPath:   cousinAPath,
-		MinSimilarity: env.dedupThreshold(),
+		MinSimilarity: env.DedupThreshold(),
 		Limit:         10,
 	})
 	require.NoError(t, err)
@@ -171,19 +173,19 @@ func TestCousins_JoinBringsThemTogetherForPrune(t *testing.T) {
 	ctx := context.Background()
 	env := cousinEnv(t, 20)
 	cousinFixtureIsSound(t, env)
-	d := env.deps()
+	d := env.Deps()
 
 	// The cousin sits OUTSIDE any prune cluster — the measured "leftover
 	// bucket" case: one twin served in a prune item, the other never served
 	// alongside it.
-	pruneClusters := [][]factForLLM{{
+	pruneClusters := [][]step.FactForLLM{{
 		{File: cousinAPath, Title: cousinTitle},
 		{File: "kb/technology/filler/topic0/00000001.md", Title: "Filler note 2026 about widget 1000"},
 	}}
 	require.False(t, clustersHoldTogether(pruneClusters, cousinAPath, cousinBPath),
 		"fixture must START with the pair apart, or the join is credited for nothing")
 
-	joined, h := joinCousinsForPrune(ctx, d, env.branch, pruneClusters, env.dedupThreshold())
+	joined, h := joinCousinsForPrune(ctx, d, env.Branch, pruneClusters, env.DedupThreshold())
 	require.Empty(t, h.Failure)
 	require.True(t, clustersHoldTogether(joined, cousinAPath, cousinBPath),
 		"a near-certain duplicate the category fence hid must be put in front of "+
@@ -202,11 +204,11 @@ func TestCousins_JoinUnionsTwoPruneClusters(t *testing.T) {
 	env := cousinEnv(t, 20)
 	cousinFixtureIsSound(t, env)
 
-	pruneClusters := [][]factForLLM{
+	pruneClusters := [][]step.FactForLLM{
 		{{File: cousinAPath}, {File: "kb/technology/filler/topic0/00000001.md"}},
 		{{File: cousinBPath}, {File: "kb/technology/filler/topic1/00000002.md"}},
 	}
-	joined, h := joinCousinsForPrune(ctx, env.deps(), env.branch, pruneClusters, env.dedupThreshold())
+	joined, h := joinCousinsForPrune(ctx, env.Deps(), env.Branch, pruneClusters, env.DedupThreshold())
 	require.Empty(t, h.Failure)
 	require.Positive(t, h.Joined, "two prune clusters linked by a cousin must be merged")
 	require.True(t, clustersHoldTogether(joined, cousinAPath, cousinBPath),
@@ -226,13 +228,13 @@ func TestCousins_ClustersAreNotMutated(t *testing.T) {
 	env := cousinEnv(t, 20)
 	cousinFixtureIsSound(t, env)
 
-	original := [][]factForLLM{{
+	original := [][]step.FactForLLM{{
 		{File: cousinAPath, Title: cousinTitle},
 		{File: "kb/technology/filler/topic0/00000001.md", Title: "Filler note 2026 about widget 1000"},
 	}}
 	before := renderClusters(original)
 
-	joined, h := joinCousinsForPrune(ctx, env.deps(), env.branch, original, env.dedupThreshold())
+	joined, h := joinCousinsForPrune(ctx, env.Deps(), env.Branch, original, env.DedupThreshold())
 	require.Positive(t, h.Attached, "fixture must actually attach something, or immutability is trivial")
 	require.True(t, clustersHoldTogether(joined, cousinAPath, cousinBPath))
 
@@ -250,8 +252,8 @@ func TestCousins_SiblingsAreNotDoubleCounted(t *testing.T) {
 	env := cousinEnv(t, 20)
 
 	// Both twins in ONE cluster already.
-	pruneClusters := [][]factForLLM{{{File: cousinAPath}, {File: cousinBPath}}}
-	joined, h := joinCousinsForPrune(ctx, env.deps(), env.branch, pruneClusters, env.dedupThreshold())
+	pruneClusters := [][]step.FactForLLM{{{File: cousinAPath}, {File: cousinBPath}}}
+	joined, h := joinCousinsForPrune(ctx, env.Deps(), env.Branch, pruneClusters, env.DedupThreshold())
 	require.Zero(t, h.Joined, "a pair already in one cluster needs no join")
 	require.Len(t, joined, 1)
 	seen := map[string]int{}
@@ -285,14 +287,14 @@ func TestCousins_BudgetActuallyTruncates(t *testing.T) {
 	env := cousinEnv(t, maxCousinSearches+10)
 
 	// One cluster holding more facts than the search budget allows.
-	var big []factForLLM
+	var big []step.FactForLLM
 	for i := range maxCousinSearches + 5 {
-		big = append(big, factForLLM{File: fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1)})
+		big = append(big, step.FactForLLM{File: fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1)})
 	}
 	require.Greater(t, len(big), maxCousinSearches,
 		"fixture must exceed the budget, or truncation is never reached")
 
-	_, h := joinCousinsForPrune(ctx, env.deps(), env.branch, [][]factForLLM{big}, env.dedupThreshold())
+	_, h := joinCousinsForPrune(ctx, env.Deps(), env.Branch, [][]step.FactForLLM{big}, env.DedupThreshold())
 	require.True(t, h.Truncated, "a sweep over more facts than the budget must report truncation")
 	require.Equal(t, maxCousinSearches, h.Searched, "and it must stop AT the budget")
 	require.Equal(t, len(big), h.Candidate, "and still report what a complete sweep would have been")
@@ -321,13 +323,13 @@ func TestCousins_TruncatedSweepIsIndependentOfClusterOrder(t *testing.T) {
 	// the cousin's (kb/technology/security/…), so under the sort the cousin
 	// falls outside the budget in BOTH presentations. Without the sort its fate
 	// depends purely on which end of the list its cluster sits at.
-	cousinCluster := []factForLLM{{File: cousinAPath}}
-	clusters := [][]factForLLM{cousinCluster}
+	cousinCluster := []step.FactForLLM{{File: cousinAPath}}
+	clusters := [][]step.FactForLLM{cousinCluster}
 	for c := range 3 {
-		var cluster []factForLLM
+		var cluster []step.FactForLLM
 		for i := range maxCousinSearches / 2 {
 			n := c*(maxCousinSearches/2) + i
-			cluster = append(cluster, factForLLM{
+			cluster = append(cluster, step.FactForLLM{
 				File: fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", n, n+1)})
 		}
 		clusters = append(clusters, cluster)
@@ -344,18 +346,18 @@ func TestCousins_TruncatedSweepIsIndependentOfClusterOrder(t *testing.T) {
 	// attach the cousin. Without this, "0 attached" below would be satisfied by
 	// a corpus that simply has no cousin to find, and the test would pass while
 	// measuring nothing.
-	_, solo := joinCousinsForPrune(ctx, env.deps(), env.branch, [][]factForLLM{cousinCluster}, env.dedupThreshold())
+	_, solo := joinCousinsForPrune(ctx, env.Deps(), env.Branch, [][]step.FactForLLM{cousinCluster}, env.DedupThreshold())
 	require.Positive(t, solo.Attached,
 		"fixture's cousin cluster must attach when the budget is not the constraint")
 
-	_, forward := joinCousinsForPrune(ctx, env.deps(), env.branch, clusters, env.dedupThreshold())
+	_, forward := joinCousinsForPrune(ctx, env.Deps(), env.Branch, clusters, env.DedupThreshold())
 	require.True(t, forward.Truncated, "fixture must truncate, or this measures nothing")
 
-	reversed := make([][]factForLLM, 0, len(clusters))
+	reversed := make([][]step.FactForLLM, 0, len(clusters))
 	for i := len(clusters) - 1; i >= 0; i-- {
 		reversed = append(reversed, clusters[i])
 	}
-	_, backward := joinCousinsForPrune(ctx, env.deps(), env.branch, reversed, env.dedupThreshold())
+	_, backward := joinCousinsForPrune(ctx, env.Deps(), env.Branch, reversed, env.DedupThreshold())
 
 	require.Equal(t, forward.Searched, backward.Searched)
 	require.Equal(t, forward.Attached, backward.Attached,
@@ -380,7 +382,7 @@ func TestCousins_PlanRunsTheSweepAndReportsIt(t *testing.T) {
 	env := cousinEnv(t, 20)
 	cousinFixtureIsSound(t, env)
 
-	p := NewPipeline(env.ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{}, reviewStrategy{})
+	p := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{}, reviewStrategy{})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 
@@ -413,11 +415,11 @@ func TestCousins_BothHalvesLeftoverIsNotReached(t *testing.T) {
 
 	// A prune cluster made of two UNRELATED filler facts: neither cousin is in
 	// it, so neither is a sweep origin.
-	pruneClusters := [][]factForLLM{{
+	pruneClusters := [][]step.FactForLLM{{
 		{File: "kb/technology/filler/topic0/00000001.md"},
 		{File: "kb/technology/filler/topic1/00000002.md"},
 	}}
-	joined, h := joinCousinsForPrune(ctx, env.deps(), env.branch, pruneClusters, env.dedupThreshold())
+	joined, h := joinCousinsForPrune(ctx, env.Deps(), env.Branch, pruneClusters, env.DedupThreshold())
 	require.Empty(t, h.Failure)
 	require.False(t, clustersHoldTogether(joined, cousinAPath, cousinBPath),
 		"KNOWN LIMIT: with neither half in a prune cluster there is no origin to "+
@@ -426,19 +428,19 @@ func TestCousins_BothHalvesLeftoverIsNotReached(t *testing.T) {
 }
 
 // allFactsForLLM reads every live fact as a seed, the way Plan does.
-func allFactsForLLM(t *testing.T, env *restatementEnv) []factForLLM {
+func allFactsForLLM(t *testing.T, env *synthtest.RestatementEnv) []step.FactForLLM {
 	t.Helper()
-	live, err := env.svc.Abstraction().LiveEpistemicFacts(context.Background(), env.branch)
+	live, err := env.Svc.Abstraction().LiveEpistemicFacts(context.Background(), env.Branch)
 	require.NoError(t, err)
-	out := make([]factForLLM, 0, len(live))
+	out := make([]step.FactForLLM, 0, len(live))
 	for _, path := range live {
-		out = append(out, factForLLM{File: path})
+		out = append(out, step.FactForLLM{File: path})
 	}
 	return out
 }
 
 // clustersHoldTogether reports whether any one cluster contains both paths.
-func clustersHoldTogether(clusters [][]factForLLM, a, b string) bool {
+func clustersHoldTogether(clusters [][]step.FactForLLM, a, b string) bool {
 	for _, c := range clusters {
 		var hasA, hasB bool
 		for _, f := range c {
@@ -457,7 +459,7 @@ func clustersHoldTogether(clusters [][]factForLLM, a, b string) bool {
 }
 
 // renderClusters is a stable string form for equality assertions.
-func renderClusters(clusters [][]factForLLM) string {
+func renderClusters(clusters [][]step.FactForLLM) string {
 	var b strings.Builder
 	for _, c := range clusters {
 		for _, f := range c {

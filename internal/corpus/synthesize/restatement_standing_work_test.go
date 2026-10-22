@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/vocab"
 
 	"github.com/stretchr/testify/require"
@@ -29,13 +31,13 @@ import (
 // The watermark is advanced by running a real session to completion rather than
 // by writing the watermark row directly: the starvation is a COMPOSITION of the
 // seed scan and the completion, and a test that fakes either half cannot see it.
-func standingEnv(t *testing.T) (*restatementEnv, *Pipeline) {
+func standingEnv(t *testing.T) (*synthtest.RestatementEnv, *Pipeline) {
 	t.Helper()
 	ctx := context.Background()
 	env := manyTwinsEnvWithFiller(t, structuralAllowance+3, 40)
-	env.seedShortlist()
+	seedShortlist(env)
 
-	p := NewPipeline(env.ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{}, reviewStrategy{})
+	p := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{}, reviewStrategy{})
 
 	// Drain one full session so the watermark reaches HEAD and the corpus goes
 	// quiet. Answers are empty no-ops; nothing here is about what the judge
@@ -77,13 +79,13 @@ func TestStanding_QuietCorpusStillDrainsItsStandingPairs(t *testing.T) {
 	// Fixture assertions FIRST. Both are load-bearing: a corpus that is not
 	// actually quiet would reach the ordinary Plan and prove nothing, and a
 	// corpus with no standing pairs would give the sweep nothing to find.
-	seeds, scan, err := p.dirtyFacts(ctx, env.branch, env.svc.Facts(), env.svc.Search(), env.svc.Pipeline())
+	seeds, scan, err := p.dirtyFacts(ctx, env.Branch, env.Svc.Facts(), env.Svc.Search(), env.Svc.Pipeline())
 	require.NoError(t, err)
 	require.Empty(t, seeds,
 		"fixture must be QUIET — with a non-empty dirty set this exercises the "+
 			"ordinary planned path and says nothing about the early return")
 	require.False(t, scan.Scoped, "fixture must be unscoped, or the scope guard short-circuits it")
-	standing, err := env.svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.branch,
+	standing, err := env.Svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.Branch,
 		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 	require.NotEmpty(t, standing, "fixture must hold standing structural pairs")
@@ -111,8 +113,8 @@ func TestStanding_QuietCorpusSaysWhatItDidWhenItPlansNothing(t *testing.T) {
 	ctx := context.Background()
 	// A quiet corpus with NO structural pairs at all: the standing channel runs
 	// and legitimately finds nothing.
-	env := newRestatementEnv(t, 6)
-	p := NewPipeline(env.ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{}, reviewStrategy{})
+	env := synthtest.NewRestatementEnv(t, 6)
+	p := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{}, reviewStrategy{})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 	for steps := 0; res.Item != nil && steps < 200; steps++ {
@@ -148,15 +150,15 @@ func TestStanding_ScopedQuietSessionDoesNotDrainTheWholeCorpus(t *testing.T) {
 	// Fixture assertion: an UNSCOPED pipeline on this same corpus DOES plan
 	// standing work. Without this the test below passes against a corpus where
 	// the standing channel finds nothing for reasons unrelated to the scope.
-	unscoped := NewPipeline(env.ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{}, reviewStrategy{})
+	unscoped := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{}, reviewStrategy{})
 	open, err := unscoped.StartSession(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, open.Item,
 		"fixture must plan standing work when UNSCOPED, or the scope guard is "+
 			"being credited for an empty corpus")
 
-	scoped := NewPipeline(env.ri, func(ProgressEvent) {}, EffortNormal,
-		ScopeFilter{Domain: []string{"a-domain-no-fact-here-carries"}}, reviewStrategy{})
+	scoped := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal,
+		step.ScopeFilter{Domain: []string{"a-domain-no-fact-here-carries"}}, reviewStrategy{})
 	res, err := scoped.StartSession(ctx)
 	require.NoError(t, err)
 	require.Nil(t, res.Item,
@@ -174,7 +176,7 @@ func TestStanding_ScopedQuietSessionDoesNotDrainTheWholeCorpus(t *testing.T) {
 // have acquired a new failure mode for every tool that has no standing channel.
 func TestStanding_HypothesizeStrategyIsUnaffected(t *testing.T) {
 	var s any = hypothesizeStrategy{}
-	_, implements := s.(standingWorkStrategy)
+	_, implements := s.(step.StandingWorkStrategy)
 	require.False(t, implements,
 		"hypothesize owns no corpus-state channel; if it grows one, this test "+
 			"should be replaced by one that exercises it, not deleted")
@@ -198,17 +200,17 @@ func TestStanding_PlanStandingWorkPlansOnlyTheStandingChannel(t *testing.T) {
 	ctx := context.Background()
 	env, _ := standingEnv(t)
 
-	d := env.deps()
-	d.Effort = EffortMedium
+	d := env.Deps()
+	d.Effort = step.EffortMedium
 	// Fixture assertion: the effort dial must actually be the one that opens the
 	// vocabulary block, or this test is back to the indistinguishable case.
 	require.True(t, d.Effort.MaintainsVocabulary(),
 		"fixture must run at an effort where Plan does MORE than the shortlist, "+
 			"or the two paths cannot be told apart")
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	planned, health, err := reviewStrategy{}.PlanStandingWork(ctx, d, sess, env.branch)
+	planned, health, err := reviewStrategy{}.PlanStandingWork(ctx, d, sess, env.Branch)
 	require.NoError(t, err)
 	require.True(t, planned, "fixture must plan something, or the census below is over an empty queue")
 	require.NotEmpty(t, health, "the standing channel always reports, planned or not")
@@ -223,7 +225,7 @@ func TestStanding_PlanStandingWorkPlansOnlyTheStandingChannel(t *testing.T) {
 			"edge-triggered maintenance, and their health line is the tell that "+
 			"the full Plan was called instead of the shortlist")
 
-	items, err := env.svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
+	items, err := env.Svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, items)
 	for _, it := range items {
@@ -246,12 +248,12 @@ func TestStanding_QuietSessionDoesNotRunTheVocabularyPasses(t *testing.T) {
 	ctx := context.Background()
 	env, _ := standingEnv(t)
 
-	p := NewPipeline(env.ri, func(ProgressEvent) {}, EffortMedium, ScopeFilter{}, reviewStrategy{})
+	p := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortMedium, step.ScopeFilter{}, reviewStrategy{})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, res.Item, "fixture must plan standing work, or there is nothing to census")
 
-	items, err := env.svc.Pipeline().PendingPipelineWorkItems(ctx, res.SessionID)
+	items, err := env.Svc.Pipeline().PendingPipelineWorkItems(ctx, res.SessionID)
 	require.NoError(t, err)
 	require.NotEmpty(t, items)
 	for _, it := range items {

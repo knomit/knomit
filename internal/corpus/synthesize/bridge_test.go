@@ -2,8 +2,10 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -12,8 +14,8 @@ import (
 )
 
 // makeFact is a tiny constructor for the test fixtures below.
-func makeFact(path, origin string, domains, entities []string) factForLLM {
-	return factForLLM{
+func makeFact(path, origin string, domains, entities []string) step.FactForLLM {
+	return step.FactForLLM{
 		File:     path,
 		Title:    path,
 		Body:     path + " body",
@@ -53,7 +55,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 	b := makeFact("kb/b.md", "authored", nil, []string{"auth"})
 	c := makeFact("kb/c.md", "authored", nil, []string{"auth"})
 	d := makeFact("kb/d.md", "authored", nil, []string{"misc"})
-	seeds := []factForLLM{a, b, c, d}
+	seeds := []step.FactForLLM{a, b, c, d}
 
 	// a in community 0, b in community 1, c in community 0 (same as a).
 	// d in community 1 (same as b) but carries a different entity.
@@ -64,7 +66,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 		},
 	}
 
-	got := enumerateBridgeCandidates(seeds, clusters, BridgeEntity, ScopeFilter{})
+	got := enumerateBridgeCandidates(seeds, clusters, BridgeEntity, step.ScopeFilter{})
 
 	set, found := containsToken(got, "auth")
 	if !found {
@@ -88,9 +90,9 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 	// Any read of the index fails the test.
-	idx := newGraphEnv(t, "main").seedAll([]factForLLM{a, b}).idx()
-	reads := guardReads(t, idx, readPolicy{})
-	got, err := buildScoredBridges(context.Background(), idx, "main", []factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
+	idx := synthtest.NewGraphEnv(t, "main").SeedAll([]step.FactForLLM{a, b}).Idx()
+	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{})
+	got, err := buildScoredBridges(context.Background(), idx, "main", []step.FactForLLM{a, b}, clusters, BridgeBoth, step.EffortNormal, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Zero(t, reads.Count())
 	if got != nil {
@@ -108,7 +110,7 @@ func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeBoth, step.ScopeFilter{})
 	if len(got) != 0 {
 		t.Errorf("discovered seed must be excluded; b alone leaves a w/o partner: %+v", got)
 	}
@@ -116,8 +118,8 @@ func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 
 // manyCrossClusterSeeds builds n distinct cross-cluster bridges: n unique
 // tokens, each on one fact in community 0 and one in community 1.
-func manyCrossClusterSeeds(n int) ([]factForLLM, ClusterResult) {
-	var seeds []factForLLM
+func manyCrossClusterSeeds(n int) ([]step.FactForLLM, ClusterResult) {
+	var seeds []step.FactForLLM
 	cluster0 := []string{}
 	cluster1 := []string{}
 	for i := 0; i < n; i++ {
@@ -140,9 +142,9 @@ func manyCrossClusterSeeds(n int) ([]factForLLM, ClusterResult) {
 // edges, so cohesion is 1 (>= CohFloor); nothing cites anything, so the
 // derivation gap is 1; the document frequency is the real number of carriers.
 // Budget truncation tests are then not confounded by gate drops.
-func cohesiveIdx(t *testing.T, seeds []factForLLM) *index.Facade {
+func cohesiveIdx(t *testing.T, seeds []step.FactForLLM) *index.Facade {
 	t.Helper()
-	env := newGraphEnv(t, "main").seedAll(seeds)
+	env := synthtest.NewGraphEnv(t, "main").SeedAll(seeds)
 	groups := map[string][]string{}
 	for _, f := range seeds {
 		for _, tok := range append(append([]string(nil), f.Entities...), f.Domain...) {
@@ -150,9 +152,9 @@ func cohesiveIdx(t *testing.T, seeds []factForLLM) *index.Facade {
 		}
 	}
 	for _, members := range groups {
-		env.similarAll(members)
+		env.SimilarAll(members)
 	}
-	return env.allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
+	return env.Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").Idx()
 }
 
 // TestBridgeSeeds_EffortBudget asserts the per-effort budget truncates the pool
@@ -165,16 +167,16 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(60)
 	ctx := context.Background()
 
-	med, err := buildScoredBridges(ctx, cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, EffortMedium, testCfg, ScopeFilter{})
+	med, err := buildScoredBridges(ctx, cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, step.EffortMedium, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
-	hi, err := buildScoredBridges(ctx, cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	hi, err := buildScoredBridges(ctx, cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 
-	if len(med) != effortBudget(EffortMedium) {
-		t.Errorf("medium budget: got %d, want %d", len(med), effortBudget(EffortMedium))
+	if len(med) != effortBudget(step.EffortMedium) {
+		t.Errorf("medium budget: got %d, want %d", len(med), effortBudget(step.EffortMedium))
 	}
-	if len(hi) != effortBudget(EffortHigh) {
-		t.Errorf("high budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
+	if len(hi) != effortBudget(step.EffortHigh) {
+		t.Errorf("high budget: got %d, want %d", len(hi), effortBudget(step.EffortHigh))
 	}
 	if !(len(med) < len(hi)) {
 		t.Errorf("effort must govern breadth: medium (%d) should dig fewer bridges than high (%d)", len(med), len(hi))
@@ -191,18 +193,18 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 func TestBridgeSeeds_PriorityBandHoldsUnderLargePool(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(maxBridgeSeeds + 25) // far over every cap
 
-	hi, err := buildScoredBridges(context.Background(), cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	hi, err := buildScoredBridges(context.Background(), cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
-	if len(hi) != effortBudget(EffortHigh) {
-		t.Fatalf("high pool must cap at the effort budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
+	if len(hi) != effortBudget(step.EffortHigh) {
+		t.Fatalf("high pool must cap at the effort budget: got %d, want %d", len(hi), effortBudget(step.EffortHigh))
 	}
 	if len(hi) > maxBridgeSeeds {
 		t.Fatalf("result %d must never exceed the absolute backstop %d", len(hi), maxBridgeSeeds)
 	}
 	// The lowest-priority surviving item must stay strictly above reflect.
 	lowest := forwardDiscoverPriority(len(hi) - 1)
-	if lowest <= reflectPriority {
-		t.Errorf("lowest forward discover priority %v must stay above reflect %v", lowest, float64(reflectPriority))
+	if lowest <= step.ReflectPriority {
+		t.Errorf("lowest forward discover priority %v must stay above reflect %v", lowest, float64(step.ReflectPriority))
 	}
 }
 
@@ -223,7 +225,7 @@ func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
-	dom := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, ScopeFilter{})
+	dom := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeDomain, step.ScopeFilter{})
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface 'auth': %v", dom)
 	}
@@ -248,7 +250,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/a.md"}},
 	}
 
-	got := enumerateBridgeCandidates([]factForLLM{a, orphan}, clusters, BridgeEntity, ScopeFilter{})
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, orphan}, clusters, BridgeEntity, step.ScopeFilter{})
 	set, found := containsToken(got, "auth")
 	if !found {
 		t.Fatalf("orphan seed (absent from clusters) must not collide with community 0; expected an 'auth' bridge, got %+v", got)
@@ -295,12 +297,12 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 
 	// a,b cluster apart → their shared tokens form cross-community bridges.
 	// Scoring: a↔b similar (a real edge), nothing cites anything.
-	m := newGraphEnv(t, "agent/test").seedFacts(synthFacts...).
-		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
-		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
+	m := synthtest.NewGraphEnv(t, "agent/test").SeedFacts(synthFacts...).
+		Partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
+		Similar([2]string{"kb/a.md", "kb/b.md"}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").Idx()
 
 	// Entity kind: only the shared ENTITY token bridges.
-	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeEntity, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})
+	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, step.EffortHigh, BridgeEntity, 2.0, 2, synthtest.DefaultNeighborKinds, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	if _, ok := containsToken(ent, "shared"); !ok {
 		t.Errorf("BridgeEntity must surface entity token 'shared': %v", ent)
@@ -310,7 +312,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 
 	// Domain kind: only the shared DOMAIN token bridges.
-	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeDomain, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})
+	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, step.EffortHigh, BridgeDomain, 2.0, 2, synthtest.DefaultNeighborKinds, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface domain token 'auth': %v", dom)
@@ -339,7 +341,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 		},
 	}
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeBoth, step.ScopeFilter{})
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 	// Entity beats domain as the Kind label when both axes carry the token.
@@ -354,14 +356,14 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 // Retargeted to enumerateBridgeCandidates (Task 16: canonicalization logic is unchanged).
 func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 	// Two facts tag the same concept with different casing, in different clusters.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a.md", Domain: []string{"Store"}},
 		{File: "kb/b.md", Domain: []string{"store"}},
 	}
 	clusters := ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a.md"}, 1: {"kb/b.md"},
 	}}
-	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain, ScopeFilter{})
+	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain, step.ScopeFilter{})
 	// Should form ONE bridge (variants unified), not two half-bridges of <2 members.
 	if len(got) != 1 {
 		t.Fatalf("expected 1 unified bridge, got %d: %+v", len(got), got)
@@ -389,7 +391,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 		},
 	}
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeBoth, step.ScopeFilter{})
 	set, found := containsToken(got, "auth")
 	require.True(t, found, "expected bridge on 'auth'")
 
@@ -430,11 +432,11 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	const wantMinCommunity = 2
 
 	// a,b cluster apart so "shared" bridges across communities.
-	m := newGraphEnv(t, "agent/test").seedFacts(synthFacts...).
-		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
-		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
+	m := synthtest.NewGraphEnv(t, "agent/test").SeedFacts(synthFacts...).
+		Partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
+		Similar([2]string{"kb/a.md", "kb/b.md"}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").Idx()
 
-	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testNeighborKinds, testCfg, ScopeFilter{})
+	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, step.EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, synthtest.DefaultNeighborKinds, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 }
 
@@ -448,7 +450,7 @@ func TestEffortBudget_StaysBelowPriorityBand(t *testing.T) {
 	// band, so the headroom question is about the TOTAL a session can enqueue,
 	// not about any one budget. Asserting effortBudget alone would have gone on
 	// passing while the band overflowed.
-	for _, e := range []Effort{EffortMedium, EffortHigh} {
+	for _, e := range []step.Effort{step.EffortMedium, step.EffortHigh} {
 		near, far := motifSubBudget(e)
 		require.Less(t, effortBudget(e)+near+far, maxBridgeSeeds,
 			"every discover item a %s session can enqueue must fit the band above reflect", e)
@@ -471,17 +473,17 @@ var testCfg = QualityConfig{
 // EffortNormal gate: buildScoredBridges must return (nil, nil) without calling
 // any idx method.
 func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/a.md", "authored", nil, []string{"tok"}),
 		makeFact("kb/b.md", "authored", nil, []string{"tok"}),
 	}
-	idx := newGraphEnv(t, "main").seedAll(seeds).idx()
-	reads := guardReads(t, idx, readPolicy{}) // any read of the index fails the test
+	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Idx()
+	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{}) // any read of the index fails the test
 	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
-	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, step.EffortNormal, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Nil(t, got, "EffortNormal must return nil, no idx calls")
 	require.Zero(t, reads.Count())
@@ -493,7 +495,7 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 	ctx := context.Background()
 	branch := "main"
 
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/a.md", "authored", nil, []string{"alpha"}),
 		makeFact("kb/b.md", "authored", nil, []string{"alpha"}),
 	}
@@ -502,9 +504,9 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 	}
 
 	// a↔b connected → cohesion = 1.0 (≥ CohFloor=0.5) — passes the gate.
-	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedAll(seeds).Similar([2]string{"kb/a.md", "kb/b.md"}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").Idx()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "expect one bridge for 'alpha'")
 	require.Equal(t, "alpha", got[0].Token)
@@ -522,7 +524,7 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 	ctx := context.Background()
 	branch := "main"
 
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/x.md", "authored", nil, []string{"gappy"}),
 		makeFact("kb/y.md", "authored", nil, []string{"gappy"}),
 	}
@@ -531,9 +533,9 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 	}
 
 	// No edges → cohesion = 0 < CohFloor=0.5 → gate fires → not kept.
-	idx := newGraphEnv(t, branch).seedAll(seeds).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedAll(seeds).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").Idx()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Empty(t, got, "low-cohesion candidate must be dropped (not kept)")
 }
@@ -549,7 +551,7 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 	// spanning communities 0 (p0,p1,p2) and 1 (p3,p4). p5 and p6 are also in
 	// communities but have no edges to the tight subset.
 	paths := []string{"kb/p0.md", "kb/p1.md", "kb/p2.md", "kb/p3.md", "kb/p4.md", "kb/p5.md", "kb/p6.md"}
-	seeds := make([]factForLLM, len(paths))
+	seeds := make([]step.FactForLLM, len(paths))
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad"})
 	}
@@ -568,9 +570,9 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 		{"kb/p2.md", "kb/p3.md"}, {"kb/p2.md", "kb/p4.md"},
 		{"kb/p3.md", "kb/p4.md"},
 	}
-	idx := newGraphEnv(t, branch).seedAll(seeds).similar(cohesivePairs...).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedAll(seeds).Similar(cohesivePairs...).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").Idx()
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "expect exactly one bridge for 'broad' after reshape")
 	bridge := got[0]
@@ -597,7 +599,7 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 
 	// 6 members > MaxMembers=5. No edges at all → reshapeCohesiveSubset returns nil.
 	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md", "kb/e.md", "kb/f.md"}
-	seeds := make([]factForLLM, len(paths))
+	seeds := make([]step.FactForLLM, len(paths))
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad2"})
 	}
@@ -609,10 +611,10 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 	}
 
 	// No edges → reshape can find no cross-community connected pair → drops candidate.
-	idx := newGraphEnv(t, branch).seedAll(seeds).idx()
-	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency"}}) // no scoring read after the drop
+	idx := synthtest.NewGraphEnv(t, branch).SeedAll(seeds).Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency"}}) // no scoring read after the drop
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Empty(t, got, "oversized group with no cohesive seam must produce no bridge")
 }
@@ -628,7 +630,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 	// spec=1/3: a third carrier is seeded in community 0). With
 	// WCoh=WGap=WSpec=1 and gap=1.0 for both, alpha's Q exceeds beta's.
 	// Expected order: alpha first.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/a1.md", "authored", nil, []string{"alpha"}),
 		makeFact("kb/a2.md", "authored", nil, []string{"alpha"}),
 		makeFact("kb/b1.md", "authored", nil, []string{"beta"}),
@@ -645,7 +647,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 	// Every token group is fully connected → cohesion = 1.0.
 	idx := cohesiveIdx(t, seeds)
 
-	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, "alpha", got[0].Token, "alpha has higher Q and must come first")
@@ -660,17 +662,17 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 // Written BEFORE the production wiring is changed (TDD: proves the invariant
 // survives the switch). The test fails if the effort gate is bypassed.
 func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/a.md", "authored", nil, []string{"tok"}),
 		makeFact("kb/b.md", "authored", nil, []string{"tok"}),
 	}
-	idx := newGraphEnv(t, "main").seedAll(seeds).idx()
-	reads := guardReads(t, idx, readPolicy{}) // any read of the index fails the test
+	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Idx()
+	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{}) // any read of the index fails the test
 	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
-	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, step.EffortNormal, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Nil(t, got, "forward path at EffortNormal must return (nil, nil) — byte-identical contract")
 	require.Zero(t, reads.Count())
@@ -699,9 +701,9 @@ func TestEnumerate_ScopedDomainExcludesMatchingToken(t *testing.T) {
 			1: {"kb/b.md", "kb/c.md"},
 		},
 	}
-	scope := ScopeFilter{Domain: []string{"Auth"}} // canonical match for "auth"
+	scope := step.ScopeFilter{Domain: []string{"Auth"}} // canonical match for "auth"
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b, c}, clusters, BridgeDomain, scope)
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, b, c}, clusters, BridgeDomain, scope)
 
 	if _, found := containsToken(got, "auth"); found {
 		t.Error("scoped domain token 'auth' must be EXCLUDED from bridge candidates")
@@ -725,9 +727,9 @@ func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 			1: {"kb/b.md"},
 		},
 	}
-	scope := ScopeFilter{Entities: []string{"alice"}} // canonical match for "Alice"
+	scope := step.ScopeFilter{Entities: []string{"alice"}} // canonical match for "Alice"
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeEntity, scope)
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeEntity, scope)
 
 	if _, found := containsToken(got, "Alice"); found {
 		t.Error("scoped entity token 'Alice' must be EXCLUDED from bridge candidates")
@@ -746,7 +748,7 @@ func TestEnumerate_EmptyScopeUnchanged(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
-	withScope := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, ScopeFilter{})
+	withScope := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeDomain, step.ScopeFilter{})
 	// Must emit "auth" just like the old no-scope behavior.
 	if _, found := containsToken(withScope, "auth"); !found {
 		t.Error("empty scope must emit cross-community token 'auth' (byte-identical to no-scope behavior)")
@@ -765,9 +767,9 @@ func TestEnumerate_CrossKindNoExclusion(t *testing.T) {
 	clusters := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
-	scope := ScopeFilter{Entities: []string{"auth"}} // only entity scope, not domain
+	scope := step.ScopeFilter{Entities: []string{"auth"}} // only entity scope, not domain
 
-	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, scope)
+	got := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeDomain, scope)
 
 	if _, found := containsToken(got, "auth"); !found {
 		t.Error("domain token 'auth' must NOT be excluded when scope.Entities matches it — domain-only-vs-Domain rule")
@@ -781,7 +783,7 @@ func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 	ctx := context.Background()
 
 	// "scoped" entity is the scope token; "other" is not.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/s1.md", "authored", nil, []string{"scoped", "other"}),
 		makeFact("kb/s2.md", "authored", nil, []string{"scoped", "other"}),
 	}
@@ -789,9 +791,9 @@ func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/s1.md"}, 1: {"kb/s2.md"}},
 	}
-	scope := ScopeFilter{Entities: []string{"scoped"}}
+	scope := step.ScopeFilter{Entities: []string{"scoped"}}
 
-	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, EffortHigh, testCfg, scope)
+	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, step.EffortHigh, testCfg, scope)
 	require.NoError(t, err)
 
 	for _, b := range got {
@@ -810,7 +812,7 @@ func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 	ctx := context.Background()
 
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/u.md", "authored", nil, []string{"tok"}),
 		makeFact("kb/v.md", "authored", nil, []string{"tok"}),
 	}
@@ -819,7 +821,7 @@ func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/u.md"}, 1: {"kb/v.md"}},
 	}
 
-	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "empty scope must not filter any candidates")
 	require.Equal(t, "tok", got[0].Token)
@@ -831,7 +833,7 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 	ctx := context.Background()
 	branch := "main"
 
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/p.md", "authored", nil, []string{"det"}),
 		makeFact("kb/q.md", "authored", nil, []string{"det"}),
 	}
@@ -839,10 +841,10 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 		Clusters: map[int][]string{0: {"kb/p.md"}, 1: {"kb/q.md"}},
 	}
 
-	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/p.md", "kb/q.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, branch).SeedAll(seeds).Similar([2]string{"kb/p.md", "kb/q.md"}).Allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").Idx()
 
-	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
-	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
+	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, step.EffortHigh, testCfg, step.ScopeFilter{})
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	require.Equal(t, run1, run2, "two identical runs must produce identical results")

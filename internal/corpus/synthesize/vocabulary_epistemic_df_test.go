@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ import (
 // observation. The path told the topic; it never told the kind.
 func TestVocabularyHealth_EpistemicRecurringCountsOnlyEpistemicCarriers(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	// One motif on three carriers: two PRAGMATIC, one EPISTEMIC.
 	// Raw df = 3 (recurring). Epistemic df = 1 (NOT recurring).
@@ -43,9 +44,9 @@ func TestVocabularyHealth_EpistemicRecurringCountsOnlyEpistemicCarriers(t *testi
 	writeKindFactWithMotifs(t, env, "kb/gotchas/e.md", fact.Epistemic, fact.Observation,
 		[]string{"genuinely-recurring"})
 
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	h, err := env.svc.Motifs().VocabularyHealth(ctx, env.branch)
+	h, err := env.Svc.Motifs().VocabularyHealth(ctx, env.Branch)
 	require.NoError(t, err)
 
 	require.Equal(t, 2, h.Clusters, "precondition: two distinct motifs")
@@ -62,7 +63,7 @@ func TestVocabularyHealth_EpistemicRecurringCountsOnlyEpistemicCarriers(t *testi
 // The kind is the point: the existing motif helper writes observations only,
 // and this test is entirely about the epistemic/pragmatic split that the
 // vocabulary line was blind to.
-func writeKindFactWithMotifs(t *testing.T, env *restatementEnv, path string, kind fact.Kind, typ fact.Type, motifs []string) {
+func writeKindFactWithMotifs(t *testing.T, env *synthtest.RestatementEnv, path string, kind fact.Kind, typ fact.Type, motifs []string) {
 	t.Helper()
 	f := fact.NewFact(path)
 	f.Title = "T " + path
@@ -77,7 +78,7 @@ func writeKindFactWithMotifs(t *testing.T, env *restatementEnv, path string, kin
 	f.Motifs = motifs
 	rendered, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(context.Background(), env.branch, f.Path(),
+	_, err = env.Svc.Facts().WriteFact(context.Background(), env.Branch, f.Path(),
 		rendered, "write "+path, "test")
 	require.NoError(t, err)
 }
