@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"knomit/internal/store/internal/sqlite"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ type Service struct {
 // schema, and returns a Service that provides access to both the git storer
 // and the search index.
 func Open(path string) (*Service, error) {
-	registerVec() // one-time sqlite-vec + knomit driver registration
+	sqlite.Register() // one-time sqlite-vec + knomit driver registration
 
 	// A bare :memory: database is per-connection — multiple pooled connections
 	// would each be a SEPARATE empty database. It is only used as a defensive
