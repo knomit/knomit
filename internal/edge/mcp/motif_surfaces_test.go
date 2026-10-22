@@ -124,7 +124,9 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	// minDirs is the directory floor per root: the store already has children,
 	// so its walk must reach them; the other roots have none yet, and their
 	// floor rises with their first child (>1 once one exists). found is
-	// asserted positive for every root.
+	// asserted positive for every root. synthesize has children since 13b (step,
+	// internal/synthtest) and prompts/ with its large/ tier: six directories with
+	// the root, so a walk that stops at the root alone fails the floor.
 	roots := []struct {
 		dir     string
 		minDirs int
@@ -133,7 +135,7 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 		// changes both the depth and the sibling names, and a relative path
 		// would break (or, worse, narrow) the scan with it.
 		{modroot.Path(t, "internal", "edge", "mcp"), 1},
-		{modroot.Path(t, "internal", "corpus", "synthesize"), 1},
+		{modroot.Path(t, "internal", "corpus", "synthesize"), 6},
 		{modroot.Path(t, "internal", "edge", "web"), 1},
 		{modroot.Path(t, "internal", "engine", "store"), 5},
 		{modroot.Path(t, "internal", "corpus", "repos"), 1},
