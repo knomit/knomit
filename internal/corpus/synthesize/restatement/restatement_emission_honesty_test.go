@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 	items := env.WorkItems(sess.ID)
 	var restate int
 	for _, it := range items {
-		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
+		if strings.HasPrefix(it.ClusterKey, ClusterKeyPrefix) {
 			restate++
 		}
 	}
@@ -93,7 +93,7 @@ func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 // which asserts that the helper works, not that anything CALLS it. Under a
 // sabotage that deleted the call site, it passed.
 //
-// So: drive planRestatementShortlist, and read the health block it actually
+// So: drive PlanShortlist, and read the health block it actually
 // produced. The invariant asserted is the one that failed on core — the number
 // printed equals the number of restate- items in the queue.
 func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
@@ -137,7 +137,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 			},
 		}, nil))
 
-	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 
 	// What the operator reads.
 	var emitted string
@@ -151,7 +151,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	// What is actually in the queue.
 	var restate int
 	for _, it := range env.WorkItems(sess.ID) {
-		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
+		if strings.HasPrefix(it.ClusterKey, ClusterKeyPrefix) {
 			restate++
 		}
 	}

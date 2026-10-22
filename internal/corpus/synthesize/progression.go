@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -111,7 +112,7 @@ func pruneVerdictCertifiesDistinct(result step.PruneResult, inputPaths []string)
 func promotesToDistill(item *model.PipelineWorkItem) bool {
 	return item != nil &&
 		item.StepType == "prune" &&
-		!strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix)
+		!strings.HasPrefix(item.ClusterKey, restatement.ClusterKeyPrefix)
 }
 
 // promoteClusterToDistill enqueues the distill item a certified-distinct prune

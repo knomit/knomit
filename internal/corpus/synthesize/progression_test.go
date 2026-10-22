@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/restatement"
 	"strings"
 	"testing"
 
@@ -140,7 +141,7 @@ func TestProgression_ShortlistItemsDoNotPromote(t *testing.T) {
 	require.True(t, promotesToDistill(cluster),
 		"a cluster-shaped prune item is the promotable kind")
 
-	shortlist := pruneItem(restatementClusterKeyPrefix+"0", "kb/a.md", "kb/b.md")
+	shortlist := pruneItem(restatement.ClusterKeyPrefix+"0", "kb/a.md", "kb/b.md")
 	require.False(t, promotesToDistill(shortlist),
 		"a shortlist pair's all-KEEP says the two are distinct, not that a group "+
 			"is worth synthesizing")
@@ -351,7 +352,7 @@ func TestProgression_EmptyAnswerPromotesNothingThroughApply(t *testing.T) {
 // answer, same facts, only the cluster key differs.
 func TestProgression_ShortlistItemPromotesNothingThroughApply(t *testing.T) {
 	ctx := context.Background()
-	env, p, sess := progressionEnv(t, restatementClusterKeyPrefix+"0")
+	env, p, sess := progressionEnv(t, restatement.ClusterKeyPrefix+"0")
 
 	_, err := p.ContinueSession(ctx, sess.ID, allKeepAnswer)
 	require.NoError(t, err)

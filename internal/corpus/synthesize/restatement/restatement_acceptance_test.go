@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -81,20 +81,20 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 	// budget; here we keep going so the measurement sees full coverage, and
 	// report what a first session would actually have cost.
 	firstSession := time.Now()
-	have, total, err := ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
+	have, total, err := EnsureTitleVectors(ctx, d, branch, titleBackfillBudget)
 	require.NoError(t, err)
 	t.Logf("first session backfill: %d/%d titles in %s", have, total, time.Since(firstSession).Round(time.Millisecond))
 
 	for have < total {
 		before := have
-		have, total, err = ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
+		have, total, err = EnsureTitleVectors(ctx, d, branch, titleBackfillBudget)
 		require.NoError(t, err)
 		require.Greater(t, have, before, "backfill stalled at %d/%d", have, total)
 	}
 	t.Logf("coverage complete: %d/%d", have, total)
 
 	seeded := time.Now()
-	refresh, err := refreshRestatementShortlist(ctx, d, branch)
+	refresh, err := RefreshShortlist(ctx, d, branch)
 	require.NoError(t, err)
 	t.Logf("shortlist seeded in %s (%d KNN queries, %d pairs, %d partners requeued)",
 		time.Since(seeded).Round(time.Millisecond),

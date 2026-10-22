@@ -401,3 +401,49 @@ func (e *RestatementEnv) FactsJSON(paths ...string) string {
 	require.NoError(e.T, err)
 	return string(out)
 }
+
+// ManyTwinsEnvWithFiller builds a corpus with n path-identity twin pairs, with the filler size chosen by the
+// caller.
+//
+// The filler exists for ONE reason — both rarity cuts are read off the corpus's
+// own token distribution, so a corpus with no distribution has nothing rare in
+// it — and the standard 404 is sized for `shortlistBudget`, which is a
+// SELECTION concern. Tests about the standing channel do not need it: the
+// allowance fires whatever the budget is, and 404 facts make the distill item
+// span six pages, which turns an unrelated paging contract into a fixture
+// problem. So they pass a smaller number and assert the detection still fires.
+func ManyTwinsEnvWithFiller(t *testing.T, n, filler int) *RestatementEnv {
+	t.Helper()
+	// Subject tokens chosen to be rare in this corpus and unrelated to each
+	// other; the prefix-EXTENSION shape (subject vs vendor/subject) is the one
+	// measured on the live corpus.
+	subjects := []string{
+		"cisco", "gitlab", "geoserver", "sharepoint", "ivanti",
+		"sonicwall", "fortinet", "confluence", "jenkins", "grafana",
+	}
+	require.LessOrEqual(t, n, len(subjects), "ManyTwinsEnv has only %d subjects", len(subjects))
+
+	env := NewRestatementEnv(t, 0)
+	env.WriteFiller(filler)
+	for i, s := range subjects[:n] {
+		env.WriteFact(
+			fmt.Sprintf("kb/technology/security/vulnerabilities/%s/%08x.md", s, 0xAA0000+i*2),
+			fmt.Sprintf("%s advisory covers a remote code execution flaw", s),
+			"a body about the event")
+		env.WriteFact(
+			fmt.Sprintf("kb/technology/security/vulnerabilities/vendor/%s/%08x.md", s, 0xAA0001+i*2),
+			fmt.Sprintf("Remote code execution flaw disclosed in %s", s),
+			"the same event, filed again")
+	}
+	return env
+}
+
+// UnitHash maps text to a stable value in [0,1). Used to place motif names at
+// distinct, deterministic angles: a fixture that derives position from a
+// property several names share (length, a small modulus) puts them on top of
+// each other and silently turns a distribution test into a constant test.
+func UnitHash(text string) float64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(text))
+	return float64(h.Sum64()%1_000_000) / 1_000_000
+}

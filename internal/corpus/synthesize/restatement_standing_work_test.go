@@ -3,10 +3,12 @@ package synthesize
 import (
 	"context"
 	"fmt"
-	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
+	"time"
 
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/vocab"
 
@@ -34,7 +36,7 @@ import (
 func standingEnv(t *testing.T) (*synthtest.RestatementEnv, *Pipeline) {
 	t.Helper()
 	ctx := context.Background()
-	env := manyTwinsEnvWithFiller(t, structuralAllowance+3, 40)
+	env := synthtest.ManyTwinsEnvWithFiller(t, restatement.StructuralAllowance+3, 40)
 	seedShortlist(env)
 
 	p := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{}, reviewStrategy{})
@@ -232,7 +234,7 @@ func TestStanding_PlanStandingWorkPlansOnlyTheStandingChannel(t *testing.T) {
 		require.Equal(t, "prune", it.StepType,
 			"the standing channel enqueues shortlist prune items and NOTHING else — "+
 				"no distill chunks, no discover items, no motif vocabulary work")
-		require.True(t, strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix),
+		require.True(t, strings.HasPrefix(it.ClusterKey, restatement.ClusterKeyPrefix),
 			fmt.Sprintf("every item must come from the shortlist; got cluster key %q", it.ClusterKey))
 	}
 }
@@ -261,4 +263,27 @@ func TestStanding_QuietSessionDoesNotRunTheVocabularyPasses(t *testing.T) {
 			"a quiet session runs the STANDING channel only; motif_alias / "+
 				"motif_define are edge-triggered maintenance and must not fire here")
 	}
+}
+
+// seedShortlist runs the title backfill and the shortlist refresh the way a
+// review session does. It mirrors the restatement package's own test fixture of
+// the same name, which this package cannot import (it is a _test.go file).
+//
+// The backfill budget is an hour, NOT production's 15 s latency budget: when
+// that expires EnsureTitleVectors returns partial coverage with no error, the
+// pair under test (highest fact ids, last batch) is the first thing a stalled
+// runner drops, and the test fails as a false claim about the gate under test
+// (knomit#298, CI job 108283236877). An hour cannot expire here; the loop exits
+// as soon as nothing is missing. The coverage assertion below is the other half:
+// a partial axis reads as "nothing to find", so the fixture fails loudly.
+func seedShortlist(e *synthtest.RestatementEnv) {
+	e.T.Helper()
+	ctx := context.Background()
+	require.NotNil(e.T, e.Emb, "seedShortlist needs an embedder: without one the axis is empty and have == total == 0 passes")
+	have, total, err := restatement.EnsureTitleVectors(ctx, e.Deps(), e.Branch, time.Hour)
+	require.NoError(e.T, err)
+	require.Equal(e.T, total, have,
+		"title backfill incomplete (%d/%d): the fixture's axis must be fully covered", have, total)
+	_, err = restatement.RefreshShortlist(ctx, e.Deps(), e.Branch)
+	require.NoError(e.T, err)
 }

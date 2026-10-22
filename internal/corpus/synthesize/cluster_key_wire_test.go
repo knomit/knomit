@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -37,9 +38,9 @@ func TestNextItem_CarriesClusterKeyOnTheWire(t *testing.T) {
 	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "prune",
-		ClusterKey: restatementClusterKeyPrefix + "0",
+		ClusterKey: restatement.ClusterKeyPrefix + "0",
 		FactsJSON:  `[{"file":"kb/technology/a.md"},{"file":"kb/technology/b.md"}]`,
-		Priority:   restatementPriority,
+		Priority:   1.0, // sorts ahead of the 0.1 cluster item below; the production value is pinned in the restatement package
 	}))
 	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
@@ -61,15 +62,15 @@ func TestNextItem_CarriesClusterKeyOnTheWire(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, engine.Item)
 
-	// The restatement item sorts first on restatementPriority, so this is the
+	// The restatement item sorts first (priority 1.0 against 0.1), so this is the
 	// one an agent meets — and it must be able to tell what it is holding.
-	require.Equal(t, restatementClusterKeyPrefix+"0", engine.Item.ClusterKey,
+	require.Equal(t, restatement.ClusterKeyPrefix+"0", engine.Item.ClusterKey,
 		"engine layer: the PipelineItem must carry the stored item's key")
 
 	wire, err := r.PageItem(ctx, sess.ID, engine.Item.ID, 1)
 	require.NoError(t, err)
 	require.NotNil(t, wire.Item)
-	require.Equal(t, restatementClusterKeyPrefix+"0", wire.Item.ClusterKey,
+	require.Equal(t, restatement.ClusterKeyPrefix+"0", wire.Item.ClusterKey,
 		"WIRE layer: a restatement pair must be distinguishable from an "+
 			"ordinary 2-fact prune cluster in what the CLIENT receives; without "+
 			"this the only safe rule is to treat every 2-fact prune as possibly "+
@@ -123,7 +124,7 @@ func TestPageItem_CarriesClusterKeyOnEveryPage(t *testing.T) {
 // every agent's rule quietly stops matching, with no failure anywhere. This
 // test is that pin: it fails, naming the wire contract, if the prefix changes.
 func TestRestatementClusterKeyPrefix_IsAWireContract(t *testing.T) {
-	require.Equal(t, "restate-", restatementClusterKeyPrefix,
+	require.Equal(t, "restate-", restatement.ClusterKeyPrefix,
 		"this prefix is now part of the WIRE CONTRACT (#120): answering agents "+
 			"identify restatement pairs by it, and a non-answer on one is "+
 			"destructive (#111). Changing it silently breaks every consumer's "+
@@ -132,5 +133,5 @@ func TestRestatementClusterKeyPrefix_IsAWireContract(t *testing.T) {
 
 	// And the producer still uses it, so the pin is on a live path rather than
 	// on an orphaned constant.
-	require.True(t, strings.HasPrefix(restatementClusterKeyPrefix+"0", "restate-"))
+	require.True(t, strings.HasPrefix(restatement.ClusterKeyPrefix+"0", "restate-"))
 }

@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -225,4 +227,12 @@ func TestDerivedWriters_DropRatherThanDiscard(t *testing.T) {
 				"malformed name would fail SerializeFact and the caller's warn+continue "+
 				"would discard the whole fact", rel)
 	}
+}
+
+// readSourceFile reads a file of this package's directory.
+func readSourceFile(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Clean(rel))
+	require.NoError(t, err)
+	return string(b)
 }

@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"crypto/sha256"
@@ -41,7 +41,7 @@ var budgetLiterals = map[string]string{
 // Slash paths from the module root (modroot), not "../store/...": a layer move
 // changes both the depth and the sibling names of every cross-package path.
 var phase0Files = []string{
-	"internal/corpus/synthesize/restatement.go",
+	"internal/corpus/synthesize/restatement/restatement.go",
 	"internal/engine/store/vocab/abstraction.go",
 }
 
@@ -106,6 +106,14 @@ func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
 // Structurally enforced as well as asserted: *vocab.AbstractionIndex is
 // deliberately NOT part of the *index.Facade composite that mcp and web depend
 // on, and service.go is the only parent file that names it (Service.Abstraction).
+//
+// This is also the rule that edge/mcp and edge/web must NOT import
+// internal/corpus/synthesize/restatement: its API takes step.Deps and sessions
+// only the engine constructs, so edge reaches it through Pipeline/Reviewer.
+// Today that is enforced by the string match below (an import path is a string
+// literal containing "restatement"); the rule is intended, so do not narrow
+// codeMentions to skip import specs without replacing this with an explicit
+// forbidden-edge check.
 func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// Whole packages, not a list of filenames. The first version of this test
 	// named five files and skipped any that had been renamed, so it would have
@@ -242,7 +250,7 @@ func TestConformance_NoConfigSurface(t *testing.T) {
 const effortNormalTestSHA256 = "edc9a1cffa207354844ea6f6441358214abefe53dc051a2cce15babcd06b7cd3"
 
 // effortNormalTestFile is the one file MN5 protects.
-const effortNormalTestFile = "review_effort_normal_test.go"
+const effortNormalTestFile = "internal/corpus/synthesize/review_effort_normal_test.go"
 
 // TestConformance_EffortNormalTestByteIdentical enforces MN5: the EffortNormal
 // contract test stays byte-identical.
@@ -282,7 +290,7 @@ func TestConformance_EffortNormalTestByteIdentical(t *testing.T) {
 	// zero-byte .go file does not compile ("expected 'package', found 'EOF'"),
 	// so the test binary would never run to make the assertion — a guard
 	// nothing can trip reads as coverage it does not provide.
-	b, err := os.ReadFile(filepath.Clean(effortNormalTestFile))
+	b, err := os.ReadFile(modroot.Path(t, filepath.FromSlash(effortNormalTestFile)))
 	require.NoError(t, err,
 		"%s could not be read. MN5 protects that file; if it was renamed or "+
 			"deleted, this test is the thing that has to be updated deliberately, "+
@@ -320,7 +328,7 @@ DID YOU MEAN TO EDIT IT?
         output. Do all three:
           1. Put the observed hash above into effortNormalTestSHA256 in this
              file. (Or recompute it:
-                 shasum -a 256 internal/corpus/synthesize/%s
+                 shasum -a 256 %s
              — sha256sum on Linux.)
           2. Say in the PR what the contract now is and why it is still the
              contract. This sentence is the entire point of the mechanism; a
