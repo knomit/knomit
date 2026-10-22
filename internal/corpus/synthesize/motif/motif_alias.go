@@ -1,4 +1,10 @@
-package synthesize
+// Package motif holds the motif-vocabulary maintenance steps of the review
+// session: alias-resolution pair selection and its judge (motif_alias.go) and
+// the blind definition pass (motif_define.go). Neither calls a model: they
+// plan work items and apply decoded answers, and write only derived vocabulary
+// state. The parent gates them at effort >= medium and owns the
+// prompts and the strategy that routes the answers.
+package motif
 
 import (
 	"context"
@@ -301,8 +307,8 @@ func normalizeVec(v []float32) {
 
 // ── the work item ─────────────────────────────────────────────────────────
 
-// motifAliasStepType is the work-item step type for the alias judge.
-const motifAliasStepType = "motif_alias"
+// AliasStepType is the work-item step type for the alias judge.
+const AliasStepType = "motif_alias"
 
 // motifAliasPriority places alias items just below prune's cluster band and
 // above the discover/reflect band: vocabulary resolution informs the surfaces
@@ -310,9 +316,9 @@ const motifAliasStepType = "motif_alias"
 // but never at the expense of consolidation itself.
 const motifAliasPriority = 1.2
 
-// motifJudgeItem is one pair as the judge sees it. Field names match the
+// JudgeItem is one pair as the judge sees it. Field names match the
 // response schema's `a`/`b` so a small model does not have to map between them.
-type motifJudgeItem struct {
+type JudgeItem struct {
 	A         string   `json:"a"`
 	AAlso     []string `json:"a_also,omitempty"`
 	ACarriers []string `json:"a_carriers"`
@@ -321,14 +327,14 @@ type motifJudgeItem struct {
 	BCarriers []string `json:"b_carriers"`
 }
 
-// motifAliasResponseSchema is what the judge must return.
+// AliasResponseSchema is what the judge must return.
 //
 // `mechanism` is required-in-practice rather than required-in-schema: the
 // schema cannot express "required only when same_mechanism is true", and the
 // write path refuses a merge without it anyway. Stating it in the description
 // and enforcing it at the write path is the honest arrangement — a schema that
 // claimed to require it unconditionally would reject every legitimate decline.
-const motifAliasResponseSchema = `{
+const AliasResponseSchema = `{
   "type": "object",
   "properties": {
     "verdicts": {
@@ -356,18 +362,18 @@ type motifAliasVerdict struct {
 	Mechanism     string `json:"mechanism"`
 }
 
-type motifAliasResult struct {
+type AliasResult struct {
 	Verdicts []motifAliasVerdict `json:"verdicts"`
 }
 
-// parseMotifAliasResponse decodes and probes the envelope.
+// ParseAliasResponse decodes and probes the envelope.
 //
 // The probe is not redundant with the typed unmarshal (invariant 51d85fcd): a
 // response carrying its content under the wrong key unmarshals to a
 // zero-valued result, applies as a silent no-op, and the item advances with the
 // work gone. Presence on the raw object is what makes that loud and retryable.
-func parseMotifAliasResponse(raw string) (motifAliasResult, error) {
-	var out motifAliasResult
+func ParseAliasResponse(raw string) (AliasResult, error) {
+	var out AliasResult
 	text := step.ExtractJSON(raw)
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return out, fmt.Errorf("parse motif alias response: %w", err)
@@ -378,14 +384,14 @@ func parseMotifAliasResponse(raw string) (motifAliasResult, error) {
 	return out, nil
 }
 
-// validateMotifAliasVerdicts checks the response against what was actually
+// ValidateAliasVerdicts checks the response against what was actually
 // offered.
 //
 // Every verdict must name a pair this item asked about. A judge that invents a
 // pair — or answers about one from a previous item — would otherwise merge two
 // clusters nobody put in front of it, and over-merge is the failure nothing
 // downstream can detect.
-func validateMotifAliasVerdicts(res motifAliasResult, offered []motifJudgeItem) error {
+func ValidateAliasVerdicts(res AliasResult, offered []JudgeItem) error {
 	valid := map[string]struct{}{}
 	for _, it := range offered {
 		valid[motifPairKey(it.A, it.B)] = struct{}{}
@@ -407,12 +413,12 @@ func validateMotifAliasVerdicts(res motifAliasResult, offered []motifJudgeItem) 
 	return nil
 }
 
-// applyMotifAliasVerdicts records the judge's decisions and rebuilds.
+// ApplyAliasVerdicts records the judge's decisions and rebuilds.
 //
 // A verdict that fails to record does not fail the item: the rest of the batch
 // is still good work, and the pair will simply be offered again. Losing a whole
 // batch to one bad row is the worse trade.
-func applyMotifAliasVerdicts(ctx context.Context, d step.Deps, branch string, res motifAliasResult) error {
+func ApplyAliasVerdicts(ctx context.Context, d step.Deps, branch string, res AliasResult) error {
 	for _, v := range res.Verdicts {
 		var err error
 		if v.SameMechanism {
@@ -439,7 +445,7 @@ func applyMotifAliasVerdicts(ctx context.Context, d step.Deps, branch string, re
 	return d.Motifs.RebuildAliases(ctx, branch)
 }
 
-// planMotifAliasWork selects pairs and enqueues at most one alias item per
+// PlanAliasWork selects pairs and enqueues at most one alias item per
 // session.
 //
 // One item, not one per pair: §3.1 specifies ONE bounded prompt, and a judge
@@ -449,15 +455,15 @@ func applyMotifAliasVerdicts(ctx context.Context, d step.Deps, branch string, re
 // Degrades to "no item" rather than failing the session, and records health on
 // every path — a corpus whose vocabulary could not be read must not look like
 // one with nothing to resolve.
-func planMotifAliasWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) error {
+func PlanAliasWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) error {
 	pairs, health, err := selectMotifJudgePairs(ctx, d, branch)
 	recordMotifAliasHealth(sess, health)
 	if err != nil || len(pairs) == 0 {
 		return nil
 	}
-	items := make([]motifJudgeItem, 0, len(pairs))
+	items := make([]JudgeItem, 0, len(pairs))
 	for _, p := range pairs {
-		items = append(items, motifJudgeItem{
+		items = append(items, JudgeItem{
 			A:         p.A.CanonicalID,
 			AAlso:     otherMembers(p.A.Members, p.A.CanonicalID),
 			ACarriers: p.ATitle,
@@ -472,7 +478,7 @@ func planMotifAliasWork(ctx context.Context, d step.Deps, sess *model.PipelineSe
 	}
 	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
-		StepType:   motifAliasStepType,
+		StepType:   AliasStepType,
 		ClusterKey: "motif-alias",
 		FactsJSON:  string(payload),
 		Priority:   motifAliasPriority,

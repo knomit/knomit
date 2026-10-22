@@ -104,7 +104,7 @@ func TestReviewer_DistillItemsAreChunked(t *testing.T) {
 
 	// Depth-0 distill groups by cluster before chunking, so the key carries the
 	// group it came from. This store has no embeddings, so there are no
-	// SIMILAR_TO edges, Louvain returns singletons, filterSmallClusters removes
+	// SIMILAR_TO edges, Louvain returns singletons, graph's small-cluster filter removes
 	// them all, and every seed lands in the "distill-rest" remainder — the
 	// documented degradation. The property under test is unchanged and is not
 	// about the group name: chunks of one group are keyed and served in

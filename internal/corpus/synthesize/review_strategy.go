@@ -27,6 +27,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/corpus/synthesize/graph"
+	"knomit/internal/corpus/synthesize/motif"
 	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
@@ -321,10 +322,10 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 			// resolved should still get its ordinary session.
 			log.Warn().Err(err).Msg("review: motif alias rebuild failed; vocabulary passes degrade")
 		}
-		if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
+		if err := motif.PlanAliasWork(ctx, d, sess, branch); err != nil {
 			return err
 		}
-		if err := planMotifDefineWork(ctx, d, sess, branch); err != nil {
+		if err := motif.PlanDefineWork(ctx, d, sess, branch); err != nil {
 			return err
 		}
 	}
@@ -608,7 +609,7 @@ func isRemainderItem(clusterKey string) bool {
 // Two properties of ScopedCluster's output make "just iterate clusters" wrong,
 // and this function exists to reconcile them with the seed pool:
 //
-//   - filterSmallClusters DROPS every community below minCommunitySize, so a
+//   - graph's small-cluster filter DROPS every community below minCommunitySize, so a
 //     seed that clusters alone is absent from clusters entirely. Grouping
 //     straight off that output would silently exclude it from synthesis — no
 //     error, no counter, indistinguishable from "nothing to synthesize". That
@@ -734,11 +735,11 @@ type itemDecision struct {
 	distill  *step.DistillResult
 	discover *discoverDecision
 	// motifAlias carries the vocabulary judge's verdicts (blueprint §3.1).
-	motifAlias *motifAliasResult
+	motifAlias *motif.AliasResult
 	// motifDefine carries the blind definition pass's sentences (§3.2), with
 	// the items they answer so each can be routed back to its cluster.
-	motifDefine        *motifDefineResult
-	motifDefineOffered []motifDefineItem
+	motifDefine        *motif.DefineResult
+	motifDefineOffered []motif.DefineItem
 }
 
 // Decode parses and validates a response against its work item. It is
@@ -797,30 +798,30 @@ func (reviewStrategy) Decode(item *model.PipelineWorkItem, response string) (any
 		}
 		return &itemDecision{distill: &result}, response, nil
 
-	case motifAliasStepType:
-		var offered []motifJudgeItem
+	case motif.AliasStepType:
+		var offered []motif.JudgeItem
 		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
 			return nil, "", step.Wrapf(step.ReviewTool, err, "unmarshal motif alias pairs")
 		}
-		result, err := parseMotifAliasResponse(response)
+		result, err := motif.ParseAliasResponse(response)
 		if err != nil {
 			return nil, "", step.Wrapf(step.ReviewTool, err, "parse motif alias response")
 		}
-		if err := validateMotifAliasVerdicts(result, offered); err != nil {
+		if err := motif.ValidateAliasVerdicts(result, offered); err != nil {
 			return nil, "", step.Wrapf(step.ReviewTool, err, "validate motif alias")
 		}
 		return &itemDecision{motifAlias: &result}, response, nil
 
-	case motifDefineStepType:
-		offered, err := motifDefineItemsFromPayload(item.FactsJSON)
+	case motif.DefineStepType:
+		offered, err := motif.DefineItemsFromPayload(item.FactsJSON)
 		if err != nil {
 			return nil, "", step.Wrapf(step.ReviewTool, err, "unmarshal motif define names")
 		}
-		result, err := parseMotifDefineResponse(response)
+		result, err := motif.ParseDefineResponse(response)
 		if err != nil {
 			return nil, "", step.Wrapf(step.ReviewTool, err, "parse motif define response")
 		}
-		if err := validateMotifDefinitions(result, offered); err != nil {
+		if err := motif.ValidateDefinitions(result, offered); err != nil {
 			return nil, "", step.Wrapf(step.ReviewTool, err, "validate motif define")
 		}
 		return &itemDecision{motifDefine: &result, motifDefineOffered: offered}, response, nil
@@ -943,13 +944,13 @@ func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.Pipeli
 		}
 		enqueueRaptorFollowups(ctx, d, sess, item, writtenFacts)
 
-	case motifAliasStepType:
-		if err := applyMotifAliasVerdicts(ctx, d, branch, *dec.motifAlias); err != nil {
+	case motif.AliasStepType:
+		if err := motif.ApplyAliasVerdicts(ctx, d, branch, *dec.motifAlias); err != nil {
 			return step.Wrapf(step.ReviewTool, err, "apply motif alias")
 		}
 
-	case motifDefineStepType:
-		if err := applyMotifDefinitions(ctx, d, branch, *dec.motifDefine, dec.motifDefineOffered); err != nil {
+	case motif.DefineStepType:
+		if err := motif.ApplyDefinitions(ctx, d, branch, *dec.motifDefine, dec.motifDefineOffered); err != nil {
 			return step.Wrapf(step.ReviewTool, err, "apply motif define")
 		}
 
@@ -1060,11 +1061,11 @@ func (reviewStrategy) Render(ctx context.Context, d step.Deps, sess *model.Pipel
 	case "reflect":
 		existingMethodology := reflectMethodologySection(ctx, d.RI, branch, []byte(item.FactsJSON))
 		content, err = renderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,
-			existingMethodology, motifVocabularySection(ctx, d, branch),
+			existingMethodology, motif.VocabularySection(ctx, d, branch),
 			reviewGuidanceSection(consensusGuidance(ctx, d.RI), ontologyRoot, transitionPathsOf([]byte(item.FactsJSON))))
-	case motifAliasStepType:
+	case motif.AliasStepType:
 		content, err = RenderMotifAliasWorkItem(item.FactsJSON)
-	case motifDefineStepType:
+	case motif.DefineStepType:
 		content, err = RenderMotifDefineWorkItem(item.FactsJSON)
 	case "discover":
 		var payload DiscoverWorkPayload

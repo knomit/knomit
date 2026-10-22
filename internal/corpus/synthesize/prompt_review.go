@@ -3,6 +3,7 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/motif"
 	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"strings"
@@ -239,7 +240,7 @@ func RenderMotifAliasWorkItem(factsJSON string) (*step.WorkItemContent, error) {
 	}
 	return &step.WorkItemContent{
 		Prompt:         prompt,
-		ResponseSchema: motifAliasResponseSchema,
+		ResponseSchema: motif.AliasResponseSchema,
 		// The pairs themselves. The prompt says they ride here; omitting them
 		// asked the judge to decide about content it never received.
 		Facts: factsJSON,
@@ -258,7 +259,7 @@ func RenderMotifDefineWorkItem(factsJSON string) (*step.WorkItemContent, error) 
 	}
 	return &step.WorkItemContent{
 		Prompt:         prompt,
-		ResponseSchema: motifDefineResponseSchema,
+		ResponseSchema: motif.DefineResponseSchema,
 		Facts:          factsJSON,
 	}, nil
 }

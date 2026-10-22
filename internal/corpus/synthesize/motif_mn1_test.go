@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/motif"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -46,10 +47,10 @@ import (
 // exception, and there is no longer a precedent for admitting one:
 // TestMN1_VocabularyAllowListIsExceptionFree fails if this map grows.
 var vocabularyBearingItems = map[string]string{
-	motifAliasStepType: "not a fact-writing path at all. §3.1 clusters the vocabulary, so the " +
+	motif.AliasStepType: "not a fact-writing path at all. §3.1 clusters the vocabulary, so the " +
 		"vocabulary IS the subject; the pass writes derived state and no facts.",
 
-	motifDefineStepType: "same — §3.2 defines names, and cannot do so without them. Note it " +
+	motif.DefineStepType: "same — §3.2 defines names, and cannot do so without them. Note it " +
 		"receives names ONLY, never carrier facts, which is a separate and stricter " +
 		"blindness the payload test asserts.",
 
@@ -87,7 +88,7 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 	env.WriteFact("kb/bare.md", "Bare fact", "a body with no motif at all")
 
@@ -310,7 +311,7 @@ func TestMN1_VocabularyAllowListIsExceptionFree(t *testing.T) {
 		permitted = append(permitted, k)
 	}
 	require.ElementsMatch(t, []string{
-		motifAliasStepType, motifDefineStepType, "distill", "discover", "reflect",
+		motif.AliasStepType, motif.DefineStepType, "distill", "discover", "reflect",
 	}, permitted,
 		"the MN1 vocabulary allow-list changed. Every entry must be a path the "+
 			"Q8 rule does not reach — one that writes facts through review-apply, "+

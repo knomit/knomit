@@ -1,9 +1,8 @@
-package synthesize
+package motif
 
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -49,59 +48,12 @@ var nearMissPairs = []struct {
 // vocabulary that never resolves is the axis failing quietly.
 var truePair = struct{ a, b string }{"silent-fallback", "quiet-degradation"}
 
-// TestMotifAliasPrompt_NamesEveryNearMissConfusion — the prompt must name each
-// confusion class explicitly. A generic "be careful" does not discriminate
-// them; these are the adjacent-family failures §12-E3 measured.
-//
-// This checks the PROMPT, not a model. Whether a given model resists each
-// confusion is an eval question (§8 harness); whether we asked it to is a
-// conformance question, and it is the half we control.
-func TestMotifAliasPrompt_NamesEveryNearMissConfusion(t *testing.T) {
-	body, err := os.ReadFile("prompts/large/motif_alias_user.txt")
-	require.NoError(t, err)
-	text := strings.ToLower(string(body))
-
-	for _, want := range []string{
-		"cause and its effect",
-		"family and one member",
-		"co-occur",
-		"broader",
-		"problem",
-		"remedy",
-	} {
-		require.Containsf(t, text, want,
-			"the prompt must name the %q confusion — a generic warning does not "+
-				"discriminate the adjacent-family failures this task actually hits", want)
-	}
-}
-
-// The asymmetry must be stated as a COST, not just as a rule. Telling a model
-// to be conservative produces mild conservatism; telling it why the two errors
-// differ in kind holds up better — and it is true, which is the part that
-// matters.
-func TestMotifAliasPrompt_StatesTheAsymmetryAsACost(t *testing.T) {
-	body, err := os.ReadFile("prompts/large/motif_alias_user.txt")
-	require.NoError(t, err)
-	text := string(body)
-	require.Contains(t, text, "DEFAULT TO \"different\"")
-	require.Contains(t, text, "no cost to leaving two names separate")
-	require.Contains(t, text, "nothing downstream can tell it happened")
-	require.Contains(t, text, "READ THE CARRIER TITLES")
-}
-
-// The named mechanism is the merge TEST, not a field filled in afterwards.
-func TestMotifAliasPrompt_MakesTheMechanismSentenceTheTest(t *testing.T) {
-	body, err := os.ReadFile("prompts/large/motif_alias_user.txt")
-	require.NoError(t, err)
-	require.Contains(t, string(body), "If you cannot write that sentence, the answer is \"different\"")
-}
-
 // ── response handling ─────────────────────────────────────────────────────
 
-func offeredFixture() []motifJudgeItem {
-	var out []motifJudgeItem
+func offeredFixture() []JudgeItem {
+	var out []JudgeItem
 	for _, p := range nearMissPairs {
-		out = append(out, motifJudgeItem{
+		out = append(out, JudgeItem{
 			A: p.a, ACarriers: []string{"A carrier"},
 			B: p.b, BCarriers: []string{"B carrier"},
 		})
@@ -113,39 +65,39 @@ func offeredFixture() []motifJudgeItem {
 // judge that invents a pair — or answers one from a previous item — merges two
 // clusters nobody put in front of it.
 func TestMotifAliasDecode_RejectsAnUnofferedPair(t *testing.T) {
-	res := motifAliasResult{Verdicts: []motifAliasVerdict{
+	res := AliasResult{Verdicts: []motifAliasVerdict{
 		{A: "invented-one", B: "invented-two", SameMechanism: true, Mechanism: "both are made up"},
 	}}
-	err := validateMotifAliasVerdicts(res, offeredFixture())
+	err := ValidateAliasVerdicts(res, offeredFixture())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not offered")
 }
 
 func TestMotifAliasDecode_RejectsAMergeWithNoMechanism(t *testing.T) {
-	res := motifAliasResult{Verdicts: []motifAliasVerdict{
+	res := AliasResult{Verdicts: []motifAliasVerdict{
 		{A: "retry-storm", B: "thundering-herd", SameMechanism: true, Mechanism: "  "},
 	}}
-	err := validateMotifAliasVerdicts(res, offeredFixture())
+	err := ValidateAliasVerdicts(res, offeredFixture())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "names no shared mechanism")
 }
 
 func TestMotifAliasDecode_RejectsADuplicateVerdict(t *testing.T) {
-	res := motifAliasResult{Verdicts: []motifAliasVerdict{
+	res := AliasResult{Verdicts: []motifAliasVerdict{
 		{A: "retry-storm", B: "thundering-herd", SameMechanism: false},
 		{A: "thundering-herd", B: "retry-storm", SameMechanism: true, Mechanism: "changed my mind"},
 	}}
-	err := validateMotifAliasVerdicts(res, offeredFixture())
+	err := ValidateAliasVerdicts(res, offeredFixture())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "more than once")
 }
 
 // A decline needs no mechanism, and the pair may be given in either order.
 func TestMotifAliasDecode_AcceptsDeclinesInEitherOrder(t *testing.T) {
-	res := motifAliasResult{Verdicts: []motifAliasVerdict{
+	res := AliasResult{Verdicts: []motifAliasVerdict{
 		{A: "thundering-herd", B: "retry-storm", SameMechanism: false},
 	}}
-	require.NoError(t, validateMotifAliasVerdicts(res, offeredFixture()))
+	require.NoError(t, ValidateAliasVerdicts(res, offeredFixture()))
 }
 
 // Invariant 51d85fcd: the schema's `required` list is INERT without a probe on
@@ -153,12 +105,12 @@ func TestMotifAliasDecode_AcceptsDeclinesInEitherOrder(t *testing.T) {
 // unmarshals to a zero value, applies as a silent no-op, and the item advances
 // with the work gone.
 func TestMotifAliasDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
-	_, err := parseMotifAliasResponse(`{"decisions": [{"a":"x","b":"y","same_mechanism":false}]}`)
+	_, err := ParseAliasResponse(`{"decisions": [{"a":"x","b":"y","same_mechanism":false}]}`)
 	require.Error(t, err,
 		"a response under the wrong key must fail loudly, not decode to an empty result "+
 			"and apply as a no-op")
 
-	_, err = parseMotifAliasResponse(`{"verdicts": []}`)
+	_, err = ParseAliasResponse(`{"verdicts": []}`)
 	require.NoError(t, err, "an explicitly empty verdict list is a legitimate 'nothing to do'")
 }
 
@@ -186,7 +138,7 @@ func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 	before := len(sess.Health)
 	require.NotZero(t, before, "the restatement lines must be there to be clobbered")
 
-	require.NoError(t, planMotifAliasWork(context.Background(), env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanAliasWork(context.Background(), env.Deps(), sess, env.Branch))
 
 	require.Greater(t, len(sess.Health), before,
 		"the alias lines must be ADDED, not substituted for the shortlist's")
@@ -202,7 +154,7 @@ func TestMotifAliasHealth_BelowFloorIsReported(t *testing.T) {
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.Branch, "")
 	require.NoError(t, err)
 
-	require.NoError(t, planMotifAliasWork(context.Background(), env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanAliasWork(context.Background(), env.Deps(), sess, env.Branch))
 	require.Contains(t, strings.Join(sess.Health, "\n"), "validity floor")
 }
 
@@ -216,14 +168,14 @@ func TestMotifAliasWorkItem_PayloadCarriesTitlesForBothSides(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planMotifAliasWork(ctx, env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanAliasWork(ctx, env.Deps(), sess, env.Branch))
 
 	item, err := env.Svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotNil(t, item, "an above-floor corpus must enqueue an alias item")
-	require.Equal(t, motifAliasStepType, item.StepType)
+	require.Equal(t, AliasStepType, item.StepType)
 
-	var offered []motifJudgeItem
+	var offered []JudgeItem
 	require.NoError(t, json.Unmarshal([]byte(item.FactsJSON), &offered))
 	require.NotEmpty(t, offered)
 	for _, o := range offered {
@@ -240,7 +192,7 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+6)
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planMotifAliasWork(ctx, env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanAliasWork(ctx, env.Deps(), sess, env.Branch))
 
 	n := 0
 	for {
@@ -249,7 +201,7 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 		if item == nil {
 			break
 		}
-		if item.StepType == motifAliasStepType {
+		if item.StepType == AliasStepType {
 			n++
 		}
 		_, err = env.Svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, "{}")

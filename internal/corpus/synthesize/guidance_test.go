@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/motif"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
@@ -247,7 +248,7 @@ func TestReviewRender_GuidanceBeforeFactData(t *testing.T) {
 	}
 
 	// Motif and discover steps get no guidance.
-	v, err := reviewStrategy{}.Render(ctx, step.Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: motifAliasStepType, FactsJSON: "[]"})
+	v, err := reviewStrategy{}.Render(ctx, step.Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: motif.AliasStepType, FactsJSON: "[]"})
 	require.NoError(t, err)
 	require.NotContains(t, v.Prompt, "REPOSITORY GUIDANCE")
 	v, err = reviewStrategy{}.Render(ctx, step.Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: "discover", FactsJSON: "{}"})
