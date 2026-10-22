@@ -18,8 +18,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/config"
-	"knomit/internal/repos"
 	"knomit/test/testenv"
 )
 
@@ -32,14 +32,14 @@ import (
 // catches it, and Create must unwind the second clone completely: no live
 // repo, no registry row, no leftover .db file.
 //
-// This test lives in test/storytests rather than internal/repos for two
+// This test lives in test/storytests rather than internal/corpus/repos for two
 // reasons:
 //
 //  1. Import cycle: the mirror fixture lives in test/testenv (per the task
 //     brief, alongside the existing BareRemote/BareRemoteHTTP fixtures), and
-//     test/testenv already imports knomit/internal/repos (see
+//     test/testenv already imports knomit/internal/corpus/repos (see
 //     mcp_hypothesize.go, storyboard.go) to drive Manager.Create in its own
-//     Storyboard/RepoHandle DSL. internal/repos importing test/testenv back
+//     Storyboard/RepoHandle DSL. internal/corpus/repos importing test/testenv back
 //     would be a genuine import cycle, so a test that needs the testenv
 //     fixture cannot live in package repos.
 //  2. Storyboard.Repo cannot be reused for either side of this test even
@@ -49,7 +49,7 @@ import (
 //     exactly what this test must NOT have — alpha and beta must share one
 //     registry, or the uniqueness constraint being tested is never exercised
 //     at all. So this test builds its own repos.Manager directly (mirroring
-//     the internal/repos test package's own newTestManager helper) and uses
+//     the internal/corpus/repos test package's own newTestManager helper) and uses
 //     the Storyboard only for its bare-remote and mirror fixtures.
 //
 // Because this test cannot reach the unexported Manager.reg field the
@@ -118,7 +118,7 @@ func TestCreate_MirrorCloneRejected(t *testing.T) {
 	// structural guard named by
 	// kb/invariants/repos/one-local-copy-per-knowledge-base, and it still fires
 	// for anything that reaches it. It is simply unreachable along THIS path
-	// now. Its own coverage lives in internal/repos; the early refusal's is
+	// now. Its own coverage lives in internal/corpus/repos; the early refusal's is
 	// TestCreate_Layer3_RefusesBeforeRegistrationWhenLocalCopyIsBehind.
 	require.ErrorIs(t, err, repos.ErrKnowledgeBaseAlreadyLocal)
 	require.Contains(t, err.Error(), `"alpha"`, "the refusal names the repo that already holds it")

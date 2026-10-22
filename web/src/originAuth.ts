@@ -1,5 +1,5 @@
 // URL/auth-method compatibility for the remote connect wizard, the rows it
-// shares with validateURLAuth (internal/web/helpers.go). Another knomit
+// shares with validateURLAuth (internal/edge/web/helpers.go). Another knomit
 // instance of this fleet is typed as a plain https URL: the server decides it
 // is one and picks its transport, so the wizard offers nothing for it.
 

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"text/template"
 
-	"knomit/internal/repos"
+	"knomit/internal/corpus/repos"
 	"knomit/tools/bridge/knomitapi"
 	"knomit/tools/bridge/skills"
 )
@@ -57,7 +57,7 @@ func runInit(args []string) error {
 	// Validate names against the server's grammar BEFORE writing any file, so a
 	// value containing quotes, backslashes, or other JSON-hostile characters is
 	// rejected up front rather than silently baked into a broken .mcp.json. The
-	// grammar lives in internal/repos (single source of truth); the bridge does
+	// grammar lives in internal/corpus/repos (single source of truth); the bridge does
 	// not duplicate it.
 	//
 	// Only an explicit name is validated. An unbound scaffold names nothing: the

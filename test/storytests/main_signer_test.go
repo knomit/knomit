@@ -13,7 +13,7 @@ import (
 // fixtures here predate that.
 //
 // It also turns SQLite's fsyncs off for every DB the binary opens (#365), as
-// internal/web does: a test that loses power mid-run has lost nothing worth
+// internal/edge/web does: a test that loses power mid-run has lost nothing worth
 // keeping. WAL stays on, so locking behaves as in production. A test of
 // durability itself must turn the switch off for its own duration; see
 // storetest.SetFastDurability.

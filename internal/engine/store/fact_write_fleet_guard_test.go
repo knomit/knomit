@@ -9,7 +9,7 @@ import (
 )
 
 // TestFactWrite_CallsNothingFleet (F10): the knowledge-base write path never
-// reaches fleet code. The fleet record reconcile lives in internal/repos,
+// reaches fleet code. The fleet record reconcile lives in internal/corpus/repos,
 // which store cannot import (it would be a cycle); this pins the other half:
 // nothing fact_write.go calls is fleet-anything.
 func TestFactWrite_CallsNothingFleet(t *testing.T) {

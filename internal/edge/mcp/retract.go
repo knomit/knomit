@@ -1,0 +1,121 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"knomit/internal/corpus/federate"
+	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+)
+
+// retractTool returns the Tool definition for knomit_retract.
+func retractTool() mcpgo.Tool {
+	return mcpgo.NewTool("knomit_retract",
+		mcpgo.WithDescription("Retract a fact from the knowledge base."),
+		bindingArg(true),
+		mcpgo.WithString("file",
+			mcpgo.Required(),
+			mcpgo.Description("Path to the fact file to retract."),
+		),
+		mcpgo.WithString("moment_name",
+			mcpgo.Required(),
+			mcpgo.Description("A short label for this retraction moment."),
+		),
+		traceArg(),
+	)
+}
+
+// RetractHandler returns the handler function for knomit_retract.
+func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
+		}
+		ri := b.Write()
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
+		// WHERE this write lands, and therefore also what it reads while
+		// deciding: dedup, existence and ref resolution must all see the
+		// branch the fact will be committed to. Inside an experiment that is
+		// the experiment — an isolated world, not a diff against the agent
+		// branch — so every one of them asks the binding, not the repo.
+		writeBranch := b.WriteBranch()
+		ontologyRoot := ri.OntologyRoot()
+
+		// 1. Get arguments.
+		file := req.GetString("file", "")
+		if file == "" {
+			return mcpgo.NewToolResultError("file is required"), nil
+		}
+		file, err = federate.WriteRepoPath(b, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		file = fact.NormalizePath(ontologyRoot, file)
+		// A DELETE is a write. Without this, retract would happily remove a
+		// hand-placed kb/.drafts/ file that create and update both refuse to
+		// write — an asymmetry with no rationale behind it — or a file of the
+		// system under .knomit/, which changes only through git (F25).
+		if msg := closedToFactTools(file); msg != "" {
+			return mcpgo.NewToolResultError(msg), nil
+		}
+		if fact.IsUnderArtifactsRoot(file) && !fact.IsArtifactPath(file) {
+			return mcpgo.NewToolResultError(notAnArtifactPath(file)), nil
+		}
+		momentName := req.GetString("moment_name", "")
+		if momentName == "" {
+			return mcpgo.NewToolResultError("moment_name is required"), nil
+		}
+		if err := checkMomentName(momentName); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: the agent's trace entries, refused before anything is written.
+		if ctx, err = applyTrace(ctx, req); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// 3. Check file exists.
+		exists, err := s.facts.FactExists(ctx, writeBranch, file)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
+		}
+		if !exists {
+			return mcpgo.NewToolResultError(fmt.Sprintf("file not found: %s", file)), nil
+		}
+
+		// 4. Delete the file.
+		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
+		hash, err := s.facts.DeleteFact(ctx, writeBranch, file, commitMsg)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
+		}
+
+		dest := describeWriteDestination(b)
+		result := map[string]interface{}{
+			"file":       file,
+			"commit":     hash,
+			"written_to": dest,
+			"summary":    dest.summary("1 retraction"),
+		}
+		out, err := json.Marshal(result)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
+		}
+		return mcpgo.NewToolResultText(string(out)), nil
+	}
+}

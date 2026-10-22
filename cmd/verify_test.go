@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/repos"
+	"knomit/internal/corpus/repos"
 )
 
 func TestVerifyCmd_FlagsRegistered(t *testing.T) {

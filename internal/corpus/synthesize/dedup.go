@@ -1,0 +1,445 @@
+package synthesize
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+
+	"knomit/internal/engine/store/index"
+
+	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
+
+	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
+)
+
+// maxConcurrentDedupSearches caps the number of in-flight idx.Search calls
+// during the candidate-pair discovery phase. Same rationale as
+// maxConcurrentNeighborSearches in cluster.go.
+const maxConcurrentDedupSearches = 8
+
+// dedupSearchKinds pins dedupCluster's candidate search to epistemic facts.
+// It is NOT [cluster_cache] neighbor_kinds and must never become it: that list
+// widens what CLUSTERS may hold, and dedup is the one consumer that acts on a
+// cluster with no judge. A widened cluster may hold a policy; this search then
+// cannot return it (knomit#308). It does not stop the search that STARTS at the
+// policy from returning an observation — sameKnownKind is what refuses that pair.
+var dedupSearchKinds = []string{string(fact.Epistemic)}
+
+// sameKnownKind reports whether a and b may be merged by kind: both kinds must
+// be known and equal (knomit#308).
+//
+// dedupCluster does NOT go through mergedFact: it re-parses the WINNER from its
+// own file, so the winner keeps its kind, writes it back, and DELETES the
+// loser. A cross-kind pair therefore corrupts by deletion, not by rewriting:
+// if the policy loses, the policy is deleted; if it wins, the observation is
+// deleted into it. That is why this check must outlive the seed filter:
+// convention 8b26a25d allows AcceptSeed to go once mergedFact/distillFact carry
+// Kind, but carrying Kind changes nothing here — dedup deletes across kinds
+// whatever mergedFact does.
+//
+// It fails CLOSED on an empty Kind: "" never equals anything here, including
+// another "". A projection site that forgot to fill Kind must make its facts
+// unmergeable, never mergeable — normalising "" to epistemic at this check
+// would re-admit exactly the pragmatic fact whose kind was dropped.
+func sameKnownKind(a, b factForLLM) bool {
+	return a.Kind != "" && a.Kind == b.Kind
+}
+
+// mergePair represents two facts that are candidates for merging.
+type mergePair struct {
+	a          factForLLM
+	b          factForLLM
+	similarity float64
+}
+
+// mergeFacts applies the dedup merge rule to a and b, returning (winner, loser).
+// Non-hypothesis facts always win over hypothesis facts regardless of confidence.
+// Between same-category facts, winner is higher confidence; ties broken by higher sources.
+func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
+	aIsHyp := a.Type == string(fact.Hypothesis)
+	bIsHyp := b.Type == string(fact.Hypothesis)
+
+	if aIsHyp != bIsHyp {
+		// One is hypothesis, one is not — non-hypothesis always wins.
+		if bIsHyp {
+			winner, loser = a, b
+		} else {
+			winner, loser = b, a
+		}
+	} else {
+		// Same category — use confidence/sources tie-breaking.
+		if a.Confidence > b.Confidence || (a.Confidence == b.Confidence && a.Sources >= b.Sources) {
+			winner, loser = a, b
+		} else {
+			winner, loser = b, a
+		}
+	}
+	// Merge domains and entities as union.
+	winner.Domain = fact.UnionStrings(winner.Domain, loser.Domain)
+	winner.Entities = fact.UnionStrings(winner.Entities, loser.Entities)
+	// Sources = sum — this is a TRANSFER (the loser is deleted by the caller),
+	// so its corroborations move to the winner or are lost.
+	//
+	// Except a hypothesis loser's, which never counted as corroboration in the
+	// first place: computeTransfer skips hypothesis-typed sources and
+	// learn.go's subsumeHypothesis adds a ref without adding the count. Pooling
+	// it here would launder a conjecture into evidence — write five
+	// hypotheses, let dedup absorb them, and the survivor reads sources: 6.
+	winner.Sources = winner.Sources + loserCorroborations(loser)
+	return winner, loser
+}
+
+// loserCorroborations is the sources count a dedup loser contributes to its
+// winner: its own, unless it is a hypothesis, which corroborates nothing.
+func loserCorroborations(loser factForLLM) int {
+	if loser.Type == string(fact.Hypothesis) {
+		return 0
+	}
+	return loser.Sources
+}
+
+// dedupMergeRefs returns the winner's post-merge ref list and, as a separate
+// list, the refs the two operands already carried — the `prior` the ref gate
+// exempts from re-judging.
+//
+// The write list drops every ref that names the WINNER itself, in either
+// stored form: the loser may cite the winner canonically
+// (kb://<own-id>/kb/x/y.md) while winnerPath is bare (kb/x/y.md), so the
+// comparison is on the CLASSIFIED path, exactly as mcp.mergeFacts filters its
+// own self-refs (#132). Without this the union grafted a loser's citation of
+// the winner onto the winner, and the survivor cited itself (#280). The gate
+// could not catch it: its self-ref check exempts carried refs, and this ref
+// WAS carried, by the loser. The ref to the loser's own path stays — it is the
+// record of the merge.
+//
+// The two lists are computed from the SAME three operands, so the write list is
+// a subset of the carried set: a mechanical merge introduces no citation, so
+// every element of the write list was carried by the winner, carried by the
+// loser, or is the loser's own path. The carried set is deliberately NOT
+// self-filtered — it is the operands' snapshot, and what it exempts is only
+// ever checked against what is written. They are built separately, and that is
+// the whole point of this function. Handing the write list to Gate.Apply in
+// both argument positions would read identically and behave identically now,
+// and would exempt whatever a later change appends to the write list at the
+// call site — a lineage pointer to a synthesized parent, an annex ref — leaving
+// a gate call that can never reject anything (0ee925f4). `prior` has to be able
+// to diverge from `refs` for the check to mean what it says, so the carried set
+// is derived from the operands, where "this was already carried" is provably
+// true, and never from the list being written.
+func dedupMergeRefs(winnerRefs, loserRefs []string, winnerPath, loserPath, localRepoID string) (write, carried []string) {
+	self := fact.ClassifyRef(winnerPath, localRepoID).Path
+	union := fact.UnionStrings(winnerRefs, loserRefs)
+	write = make([]string, 0, len(union)+1)
+	for _, r := range union {
+		if c := fact.ClassifyRef(r, localRepoID); c.Kind == fact.RefLocalFact && c.Path == self {
+			continue
+		}
+		write = append(write, r)
+	}
+	write = fact.AppendUnique(write, loserPath)
+
+	carried = fact.UnionStrings(winnerRefs, loserRefs)
+	carried = fact.AppendUnique(carried, loserPath)
+
+	return write, carried
+}
+
+// applyGreedyMerges sorts pairs by similarity descending and selects pairs
+// such that each fact index participates in at most one merge.
+func applyGreedyMerges(pairs []mergePair) []mergePair {
+	// Sort by similarity descending.
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].similarity > pairs[j].similarity
+	})
+
+	consumed := make(map[string]bool)
+	var selected []mergePair
+	for _, p := range pairs {
+		if consumed[p.a.File] || consumed[p.b.File] {
+			continue
+		}
+		selected = append(selected, p)
+		consumed[p.a.File] = true
+		consumed[p.b.File] = true
+	}
+	return selected
+}
+
+// dedupCluster runs the embedding-based dedup pass on a cluster of facts.
+// It searches for near-duplicates, applies greedy merge selection, and
+// commits the changes to git and the search index.
+// It returns the surviving cluster facts (after removing losers).
+//
+// Vector lookup uses SearchOptions.QueryByPath, which resolves each member's
+// stored vector via a SQL subquery in the sqlite-vec MATCH operand. No
+// ONNX inference runs in this pass — every cluster member is already an
+// indexed fact whose 768-dim vector lives in facts_vec from when it was
+// learned, computed over the same title+body content we'd otherwise
+// re-embed here.
+func dedupCluster(
+	ctx context.Context,
+	cluster []factForLLM,
+	gs *facts.Index,
+	sysFiles *facts.Repo,
+	idx *index.Facade,
+	threshold float64,
+	recipeName string,
+	onProgress func(ProgressEvent),
+	agentBranch string,
+	// localRepoID is this repo's 12-hex id, for the ref gate below.
+	localRepoID string,
+) ([]factForLLM, error) {
+	if len(cluster) < 2 {
+		return cluster, nil
+	}
+
+	// The one gate the merged winners below go through, built once for the
+	// whole cluster rather than per merge.
+	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
+
+	// Build a set for fast path lookup.
+	clusterByPath := make(map[string]factForLLM, len(cluster))
+	for _, f := range cluster {
+		clusterByPath[f.File] = f
+	}
+
+	// Find candidate pairs via embedding search. Searches run with bounded
+	// concurrency since each idx.Search is independent and dominates wall
+	// time. A single mutex protects the seen-pair set and pairs slice.
+	seen := make(map[string]bool) // track "a|b" canonical pairs already added
+	var pairs []mergePair
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentDedupSearches)
+	for _, fact := range cluster {
+		g.Go(func() error {
+			sq := index.SearchOptions{
+				QueryByPath:   fact.File,
+				MinSimilarity: threshold,
+				Limit:         10,
+				IncludeKinds:  dedupSearchKinds,
+			}
+			results, err := idx.Search(gctx, agentBranch, sq)
+			if err != nil {
+				return fmt.Errorf("dedupCluster: search for %q: %w", fact.File, err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			for _, r := range results {
+				// Only consider results that are within the current cluster.
+				other, inCluster := clusterByPath[r.Path]
+				if !inCluster {
+					continue
+				}
+				// Skip self-match.
+				if r.Path == fact.File {
+					continue
+				}
+				// Never pair across kinds, or with a member whose kind is
+				// unknown. Unconditional: no config reaches this.
+				if !sameKnownKind(fact, other) {
+					log.Debug().
+						Str("a", fact.File).Str("a_kind", fact.Kind).
+						Str("b", other.File).Str("b_kind", other.Kind).
+						Msg("dedup: skipping cross-kind or unknown-kind pair")
+					continue
+				}
+				// Deduplicate symmetric pairs by normalising to (lexicographically smaller, larger).
+				key := fact.File + "|" + other.File
+				reverseKey := other.File + "|" + fact.File
+				if seen[key] || seen[reverseKey] {
+					continue
+				}
+				seen[key] = true
+
+				similarity := r.Score / 100.0
+				pairs = append(pairs, mergePair{
+					a:          fact,
+					b:          other,
+					similarity: similarity,
+				})
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	if len(pairs) == 0 {
+		return cluster, nil
+	}
+
+	selected := applyGreedyMerges(pairs)
+
+	// Track which paths are removed (losers).
+	removedPaths := make(map[string]bool)
+
+	for _, p := range selected {
+		winnerFact, loserFact := mergeFacts(p.a, p.b)
+
+		log.Info().
+			Str("winner", winnerFact.File).
+			Str("loser", loserFact.File).
+			Float64("similarity", p.similarity).
+			Msg("dedup: merging near-duplicate facts")
+
+		onProgress(ProgressEvent{Phase: "dedup-merge", Message: fmt.Sprintf("%s <- %s (%.2f)", winnerFact.File, loserFact.File, p.similarity)})
+
+		// Every failure from here to the end of the iteration is scoped to
+		// THIS pair: warn, skip it, keep going — the same shape the merge and
+		// discovery loops use. A single member that cannot be read or parsed
+		// (frontmatter from an older serializer, a hand-edit on the KB branch)
+		// otherwise aborts the whole review session before it plans anything,
+		// which is the #103 failure again from a different cause and just as
+		// permanent across retries. Skipping leaves both facts live, so the
+		// next pass is free to try the pair again.
+
+		// Read the winner's full fact from git to get its Refs.
+		winnerResult, err := gs.ReadFact(ctx, agentBranch, winnerFact.File, nil)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read winner %s: %v", winnerFact.File, err)})
+			continue
+		}
+		fullWinner, err := fact.ParseFact(winnerFact.File, winnerResult.Content)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse winner %s: %v", winnerFact.File, err)})
+			continue
+		}
+		// F22: the winner is rewritten below; a context map ParseFact had to
+		// drop (malformed, arrived via git) would be deleted. Skip the pair.
+		if len(fullWinner.ContextWarnings) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"dedup %s skipped: its context is malformed and a rewrite would drop it (%s)",
+				winnerFact.File, strings.Join(fullWinner.ContextWarnings, "; "))})
+			continue
+		}
+
+		// Read the loser's full fact to get its Refs.
+		loserResult, err := gs.ReadFact(ctx, agentBranch, loserFact.File, nil)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read loser %s: %v", loserFact.File, err)})
+			continue
+		}
+		fullLoser, err := fact.ParseFact(loserFact.File, loserResult.Content)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse loser %s: %v", loserFact.File, err)})
+			continue
+		}
+
+		// Apply merged fields to the full winner fact.
+		fullWinner.Domain = winnerFact.Domain
+		fullWinner.Entities = winnerFact.Entities
+		fullWinner.Confidence = winnerFact.Confidence
+		fullWinner.Sources = winnerFact.Sources
+		// Motifs are merged HERE rather than in mergeFacts above, because
+		// factForLLM does not carry them — only the full parsed facts do. Same
+		// helper as the learn-time merge: this is the same operation in a second
+		// location, and without it the loser's motifs are simply deleted along
+		// with the loser, losing authored data that no derived state can rebuild.
+		fullWinner.Motifs = fact.MergeMotifs(fullWinner.Motifs, fullLoser.Motifs)
+		// RECOMPUTE the evidence weight from the pooled lineage (#94).
+		//
+		// The merge pools the loser's sources onto the winner two lines above,
+		// and evidence weight is DEFINED as a function of the pooled evidence —
+		// so a weight carried over unchanged describes evidence the surviving
+		// fact no longer has. Not an erasure like the learn path: a stale
+		// number, which is harder to notice and just as wrong.
+		//
+		// computeTransfer is the SAME call ApplyPruneDecisions uses, deliberately.
+		// Two merge paths deriving one field two ways is the "same operation,
+		// two callers, one silently wrong" drift this package keeps hitting;
+		// one mechanism cannot drift from itself. It runs before the loser is
+		// deleted, because it reads both facts.
+		//
+		// Only the WEIGHT is taken. Sources stays with mergeFacts, which owns
+		// the merge rule and whose hypothesis handling
+		// (loserCorroborations) is already pinned by tests; the two agree on
+		// every ordinary pair and disagree only when the WINNER is a
+		// hypothesis, where mergeFacts' answer is the tested one.
+		mergedWeight, _, _ := computeTransfer(ctx, gs, agentBranch, localRepoID,
+			[]string{winnerFact.File, loserFact.File})
+		fullWinner.EvidenceWeight = mergedWeight
+		// Refs = union of both refs + loser's path, minus the winner's own path
+		// (#280), and — separately — the snapshot of what the two operands
+		// already carried.
+		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, winnerFact.File, loserFact.File, localRepoID)
+
+		// Same gate as every other write path — but this merge ADDS no
+		// citation, so the whole carried set goes in as prior.
+		//
+		// Both operands are facts already in the corpus: each carried its refs
+		// from its own commit, where they were checked once, and grafting the
+		// loser's lineage onto the winner is a transfer, not the author making
+		// a fresh claim about today's index. internal/corpus/refs is explicit that
+		// such refs are never re-judged — "a retraction anywhere in history
+		// makes every fact that ever cited it uneditable" is exactly the
+		// failure re-judging produces. Here it was worse than uneditable: one
+		// cluster member citing a fact that no longer resolves aborted the
+		// whole review session — every pass in the run lost, and lost again on
+		// every retry (#103). Dropping the offending refs instead would trade
+		// the abort for silent provenance loss, and those targets are usually
+		// still reachable through the commit their referrer pinned.
+		//
+		// The loser's own path is prior for the reason it always was: it is
+		// deleted immediately below and the winner cites it as lineage — that
+		// citation is the record of the merge, not a dead ref.
+		//
+		// The check is therefore structurally satisfied today. It stays for
+		// Canonicalize, and because carriedRefs is built from the operands
+		// rather than from mergedRefs, anything a later change appends to the
+		// write list here is still gated (0ee925f4).
+		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, carriedRefs)
+		if gerr != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup merge %s rejected: %v", winnerFact.File, gerr)})
+			continue
+		}
+		fullWinner.Refs = canonRefs
+
+		// Serialize and write the winner back to git.
+		newContent, err := fact.SerializeFact(fullWinner)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup serialize winner %s: %v", winnerFact.File, err)})
+			continue
+		}
+		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup write winner %s: %v", winnerFact.File, err)})
+			continue
+		}
+
+		// Update the in-memory fact for the winner in case subsequent searches
+		// see it. This happens BEFORE the delete below, so the in-memory copy
+		// matches what is on the branch even if the delete is what fails.
+		updatedWinner := winnerFact
+		updatedWinner.Confidence = fullWinner.Confidence
+		updatedWinner.Sources = fullWinner.Sources
+		clusterByPath[winnerFact.File] = updatedWinner
+
+		// Delete the loser from git. A failure here leaves the winner merged
+		// and the loser still live: the pair stays a near-duplicate for this
+		// pass, and the winner's citation of it resolves either way. The loser
+		// stays in the surviving cluster, so nothing downstream is handed a
+		// path that is still there.
+		if _, err := gs.DeleteFact(ctx, agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup delete loser %s: %v", loserFact.File, err)})
+			continue
+		}
+
+		removedPaths[loserFact.File] = true
+	}
+
+	// Build surviving cluster (exclude losers).
+	surviving := make([]factForLLM, 0, len(cluster))
+	for _, f := range cluster {
+		if !removedPaths[f.File] {
+			surviving = append(surviving, clusterByPath[f.File])
+		}
+	}
+
+	return surviving, nil
+}

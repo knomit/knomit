@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/repos"
 )
 
 // requireNothingInstalled: no trust material, no fleet state, no repository.

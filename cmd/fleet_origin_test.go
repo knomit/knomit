@@ -15,14 +15,14 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/app"
+	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/web"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
-	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
-	"knomit/internal/web"
 )
 
 // SABOTAGE (against the commit that added this file): ClassifyPeerError

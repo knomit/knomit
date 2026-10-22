@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/repos"
 )
 
 // installedLeafOf is the instance certificate installed in n's [tls].dir.

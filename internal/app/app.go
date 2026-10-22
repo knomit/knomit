@@ -16,19 +16,19 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/mcp"
+	"knomit/internal/edge/oauth"
+	"knomit/internal/edge/oauth/idp"
+	"knomit/internal/edge/web"
 	"knomit/internal/engine/embeddings"
 	"knomit/internal/engine/llm"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/mcp"
-	"knomit/internal/oauth"
-	"knomit/internal/oauth/idp"
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/memlimit"
 	"knomit/internal/platform/privdir"
-	"knomit/internal/repos"
-	"knomit/internal/web"
 )
 
 // App holds the assembled application and its closeable resources.

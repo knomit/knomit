@@ -201,7 +201,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 		if !ok {
 			// The ref gate stops a NEWLY ADDED local ref from being written
 			// unresolvable, but it deliberately exempts refs a fact already
-			// carried — internal/refs does not re-judge the past. So this is
+			// carried — internal/corpus/refs does not re-judge the past. So this is
 			// reachable through ordinary MCP writes too: a dedup merge grafts
 			// the loser's carried refs onto the winner, and on a corpus that
 			// predates the gate, or whose targets fell past the walk-back

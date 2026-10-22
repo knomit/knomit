@@ -138,7 +138,7 @@ func (fq *FactQuery) queryDistinct(ctx context.Context, query string, args ...an
 // pooled inputs to AxisFromSeparation: the live, non-excluded fact count and
 // total out-degree of the top (distilled) layer, and of observations. They
 // are COUNTS and SUMS, not pre-divided means, so the lens union handler
-// (internal/web/handlers_lenses_stats.go) can sum multiple mounts' raw
+// (internal/edge/web/handlers_lenses_stats.go) can sum multiple mounts' raw
 // numbers before deriving ONE pooled verdict via AxisFromSeparation — see its
 // doc comment. Deliberately internal plumbing, NOT on the wire: StatsResult
 // is never marshaled directly (handlers always project it into statsView /

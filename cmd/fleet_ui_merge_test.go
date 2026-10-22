@@ -16,12 +16,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/repos"
 )
 
 // TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable is the F11 UI merge end

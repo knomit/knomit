@@ -4,7 +4,7 @@ import "errors"
 
 // ErrBranchNotFound is returned by ref-resolving code paths (ListDir, ReadFact,
 // HeadCommit, etc.) when the requested branch has no matching git ref. Handlers
-// in internal/web detect this via errors.Is and map it to HTTP 404 instead of
+// in internal/edge/web detect this via errors.Is and map it to HTTP 404 instead of
 // 500. The underlying go-git plumbing.ErrReferenceNotFound is preserved in the
 // error chain for introspection.
 var ErrBranchNotFound = errors.New("branch not found")

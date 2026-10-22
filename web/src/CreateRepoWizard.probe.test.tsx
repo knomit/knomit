@@ -5,7 +5,7 @@ import { api, type ProbeResult } from './api';
 
 // A stand-in git host, driven by the ProbeResult shapes the real one can
 // produce. ProbeOrigin reports every outcome as a normal 200 — unreachable and
-// auth-required are RESULTS, not errors (internal/repos/probe.go) — so a fake
+// auth-required are RESULTS, not errors (internal/corpus/repos/probe.go) — so a fake
 // that returns these five shapes covers the whole surface the wizard reacts to,
 // without a network, a server, or a real remote.
 //

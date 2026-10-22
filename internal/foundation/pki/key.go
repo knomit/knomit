@@ -1,7 +1,7 @@
 // Package pki is the pure certificate core for F19 phase 2: the instance key
 // as a crypto.Signer, the fleet root, instance issuance, CRLs, chain
 // verification, and the server and client tls.Config. It has no store, web or
-// repos dependency; integration lives in cmd/, internal/foundation/auth and internal/web.
+// repos dependency; integration lives in cmd/, internal/foundation/auth and internal/edge/web.
 package pki
 
 import (

@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/repos"
 )
 
 // identityCmd is `knomit identity`: what this instance is, for the fleet.

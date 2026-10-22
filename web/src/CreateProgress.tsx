@@ -2,7 +2,7 @@ import { CreateBar } from './PendingCreateRow';
 import type { RepoCreateStatus } from './api';
 
 // CREATE_STEPS is the step list each create mode runs, in order, mirroring the
-// emit() calls in internal/repos/lifecycle.go. It exists because polling
+// emit() calls in internal/corpus/repos/lifecycle.go. It exists because polling
 // reports a LATEST VALUE, not a stream: a local create finishes in
 // milliseconds and is typically polled once, so a component that rendered only
 // what it observed would flash "started → done" and show none of the work.

@@ -19,10 +19,10 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"knomit/internal/edge/oauth"
 	"knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
-	"knomit/internal/oauth"
 )
 
 // issuerFixture is a knomit issuer in-process: the real oauth package on a
@@ -224,7 +224,7 @@ func TestBearer_ExpiredAccessRefreshesOnceAndReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	hitsAfterLogin := f.tokenHits.Load()
-	// "access" is oauth's unexported kindAccess (internal/oauth/store.go).
+	// "access" is oauth's unexported kindAccess (internal/edge/oauth/store.go).
 	res, err := f.db.Exec(`UPDATE oauth_tokens SET expires_at = ? WHERE kind = ?`, time.Now().Add(-time.Minute).Unix(), "access")
 	if err != nil {
 		t.Fatal(err)

@@ -14,11 +14,11 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"knomit/internal/edge/oauth"
+	"knomit/internal/edge/web"
 	"knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
-	"knomit/internal/oauth"
-	"knomit/internal/web"
 )
 
 // oauthCLIFixture serves the plain router on a REAL local listener with the

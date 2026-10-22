@@ -16,7 +16,7 @@ package cmd
 //  3. A peer clones the repo FROM THE HOST over cert HTTPS.
 //
 // The README's default "Create it" (mode template, no origin from birth) is
-// what the two-instance tests in internal/repos run (newMissionHost) and
+// what the two-instance tests in internal/corpus/repos run (newMissionHost) and
 // POST /repos is TestPostRepos_Template; this test keeps the clone route
 // because it is the one that can carry a consensus branch other than main.
 //
@@ -41,16 +41,16 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	"knomit/internal/edge/web"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
-	"knomit/internal/repos"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
-	"knomit/internal/web"
 )
 
 func missionGit(t *testing.T, dir string, args ...string) {

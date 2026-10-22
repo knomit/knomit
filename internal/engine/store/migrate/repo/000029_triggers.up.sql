@@ -1,5 +1,5 @@
 -- F07: the trigger dispatcher's two tables (see internal/engine/store/triggers.go and
--- internal/repos/triggers.go). Both are LOCAL CACHE: never synced, rebuildable
+-- internal/corpus/repos/triggers.go). Both are LOCAL CACHE: never synced, rebuildable
 -- (a lost watermark restarts the trigger at the head of the next advance; a
 -- lost fire log loses operator history, never a fact).
 --

@@ -71,7 +71,7 @@ func TestValidateOntologyYAML_MalformedYAMLIsOneDiagnostic(t *testing.T) {
 // mode=custom (and mode=initialize) and through POST /ontologies:validate, so a nil
 // deref here is a panic any caller can cause. ValidateOntologyYAML's child-key
 // loop guards it with `node == nil || node.Children == nil`, buildRulesCache's
-// walk with `if n == nil`, and countRules (internal/web) with its own — none
+// walk with `if n == nil`, and countRules (internal/edge/web) with its own — none
 // of which anything pinned until now.
 func TestValidateOntologyYAML_BareTopicKeyIsANilNodeAndDoesNotPanic(t *testing.T) {
 	src := "id: x\nname: X\ntopics:\n  alpha:\n"

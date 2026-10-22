@@ -133,7 +133,7 @@ func TestServeUntil_ListenerFailureUnblocksStreams(t *testing.T) {
 // defers have run, and verify sets no crash marker. Allowed by exact count, so
 // a third exit there still fails.
 //
-// This guard is cmd-scoped. internal/web/server.go Server.grants() still calls
+// This guard is cmd-scoped. internal/edge/web/server.go Server.grants() still calls
 // log.Fatal on an invalid [auth].loopback_default; serve cannot reach it only
 // because app.New's seedOwnPrincipal parses the same value first and returns
 // the error. That is deliberately out of scope here.

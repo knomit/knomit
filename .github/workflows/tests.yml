@@ -14,7 +14,7 @@ name: Tests
 # silently stops matching CI the first time either side is edited.
 #
 # ONE CONSEQUENCE OF THAT, NOW THAT WINDOWS IS HERE: `publish` waits on the
-# Windows legs too, including the ~30-minute internal/synthesize one, and a
+# Windows legs too, including the ~30-minute internal/corpus/synthesize one, and a
 # Windows-only failure blocks a macOS release. That is the same gate working as
 # designed — a tree that fails on a platform we support is not a tree to cut a
 # signed release from — but it is a new cost, and decoupling it would mean an
@@ -81,31 +81,31 @@ name: Tests
 #     step. See .github/actions/native-toolchain, which also explains why the
 #     key has no restore-keys and why extending it cost the Windows entry once.
 #   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
-#     take 10m from the same matrix. On a Windows laptop internal/synthesize
+#     take 10m from the same matrix. On a Windows laptop internal/corpus/synthesize
 #     (1776s) and internal/engine/store (816s) exceed go test's 10-minute per-package
-#     default outright and internal/repos (441-639s) straddles it; on THIS
+#     default outright and internal/corpus/repos (441-639s) straddles it; on THIS
 #     runner only synthesize still does, at 1166-1641s across four runs.
 #     Nothing hangs; it is filesystem cost, and the Makefile scopes the same
 #     40m to GOOS=windows for the same reason. The slow-tests job below
 #     carries both machines' numbers.
 #     Every OTHER step keeps the 10-minute default deliberately: a ceiling is
 #     also a hang guard, and a package that suddenly needs 40 minutes is news.
-#     The package nearest that line in build-test is internal/web, and it
+#     The package nearest that line in build-test is internal/edge/web, and it
 #     shares its step with storytests and the desktop helpers, which go test
 #     runs CONCURRENTLY, so its real margin is thinner than its own time
 #     suggests. It once hit the line (#365; dev run 36731818890, timed out at
 #     600s): ~400 tests each create real repos, and on Windows each create's
 #     SQLite fsyncs cost most of ~0.8s.
-#     The fix was NOT a longer -timeout here: internal/web's TestMain now
+#     The fix was NOT a longer -timeout here: internal/edge/web's TestMain now
 #     calls storetest.SetFastDurability, which runs every DB the test binary
 #     opens at synchronous=OFF (WAL kept, so locking is unchanged). On a
 #     Windows 10 laptop that took the package from 706s to 389s, same 834
 #     tests passing (737s in an earlier measurement); on the windows-2025
 #     runner it was ~281s before (PR #363, run 36863649277, windows-2025
-#     build-test job 110394895276: internal/web 281s, the whole web step
+#     build-test job 110394895276: internal/edge/web 281s, the whole web step
 #     4m49s), and the after-number is to be confirmed from the first CI run
 #     with the switch. If that step ever times out
-#     again, internal/web is still where to look first — and the fix is
+#     again, internal/edge/web is still where to look first — and the fix is
 #     still to make it faster, not to raise the ceiling.
 #
 # WHAT THIS COSTS. Since the PR/full split (see `full` below) a PR no longer
@@ -134,7 +134,7 @@ name: Tests
 # So the build answer arrives in roughly ten minutes and a FULL green waits on
 # synthesize, for somewhere between twenty and thirty minutes. The unix legs
 # are unchanged by any of this. If that second number is ever the thing
-# standing between this repo and a merge, the fix is in internal/synthesize's
+# standing between this repo and a merge, the fix is in internal/corpus/synthesize's
 # fixtures — the tests each build a 400-fact corpus one WriteFact at a time —
 # and not in this file.
 #
@@ -151,10 +151,10 @@ name: Tests
 # THE RUNNER IS ELEVATED, and that is not a choice we have. GitHub-hosted
 # Windows runners run as administrator with UAC disabled, so the process holds
 # SeCreateSymbolicLinkPrivilege and the canSymlink() probes in
-# internal/repos/origin_test.go and tools/desktop/bundled_test.go come back
+# internal/corpus/repos/origin_test.go and tools/desktop/bundled_test.go come back
 # TRUE. Two consequences, both of them what IS rather than what we would like:
 # the symlink-escape security test really does execute here (one of the reasons
-# ./internal/repos/ is worth running on this leg at all), and the UNPRIVILEGED
+# ./internal/corpus/repos/ is worth running on this leg at all), and the UNPRIVILEGED
 # branch — the skip path an ordinary Windows user actually takes — is exercised
 # by no CI leg on any platform and remains local-verification-only.
 #
@@ -318,13 +318,13 @@ jobs:
       # root, key and certificate its tests use is generated in t.TempDir().
       # A new package is not tested until it is named here.
       #
-      # internal/oauth (F19 phase 3a) needs sqlite (control.db via
+      # internal/edge/oauth (F19 phase 3a) needs sqlite (control.db via
       # internal/engine/store/migrate) but no native runtime libs, and its CIMD tests
       # run their own in-process HTTPS server with a generated CA. The `...`
-      # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
-      # in-process fake provider in internal/oauth/idp/idptest.
+      # takes in internal/edge/oauth/idp (F19 phase 3c), whose tests drive the
+      # in-process fake provider in internal/edge/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/engine/embeddings/ ./internal/foundation/config/ ./internal/domain/fact/ ./internal/foundation/auth/ ./internal/foundation/serveraddr/ ./internal/foundation/pki/... ./internal/oauth/...
+        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/engine/embeddings/ ./internal/foundation/config/ ./internal/domain/fact/ ./internal/foundation/auth/ ./internal/foundation/serveraddr/ ./internal/foundation/pki/... ./internal/edge/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no
@@ -332,7 +332,7 @@ jobs:
       - name: Test-harness isolation guard
         run: go test ./test/archtest/
 
-      # These link the runtime native libs: internal/web transitively (it
+      # These link the runtime native libs: internal/edge/web transitively (it
       # constructs a store in tests), and the desktop helper packages
       # (lockfile/netutil/paths/autostart/singleinstance) are plain Go but run
       # here too so the build-test job actually exercises them. The desktop
@@ -352,7 +352,7 @@ jobs:
       - name: Story, web + desktop-helper tests (runtime native libs)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh web ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh web ./test/storytests/ ./internal/edge/web/... ./tools/desktop/internal/...
 
       # NEW WITH THE WINDOWS LEG, AND HALF THE POINT OF IT. These packages were
       # COMPILED by the build step above but their tests ran on no platform in
@@ -432,9 +432,9 @@ jobs:
   # them, and note that synthesize alone varied by four minutes across them:
   #
   #                     laptop      runner
-  #   internal/synthesize  1776s      1166-1641s (four runs, 41% spread)
+  #   internal/corpus/synthesize  1776s      1166-1641s (four runs, 41% spread)
   #   internal/engine/store        816s       212s
-  #   internal/repos    441-639s       307s
+  #   internal/corpus/repos    441-639s       307s
   #
   # Note which way that cuts. store and repos are ~2.5x faster on the runner,
   # synthesize barely faster at all — it writes a 400-fact corpus one WriteFact
@@ -494,8 +494,8 @@ jobs:
         # runs once per leg that already ran its parent.
         include: >-
           ${{ fromJSON(inputs.full
-          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/engine/store/... ./internal/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/... ./internal/engine/store/... ./internal/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/engine/store/...","timeout":"40m"},{"leg":"windows-2025 repos mission","os":"windows-2025","packages":"./internal/repos/...","args":"-run=^TestMission","timeout":"40m"},{"leg":"windows-2025 repos rest","os":"windows-2025","packages":"./internal/repos/...","args":"-skip=^TestMission","timeout":"40m"}]'
-          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/engine/store/... ./internal/repos/...","timeout":"10m"}]') }}
+          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/corpus/synthesize/... ./internal/engine/store/... ./internal/corpus/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/corpus/synthesize/... ./internal/engine/store/... ./internal/corpus/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/corpus/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/engine/store/...","timeout":"40m"},{"leg":"windows-2025 repos mission","os":"windows-2025","packages":"./internal/corpus/repos/...","args":"-run=^TestMission","timeout":"40m"},{"leg":"windows-2025 repos rest","os":"windows-2025","packages":"./internal/corpus/repos/...","args":"-skip=^TestMission","timeout":"40m"}]'
+          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/corpus/synthesize/... ./internal/engine/store/... ./internal/corpus/repos/...","timeout":"10m"}]') }}
     runs-on: ${{ matrix.os }}
     # Deliberately looser than the -timeout below, for the reason race.yml
     # spells out: the go test timeout prints a goroutine dump naming the stuck

@@ -20,7 +20,7 @@ const (
 	// and kb://<source repo id>@<commit> — the source repo's ID (its root
 	// commit), never its name, so the link survives a rename or an unmount.
 	// Stamped only by knomit's own create; an agent's trace may not carry
-	// any Knomit- key but Trace, Cause and Run (internal/mcp/trace.go).
+	// any Knomit- key but Trace, Cause and Run (internal/edge/mcp/trace.go).
 	TrailerTemplate       = "Knomit-Template"
 	TrailerTemplateSource = "Knomit-Template-Source"
 )
@@ -79,7 +79,7 @@ type Trailers struct {
 	Extra          []TrailerEntry // an agent's own keys (never Knomit-*); written after Run, sorted by key
 }
 
-// TrailerEntry is one agent-supplied `Key: value` line. internal/mcp
+// TrailerEntry is one agent-supplied `Key: value` line. internal/edge/mcp
 // validates both halves (trace.go); the store writes them as given.
 type TrailerEntry struct {
 	Key   string

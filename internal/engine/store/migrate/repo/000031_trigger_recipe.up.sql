@@ -1,5 +1,5 @@
 -- F07 PR 5: three fire-log columns for `do: run` and knomit.run (see
--- internal/engine/store/triggers.go and internal/repos/trigger_recipe.go):
+-- internal/engine/store/triggers.go and internal/corpus/repos/trigger_recipe.go):
 --   recipe_source  repo | local — where the recipe that ran came from: the
 --                  tip of the repo's main branch, or <home>/recipes on this
 --                  machine. NOT `source`, which is the episode's source

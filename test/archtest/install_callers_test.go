@@ -23,10 +23,10 @@ import (
 // binding of its own: its main window joins through POST /fleet/join. The
 // callers are:
 //
-//   - internal/repos/fleet_create.go, the fleet create. It installs this
+//   - internal/corpus/repos/fleet_create.go, the fleet create. It installs this
 //     instance's OWN leaf, which it has just issued from the fresh root it
 //     minted, so the material never comes from a request;
-//   - internal/repos/fleet_membership.go, the fleet join. It installs the
+//   - internal/corpus/repos/fleet_membership.go, the fleet join. It installs the
 //     bundle the operator brought from the master's enroll, after checking
 //     it is for THIS instance's key and agent id, and only on an instance
 //     with no trust material installed; a refused join uninstalls it.
@@ -38,8 +38,8 @@ import (
 // A route-list snapshot would catch a NEW route only; this catches any
 // production code, route or not, that starts calling install.
 var installCallers = []string{
-	"internal/repos/fleet_create.go",
-	"internal/repos/fleet_membership.go",
+	"internal/corpus/repos/fleet_create.go",
+	"internal/corpus/repos/fleet_membership.go",
 }
 
 // installCRLCallers are the ONLY production files that may call
@@ -47,30 +47,30 @@ var installCallers = []string{
 // material like InstallBundle and must never be reachable over a network
 // route. The callers are:
 //
-//   - internal/repos/fleet_membership.go, the master's revoke (POST
+//   - internal/corpus/repos/fleet_membership.go, the master's revoke (POST
 //     /api/v1/fleet/revoke, behind RequireLocalVia, and the master's leave
 //     duty), which installs the CRL it just signed under its own installed
 //     root;
-//   - internal/repos/fleet_tick.go, every copy's tick duty (fleet design
+//   - internal/corpus/repos/fleet_tick.go, every copy's tick duty (fleet design
 //     P6): the CRL on the fleet repository's main, installed only when its
 //     root is the INSTALLED root and its Number is above the accepted one
 //     (InstallCRL checks both under the install lock). No route reaches it:
 //     it runs in the sync rounds, from what the master published to main,
 //     which the master's own judge held before it moved.
 var installCRLCallers = []string{
-	"internal/repos/fleet_membership.go",
-	"internal/repos/fleet_tick.go",
+	"internal/corpus/repos/fleet_membership.go",
+	"internal/corpus/repos/fleet_tick.go",
 }
 
 // installLeafCallers are the ONLY production files that may call
 // pki.InstallLeaf, the renewed-leaf install (fleet design D17). The one
-// caller is every copy's tick duty (internal/repos/fleet_tick.go): this
+// caller is every copy's tick duty (internal/corpus/repos/fleet_tick.go): this
 // instance's own certificate as the fleet's main holds it after the master
 // renewed it, installed only for this instance's key and identity, chaining
 // to the INSTALLED root and CRL, with a later NotBefore (InstallLeaf checks
 // each under the install lock). No route reaches it.
 var installLeafCallers = []string{
-	"internal/repos/fleet_tick.go",
+	"internal/corpus/repos/fleet_tick.go",
 }
 
 // TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of

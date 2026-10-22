@@ -46,7 +46,7 @@ var changesAllowedCalls = map[string][]string{
 		"plumbing.NewHash", "strings.Cut", "strings.ToLower", "errors.New", "fmt.Errorf", "ParseFullHash", "isHex",
 		"json.Marshal", "json.Unmarshal", "?.EncodeToString", "?.DecodeString", "len",
 	},
-	"internal/mcp/changes.go": {
+	"internal/edge/mcp/changes.go": {
 		"repos.RequireBinding", "b.Write", "?.Acquire", "release", "svc.Remote", "remote.UpstreamBranch", "svc.Facts", "?.ChangesUnder",
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"req.GetInt", "req.GetString", "req.GetBool", "context.WithTimeout", "cancel",
@@ -62,7 +62,7 @@ var changesAllowedCalls = map[string][]string{
 		"model.ParseChangesSince", "model.ChangesBookmark",
 		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
 	},
-	"internal/web/handlers_changes.go": {
+	"internal/edge/web/handlers_changes.go": {
 		"repos.RepoFromContext", "BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
@@ -79,7 +79,7 @@ var changesAllowedCalls = map[string][]string{
 // approved without) and never read a CLOCK or the commit log (commit time is
 // set by whoever makes the commit, and ordering by it is how a deletion gets
 // lost). The behavioural half is TestChangesUnder_WritesNothing here and
-// TestChangesHandler_WritesNothing in internal/mcp.
+// TestChangesHandler_WritesNothing in internal/edge/mcp.
 func TestChanges_CallsAreAllowlisted(t *testing.T) {
 	fset := token.NewFileSet()
 	for f, list := range changesAllowedCalls {

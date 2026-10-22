@@ -40,7 +40,7 @@ export function CreateLensForm({ repos: listed, lenses = [], onDone, onError, on
 }) {
   // Only repos with a live store can be lens members. A lens whose member is
   // unavailable does not merely lose that mount — the binding refuses to
-  // resolve and the WHOLE lens fails (see internal/repos/binding.go), so
+  // resolve and the WHOLE lens fails (see internal/corpus/repos/binding.go), so
   // offering one here would let a reader assemble something guaranteed to break
   // on its first read. The prop is named `listed` to make the gate visible:
   // everything below composes from `repos`, which is the mountable subset.

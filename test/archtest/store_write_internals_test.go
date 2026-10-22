@@ -21,11 +21,11 @@ import (
 const systemTreeDoor = "WriteSystemTree"
 
 // systemTreeDoorAllowed reports whether a NON-test file, given as a
-// module-root-relative slash path, may name the door: internal/repos, which
+// module-root-relative slash path, may name the door: internal/corpus/repos, which
 // creates a repo from a template. Tests may name it anywhere (they set up
 // fixtures), and everything under internal/engine/store is the store's own code.
 func systemTreeDoorAllowed(rel string) bool {
-	return strings.HasPrefix(rel, "internal/repos/") && !strings.Contains(strings.TrimPrefix(rel, "internal/repos/"), "/")
+	return strings.HasPrefix(rel, "internal/corpus/repos/") && !strings.Contains(strings.TrimPrefix(rel, "internal/corpus/repos/"), "/")
 }
 
 // systemTreeDoorUses returns one "line N" string per selector expression
@@ -58,10 +58,10 @@ func selectorUses(t *testing.T, fset *token.FileSet, name string, src any, names
 // the rule that used to be "callers of Service.WriteSystemTree" is now a rule
 // about who may name the method. This parses every .go file outside
 // internal/engine/store/** and fails on a non-test file other than the top-level
-// files of internal/repos that selects WriteSystemTree.
+// files of internal/corpus/repos that selects WriteSystemTree.
 //
 // Non-vacuity: the walk must visit at least minFiles files, find at least one
-// allowed use (internal/repos/lifecycle.go, today), and see the door still
+// allowed use (internal/corpus/repos/lifecycle.go, today), and see the door still
 // declared in internal/engine/store/facts/system_files.go, so a rename cannot leave
 // the scan matching nothing.
 func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
@@ -110,7 +110,7 @@ func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
 		t.Fatalf("scanned only %d .go files, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
 	}
 	if allowedUses < 1 {
-		t.Fatal("found no allowed use of WriteSystemTree in internal/repos: the caller moved or was renamed, so this guard's allowlist is stale")
+		t.Fatal("found no allowed use of WriteSystemTree in internal/corpus/repos: the caller moved or was renamed, so this guard's allowlist is stale")
 	}
 	decl := filepath.Join(root, "internal", "engine", "store", "facts", "system_files.go")
 	f, err := parser.ParseFile(token.NewFileSet(), decl, nil, parser.SkipObjectResolution)
@@ -128,7 +128,7 @@ func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("%s keeps the case of a nested path and is never on the MCP or REST surface "+
-			"(kb/invariants/store/paths/system-tree-door/ec0eb08f.md); only internal/repos may name it outside the store:\n  %s",
+			"(kb/invariants/store/paths/system-tree-door/ec0eb08f.md); only internal/corpus/repos may name it outside the store:\n  %s",
 			systemTreeDoor, strings.Join(offenders, "\n  "))
 	}
 }
@@ -155,10 +155,10 @@ func TestStoreSystemTreeDoor_GuardDiscriminates(t *testing.T) {
 		}
 	}
 	for rel, want := range map[string]bool{
-		"internal/repos/lifecycle.go":   true,
-		"internal/repos/sub/x.go":       false,
-		"internal/mcp/learn.go":         false,
-		"internal/web/handlers_fact.go": false,
+		"internal/corpus/repos/lifecycle.go": true,
+		"internal/corpus/repos/sub/x.go":     false,
+		"internal/edge/mcp/learn.go":         false,
+		"internal/edge/web/handlers_fact.go": false,
 	} {
 		if systemTreeDoorAllowed(rel) != want {
 			t.Errorf("systemTreeDoorAllowed(%q) = %v, want %v", rel, !want, want)
@@ -180,14 +180,14 @@ var triggerTableWrites = map[string]bool{
 // Service. They were already reachable through Service.Triggers(), so E3 did
 // not widen the method set; this guard pins the reach. It parses every .go
 // file outside internal/engine/store/** and fails on a non-test file other than
-// internal/repos/triggers.go that selects one of them.
+// internal/corpus/repos/triggers.go that selects one of them.
 //
 // Non-vacuity: at least 500 files walked; triggers.go must use
 // RecordTriggerRuns, RecordTriggerResults and AdvanceTriggerWatermarks; and
 // facts/triggers.go must still declare all four.
 func TestFactsRepoTriggerWrites_OnlyFromDispatcher(t *testing.T) {
 	const minFiles = 500
-	const dispatcher = "internal/repos/triggers.go"
+	const dispatcher = "internal/corpus/repos/triggers.go"
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 	var offenders []string

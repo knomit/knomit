@@ -143,7 +143,7 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			// Skipped by PATH at the module root, never by name: a name match
-			// ("web") also exempts internal/web.
+			// ("web") also exempts internal/edge/web.
 			switch rel {
 			case ".git", "web", "dist", ".claude", "third_party":
 				return filepath.SkipDir
@@ -250,7 +250,7 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		"internal/engine/store/merge/testseams.go":        true,
 		"test/testenv/corrupt.go":                         true,
 		"internal/testsupport/testsigner/signer.go":       true,
-		"internal/repos/experiment_sweep.go":              false,
+		"internal/corpus/repos/experiment_sweep.go":       false,
 		"internal/engine/store/service.go":                false,
 		"internal/testseams.go":                           false,
 		"internal/engine/store/vcs_seam.go":               false,

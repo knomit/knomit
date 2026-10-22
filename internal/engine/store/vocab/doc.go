@@ -6,6 +6,6 @@
 // to it, never the reverse.
 //
 // The constructors live beside their types (abstraction.go, motif_alias.go):
-// internal/synthesize TestConformance_ReviewPipelineOnly lets only
+// internal/corpus/synthesize TestConformance_ReviewPipelineOnly lets only
 // vocab/abstraction.go name the axis, so no other file here may.
 package vocab

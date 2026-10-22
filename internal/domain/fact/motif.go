@@ -135,8 +135,8 @@ func DropInvalidMotifs(motifs []string) []string {
 // it — a learn call, or a review session's consolidation.
 //
 // It lives here, with one definition and two callers, because there are two
-// merge sites: learn-time dedup (internal/mcp) and review-session
-// consolidation (internal/synthesize). They are the same operation in two
+// merge sites: learn-time dedup (internal/edge/mcp) and review-session
+// consolidation (internal/corpus/synthesize). They are the same operation in two
 // places, and the second one silently dropped the loser's motifs until a
 // review caught it — which is what a second copy of a rule buys you.
 //

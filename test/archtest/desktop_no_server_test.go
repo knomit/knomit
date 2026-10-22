@@ -8,13 +8,13 @@ import (
 )
 
 // desktopForbidden are the packages that ARE the knomit server: the
-// composition root (internal/app) and the HTTP surface (internal/web). The
+// composition root (internal/app) and the HTTP surface (internal/edge/web). The
 // desktop runs `knomit serve --supervised` as a child process and reaches it
 // over the local socket/pipe; linking either of these back into knomit-desktop
 // would be a second server construction path, which is exactly what the
 // separate-process design removed (the two paths drifted: kb gotcha
 // desktop/separate-server-boot-path).
-var desktopForbidden = []string{"knomit/internal/app", "knomit/internal/web"}
+var desktopForbidden = []string{"knomit/internal/app", "knomit/internal/edge/web"}
 
 // desktopForbiddenExact are packages the desktop must not link, matched
 // exactly: the cgo inference stack (the ONNX runtime binding, the tokenizers

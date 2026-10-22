@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/repos"
+	"knomit/internal/corpus/repos"
 )
 
 // run executes the real root command with args and returns stdout+stderr.

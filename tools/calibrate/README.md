@@ -64,7 +64,7 @@ not re-listed in the tool.
 calibration, not a description of the production gate. The learn-time
 same-subject check caps at `Dedup` only for candidates in the incoming fact's
 own category, and has no upper bound across categories
-(`internal/mcp/learn_same_subject.go`). `SimilarTo` comes from
+(`internal/edge/mcp/learn_same_subject.go`). `SimilarTo` comes from
 `docDocAll`, so `[SimilarTo, Dedup)` describes no region of either population
 (see knomit fact `decisions/mcp/learn/same-subject-band-endpoints`). This does
 not make `SimilarTo` wrong. It is calibrated for exactly one job: drawing

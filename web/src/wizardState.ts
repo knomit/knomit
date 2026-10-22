@@ -75,7 +75,7 @@ export interface WizardState {
    *
    * A create reads whatever InitFromRemote adopts: this machine's agent branch
    * when the remote already carries one, otherwise the chosen consensus branch
-   * (internal/repos/initialized.go mirrors that rule). So a remote this machine
+   * (internal/corpus/repos/initialized.go mirrors that rule). So a remote this machine
    * initialized earlier answers 'yes' about `agent/<host>` while `main` — the
    * branch on screen — has no ontology and never will.
    *
@@ -231,7 +231,7 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     // pressing "Check access" and getting any unclassified error threw the
     // wizard back to the first screen and took the access step (the only place
     // a credential can be entered) with it. That is the same dead end
-    // internal/repos/probe.go documents for the unresolvable-credential case,
+    // internal/corpus/repos/probe.go documents for the unresolvable-credential case,
     // arriving from the client side instead.
     //
     // The failure is still reported — CreateRepoWizard surfaces it as
@@ -533,7 +533,7 @@ function originFor(s: WizardState): NonNullable<CreateRepoBody['origin']> {
 }
 
 /**
- * isValidRepoName mirrors the backend's isValidRepoName (internal/repos/
+ * isValidRepoName mirrors the backend's isValidRepoName (internal/corpus/repos/
  * manager.go): non-empty, and lowercase alphanumerics, '-' and '_' only.
  *
  * Kept client-side so "My KB" is refused where it was typed rather than
@@ -551,7 +551,7 @@ export function isValidRepoName(name: string): boolean {
 /**
  * Transport names which credential a URL can actually use.
  *
- * Mirrors resolveAuthWithOrigin (internal/repos/auth.go): a `git@` or `ssh://`
+ * Mirrors resolveAuthWithOrigin (internal/corpus/repos/auth.go): a `git@` or `ssh://`
  * URL is promoted to SSH auth under auto-detect, and go-git then dispatches by
  * SCHEME — so a token typed against one of those is assembled into HTTP basic
  * auth that the SSH transport never consults. The access step says so out loud

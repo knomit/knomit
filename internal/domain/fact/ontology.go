@@ -68,7 +68,7 @@ var (
 // FleetOntologyID is the id of the fleet ontology. A repository whose ontology
 // has this id IS a fleet repository (F09): that is how an instance recognises
 // it, with no reserved name and nothing in any other repository's ontology.
-// The id is reserved: no generic create door accepts it (internal/repos,
+// The id is reserved: no generic create door accepts it (internal/corpus/repos,
 // ErrFleetOntologyReserved), so only knomit's fleet code mounts one.
 const FleetOntologyID = "fleet"
 

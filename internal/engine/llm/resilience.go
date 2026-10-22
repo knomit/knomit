@@ -25,7 +25,7 @@ type Policy struct {
 	// attempt. The overall budget belongs to the caller's context, which
 	// WithTimeout can only tighten, never extend. Note that this is where the
 	// budget *should* live, not a guarantee that it does: a caller passing a
-	// context with no deadline (as internal/synthesize currently does) is
+	// context with no deadline (as internal/corpus/synthesize currently does) is
 	// bounded only by AttemptTimeout × (MaxRetries+1) plus backoff.
 	AttemptTimeout time.Duration
 	// MaxRetries is the number of retries *after* the first attempt. Providers

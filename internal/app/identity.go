@@ -14,8 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/repos"
 )
 
 // ensureKeyPair loads or generates an Ed25519 keypair at the given path.

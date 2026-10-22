@@ -20,7 +20,7 @@ var testFastDurability atomic.Bool
 //
 // Why it exists (#365): on Windows a repo create costs ~0.8s, almost all of it
 // WAL file creation and the fsyncs of checkpoint and close, and packages such
-// as internal/web create hundreds of repos. A test that loses power mid-run has
+// as internal/edge/web create hundreds of repos. A test that loses power mid-run has
 // lost nothing worth keeping, so those fsyncs buy a test binary nothing.
 //
 // What it deliberately does NOT change: the journal mode. Every DB stays in

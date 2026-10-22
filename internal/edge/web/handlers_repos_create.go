@@ -1,0 +1,405 @@
+package web
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/web/hal"
+	"knomit/internal/foundation/pki"
+)
+
+type createRepoRequest struct {
+	Name           string `json:"name"`
+	Mode           string `json:"mode"`
+	OntologyPreset string `json:"ontology_preset"`
+	OntologyYAML   string `json:"ontology_yaml"`
+	// Template (F24): {repo, name}, repo by NAME and required. The third
+	// ontology source, for modes "template" and "initialize".
+	Template *struct {
+		Repo string `json:"repo"`
+		Name string `json:"name"`
+	} `json:"template"`
+	Origin *struct {
+		URL        string `json:"url"`
+		Branch     string `json:"branch"`
+		AuthMethod string `json:"auth_method"`
+		AuthToken  string `json:"auth_token"`
+	} `json:"origin"`
+}
+
+// maxCreateBodyBytes bounds the whole create envelope, and is deliberately NOT
+// MaxOntologyBytes. ontology_yaml rides here as a JSON STRING, and encoding
+// inflates it: every newline costs two bytes, every quote and backslash two,
+// every other control character six (\u00XX). An ontology is newline-dense by
+// construction, so a document :validate accepted at 250 KiB of raw YAML can
+// easily exceed 256 KiB once escaped — and capping the body at the ontology
+// limit then answered 413 "Ontology too large" for a document that IS under
+// the documented limit, an error the user has no way to act on.
+//
+// So the body cap only has to bound memory (6x covers the all-control-character
+// worst case, plus room for the name/mode/origin fields), and the real limit is
+// enforced on the DECODED ontology below, where it means what it says.
+const maxCreateBodyBytes = 6*MaxOntologyBytes + 4*1024
+
+// handleHALReposCreate serves POST /api/v1/repos. It pre-validates (returning
+// problem+json on rejection), then starts the create DETACHED and answers
+// 202 Accepted with the job's identity and a link to poll.
+//
+// THE RESPONSE NO LONGER HOLDS THE WORK (issue #67). It used to stream NDJSON
+// progress until the create finished, with r.Context() passed straight into
+// Manager.Create — which made a repo's creation the property of the request
+// that asked for it: a client that closed its tab cancelled the create at its
+// next step boundary, discarding a clone that may already have completed.
+//
+// 202 makes that structurally impossible rather than merely fixed. There is no
+// window in which the client owns the work, because the client never holds it
+// at all: it starts a job, gets an id, and asks about it afterwards. A client
+// that never comes back changes nothing — the job is bounded by its own
+// deadline and lands in a terminal state either way, which StartCreate also
+// logs for exactly the reader who is no longer here.
+func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// ontology_yaml rides in this body for modes "custom" and "initialize", so the
+		// cap MaxOntologyBytes names has to be applied here too — :validate
+		// alone leaves the create path unbounded, and nothing forces a client
+		// to visit :validate first. Two guards, because they answer two
+		// different questions: the reader below bounds how much we will read at
+		// all (see maxCreateBodyBytes), and the check after it enforces the
+		// ontology limit on the ontology itself.
+		var req createRepoRequest
+		if !decodeJSON(w, r, &req, maxCreateBodyBytes) {
+			return
+		}
+		// The ontology limit, measured on the same bytes :validate measures, so
+		// the two paths agree about what "256 KiB" means.
+		if len(req.OntologyYAML) > MaxOntologyBytes {
+			hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Ontology too large",
+				"ontology exceeds the maximum accepted size", r.URL.Path)
+			return
+		}
+		// Local-origin policy is enforced at the clone boundary
+		// (Manager.ResolveAuth, invoked by the clone-mode Create below).
+		spec := repos.CreateSpec{
+			Name:           req.Name,
+			Mode:           req.Mode,
+			OntologyPreset: req.OntologyPreset,
+			OntologyYAML:   req.OntologyYAML,
+		}
+		if req.Template != nil {
+			spec.Template = &repos.TemplateRef{Repo: req.Template.Repo, Name: req.Template.Name}
+		}
+		if req.Origin != nil {
+			spec.Origin = &repos.OriginSpec{
+				URL:        trimOriginURL(req.Origin.URL),
+				Branch:     req.Origin.Branch,
+				AuthMethod: req.Origin.AuthMethod,
+				AuthToken:  req.Origin.AuthToken,
+			}
+		}
+		// The same URL/auth compatibility check PUT /origin and the origin
+		// sessions run, in the same words, before any job starts.
+		if spec.Origin != nil {
+			if err := validateURLAuth(spec.Origin.URL, spec.Origin.AuthMethod); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
+				return
+			}
+		}
+
+		// Preflight still runs on the REQUEST's context, and correctly so: it
+		// is the only part of a create the caller genuinely owns. Its refusals
+		// are the documented 4xx statuses, and they must stay refusals of the
+		// request rather than becoming the terminal state of a job nobody
+		// asked to start.
+		if err := m.CreatePreflight(r.Context(), spec); err != nil {
+			status, title := createErrStatus(err)
+			// The title already names the kind of refusal, so the detail must
+			// not repeat it — see detailWithoutTitlePrefix.
+			hal.WriteProblem(w, status, title, detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
+			return
+		}
+
+		job := m.StartCreate(spec)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Location", b.RepoCreate(job.ID()))
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(createStatusBody(b, job.Status()))
+	}
+}
+
+// handleHALRepoCreateStatus serves GET /api/v1/repo-creates/{id} — the poll
+// target the 202 points at. It reports progress while running and the terminal
+// outcome afterwards, for CreateJobTTL past the finish.
+//
+// NOTE ON THE PATH: this is deliberately NOT /repos/creates/{id}. Repo names
+// use the alphabet [a-z0-9_-], so "creates" is a legal repo name, and chi
+// resolves a static segment in preference to a {repo} param without
+// backtracking — a repo actually named "creates" would become unreachable at
+// every route under /repos/{repo}. A sibling collection has no such shadow.
+func handleHALRepoCreateStatus(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		job, ok := m.CreateJobByID(id)
+		if !ok {
+			// Unknown and expired are one answer on purpose: a client cannot
+			// act differently on them, and the registry is the authoritative
+			// answer to whether the repo exists.
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(createStatusBody(b, job.Status()))
+	}
+}
+
+// handleHALRepoCreates serves GET /api/v1/repo-creates — every job the manager
+// still holds, running and finished-within-TTL, newest first.
+//
+// The collection is what makes a detached create RECOVERABLE. The 202 hands
+// back one id; a client that loses it (closed tab, navigated to Logs,
+// restarted the app) had no route back to a running or failed create, because
+// the single-job endpoint needs the id and the repo list cannot show a repo
+// that does not exist yet. That is the "no trace of the create anywhere" half
+// of the incident.
+func handleHALRepoCreates(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobs := m.CreateJobs()
+		items := make([]map[string]any, 0, len(jobs))
+		for _, st := range jobs {
+			items = append(items, createStatusBody(b, st))
+		}
+		hal.WriteHAL(w, http.StatusOK, hal.CollectionView[map[string]any]{
+			Count:    len(items),
+			Links:    hal.LinkMap{"self": {Href: b.RepoCreates()}},
+			Embedded: map[string][]map[string]any{"creates": items},
+		})
+	}
+}
+
+// handleHALRepoCreateCancel serves POST /api/v1/repo-creates/{id}:cancel: stop
+// a create and remove everything it produced.
+//
+// 202, not 200, and the status body rather than 204: NOTHING is finished when
+// this returns. Manager.CancelCreate records the request and comes straight
+// back, so the body reads `cancelling` — a running create still has to reach
+// its next step boundary, and a finished one still has a repo to delete on a
+// goroutine. The honest answer is "accepted — poll the job to `cancelled`",
+// and the body is the same snapshot the poll returns, so a client that
+// already renders one needs nothing new.
+//
+// `cancelling` is why this handler has no synchronous failure to report any
+// more. The delete's own errors — a repo held by a lens, most of all — land
+// on the JOB, which ends `failed` carrying the reason, because by the time
+// they happen this response is long since written.
+//
+// Cancelling a job that is ALREADY cancelling is 202 again, not 409: the
+// request is idempotent, and a button labelled "Cancelling…" that answers a
+// second press with an error would be reporting a failure for asking twice
+// for the thing already under way.
+//
+// A FAILED or already-cancelled job is 409: there is nothing left to undo,
+// and DELETE (dismiss) is the operation for making its row go away. Unknown
+// and expired are one 404, as everywhere else on this collection.
+func handleHALRepoCreateCancel(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		switch err := m.CancelCreate(id); {
+		case err == nil:
+			job, ok := m.CreateJobByID(id)
+			if !ok {
+				hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+					"no create job with that id (it may have expired)", r.URL.Path)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(createStatusBody(b, job.Status()))
+		case errors.Is(err, repos.ErrCreateUnknown):
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
+		case errors.Is(err, repos.ErrCreateFinished):
+			hal.WriteProblem(w, http.StatusConflict, "Create already finished",
+				"this create already failed or was cancelled; there is nothing to undo — dismiss it instead", r.URL.Path)
+		// No ErrRepoInUseByLens case: the delete that raises it now runs on the
+		// job's goroutine, after this response is written, and surfaces as the
+		// job ending `failed` with that reason. A case here would be a branch
+		// that cannot be reached and a promise to clients that cannot be kept.
+		default:
+			hal.WriteProblem(w, http.StatusInternalServerError, "Cancel failed", err.Error(), r.URL.Path)
+		}
+	}
+}
+
+// handleHALRepoCreateDismiss serves DELETE /api/v1/repo-creates/{id}: forget a
+// FINISHED job so its row leaves the list without waiting out CreateJobTTL.
+//
+// A RUNNING job answers 409, not 204 and not a cancel. Dismissing a row is a
+// list operation; cancelling a create is a different act with a half-clone to
+// roll back, and no client asked for that by clicking a dismiss control —
+// POST /repo-creates/{id}:cancel is where that act lives.
+func handleHALRepoCreateDismiss(m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch err := m.DismissCreateJob(chi.URLParam(r, "id")); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, repos.ErrCreateRunning):
+			hal.WriteProblem(w, http.StatusConflict, "Create is still running",
+				"a running create cannot be dismissed; it will finish or reach its deadline", r.URL.Path)
+		default:
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
+		}
+	}
+}
+
+// createStatusBody renders one create job for the wire. Both the 202 and the
+// poll use it, so a client parses ONE shape and the initial response is
+// literally the first poll result.
+func createStatusBody(b hal.URLBuilder, st repos.CreateStatus) map[string]any {
+	body := map[string]any{
+		"create_id": st.ID,
+		"name":      st.Name,
+		"mode":      st.Mode,
+		"state":     string(st.State),
+		"step":      st.Step,
+		"message":   st.Message,
+		// phase says what KIND of work is happening and is what a client draws
+		// from; the step set is ours to change.
+		"phase":         st.Phase,
+		"indeterminate": st.Indeterminate,
+		"_links":        hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+	}
+	// THE WIRE CONTRACT: indeterminate true → NO pct key at all; otherwise pct
+	// is present. A client sees no number rather than a false one.
+	//
+	// Omitted rather than zeroed. The job's Pct is a latest value, so writing 0
+	// here would run 5 → 0 → 70 across a create and send a monotonic client's
+	// bar BACKWARDS mid-transfer — a different wrong picture from the frozen
+	// 40%, not a fix for it. Absence is the only honest encoding of "there is
+	// no percentage for this", and it is the one a client cannot accidentally
+	// render: `pct ?? 0` produces a number, but only if something reads it, and
+	// a client that respects `indeterminate` never does.
+	//
+	// knomit's own UI honours the flag (CreateProgress prints no percent,
+	// PendingCreateRow draws an indeterminate bar), but this collection is now
+	// listable by anyone, and a consumer that ignored `indeterminate` would
+	// otherwise draw exactly the incident's frozen bar from a number the server
+	// invented. Now there is no number to draw.
+	if !st.Indeterminate {
+		body["pct"] = st.Pct
+	}
+	if st.IndexState != "" {
+		// Present on a DONE job too, and that is the point: "done" now means
+		// indexed, and an index that ended in error rides on a create that
+		// succeeded — the repo is there, and its row shows the chip.
+		body["index_state"] = st.IndexState
+	}
+	switch st.State {
+	case repos.CreateDone:
+		// The repo link appears only once the repo actually exists — a link
+		// offered while the create is still running would 404, and one offered
+		// after a failure would point at something that was rolled back.
+		repo := map[string]any{
+			"name":   st.Name,
+			"_links": hal.LinkMap{"self": {Href: b.Repo(st.Name)}},
+		}
+		// uid is what a client matches this create against its repo list by.
+		// The name follows a rename too (see CreateStatus.Name), but the uid is
+		// the identity a rename cannot touch.
+		if st.RepoUID != "" {
+			repo["uid"] = st.RepoUID
+		}
+		body["repo"] = repo
+	case repos.CreateFailed:
+		body["error"] = st.Err.Error()
+		// Named separately from the message because a deadline and a genuine
+		// create failure call for different client behaviour: one is worth
+		// retrying as-is, the other is not.
+		body["timed_out"] = st.TimedOut
+	}
+	return body
+}
+
+func createErrStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, repos.ErrInvalidName):
+		return http.StatusBadRequest, "Invalid name"
+	case errors.Is(err, repos.ErrRepoExists):
+		return http.StatusConflict, "Repo exists"
+	case errors.Is(err, repos.ErrRepoNameConflictsLens):
+		return http.StatusConflict, "Repo name conflicts with a lens"
+	case errors.Is(err, repos.ErrCreateInFlight):
+		return http.StatusConflict, "Create in flight"
+	case errors.Is(err, repos.ErrOriginInUse):
+		return http.StatusConflict, "Origin in use"
+	// The three ways a remote can be the wrong SHAPE for the requested mode.
+	// All 409: the request is well-formed and the server understood it, but the
+	// remote is in a state that conflicts with it — and each names the mode that
+	// would have worked, because in every case one of the other modes does.
+	case errors.Is(err, repos.ErrRemoteNoBranches):
+		return http.StatusConflict, "Remote has no branches"
+	case errors.Is(err, repos.ErrRemoteNotInitialized):
+		return http.StatusConflict, "Remote is not a knowledge base"
+	case errors.Is(err, repos.ErrRemoteAlreadyInitialized):
+		return http.StatusConflict, "Remote is already a knowledge base"
+	// The duplicate-knowledge-base refusal, from any of the three layers. 409
+	// for the same reason as the shape refusals above: the request is
+	// well-formed and understood, and the conflict is with local state — the
+	// error text names the repo that already holds it, which is the only thing
+	// the reader can act on.
+	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
+		return http.StatusConflict, "Knowledge base already registered"
+	// NOT a refusal: the check could not be RUN. Reported as unavailable so it
+	// can never be mistaken for a create that was examined and rejected, nor
+	// for one that was examined and passed.
+	case errors.Is(err, repos.ErrRegistryUnavailable):
+		return http.StatusServiceUnavailable, "Registry unavailable"
+	// The local-origin policy, reached at preflight since the identity layers
+	// moved the gate ahead of the create. 400 and this title match what
+	// PUT /origin has always answered for the same refusal — one policy, one
+	// status, whichever door the request came through. Without this arm it
+	// fell to the default and answered 500: a server error for a request the
+	// server understood perfectly and declined on policy.
+	case errors.Is(err, repos.ErrLocalOriginDenied):
+		return http.StatusBadRequest, "Origin not allowed"
+	// The transport decision (repos.Manager.ResolveOrigin). A credential for
+	// a fleet peer, cert as input or the internal scheme is a bad request;
+	// a host that cannot be reached, or a peer whose certificate is refused,
+	// is the origin's failure.
+	case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):
+		return http.StatusBadRequest, "Invalid origin"
+	case errors.Is(err, repos.ErrOriginUnreachable):
+		return http.StatusBadGateway, "Origin not reachable"
+	// F24 template refusals. The source or template is not there: 404. The
+	// source is mounted but not open: 503, worth retrying. The template is
+	// there and wrong: 422 — the request is well-formed, the content is not
+	// usable — and the detail names which rule it broke.
+	case errors.Is(err, repos.ErrTemplateName):
+		return http.StatusBadRequest, "Invalid template name"
+	case errors.Is(err, repos.ErrTemplateSourceNotFound):
+		return http.StatusNotFound, "Template source not found"
+	case errors.Is(err, repos.ErrTemplateNotFound):
+		return http.StatusNotFound, "Template not found"
+	case errors.Is(err, repos.ErrTemplateSourceUnavailable):
+		return http.StatusServiceUnavailable, "Template source unavailable"
+	// The reserved fleet id, from any door that names an ontology (a preset,
+	// YAML, a template) or mounts one (clone, subscribe): 422, the request is
+	// well-formed and the ontology it carries is not one a create may use.
+	case errors.Is(err, repos.ErrFleetOntologyReserved):
+		return http.StatusUnprocessableEntity, "Fleet ontology reserved"
+	case errors.Is(err, repos.ErrTemplateNotRegular),
+		errors.Is(err, repos.ErrTemplateTooLarge),
+		errors.Is(err, repos.ErrTemplateLayout),
+		errors.Is(err, repos.ErrTemplateDescribedTwice),
+		errors.Is(err, repos.ErrTemplateNoOntology),
+		errors.Is(err, repos.ErrTemplateOntology),
+		errors.Is(err, repos.ErrTemplatePresetID):
+		return http.StatusUnprocessableEntity, "Template invalid"
+	default:
+		return http.StatusInternalServerError, "Create failed"
+	}
+}

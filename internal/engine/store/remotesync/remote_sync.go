@@ -119,7 +119,7 @@ func FetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 // Such an attempt established NOTHING about the remote, so it must not
 // overwrite what the last completed one established. The reported case: an
 // event that restarts or exits the Sync stage (an origin attach or detach, a
-// store swap, an unmount; internal/repos/stages.go) cancels the reconcile
+// store swap, an unmount; internal/corpus/repos/stages.go) cancels the reconcile
 // loop's life, and the loop starts with an immediate tick, so a fetch is
 // routinely in flight when that lands. Such a tick died with "context
 // canceled", and that was written here as the remote's status — so an

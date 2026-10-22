@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/repos"
 )
 
 // peerGet makes one fresh mTLS request from peer's installed identity to

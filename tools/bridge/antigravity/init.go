@@ -12,7 +12,7 @@ import (
 	"strings"
 	"text/template"
 
-	"knomit/internal/repos"
+	"knomit/internal/corpus/repos"
 	"knomit/tools/bridge/knomitapi"
 	"knomit/tools/bridge/skills"
 )
@@ -73,7 +73,7 @@ func runInit(args []string) error {
 
 	// Validate BEFORE writing anything, so a value containing quotes or other
 	// JSON-hostile characters is rejected up front rather than baked into a
-	// broken mcp_config.json. The grammar lives in internal/repos.
+	// broken mcp_config.json. The grammar lives in internal/corpus/repos.
 	// Only a name is validated; an unbound scaffold names nothing, and the
 	// directory name is sanitized into the key rather than failing init.
 	const nameRule = "must be lowercase letters, digits, hyphens, or underscores"

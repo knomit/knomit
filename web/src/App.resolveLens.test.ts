@@ -330,7 +330,7 @@ describe('refreshContextAfterChange — post-mutation resync', () => {
   });
 });
 
-// A lens binds ALL of its members or none — internal/repos/binding.go fails the
+// A lens binds ALL of its members or none — internal/corpus/repos/binding.go fails the
 // whole binding the moment one member has no live instance. But
 // GET /lenses/{lens} sits OUTSIDE LensMiddleware, so it answers 200 for such a
 // lens, and every read endpoint underneath then answers 503.

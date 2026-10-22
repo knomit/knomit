@@ -202,7 +202,7 @@ export function hostPortOf(url: string): string {
   return `${host}:${port}`;
 }
 
-/** sameFleetURL mirrors internal/repos/fleet_host.go sameFleetURL, the
+/** sameFleetURL mirrors internal/corpus/repos/fleet_host.go sameFleetURL, the
  *  server's own comparison, so the Move flow can say "already on this forge"
  *  before Review: credentials dropped, scheme and host lowercased, a default
  *  port (443 on https, 80 on http) dropped, a trailing slash ignored, the

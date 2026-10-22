@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { urlAuthMismatch } from './originAuth';
 
 // The rows TestValidateURLAuth_FleetPeersAreDecidedNotTyped in
-// internal/web/helpers_test.go shares with the wizard. A peer's https URL
+// internal/edge/web/helpers_test.go shares with the wizard. A peer's https URL
 // with no auth is allowed: the server decides it is a peer.
 const rows: [string, string, string][] = [
   ['https://github.com/o/r.git', 'token', ''],

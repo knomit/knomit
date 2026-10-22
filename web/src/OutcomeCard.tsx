@@ -14,7 +14,7 @@
 // costume of an explanation, and a wrong guess sends people to fix the wrong
 // thing. That is the same failure as reporting an unresolvable SSH credential
 // as `unreachable`, which told users the wrong cause AND removed the access
-// step that could have fixed it (internal/repos/probe.go's own comment).
+// step that could have fixed it (internal/corpus/repos/probe.go's own comment).
 //
 // So callers pass a `headline` and `body` built only from probe fields, and
 // `detail` straight through from ProbeResult.Detail. Nothing here interprets.

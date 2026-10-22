@@ -59,8 +59,8 @@ jobs:
 
       # ./... — DELIBERATELY WIDER THAN tests.yml, which names its packages and
       # so covers 17 of the repo's 49 test-bearing ones. A race job that
-      # inherited that list would be blind to internal/synthesize, internal/mcp,
-      # internal/repos and internal/refs, which is most of where concurrency
+      # inherited that list would be blind to internal/corpus/synthesize, internal/edge/mcp,
+      # internal/corpus/repos and internal/corpus/refs, which is most of where concurrency
       # actually lives here.
       #
       # READ A RED HERE CAREFULLY: because this is the only job running those
@@ -74,7 +74,7 @@ jobs:
       # detector has to actually execute the code.
       #
       # -timeout 45m is MEASURED, not guessed. go test defaults to 10 minutes
-      # PER PACKAGE, and internal/synthesize under -race is the package that
+      # PER PACKAGE, and internal/corpus/synthesize under -race is the package that
       # blows it — so the default makes that package panic with `test timed
       # out after 10m0s` and the job goes red for a reason that is not a race.
       # That is the wallpaper failure this job exists to avoid, and it is how
@@ -82,7 +82,7 @@ jobs:
       #
       # The first figure was 744s on an Apple-Silicon dev machine, and 30m was
       # set as ~2.4x of that. The MACHINE THAT MATTERS is ubuntu-latest, and
-      # across the eleven runs of 2026-09-19..24 it took internal/synthesize
+      # across the eleven runs of 2026-09-19..24 it took internal/corpus/synthesize
       # 1006s–1643s (runs 35458319863..36025605402), i.e. up to 27.4 min
       # against a 30 min limit: 157s of headroom on the worst run. 45m is
       # ~1.65x the worst observed CI figure. If a package ever legitimately

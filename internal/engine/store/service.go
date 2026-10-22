@@ -279,7 +279,7 @@ func (s *Service) SetReadOnly(ro bool) { s.rh.SetReadOnly(ro) }
 func (s *Service) Remote() *remotesync.Index { return s.ri }
 
 // Facts is the fact index: git-backed fact reads and writes, and the one
-// system-tree write door (WriteSystemTree, callable only from internal/repos;
+// system-tree write door (WriteSystemTree, callable only from internal/corpus/repos;
 // see test/archtest/store_write_internals_test.go).
 func (s *Service) Facts() *facts.Index { return s.fi }
 
@@ -412,7 +412,7 @@ func canonicalizePath(path string) string {
 // A HIT is proof, a MISS is not. Commits are unique to a history, so a store
 // that holds a remote's advertised tip is holding the same knowledge base —
 // which is what makes this a cheap sufficient check for a duplicate
-// subscription (internal/repos, layer 2). A store that does NOT hold it has
+// subscription (internal/corpus/repos, layer 2). A store that does NOT hold it has
 // established nothing: the local copy may simply be behind the remote, which
 // is the ordinary case. Callers must never read a miss as "not a duplicate".
 //

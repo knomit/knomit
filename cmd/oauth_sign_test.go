@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/edge/oauth"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/oauth"
 )
 
 // `knomit oauth approve|deny --sign` runs on the OPERATOR's machine (F19

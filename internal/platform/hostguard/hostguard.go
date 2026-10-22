@@ -3,7 +3,7 @@
 // Host header name this machine the way a browser on it would. Both
 // AuthMiddleware (#281) and the runtime diagnostics port (#288) ask them, and
 // the diagnostics port lives in internal/platform, which may not import
-// internal/web — so the rules live here, below both. Pure stdlib.
+// internal/edge/web — so the rules live here, below both. Pure stdlib.
 //
 // Neither answer is a credential. A loopback peer is a TCP address: every
 // local process and every DNS-rebound browser page is one. Who a caller IS

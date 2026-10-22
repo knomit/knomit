@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"knomit/internal/corpus/synthesize"
 	"knomit/internal/engine/store"
-	"knomit/internal/synthesize"
 )
 
 // TestSuggestFloors_EmptyInput verifies that an empty bridge list returns (0,0).

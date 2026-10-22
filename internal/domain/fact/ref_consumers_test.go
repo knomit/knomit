@@ -43,7 +43,7 @@ func TestRefClassification_HasNoSecondImplementation(t *testing.T) {
 		// justify itself rather than silently widening the exemption.
 		filepath.Join("internal", "domain", "fact", "corpus_test.go"):                  "walks a directory selecting .md files",
 		filepath.Join("internal", "domain", "fact", "paths.go"):                        "fact file naming",
-		filepath.Join("internal", "synthesize", "pipeline.go"):                         "skips non-fact files when scanning a tree",
+		filepath.Join("internal", "corpus", "synthesize", "pipeline.go"):               "skips non-fact files when scanning a tree",
 		filepath.Join("internal", "domain", "okf", "source", "history.go"):             "selects fact files out of a git tree",
 		filepath.Join("internal", "engine", "store", "fleetrec", "read.go"):            "selects member record files out of a fleet repository's git tree",
 		filepath.Join("internal", "engine", "store", "verify", "range.go"):             "selects the member record files a judged commit writes (record-owner rule)",
@@ -56,9 +56,9 @@ func TestRefClassification_HasNoSecondImplementation(t *testing.T) {
 		filepath.Join("internal", "engine", "store", "internal", "vcs", "factpath.go"): "index membership by location under the ontology root",
 		filepath.Join("internal", "engine", "store", "facts", "fact_read.go"):          "fact file naming",
 		filepath.Join("internal", "engine", "store", "git", "commitlog.go"):            "selects fact files when indexing a commit",
-		filepath.Join("internal", "repos", "origin_method.go"):                         "checks a remote URL's scheme against the auth method (MethodMismatch, shared with web validateURLAuth), not a ref",
-		filepath.Join("internal", "mcp", "lens_endtoend_test.go"):                      "asserts the kb:// WIRE PATH form of a result row",
-		filepath.Join("internal", "mcp", "query_federation_test.go"):                   "asserts the kb:// WIRE PATH form of a result row",
+		filepath.Join("internal", "corpus", "repos", "origin_method.go"):               "checks a remote URL's scheme against the auth method (MethodMismatch, shared with web validateURLAuth), not a ref",
+		filepath.Join("internal", "edge", "mcp", "lens_endtoend_test.go"):              "asserts the kb:// WIRE PATH form of a result row",
+		filepath.Join("internal", "edge", "mcp", "query_federation_test.go"):           "asserts the kb:// WIRE PATH form of a result row",
 	}
 
 	root := modroot.Dir(t)

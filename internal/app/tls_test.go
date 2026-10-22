@@ -18,12 +18,12 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/web"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
-	"knomit/internal/repos"
-	"knomit/internal/web"
 )
 
 // syncBuffer is a goroutine-safe log sink: the TLS server logs from its own

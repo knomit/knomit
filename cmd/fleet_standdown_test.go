@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	"knomit/internal/edge/web"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
-	"knomit/internal/repos"
-	"knomit/internal/web"
 )
 
 // The self-hosted master switch as the user ruled it (2026-10-16): the old

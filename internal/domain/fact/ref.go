@@ -25,7 +25,7 @@ const (
 // RefKind is what a ref IS — syntax plus repo identity, both independent of any
 // commit. It is deliberately NOT a resolution status: whether a target exists
 // is anchor-dependent, and is decided by the consumer that holds the anchor
-// (internal/web's ref resolver, the UI's commit-anchored hop). Computing
+// (internal/edge/web's ref resolver, the UI's commit-anchored hop). Computing
 // resolution here would force a HEAD answer onto readers anchored elsewhere.
 type RefKind string
 
@@ -331,7 +331,7 @@ func isDigits(s string) bool {
 // search index and the provenance graph without a word.
 //
 // Existence is deliberately NOT checked here: a local fact ref is checked by
-// the write gate (internal/refs), which has corpus access this package must
+// the write gate (internal/corpus/refs), which has corpus access this package must
 // not; a source ref cannot be checked at all, since knomit's object database
 // holds fact blobs and never source.
 //
