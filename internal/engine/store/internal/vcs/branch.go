@@ -65,7 +65,7 @@ type Repo struct {
 	onDrop func(context.Context) error
 	gits   *storegit.Storer
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	signer ssh.Signer        // SSH signer for commit signing (shared)
+	signer atomic.Pointer[ssh.Signer] // SSH signer for commit signing (shared); nil pointer = none
 
 	// onDropBranchRows deletes the per-branch rows higher clusters keep in
 	// tables without an ON DELETE CASCADE; DropBranchLocked runs it between

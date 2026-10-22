@@ -19,8 +19,8 @@ import (
 // ErrNoSigner. Callers ask for it BEFORE writing any object, so a refused write
 // leaves nothing behind in the object store.
 func (rh *Repo) CommitSigner() (ssh.Signer, error) {
-	if rh.signer != nil {
-		return rh.signer, nil
+	if s := rh.signer.Load(); s != nil {
+		return *s, nil
 	}
 	if fb := testFallbackSigner(); fb != nil {
 		return fb, nil

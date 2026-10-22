@@ -89,9 +89,17 @@ func (rh *Repo) ReadOnly() bool { return rh.readOnly }
 // SetReadOnly sets ReadOnly.
 func (rh *Repo) SetReadOnly(ro bool) { rh.readOnly = ro }
 
-// SetSigner sets the commit signer. Unsynchronised: configure before the Repo
-// is shared (see store.Service.SetSigner).
-func (rh *Repo) SetSigner(s ssh.Signer) { rh.signer = s }
+// SetSigner sets the commit signer. The field is an atomic pointer, so a
+// concurrent CommitSigner (the trigger dispatcher reads it on its own
+// goroutine) is race-free; production still configures it right after Open,
+// before the Repo is shared (see store.Service.SetSigner).
+func (rh *Repo) SetSigner(s ssh.Signer) {
+	if s == nil {
+		rh.signer.Store(nil)
+		return
+	}
+	rh.signer.Store(&s)
+}
 
 // SetAgentID sets this instance's persisted agent id.
 func (rh *Repo) SetAgentID(id string) { rh.agentID = id }

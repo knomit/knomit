@@ -508,6 +508,7 @@ func TestCreateFromTemplate_PresetIdentityIsTheRefreshRule(t *testing.T) {
 // SABOTAGE: log every skip at Warn → the not-open assertion red; log every
 // skip at Debug → the genuine-error control red.
 func TestListTemplates_NotOpenRepoIsNotAWarning(t *testing.T) {
+	restoreLoggerLast(t)
 	root := t.TempDir()
 	m := tmplManager(t, root, "tmpl-host")
 	playbooksSource(t, m, root, "clone")

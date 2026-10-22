@@ -317,6 +317,7 @@ func TestFleetFollow_ErrorTextsAreCredentialFree(t *testing.T) {
 	})
 
 	t.Run("the move's publish warning", func(t *testing.T) {
+		restoreLoggerLast(t)
 		f := newForgeFleet(t, nil)
 		hubOf(t, f)
 		_, url := emptyBare(t, f.dir, "moved.git")

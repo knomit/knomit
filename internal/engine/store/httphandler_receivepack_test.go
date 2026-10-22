@@ -219,13 +219,38 @@ func (p *peer) setBranch(name string, c *object.Commit) {
 	require.NoError(p.t, p.repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(name), c.Hash)))
 }
 
-func captureLog(t *testing.T) *bytes.Buffer {
+// syncBuf is a bytes.Buffer safe for a logger written from the goroutines of
+// the test servers while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuf) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.b.Bytes()...)
+}
+
+func captureLog(t *testing.T) *syncBuf {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &syncBuf{}
 	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
+	log.Logger = zerolog.New(buf)
 	t.Cleanup(func() { log.Logger = prev })
-	return &buf
+	return buf
 }
 
 func factAt(t *testing.T, svc *Service, branch, path string) (string, error) {

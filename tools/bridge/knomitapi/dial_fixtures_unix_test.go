@@ -3,7 +3,6 @@
 package knomitapi
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -154,7 +153,7 @@ func TestNewHTTPClient_OverlongSocketPathStillWarns(t *testing.T) {
 	}))
 	defer tcp.Close()
 
-	var logbuf bytes.Buffer
+	var logbuf syncBuf
 	restore := log.Logger
 	log.Logger = zerolog.New(&logbuf).Level(zerolog.DebugLevel)
 	t.Cleanup(func() { log.Logger = restore })

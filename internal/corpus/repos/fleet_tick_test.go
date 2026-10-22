@@ -132,6 +132,7 @@ func TestFleetTick_NothingInstalledOrAnotherRootInstallsNothing(t *testing.T) {
 // per round.
 // SABOTAGE: drop the nothing-installed early return -> a warning -> red.
 func TestFleetTick_NothingInstalledLogsNothing(t *testing.T) {
+	restoreLoggerLast(t)
 	f := newForgeFleet(t, nil)
 	installMasterLeaf(t, f)
 	alpha := f.namedMember(t, "alpha")

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -240,6 +241,31 @@ func TestSessionStart_FallsBackToInvariantsWhenNoGlobalPrinciples(t *testing.T) 
 // not-emitted branch left its line — emitted=true, no counts, no reason —
 // indistinguishable at a glance from a healthy emission. Whoever reads the log
 // to find out why knomit went quiet is exactly who needs that field.
+// syncBuf is a bytes.Buffer safe for a logger written from other goroutines
+// while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuf) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.b.Bytes()...)
+}
+
 func TestSessionStart_MultipleServersLogsTheSkipReason(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"mcpServers":{
@@ -248,7 +274,7 @@ func TestSessionStart_MultipleServersLogsTheSkipReason(t *testing.T) {
 	}}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644))
 
-	var logBuf bytes.Buffer
+	var logBuf syncBuf
 	prev := log.Logger
 	log.Logger = zerolog.New(&logBuf)
 	t.Cleanup(func() { log.Logger = prev })
