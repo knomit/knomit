@@ -1,4 +1,4 @@
-package synthesize
+package motif
 
 import (
 	"context"
@@ -27,19 +27,10 @@ func motifVocabEnv(t *testing.T, n int) *synthtest.RestatementEnv {
 	for i := range n {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 	return env
-}
-
-// numberWord keeps generated motif names to the 2–4 word kebab shape the field
-// contract requires — "mechanism-17" would be rejected as a digit token.
-func numberWord(i int) string {
-	words := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
-		"golf", "hotel", "india", "juliet", "kilo", "lima", "mike", "november",
-		"oscar", "papa", "quebec", "romeo", "sierra", "tango"}
-	return words[i%len(words)]
 }
 
 // The statistical-validity floor: below it, nothing is offered at all. A
@@ -79,7 +70,7 @@ func TestMotifJudgeSelection_SlotBudgetCapsAFloodCorpus(t *testing.T) {
 	for i := range 40 {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
-			[]string{fmt.Sprintf("mechanism-%s-%s", numberWord(i), numberWord(i/20))})
+			[]string{fmt.Sprintf("mechanism-%s-%s", synthtest.NumberWord(i), synthtest.NumberWord(i/20))})
 	}
 	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 
@@ -108,7 +99,7 @@ func TestMotifJudgeSelection_NoClusterExceedsItsNeighbourBudget(t *testing.T) {
 	for i := range 20 {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
-			[]string{fmt.Sprintf("spoke-%s", numberWord(i))})
+			[]string{fmt.Sprintf("spoke-%s", synthtest.NumberWord(i))})
 	}
 	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 
@@ -207,7 +198,7 @@ func TestMotifJudgeSelection_NoEmbedderDegradesQuietly(t *testing.T) {
 	for i := range minJudgeVocabulary + 2 {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 

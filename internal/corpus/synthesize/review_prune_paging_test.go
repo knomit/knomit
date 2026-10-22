@@ -77,7 +77,7 @@ func TestRenderPruneWorkItem_FactsAreStructural(t *testing.T) {
 // Driven through reviewResultPage and RequireCompletion directly rather than a
 // live session, because a unit store has no similarity edges and therefore
 // produces no prune clusters at all (Louvain returns singletons and
-// filterSmallClusters removes them) — the cluster shape under test cannot be
+// graph.filterSmallClusters removes them) — the cluster shape under test cannot be
 // reached from StartSession here.
 func TestPaging_LargePruneClusterPagesAndRequiresToken(t *testing.T) {
 	facts := bigPruneFacts(40, 3*1024)

@@ -200,6 +200,9 @@ var sameLayerEdges = map[string]bool{
 	"corpus/synthesize/restatement -> corpus/synthesize/step": true,
 	// The graph child clusters step.FactForLLM values (step vocabulary).
 	"corpus/synthesize/graph -> corpus/synthesize/step": true,
+	// The motif child plans and decodes the vocabulary steps over step.Deps and
+	// work items (step vocabulary).
+	"corpus/synthesize/motif -> corpus/synthesize/step": true,
 	// synthtest is the test-support package of the synthesize tree; its
 	// environment builders stand up a repo instance.
 	"corpus/synthesize/internal/synthtest -> corpus/repos":           true,

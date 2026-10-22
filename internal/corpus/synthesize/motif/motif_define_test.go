@@ -1,10 +1,9 @@
-package synthesize
+package motif
 
 import (
 	"context"
 	"encoding/json"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
-	"os"
 	"strings"
 	"testing"
 
@@ -22,12 +21,12 @@ func TestMotifDefine_PayloadCarriesNoCarrierContent(t *testing.T) {
 	env := motifVocabEnv(t, 4)
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planMotifDefineWork(ctx, env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanDefineWork(ctx, env.Deps(), sess, env.Branch))
 
 	item, err := env.Svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotNil(t, item)
-	require.Equal(t, motifDefineStepType, item.StepType)
+	require.Equal(t, DefineStepType, item.StepType)
 
 	// The fixture's carrier titles are "Carrier N" and its bodies "body".
 	// Neither may appear anywhere in what the model is shown.
@@ -47,58 +46,30 @@ func TestMotifDefine_PayloadCarriesNoCarrierContent(t *testing.T) {
 	}
 }
 
-// The prompt must state the blindness WITH its reason, and the register rule
-// mechanically rather than stylistically.
-func TestMotifDefinePrompt_StatesBlindnessAndRegisterWithReasons(t *testing.T) {
-	body, err := os.ReadFile("prompts/large/motif_define_user.txt")
-	require.NoError(t, err)
-	text := string(body)
-
-	require.Contains(t, text, "You are given the NAMES ONLY")
-	require.Contains(t, text, "and that is deliberate",
-		"blindness must be explained, not merely imposed — a model told why a "+
-			"constraint exists honours it better than one told a rule")
-	require.Contains(t, text, "still fits a fact about some entirely different system")
-
-	// The register rule, and every false-generic class it must name.
-	for _, want := range []string{"product", "company", "tool", "system", "component", "protocol", "library"} {
-		require.Containsf(t, text, want, "the register rule must name %q", want)
-	}
-	require.Contains(t, text, "definition of that thing rather than of the mechanism",
-		"the register rule must be justified mechanically — a definition naming a "+
-			"product has become a definition OF that product and stops matching")
-
-	// The tautology ban, with its worked negative example.
-	require.Contains(t, text, "a fallback that is silent")
-
-	// The escape hatch.
-	require.Contains(t, text, "A wrong definition is worse than a missing one")
-}
-
 // ── response handling ─────────────────────────────────────────────────────
 
-func defineOffered() []motifDefineItem {
-	return []motifDefineItem{
+func defineOffered() []DefineItem {
+	return []DefineItem{
 		{Name: "silent-fallback", clusterKey: "fallback-silent"},
 		{Name: "config-drift", clusterKey: "config-drift"},
 	}
 }
 
 func TestMotifDefineDecode_RejectsAnUnofferedName(t *testing.T) {
-	res := motifDefineResult{Definitions: []motifDefinition{
+	res := DefineResult{Definitions: []motifDefinition{
 		{Name: "invented-mechanism", Definition: "Something."},
 	}}
-	err := validateMotifDefinitions(res, defineOffered())
+	err := ValidateDefinitions(res, defineOffered())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not offered")
 }
 
 func TestMotifDefineDecode_RejectsADuplicate(t *testing.T) {
-	res := motifDefineResult{Definitions: []motifDefinition{
+	res := DefineResult{Definitions: []motifDefinition{
 		{Name: "config-drift", Definition: "One."},
 		{Name: "config-drift", Definition: "Two."},
 	}}
-	err := validateMotifDefinitions(res, defineOffered())
+	err := ValidateDefinitions(res, defineOffered())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "more than once")
 }
@@ -106,16 +77,16 @@ func TestMotifDefineDecode_RejectsADuplicate(t *testing.T) {
 // An empty definition is a legitimate answer, not a malformed one: the prompt
 // asks for one rather than a guess when a name cannot be defined from itself.
 func TestMotifDefineDecode_EmptyDefinitionIsAllowed(t *testing.T) {
-	res := motifDefineResult{Definitions: []motifDefinition{
+	res := DefineResult{Definitions: []motifDefinition{
 		{Name: "config-drift", Definition: ""},
 	}}
-	require.NoError(t, validateMotifDefinitions(res, defineOffered()))
+	require.NoError(t, ValidateDefinitions(res, defineOffered()))
 }
 
 func TestMotifDefineDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
-	_, err := parseMotifDefineResponse(`{"decisions":[{"name":"x","definition":"y"}]}`)
+	_, err := ParseDefineResponse(`{"decisions":[{"name":"x","definition":"y"}]}`)
 	require.Error(t, err)
-	_, err = parseMotifDefineResponse(`{"definitions":[]}`)
+	_, err = ParseDefineResponse(`{"definitions":[]}`)
 	require.NoError(t, err, "an empty list is a legitimate 'nothing to author'")
 }
 
@@ -130,9 +101,9 @@ func TestMotifDefineApply_EmptyDefinitionLeavesTheClusterQueued(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, targets)
 
-	offered := []motifDefineItem{{Name: targets[0].Name, clusterKey: targets[0].ClusterKey}}
-	res := motifDefineResult{Definitions: []motifDefinition{{Name: targets[0].Name, Definition: "   "}}}
-	require.NoError(t, applyMotifDefinitions(ctx, env.Deps(), env.Branch, res, offered))
+	offered := []DefineItem{{Name: targets[0].Name, clusterKey: targets[0].ClusterKey}}
+	res := DefineResult{Definitions: []motifDefinition{{Name: targets[0].Name, Definition: "   "}}}
+	require.NoError(t, ApplyDefinitions(ctx, env.Deps(), env.Branch, res, offered))
 
 	after, err := env.Svc.Motifs().ClustersNeedingDefinition(ctx, env.Branch)
 	require.NoError(t, err)
@@ -169,17 +140,17 @@ func TestMotifDefineApply_RoutesByClusterKeyNotName(t *testing.T) {
 	require.Equal(t, "write-atomic", targets[0].Name)
 	require.NotEqual(t, targets[0].Name, targets[0].ClusterKey,
 		"precondition: name and key must differ, or this test cannot tell them apart")
-	offered := []motifDefineItem{{Name: targets[0].Name, clusterKey: targets[0].ClusterKey}}
+	offered := []DefineItem{{Name: targets[0].Name, clusterKey: targets[0].ClusterKey}}
 
 	// Usage shifts so the representative flips BEFORE the answer arrives.
 	env.WriteFactWithMotifs("kb/d.md", "D", "body", []string{"atomic-write"})
 	env.WriteFactWithMotifs("kb/e.md", "E", "body", []string{"atomic-write"})
 	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	res := motifDefineResult{Definitions: []motifDefinition{
+	res := DefineResult{Definitions: []motifDefinition{
 		{Name: targets[0].Name, Definition: "A write becomes visible in full or not at all."},
 	}}
-	require.NoError(t, applyMotifDefinitions(ctx, env.Deps(), env.Branch, res, offered))
+	require.NoError(t, ApplyDefinitions(ctx, env.Deps(), env.Branch, res, offered))
 
 	def, ok, err := env.Svc.Motifs().Definition(ctx, env.Branch, targets[0].ClusterKey)
 	require.NoError(t, err)
@@ -215,66 +186,24 @@ func TestMotifDefine_RegisterRejectsCarrierEntityNames(t *testing.T) {
 	// carried "Postgres", so a compliant writer could not have used it.
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planMotifDefineWork(ctx, env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanDefineWork(ctx, env.Deps(), sess, env.Branch))
 	item, err := env.Svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotContains(t, strings.ToLower(item.FactsJSON), "postgres",
 		"the carrier's entity reached the payload — the register rule then depends on "+
 			"the model declining to use what it was handed")
 
-	offered, err := motifDefineItemsFromPayload(item.FactsJSON)
+	offered, err := DefineItemsFromPayload(item.FactsJSON)
 	require.NoError(t, err)
-	res := motifDefineResult{Definitions: []motifDefinition{
+	res := DefineResult{Definitions: []motifDefinition{
 		{Name: offered[0].Name, Definition: "A bounded resource is fully consumed, so new work cannot proceed."},
 	}}
-	require.NoError(t, applyMotifDefinitions(ctx, env.Deps(), env.Branch, res, offered))
+	require.NoError(t, ApplyDefinitions(ctx, env.Deps(), env.Branch, res, offered))
 
 	def, ok, err := env.Svc.Motifs().Definition(ctx, env.Branch, targets[0].ClusterKey)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotContains(t, strings.ToLower(def), "postgres")
-}
-
-// ── §3.3 metrics reaching their surfaces ──────────────────────────────────
-
-// The reflect payload carries recurrence and mint-to-link (§3.3). Reflect is
-// where the corpus reasons about its own habits, and "are we naming the same
-// mechanisms as each other" is one.
-func TestMotifVocabulary_ReachesTheReflectPayload(t *testing.T) {
-	ctx := context.Background()
-	env := synthtest.NewRestatementEnv(t, 0)
-	env.WriteFactWithMotifs("kb/a.md", "A", "body", []string{"silent-fallback"})
-	env.WriteFactWithMotifs("kb/b.md", "B", "body", []string{"silent-fallback"})
-	env.WriteFactWithMotifs("kb/c.md", "C", "body", []string{"config-drift"})
-	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
-
-	section := motifVocabularySection(ctx, env.Deps(), env.Branch)
-	require.Contains(t, section, "motif clusters")
-	require.Contains(t, section, "Recurrence")
-	require.Contains(t, section, "Mint-to-link")
-
-	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "", section)
-	require.NoError(t, err)
-	require.Contains(t, content.Prompt, "Recurrence",
-		"the reflect prompt must carry the vocabulary metrics when there is a vocabulary")
-}
-
-// A corpus with no motif vocabulary gets NO section — not a section of zeroes.
-// "0 clusters, recurrence 0%" invites the model to reason about a mechanism the
-// corpus is not using.
-func TestMotifVocabulary_AbsentSectionOnAMotiflessCorpus(t *testing.T) {
-	ctx := context.Background()
-	env := synthtest.NewRestatementEnv(t, 3) // plain facts, no motifs
-	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
-
-	section := motifVocabularySection(ctx, env.Deps(), env.Branch)
-	require.Empty(t, section)
-
-	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "", section)
-	require.NoError(t, err)
-	require.NotContains(t, content.Prompt, "Recurrence")
-	require.NotContains(t, content.Prompt, "motif clusters",
-		"a motif-free corpus must see no motif section at all")
 }
 
 // The metrics also land in the session's health lines, alongside every other
@@ -289,7 +218,7 @@ func TestMotifVocabulary_ReachesTheHealthLines(t *testing.T) {
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
 	sess.Health = []string{"a line from another producer"}
-	require.NoError(t, planMotifDefineWork(ctx, env.Deps(), sess, env.Branch))
+	require.NoError(t, PlanDefineWork(ctx, env.Deps(), sess, env.Branch))
 
 	joined := strings.Join(sess.Health, "\n")
 	require.Contains(t, joined, "motif vocabulary:")

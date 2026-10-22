@@ -6,6 +6,7 @@ import (
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/motif"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -42,7 +43,7 @@ func TestBootstrap_SessionBuildsItsOwnAliasTableFromNothing(t *testing.T) {
 			fmt.Sprintf("kb/f%02d.md", i),
 			fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 
 	before, err := env.Svc.Motifs().AliasTable(ctx, env.Branch)
@@ -75,7 +76,7 @@ func TestBootstrap_ConsumersComeAliveAfterOneSession(t *testing.T) {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 
 	vocabSession(env)
@@ -122,7 +123,7 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 	env.WriteFact("kb/bare.md", "Bare fact", "a body with no motif")
 
@@ -131,7 +132,7 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 	seen := map[string]bool{}
 	for _, item := range out.restatementItems {
 		switch item.StepType {
-		case motifAliasStepType, motifDefineStepType:
+		case motif.AliasStepType, motif.DefineStepType:
 			seen[item.StepType] = true
 			sess := pipelineSessionFor(env, out.sessionID)
 			view, err := (reviewStrategy{}).Render(ctx, env.Deps(), &sess, &item)
@@ -177,7 +178,7 @@ func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+			[]string{fmt.Sprintf("mechanism-%s", synthtest.NumberWord(i))})
 	}
 	env.WriteFact("kb/bare.md", "Bare fact", "a body with no motif")
 
@@ -201,10 +202,10 @@ func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
 				"%s served BLANKED factForLLM structs — the paging layer replaced the "+
 					"real payload with empty ones", res.Item.Type)
 			switch res.Item.Type {
-			case motifAliasStepType:
+			case motif.AliasStepType:
 				require.Contains(t, string(res.Item.Facts), `"a_carriers"`,
 					"the judge must receive carrier titles — they are the over-merge guard")
-			case motifDefineStepType:
+			case motif.DefineStepType:
 				require.Contains(t, string(res.Item.Facts), `"cluster_key"`,
 					"the definer's answer must be routable back to a cluster")
 			}
@@ -215,13 +216,13 @@ func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
 			break
 		}
 	}
-	require.Containsf(t, checked, motifDefineStepType,
+	require.Containsf(t, checked, motif.DefineStepType,
 		"the fixture must serve a define item — it is the payload that was being blanked")
 }
 
 func motifStepForTest(t string) bool {
 	switch t {
-	case motifAliasStepType, motifDefineStepType:
+	case motif.AliasStepType, motif.DefineStepType:
 		return true
 	}
 	return false
@@ -229,9 +230,9 @@ func motifStepForTest(t string) bool {
 
 func emptyResponseForTest(stepType string) string {
 	switch stepType {
-	case motifAliasStepType:
+	case motif.AliasStepType:
 		return `{"verdicts":[]}`
-	case motifDefineStepType:
+	case motif.DefineStepType:
 		return `{"definitions":[]}`
 	case "prune":
 		return `{"decisions":[],"merges":[]}`

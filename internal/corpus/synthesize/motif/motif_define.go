@@ -1,4 +1,4 @@
-package synthesize
+package motif
 
 import (
 	"context"
@@ -24,8 +24,8 @@ import (
 // achievable rather than merely requested — a writer who never saw a product
 // name cannot put one in.
 
-// motifDefineStepType is the work-item step type for the definition pass.
-const motifDefineStepType = "motif_define"
+// DefineStepType is the work-item step type for the definition pass.
+const DefineStepType = "motif_define"
 
 // motifDefinePriority sits just below the alias judge: definitions are written
 // over clusters, so resolving the vocabulary first avoids authoring a sentence
@@ -39,11 +39,11 @@ const motifDefinePriority = 1.1
 // remember where it got to.
 const maxDefinitionsPerSession = 24
 
-// motifDefineItem is one name as the authoring pass sees it.
+// DefineItem is one name as the authoring pass sees it.
 //
 // Name and Current only. There is deliberately no carrier field: see the file
 // comment, and the prompt, which states the reason rather than the rule.
-type motifDefineItem struct {
+type DefineItem struct {
 	Name string `json:"name"`
 	// Current is the definition standing for this cluster, shown on a REFRESH
 	// so the model revises rather than restarts (designer ruling): definition
@@ -70,7 +70,7 @@ type motifDefineItem struct {
 	membersKnown bool
 }
 
-const motifDefineResponseSchema = `{
+const DefineResponseSchema = `{
   "type": "object",
   "properties": {
     "definitions": {
@@ -93,15 +93,15 @@ type motifDefinition struct {
 	Definition string `json:"definition"`
 }
 
-type motifDefineResult struct {
+type DefineResult struct {
 	Definitions []motifDefinition `json:"definitions"`
 }
 
-// parseMotifDefineResponse decodes and probes the envelope (invariant
+// ParseDefineResponse decodes and probes the envelope (invariant
 // 51d85fcd — the schema's `required` list is inert without a probe on the raw
 // object, and a response under the wrong key would apply as a silent no-op).
-func parseMotifDefineResponse(raw string) (motifDefineResult, error) {
-	var out motifDefineResult
+func ParseDefineResponse(raw string) (DefineResult, error) {
+	var out DefineResult
 	text := step.ExtractJSON(raw)
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return out, fmt.Errorf("parse motif define response: %w", err)
@@ -112,7 +112,7 @@ func parseMotifDefineResponse(raw string) (motifDefineResult, error) {
 	return out, nil
 }
 
-// validateMotifDefinitions checks the response against what was asked for.
+// ValidateDefinitions checks the response against what was asked for.
 //
 // A definition for a name this item never offered is refused: it would be
 // stored against whatever cluster happened to match, and a definition is used
@@ -121,7 +121,7 @@ func parseMotifDefineResponse(raw string) (motifDefineResult, error) {
 // An EMPTY definition is legitimate — the prompt asks for one rather than a
 // guess when a name cannot be defined from itself. It is simply not stored, so
 // the cluster stays queued.
-func validateMotifDefinitions(res motifDefineResult, offered []motifDefineItem) error {
+func ValidateDefinitions(res DefineResult, offered []DefineItem) error {
 	valid := map[string]struct{}{}
 	for _, it := range offered {
 		valid[it.Name] = struct{}{}
@@ -139,13 +139,13 @@ func validateMotifDefinitions(res motifDefineResult, offered []motifDefineItem) 
 	return nil
 }
 
-// applyMotifDefinitions stores the authored sentences.
+// ApplyDefinitions stores the authored sentences.
 //
 // Routed by CLUSTER KEY, not by name. The representative spelling can flip
 // between the item being rendered and answered — that is exactly what
 // canonical_id does — and storing by name would then write the sentence
 // against a cluster nobody asked about.
-func applyMotifDefinitions(ctx context.Context, d step.Deps, branch string, res motifDefineResult, offered []motifDefineItem) error {
+func ApplyDefinitions(ctx context.Context, d step.Deps, branch string, res DefineResult, offered []DefineItem) error {
 	type route struct {
 		key   string
 		stamp vocab.DefinitionStamp
@@ -242,8 +242,8 @@ func recordMotifDefineHealth(sess *model.PipelineSession, h motifDefineHealth) {
 		h.Queued, h.Offered))
 }
 
-// planMotifDefineWork enqueues at most one definition item per session.
-func planMotifDefineWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) error {
+// PlanDefineWork enqueues at most one definition item per session.
+func PlanDefineWork(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string) error {
 	targets, err := d.Motifs.ClustersNeedingDefinition(ctx, branch)
 	if err != nil {
 		return nil // an addition to review; degrade rather than fail the session
@@ -263,9 +263,9 @@ func planMotifDefineWork(ctx context.Context, d step.Deps, sess *model.PipelineS
 	if len(targets) > maxDefinitionsPerSession {
 		targets = targets[:maxDefinitionsPerSession]
 	}
-	items := make([]motifDefineItem, 0, len(targets))
+	items := make([]DefineItem, 0, len(targets))
 	for _, t := range targets {
-		items = append(items, motifDefineItem{
+		items = append(items, DefineItem{
 			Name:       t.Name,
 			Current:    t.Interim,
 			clusterKey: t.ClusterKey,
@@ -282,7 +282,7 @@ func planMotifDefineWork(ctx context.Context, d step.Deps, sess *model.PipelineS
 	}
 	return d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
-		StepType:   motifDefineStepType,
+		StepType:   DefineStepType,
 		ClusterKey: "motif-define",
 		FactsJSON:  string(payload),
 		Priority:   motifDefinePriority,
@@ -297,8 +297,8 @@ func planMotifDefineWork(ctx context.Context, d step.Deps, sess *model.PipelineS
 // they are simply not what the definer is asked to reason about.
 //
 // The key is a separate exported field rather than an unexported one on
-// motifDefineItem because the payload round-trips through the work item's
-// JSON: an unexported field would marshal away, and applyMotifDefinitions
+// DefineItem because the payload round-trips through the work item's
+// JSON: an unexported field would marshal away, and ApplyDefinitions
 // would then have no cluster to store against — silently writing nothing on
 // every refresh.
 type motifDefinePayloadEntry struct {
@@ -315,7 +315,7 @@ type motifDefinePayloadEntry struct {
 	MembersKnown bool `json:"members_known"`
 }
 
-func motifDefinePayload(items []motifDefineItem) []motifDefinePayloadEntry {
+func motifDefinePayload(items []DefineItem) []motifDefinePayloadEntry {
 	out := make([]motifDefinePayloadEntry, len(items))
 	for i, it := range items {
 		out[i] = motifDefinePayloadEntry{
@@ -327,14 +327,14 @@ func motifDefinePayload(items []motifDefineItem) []motifDefinePayloadEntry {
 	return out
 }
 
-func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
+func DefineItemsFromPayload(raw string) ([]DefineItem, error) {
 	var entries []motifDefinePayloadEntry
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return nil, err
 	}
-	out := make([]motifDefineItem, len(entries))
+	out := make([]DefineItem, len(entries))
 	for i, e := range entries {
-		out[i] = motifDefineItem{
+		out[i] = DefineItem{
 			Name: e.Name, Current: e.Current,
 			clusterKey: e.ClusterKey, members: e.Members,
 			membersKnown: e.MembersKnown,
@@ -343,7 +343,7 @@ func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
 	return out, nil
 }
 
-// motifVocabularySection renders the §3.3 metrics for the reflect prompt, or
+// VocabularySection renders the §3.3 metrics for the reflect prompt, or
 // "" when the corpus has no motif vocabulary.
 //
 // Empty rather than zeroes: a reflection prompt carrying "0 clusters,
@@ -354,7 +354,7 @@ func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
 // about the corpus's own habits, and recurrence is exactly such a habit — the
 // question "are we naming the same mechanisms as each other" is a methodology
 // question, not a fact-level one.
-func motifVocabularySection(ctx context.Context, d step.Deps, branch string) string {
+func VocabularySection(ctx context.Context, d step.Deps, branch string) string {
 	if d.Motifs == nil {
 		return ""
 	}

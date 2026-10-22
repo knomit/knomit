@@ -447,3 +447,12 @@ func UnitHash(text string) float64 {
 	_, _ = h.Write([]byte(text))
 	return float64(h.Sum64()%1_000_000) / 1_000_000
 }
+
+// NumberWord keeps generated motif names to the 2–4 word kebab shape the field
+// contract requires — "mechanism-17" would be rejected as a digit token.
+func NumberWord(i int) string {
+	words := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
+		"golf", "hotel", "india", "juliet", "kilo", "lima", "mike", "november",
+		"oscar", "papa", "quebec", "romeo", "sierra", "tango"}
+	return words[i%len(words)]
+}
