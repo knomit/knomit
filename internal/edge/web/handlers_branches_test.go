@@ -7,26 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/engine/store/model"
-
-	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 )
 
 func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 	// Wire a manager with one repo.
-	m := newTestManagerWithRepos(t, "alpha")
-	s := &Server{
-		Manager: m,
-		providers: storeProviders{
-			branchesLister: func(_ context.Context, _ *repos.RepoInstance) ([]model.Branch, error) {
-				return []model.Branch{
-					{Name: "agent/test"},
-					{Name: "main"},
-				}, nil
-			},
-		},
-	}
+	m, _ := newRealStoreManager(t, "alpha")
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
@@ -78,19 +65,15 @@ func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 }
 
 func TestHandleHALBranch_ReturnsStatusAndFullLinkMap(t *testing.T) {
-	m := newTestManagerWithRepos(t, "alpha")
+	m, svcs := newRealStoreManager(t, "alpha")
+	head, err := svcs["alpha"].HeadCommit(context.Background(), "agent/test")
+	if err != nil || head == "" {
+		t.Fatalf("fixture: head of agent/test = %q, %v", head, err)
+	}
 	s := &Server{
 		Manager:           m,
 		EmbeddingsEnabled: true,
 		AgentBranch:       "agent/test",
-		providers: storeProviders{
-			branchRootReader: func(_ context.Context, _ *repos.RepoInstance, name string) (branchRootInfo, error) {
-				return branchRootInfo{
-					Head:        "7f3a8b2c",
-					IndexCommit: "7f3a8b2c",
-				}, nil
-			},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -120,8 +103,8 @@ func TestHandleHALBranch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 	if body.Name != "agent/test" {
 		t.Errorf("name: %q (must be decoded)", body.Name)
 	}
-	if body.Head != "7f3a8b2c" {
-		t.Errorf("head: %q", body.Head)
+	if body.Head != head {
+		t.Errorf("head: %q, want the store's head %q", body.Head, head)
 	}
 	if !body.EmbeddingsEnabled {
 		t.Error("embeddings_enabled should be true")

@@ -299,7 +299,6 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 // content question, and a subscription has no agent branch.
 func handleHALRepo(
 	b hal.URLBuilder,
-	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	agentBranch string,
 	embeddingsEnabled bool,
 	experimentExpiryDays int,
@@ -308,7 +307,7 @@ func handleHALRepo(
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		body := repoView(b, r, name, ri)
-		if root := embedBranchRoot(r.Context(), b, reader, name, ri.ReadBranch(), ri, agentBranch, embeddingsEnabled, experimentExpiryDays); root != nil {
+		if root := embedBranchRoot(r.Context(), b, name, ri.ReadBranch(), ri, agentBranch, embeddingsEnabled, experimentExpiryDays); root != nil {
 			body["_embedded"] = map[string]any{"branch": root}
 		}
 		hal.WriteHAL(w, http.StatusOK, body)

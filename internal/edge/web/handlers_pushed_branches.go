@@ -7,7 +7,6 @@ package web
 // is the POST, which needs `operator` and the tip the operator reviewed.
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -46,7 +45,6 @@ type pushedBranchView struct {
 // with what merging it would bring. A subscription has none.
 func handleHALPushedBranches(
 	b hal.URLBuilder,
-	lister func(context.Context, *repos.RepoInstance) ([]model.Branch, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -55,7 +53,7 @@ func handleHALPushedBranches(
 
 		items := []pushedBranchView{}
 		if !ri.Subscribed() && ri.AgentBranch() != "" {
-			branches, err := lister(r.Context(), ri)
+			branches, err := listRepoBranches(r.Context(), ri)
 			if err != nil {
 				hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list branches", err.Error(), r.URL.Path)
 				return
