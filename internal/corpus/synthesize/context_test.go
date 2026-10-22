@@ -258,7 +258,10 @@ func TestPrompts_NeverInterpolateContext(t *testing.T) {
 		}
 	}
 
-	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go"}
+	// types.go holds factsForLLM and WorkItemContent, which 13a moved out of
+	// review_strategy.go and prompt_review.go: the projection that carries
+	// Context into the prompt payload stays under this scan.
+	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go", "types.go"}
 	for _, name := range builders {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, name, nil, 0)

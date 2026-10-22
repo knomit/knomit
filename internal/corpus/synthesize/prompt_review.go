@@ -7,16 +7,6 @@ import (
 	"strings"
 )
 
-// WorkItemContent is what gets returned to the hosting model in the MCP response.
-type WorkItemContent struct {
-	Prompt         string `json:"prompt"`
-	ResponseSchema string `json:"response_schema"`
-	// Facts is the item's payload as a structured JSON array, carried beside
-	// the prompt rather than serialized into it. Empty for step types that
-	// still interpolate their payload into the template.
-	Facts string `json:"facts,omitempty"`
-}
-
 const pruneResponseSchema = `{
   "type": "object",
   "properties": {

@@ -11,12 +11,9 @@ package synthesize
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-
-	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/vocab"
@@ -1298,26 +1295,6 @@ func rankAndCap(in []enumeratedMotif, budget int) ([]BridgeSeedSet, int) {
 }
 
 // ── review-pipeline wiring ────────────────────────────────────────────────
-
-// enqueueDiscover writes one discover work item. One definition, so the
-// entity/domain path and both motif lanes cannot drift apart in how an item is
-// shaped, keyed, or prioritised.
-func enqueueDiscover(ctx context.Context, d Deps, sess *model.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return wrapf(reviewTool, err, "marshal discover payload %s", clusterKey)
-	}
-	if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
-		SessionID:  sess.ID,
-		StepType:   "discover",
-		ClusterKey: clusterKey,
-		FactsJSON:  string(payloadJSON),
-		Priority:   priority,
-	}); err != nil {
-		return wrapf(reviewTool, err, "insert discover item %s", clusterKey)
-	}
-	return nil
-}
 
 // motifResolverFor closes over this session's alias table.
 //

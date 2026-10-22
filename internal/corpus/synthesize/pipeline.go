@@ -107,17 +107,6 @@ func NewPipelineOnBranch(ri *repos.RepoInstance, onProgress func(ProgressEvent),
 // Effort returns the discovery dial this Pipeline was constructed with.
 func (p *Pipeline) Effort() Effort { return p.effort }
 
-// wrapf and errf give every engine error a consistent `<tool>: <what>` prefix.
-// The tool name is a runtime value now that one engine serves several tools,
-// so the prefix cannot be a string literal the way it was in review.go.
-func wrapf(tool string, err error, format string, args ...any) error {
-	return fmt.Errorf("%s: %s: %w", tool, fmt.Sprintf(format, args...), err)
-}
-
-func errf(tool string, format string, args ...any) error {
-	return fmt.Errorf("%s: %s", tool, fmt.Sprintf(format, args...))
-}
-
 // storeIndices returns the store indices under the repo read lock.
 func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, *index.Facade, *sessions.PipelineIndex, func(ctx context.Context, branch string) (string, error), *vocab.AbstractionIndex, *vocab.MotifIndex) {
 	var gs *facts.Index
@@ -941,51 +930,6 @@ func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Inde
 		seeds = append(seeds, f)
 	}
 	return seeds, scan, nil
-}
-
-// factFromSearchResult projects a search hit into a fact.Fact so the full-scan
-// seed path yields the same type as the incremental (fact.ParseFact) path.
-//
-// Kind is normalized the way fact.ParseFact normalizes it — an absent kind
-// means the default, epistemic. Without that, a strategy whose AcceptSeed
-// tests Kind would reject the entire full-scan pool while accepting the
-// incremental one, making the seed pool depend on watermark state.
-//
-// Origin must be copied: see dirtyFacts.
-func factFromSearchResult(sr index.SearchResult) fact.Fact {
-	f := fact.NewFact(sr.Path)
-	f.Title = sr.Title
-	f.Body = sr.Body
-	f.Kind = fact.Kind(sr.Kind)
-	if f.Kind == "" {
-		f.Kind = fact.DefaultKind
-	}
-	f.Type = fact.Type(sr.Type)
-	f.Domain = sr.Domain
-	f.Entities = sr.Entities
-	// Motifs travel with the fact, like every other authored field above.
-	// They were missing here until Phase 3 (designer ruling 2026-08-23,
-	// .claude/plans/motif/2026-08-23-phase3-rulings-3.md), which meant the
-	// full-scan path and the incremental path disagreed about what a seed IS —
-	// and a full scan is what every FIRST session on a corpus runs.
-	f.Motifs = sr.Motifs
-	f.Confidence = sr.Confidence
-	f.Sources = sr.Sources
-	f.Refs = sr.Refs
-	// EvidenceWeight is authored data like every field above it. It was missing
-	// here until the Phase-3 fresh-eyes review (finding M1a) — the identical
-	// omission the same commit had just repaired for Motifs, in the same
-	// function, found because the parity test was rebuilt to compare fields it
-	// was not told about.
-	f.EvidenceWeight = sr.EvidenceWeight
-	// Expires (F03): authored data, so the full-scan seed must carry the same
-	// value the incremental ParseFact path does (TestSeedScanPaths_ProduceTheSameFact).
-	f.Expires = sr.Expires
-	// Context (F22), for the same parity: the result carries the map read
-	// from the blob, exactly what ParseFact gives the incremental path.
-	f.Context = sr.Context
-	f.Origin = fact.Origin(sr.Origin)
-	return f
 }
 
 // ── phase machine ─────────────────────────────────────────────────────────
