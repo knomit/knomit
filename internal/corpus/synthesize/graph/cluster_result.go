@@ -6,7 +6,7 @@ import (
 )
 
 // ClusterResult holds a community partition over fact paths. It is the currency
-// the bridge engine consumes: enumerateBridgeCandidates and buildScoredBridges
+// the bridge engine consumes: bridge.EnumerateBridgeCandidates and bridge.BuildScoredBridges
 // both derive their path→community map from it (via bridgePathCommunities) so
 // they always operate on the SAME assignment.
 //

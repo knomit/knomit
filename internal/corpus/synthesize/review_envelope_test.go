@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -135,8 +136,8 @@ func TestReviewer_DiscoverWrites_CountedInSummary(t *testing.T) {
 	sess := manualSession(t, svc, branch)
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{
 				{File: "kb/technology/a.md", Title: "A"},
 				{File: "kb/technology/b.md", Title: "B"},

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/domain/modelparams"
 	"knomit/internal/engine/embeddings"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"knomit/internal/corpus/synthesize"
 	"knomit/internal/engine/store"
 )
 
@@ -27,17 +27,17 @@ func TestSuggestFloors_EmptyInput(t *testing.T) {
 // strictly between the grab-bag cluster (Coh ~0.05-0.10) and the cohesive
 // cluster (Coh ~0.60-0.90), given Sep>=2 candidates in both groups.
 func TestSuggestFloors_TwoClusters(t *testing.T) {
-	bridges := []synthesize.ScoredBridge{
+	bridges := []bridge.ScoredBridge{
 		// Grab-bags: low cohesion, cross-community (Sep>=2), not kept.
-		{Token: "grab1", Comp: synthesize.BridgeComponents{Coh: 0.05, Sep: 3, Gap: 0.2, Spec: 0.3, Members: 3}, Q: 0.0, Kept: false},
-		{Token: "grab2", Comp: synthesize.BridgeComponents{Coh: 0.08, Sep: 2, Gap: 0.1, Spec: 0.2, Members: 4}, Q: 0.0, Kept: false},
-		{Token: "grab3", Comp: synthesize.BridgeComponents{Coh: 0.07, Sep: 4, Gap: 0.3, Spec: 0.4, Members: 2}, Q: 0.0, Kept: false},
-		{Token: "grab4", Comp: synthesize.BridgeComponents{Coh: 0.10, Sep: 2, Gap: 0.2, Spec: 0.1, Members: 3}, Q: 0.0, Kept: false},
+		{Token: "grab1", Comp: bridge.BridgeComponents{Coh: 0.05, Sep: 3, Gap: 0.2, Spec: 0.3, Members: 3}, Q: 0.0, Kept: false},
+		{Token: "grab2", Comp: bridge.BridgeComponents{Coh: 0.08, Sep: 2, Gap: 0.1, Spec: 0.2, Members: 4}, Q: 0.0, Kept: false},
+		{Token: "grab3", Comp: bridge.BridgeComponents{Coh: 0.07, Sep: 4, Gap: 0.3, Spec: 0.4, Members: 2}, Q: 0.0, Kept: false},
+		{Token: "grab4", Comp: bridge.BridgeComponents{Coh: 0.10, Sep: 2, Gap: 0.2, Spec: 0.1, Members: 3}, Q: 0.0, Kept: false},
 		// Cohesive: high cohesion, cross-community (Sep>=2), kept.
-		{Token: "coh1", Comp: synthesize.BridgeComponents{Coh: 0.62, Sep: 2, Gap: 0.8, Spec: 0.7, Members: 2}, Q: 2.12, Kept: true},
-		{Token: "coh2", Comp: synthesize.BridgeComponents{Coh: 0.75, Sep: 3, Gap: 0.9, Spec: 0.8, Members: 3}, Q: 2.45, Kept: true},
-		{Token: "coh3", Comp: synthesize.BridgeComponents{Coh: 0.85, Sep: 2, Gap: 0.7, Spec: 0.6, Members: 2}, Q: 2.15, Kept: true},
-		{Token: "coh4", Comp: synthesize.BridgeComponents{Coh: 0.90, Sep: 4, Gap: 0.85, Spec: 0.75, Members: 4}, Q: 2.50, Kept: true},
+		{Token: "coh1", Comp: bridge.BridgeComponents{Coh: 0.62, Sep: 2, Gap: 0.8, Spec: 0.7, Members: 2}, Q: 2.12, Kept: true},
+		{Token: "coh2", Comp: bridge.BridgeComponents{Coh: 0.75, Sep: 3, Gap: 0.9, Spec: 0.8, Members: 3}, Q: 2.45, Kept: true},
+		{Token: "coh3", Comp: bridge.BridgeComponents{Coh: 0.85, Sep: 2, Gap: 0.7, Spec: 0.6, Members: 2}, Q: 2.15, Kept: true},
+		{Token: "coh4", Comp: bridge.BridgeComponents{Coh: 0.90, Sep: 4, Gap: 0.85, Spec: 0.75, Members: 4}, Q: 2.50, Kept: true},
 	}
 
 	cohFloor, qualityFloor := suggestFloors(bridges)
@@ -58,9 +58,9 @@ func TestSuggestFloors_TwoClusters(t *testing.T) {
 // TestSuggestFloors_NoSep2Candidates verifies that if no candidates have Sep>=2,
 // cohFloor returns 0.
 func TestSuggestFloors_NoSep2Candidates(t *testing.T) {
-	bridges := []synthesize.ScoredBridge{
-		{Token: "a", Comp: synthesize.BridgeComponents{Coh: 0.5, Sep: 1, Gap: 0.5, Spec: 0.5, Members: 2}, Q: 0.0, Kept: false},
-		{Token: "b", Comp: synthesize.BridgeComponents{Coh: 0.8, Sep: 0, Gap: 0.5, Spec: 0.5, Members: 2}, Q: 0.0, Kept: false},
+	bridges := []bridge.ScoredBridge{
+		{Token: "a", Comp: bridge.BridgeComponents{Coh: 0.5, Sep: 1, Gap: 0.5, Spec: 0.5, Members: 2}, Q: 0.0, Kept: false},
+		{Token: "b", Comp: bridge.BridgeComponents{Coh: 0.8, Sep: 0, Gap: 0.5, Spec: 0.5, Members: 2}, Q: 0.0, Kept: false},
 	}
 	cohFloor, _ := suggestFloors(bridges)
 	assert.Equal(t, 0.0, cohFloor, "no Sep>=2 candidates → cohFloor should be 0")

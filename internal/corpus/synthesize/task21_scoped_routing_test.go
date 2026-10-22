@@ -3,10 +3,10 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"knomit/internal/engine/store/model"
@@ -19,50 +19,7 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// --- scopeLabel tests ---
-
-// TestScopeLabel_EmptyFilter returns "" for an empty scope filter.
-func TestScopeLabel_EmptyFilter(t *testing.T) {
-	got := scopeLabel(step.ScopeFilter{})
-	if got != "" {
-		t.Errorf("empty filter: want \"\", got %q", got)
-	}
-}
-
-// TestScopeLabel_DomainOnly formats domain-only scopes.
-func TestScopeLabel_DomainOnly(t *testing.T) {
-	got := scopeLabel(step.ScopeFilter{Domain: []string{"auth"}})
-	if got == "" {
-		t.Error("domain-only scope must return non-empty label")
-	}
-	if !strings.Contains(got, "auth") {
-		t.Errorf("domain-only scope label must contain 'auth', got %q", got)
-	}
-}
-
-// TestScopeLabel_MultiDomainAndEntity formats a full scope with domain+entities.
-func TestScopeLabel_MultiDomainAndEntity(t *testing.T) {
-	s := step.ScopeFilter{Domain: []string{"auth"}, Entities: []string{"permissions"}}
-	got := scopeLabel(s)
-	if !strings.Contains(got, "auth") {
-		t.Errorf("label must contain 'auth', got %q", got)
-	}
-	if !strings.Contains(got, "permissions") {
-		t.Errorf("label must contain 'permissions', got %q", got)
-	}
-}
-
-// TestScopeLabel_Deterministic confirms the same scope returns the same string.
-func TestScopeLabel_Deterministic(t *testing.T) {
-	s := step.ScopeFilter{Domain: []string{"auth", "billing"}, Entities: []string{"alice"}}
-	a := scopeLabel(s)
-	b := scopeLabel(s)
-	if a != b {
-		t.Errorf("scopeLabel must be deterministic: %q != %q", a, b)
-	}
-}
-
-// --- Forward dispatch: scoped path routes to buildFilteredBridges ---
+// --- Forward dispatch: scoped path routes to bridge.BuildFilteredBridges ---
 
 // TestForwardDispatch_Scoped_ScopeLabelOnPayload verifies that when a scoped
 // Reviewer (non-empty scope, effort=high) enqueues discover work items via
@@ -96,7 +53,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	}
 
 	// Clustering (Search + SubgraphEdges) is driven by ScopedCluster (the cluster
-	// step, not by buildFilteredBridges itself).  The real svc.Search() is used for clustering;
+	// step, not by bridge.BuildFilteredBridges itself).  The real svc.Search() is used for clustering;
 	// we inject idx via a test-specific dependency path via cohesive mocking.
 	// BUT: StartSession uses r.ri's store for clustering, not the injected idx.
 	// So we can only unit-test the dispatch via an integration-style test that
@@ -104,13 +61,13 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	// with a mock that provides SimilarityAdjacency data.
 	//
 	// The real path: StartSession calls ScopedCluster (using ri's store),
-	// then buildFilteredBridges(ctx, idx, ...) where idx = ri.Search().
+	// then bridge.BuildFilteredBridges(ctx, idx, ...) where idx = ri.Search().
 	// Since we can't override the store's search index in tests without
 	// a new seam, we validate the ScopeLabel invariant via pipeline item inspection.
 	//
 	// Approach: use the real svc fully, run StartSession at EffortNormal + scope
 	// so no idx calls occur (EffortNormal returns early), but confirm that
-	// the dispatch path selects buildFilteredBridges (empty result) vs buildScoredBridges.
+	// the dispatch path selects bridge.BuildFilteredBridges (empty result) vs bridge.BuildScoredBridges.
 	// For the ScopeLabel assertion, we inject a discover item directly.
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
@@ -120,7 +77,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 		OntologyRoot: "kb",
 	})
 
-	// EffortNormal + scope: buildFilteredBridges returns nil immediately (gate).
+	// EffortNormal + scope: bridge.BuildFilteredBridges returns nil immediately (gate).
 	// We verify via the absence of discover items — the scope routing is correct.
 	scope := step.ScopeFilter{Domain: []string{"auth"}}
 	r := NewReviewerWithOptions(ri, func(step.ProgressEvent) {}, step.EffortNormal, scope)
@@ -130,15 +87,15 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 
 	// Now manually inject a discover payload with ScopeLabel to verify the
 	// rendering path handles it correctly — this tests the payload construction.
-	scopeL := scopeLabel(scope)
+	scopeL := bridge.ScopeLabel(scope)
 	require.NotEmpty(t, scopeL, "scopeLabel for non-empty scope must be non-empty")
 
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverForward,
 		ScopeLabel: scopeL,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token:   "", // token-optional (filtered path)
-			Kind:    BridgeBoth,
+			Kind:    bridge.BridgeBoth,
 			Members: []step.FactForLLM{{File: "kb/auth/a.md", Title: "A"}, {File: "kb/auth/b.md", Title: "B"}},
 		},
 	}
@@ -183,7 +140,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	}
 }
 
-// --- Forward dispatch: scoped EffortHigh routes to buildFilteredBridges, not buildScoredBridges ---
+// --- Forward dispatch: scoped EffortHigh routes to bridge.BuildFilteredBridges, not bridge.BuildScoredBridges ---
 
 // TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet asserts that when
 // StartSession is called with a non-empty scope and EffortHigh, the queued
@@ -191,9 +148,9 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 //
 // We use a custom cohesive mock idx injected via the test seam (StartSession
 // calls idx obtained from ri's store, but we test via directly calling the
-// plumbing on buildFilteredBridges and asserting on DiscoverWorkPayload shape).
+// plumbing on bridge.BuildFilteredBridges and asserting on DiscoverWorkPayload shape).
 //
-// Direct unit: call buildFilteredBridges and verify BridgeSeedSet, then
+// Direct unit: call bridge.BuildFilteredBridges and verify BridgeSeedSet, then
 // simulate the payload-construction path to confirm ScopeLabel assignment.
 func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 	seeds := []step.FactForLLM{
@@ -205,31 +162,31 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 	}
 	scope := step.ScopeFilter{Domain: []string{"auth"}}
 
-	// buildFilteredBridges reads SimilarityAdjacency and the reverse dependents
-	// (derivationGap), and must NOT read TokenDF (that is buildScoredBridges):
+	// bridge.BuildFilteredBridges reads SimilarityAdjacency and the reverse dependents
+	// (derivationGap), and must NOT read TokenDF (that is bridge.BuildScoredBridges):
 	// the strict policy fails the test on any other read.
 	env := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Similar([2]string{"kb/auth/a.md", "kb/auth/b.md"})
 	idx := env.Idx()
 	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
-	filteredCfg := QualityConfig{
+	filteredCfg := bridge.QualityConfig{
 		CohFloor:     0.0, // accept all cohesion for this test
 		QualityFloor: 0,
 		WCoh:         1, WGap: 1, WSpec: 1,
 		MaxMembers: 5,
 	}
 
-	bridges, err := buildFilteredBridges(context.Background(), idx, "main", seeds, cr, scope, step.EffortHigh, filteredCfg)
+	bridges, err := bridge.BuildFilteredBridges(context.Background(), idx, "main", seeds, cr, scope, step.EffortHigh, filteredCfg)
 	require.NoError(t, err)
 	// At least one bridge should be found (two cross-community facts).
 	// If none: the cohesion + quality floors caused a drop — still valid for this test.
 	// The key test: scopeLabel is set.
 
-	label := scopeLabel(scope)
+	label := bridge.ScopeLabel(scope)
 	require.NotEmpty(t, label)
 
 	// Simulate what StartSession does when scope is non-empty:
-	// build DiscoverWorkPayload with ScopeLabel = scopeLabel(r.scope).
+	// build DiscoverWorkPayload with ScopeLabel = bridge.ScopeLabel(r.scope).
 	for _, b := range bridges {
 		p := DiscoverWorkPayload{
 			Direction:  DiscoverForward,
@@ -255,13 +212,13 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 // the enqueueBackwardBridgeItems path sets ScopeLabel on each payload.
 func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	scope := step.ScopeFilter{Entities: []string{"alice", "bob"}}
-	label := scopeLabel(scope)
+	label := bridge.ScopeLabel(scope)
 	require.NotEmpty(t, label, "scopeLabel must be non-empty for non-empty scope")
 
 	// Simulate what enqueueBackwardBridgeItems does for each bridge:
-	b := BridgeSeedSet{
+	b := bridge.BridgeSeedSet{
 		Token:   "", // token-optional backward bridge
-		Kind:    BridgeBoth,
+		Kind:    bridge.BridgeBoth,
 		Members: []step.FactForLLM{{File: "a.md", Title: "A"}, {File: "b.md", Title: "B"}},
 	}
 	payload := DiscoverWorkPayload{
@@ -288,19 +245,19 @@ func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 
 // TestBackwardDispatch_Unscoped_EmptyScopeLabel confirms that an unscoped
 // backward discover payload has empty ScopeLabel (and non-empty Token from the
-// standard buildScoredBridges path).
+// standard bridge.BuildScoredBridges path).
 func TestBackwardDispatch_Unscoped_EmptyScopeLabel(t *testing.T) {
 	scope := step.ScopeFilter{} // empty = unscoped
-	label := scopeLabel(scope)
-	require.Empty(t, label, "scopeLabel(empty filter) must be empty")
+	label := bridge.ScopeLabel(scope)
+	require.Empty(t, label, "bridge.ScopeLabel(empty filter) must be empty")
 
 	// Standard token-anchored payload.
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverBackward,
 		ScopeLabel: label, // ""
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token:   "auth",
-			Kind:    BridgeDomain,
+			Kind:    bridge.BridgeDomain,
 			Members: []step.FactForLLM{{File: "a.md", Title: "A"}, {File: "b.md", Title: "B"}},
 		},
 	}
@@ -345,9 +302,9 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverForward,
 		ScopeLabel: "auth",
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "", // empty token — filtered bridge
-			Kind:  BridgeBoth,
+			Kind:  bridge.BridgeBoth,
 			Members: []step.FactForLLM{
 				{File: memberPaths[0], Title: "Seed A"},
 				{File: memberPaths[1], Title: "Seed B"},
@@ -431,8 +388,8 @@ func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *t
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverForward,
 		ScopeLabel: "", // empty scope label → fallback must be "scoped"
-		Bridge: BridgeSeedSet{
-			Token: "", Kind: BridgeBoth,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "", Kind: bridge.BridgeBoth,
 			Members: []step.FactForLLM{{File: memberPaths[0], Title: "C"}, {File: memberPaths[1], Title: "D"}},
 		},
 	}
@@ -462,7 +419,7 @@ func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *t
 }
 
 // TestForward_Unscoped_EffortNormal_ByteIdentical is the regression guard:
-// empty scope + EffortNormal must select buildScoredBridges, which returns
+// empty scope + EffortNormal must select bridge.BuildScoredBridges, which returns
 // (nil, nil) immediately, so zero discover items are enqueued — byte-identical.
 func TestForward_Unscoped_EffortNormal_ByteIdentical(t *testing.T) {
 	dir := t.TempDir()
@@ -507,5 +464,18 @@ func TestForward_Unscoped_EffortNormal_ByteIdentical(t *testing.T) {
 		}
 		res, err = r.ContinueSession(context.Background(), res.SessionID, noop)
 		require.NoError(t, err)
+	}
+}
+
+// makeFact is a tiny constructor for the fixtures below.
+func makeFact(path, origin string, domains, entities []string) step.FactForLLM {
+	return step.FactForLLM{
+		File:     path,
+		Title:    path,
+		Body:     path + " body",
+		Type:     "observation",
+		Domain:   domains,
+		Entities: entities,
+		Origin:   origin,
 	}
 }

@@ -1,13 +1,14 @@
-package synthesize
+package bridge
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"knomit/internal/corpus/synthesize/graph"
-	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
+
+	"knomit/internal/corpus/synthesize/graph"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
@@ -516,7 +517,7 @@ func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
 	seeds := []step.FactForLLM{{File: "kb/alpha/1.md"}, {File: "kb/beta/2.md"}}
 	idx, reads := countedMotifIdx(t, seeds, nil)
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		twoCommunities("kb/alpha/1.md", "kb/beta/2.md"), step.EffortNormal, motifQualityConfig(),
 		identityResolver, labelsWith(200, nil), nil)
 
@@ -562,7 +563,7 @@ func TestBuildMotifBridges_NormalEmitsAtMostTwoNearAndNoFar(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(6)
 	idx := motifIdx(t, seeds, motifGroupEdges(seeds)) // every group is a near-lane group
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0))
 
 	require.NoError(t, err)
@@ -579,7 +580,7 @@ func TestBuildMotifBridges_NormalEmitsNothingForFarLaneGroups(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(6)
 	idx := motifIdx(t, seeds, nil) // no adjacency: every group is far
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -592,7 +593,7 @@ func TestBuildMotifBridges_HighOpensBothLanesWithinTheirBudgets(t *testing.T) {
 	seeds, clusters, labels := saturatedMotifCorpus(20)
 	idx := motifIdx(t, seeds, nil) // no SIMILAR_TO edges => every group is far
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -610,7 +611,7 @@ func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 	// Give the first pair a SIMILAR_TO edge, so exactly one group is near.
 	idx := motifIdx(t, seeds, [][2]string{[2]string{"kb/a00/fa00.md", "kb/b00/fb00.md"}})
 
-	near, far, _, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, _, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -626,7 +627,7 @@ func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 // pair of edges (none: every group is far). Nothing cites anything, so the
 // derivation gap is 1.
 //
-// The read policy is strict: buildMotifBridges may read the adjacency, the
+// The read policy is strict: BuildMotifBridges may read the adjacency, the
 // reverse dependents and the token document frequency, and nothing else.
 func motifIdx(t *testing.T, seeds []step.FactForLLM, edges [][2]string) *index.Facade {
 	idx, _ := countedMotifIdx(t, seeds, edges)
@@ -670,7 +671,7 @@ func permissiveMotifConfig() QualityConfig {
 // ── L6: a failed pass must not read like an empty one ─────────────────────
 
 func TestMotifBridgeHealthLines_FailureIsNotSuccessShapedZeros(t *testing.T) {
-	failed := motifBridgeHealthLines(motifEnumHealth{
+	failed := MotifBridgeHealthLines(motifEnumHealth{
 		Failure: "similarity adjacency unavailable", Candidates: 3, Ceiling: 12}, 0, 0)
 	require.Len(t, failed, 1)
 	require.Contains(t, failed[0], "motif bridges unavailable this session")
@@ -681,8 +682,8 @@ func TestMotifBridgeHealthLines_FailureIsNotSuccessShapedZeros(t *testing.T) {
 	// The complement: an axis that genuinely found nothing stays silent, and one
 	// that found something reports it. Without these the assertion above is
 	// satisfied by a function that always says "unavailable".
-	require.Empty(t, motifBridgeHealthLines(motifEnumHealth{Ceiling: 12}, 0, 0))
-	found := motifBridgeHealthLines(motifEnumHealth{Candidates: 2, Ceiling: 12}, 1, 1)
+	require.Empty(t, MotifBridgeHealthLines(motifEnumHealth{Ceiling: 12}, 0, 0))
+	found := MotifBridgeHealthLines(motifEnumHealth{Candidates: 2, Ceiling: 12}, 1, 1)
 	require.Contains(t, found[0], "motif bridges: 2 candidates, 1 near, 1 far")
 }
 
@@ -795,7 +796,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 	idx := motifIdx(t, seeds, [][2]string{[2]string{"kb/a/one.md", "kb/b/two.md"}})
 	cfg := motifQualityConfig() // CohFloor 0.5
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -807,7 +808,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 
 	require.Zero(t, health.NearOtherDropped, "and attributed to the floor, not to 'other'")
 
-	lines := motifBridgeHealthLines(health, 0, 0)
+	lines := MotifBridgeHealthLines(health, 0, 0)
 	require.Contains(t, strings.Join(lines, "\n"), "motif near-lane floor: 1 group(s)")
 }
 
@@ -850,7 +851,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3 // group B has four
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -860,7 +861,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 	require.Equal(t, 1, health.NearFloorDropped, "the sparse group, and only it")
 	require.Equal(t, 1, health.NearOtherDropped, "the oversize group, counted apart")
 
-	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	lines := strings.Join(MotifBridgeHealthLines(health, 0, 0), "\n")
 	require.Contains(t, lines, "motif near-lane floor: 1 group(s)")
 	require.Contains(t, lines, "motif near-lane other: 1 group(s)")
 }
@@ -891,7 +892,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -904,7 +905,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 	require.Zero(t, health.NearFloorDropped, "a far-lane drop is not a near-lane drop")
 	require.Zero(t, health.NearOtherDropped)
 
-	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	lines := strings.Join(MotifBridgeHealthLines(health, 0, 0), "\n")
 	require.Contains(t, lines, "motif far-lane oversize: 1 group(s)")
 }
 
@@ -939,7 +940,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 	// attribution turns on, or the test cannot tell the causes apart.
 	require.NotEqual(t, 4, 2, "group sizes straddle the cap")
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -949,7 +950,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 	require.Equal(t, 1, health.FarOversizeDropped, "the wide group, and only it")
 	require.Equal(t, 1, health.FarOtherDropped, "the floor-failing group, counted apart")
 
-	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	lines := strings.Join(MotifBridgeHealthLines(health, 0, 0), "\n")
 	require.Contains(t, lines, "motif far-lane oversize: 1 group(s)")
 	require.Contains(t, lines, "motif far-lane other: 1 group(s)")
 }
@@ -968,10 +969,10 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
-	near, far, buildHealth, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, buildHealth, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
-	// buildMotifBridges' health carries ONE field the rows' does not:
+	// BuildMotifBridges' health carries ONE field the rows' does not:
 	// FamilySuppressedByExact, which only exists once suppression has run. Set
 	// it from the same rebuild below rather than excluding it, so the equality
 	// still covers every other field. (The first version compared the structs
@@ -1112,7 +1113,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 	clusters, labels := oneCommunityEach(seeds)
 	idx, reads := countedMotifIdx(t, seeds, nil)
 
-	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -1123,7 +1124,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 	require.Zero(t, health.Candidates, "an inactive corpus enumerates nothing")
 	require.Zero(t, reads.Count(), "and costs no index call to decide it")
 
-	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	lines := strings.Join(MotifBridgeHealthLines(health, 0, 0), "\n")
 	require.Contains(t, lines, "motif bridging inactive")
 	require.Contains(t, lines, "2 recurring")
 }
@@ -1142,7 +1143,7 @@ func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) 
 	clusters, labels := oneCommunityEach(seeds)
 	idx := motifIdx(t, seeds, nil)
 
-	_, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+	_, far, health, err := BuildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -1309,7 +1310,7 @@ func TestSeedRecurrence_DoesNotCountDiscoveredFacts(t *testing.T) {
 // The consequence at the boundary that matters: a corpus whose third recurring
 // cluster exists only on discovered facts must NOT activate.
 //
-// Asserted through buildMotifBridges rather than through seedRecurrence alone,
+// Asserted through BuildMotifBridges rather than through seedRecurrence alone,
 // because "the axis switched on and found nothing" is the failure, and that is
 // visible only where activation meets enumeration (lesson 8).
 func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing.T) {
@@ -1325,7 +1326,7 @@ func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main", seeds,
+	near, far, health, err := BuildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main", seeds,
 		clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -1541,7 +1542,7 @@ func TestBuildMotifBridges_MotifFreeCorpusIsNotEvaluatedAtAll(t *testing.T) {
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
+	near, far, health, err := BuildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
 		seeds, clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
@@ -1552,7 +1553,7 @@ func TestBuildMotifBridges_MotifFreeCorpusIsNotEvaluatedAtAll(t *testing.T) {
 			"'never asked' and 'asked, and below the floor' are different statements")
 	require.False(t, health.Activation.Active)
 
-	require.Empty(t, motifBridgeHealthLines(health, 0, 0),
+	require.Empty(t, MotifBridgeHealthLines(health, 0, 0),
 		"and so it says nothing at all — an inactive line here would send a reader "+
 			"to the vocabulary when the truth is that backfill has never run")
 }
@@ -1566,13 +1567,13 @@ func TestBuildMotifBridges_BelowFloorCorpusIsEvaluatedAndSpeaks(t *testing.T) {
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	_, _, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
+	_, _, health, err := BuildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
 		seeds, clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.True(t, health.Activation.Evaluated, "this corpus WAS asked")
 	require.False(t, health.Activation.Active)
-	require.Contains(t, strings.Join(motifBridgeHealthLines(health, 0, 0), "\n"),
+	require.Contains(t, strings.Join(MotifBridgeHealthLines(health, 0, 0), "\n"),
 		"motif bridging inactive", "and the answer is worth reporting")
 }
 

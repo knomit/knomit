@@ -1,4 +1,4 @@
-package synthesize
+package bridge
 
 import (
 	"context"
@@ -29,7 +29,7 @@ type ScoredBridge struct {
 }
 
 // BridgeComponentReport enumerates the bridge candidates via
-// enumerateBridgeCandidates for the given parameters, scores each with the Q
+// EnumerateBridgeCandidates for the given parameters, scores each with the Q
 // components (cohesion, separation, derivation gap, specificity), and returns
 // all candidates sorted by Q descending then Token ascending. At EffortNormal,
 // returns (nil, nil) immediately (no candidates, no scoring calls).
@@ -99,7 +99,7 @@ func BridgeComponentReport(
 	if !eff.Discovers() {
 		return nil, nil
 	}
-	cands := enumerateBridgeCandidates(seeds, cr, kind, step.ScopeFilter{})
+	cands := EnumerateBridgeCandidates(seeds, cr, kind, step.ScopeFilter{})
 	if len(cands) == 0 {
 		return nil, nil
 	}

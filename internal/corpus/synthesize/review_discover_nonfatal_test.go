@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -57,8 +58,8 @@ func TestReviewer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	// internal-corruption guard stays fatal); only the agent RESPONSE is junk.
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
 		},
 	}
@@ -105,8 +106,8 @@ func TestReviewer_EmptyDiscoverResponse_AnswersItem(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
 		},
 	}

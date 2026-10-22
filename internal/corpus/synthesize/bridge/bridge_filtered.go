@@ -1,4 +1,4 @@
-package synthesize
+package bridge
 
 import (
 	"context"
@@ -12,14 +12,14 @@ import (
 	"knomit/internal/domain/fact"
 )
 
-// scopeLabel returns a human-readable label for the scope filter. The label is
+// ScopeLabel returns a human-readable label for the scope filter. The label is
 // the Domain and Entities tokens joined with ", " in declaration order
 // (Domain first, then Entities). Returns "" when the scope is empty (unscoped).
 //
 // Declaration order is preserved (not sorted) so the label is stable across
 // calls with the same ScopeFilter value — callers that need canonical ordering
 // must sort before passing.
-func scopeLabel(s step.ScopeFilter) string {
+func ScopeLabel(s step.ScopeFilter) string {
 	if s.IsEmpty() {
 		return ""
 	}
@@ -96,7 +96,7 @@ type tokenAxis struct {
 
 // tokensCarriedBy enumerates all tokens carried by fact f under kind,
 // returning them in entity-first order (entity beats domain, mirroring
-// enumerateBridgeCandidates). Each canonical form is returned at most once;
+// EnumerateBridgeCandidates). Each canonical form is returned at most once;
 // if the same canonical form appears on both axes, the entity kind wins.
 func tokensCarriedBy(f step.FactForLLM, kind BridgeKind) []tokenAxis {
 	if kind == "" {
@@ -139,7 +139,7 @@ func tokensCarriedBy(f step.FactForLLM, kind BridgeKind) []tokenAxis {
 // first-seen authored form, its kind, and its within-scope specificity.
 //
 // Kind rules (BridgeBoth → both axes; entity beats domain on kind when a
-// token appears as both, mirroring enumerateBridgeCandidates):
+// token appears as both, mirroring EnumerateBridgeCandidates):
 //   - BridgeDomain: only Domain entries considered.
 //   - BridgeEntity: only Entities entries considered.
 //   - BridgeBoth (or ""): both axes; entity kind wins over domain for the
@@ -222,7 +222,7 @@ func sharedSubToken(members []step.FactForLLM, kind BridgeKind, pool []step.Fact
 	return bestAuthored, bestKind, specificityWithinScope(bestAuthored, bestKind, pool)
 }
 
-// buildFilteredBridges extracts multiple token-optional cohesive cross-community
+// BuildFilteredBridges extracts multiple token-optional cohesive cross-community
 // seed sets directly from the SIMILAR_TO graph over a scoped pool, reusing the
 // Phase-4 reshapeCohesiveSubset seed-and-grow.
 //
@@ -243,10 +243,10 @@ func sharedSubToken(members []step.FactForLLM, kind BridgeKind, pool []step.Fact
 //     effortBudget(eff).
 //
 // The branch parameter is accepted for call-site symmetry with
-// buildScoredBridges (Task 21 dispatches between the two) but is intentionally
+// BuildScoredBridges (Task 21 dispatches between the two) but is intentionally
 // unused here: the filtered path scores specificity within-scope via
 // sharedSubToken, never via idx.TokenDF(branch, ...).
-func buildFilteredBridges(
+func BuildFilteredBridges(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
@@ -344,7 +344,7 @@ func buildFilteredBridges(
 		tok, tkind, spec := sharedSubToken(members, DefaultBridgeKind, seeds)
 		if tok != "" {
 			// Check whether tok canonically matches the scope along its own axis
-			// (by-kind rule matching enumerateBridgeCandidates Item-2).
+			// (by-kind rule matching EnumerateBridgeCandidates Item-2).
 			scopeMatch := false
 			if tkind == BridgeDomain {
 				for _, sd := range scope.Domain {

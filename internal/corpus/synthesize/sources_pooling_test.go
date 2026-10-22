@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"testing"
@@ -108,8 +109,8 @@ func TestApplyDiscoveredProposals_SourcesIsOne(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}

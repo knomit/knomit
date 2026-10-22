@@ -157,11 +157,11 @@ var mechanicsPaths = map[string][]string{
 	// function here — the similarity scoring, the threshold comparison, the
 	// greedy pair selection — must stay blind to motifs, which is the actual
 	// MN6 constraint.
-	"internal/corpus/synthesize/dedup.go":           {"dedupCluster"},
-	"internal/corpus/synthesize/bridge.go":          nil,
-	"internal/corpus/synthesize/bridge_score.go":    nil,
-	"internal/corpus/synthesize/bridge_filtered.go": nil,
-	"internal/corpus/synthesize/bridge_reshape.go":  nil,
+	"internal/corpus/synthesize/dedup.go":                  {"dedupCluster"},
+	"internal/corpus/synthesize/bridge/bridge.go":          nil,
+	"internal/corpus/synthesize/bridge/bridge_score.go":    nil,
+	"internal/corpus/synthesize/bridge/bridge_filtered.go": nil,
+	"internal/corpus/synthesize/bridge/bridge_reshape.go":  nil,
 	// The §7 shortlist is a path MN6 names EXPLICITLY as designed for motifs
 	// ("anything that spawns work outside the §4/§5/§7 synthesis paths designed
 	// for them"), so this is the rule's exemption rather than an exception to
@@ -232,11 +232,11 @@ var mechanicsPaths = map[string][]string{
 	// GROUP them and sharedMotifSpecificity reads them to SCORE the group it
 	// was already given — both inside the §4/§5 cascade, neither reachable from
 	// dedup, clustering or search ranking.
-	// buildMotifBridges is the §4/§5 entry point: it reads the seed pool's
+	// BuildMotifBridges is the §4/§5 entry point: it reads the seed pool's
 	// motifs to decide whether the axis does anything at all, then drives
 	// enumeration, the lane split and the per-lane budgets.
-	// The wiring half of the same file: motifResolverFor closes over the alias
-	// table, and motifBridgeHealthLines RENDERS what the axis did into the
+	// The wiring half of the same file: MotifResolverFor closes over the alias
+	// table, and MotifBridgeHealthLines RENDERS what the axis did into the
 	// session's health output. Reporting is not deciding — the no-branch
 	// property is what MN6 is about, and it holds: nothing in this package
 	// reads a health line.
@@ -252,9 +252,9 @@ var mechanicsPaths = map[string][]string{
 	// entity term deciding whether a candidate EXISTS. The tiebreaker sits
 	// strictly below Q for exactly that reason, and is a sort term rather than
 	// a weight so no constant has to be invented to mean "small" (MN13).
-	"internal/corpus/synthesize/bridge_motif.go": {
-		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
-		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
+	"internal/corpus/synthesize/bridge/bridge_motif.go": {
+		"BuildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
+		"MotifResolverFor", "MotifBridgeHealthLines", "verbatimGroups", "token2Families",
 		"rankAndCap", "rankAndCapRows", "DFCeiling",
 		// DFCeiling names motifDFCeilingFloor/PerCent, which is why the
 		// identifier scan sees it — but it reads two CONSTANTS, never a fact's
@@ -270,11 +270,11 @@ var mechanicsPaths = map[string][]string{
 		// a one-entry allow-list, to hold a predicate whose whole subject is
 		// the other axis. Moving the method preserved the stronger statement.
 		"Qualifies",
-		// Phase 4: buildMotifBridges' own loop, extracted so the measurement
+		// Phase 4: BuildMotifBridges' own loop, extracted so the measurement
 		// instrument and production drive the SAME enumeration and scoring
 		// rather than two implementations that agree until they do not. It IS
 		// the §4/§5 path MN6 designs motifs into — the same licence
-		// buildMotifBridges has always had, now naming the function that does
+		// BuildMotifBridges has always had, now naming the function that does
 		// the work instead of the wrapper that calls it.
 		"scoreMotifCandidates",
 		// The drop-cause taxonomy and its tally. They read the SCORER's
@@ -294,7 +294,7 @@ var mechanicsPaths = map[string][]string{
 		// catch.
 		"suppressContainedTracked",
 		// The single-pass builder and the row-writing rank/cap it delegates
-		// to. Same §4/§5 licence buildMotifBridges has always had; theyname the
+		// to. Same §4/§5 licence BuildMotifBridges has always had; theyname the
 		// functions that now do the work.
 		"buildMotifBridgesWithRows",
 		// Phase 4: the activation floor. seedRecurrence counts the corpus's
@@ -316,17 +316,21 @@ var mechanicsPaths = map[string][]string{
 	// token2PairsOf reports which canonical ids the token-2 tier WOULD fold,
 	// using the tier's own predicate. It decides nothing — the report is
 	// read-only and no branch consults it.
-	"internal/corpus/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf",
+	"internal/corpus/synthesize/bridge/bridge_motif_report.go": {"MotifReportFromSeeds", "Summary", "token2PairsOf",
 		// The row-to-report projection (M-8). It moves a candidate's own
 		// disposition into the reported shape and decides nothing.
 		"scoredMotifBridgeOf"},
+	// The parent keeps only the seed pool (reviewStrategy.AcceptSeed) and hands
+	// it to bridge.MotifReportFromSeeds: it forwards the motif index, decides
+	// nothing, and no production branch reads it.
+	"internal/corpus/synthesize/bridge_motif_report.go": {"MotifComponentReport"},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted
 	// function so that a motif-reading function added here must be declared.
-	"internal/corpus/synthesize/motif_disjoint.go": {},
-	"internal/corpus/synthesize/graph/cluster.go":  {"ScopedCluster"},
-	"internal/corpus/synthesize/graph/louvain.go":  nil,
+	"internal/corpus/synthesize/bridge/motif_disjoint.go": {},
+	"internal/corpus/synthesize/graph/cluster.go":         {"ScopedCluster"},
+	"internal/corpus/synthesize/graph/louvain.go":         nil,
 
 	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
 	// these names a SELECT column list and hands the row to a scanner; carrying
@@ -397,6 +401,30 @@ func TestMN6_MotifsDoNotDriveMechanics(t *testing.T) {
 					"mechanicsPaths with a reason.", rel, fn)
 		}
 	}
+
+	// The bridge and graph children are mechanical in their entirety, so they
+	// are also walked as DIRECTORIES: a file that is not keyed above (a new
+	// one, or bridge_lineage.go and quality_config.go, which never were) may
+	// not read motifs either. Keyed files were checked with their own allow-list.
+	for _, dir := range []string{
+		"internal/corpus/synthesize/bridge/",
+		"internal/corpus/synthesize/graph/",
+	} {
+		walked := 0
+		for rel := range sources {
+			if !strings.HasPrefix(rel, dir) {
+				continue
+			}
+			walked++
+			if _, keyed := mechanicsPaths[rel]; keyed {
+				continue
+			}
+			require.Emptyf(t, funcsMentioningMotifs(t, rel),
+				"MN6: %s is in a mechanical-path directory and must not read motifs; "+
+					"key it in mechanicsPaths with a reason if it only carries them", rel)
+		}
+		require.Positivef(t, walked, "MN6: no non-test Go files found under %s — the walk is not reading it", dir)
+	}
 }
 
 // funcsMentioningMotifs returns the names of top-level functions in rel whose
@@ -456,23 +484,29 @@ func TestMN2_NoLLMInMotifCode(t *testing.T) {
 	sources := goSources(t)
 	targets := []string{
 		"internal/domain/fact/motif.go", "internal/domain/fact/textnorm/textnorm.go",
-		// Phase 3's enumeration and its gate. The detector stays mechanical:
-		// the connected agent is the only reasoner in the read path, and it
-		// already exists (cf455b8f).
-		"internal/corpus/synthesize/bridge_motif.go", "internal/corpus/synthesize/motif_disjoint.go",
 	}
 	// The motif child is scanned as a DIRECTORY, not by name: it plans work
 	// items for the LLM step but must reach no model itself, and a file added
 	// to it later is covered without anyone remembering to list it.
-	const motifChild = "internal/corpus/synthesize/motif/"
-	childFiles := 0
-	for rel := range sources {
-		if strings.HasPrefix(rel, motifChild) {
-			targets = append(targets, rel)
-			childFiles++
+	//
+	// The bridge child is scanned the same way. It holds Phase 3's enumeration
+	// and its gate (bridge_motif.go, motif_disjoint.go): the detector stays
+	// mechanical, the connected agent is the only reasoner in the read path, and
+	// it already exists (cf455b8f). Those two files used to be listed by name;
+	// a name list does not follow a file that moves.
+	for _, child := range []string{
+		"internal/corpus/synthesize/motif/",
+		"internal/corpus/synthesize/bridge/",
+	} {
+		childFiles := 0
+		for rel := range sources {
+			if strings.HasPrefix(rel, child) {
+				targets = append(targets, rel)
+				childFiles++
+			}
 		}
+		require.Positivef(t, childFiles, "MN2: no non-test Go files found under %s — the scan is not reading that child", child)
 	}
-	require.Positivef(t, childFiles, "MN2: no non-test Go files found under %s — the scan is not reading the motif child", motifChild)
 	for _, rel := range targets {
 		src, ok := sources[rel]
 		require.Truef(t, ok, "MN2 target %s is missing", rel)
@@ -597,12 +631,12 @@ func parseGo(t *testing.T, rel string) *ast.File {
 // clothes.
 func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
 	for rel, want := range map[string]map[string]string{
-		"internal/corpus/synthesize/motif_disjoint.go": {
+		"internal/corpus/synthesize/bridge/motif_disjoint.go": {
 			"disjointnessPercentile": "SELECTION POINT",
 			"minLabelsForPercentile": "STATISTICAL-VALIDITY FLOOR",
 			"umbrellaPerCent":        "RATIO",
 		},
-		"internal/corpus/synthesize/bridge_motif.go": {
+		"internal/corpus/synthesize/bridge/bridge_motif.go": {
 			"motifDFCeilingFloor":   "STATISTICAL-VALIDITY FLOOR",
 			"motifDFCeilingPerCent": "RATIO",
 			"motifActivationFloor":  "STATISTICAL-VALIDITY FLOOR",

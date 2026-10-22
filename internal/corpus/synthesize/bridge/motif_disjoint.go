@@ -1,4 +1,4 @@
-package synthesize
+package bridge
 
 // Subject-disjointness — blueprint §4 gate 3, as amended by GATE RIDER 1
 // (designer ruling 2026-08-23,

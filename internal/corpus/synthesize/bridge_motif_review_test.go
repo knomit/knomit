@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"strings"
@@ -39,7 +40,7 @@ func motifBridgeSession(e *synthtest.RestatementEnv, effort step.Effort) ([]Disc
 func motifPayloads(in []DiscoverWorkPayload) []DiscoverWorkPayload {
 	var out []DiscoverWorkPayload
 	for _, p := range in {
-		if p.Bridge.Kind == BridgeMotif {
+		if p.Bridge.Kind == bridge.BridgeMotif {
 			out = append(out, p)
 		}
 	}
@@ -85,7 +86,7 @@ func TestReviewPlan_FarLaneRoutesBackward(t *testing.T) {
 	motifs := motifPayloads(payloads)
 
 	require.Len(t, motifs, 1)
-	require.Equal(t, LaneFar, motifs[0].Lane,
+	require.Equal(t, bridge.LaneFar, motifs[0].Lane,
 		"precondition: with no SIMILAR_TO edge the pair is a far-lane group")
 	require.Equal(t, DiscoverBackward, motifs[0].Direction)
 	require.Equal(t, "measure-becomes-target", motifs[0].Bridge.Token)

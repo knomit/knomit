@@ -1,11 +1,12 @@
-package synthesize
+package bridge
 
 import (
 	"context"
 	"errors"
+	"testing"
+
 	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 
@@ -207,7 +208,7 @@ func TestSharedSubToken_DeterministicTieBreak(t *testing.T) {
 
 // TestSharedSubToken_EntityBeatesDomainOnBridgeBoth verifies that when a
 // token appears on both entity and domain axes under BridgeBoth, the returned
-// kind is BridgeEntity (entity beats domain, mirroring enumerateBridgeCandidates).
+// kind is BridgeEntity (entity beats domain, mirroring EnumerateBridgeCandidates).
 func TestSharedSubToken_EntityBeatesDomainOnBridgeBoth(t *testing.T) {
 	pool := []step.FactForLLM{
 		{File: "kb/p1.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
@@ -258,7 +259,7 @@ func TestSharedSubToken_EmptyMembers(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// buildFilteredBridges tests
+// BuildFilteredBridges tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 // filteredCfg is a permissive QualityConfig for the filtered-bridge tests:
@@ -308,7 +309,7 @@ func TestBuildFilteredBridges_EffortNormal_NilNoIdx(t *testing.T) {
 	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{}) // no read of any kind is allowed
 	scope := step.ScopeFilter{Domain: []string{"auth"}}
 
-	got, err := buildFilteredBridges(
+	got, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, scope, step.EffortNormal, filteredCfg,
 	)
 	if err != nil {
@@ -334,7 +335,7 @@ func TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges(t *testing.T) {
 
 	scope := step.ScopeFilter{Domain: []string{"auth"}} // scope is "auth"
 
-	got, err := buildFilteredBridges(
+	got, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, scope, step.EffortHigh, filteredCfg,
 	)
 	if err != nil {
@@ -410,7 +411,7 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 	// scope → should become the bridge token.
 	scope := step.ScopeFilter{Domain: []string{"billing"}}
 
-	got, err := buildFilteredBridges(
+	got, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, scope, step.EffortHigh, filteredCfg,
 	)
 	if err != nil {
@@ -462,7 +463,7 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 
 	scope := step.ScopeFilter{Domain: []string{"auth"}} // "auth" is the scope
 
-	got, err := buildFilteredBridges(
+	got, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, scope, step.EffortHigh, filteredCfg,
 	)
 	if err != nil {
@@ -481,14 +482,14 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 func TestBuildFilteredBridges_Determinism(t *testing.T) {
 	seeds, clusters, pairs := buildTwoClusterSeeds()
 
-	// Two calls to buildFilteredBridges → each reads SimilarityAdjacency once.
+	// Two calls to BuildFilteredBridges → each reads SimilarityAdjacency once.
 	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Similar(pairs...).Idx()
 	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	scope := step.ScopeFilter{}
 
 	run := func() []BridgeSeedSet {
-		got, err := buildFilteredBridges(
+		got, err := BuildFilteredBridges(
 			context.Background(), idx, "main", seeds, clusters, scope, step.EffortHigh, filteredCfg,
 		)
 		if err != nil {
@@ -527,7 +528,7 @@ func TestBuildFilteredBridges_SimilarityAdjacencyError(t *testing.T) {
 	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency"},
 		Fail: map[string]error{"SimilarityAdjacency": wantErr}})
 
-	_, err := buildFilteredBridges(
+	_, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, step.ScopeFilter{}, step.EffortHigh, filteredCfg,
 	)
 	if !errors.Is(err, wantErr) {
@@ -551,7 +552,7 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"},
 		Fail: map[string]error{"ReverseDependentPaths": wantErr}})
 
-	_, err := buildFilteredBridges(
+	_, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, step.ScopeFilter{}, step.EffortHigh, filteredCfg,
 	)
 	if !errors.Is(err, wantErr) {
@@ -578,7 +579,7 @@ func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
 	// No ReverseDependentPaths read is allowed: no subset passes reshape.
 	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency"}})
 
-	got, err := buildFilteredBridges(
+	got, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, step.ScopeFilter{}, step.EffortHigh, filteredCfg,
 	)
 	if err != nil {
@@ -605,7 +606,7 @@ func TestBuildFilteredBridges_DiscoveredOriginExcluded(t *testing.T) {
 	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Idx()
 	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{})
 
-	got, err := buildFilteredBridges(
+	got, err := BuildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, step.ScopeFilter{}, step.EffortHigh, filteredCfg,
 	)
 	if err != nil {

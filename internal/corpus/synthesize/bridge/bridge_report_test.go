@@ -1,10 +1,11 @@
-package synthesize
+package bridge
 
 import (
 	"context"
 	"errors"
-	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
+
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
@@ -98,7 +99,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 		makeSearchResult("kb/y.md", "Y", "body y", "synthesis", "authored", nil, []string{"shared"}, 0.8, 1),
 	}
 
-	// Both in same cluster → enumerateBridgeCandidates will NOT produce a bridge candidate.
+	// Both in same cluster → EnumerateBridgeCandidates will NOT produce a bridge candidate.
 	// x,y in one community → their shared token is not a cross-community bridge,
 	// so the scoring reads (SimilarityAdjacency, ReverseDependentPaths, TokenDF)
 	// MUST NEVER happen: the strict policy allows only the clustering reads.
@@ -122,7 +123,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 
 // TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept proves the
 // CohFloor gate fires INSIDE BridgeComponentReport: a genuine cross-community
-// candidate (so enumerateBridgeCandidates keeps it) whose members have no SIMILAR_TO edges
+// candidate (so EnumerateBridgeCandidates keeps it) whose members have no SIMILAR_TO edges
 // → cohesion 0 < CohFloor → the candidate appears in results but Kept=false,
 // Q=0 (the gate path of bridgeQ returns (0, false)).
 func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing.T) {
@@ -130,7 +131,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	branch := "agent/test"
 
 	// Two facts sharing entity "gappy" in DIFFERENT communities → a real
-	// cross-community bridge candidate that enumerateBridgeCandidates keeps.
+	// cross-community bridge candidate that EnumerateBridgeCandidates keeps.
 	searchResults := []index.SearchResult{
 		makeSearchResult("kb/p.md", "P", "body p", "synthesis", "authored", nil, []string{"gappy"}, 0.9, 1),
 		makeSearchResult("kb/q.md", "Q", "body q", "synthesis", "authored", nil, []string{"gappy"}, 0.8, 1),

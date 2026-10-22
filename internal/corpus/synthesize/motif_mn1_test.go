@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
@@ -263,8 +264,8 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 		{File: "kb/b.md", Title: "Bravo", Body: "another body", Motifs: []string{marker}},
 	}
 	payload := DiscoverWorkPayload{
-		Direction: DiscoverBackward, Lane: LaneFar,
-		Bridge: BridgeSeedSet{Token: marker, Kind: BridgeMotif, Members: members},
+		Direction: DiscoverBackward, Lane: bridge.LaneFar,
+		Bridge: bridge.BridgeSeedSet{Token: marker, Kind: bridge.BridgeMotif, Members: members},
 	}
 	view := RenderDiscoverWorkItem(payload, "kb")
 
@@ -285,7 +286,7 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 	// vocabulary anywhere — the entity/domain bridges that share this renderer.
 	bare := RenderDiscoverWorkItem(DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{Token: "some-entity", Kind: BridgeEntity, Members: []step.FactForLLM{
+		Bridge: bridge.BridgeSeedSet{Token: "some-entity", Kind: bridge.BridgeEntity, Members: []step.FactForLLM{
 			{File: "kb/c.md", Title: "Charlie", Body: "body"}}},
 	}, "kb")
 	require.NotContains(t, bare.Prompt, marker)

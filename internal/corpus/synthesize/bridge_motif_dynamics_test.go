@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
@@ -84,7 +85,7 @@ func TestMotifBridging_AcrossSessions(t *testing.T) {
 	s2, h2 := motifBridgeSession(env, step.EffortHigh)
 	motifs2 := motifPayloadsFor(s2, "measure-becomes-target")
 	require.Len(t, motifs2, 1, "the pair bridges once its motifs exist")
-	require.Equal(t, LaneFar, motifs2[0].Lane)
+	require.Equal(t, bridge.LaneFar, motifs2[0].Lane)
 	require.Contains(t, strings.Join(h2, "\n"), "motif bridges:")
 
 	// S3 — nothing changed. The bridge is still THERE: enumeration is a

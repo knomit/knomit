@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"testing"
@@ -295,7 +296,7 @@ func TestInFlightRefresh_ClearsAcrossVehicles(t *testing.T) {
 		members(dupBPath, "kb/other-x.md", "kb/other-y.md"), 0)
 	discoverID := env.queue("discover", "discover-fwd-0", DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token:   "SmartConsole",
 			Members: members(dupBPath, "kb/other-x.md", "kb/other-y.md"),
 		},
@@ -412,7 +413,7 @@ func TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots(t *testing.T) {
 
 	discoverID := env.queue("discover", "discover-fwd-0", DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token:   "SmartConsole",
 			Members: members(dupBPath, "kb/other-x.md"),
 		},

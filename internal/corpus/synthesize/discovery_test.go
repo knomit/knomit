@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"strings"
@@ -25,9 +26,9 @@ import (
 func TestRenderDiscoverPrompt_DefaultToNo(t *testing.T) {
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "auth",
-			Kind:  BridgeEntity,
+			Kind:  bridge.BridgeEntity,
 			Members: []step.FactForLLM{
 				{File: "a.md", Title: "A"},
 				{File: "b.md", Title: "B"},
@@ -72,9 +73,9 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "x",
-			Kind:  BridgeEntity,
+			Kind:  bridge.BridgeEntity,
 			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 				{File: "kb/b.md", Title: "B"},
@@ -120,8 +121,8 @@ func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
@@ -150,8 +151,8 @@ func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
@@ -186,8 +187,8 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
@@ -206,9 +207,9 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 func TestRenderDiscoverPrompt_TokenPresent_ContainsBridgeTokenLine(t *testing.T) {
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "auth",
-			Kind:  BridgeEntity,
+			Kind:  bridge.BridgeEntity,
 			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 			},
@@ -235,9 +236,9 @@ func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverForward,
 		ScopeLabel: "auth",
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "",
-			Kind:  BridgeDomain,
+			Kind:  bridge.BridgeDomain,
 			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A", Body: "body a"},
 				{File: "kb/b.md", Title: "B"},
@@ -256,8 +257,8 @@ func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
 	// RESPONSE SCHEMA line must be byte-identical to the token-present variant.
 	tokenPresent := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "auth", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "auth", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}},
 		},
 	}
@@ -277,10 +278,10 @@ func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
 		name    string
 		payload DiscoverWorkPayload
 	}{
-		{"forward-token", DiscoverWorkPayload{Direction: DiscoverForward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
-		{"backward-token", DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: BridgeSeedSet{Token: "auth", Kind: BridgeEntity, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
-		{"forward-scoped", DiscoverWorkPayload{Direction: DiscoverForward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
-		{"backward-scoped", DiscoverWorkPayload{Direction: DiscoverBackward, ScopeLabel: "auth", Bridge: BridgeSeedSet{Kind: BridgeDomain, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"forward-token", DiscoverWorkPayload{Direction: DiscoverForward, Bridge: bridge.BridgeSeedSet{Token: "auth", Kind: bridge.BridgeEntity, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"backward-token", DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: bridge.BridgeSeedSet{Token: "auth", Kind: bridge.BridgeEntity, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"forward-scoped", DiscoverWorkPayload{Direction: DiscoverForward, ScopeLabel: "auth", Bridge: bridge.BridgeSeedSet{Kind: bridge.BridgeDomain, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
+		{"backward-scoped", DiscoverWorkPayload{Direction: DiscoverBackward, ScopeLabel: "auth", Bridge: bridge.BridgeSeedSet{Kind: bridge.BridgeDomain, Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}}}}},
 	}
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {
@@ -316,9 +317,9 @@ func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverBackward,
 		ScopeLabel: "auth",
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "",
-			Kind:  BridgeDomain,
+			Kind:  bridge.BridgeDomain,
 			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 			},
@@ -335,8 +336,8 @@ func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
 	// RESPONSE SCHEMA must match backward token-present.
 	tokenPresent := DiscoverWorkPayload{
 		Direction: DiscoverBackward,
-		Bridge: BridgeSeedSet{
-			Token: "auth", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "auth", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}},
 		},
 	}
@@ -350,9 +351,9 @@ func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
 func TestRenderDiscoverPrompt_TokenEmpty_NoScopeLabel_FallsBack(t *testing.T) {
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "",
-			Kind:  BridgeDomain,
+			Kind:  bridge.BridgeDomain,
 			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 			},
@@ -407,8 +408,8 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverBackward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
@@ -457,9 +458,9 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
+		Bridge: bridge.BridgeSeedSet{
 			Token: "auth",
-			Kind:  BridgeEntity,
+			Kind:  bridge.BridgeEntity,
 			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 				{File: "kb/b.md", Title: "B"},
@@ -513,8 +514,8 @@ func TestApplyDiscoveredProposals_NoEmbedder_NoDedup(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{
-			Token: "x", Kind: BridgeEntity,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}

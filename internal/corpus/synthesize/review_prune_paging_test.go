@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -154,7 +155,7 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 
 	discoverJSON, err := json.Marshal(DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge:    BridgeSeedSet{Token: "x", Kind: BridgeEntity, Members: bigPruneFacts(40, 3*1024)},
+		Bridge:    bridge.BridgeSeedSet{Token: "x", Kind: bridge.BridgeEntity, Members: bigPruneFacts(40, 3*1024)},
 	})
 	require.NoError(t, err)
 	require.Greater(t, len(discoverJSON), step.MaxPageFactBytes)

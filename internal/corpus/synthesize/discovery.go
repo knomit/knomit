@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -38,14 +39,14 @@ const (
 // item. It is small and self-contained so the dispatcher can rehydrate
 // everything the prompt builder needs without re-running the bridge engine.
 type DiscoverWorkPayload struct {
-	Direction  DiscoverDirection `json:"direction"`
-	Bridge     BridgeSeedSet     `json:"bridge"`
-	ScopeLabel string            `json:"scope_label,omitempty"`
+	Direction  DiscoverDirection    `json:"direction"`
+	Bridge     bridge.BridgeSeedSet `json:"bridge"`
+	ScopeLabel string               `json:"scope_label,omitempty"`
 	// Lane is set for motif bridges only (§4). It is carried EXPLICITLY rather
 	// than re-derived from Kind+Direction so that the prompt renderer and the
 	// health reporter read the same value the builder decided, and so a future
 	// bridge kind with two lanes does not silently inherit this one's mapping.
-	Lane BridgeLane `json:"lane,omitempty"`
+	Lane bridge.BridgeLane `json:"lane,omitempty"`
 }
 
 // DiscoverResponse is the LLM JSON contract for one discover work item. The
@@ -217,7 +218,7 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 		// above says they "share the structural token". A model reading only
 		// that would reasonably infer they are also SIMILAR, which is the exact
 		// inference the far lane exists to prevent.
-		if payload.Lane == LaneFar {
+		if payload.Lane == bridge.LaneFar {
 			fmt.Fprintf(&b, "\nThese facts are NOT semantically similar. Each claims motif %q. Propose a keystone only if one mechanism genuinely underlies all members — default to NO.\n", payload.Bridge.Token)
 		}
 	} else {
