@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
@@ -19,10 +20,10 @@ const shipFarLaneLine = `These facts are NOT semantically similar. Each claims m
 func farLanePayload() DiscoverWorkPayload {
 	return DiscoverWorkPayload{
 		Direction: DiscoverBackward,
-		Lane:      LaneFar,
-		Bridge: BridgeSeedSet{
+		Lane:      bridge.LaneFar,
+		Bridge: bridge.BridgeSeedSet{
 			Token: "measure-becomes-target",
-			Kind:  BridgeMotif,
+			Kind:  bridge.BridgeMotif,
 			Members: []step.FactForLLM{
 				{File: "kb/gotchas/uitesting/1.md", Title: "A", Body: "body a"},
 				{File: "kb/technology/benchmarks/2.md", Title: "B", Body: "body b"},
@@ -49,12 +50,12 @@ func TestRenderDiscoverPrompt_FarLaneCarriesTheShipLine(t *testing.T) {
 // because for them it is false.
 func TestRenderDiscoverPrompt_ShipLineIsFarLaneOnly(t *testing.T) {
 	for _, p := range []DiscoverWorkPayload{
-		{Direction: DiscoverForward, Lane: LaneNear,
-			Bridge: BridgeSeedSet{Token: "measure-becomes-target", Kind: BridgeMotif}},
+		{Direction: DiscoverForward, Lane: bridge.LaneNear,
+			Bridge: bridge.BridgeSeedSet{Token: "measure-becomes-target", Kind: bridge.BridgeMotif}},
 		{Direction: DiscoverBackward,
-			Bridge: BridgeSeedSet{Token: "some-entity", Kind: BridgeEntity}},
+			Bridge: bridge.BridgeSeedSet{Token: "some-entity", Kind: bridge.BridgeEntity}},
 		{Direction: DiscoverForward,
-			Bridge: BridgeSeedSet{Token: "some-domain", Kind: BridgeDomain}},
+			Bridge: bridge.BridgeSeedSet{Token: "some-domain", Kind: bridge.BridgeDomain}},
 	} {
 		require.NotContains(t, renderDiscoverPrompt(p, "kb"), "NOT semantically similar")
 	}
@@ -66,9 +67,9 @@ func TestRenderDiscoverPrompt_ShipLineIsFarLaneOnly(t *testing.T) {
 func TestRenderDiscoverPrompt_InstructsRecallBeforeProposing(t *testing.T) {
 	const header = "BEFORE YOU ANSWER — QUERY THE CORPUS."
 	for _, dir := range []DiscoverDirection{DiscoverForward, DiscoverBackward} {
-		for _, kind := range []BridgeKind{BridgeEntity, BridgeDomain, BridgeMotif} {
+		for _, kind := range []bridge.BridgeKind{bridge.BridgeEntity, bridge.BridgeDomain, bridge.BridgeMotif} {
 			got := renderDiscoverPrompt(DiscoverWorkPayload{Direction: dir,
-				Bridge: BridgeSeedSet{Token: "tok", Kind: kind}}, "kb")
+				Bridge: bridge.BridgeSeedSet{Token: "tok", Kind: kind}}, "kb")
 
 			require.Contains(t, got, header, "kind=%s dir=%s", kind, dir)
 			require.Contains(t, got, "you QUERIED for it above and no existing fact states it",

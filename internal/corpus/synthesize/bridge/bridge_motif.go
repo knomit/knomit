@@ -1,4 +1,4 @@
-package synthesize
+package bridge
 
 // Motif bridging — blueprint §4/§5. The aspect axis: facts about unrelated
 // subjects grouped by the MECHANISM they both instantiate.
@@ -93,7 +93,7 @@ type motifEnumHealth struct {
 	// Failure names why the pass could not run, when it could not. A failed
 	// pass that reported "N candidates, 0 near, 0 far" was indistinguishable
 	// from an axis that enumerated and found nothing (Phase-3 review, L6) —
-	// the same distinction motifResolverFor's warning exists to preserve, one
+	// the same distinction MotifResolverFor's warning exists to preserve, one
 	// layer up.
 	Failure string
 	// Candidates is how many groups survived every gate.
@@ -832,13 +832,13 @@ func motifSubBudget(e step.Effort) (near, far int) {
 	return 2, 0
 }
 
-// buildMotifBridges is the production builder: enumerate, split by lane, score
+// BuildMotifBridges is the production builder: enumerate, split by lane, score
 // per lane, rank, and cap each lane at its OWN sub-budget.
 //
-// Unlike buildScoredBridges it is NOT gated on eff.Discovers(): normal effort
+// Unlike BuildScoredBridges it is NOT gated on eff.Discovers(): normal effort
 // runs the verbatim tier (§5), bounded at two items. What keeps that honest is
 // the motif-free short circuit below, not an effort check.
-func buildMotifBridges(
+func BuildMotifBridges(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
@@ -855,11 +855,11 @@ func buildMotifBridges(
 	return near, far, health, err
 }
 
-// buildMotifBridgesWithRows is buildMotifBridges plus the per-candidate rows,
+// buildMotifBridgesWithRows is BuildMotifBridges plus the per-candidate rows,
 // with every disposition filled in — suppression and budget included.
 //
 // It exists so the measurement surface reads the SAME pass production serves
-// from. The report used to call scoreMotifCandidates and buildMotifBridges
+// from. The report used to call scoreMotifCandidates and BuildMotifBridges
 // separately, which enumerated twice and left the rows knowing nothing about
 // what happened after scoring: suppression drops a candidate inside
 // rankAndCap, so a row said `Kept: true, Cause: ""` for a group no agent ever
@@ -1298,12 +1298,12 @@ func rankAndCap(in []enumeratedMotif, budget int) ([]BridgeSeedSet, int) {
 
 // ── review-pipeline wiring ────────────────────────────────────────────────
 
-// motifResolverFor closes over this session's alias table.
+// MotifResolverFor closes over this session's alias table.
 //
 // Read ONCE: the resolver is called per motif per fact, and a per-call query
 // would turn enumeration into a round-trip storm over a table that does not
 // change mid-session.
-func motifResolverFor(ctx context.Context, motifs *vocab.MotifIndex, branch string) motifResolver {
+func MotifResolverFor(ctx context.Context, motifs *vocab.MotifIndex, branch string) motifResolver {
 	table, err := motifs.AliasTable(ctx, branch)
 	if err != nil {
 		// Degrade, but never silently: without the table every spelling is its
@@ -1325,11 +1325,11 @@ func motifResolverFor(ctx context.Context, motifs *vocab.MotifIndex, branch stri
 	}
 }
 
-// subjectLabelsFor reads the corpus's own label distribution for the
+// SubjectLabelsFor reads the corpus's own label distribution for the
 // disjointness gate. On failure it returns the zero value, whose operating
 // point is STRICT — the conservative direction, and the one that keeps a
 // near-duplicate out rather than letting it through.
-func subjectLabelsFor(ctx context.Context, search *index.Facade, branch string) index.SubjectLabelDF {
+func SubjectLabelsFor(ctx context.Context, search *index.Facade, branch string) index.SubjectLabelDF {
 	labels, err := search.SubjectLabelDF(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).
@@ -1344,7 +1344,7 @@ func subjectLabelsFor(ctx context.Context, search *index.Facade, branch string) 
 // The far lane cannot get them from the SIMILAR_TO graph — that graph is empty
 // there by definition — so this reaches for the vectors the graph was built
 // from.
-func pairCosFor(abstraction *vocab.AbstractionIndex, branch string) pairCosFn {
+func PairCosFor(abstraction *vocab.AbstractionIndex, branch string) pairCosFn {
 	return func(ctx context.Context, paths []string) ([]float64, error) {
 		ids, err := abstraction.FactIDsByPath(ctx, branch, paths)
 		if err != nil {
@@ -1397,12 +1397,12 @@ func meanPairCos(ctx context.Context, paths []string, pairCos pairCosFn) (float6
 	return sum / float64(len(cs)), nil
 }
 
-// motifBridgeHealthLines are DESCRIPTORS: no branch in this package reads any
+// MotifBridgeHealthLines are DESCRIPTORS: no branch in this package reads any
 // of them. The operating point is printed precisely because it is a
 // fingerprint — the same code on two corpora prints two different df cuts,
 // which is what it means for the gate to be a percentile of each repo's own
 // distribution rather than a threshold someone picked (MN13).
-func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
+func MotifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 	if h.Failure != "" {
 		return []string{fmt.Sprintf(
 			"motif bridges unavailable this session: %s "+

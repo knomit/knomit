@@ -3,6 +3,7 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/step"
 	"os"
 	"strings"
@@ -41,10 +42,10 @@ func TestFarLaneDemo_RenderTheShipPrompt(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverBackward, // far lane routes backward → hypothesize
-		Lane:      LaneFar,
-		Bridge: BridgeSeedSet{
+		Lane:      bridge.LaneFar,
+		Bridge: bridge.BridgeSeedSet{
 			Token: motif,
-			Kind:  BridgeMotif,
+			Kind:  bridge.BridgeMotif,
 			Members: []step.FactForLLM{
 				{
 					File:  "kb/gotchas/ai/agents/coding-agents/ui-testing/77b3e628.md",

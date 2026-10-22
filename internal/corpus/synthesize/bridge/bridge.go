@@ -1,4 +1,4 @@
-package synthesize
+package bridge
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 )
 
 // bridgePathCommunities builds the path→communityID map used by both
-// enumerateBridgeCandidates and buildScoredBridges so both always operate on
+// EnumerateBridgeCandidates and BuildScoredBridges so both always operate on
 // the SAME community assignment. The mapping logic:
 //   - Clustered paths get their real community id.
 //   - Noise paths each get their own unique synthetic negative id (so two
@@ -99,7 +99,7 @@ func BridgeKindFromString(s string) BridgeKind {
 	return DefaultBridgeKind
 }
 
-// entityAxisRankOnlyLine is the health line every surface that USED to serve
+// EntityAxisRankOnlyLine is the health line every surface that USED to serve
 // entity/domain bridges emits in their place.
 //
 // It exists because "0 bridges" and "this axis no longer qualifies" are the same
@@ -107,7 +107,7 @@ func BridgeKindFromString(s string) BridgeKind {
 // way to tell an axis that found nothing from one that cannot qualify — the
 // saturated-vs-broken confusion #147 was re-ruled over, one surface across.
 // The sentence names the state, not a count: there is no count to give.
-func entityAxisRankOnlyLine() string {
+func EntityAxisRankOnlyLine() string {
 	return "bridge axis: entity/domain is RANK-ONLY — a shared name no longer qualifies a " +
 		"bridge, only a shared mechanism does (#125). Zero entity bridges here is the " +
 		"designed state, not a stall."
@@ -145,6 +145,19 @@ func effortBudget(e step.Effort) int {
 // raises the budget past the band width.
 const maxBridgeSeeds = step.ForwardDiscoverPriorityBase - step.ReflectPriority
 
+// ForwardDiscoverPriority ranks the i-th forward discover item. `bridges` is
+// already sorted by Q descending, so rank == i preserves quality order
+// among discover items while keeping every priority strictly negative.
+//
+// Crucially, priority is a function of RANK, not Q: feeding a score directly
+// into the priority (the old `-10 + b.Strength` anti-pattern) let a
+// high-score bridge exceed 0 and leapfrog the prune/distill items it must run
+// after. This mirrors the backward (hypothesize) path's `-100 - i`, which was
+// written to avoid the same "a large rank flips the priority positive" bug.
+func ForwardDiscoverPriority(rank int) float64 {
+	return step.ForwardDiscoverPriorityBase - float64(rank)
+}
+
 // BridgeSeedSet is a small group of related facts plus the structural token
 // that bridges them. The discovery prompt presents this set verbatim and asks
 // the connected MCP agent whether a consequence (forward) or keystone
@@ -159,12 +172,12 @@ type BridgeSeedSet struct {
 	// community ids represented.
 	Members []step.FactForLLM `json:"members"`
 	// Q is the weighted quality score (cohesion + derivation-gap + specificity)
-	// computed by buildScoredBridges. Used for ranking; zero when the
+	// computed by BuildScoredBridges. Used for ranking; zero when the
 	// candidate was dropped by a gate (never appears in returned slices).
 	Q float64 `json:"-"`
 }
 
-// enumerateBridgeCandidates performs the grouping step only: it builds the
+// EnumerateBridgeCandidates performs the grouping step only: it builds the
 // community map (via bridgePathCommunities), applies the §7 discovered-origin
 // exclusion, groups non-discovered seed facts by canonical token (entity beats
 // domain; dedup for facts carrying the same token on both axes), and returns
@@ -188,9 +201,14 @@ type BridgeSeedSet struct {
 // share a string with a domain token or vice versa. Empty scope → no
 // exclusion (unscoped/production behavior byte-identical).
 //
-// This is the enumeration engine used by buildScoredBridges (quality/Q path)
+// This is the enumeration engine used by BuildScoredBridges (quality/Q path)
 // and BridgeComponentReport (calibrate/diagnostic tool).
-func enumerateBridgeCandidates(seeds []step.FactForLLM, clusters graph.ClusterResult, kind BridgeKind, scope step.ScopeFilter) []BridgeSeedSet {
+//
+// It is exported for the two qualify-gate session tests in the parent
+// package, which drive a Reviewer/Hypothesizer (so cannot live here) and use
+// it to prove their fixture pool really would bridge before asserting that the
+// session serves nothing.
+func EnumerateBridgeCandidates(seeds []step.FactForLLM, clusters graph.ClusterResult, kind BridgeKind, scope step.ScopeFilter) []BridgeSeedSet {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -327,8 +345,8 @@ func enumerateBridgeCandidates(seeds []step.FactForLLM, clusters graph.ClusterRe
 	return out
 }
 
-// buildScoredBridges is the Phase-4 production builder. It enumerates bridge
-// candidates (via enumerateBridgeCandidates), reshapes oversized groups to
+// BuildScoredBridges is the Phase-4 production builder. It enumerates bridge
+// candidates (via EnumerateBridgeCandidates), reshapes oversized groups to
 // their most cohesive cross-community subset, scores each surviving candidate
 // with the Q-score (cohesion + derivation-gap + specificity), drops those
 // below the quality gate, ranks by Q descending (Token asc on ties), and caps
@@ -336,8 +354,8 @@ func enumerateBridgeCandidates(seeds []step.FactForLLM, clusters graph.ClusterRe
 //
 // Gate: if !eff.Discovers() returns (nil, nil) immediately without calling idx.
 //
-// buildScoredBridges sets the Q field on each returned BridgeSeedSet.
-func buildScoredBridges(
+// BuildScoredBridges sets the Q field on each returned BridgeSeedSet.
+func BuildScoredBridges(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
@@ -352,7 +370,7 @@ func buildScoredBridges(
 		return nil, nil
 	}
 
-	cands := enumerateBridgeCandidates(seeds, clusters, kind, scope)
+	cands := EnumerateBridgeCandidates(seeds, clusters, kind, scope)
 	if len(cands) == 0 {
 		return nil, nil
 	}
@@ -361,7 +379,7 @@ func buildScoredBridges(
 	clusterOf := bridgePathCommunities(seeds, clusters)
 
 	// byPath allows fast reconstruction of factForLLM from a path after reshape.
-	// Exclude discovered-origin facts to mirror enumerateBridgeCandidates's §7
+	// Exclude discovered-origin facts to mirror EnumerateBridgeCandidates's §7
 	// idempotency exclusion (they never appear in candidates anyway).
 	byPath := make(map[string]step.FactForLLM, len(seeds))
 	for _, f := range seeds {
@@ -495,7 +513,7 @@ func BuildBackwardBridges(
 	// unscoped sessions use the token-anchored scored generator. Mirrors the
 	// forward (review) dispatch in review.go StartSession.
 	if !scope.IsEmpty() {
-		return buildFilteredBridges(ctx, idx, branch, seeds, cr, scope, effort, cfg)
+		return BuildFilteredBridges(ctx, idx, branch, seeds, cr, scope, effort, cfg)
 	}
-	return buildScoredBridges(ctx, idx, branch, seeds, cr, kind, effort, cfg, scope)
+	return BuildScoredBridges(ctx, idx, branch, seeds, cr, kind, effort, cfg, scope)
 }

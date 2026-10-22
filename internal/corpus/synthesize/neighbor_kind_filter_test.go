@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
@@ -230,8 +231,8 @@ func TestNeighborKinds_BackwardBridgesThreadTheList(t *testing.T) {
 		}
 		synthtest.RequireUnfilteredSearchFinds(t, env, synthtest.KindObs, synthtest.KindPol, index.SearchOptions{Path: synthtest.KindDir})
 		recIdx, rec := synthtest.RecordSearch(t, env.Svc)
-		_, err := BuildBackwardBridges(ctx, recIdx, synth, env.Branch, testLocalRepoID, step.EffortHigh,
-			BridgeBoth, 1.0, 2, env.RI.ClusterNeighborKinds(), QualityConfigFromRepo(env.RI), step.ScopeFilter{})
+		_, err := bridge.BuildBackwardBridges(ctx, recIdx, synth, env.Branch, testLocalRepoID, step.EffortHigh,
+			bridge.BridgeBoth, 1.0, 2, env.RI.ClusterNeighborKinds(), bridge.QualityConfigFromRepo(env.RI), step.ScopeFilter{})
 		require.NoError(t, err)
 		require.NotEmpty(t, rec.Kinds, "PREMISE: the bridge path must have run neighbour searches")
 		return rec
@@ -263,3 +264,8 @@ func TestNeighborKinds_WidenedListNeverSeeds(t *testing.T) {
 	require.Contains(t, paths, synthtest.KindObs)
 	require.NotContains(t, paths, synthtest.KindPol, "neighbor_kinds widens neighbours only; seeds stay epistemic")
 }
+
+// testLocalRepoID is a well-formed 12-hex repo id: a REAL id shape, not "",
+// because "" is the configuration under which the lineage exclusion does
+// nothing at all.
+const testLocalRepoID = "abcdef012345"

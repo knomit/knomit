@@ -1,10 +1,11 @@
-package synthesize
+package bridge
 
 import (
 	"context"
+	"testing"
+
 	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 
@@ -50,7 +51,7 @@ func TestBridgeLineage_ControlUnrelatedPairIsABridge(t *testing.T) {
 	parent := lineageSeed("kb/synthesis/parent.md")
 	child := lineageSeed("kb/observations/child.md")
 
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{parent, child},
 		twoCommunities("kb/synthesis/parent.md", "kb/observations/child.md"),
 		BridgeDomain, step.ScopeFilter{})
@@ -68,7 +69,7 @@ func TestBridgeLineage_ChildCitingParentIsNotABridge(t *testing.T) {
 	parent := lineageSeed("kb/synthesis/parent.md")
 	child := lineageSeed("kb/observations/child.md", storedRef("kb/synthesis/parent.md"))
 
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{parent, child},
 		twoCommunities("kb/synthesis/parent.md", "kb/observations/child.md"),
 		BridgeDomain, step.ScopeFilter{})
@@ -87,7 +88,7 @@ func TestBridgeLineage_ParentCitingChildIsNotABridge(t *testing.T) {
 	parent := lineageSeed("kb/synthesis/parent.md", storedRef("kb/observations/child.md"))
 	child := lineageSeed("kb/observations/child.md")
 
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{parent, child},
 		twoCommunities("kb/synthesis/parent.md", "kb/observations/child.md"),
 		BridgeDomain, step.ScopeFilter{})
@@ -119,7 +120,7 @@ func TestBridgeLineage_EmptyRepoIDExcludesNothing(t *testing.T) {
 	require.NotEmpty(t, withID[1].LineageRefs,
 		"fixture check: with the real repo id the stored ref MUST reduce to a local path")
 	_, found := containsToken(
-		enumerateBridgeCandidates(withID, clusters, BridgeDomain, step.ScopeFilter{}), "auth")
+		EnumerateBridgeCandidates(withID, clusters, BridgeDomain, step.ScopeFilter{}), "auth")
 	require.False(t, found, "with the repo id the lineage pair is excluded")
 
 	withoutID := []step.FactForLLM{
@@ -130,7 +131,7 @@ func TestBridgeLineage_EmptyRepoIDExcludesNothing(t *testing.T) {
 	require.Empty(t, withoutID[1].LineageRefs,
 		"an empty repo id reads every stored ref as foreign — this is the trap being pinned")
 	_, found = containsToken(
-		enumerateBridgeCandidates(withoutID, clusters, BridgeDomain, step.ScopeFilter{}), "auth")
+		EnumerateBridgeCandidates(withoutID, clusters, BridgeDomain, step.ScopeFilter{}), "auth")
 	require.True(t, found,
 		"with an empty repo id the SAME lineage pair sails through — if this ever goes false, "+
 			"normalization has moved and the empty-id hazard is gone; delete this test rather than weaken it")
@@ -143,7 +144,7 @@ func TestBridgeLineage_BareRefSpellingAlsoExcludes(t *testing.T) {
 	parent := lineageSeed("kb/synthesis/parent.md")
 	child := lineageSeed("kb/observations/child.md", "kb/synthesis/parent.md")
 
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{parent, child},
 		twoCommunities("kb/synthesis/parent.md", "kb/observations/child.md"),
 		BridgeDomain, step.ScopeFilter{})
@@ -174,7 +175,7 @@ func TestBridgeLineage_DropsOnlyTheLineageMember(t *testing.T) {
 		0: {"kb/a-synthesis.md"}, 1: {"kb/b-child.md"}, 2: {"kb/c-stranger.md"},
 	}}
 
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{parent, child, stranger}, clusters, BridgeDomain, step.ScopeFilter{})
 
 	set, found := containsToken(got, "auth")
@@ -214,7 +215,7 @@ func TestBridgeLineage_CollapsedSpanDropsTheGroup(t *testing.T) {
 	// communities, so the span check it must not reach would have passed.
 	require.Len(t, []step.FactForLLM{parent, child, sibling}, 3)
 
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{parent, child, sibling}, clusters, BridgeDomain, step.ScopeFilter{})
 
 	_, found := containsToken(got, "auth")
@@ -261,7 +262,7 @@ func TestBridgeLineage_MotifSignalExcludesParentAndOwnSource(t *testing.T) {
 
 // TestBridgeLineage_FilteredPathExcludesLineagePair covers the third
 // enumeration path — the one scoped sessions use. It does not share
-// enumerateBridgeCandidates with the other two, so an exclusion that only
+// EnumerateBridgeCandidates with the other two, so an exclusion that only
 // landed there would leave every scoped session unprotected.
 func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 	run := func(t *testing.T, childRefs []string) []BridgeSeedSet {
@@ -278,7 +279,7 @@ func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 		idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Similar([2]string{"kb/a.md", "kb/b.md"}).Idx()
 		synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
-		out, err := buildFilteredBridges(context.Background(), idx, "main", seeds, clusters,
+		out, err := BuildFilteredBridges(context.Background(), idx, "main", seeds, clusters,
 			step.ScopeFilter{Domain: []string{"auth"}}, step.EffortHigh, filteredCfg)
 		require.NoError(t, err)
 		return out
@@ -307,7 +308,7 @@ func TestBridgeLineage_TransitiveIsDELIBERATELYNotExcluded(t *testing.T) {
 	c := lineageSeed("kb/c-bottom.md")
 
 	// Only a and c are offered, so nothing in hand links them.
-	got := enumerateBridgeCandidates(
+	got := EnumerateBridgeCandidates(
 		[]step.FactForLLM{a, c},
 		twoCommunities("kb/a-top.md", "kb/c-bottom.md"),
 		BridgeDomain, step.ScopeFilter{})
@@ -362,7 +363,7 @@ func TestBridgeLineage_ReviewProjectionNormalizesStoredRefs(t *testing.T) {
 	// And end to end through the gate, so the wiring is pinned by behaviour and
 	// not only by a field value.
 	_, found := containsToken(
-		enumerateBridgeCandidates(seeds, twoCommunities(parent.Path(), child.Path()),
+		EnumerateBridgeCandidates(seeds, twoCommunities(parent.Path(), child.Path()),
 			BridgeDomain, step.ScopeFilter{}),
 		"auth")
 	require.False(t, found, "projected seeds must carry enough for the gate to fire")

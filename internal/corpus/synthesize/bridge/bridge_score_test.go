@@ -1,10 +1,11 @@
-package synthesize
+package bridge
 
 import (
 	"context"
 	"errors"
-	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
+
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 
 	"github.com/stretchr/testify/require"
 

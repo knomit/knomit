@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -143,8 +144,8 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pi
 	// removing it is a rip-out decision for its own ticket, not part of this
 	// fix, and BuildBackwardBridges is still what the calibrate tools measure.
 	switch {
-	case d.Effort.Discovers() && !BridgeKindFromString(d.RI.DiscoveryBridge()).Qualifies():
-		sess.Health = append(sess.Health, entityAxisRankOnlyLine())
+	case d.Effort.Discovers() && !bridge.BridgeKindFromString(d.RI.DiscoveryBridge()).Qualifies():
+		sess.Health = append(sess.Health, bridge.EntityAxisRankOnlyLine())
 	case d.Effort.Discovers() && len(seeds) >= 2:
 		if err := enqueueBackwardBridgeItems(ctx, d, sess.ID, seeds, branch); err != nil {
 			// Non-fatal: discovery is enrichment, not a blocker on the standard
@@ -194,7 +195,7 @@ const backwardDiscoverPriorityBase = -100
 // feeding blast straight into the priority (the old `-100 + blast` anti-pattern)
 // let a high-blast keystone produce a positive priority and leapfrog the
 // per-fact items it must run after. Mirrors the forward path's
-// forwardDiscoverPriority, which was written to avoid the same flip.
+// bridge.ForwardDiscoverPriority, which was written to avoid the same flip.
 func backwardDiscoverPriority(rank int) float64 {
 	return backwardDiscoverPriorityBase - float64(rank)
 }
@@ -210,9 +211,9 @@ func backwardDiscoverPriority(rank int) float64 {
 // forward (review) path uses, so both discovery directions honour the same axis
 // selection AND the same community partition, with nothing hardcoded.
 func enqueueBackwardBridgeItems(ctx context.Context, d step.Deps, sessionID string, seeds []fact.Fact, branch string) error {
-	bridges, err := BuildBackwardBridges(ctx, d.Search, seeds, branch, fact.ID12(d.RI.ID()), d.Effort,
-		BridgeKindFromString(d.RI.DiscoveryBridge()), d.RI.ClusterResolution(),
-		d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), QualityConfigFromRepo(d.RI), d.Scope)
+	bridges, err := bridge.BuildBackwardBridges(ctx, d.Search, seeds, branch, fact.ID12(d.RI.ID()), d.Effort,
+		bridge.BridgeKindFromString(d.RI.DiscoveryBridge()), d.RI.ClusterResolution(),
+		d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), bridge.QualityConfigFromRepo(d.RI), d.Scope)
 	if err != nil {
 		return err
 	}
@@ -223,7 +224,7 @@ func enqueueBackwardBridgeItems(ctx context.Context, d step.Deps, sessionID stri
 	// query per transitive dependent, so memoize per path to avoid recomputing
 	// the same walk on every bridge it participates in.
 	type rankedBridge struct {
-		b    BridgeSeedSet
+		b    bridge.BridgeSeedSet
 		rank int
 	}
 	blastByPath := make(map[string]int)
@@ -256,7 +257,7 @@ func enqueueBackwardBridgeItems(ctx context.Context, d step.Deps, sessionID stri
 		return ranked[i].b.Token < ranked[j].b.Token
 	})
 
-	sl := scopeLabel(d.Scope)
+	sl := bridge.ScopeLabel(d.Scope)
 	for i, rb := range ranked {
 		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: rb.b, ScopeLabel: sl}
 		payloadJSON, mErr := json.Marshal(payload)

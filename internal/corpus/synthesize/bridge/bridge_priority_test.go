@@ -1,8 +1,9 @@
-package synthesize
+package bridge
 
 import (
-	"knomit/internal/corpus/synthesize/step"
 	"testing"
+
+	"knomit/internal/corpus/synthesize/step"
 )
 
 // TestForwardDiscoverPriority_StrictlyNegativeRanked is the regression guard for
@@ -18,9 +19,9 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 	// Even a very large discover queue stays strictly below distill (0).
 	prev := 0.0
 	for rank := 0; rank < 1000; rank++ {
-		p := forwardDiscoverPriority(rank)
+		p := ForwardDiscoverPriority(rank)
 		if p >= 0 {
-			t.Fatalf("forwardDiscoverPriority(%d) = %v, must be strictly negative (below distill's 0)", rank, p)
+			t.Fatalf("ForwardDiscoverPriority(%d) = %v, must be strictly negative (below distill's 0)", rank, p)
 		}
 		if rank > 0 && p >= prev {
 			t.Fatalf("priority must strictly decrease with rank: rank %d = %v, prev = %v", rank, p, prev)
@@ -29,7 +30,7 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 	}
 
 	// Highest-Q bridge (rank 0) sits at the top of the discover band.
-	if got := forwardDiscoverPriority(0); got != step.ForwardDiscoverPriorityBase {
+	if got := ForwardDiscoverPriority(0); got != step.ForwardDiscoverPriorityBase {
 		t.Errorf("rank 0 priority = %v, want %v (top of discover band)", got, step.ForwardDiscoverPriorityBase)
 	}
 
@@ -46,7 +47,7 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 	// in practice: the deepest possible discover item is at rank maxBridgeSeeds-1,
 	// and its priority must stay strictly above reflect. Without the cap, an
 	// unbounded scoped pool would push rank ≥ 90 and collide with reflect's -100.
-	deepest := forwardDiscoverPriority(maxBridgeSeeds - 1)
+	deepest := ForwardDiscoverPriority(maxBridgeSeeds - 1)
 	if deepest <= step.ReflectPriority {
 		t.Errorf("deepest capped discover priority %v (rank %d) must stay above reflect %d",
 			deepest, maxBridgeSeeds-1, step.ReflectPriority)

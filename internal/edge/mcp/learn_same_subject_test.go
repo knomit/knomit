@@ -85,7 +85,7 @@ func inBand(th modelparams.Thresholds) float64 { return (th.ReflectNovelty + th.
 
 const (
 	// testDFCeiling is the generic-entity cutoff the cases run against. The
-	// production value comes from synthesize.DFCeiling(liveFacts); the exact
+	// production value comes from bridge.DFCeiling(liveFacts); the exact
 	// number does not matter here, only which side of it each entity sits.
 	testDFCeiling = 12
 	genericDF     = testDFCeiling + 1

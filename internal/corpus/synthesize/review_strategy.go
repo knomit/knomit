@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -352,7 +353,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	//
 	// Priority stays 0.0 for every item — the same band as before, below
 	// prune's positive cluster-size priorities and above the negative
-	// discover/reflect band (see forwardDiscoverPriority). Equal-priority items
+	// discover/reflect band (see bridge.ForwardDiscoverPriority). Equal-priority items
 	// are served in insertion order by NextPipelineWorkItem's `id ASC` tiebreak.
 	//
 	// PROGRESSION, NOT MIRROR (knomit#135). Only the REMAINDER group is
@@ -413,11 +414,11 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// the bridge builders return (nil, nil) there, which is the
 	// zero-discovery-spend contract of
 	// invariants/synthesize/effort-normal-byte-identical.
-	cfg := QualityConfigFromRepo(d.RI)
+	cfg := bridge.QualityConfigFromRepo(d.RI)
 	cr := graph.ClusterResultFromGroups(clusters)
 	// Dispatch: scoped sessions use the token-optional filtered generator;
 	// unscoped sessions use the token-anchored scored generator. The scope is
-	// empty in the unscoped case, so passing it to buildScoredBridges is a no-op.
+	// empty in the unscoped case, so passing it to bridge.BuildScoredBridges is a no-op.
 	//
 	// THE QUALIFY GATE (#125). Only a shared MECHANISM qualifies a bridge; a
 	// shared entity or domain name does not, and enters only at rank. Both
@@ -430,30 +431,30 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// The builders themselves are deliberately untouched. They remain the
 	// population BridgeComponentReport measures, and removing them is a
 	// rip-out decision for its own ticket, not part of this fix.
-	bridgeKind := BridgeKindFromString(d.RI.DiscoveryBridge())
-	var bridges []BridgeSeedSet
+	bridgeKind := bridge.BridgeKindFromString(d.RI.DiscoveryBridge())
+	var bridges []bridge.BridgeSeedSet
 	switch {
 	case !bridgeKind.Qualifies():
 		// Say WHY there are none. "0 bridges" and "this axis cannot qualify"
 		// are the same number, and only the health line separates a designed
 		// silence from a stall (the #147 lesson, one surface over).
 		if d.Effort.Discovers() {
-			sess.Health = append(sess.Health, entityAxisRankOnlyLine())
+			sess.Health = append(sess.Health, bridge.EntityAxisRankOnlyLine())
 		}
 	case !d.Scope.IsEmpty():
-		bridges, err = buildFilteredBridges(ctx, d.Search, branch, llmSeeds, cr, d.Scope, d.Effort, cfg)
+		bridges, err = bridge.BuildFilteredBridges(ctx, d.Search, branch, llmSeeds, cr, d.Scope, d.Effort, cfg)
 	default:
-		bridges, err = buildScoredBridges(ctx, d.Search, branch, llmSeeds, cr, bridgeKind, d.Effort, cfg, d.Scope)
+		bridges, err = bridge.BuildScoredBridges(ctx, d.Search, branch, llmSeeds, cr, bridgeKind, d.Effort, cfg, d.Scope)
 	}
 	if err != nil {
 		return step.Wrapf(step.ReviewTool, err, "build bridges")
 	}
-	sl := scopeLabel(d.Scope)
+	sl := bridge.ScopeLabel(d.Scope)
 	rank := 0
 	for _, b := range bridges {
 		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl}
 		if err := enqueueDiscover(ctx, d, sess, payload,
-			fmt.Sprintf("discover-fwd-%d", rank), forwardDiscoverPriority(rank)); err != nil {
+			fmt.Sprintf("discover-fwd-%d", rank), bridge.ForwardDiscoverPriority(rank)); err != nil {
 			return err
 		}
 		rank++
@@ -469,9 +470,9 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// makes it a hypothesis under the blast-radius gate (2bc84184). The
 	// hypothesize tool's synthesis-only seed pool is untouched by this
 	// (designer ruling 2026-08-23, phase3-rulings-1 Q2).
-	nearMotif, farMotif, motifHealth, mErr := buildMotifBridges(ctx, d.Search, branch,
-		llmSeeds, cr, d.Effort, cfg, motifResolverFor(ctx, d.Motifs, branch),
-		subjectLabelsFor(ctx, d.Search, branch), pairCosFor(d.Abstraction, branch))
+	nearMotif, farMotif, motifHealth, mErr := bridge.BuildMotifBridges(ctx, d.Search, branch,
+		llmSeeds, cr, d.Effort, cfg, bridge.MotifResolverFor(ctx, d.Motifs, branch),
+		bridge.SubjectLabelsFor(ctx, d.Search, branch), bridge.PairCosFor(d.Abstraction, branch))
 	if mErr != nil {
 		// Degrade rather than fail the session: the grounded work above is
 		// already queued, and an unavailable axis is not a reason to lose it.
@@ -490,22 +491,22 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// asserted on the total in TestEffortBudget_StaysBelowPriorityBand — do not
 	// "fix" this by inventing a second band.
 	for _, b := range nearMotif {
-		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl, Lane: LaneNear}
+		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl, Lane: bridge.LaneNear}
 		if err := enqueueDiscover(ctx, d, sess, payload,
-			fmt.Sprintf("discover-motif-near-%d", rank), forwardDiscoverPriority(rank)); err != nil {
+			fmt.Sprintf("discover-motif-near-%d", rank), bridge.ForwardDiscoverPriority(rank)); err != nil {
 			return err
 		}
 		rank++
 	}
 	for _, b := range farMotif {
-		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: b, ScopeLabel: sl, Lane: LaneFar}
+		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: b, ScopeLabel: sl, Lane: bridge.LaneFar}
 		if err := enqueueDiscover(ctx, d, sess, payload,
-			fmt.Sprintf("discover-motif-far-%d", rank), forwardDiscoverPriority(rank)); err != nil {
+			fmt.Sprintf("discover-motif-far-%d", rank), bridge.ForwardDiscoverPriority(rank)); err != nil {
 			return err
 		}
 		rank++
 	}
-	sess.Health = append(sess.Health, motifBridgeHealthLines(motifHealth, len(nearMotif), len(farMotif))...)
+	sess.Health = append(sess.Health, bridge.MotifBridgeHealthLines(motifHealth, len(nearMotif), len(farMotif))...)
 
 	log.Info().
 		Str("session", sess.ID).
@@ -707,19 +708,6 @@ func maybeEnqueueReflectItem(ctx context.Context, d step.Deps, sess *model.Pipel
 }
 
 // ── work-item priority bands ──────────────────────────────────────────────
-
-// forwardDiscoverPriority ranks the i-th forward discover item. `bridges` is
-// already sorted by Q descending, so rank == i preserves quality order
-// among discover items while keeping every priority strictly negative.
-//
-// Crucially, priority is a function of RANK, not Q: feeding a score directly
-// into the priority (the old `-10 + b.Strength` anti-pattern) let a
-// high-score bridge exceed 0 and leapfrog the prune/distill items it must run
-// after. This mirrors the backward (hypothesize) path's `-100 - i`, which was
-// written to avoid the same "a large rank flips the priority positive" bug.
-func forwardDiscoverPriority(rank int) float64 {
-	return step.ForwardDiscoverPriorityBase - float64(rank)
-}
 
 // ── decode ────────────────────────────────────────────────────────────────
 

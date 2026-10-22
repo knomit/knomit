@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"slices"
 	"strings"
@@ -76,10 +77,10 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 		repoID:         fact.ID12(env.RI.ID()),
 		payload: DiscoverWorkPayload{
 			Direction: DiscoverBackward,
-			Lane:      LaneFar,
-			Bridge: BridgeSeedSet{
+			Lane:      bridge.LaneFar,
+			Bridge: bridge.BridgeSeedSet{
 				Token: "measure-becomes-target",
-				Kind:  BridgeMotif,
+				Kind:  bridge.BridgeMotif,
 				Members: []step.FactForLLM{
 					{File: seedOnePath}, {File: seedTwoPath},
 				},

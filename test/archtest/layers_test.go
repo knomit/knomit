@@ -203,6 +203,11 @@ var sameLayerEdges = map[string]bool{
 	// The motif child plans and decodes the vocabulary steps over step.Deps and
 	// work items (step vocabulary).
 	"corpus/synthesize/motif -> corpus/synthesize/step": true,
+	// The bridge child enumerates and scores bridges over step.FactForLLM and
+	// graph clusters; QualityConfigFromRepo reads the repo instance's settings.
+	"corpus/synthesize/bridge -> corpus/repos":            true,
+	"corpus/synthesize/bridge -> corpus/synthesize/graph": true,
+	"corpus/synthesize/bridge -> corpus/synthesize/step":  true,
 	// synthtest is the test-support package of the synthesize tree; its
 	// environment builders stand up a repo instance.
 	"corpus/synthesize/internal/synthtest -> corpus/repos":           true,

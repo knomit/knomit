@@ -1,4 +1,4 @@
-package synthesize
+package bridge
 
 import (
 	"fmt"
@@ -260,7 +260,7 @@ func TestResolveDisjointnessPoint_NamesWhichFallbackFired(t *testing.T) {
 	require.True(t, p.Strict)
 	require.Equal(t, labelFloor, p.Fallback)
 
-	lines := motifBridgeHealthLines(motifEnumHealth{
+	lines := MotifBridgeHealthLines(motifEnumHealth{
 		Candidates: 1, Ceiling: 12, Point: p,
 		Activation: motifActivation{Evaluated: true, Active: true, DF2Clusters: 3},
 	}, 1, 0)

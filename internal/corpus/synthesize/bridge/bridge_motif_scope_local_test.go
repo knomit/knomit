@@ -1,10 +1,11 @@
-package synthesize
+package bridge
 
 import (
 	"context"
-	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
+
+	"knomit/internal/corpus/synthesize/step"
 
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ import (
 // unreachability concern for a corpus that had already had bridging enumerate
 // live. A false sentence printed every session eventually colonises any reader.
 func TestMotifBridgeHealthLines_InactiveLineIsScopeLocal(t *testing.T) {
-	lines := strings.Join(motifBridgeHealthLines(motifEnumHealth{
+	lines := strings.Join(MotifBridgeHealthLines(motifEnumHealth{
 		Activation: motifActivation{
 			Evaluated:   true,
 			Active:      false,
@@ -70,7 +71,7 @@ func TestMotifBridgeHealthLines_InactiveLineIsScopeLocal(t *testing.T) {
 // session's pool. On a scoped session the pool does not accumulate anything;
 // the next narrow scope reports inactive again.
 func TestMotifBridgeHealthLines_InactiveLinePromisesNoFutureActivation(t *testing.T) {
-	lines := strings.ToLower(strings.Join(motifBridgeHealthLines(motifEnumHealth{
+	lines := strings.ToLower(strings.Join(MotifBridgeHealthLines(motifEnumHealth{
 		Activation: motifActivation{Evaluated: true, Active: false, DF2Clusters: 1, Seeds: 3},
 	}, 0, 0), "\n"))
 
@@ -100,7 +101,7 @@ func TestMotifActive_RecordsThePoolItDecidedOver(t *testing.T) {
 			"over, or the health line cannot say what it measured")
 }
 
-// End-to-end through buildMotifBridges, so the field is populated on the path
+// End-to-end through BuildMotifBridges, so the field is populated on the path
 // that actually produces the health block — not only when motifActive is
 // called directly. This is the wiring half: a Seeds field that only the unit
 // test ever sets would leave the shipped line saying "among 0 seed facts".
@@ -111,7 +112,7 @@ func TestBuildMotifBridges_BelowFloorLineCarriesTheSeedCount(t *testing.T) {
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
-	_, _, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
+	_, _, health, err := BuildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
 		seeds, clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	require.False(t, health.Activation.Active, "precondition: below the floor")
@@ -119,6 +120,6 @@ func TestBuildMotifBridges_BelowFloorLineCarriesTheSeedCount(t *testing.T) {
 	require.Equal(t, len(seeds), health.Activation.Seeds,
 		"the seed count must survive the real enumeration path, not just a "+
 			"direct motifActive call")
-	require.Contains(t, strings.Join(motifBridgeHealthLines(health, 0, 0), "\n"), "2",
+	require.Contains(t, strings.Join(MotifBridgeHealthLines(health, 0, 0), "\n"), "2",
 		"and reach the rendered line")
 }

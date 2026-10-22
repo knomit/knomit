@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/corpus/synthesize"
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
 )
@@ -52,7 +52,7 @@ func (c sameSubjectCandidate) String() string {
 // so this ceiling is reused for its SHAPE, not because 2% has been validated
 // against the entity distribution. See the PR: measuring known collision pairs'
 // anchors against it is the check that would confirm the transfer.
-func dfCeilingForFacts(n int) int { return synthesize.DFCeiling(n) }
+func dfCeilingForFacts(n int) int { return bridge.DFCeiling(n) }
 
 // findSameSubjectCandidates searches the WHOLE branch (not the category
 // directory — that scoping is why two sessions filing one event under two

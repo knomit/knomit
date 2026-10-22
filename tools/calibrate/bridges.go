@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"text/tabwriter"
@@ -22,7 +23,7 @@ func newBridgesCmd() *cobra.Command {
 		Use:   "bridges --db <repo.db> [flags]",
 		Short: "Run bridge quality scorer and print component report + suggested floors",
 		Long: `bridges opens a knomit index through store.Open (no ONNX required), runs
-synthesize.BridgeComponentReport, and prints:
+bridge.BridgeComponentReport, and prints:
   1. A per-bridge component table (token, kind, members, coh, sep, gap, spec, Q, kept).
   2. Aggregates: mean Q, median Q, count Kept, total candidates.
   3. Suggested cohFloor and qualityFloor derived from the score distribution.
@@ -61,7 +62,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 			wGap, _ := f.GetFloat64("w-gap")
 			wSpec, _ := f.GetFloat64("w-spec")
 			maxMembers, _ := f.GetInt("max-members")
-			cfg := synthesize.QualityConfig{
+			cfg := bridge.QualityConfig{
 				CohFloor:     cohFloorFlag,
 				QualityFloor: qualityFloorFlag,
 				WCoh:         wCoh,
@@ -83,7 +84,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 			if kindStr == "motif" {
 				return runMotifReport(cmd, dbPath, branch, effortStr, resolution, minCommunity, neighborKinds, cfg)
 			}
-			kind := synthesize.BridgeKindFromString(kindStr)
+			kind := bridge.BridgeKindFromString(kindStr)
 
 			// Open the index without an embedder — the scoring path is embedder-free.
 			svc, err := store.Open(dbPath)
@@ -103,7 +104,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 				return err
 			}
 
-			report, err := synthesize.BridgeComponentReport(ctx, idx, branch, localRepoID, kind, eff, resolution, minCommunity, neighborKinds, cfg)
+			report, err := bridge.BridgeComponentReport(ctx, idx, branch, localRepoID, kind, eff, resolution, minCommunity, neighborKinds, cfg)
 			if err != nil {
 				return fmt.Errorf("bridge component report: %w", err)
 			}
@@ -209,7 +210,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 // viable bridges; raise it to filter borderline cases.
 //
 // Returns (0,0) for empty input or when the filtered subsets are empty.
-func suggestFloors(bridges []synthesize.ScoredBridge) (cohFloor, qualityFloor float64) {
+func suggestFloors(bridges []bridge.ScoredBridge) (cohFloor, qualityFloor float64) {
 	if len(bridges) == 0 {
 		return 0, 0
 	}
@@ -255,7 +256,7 @@ func sortedCopy(vs []float64) []float64 {
 // population, different pool, different engine. It states all three in its own
 // header rather than inheriting a sentence written about another axis.
 func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
-	resolution float64, minCommunity int, neighborKinds []string, cfg synthesize.QualityConfig) error {
+	resolution float64, minCommunity int, neighborKinds []string, cfg bridge.QualityConfig) error {
 	eff := step.NormalizeEffort(step.Effort(effortStr))
 	if err := eff.Validate(); err != nil {
 		return fmt.Errorf("--effort: %w", err)

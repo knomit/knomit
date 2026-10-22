@@ -350,7 +350,7 @@ func TestConformance_ShortlistDoesNotBranchOnEffort(t *testing.T) {
 	require.NotContains(t, src, "EffortHigh")
 	require.NotContains(t, src, "d.Effort",
 		"the shortlist is review machinery, not a discovery spend")
-	for _, forbidden := range []string{"BridgeSeedSet", "bridgeQ", "buildScoredBridges", "BridgeKind"} {
+	for _, forbidden := range []string{"BridgeSeedSet", "bridgeQ", "BuildScoredBridges", "BridgeKind"} {
 		require.NotContains(t, src, forbidden,
 			"the consolidation-scope fix is independent of the bridge engine")
 	}
