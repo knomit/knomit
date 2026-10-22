@@ -276,30 +276,30 @@ func (s *Service) Facts() *facts.Index { return s.fi }
 // methods is reachable through it.
 func (s *Service) FactsRepo() *facts.Repo { return s.rh.factsRepo }
 
-// Search returns the SearchIndex composite (a facade over the four query
+// Search returns the search composite (a facade over the four query
 // sub-services). Prefer the narrow accessors below (FactQuery/GraphStore/
 // HistoryQuery/Methodology) — depend on the smallest query surface a caller
 // needs.
-func (s *Service) Search() SearchIndex { return s.search }
+func (s *Service) Search() *index.Facade { return s.search }
 
 // FactQuery returns the fact read/search/existence query sub-service.
-func (s *Service) FactQuery() FactQuery { return s.fq }
+func (s *Service) FactQuery() *index.FactQuery { return s.fq }
 
 // GraphStore returns the DERIVED_FROM / SIMILAR_TO graph query sub-service.
-func (s *Service) GraphStore() GraphStore { return s.gq }
+func (s *Service) GraphStore() *index.GraphStore { return s.gq }
 
 // HistoryQuery returns the commit-log / revision history query sub-service.
-func (s *Service) HistoryQuery() HistoryQuery { return s.hq }
+func (s *Service) HistoryQuery() *index.HistoryQuery { return s.hq }
 
 // Methodology returns the methodology-matching query sub-service.
-func (s *Service) Methodology() MethodologyMatcher { return s.mq }
+func (s *Service) Methodology() *index.MethodologyMatcher { return s.mq }
 
 // Abstraction returns the title-embedding axis and the restatement shortlist
 // built on it. REVIEW PIPELINE ONLY — no runtime path may consume it.
-func (s *Service) Abstraction() AbstractionIndex { return s.ax }
+func (s *Service) Abstraction() *vocab.AbstractionIndex { return s.ax }
 
 // Motifs is alias resolution over the corpus's motif vocabulary.
-func (s *Service) Motifs() MotifIndex { return s.mo }
+func (s *Service) Motifs() *vocab.MotifIndex { return s.mo }
 
 // IndexManager returns the search index for its lifecycle operations (Sync,
 // SyncLocked, Rebuild, SyncWatermark, NeedsRebuild).

@@ -337,7 +337,7 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 // buildScoredBridges sets the Q field on each returned BridgeSeedSet.
 func buildScoredBridges(
 	ctx context.Context,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	seeds []factForLLM,
 	clusters ClusterResult,
@@ -451,7 +451,7 @@ func buildScoredBridges(
 // neighbour-kind list would be a different partition.
 func BuildBackwardBridges(
 	ctx context.Context,
-	idx SearchQuery,
+	idx *index.Facade,
 	synthFacts []fact.Fact,
 	branch string,
 	localRepoID string,

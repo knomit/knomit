@@ -39,6 +39,7 @@ type SubjectLabelDF struct {
 // reimplementation would be a second definition of the same rule, free to
 // drift from the one the write path enforces.
 func (gs *GraphStore) SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error) {
+	gs.probe("SubjectLabelDF")
 	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return SubjectLabelDF{}, fmt.Errorf("SubjectLabelDF: branchID: %w", err)

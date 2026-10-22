@@ -114,7 +114,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	sysFiles *facts.Repo,
 	// idx supplies FactExistsAt — the same resolution predicate every READER
 	// uses, which the ref gate must match exactly.
-	idx SearchQuery,
+	idx *index.Facade,
 	decisions []PruneDecision,
 	merges []MergeEntry,
 	recipeName string,
@@ -139,7 +139,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	rewrittenPaths := make(map[string]bool)
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
-	mergeGate := writeGate(localRepoID, idx, sysFiles, agentBranch)
+	mergeGate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
 	// Each merge's prior: its members' refs, SNAPSHOTTED NOW, before the
 	// decision loop's retracts and the earlier merges below delete members on
 	// this branch. Read at the tip later, a member retracted or consumed
@@ -436,7 +436,7 @@ func ApplyDistillDecisions(ctx context.Context,
 	gs *facts.Index,
 	sysFiles *facts.Repo,
 	// idx supplies FactExistsAt — the reader's resolution predicate.
-	idx SearchQuery,
+	idx *index.Facade,
 	synthesized []distillFact,
 	retract []string,
 	recipeName string,
@@ -450,7 +450,7 @@ func ApplyDistillDecisions(ctx context.Context,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
-	gate := writeGate(localRepoID, idx, sysFiles, agentBranch)
+	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -570,7 +570,7 @@ func ApplyReflectDecisions(
 	ctx context.Context,
 	gs *facts.Index,
 	sysFiles *facts.Repo,
-	idx SearchQuery,
+	idx *index.Facade,
 	result ReflectResult,
 	sess *model.PipelineSession,
 	// localRepoID is this repo's 12-hex id, for the ref gate below.
@@ -597,7 +597,7 @@ func ApplyReflectDecisions(
 	// ref. Everything it already cited resolved at its own commit and is not
 	// re-judged here.
 	priorRefsByPath := make(map[string][]string)
-	reflectGate := writeGate(localRepoID, idx, sysFiles, branch)
+	reflectGate := writeGate(localRepoID, idx.FactQuery, sysFiles, branch)
 
 	// Phase 1 — validate reinforce targets resolve to methodology facts and
 	// stage transition-fact updates appending the methodology path to refs.

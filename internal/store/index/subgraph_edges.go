@@ -29,6 +29,12 @@ var subgraphEdgeChunkSize = 400
 // intra-set edge (x,y) is therefore found when x's chunk is queried, so
 // chunking never drops an edge — it only bounds each query's expression depth.
 func (gs *GraphStore) SubgraphEdges(ctx context.Context, paths []string) ([][2]string, error) {
+	if err := gs.probe("SubgraphEdges"); err != nil {
+		return nil, err
+	}
+	if ov := gs.ov.Load(); ov != nil && ov.SubgraphEdges != nil {
+		return ov.SubgraphEdges(ctx, paths)
+	}
 	if len(paths) < 2 {
 		return nil, nil
 	}

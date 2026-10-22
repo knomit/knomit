@@ -40,7 +40,7 @@ const (
 // 4. Fallback to grouping by category path if the edge read fails or yields no clusters
 func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
-	idx SearchQuery,
+	idx *index.Facade,
 	resolution float64,
 	minCommunitySize int,
 	neighborKinds []string,

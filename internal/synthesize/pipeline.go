@@ -34,6 +34,7 @@ import (
 	"knomit/internal/store/sessions"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
 
 	"knomit/internal/fact"
 	"knomit/internal/fact/textnorm"
@@ -118,14 +119,14 @@ func errf(tool string, format string, args ...any) error {
 }
 
 // storeIndices returns the store indices under the repo read lock.
-func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, SearchQuery, *sessions.PipelineIndex, func(ctx context.Context, branch string) (string, error), store.AbstractionIndex, store.MotifIndex) {
+func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, *index.Facade, *sessions.PipelineIndex, func(ctx context.Context, branch string) (string, error), *vocab.AbstractionIndex, *vocab.MotifIndex) {
 	var gs *facts.Index
 	var files *facts.Repo
-	var idx SearchQuery
+	var idx *index.Facade
 	var pipelineIdx *sessions.PipelineIndex
 	var headCommit func(ctx context.Context, branch string) (string, error)
-	var abstraction store.AbstractionIndex
-	var motifs store.MotifIndex
+	var abstraction *vocab.AbstractionIndex
+	var motifs *vocab.MotifIndex
 	p.ri.WithRead(func(svc *store.Service) {
 		gs = svc.Facts()
 		files = svc.FactsRepo()
@@ -863,7 +864,7 @@ const (
 // load-bearing: discovery seeding excludes origin=discovered facts, and
 // dropping Origin here previously let a discovered fact seed its own
 // discovery.
-func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx SearchQuery, pipelineIdx *sessions.PipelineIndex) ([]fact.Fact, seedScan, error) {
+func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx *index.Facade, pipelineIdx *sessions.PipelineIndex) ([]fact.Fact, seedScan, error) {
 	tool := p.strategy.Tool()
 
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, tool, branch)

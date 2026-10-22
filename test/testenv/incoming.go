@@ -12,7 +12,7 @@ import (
 // Incoming returns the incoming-edge view at this fact handle's commit pin.
 // Receiver must be in FactStateExists (enforced via MustExist).
 //
-// Mirrors the production read path: it calls store.GraphStore.IncomingAtCommit
+// Mirrors the production read path: it calls index.GraphStore.IncomingAtCommit
 // directly, so the result is identical to what the HTTP /incoming endpoint
 // would return — no HTTP round-trip in tests.
 func (f *FactHandle) Incoming() *EdgeView {

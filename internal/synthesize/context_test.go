@@ -165,7 +165,7 @@ func TestDedupCluster_ContextIsTheWinnersWholeMap(t *testing.T) {
 		{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
-	idx := &fixedPairSearch{SearchQuery: svc.Search(), results: []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)}}
+	idx := fixedPairSearch(t, svc, []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)})
 	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test", func(ProgressEvent) {}, branch, bareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, surviving, 1)

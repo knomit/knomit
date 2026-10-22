@@ -11,8 +11,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
 )
 
 // errStoreUnavailable is the caller-facing error for a mount whose store
@@ -25,9 +26,9 @@ var errStoreUnavailable = errors.New("knowledge base is unavailable (repo is clo
 // MethodologyMatcher.
 type mcpStore struct {
 	facts       *facts.Index
-	factQuery   store.FactQuery
-	graph       store.GraphStore
-	history     store.HistoryQuery
+	factQuery   *index.FactQuery
+	graph       *index.GraphStore
+	history     *index.HistoryQuery
 	toolSession *sessions.ToolIndex
 	pipeline    *sessions.PipelineIndex
 	// headCommit is the tip of a branch (Service.HeadCommit), bound under the
@@ -36,7 +37,7 @@ type mcpStore struct {
 	// motifs is alias resolution over the motif vocabulary — read-only here.
 	// The §6 explain surface resolves a fact's motifs to their cluster,
 	// definition and siblings; nothing on this path writes derived state.
-	motifs store.MotifIndex
+	motifs *vocab.MotifIndex
 	// files reads one file under .knomit/ by exact path (explain, the refs gate).
 	// Read-only: nothing lists or indexes the system root.
 	files *facts.Repo

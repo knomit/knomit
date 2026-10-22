@@ -185,7 +185,7 @@ func dedupCluster(
 	cluster []factForLLM,
 	gs *facts.Index,
 	sysFiles *facts.Repo,
-	idx SearchQuery,
+	idx *index.Facade,
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
@@ -199,7 +199,7 @@ func dedupCluster(
 
 	// The one gate the merged winners below go through, built once for the
 	// whole cluster rather than per merge.
-	gate := writeGate(localRepoID, idx, sysFiles, agentBranch)
+	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
 
 	// Build a set for fast path lookup.
 	clusterByPath := make(map[string]factForLLM, len(cluster))

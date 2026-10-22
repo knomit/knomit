@@ -65,10 +65,7 @@ func TestDedupCluster_SurvivorDoesNotCiteItself(t *testing.T) {
 				{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
 				{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 			}
-			idx := &fixedPairSearch{
-				SearchQuery: svc.Search(),
-				results:     []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)},
-			}
+			idx := fixedPairSearch(t, svc, []index.SearchResult{searchHit(winnerPath), searchHit(loserPath)})
 
 			surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
 				func(ProgressEvent) {}, branch, selfRefRepoID)

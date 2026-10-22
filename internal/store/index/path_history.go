@@ -22,6 +22,7 @@ import (
 // instead of a first-parent walk; below a history boundary (a missing commit
 // object) it finds nothing. "" when there is none.
 func (hq *HistoryQuery) LiveRevision(ctx context.Context, branch, path, anchor string) (string, error) {
+	hq.probe("LiveRevision")
 	branchID, err := hq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("LiveRevision: branchID: %w", err)
@@ -69,6 +70,7 @@ type PathHistoryCursor struct {
 // reports that a continuation's anchor left the branch, or that a change the
 // walk needs (the frontier, or a link from it) is not visible on the branch.
 func (hq *HistoryQuery) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error) {
+	hq.probe("PathHistory")
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil, nil
 	}
@@ -268,6 +270,7 @@ func (h *changeHeap) Pop() any {
 // off-branch lineage never surface even when anchorCommit was committed
 // elsewhere.
 func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]model.RevisionMeta, error) {
+	hq.probe("RevisionsBefore")
 	if anchorCommit == "" || limit <= 0 {
 		return nil, nil
 	}

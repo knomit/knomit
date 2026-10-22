@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/store"
 	"knomit/internal/store/index"
 
 	"knomit/internal/fact"
@@ -18,17 +19,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fixedPairSearch is a SearchQuery whose Search returns a canned result set,
-// so a dedup pair can be forced without standing up an embedder. Every other
-// method — crucially FactExistsAt, which the ref gate resolves through — is
-// the real one.
-type fixedPairSearch struct {
-	SearchQuery
-	results []index.SearchResult
-}
-
-func (f *fixedPairSearch) Search(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
-	return f.results, nil
+// fixedPairSearch makes svc's search return a canned result set, so a dedup
+// pair can be forced without standing up an embedder. Every other read —
+// crucially FactExistsAt, which the ref gate resolves through — is the real
+// one. It returns svc's own *index.Facade, with the override undone when the
+// test ends.
+func fixedPairSearch(t *testing.T, svc *store.Service, results []index.SearchResult) *index.Facade {
+	t.Helper()
+	idx := svc.Search()
+	overridesOf(t, idx).search(func(index.SearchFunc) index.SearchFunc {
+		return func(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
+			return results, nil
+		}
+	})
+	return idx
 }
 
 // searchHit is a result above any dedup threshold — dedupCluster divides Score
@@ -88,13 +92,10 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 		{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 	}
-	idx := &fixedPairSearch{
-		SearchQuery: svc.Search(),
-		results: []index.SearchResult{
-			searchHit(winnerPath),
-			searchHit(loserPath),
-		},
-	}
+	idx := fixedPairSearch(t, svc, []index.SearchResult{
+		searchHit(winnerPath),
+		searchHit(loserPath),
+	})
 
 	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
 		func(ProgressEvent) {}, branch, bareRefFixture)
@@ -170,7 +171,7 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	require.NotSame(t, &write[0], &carried[0],
 		"prior must be its own list, not the write list under a second name")
 
-	gate := refs.New(bareRefFixture, refs.FromFactQuery(svc.Search(), branch))
+	gate := refs.New(bareRefFixture, refs.FromFactQuery(svc.FactQuery(), branch))
 
 	// Positive control: the carried set, unresolvable member and all, passes.
 	// This is the #103 case and it must not be rejected.
