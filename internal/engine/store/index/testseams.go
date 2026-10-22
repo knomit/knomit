@@ -273,6 +273,64 @@ type Overrides struct {
 	SubgraphEdges func(ctx context.Context, paths []string) ([][2]string, error)
 }
 
+// ReadName names a read SetReadFaultForTest can fail. It is a distinct type
+// with one constant per faultable read, so a mistyped name is a compile error
+// and not a fault that silently never fires.
+type ReadName string
+
+// The reads SetReadFaultForTest can fail.
+const (
+	ReadStats            ReadName = "Stats"
+	ReadActivity         ReadName = "Activity"
+	ReadCompletions      ReadName = "Completions"
+	ReadRecentFacts      ReadName = "RecentFacts"
+	ReadSearch           ReadName = "Search"
+	ReadExplainFact      ReadName = "ExplainFact"
+	ReadFactLiveAtCommit ReadName = "FactLiveAtCommit"
+)
+
+// ReadFault is the hook of SetReadFaultForTest: it is called with the name of a
+// faultable read and returns the error that read must return, or nil to let it
+// run.
+type ReadFault func(read ReadName) error
+
+// SetReadFaultForTest makes a read return fault(method) instead of running,
+// when fault returns an error; a nil result lets the read through, and a nil
+// fault removes the hook. It is FAIL-ONLY: it cannot fake an answer, and it is
+// separate from Overrides, which stays an observer (Overrides.Reads errors on
+// four reads only). The fault runs right after the Overrides probe, so an
+// Overrides.Reads observer on the same Facade still sees the read, and may
+// sleep there to model per-mount latency.
+//
+// Faultable reads: Stats, Activity, Completions, RecentFacts, Search,
+// ExplainFact and FactLiveAtCommit. Nested calls fire it too, as the probes
+// do: a Search fault also fails RecentFacts with Text set, which reaches
+// Search. The hook is installed on this Facade's query services, that is on one
+// store.Service; another Service is unaffected. It panics outside a test
+// binary; the returned func restores the previous hook.
+//
+// The hook closure may run on several goroutines at once (the lens fan-out
+// reads every mount concurrently), so a closure that records anything must be
+// goroutine-safe. Match on the exact ReadName and assert the injected error's
+// identity (a distinct sentinel or message), not only a status, so a test
+// cannot pass for the wrong reason.
+func (f *Facade) SetReadFaultForTest(fault ReadFault) (restore func()) {
+	mustBeTest("SetReadFaultForTest")
+	var p *ReadFault
+	if fault != nil {
+		p = &fault
+	}
+	prevF, prevG, prevH := f.FactQuery.fault.Load(), f.GraphStore.fault.Load(), f.HistoryQuery.fault.Load()
+	f.FactQuery.fault.Store(p)
+	f.GraphStore.fault.Store(p)
+	f.HistoryQuery.fault.Store(p)
+	return func() {
+		f.FactQuery.fault.Store(prevF)
+		f.GraphStore.fault.Store(prevG)
+		f.HistoryQuery.fault.Store(prevH)
+	}
+}
+
 // SetOverridesForTest installs o on all four query services of this Facade and
 // returns a func that restores the previous set (see Overrides for the scope).
 // It panics outside a test binary.

@@ -156,6 +156,9 @@ func (hq *HistoryQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 // Activity returns commit-activity metrics for path using SQL aggregates.
 func (hq *HistoryQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
 	hq.probe("Activity")
+	if err := hq.failRead(ReadActivity); err != nil {
+		return ActivityResult{}, err
+	}
 	cutoff7 := vcs.CommitLogAge(7)
 	cutoff30 := vcs.CommitLogAge(30)
 	cutoff90 := vcs.CommitLogAge(90)

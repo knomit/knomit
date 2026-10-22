@@ -271,6 +271,9 @@ func (mi *MotifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 // that IS scoped. Narrowing by ?q= is the opposite case and stays unnarrowed:
 // a search is a way of reading the list, a path is which corpus you are in.
 func (mi *MotifIndex) VocabularyHealthUnder(ctx context.Context, branch, pathPrefix string) (MotifVocabularyHealth, error) {
+	if err := mi.failRead(ReadVocabularyHealthUnder); err != nil {
+		return MotifVocabularyHealth{}, err
+	}
 	var h MotifVocabularyHealth
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
@@ -376,6 +379,9 @@ type MotifDefinitionStatus struct {
 // A key with no stored definition is ABSENT from the result — "missing" is the
 // absence, not an empty entry, matching Definition's (_, false, nil).
 func (mi *MotifIndex) Definitions(ctx context.Context, branch string, keys []string) (map[string]MotifDefinitionStatus, error) {
+	if err := mi.failRead(ReadDefinitions); err != nil {
+		return nil, err
+	}
 	branchID, err := mi.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("Definitions: %w", err)

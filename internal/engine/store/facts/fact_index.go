@@ -28,6 +28,12 @@ type Index struct {
 	// deleteFault is the failure-injection hook of SetDeleteFaultForTest
 	// (testseams.go); nil in production, where nothing can set it.
 	deleteFault atomic.Pointer[func(path string) error]
+	// readFactFault, listDirFault and writeFault are the failure-injection
+	// hooks of SetReadFactFaultForTest, SetListDirFaultForTest and
+	// SetWriteFaultForTest (testseams.go); nil in production.
+	readFactFault atomic.Pointer[func(path string, opts *ReadFactOpts) error]
+	listDirFault  atomic.Pointer[func(path string) error]
+	writeFault    atomic.Pointer[func(path string) error]
 }
 
 // NewIndex builds the fact index over rh. The parent's constructors call it

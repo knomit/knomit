@@ -54,6 +54,9 @@ var contextBlobColumn = fmt.Sprintf(
 // QueryByPath, MinSimilarity) are inert here.
 func (fq *FactQuery) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
 	fq.probe("RecentFacts")
+	if err := fq.failRead(ReadRecentFacts); err != nil {
+		return nil, 0, err
+	}
 	if opts.Text != "" {
 		return fq.recentFactsSearch(ctx, branch, opts)
 	}
@@ -891,6 +894,9 @@ func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string 
 
 func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	fq.probe("Search")
+	if err := fq.failRead(ReadSearch); err != nil {
+		return nil, err
+	}
 	if ov := fq.ov.Load(); ov != nil && ov.Search != nil {
 		return ov.Search(fq.search)(ctx, branch, q)
 	}

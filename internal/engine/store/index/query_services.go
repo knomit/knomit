@@ -19,18 +19,25 @@ import (
 type FactQuery struct {
 	rh *vcs.Repo
 	ov atomic.Pointer[Overrides]
+	// fault is the failure-injection hook of Facade.SetReadFaultForTest;
+	// nil in production, where nothing can set it.
+	fault atomic.Pointer[ReadFault]
 }
 
 // GraphStore is the DERIVED_FROM / SIMILAR_TO graph queries.
 type GraphStore struct {
 	rh *vcs.Repo
 	ov atomic.Pointer[Overrides]
+	// fault: see FactQuery.fault.
+	fault atomic.Pointer[ReadFault]
 }
 
 // HistoryQuery is the commit-log / revision history queries.
 type HistoryQuery struct {
 	rh *vcs.Repo
 	ov atomic.Pointer[Overrides]
+	// fault: see FactQuery.fault.
+	fault atomic.Pointer[ReadFault]
 }
 
 // MethodologyMatcher is methodology-fact matching.
@@ -59,6 +66,23 @@ func (gs *GraphStore) probe(m string) error { return probeOf(gs.ov.Load(), m) }
 func (hq *HistoryQuery) probe(m string) error { return probeOf(hq.ov.Load(), m) }
 
 func (mm *MethodologyMatcher) probe(m string) error { return probeOf(mm.ov.Load(), m) }
+
+// failRead returns the error the test-only read fault (SetReadFaultForTest)
+// chose for the named read, or nil. Unlike probe its result is RETURNED by the
+// read, before any work. With no fault installed (always, in production) it is
+// one atomic load.
+func (fq *FactQuery) failRead(m ReadName) error { return faultOf(fq.fault.Load(), m) }
+
+func (gs *GraphStore) failRead(m ReadName) error { return faultOf(gs.fault.Load(), m) }
+
+func (hq *HistoryQuery) failRead(m ReadName) error { return faultOf(hq.fault.Load(), m) }
+
+func faultOf(f *ReadFault, m ReadName) error {
+	if f == nil {
+		return nil
+	}
+	return (*f)(m)
+}
 
 func probeOf(o *Overrides, m string) error {
 	if o == nil || o.Reads == nil {
