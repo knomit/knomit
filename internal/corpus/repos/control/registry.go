@@ -41,8 +41,8 @@ var (
 	ErrRepoAlreadyRegistered = errors.New("this knowledge base is already registered")
 	// ErrRepoExists is returned when a Create targets a name that is already active.
 	ErrRepoExists = errors.New("repo already exists")
-	// ErrRegistryNotFound is returned when a uid has no row.
-	ErrRegistryNotFound = errors.New("repo not in registry")
+	// errRegistryNotFound is returned when a uid has no row.
+	errRegistryNotFound = errors.New("repo not in registry")
 )
 
 // Valid profile values. Absent rows read as ProfileCode.
@@ -52,8 +52,8 @@ const (
 	ProfileGeneric = "generic"
 )
 
-// ErrInvalidProfile is returned by SetProfile for unknown profile values.
-var ErrInvalidProfile = errors.New("invalid profile (want code, chat, or generic)")
+// errInvalidProfile is returned by SetProfile for unknown profile values.
+var errInvalidProfile = errors.New("invalid profile (want code, chat, or generic)")
 
 // RepoRecord is one registered repository.
 type RepoRecord struct {
@@ -443,7 +443,7 @@ func (r *Registry) Rename(uid, name string) error {
 // RenameIfNamed sets uid's name to `to` ONLY IF it currently holds `from`.
 // Reports whether the row changed: (false, nil) means the predicate did not
 // hold — a legitimate outcome, NOT an error. Contrast Rename, which is
-// unconditional and reports zero rows as ErrRegistryNotFound; the two have
+// unconditional and reports zero rows as errRegistryNotFound; the two have
 // different zero-row semantics and mixing them up is the trap here.
 //
 // This is a compare-and-swap, and Manager.RenameRepo uses it for BOTH halves of
@@ -482,7 +482,7 @@ func (r *Registry) SetProfile(uid, profile string) error {
 	switch profile {
 	case ProfileCode, ProfileChat, ProfileGeneric:
 	default:
-		return fmt.Errorf("%w: %q", ErrInvalidProfile, profile)
+		return fmt.Errorf("%w: %q", errInvalidProfile, profile)
 	}
 	res, err := r.db.Exec(`UPDATE repos SET profile = ? WHERE uid = ?`, profile, uid)
 	if err != nil {
@@ -532,7 +532,7 @@ func requireOneRow(res sql.Result, uid string) error {
 		return fmt.Errorf("registry: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%w: %q", ErrRegistryNotFound, uid)
+		return fmt.Errorf("%w: %q", errRegistryNotFound, uid)
 	}
 	return nil
 }
