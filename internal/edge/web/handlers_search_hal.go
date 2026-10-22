@@ -19,18 +19,11 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// searchProvider is the narrow interface the search HAL handler depends on.
-// Production wires it to defaultSearchProvider; tests inject stubs.
-type searchProvider interface {
-	Search(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error)
-}
-
-// defaultSearchProvider is the production searchProvider that calls through
+// searchRepo runs a search against one repo instance. It calls through
 // ri.WithRead to access the real store, and uses the server embedder for
-// query vector generation.
-type defaultSearchProvider struct{}
-
-func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+// query vector generation. Both the repo /search handler and every mount of the
+// lens /search fan-out call it.
+func searchRepo(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 	// Generate query vector if text is provided and an embedder is available.
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
 		vec, err := emb.EmbedQuery(ctx, q.Text)
@@ -82,7 +75,7 @@ type searchView struct {
 }
 
 // handleSearch serves GET /repos/{repo}/branches/{branch}/search.
-func handleSearch(b hal.URLBuilder, provider searchProvider, emb model.Embedder) http.HandlerFunc {
+func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -192,7 +185,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb model.Embedder)
 		var diag index.SearchDiag
 		q.Diag = &diag
 		if !empty {
-			results, err = provider.Search(r.Context(), ri, emb, branch, q)
+			results, err = searchRepo(r.Context(), ri, emb, branch, q)
 		}
 		log.Info().
 			Bool("text", text != "").

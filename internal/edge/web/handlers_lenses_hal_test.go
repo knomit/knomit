@@ -17,6 +17,7 @@ import (
 	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -26,10 +27,18 @@ import (
 // dir so replica tests can copy a repo's .db to force an ID collision.
 func newTestLensManager(t *testing.T, names ...string) (*repos.Manager, string) {
 	t.Helper()
+	return newTestLensManagerWith(t, nil, names...)
+}
+
+// newTestLensManagerWith is newTestLensManager whose repos embed with emb (nil:
+// no embedder), so a lens text search runs the real vector step on every mount.
+func newTestLensManagerWith(t *testing.T, emb model.BatchEmbedder, names ...string) (*repos.Manager, string) {
+	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:     config.Config{Home: home},
-		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: emb,
+		Cfg:      config.Config{Home: home},
+		AgentID:  testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		Machine: repos.Options{Synchronous: true},
 	})
 	if err := m.Start(); err != nil {

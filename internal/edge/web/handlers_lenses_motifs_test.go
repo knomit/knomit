@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -18,6 +20,7 @@ import (
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 )
 
@@ -673,19 +676,6 @@ func (s *lensPivotFactsStub) RecentFacts(
 	return out, n, nil
 }
 
-func (s *lensPivotFactsStub) Search(
-	_ context.Context, ri *repos.RepoInstance, _ model.Embedder, _ string, opts index.SearchOptions,
-) ([]index.SearchResult, error) {
-	out, _ := s.carriers(ri, opts)
-	res := make([]index.SearchResult, 0, len(out))
-	for _, e := range out {
-		var sr index.SearchResult
-		sr.Path, sr.Title, sr.Motifs = e.Path, e.Title, e.Motifs
-		res = append(res, sr)
-	}
-	return res, nil
-}
-
 // The carriers of the merged `drift-config` cluster, split across mounts by
 // SPELLING: alpha's five carry `config-drift` (the elected canonical), beta's
 // two carry `configuration-drifts` and nothing else. splitVocabularyStub says
@@ -718,7 +708,7 @@ func TestLensFacts_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
 	motifs := splitVocabularyStub()
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{motifs: motifs, factsCollection: carriers, search: carriers}}
+	s := &Server{Manager: m, providers: storeProviders{motifs: motifs, factsCollection: carriers}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -775,19 +765,33 @@ func motifSorted(in []string) []string {
 // both reach it, and a relevance query that dropped a mount would be the same
 // defect with a different envelope.
 func TestLensSearch_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
-	carriers := driftCarriersByMount()
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		motifs: splitVocabularyStub(), factsCollection: carriers, search: carriers}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{motifs: splitVocabularyStub()}, "alpha", "beta")
+	spell := func(m string) func(*fact.Fact) { return func(f *fact.Fact) { f.Motifs = []string{m} } }
+	writeCosFact(t, env.m.Get("alpha"), "kb/a0.md", "alpha 0", 0.9, spell("config-drift"))
+	writeCosFact(t, env.m.Get("beta"), "kb/b0.md", "beta 0", 0.8, spell("configuration-drifts"))
+	writeCosFact(t, env.m.Get("beta"), "kb/b1.md", "beta 1", 0.7, spell("configuration-drifts"))
+	seen := observeMountSearch(t, env.m, "alpha", "beta")
 
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=drift&motifs=config-drift&motif_match=exact")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	rec := env.get(t, "/lenses/eng/search?q=drift&motifs=config-drift&motif_match=exact")
+	body := decodeLensSearch(t, rec)
+
+	// The mount that spells the shape differently is IN the answer.
+	fromBeta := 0
+	for _, res := range body.Results {
+		if res.Source.Repo == "beta" {
+			fromBeta++
+		}
 	}
-	if got := strings.Join(motifSorted(carriers.lastOpts["beta"].Motifs), ","); got != "config-drift,configuration-drifts" {
-		t.Errorf("beta was asked for %q, want the merged member list", got)
+	if fromBeta != 2 || len(body.Results) != 3 {
+		t.Errorf("got %d rows (%d from beta), want 3 (2 from beta): %+v", len(body.Results), fromBeta, body.Results)
+	}
+	// Every mount was asked about the WHOLE shape, not about one mount's name.
+	for _, name := range []string{"alpha", "beta"} {
+		got := seen.of(name)
+		require.Len(t, got, 1, name)
+		if joined := strings.Join(motifSorted(got[0].Motifs), ","); joined != "config-drift,configuration-drifts" {
+			t.Errorf("%s was asked for %q, want the merged member list", name, joined)
+		}
 	}
 }
 
@@ -799,7 +803,7 @@ func TestLensFacts_PivotWideningIgnoresRepoNarrowing(t *testing.T) {
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{
-		motifs: splitVocabularyStub(), factsCollection: carriers, search: carriers}}
+		motifs: splitVocabularyStub(), factsCollection: carriers}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -816,7 +820,7 @@ func TestLensFacts_UnknownMotifTermIsPassedThroughUnchanged(t *testing.T) {
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{
-		motifs: splitVocabularyStub(), factsCollection: carriers, search: carriers}}
+		motifs: splitVocabularyStub(), factsCollection: carriers}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -849,7 +853,7 @@ func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
 		motifs: &lensMotifsStub{clusters: map[string][]vocab.MotifCluster{
 			"alpha": {{ClusterKey: "drift-config", CanonicalID: "config-drift", Members: []string{"config-drift"}, DF: 5, DFTotal: 5}},
 		}},
-		factsCollection: carriers, search: carriers}}
+		factsCollection: carriers}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"solo","write":"alpha","reads":[]}`)
 
@@ -910,7 +914,7 @@ func TestLensFacts_MotifWideningNamesTheFailingMountsBranch(t *testing.T) {
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{
-		motifs: motifs, factsCollection: carriers, search: carriers}}
+		motifs: motifs, factsCollection: carriers}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -945,7 +949,7 @@ func TestLensFacts_MotifWideningFailsTheWholeRequest(t *testing.T) {
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m, providers: storeProviders{
-		motifs: motifs, factsCollection: carriers, search: carriers}}
+		motifs: motifs, factsCollection: carriers}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
