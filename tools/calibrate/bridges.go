@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"text/tabwriter"
 
 	"knomit/internal/corpus/synthesize"
+	"knomit/internal/corpus/synthesize/bridge"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/embeddings"
 	"knomit/internal/engine/store"

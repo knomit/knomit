@@ -401,6 +401,30 @@ func TestMN6_MotifsDoNotDriveMechanics(t *testing.T) {
 					"mechanicsPaths with a reason.", rel, fn)
 		}
 	}
+
+	// The bridge and graph children are mechanical in their entirety, so they
+	// are also walked as DIRECTORIES: a file that is not keyed above (a new
+	// one, or bridge_lineage.go and quality_config.go, which never were) may
+	// not read motifs either. Keyed files were checked with their own allow-list.
+	for _, dir := range []string{
+		"internal/corpus/synthesize/bridge/",
+		"internal/corpus/synthesize/graph/",
+	} {
+		walked := 0
+		for rel := range sources {
+			if !strings.HasPrefix(rel, dir) {
+				continue
+			}
+			walked++
+			if _, keyed := mechanicsPaths[rel]; keyed {
+				continue
+			}
+			require.Emptyf(t, funcsMentioningMotifs(t, rel),
+				"MN6: %s is in a mechanical-path directory and must not read motifs; "+
+					"key it in mechanicsPaths with a reason if it only carries them", rel)
+		}
+		require.Positivef(t, walked, "MN6: no non-test Go files found under %s — the walk is not reading it", dir)
+	}
 }
 
 // funcsMentioningMotifs returns the names of top-level functions in rel whose

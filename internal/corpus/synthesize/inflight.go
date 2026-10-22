@@ -47,7 +47,7 @@ const minJudgeableMembers = 2
 
 // minBridgeMembers is the same kind of structural floor for a bridge: a
 // discover item asks what two or more independent facts jointly entail, and
-// enumerateBridgeCandidates will not emit a set below it.
+// bridge.EnumerateBridgeCandidates will not emit a set below it.
 const minBridgeMembers = 2
 
 // refreshInFlightItems reconciles this session's UNANSWERED work items with a
