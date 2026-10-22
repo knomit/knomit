@@ -44,8 +44,9 @@ func EmbedderThresholds(emb Embedder) modelparams.Thresholds {
 	return emb.Thresholds()
 }
 
-//go:generate go run go.uber.org/mock/mockgen -destination=../mock_batch_embedder_test.go -package=store knomit/internal/engine/store/model BatchEmbedder
-//go:generate go run go.uber.org/mock/mockgen -destination=../../../edge/mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/engine/store/model BatchEmbedder
+//go:generate go tool mockgen -destination=../../../corpus/synthesize/mock_embedder_test.go -package=synthesize knomit/internal/engine/store/model Embedder
+//go:generate go tool mockgen -destination=../mock_batch_embedder_test.go -package=store knomit/internal/engine/store/model BatchEmbedder
+//go:generate go tool mockgen -destination=../../../edge/mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/engine/store/model BatchEmbedder
 
 // BatchEmbedder extends Embedder with batched document inference. This is the
 // one embed path where ctx buys something material: a full-corpus re-embed
