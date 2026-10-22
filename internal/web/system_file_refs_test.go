@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	knomitfact "knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 )
 
 // #428 follow-ups (N1, N4): the REST write door checks a fact's NEW ref to a

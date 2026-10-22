@@ -12,7 +12,7 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 
 	"github.com/stretchr/testify/require"
 

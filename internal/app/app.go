@@ -11,16 +11,16 @@ import (
 	"os"
 	"path/filepath"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/embeddings"
+	"knomit/internal/engine/embeddings"
+	"knomit/internal/engine/llm"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/oauth"
 	"knomit/internal/oauth/idp"

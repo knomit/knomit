@@ -8,13 +8,13 @@ import (
 	"regexp"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // The host record (artifacts/fleet/host, fact.FleetHostPath) is where the

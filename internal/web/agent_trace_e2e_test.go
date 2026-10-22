@@ -12,13 +12,13 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 var (

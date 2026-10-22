@@ -13,9 +13,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	_ "github.com/mattn/go-sqlite3"
 
+	storemigrate "knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
-	storemigrate "knomit/internal/store/migrate"
 )
 
 func newSessionsStore(t *testing.T) *clientsessions.Store {

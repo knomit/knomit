@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 )
 
 // ---- F08 PR A, M4 (ruling R9): inline `js:` trigger scripts, dispatcher

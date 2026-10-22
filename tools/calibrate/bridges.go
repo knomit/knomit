@@ -8,9 +8,9 @@ import (
 	"text/tabwriter"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/embeddings"
+	"knomit/internal/engine/embeddings"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 	"knomit/internal/synthesize"
 
 	"github.com/spf13/cobra"

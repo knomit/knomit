@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 )
 
 // #533 review 3 SF1: the foreign_commit dead end has a confirmed way out.

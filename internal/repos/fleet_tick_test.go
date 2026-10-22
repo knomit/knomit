@@ -13,9 +13,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
-	"knomit/internal/store"
 )
 
 // installedCRL is the Number of the CRL installed in m's [tls].dir and its

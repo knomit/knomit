@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 

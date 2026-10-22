@@ -366,7 +366,7 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 // answers 404 "Fact not found", exactly as a GET of the same missing path
 // does, instead of 500. Against the REAL store (contextManager), not the
 // stub writer: the bug was in deleteFile's own existence check
-// (internal/store/fact_write.go), which returned a bare error string
+// (internal/engine/store/fact_write.go), which returned a bare error string
 // writeStoreError's switch could not recognise, so EVERY missing-path
 // delete — encoded or not — fell through to the default 500 case.
 // Sabotage: drop the wrapped store.ErrPathNotFound from deleteFile's

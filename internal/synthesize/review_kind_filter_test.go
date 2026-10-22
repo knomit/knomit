@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestDirtyFacts_ExcludesPragmaticFacts is a regression test for the synthesis

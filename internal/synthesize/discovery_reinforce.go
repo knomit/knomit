@@ -25,8 +25,8 @@ import (
 	"strings"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 )
 
 // permittedRewriteLines are the frontmatter keys a reinforcement may change.

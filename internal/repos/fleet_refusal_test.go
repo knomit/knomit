@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/stretchr/testify/require"
 

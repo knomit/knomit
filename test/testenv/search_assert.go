@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // SearchAssert chains assertions over a search query result. Returned by

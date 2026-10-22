@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // VerifyAccepts is this instance's F09 accept list, a tenant of control.db
-// (verify_accepted, control migration 000013). See internal/store/model/accept_list.go for what
+// (verify_accepted, control migration 000013). See internal/engine/store/model/accept_list.go for what
 // an accept waives, and does not.
 type VerifyAccepts struct{ db *sql.DB }
 

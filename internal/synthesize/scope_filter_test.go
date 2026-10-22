@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // seedFactInDomain writes one observation fact in the given domain on branch.

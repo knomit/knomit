@@ -20,7 +20,7 @@ import { typeStyles, defaultTypeStyle } from './utils';
 // differently depending on which column you click it in.
 //
 // The whole histogram already ships in the stats payload (no LIMIT server-side
-// — internal/store/index.go groups every domain and entity), so the browser
+// — internal/engine/store/index.go groups every domain and entity), so the browser
 // needs no new endpoint: it is filtering a map the panel already holds.
 
 export type FacetKind = 'domain' | 'entity' | 'type';

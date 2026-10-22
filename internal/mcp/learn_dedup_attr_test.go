@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // dedupAttrOntologyYAML flags `inbox` (and so every category under it) with

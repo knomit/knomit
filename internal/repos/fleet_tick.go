@@ -8,8 +8,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
 )
 
 // The tick duty of every copy of the fleet repository (fleet design P6): in

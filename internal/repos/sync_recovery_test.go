@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/merge"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/remotesync"
 )
 
 func TestRemoteStatusIsError(t *testing.T) {

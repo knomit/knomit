@@ -6,13 +6,13 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // Tests for the P0.4 claim protocol in ContinueSession: peek → decode+validate

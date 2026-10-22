@@ -3,7 +3,7 @@ package web
 import (
 	"context"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"knomit/internal/repos"
 )

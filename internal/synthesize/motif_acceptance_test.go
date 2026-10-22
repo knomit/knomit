@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // TestAcceptance_MotifField runs Phase 1's FIRST acceptance item against a

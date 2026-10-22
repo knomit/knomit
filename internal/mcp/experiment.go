@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/repos"
 	"knomit/internal/resolutions"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
 )
 
 // experimentTool declares knomit_experiment.

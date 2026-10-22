@@ -7,13 +7,13 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // Tests for the phase-state-machine dispatcher in Reviewer. The pre-fix code

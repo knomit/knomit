@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-const storeImport = "knomit/internal/store"
+const storeImport = "knomit/internal/engine/store"
 
-// storeChildPath returns the part of an import path below knomit/internal/store/
+// storeChildPath returns the part of an import path below knomit/internal/engine/store/
 // ("" when the path is not a store child).
 func storeChildPath(p string) string {
 	if !strings.HasPrefix(p, storePkgPrefix) {
@@ -23,9 +23,9 @@ func storeChildPath(p string) string {
 	return strings.TrimPrefix(p, storePkgPrefix)
 }
 
-// storeChildImportable reports whether a package outside internal/store may
+// storeChildImportable reports whether a package outside internal/engine/store may
 // import the child: the Go internal rule bars anything below
-// internal/store/internal/.
+// internal/engine/store/internal/.
 func storeChildImportable(p string) bool {
 	rest := storeChildPath(p)
 	return rest != "" && !strings.HasPrefix(rest, "internal/") && !strings.Contains(rest, "/internal/")
@@ -159,8 +159,8 @@ func storeReexports(t *testing.T, fset *token.FileSet, name string, src any) []r
 // TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller (guard A1): the
 // non-test files of package store (depth 1) declare no re-export of an
 // IMPORTABLE child's name (callers import the owning package), and a
-// re-export of a non-importable one (internal/store/internal/...) exists only
-// when some file outside internal/store/** (tests included) selects store.X.
+// re-export of a non-importable one (internal/engine/store/internal/...) exists only
+// when some file outside internal/engine/store/** (tests included) selects store.X.
 // An unexported re-export has no outside caller by definition, so it fails
 // too: it is a private forward that exists so the parent's own code can avoid
 // naming the child.
@@ -181,7 +181,7 @@ func TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller(t *testing.T) {
 	fset := token.NewFileSet()
 
 	var parent []string
-	entries, err := filepath.Glob(filepath.Join(root, "internal", "store", "*.go"))
+	entries, err := filepath.Glob(filepath.Join(root, "internal", "engine", "store", "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller(t *testing.T) {
 		}
 	}
 	if len(parent) < minParent {
-		t.Fatalf("found only %d non-test files in internal/store, want at least %d: the glob matches nothing", len(parent), minParent)
+		t.Fatalf("found only %d non-test files in internal/engine/store, want at least %d: the glob matches nothing", len(parent), minParent)
 	}
 
 	outsideSel := map[string]bool{}
@@ -204,7 +204,7 @@ func TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			switch rel {
-			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+			case ".git", "web", "dist", ".claude", "third_party", "internal/engine/store":
 				return filepath.SkipDir
 			}
 			if d.Name() == "node_modules" {
@@ -246,15 +246,15 @@ func TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	if outside < minOutside {
-		t.Fatalf("parsed only %d files outside internal/store, want at least %d: the walk no longer reaches the module", outside, minOutside)
+		t.Fatalf("parsed only %d files outside internal/engine/store, want at least %d: the walk no longer reaches the module", outside, minOutside)
 	}
 	if len(outsideSel) < minDistinct {
-		t.Fatalf("saw only %d distinct store.X selectors outside internal/store, want at least %d: the import-alias resolution matches nothing", len(outsideSel), minDistinct)
+		t.Fatalf("saw only %d distinct store.X selectors outside internal/engine/store, want at least %d: the import-alias resolution matches nothing", len(outsideSel), minDistinct)
 	}
 
 	for _, want := range []string{"Service", "Open", "SyncDSNParam"} {
 		if !outsideSel[want] {
-			t.Fatalf("no file outside internal/store selects store.%s: the import-alias resolution matches nothing, or the name moved", want)
+			t.Fatalf("no file outside internal/engine/store selects store.%s: the import-alias resolution matches nothing, or the name moved", want)
 		}
 	}
 	var offenders []string
@@ -265,7 +265,7 @@ func TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller(t *testing.T) {
 			case storeChildImportable(r.Pkg):
 				offenders = append(offenders, where+" (the child is importable: callers import it)")
 			case !outsideSel[r.Name]:
-				offenders = append(offenders, where+" (non-importable child, but nothing outside internal/store selects store."+r.Name+")")
+				offenders = append(offenders, where+" (non-importable child, but nothing outside internal/engine/store selects store."+r.Name+")")
 			}
 		}
 	}
@@ -280,20 +280,20 @@ func TestStoreParent_ReexportsOnlyNonImportableWithOutsideCaller(t *testing.T) {
 // its way through, a method, a same-package alias and an alias of a stdlib
 // type are not.
 func TestStoreParent_ReexportGuardDiscriminates(t *testing.T) {
-	const imp = "package store\nimport (\n\t\"knomit/internal/store/merge\"\n\tm \"knomit/internal/store/merge\"\n\t\"knomit/internal/store/internal/vcs\"\n\t\"time\"\n)\n"
+	const imp = "package store\nimport (\n\t\"knomit/internal/engine/store/merge\"\n\tm \"knomit/internal/engine/store/merge\"\n\t\"knomit/internal/engine/store/internal/vcs\"\n\t\"time\"\n)\n"
 	flagged := map[string]struct {
 		src  string
 		name string
 		pkg  string
 	}{
-		"type alias":         {imp + "type Mode = merge.Mode\n", "Mode", "knomit/internal/store/merge"},
-		"aliased import":     {imp + "type Mode = m.Mode\n", "Mode", "knomit/internal/store/merge"},
-		"var forward":        {imp + "var ErrZ = vcs.ErrBranchNotFound\n", "ErrZ", "knomit/internal/store/internal/vcs"},
-		"const forward":      {imp + "const K = merge.Kind\n", "K", "knomit/internal/store/merge"},
-		"var in group":       {imp + "var (\n\ta = 1\n\tB = vcs.Reg\n)\n", "B", "knomit/internal/store/internal/vcs"},
-		"func forward":       {imp + "func F(a int, b string) error { return vcs.F(a, b) }\n", "F", "knomit/internal/store/internal/vcs"},
-		"func forward, stmt": {imp + "func G(a int) { vcs.G(a) }\n", "G", "knomit/internal/store/internal/vcs"},
-		"func forward, none": {imp + "func H() string { return vcs.H() }\n", "H", "knomit/internal/store/internal/vcs"},
+		"type alias":         {imp + "type Mode = merge.Mode\n", "Mode", "knomit/internal/engine/store/merge"},
+		"aliased import":     {imp + "type Mode = m.Mode\n", "Mode", "knomit/internal/engine/store/merge"},
+		"var forward":        {imp + "var ErrZ = vcs.ErrBranchNotFound\n", "ErrZ", "knomit/internal/engine/store/internal/vcs"},
+		"const forward":      {imp + "const K = merge.Kind\n", "K", "knomit/internal/engine/store/merge"},
+		"var in group":       {imp + "var (\n\ta = 1\n\tB = vcs.Reg\n)\n", "B", "knomit/internal/engine/store/internal/vcs"},
+		"func forward":       {imp + "func F(a int, b string) error { return vcs.F(a, b) }\n", "F", "knomit/internal/engine/store/internal/vcs"},
+		"func forward, stmt": {imp + "func G(a int) { vcs.G(a) }\n", "G", "knomit/internal/engine/store/internal/vcs"},
+		"func forward, none": {imp + "func H() string { return vcs.H() }\n", "H", "knomit/internal/engine/store/internal/vcs"},
 	}
 	for name, c := range flagged {
 		got := storeReexports(t, token.NewFileSet(), name+".go", c.src)
@@ -319,14 +319,14 @@ func TestStoreParent_ReexportGuardDiscriminates(t *testing.T) {
 		}
 	}
 	for p, want := range map[string]bool{
-		"knomit/internal/store/merge":             true,
-		"knomit/internal/store/model":             true,
-		"knomit/internal/store/remotesync":        true,
-		"knomit/internal/store/internal/vcs":      false,
-		"knomit/internal/store/internal/sqlite":   false,
-		"knomit/internal/store/internal/sessions": false,
-		"knomit/internal/embeddings":              false,
-		"knomit/internal/store":                   false,
+		"knomit/internal/engine/store/merge":             true,
+		"knomit/internal/engine/store/model":             true,
+		"knomit/internal/engine/store/remotesync":        true,
+		"knomit/internal/engine/store/internal/vcs":      false,
+		"knomit/internal/engine/store/internal/sqlite":   false,
+		"knomit/internal/engine/store/internal/sessions": false,
+		"knomit/internal/engine/embeddings":              false,
+		"knomit/internal/engine/store":                   false,
 	} {
 		if storeChildImportable(p) != want {
 			t.Errorf("storeChildImportable(%q) = %v, want %v", p, !want, want)
@@ -470,7 +470,7 @@ var injectsStoreState = map[string]string{
 // self-test runs the detector on inline source.
 func TestStoreService_NoForwardIntoImportableChild(t *testing.T) {
 	const minMethods = 30
-	dir := filepath.Join("..", "..", "internal", "store")
+	dir := filepath.Join("..", "..", "internal", "engine", "store")
 	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -526,8 +526,8 @@ func TestStoreService_NoForwardIntoImportableChild(t *testing.T) {
 // TestStoreService_ForwardGuardDiscriminates runs the detector on inline
 // source.
 func TestStoreService_ForwardGuardDiscriminates(t *testing.T) {
-	const imp = "package store\nimport (\n\t\"knomit/internal/store/facts\"\n\t\"knomit/internal/store/fleetrec\"\n\t\"knomit/internal/store/internal/vcs\"\n)\ntype Service struct{ fr *facts.Repo; rh *vcs.Repo; n int }\n"
-	fields := map[string]string{"fr": "knomit/internal/store/facts"}
+	const imp = "package store\nimport (\n\t\"knomit/internal/engine/store/facts\"\n\t\"knomit/internal/engine/store/fleetrec\"\n\t\"knomit/internal/engine/store/internal/vcs\"\n)\ntype Service struct{ fr *facts.Repo; rh *vcs.Repo; n int }\n"
+	fields := map[string]string{"fr": "knomit/internal/engine/store/facts"}
 	flagged := map[string]string{
 		"field forward":        imp + "func (s *Service) PushedBranches(a int) error { return s.fr.PushedBranches(a) }\n",
 		"field forward, stmt":  imp + "func (s *Service) Poke() { s.fr.Poke() }\n",

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/rs/zerolog/log"
 

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // Tests for depth composition in evidence_weight (spec §5.2).

@@ -9,7 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 var (

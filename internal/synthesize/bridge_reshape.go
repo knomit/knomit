@@ -3,7 +3,7 @@ package synthesize
 import (
 	"sort"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // reshapeCohesiveSubset extracts a tight cross-community cohesive subset from

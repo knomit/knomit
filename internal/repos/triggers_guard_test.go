@@ -11,7 +11,7 @@ import (
 )
 
 // triggersRepoAllowedCalls is EVERY call the dispatcher may make, keyed as in
-// internal/store/changes_guard_test.go ("<receiver>.<method>", "?.<method>"
+// internal/engine/store/changes_guard_test.go ("<receiver>.<method>", "?.<method>"
 // for an expression receiver, the bare name for a function). An ALLOWLIST on
 // purpose: the dispatcher never writes a fact, a ref or an object, and never
 // calls back into the store's write path. Its only store WRITES are the three

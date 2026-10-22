@@ -13,9 +13,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 )
 
 // triggersRepo boots a real manager with one repo whose agent branch carries

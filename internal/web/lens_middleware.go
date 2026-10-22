@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
 

@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/test/testenv"
 )
 

@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // openTestStore builds a real store with one fact on "main" and returns the

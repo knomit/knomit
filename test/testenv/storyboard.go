@@ -9,17 +9,17 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // StoryboardOpts controls Storyboard behavior. Zero value uses sensible

@@ -10,10 +10,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/remotesync"
 )
 
 // remoteAuthFn returns a transport.AuthMethod for the given remote record, or

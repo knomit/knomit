@@ -10,9 +10,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 

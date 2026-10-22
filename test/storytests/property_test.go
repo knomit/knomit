@@ -22,8 +22,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/test/testenv"
 )
 

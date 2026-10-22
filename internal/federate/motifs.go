@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/repos"
 )

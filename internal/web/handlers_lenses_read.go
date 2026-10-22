@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"

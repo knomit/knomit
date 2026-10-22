@@ -13,9 +13,9 @@ import (
 )
 
 // storePkgPrefix is the import-path root of the store and every child under it.
-const storePkgPrefix = "knomit/internal/store/"
+const storePkgPrefix = "knomit/internal/engine/store/"
 
-// embedAllowed is every struct under internal/store/** that may embed a type
+// embedAllowed is every struct under internal/engine/store/** that may embed a type
 // from another store package, keyed "<root-relative file>|<struct>|<embedded
 // type as written>". Each entry says why; a stale entry fails the test, so the
 // list cannot outlive the embed it excuses.
@@ -26,9 +26,9 @@ const storePkgPrefix = "knomit/internal/store/"
 // grows. The store's own handles (Service, repoHandler) held the facts, merge
 // and remotesync children by embedding until E7c; they are named fields now.
 var embedAllowed = map[string]string{
-	"internal/store/vcs_seam.go|repoHandler|vcs.Repo":                      "the one shared vcs handle; repoHandler is unexported, never handed out, and the parent's own code calls the vcs.Repo surface through it (the documented vcs exception)",
-	"internal/store/gitserve/host.go|host|vcs.Repo":                        "unexported per-handler view of the git layer, built inside NewHandler and never returned; every receive-pack and upload-pack path calls the vcs surface on it",
-	"internal/store/index/search_query.go|SearchResult|facts.FactWithBody": "a data struct that flattens FactWithBody's fields into the JSON search result; FactWithBody has no behaviour to leak",
+	"internal/engine/store/vcs_seam.go|repoHandler|vcs.Repo":                      "the one shared vcs handle; repoHandler is unexported, never handed out, and the parent's own code calls the vcs.Repo surface through it (the documented vcs exception)",
+	"internal/engine/store/gitserve/host.go|host|vcs.Repo":                        "unexported per-handler view of the git layer, built inside NewHandler and never returned; every receive-pack and upload-pack path calls the vcs surface on it",
+	"internal/engine/store/index/search_query.go|SearchResult|facts.FactWithBody": "a data struct that flattens FactWithBody's fields into the JSON search result; FactWithBody has no behaviour to leak",
 }
 
 // embedUses returns, for each struct type in one parsed file that embeds a
@@ -84,7 +84,7 @@ func embedUses(t *testing.T, fset *token.FileSet, name string, src any, aliases 
 }
 
 // storeImportNames maps the local names a file gives to imports under
-// internal/store/ (the alias if any, else the last path element).
+// internal/engine/store/ (the alias if any, else the last path element).
 func storeImportNames(f *ast.File) map[string]bool {
 	m := map[string]bool{}
 	for _, imp := range f.Imports {
@@ -131,7 +131,7 @@ func storeAliasNames(f *ast.File) []string {
 }
 
 // TestStoreTypes_DoNotEmbedStorePackageTypes (guard A, the embed half): no
-// struct in a non-test file under internal/store/** embeds a type declared in
+// struct in a non-test file under internal/engine/store/** embeds a type declared in
 // another store package, directly or through a same-package alias, unless it
 // is in embedAllowed with a reason. The facts, merge and remotesync handles
 // are named fields (fr, mr, rr) on Service, and remotesync.Repo holds its
@@ -143,7 +143,7 @@ func storeAliasNames(f *ast.File) []string {
 // match a live embed.
 func TestStoreTypes_DoNotEmbedStorePackageTypes(t *testing.T) {
 	const minFiles = 150
-	root := filepath.Join("..", "..", "internal", "store")
+	root := filepath.Join("..", "..", "internal", "engine", "store")
 	fset := token.NewFileSet()
 	type pkgFiles struct {
 		files   []string
@@ -196,7 +196,7 @@ func TestStoreTypes_DoNotEmbedStorePackageTypes(t *testing.T) {
 		}
 	}
 	if parsed < minFiles {
-		t.Fatalf("parsed only %d non-test files under internal/store, want at least %d: the walk no longer reaches the store, so this guard checks nothing", parsed, minFiles)
+		t.Fatalf("parsed only %d non-test files under internal/engine/store, want at least %d: the walk no longer reaches the store, so this guard checks nothing", parsed, minFiles)
 	}
 	for k := range embedAllowed {
 		if !used[k] {
@@ -205,14 +205,14 @@ func TestStoreTypes_DoNotEmbedStorePackageTypes(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		sort.Strings(offenders)
-		t.Fatalf("a struct under internal/store embeds a type from another store package, which promotes every exported method of it. Use a named field, or add an embedAllowed entry with a reason:\n  %s", strings.Join(offenders, "\n  "))
+		t.Fatalf("a struct under internal/engine/store embeds a type from another store package, which promotes every exported method of it. Use a named field, or add an embedAllowed entry with a reason:\n  %s", strings.Join(offenders, "\n  "))
 	}
 }
 
 // TestStoreTypes_EmbedGuardDiscriminates runs the detector on inline source:
 // the shapes it must flag and the shapes it must leave alone.
 func TestStoreTypes_EmbedGuardDiscriminates(t *testing.T) {
-	const imp = "package p\nimport (\n\t\"knomit/internal/store/facts\"\n\tmg \"knomit/internal/store/merge\"\n\t\"sync\"\n)\n"
+	const imp = "package p\nimport (\n\t\"knomit/internal/engine/store/facts\"\n\tmg \"knomit/internal/engine/store/merge\"\n\t\"sync\"\n)\n"
 	aliasSrc := imp + "type factsRepo = facts.Repo\n"
 	af, err := parser.ParseFile(token.NewFileSet(), "a.go", aliasSrc, 0)
 	if err != nil {

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 func headIn(t *testing.T, m *repos.Manager, repo, branch string) string {

@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 )
 
 // F22: a trigger condition sees fact.context (the same map the validation

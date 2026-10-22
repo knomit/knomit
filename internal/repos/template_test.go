@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog"

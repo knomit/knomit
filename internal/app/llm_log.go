@@ -5,7 +5,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"knomit/internal/llm"
+	"knomit/internal/engine/llm"
 )
 
 // logLLMSetup reports, once per app.New, what the server's own LLM adapter

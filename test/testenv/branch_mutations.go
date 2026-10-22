@@ -4,8 +4,8 @@ import (
 	"context"
 	"strconv"
 
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 )
 
 // Write creates or overwrites a fact at path with spec's content and

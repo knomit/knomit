@@ -2895,7 +2895,7 @@ export const api = {
     // RefGroup with versions[] ordered newest-first by committed_at.
     // Same source path with different source_commits = different versions
     // of the source asserting the same target — multi-edges are intentional
-    // (see internal/store/edge_props.go:11). Grouping de-dupes them in the UI.
+    // (see internal/engine/store/edge_props.go:11). Grouping de-dupes them in the UI.
     // `dir` decides whether recency may order the entries, because the two
     // directions are not the same question:
     //
@@ -2910,7 +2910,7 @@ export const api = {
     //   incoming — `commit` is the edge's SOURCE_COMMIT: which version of
     //     another fact cites this one. Several versions of one source citing
     //     the same target is the intended multi-edge case
-    //     (internal/store/edge_props.go:11), and "who cites me" is a question
+    //     (internal/engine/store/edge_props.go:11), and "who cites me" is a question
     //     about the present, so the most recent citing version leads.
     const groupRefs = (refs: RawRef[], dir: 'incoming' | 'outgoing'): RefGroup[] => {
       const order: string[] = [];

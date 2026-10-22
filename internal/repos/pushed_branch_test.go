@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 func TestIsPushedBranch(t *testing.T) {

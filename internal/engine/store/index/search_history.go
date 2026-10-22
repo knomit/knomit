@@ -1,0 +1,244 @@
+package index
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"knomit/internal/engine/store/internal/vcs"
+)
+
+// Log returns up to 50 log entries for commits that modified path on branch.
+// Queries commit_log directly; branch is accepted for interface compatibility.
+func (hq *HistoryQuery) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
+	hq.probe("Log")
+	rows, _, err := hq.rh.CommitLogQuery(ctx, branch, path, "", "", "", 50)
+	if err != nil {
+		return nil, fmt.Errorf("Log: %w", err)
+	}
+	entries := make([]LogEntry, 0, len(rows))
+	for _, r := range rows {
+		entries = append(entries, LogEntry{
+			Commit:  r.Hash,
+			Date:    time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
+			Message: vcs.FirstLine(r.Message),
+		})
+	}
+	return entries, nil
+}
+
+// LogPaginated returns paginated log entries with file-count tags.
+func (hq *HistoryQuery) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+	hq.probe("LogPaginated")
+	rows, hasMore, err := hq.rh.CommitLogQuery(ctx, branch, path, after, from, before, limit)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("LogPaginated: %w", err)
+	}
+
+	entries := make([]LogEntryWithTags, 0, len(rows))
+	for _, r := range rows {
+		entries = append(entries, LogEntryWithTags{
+			Commit:    r.Hash,
+			Date:      time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
+			Message:   vcs.FirstLine(r.Message),
+			Operation: r.Operation,
+			Author:    CommitAuthor{Name: r.AuthorName, Email: r.AuthorEmail},
+		})
+	}
+
+	var nextCursor, prevCursor string
+	switch {
+	case before != "":
+		if hasMore && len(entries) > 0 {
+			prevCursor = entries[0].Commit
+		}
+	case from != "":
+		if len(entries) > 0 {
+			prevCursor = entries[0].Commit
+		}
+		if hasMore {
+			nextCursor = entries[len(entries)-1].Commit
+		}
+	default:
+		if hasMore {
+			nextCursor = entries[len(entries)-1].Commit
+		}
+	}
+
+	if len(entries) > 0 {
+		hq.enrichFileCounts(entries)
+	}
+	return entries, nextCursor, prevCursor, nil
+}
+
+// enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
+func (hq *HistoryQuery) enrichFileCounts(entries []LogEntryWithTags) {
+	hashes := make([]string, len(entries))
+	idx := make(map[string]int, len(entries))
+	for i, e := range entries {
+		hashes[i] = e.Commit
+		idx[e.Commit] = i
+	}
+
+	counts, err := hq.rh.CommitLogFileCounts(hashes)
+	if err != nil {
+		return
+	}
+
+	for hash, actionCounts := range counts {
+		i, ok := idx[hash]
+		if !ok {
+			continue
+		}
+		entries[i].Files.Added = actionCounts["added"]
+		entries[i].Files.Modified = actionCounts["modified"]
+		entries[i].Files.Deleted = actionCounts["deleted"]
+	}
+}
+
+// CommitDetail returns metadata and changed files for a specific commit,
+// queried from commit_log. When pathPrefix is non-empty, only files under
+// that directory are returned.
+func (hq *HistoryQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error) {
+	hq.probe("CommitDetail")
+	db := conn(ctx, hq.rh.DB())
+
+	var committedAt int64
+	var message, operation, authorName, authorEmail string
+	err := db.QueryRowContext(ctx,
+		`SELECT committed_at, message, operation, author_name, author_email FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+		commitHash,
+	).Scan(&committedAt, &message, &operation, &authorName, &authorEmail)
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: commit not found in history index: %s", commitHash)
+	}
+
+	var fileRows *sql.Rows
+	if pathPrefix != "" {
+		fileRows, err = db.QueryContext(ctx,
+			`SELECT DISTINCT path, action FROM commit_log WHERE commit_hash = ? AND path GLOB ? ORDER BY path`,
+			commitHash, pathPrefix+"/*",
+		)
+	} else {
+		fileRows, err = db.QueryContext(ctx,
+			`SELECT DISTINCT path, action FROM commit_log WHERE commit_hash = ? ORDER BY path`,
+			commitHash,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: files: %w", err)
+	}
+	defer fileRows.Close()
+
+	var files []ChangedFile
+	for fileRows.Next() {
+		var path, action string
+		if err := fileRows.Scan(&path, &action); err != nil {
+			return nil, fmt.Errorf("CommitDetail: scan: %w", err)
+		}
+		files = append(files, ChangedFile{Path: path, Action: action})
+	}
+	if files == nil {
+		files = []ChangedFile{}
+	}
+
+	return &CommitDetailResult{
+		Commit:    commitHash,
+		Date:      time.Unix(committedAt, 0).UTC().Format(time.RFC3339),
+		Message:   vcs.FirstLine(message),
+		Operation: operation,
+		Author:    CommitAuthor{Name: authorName, Email: authorEmail},
+		Files:     files,
+	}, nil
+}
+
+// Activity returns commit-activity metrics for path using SQL aggregates.
+func (hq *HistoryQuery) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
+	hq.probe("Activity")
+	cutoff7 := vcs.CommitLogAge(7)
+	cutoff30 := vcs.CommitLogAge(30)
+	cutoff90 := vcs.CommitLogAge(90)
+
+	r, err := hq.rh.CommitLogActivity(ctx, branch, path, cutoff7, cutoff30, cutoff90)
+	if err != nil {
+		return ActivityResult{}, fmt.Errorf("Activity: %w", err)
+	}
+
+	var lastCommit string
+	if r.LastCommit.Valid {
+		lastCommit = time.Unix(r.LastCommit.Int64, 0).UTC().Format(time.RFC3339)
+	}
+	return ActivityResult{
+		LastCommit: lastCommit,
+		Total:      r.Total,
+		Changes7d:  r.Changes7d,
+		Changes30d: r.Changes30d,
+		Changes90d: r.Changes90d,
+	}, nil
+}
+
+// FactsIter opens a cursor over facts for the given branch ordered by fact_id DESC.
+// The caller must call Close() when done to release the underlying database cursor.
+func (fq *FactQuery) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
+	fq.probe("FactsIter")
+	branchID, err := fq.rh.BranchID(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
+		`SELECT bf.path, f.blob_hash, bf.commit_hash
+		 FROM branch_facts bf
+		 JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ?
+		 ORDER BY bf.fact_id DESC`,
+		branchID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &FactsIter{rows: rows, seen: make(map[string]struct{})}, nil
+}
+
+// FactRow holds the minimal fields needed to replay a fact into another store.
+type FactRow struct {
+	Path       string
+	BlobHash   string
+	CommitHash string
+}
+
+// FactsIter is a cursor-based iterator over the branch_facts table. It yields
+// facts one at a time, newest-first (by fact_id DESC), deduplicating by path
+// so that only the latest version of each fact is returned. It never loads all
+// facts into memory.
+type FactsIter struct {
+	rows *sql.Rows
+	seen map[string]struct{}
+}
+
+// Next returns the next unique fact, or nil when iteration is complete.
+// It skips paths that have already been yielded (dedup).
+func (it *FactsIter) Next() (*FactRow, error) {
+	for it.rows.Next() {
+		var row FactRow
+		if err := it.rows.Scan(&row.Path, &row.BlobHash, &row.CommitHash); err != nil {
+			return nil, err
+		}
+		if _, dup := it.seen[row.Path]; dup {
+			continue
+		}
+		it.seen[row.Path] = struct{}{}
+		return &row, nil
+	}
+	return nil, it.rows.Err()
+}
+
+// Close releases the underlying database cursor. It is safe to call multiple times.
+func (it *FactsIter) Close() error {
+	if it.rows != nil {
+		err := it.rows.Close()
+		it.rows = nil
+		return err
+	}
+	return nil
+}

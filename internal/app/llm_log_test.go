@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/llm"
+	"knomit/internal/engine/llm"
 )
 
 // logLines runs logLLMSetup into a buffer and returns each line's level and

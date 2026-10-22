@@ -5,15 +5,15 @@ import (
 	"errors"
 	"net/http"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 

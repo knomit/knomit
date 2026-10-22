@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestFleetHubMovesToAForge is the hub → forge move end to end (user ruling

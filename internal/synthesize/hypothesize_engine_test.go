@@ -6,15 +6,15 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // Engine-level tests for the hypothesize pipeline. Before the Strategy

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // TestHandleCommit_SharedHistory_DoesNotSwapLocalStore pins the contract that

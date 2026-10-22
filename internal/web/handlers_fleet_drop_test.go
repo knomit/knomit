@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/repos"
-	"knomit/internal/store/remotesync"
 )
 
 // #533 review 3 SF1: a refused drop's problem body carries leave_out, what

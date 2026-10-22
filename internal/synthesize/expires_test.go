@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // F03 merge rule, synthesis side: a surviving fact keeps its OWN expires; a

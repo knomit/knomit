@@ -1,7 +1,7 @@
 // Package textnorm is the single definition of "the same token" for knomit.
 //
 // It exists because two subsystems must agree on that definition and cannot
-// import each other. Domain matching lives in internal/store; the motif
+// import each other. Domain matching lives in internal/engine/store; the motif
 // subject-word strip lives in internal/domain/fact, which imports no internal
 // package at all, by design. Two copies of a stemmer are two things that
 // drift, and when they drift a motif that merely renames its own fact's

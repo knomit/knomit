@@ -15,14 +15,14 @@ import (
 	"net/http"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/repos"
 	"knomit/internal/resolutions"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
 	"knomit/internal/web/hal"
 )
 

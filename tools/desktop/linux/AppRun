@@ -1,8 +1,8 @@
 #!/bin/sh
 # AppImage entry point.
 #
-# knomit resolves its native libs from <exe>/lib (internal/embeddings and
-# internal/store/internal/sqlite/vec.go), so the ONNX runtime lives at usr/bin/lib/ beside the
+# knomit resolves its native libs from <exe>/lib (internal/engine/embeddings and
+# internal/engine/store/internal/sqlite/vec.go), so the ONNX runtime lives at usr/bin/lib/ beside the
 # binary and needs no LD_LIBRARY_PATH. GTK 4 and WebKitGTK 6.0 are deliberately
 # NOT bundled — they come from the host, matching what the tarball has always
 # required. Bundling a UI toolkit that talks to the host's graphics drivers is

@@ -15,16 +15,16 @@ import (
 	"sort"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
 	"knomit/internal/web/hal"
 )
 

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 
 	"github.com/stretchr/testify/require"
 )

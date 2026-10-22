@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // healFixture is a booted repo's real index and two branches that really exist

@@ -23,7 +23,7 @@ package synthesize
 import (
 	"sort"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
 )

@@ -1,9 +1,9 @@
 package synthesize
 
 import (
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/refs"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/index"
 )
 
 // writeGate is the ONE constructor of the ref gate every synthesize write goes

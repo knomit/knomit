@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"

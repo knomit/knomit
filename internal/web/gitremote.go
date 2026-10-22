@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"knomit/internal/store/gitserve"
+	"knomit/internal/engine/store/gitserve"
 
 	"github.com/go-chi/chi/v5"
 

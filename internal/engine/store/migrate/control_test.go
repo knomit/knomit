@@ -1,0 +1,507 @@
+package migrate
+
+import (
+	"database/sql"
+	"fmt"
+	"io/fs"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/require"
+)
+
+// controlDB opens a temp control.db with the same DSN internal/repos uses.
+func controlDB(t *testing.T) *sql.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "control.db")
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func objectExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var n int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE name = ?`, name).Scan(&n))
+	return n > 0
+}
+
+func controlVersion(t *testing.T, db *sql.DB) (int, bool) {
+	t.Helper()
+	var v int
+	var dirty bool
+	require.NoError(t, db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty))
+	return v, dirty
+}
+
+// Every control up-migration must consist of CREATE ... IF NOT EXISTS
+// statements only, because recovery RE-RUNS a body against a database that may
+// already hold what it created: Control -> upWithRecovery -> recoverDirty
+// forces a dirty version N back to N-1 and calls Up again. With idempotent DDL
+// that re-run is a no-op and recovery succeeds on its first path. Anything else
+// leans on the fallback, forcePastCommittedBody, which recognises only
+// "already exists" / "duplicate column name": a re-run INSERT double-applies
+// silently and a re-run DROP fails with "no such table", leaving control.db
+// dirty — and a dirty control.db makes every repo unreachable at once.
+//
+// Relaxing the rule to "re-runnable" rather than "CREATE IF NOT EXISTS only"
+// is a separate decision, not implied by anything here.
+func TestControl_UpMigrationsAreIdempotentDDL(t *testing.T) {
+	ups, err := fs.Glob(controlFS, "control/*.up.sql")
+	require.NoError(t, err)
+	require.NotEmpty(t, ups)
+	for _, name := range ups {
+		body, rerr := controlFS.ReadFile(name)
+		require.NoError(t, rerr)
+		for _, stmt := range strings.Split(string(body), ";") {
+			s := strings.TrimSpace(stripSQLComments(stmt))
+			if s == "" {
+				continue
+			}
+			require.Regexp(t, `(?i)^CREATE (TABLE|UNIQUE INDEX|INDEX) IF NOT EXISTS `, s,
+				"%s: statement is not idempotent DDL: %q", name, s)
+		}
+	}
+}
+
+func stripSQLComments(s string) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// Every object the control chain is responsible for. TestControl_FreshDatabase
+// asserts the migrator creates each one.
+var controlObjects = []string{
+	"repos", "repos_active_name", "repos_active_repo_id",
+	"repo_origins", "lenses", "lenses_name", "lens_reads",
+	"repo_subscriptions",
+	"client_sessions", "client_sessions_last_seen", "client_sessions_binding",
+	// session_bindings is DEAD as of 000005 — nothing reads or writes it — but
+	// it is still created, because the control chain admits no DROP (see
+	// TestControl_UpMigrationsAreIdempotentDDL), so it stays listed.
+	"session_bindings",
+	"binding_handles", "binding_handles_last_used",
+	"client_session_bindings", "client_session_bindings_binding",
+	// handle_experiments has no index: it is read only by primary key.
+	"handle_experiments",
+	// mount_experiments likewise: every read is by its full (session_id,
+	// mount_uid) primary key, and the one listing is per session.
+	"mount_experiments",
+	// grants is read by principal on every permission check, and only live
+	// rows matter, so the index is partial on revoked_at IS NULL.
+	"grants", "grants_principal_live",
+	// client_session_peers has no index: it is read only by primary key,
+	// through the LEFT JOIN in sessions.Store.List.
+	"client_session_peers",
+	// OAuth issuer (F19 phase 3a). Tokens and codes are read by hash (their
+	// primary key); the family indexes serve family-wide revocation.
+	"oauth_pending", "oauth_pending_live",
+	"oauth_families",
+	"oauth_codes", "oauth_codes_family",
+	"oauth_tokens", "oauth_tokens_family",
+	// repo_archive_reasons has no index: it is read by its uid primary key,
+	// and listed through a LEFT JOIN from repos.
+	"repo_archive_reasons",
+}
+
+// newestControlVersion is the highest numbered up-migration in the EMBEDDED
+// chain.
+//
+// Derived, never written as a literal. Four assertions here mean "Control left
+// the database at the newest version", and when each spelled that as a number
+// every legitimate chain bump failed all four for the wrong reason — with the
+// tempting fix, editing the literals, pinning them to a version the chain no
+// longer ends at. Same trap as the CLAUDE.md block-marker test.
+func newestControlVersion(t *testing.T) int {
+	t.Helper()
+	entries, err := controlFS.ReadDir("control")
+	require.NoError(t, err)
+	newest := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".up.sql") {
+			continue
+		}
+		n, cerr := strconv.Atoi(strings.SplitN(name, "_", 2)[0])
+		require.NoError(t, cerr, "migration %q does not start with a number", name)
+		if n > newest {
+			newest = n
+		}
+	}
+	require.Greater(t, newest, 0, "no up-migrations found in the embedded control chain")
+	return newest
+}
+
+// A fresh home gets the whole control schema and lands on the newest version.
+func TestControl_FreshDatabase(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+
+	for _, name := range controlObjects {
+		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
+	}
+	v, dirty := controlVersion(t, db)
+	require.Equal(t, newestControlVersion(t), v)
+	require.False(t, dirty)
+}
+
+// An existing home already carrying the current shape is stamped, not rebuilt:
+// the baseline is a no-op and every row survives.
+func TestControl_NoOpOnExistingShape(t *testing.T) {
+	db := controlDB(t)
+
+	// Build the current shape by hand, the way a pre-migrate home looks.
+	_, err := db.Exec(`
+CREATE TABLE repos (
+    uid TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL,
+    profile TEXT NOT NULL DEFAULT 'code', repo_id TEXT,
+    created_at INTEGER NOT NULL, archived_at INTEGER);
+CREATE UNIQUE INDEX repos_active_name ON repos(name) WHERE state = 'active';
+CREATE UNIQUE INDEX repos_active_repo_id ON repos(repo_id) WHERE state = 'active' AND repo_id IS NOT NULL;
+CREATE TABLE repo_origins (
+    repo_uid TEXT PRIMARY KEY REFERENCES repos(uid) ON DELETE CASCADE,
+    url TEXT NOT NULL, branch TEXT NOT NULL,
+    auth_method TEXT NOT NULL DEFAULT '', auth_token TEXT NOT NULL DEFAULT '');
+CREATE TABLE lenses (
+    uid TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
+    write_uid TEXT NOT NULL REFERENCES repos(uid),
+    description TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX lenses_name ON lenses(name);
+CREATE TABLE lens_reads (
+    lens_uid TEXT NOT NULL REFERENCES lenses(uid) ON DELETE CASCADE,
+    repo_uid TEXT NOT NULL REFERENCES repos(uid),
+    branch TEXT NOT NULL DEFAULT '', source TEXT,
+    PRIMARY KEY (lens_uid, repo_uid));`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO repos (uid, name, state, profile, created_at)
+	                  VALUES ('u1', 'alpha', 'active', 'code', 7)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO lenses (uid, name, write_uid, created_at, updated_at)
+	                  VALUES ('l1', 'work', 'u1', 7, 7)`)
+	require.NoError(t, err)
+
+	require.NoError(t, Control(db))
+
+	v, dirty := controlVersion(t, db)
+	require.Equal(t, newestControlVersion(t), v)
+	require.False(t, dirty)
+
+	var name string
+	require.NoError(t, db.QueryRow(`SELECT name FROM repos WHERE uid = 'u1'`).Scan(&name))
+	require.Equal(t, "alpha", name)
+	var lens string
+	require.NoError(t, db.QueryRow(`SELECT name FROM lenses WHERE uid = 'l1'`).Scan(&lens))
+	require.Equal(t, "work", lens)
+}
+
+// legacyControlDDL is the shape every control.db that predates this migration
+// already carries on disk: the verbatim text of the three ad-hoc
+// `CREATE TABLE IF NOT EXISTS` constants internal/repos ran on every open
+// before control.db was versioned — registrySchema (internal/repos/registry.go),
+// originsSchema (internal/repos/origins.go) and lensSchema
+// (internal/repos/lens.go), in dependency order. The constants themselves were
+// deleted when the baseline migration replaced them; recover the originals with
+// `git show 050def4b:internal/repos/registry.go` and friends.
+//
+// Pasted literally rather than derived from control/000001_control_baseline.up.sql,
+// for exactly the reason legacyLensDDL in internal/repos/lens_migrate_test.go is:
+// an INDEPENDENT copy is the whole point. Generate it from the baseline and the
+// two agree by construction, and TestControl_BaselineMatchesLiveShape below
+// asserts nothing at all. Keeping the two in step is meant to be a deliberate
+// act — see that test for what to do when it fails.
+const legacyControlDDL = `
+CREATE TABLE IF NOT EXISTS repos (
+    uid         TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    profile     TEXT NOT NULL DEFAULT 'code',
+    repo_id     TEXT,
+    created_at  INTEGER NOT NULL,
+    archived_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS repos_active_name
+    ON repos(name) WHERE state = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS repos_active_repo_id
+    ON repos(repo_id) WHERE state = 'active' AND repo_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS repo_origins (
+    repo_uid    TEXT PRIMARY KEY REFERENCES repos(uid) ON DELETE CASCADE,
+    url         TEXT NOT NULL,
+    branch      TEXT NOT NULL,
+    auth_method TEXT NOT NULL DEFAULT '',
+    auth_token  TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS lenses (
+    uid         TEXT PRIMARY KEY NOT NULL,
+    name        TEXT NOT NULL,
+    write_uid   TEXT NOT NULL REFERENCES repos(uid),
+    description TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lenses_name ON lenses(name);
+CREATE TABLE IF NOT EXISTS lens_reads (
+    lens_uid  TEXT NOT NULL REFERENCES lenses(uid) ON DELETE CASCADE,
+    repo_uid  TEXT NOT NULL REFERENCES repos(uid),
+    branch    TEXT NOT NULL DEFAULT '',
+    source    TEXT,
+    PRIMARY KEY (lens_uid, repo_uid)
+);`
+
+// controlTables are the four tables the baseline is responsible for, in
+// dependency order.
+var controlTables = []string{"repos", "repo_origins", "lenses", "lens_reads"}
+
+// The baseline migration is a RESTATEMENT of DDL that already exists in every
+// live home, not a fresh design. If it drifts, fresh homes get a different
+// control.db shape from existing ones — permanently, and with no runtime signal
+// whatsoever, because every baseline statement is IF NOT EXISTS and therefore a
+// silent no-op against a table that is already there. Neither
+// TestControl_FreshDatabase (object NAMES only) nor
+// TestControl_NoOpOnExistingShape (the no-op is the point) can see that.
+//
+// So compare the two shapes directly: database A built by hand from the legacy
+// DDL, database B built by the migrator.
+func TestControl_BaselineMatchesLiveShape(t *testing.T) {
+	live := controlDB(t)
+	_, err := live.Exec(legacyControlDDL)
+	require.NoError(t, err)
+
+	fresh := controlDB(t)
+	require.NoError(t, Control(fresh))
+
+	for _, table := range controlTables {
+		requireSameTableShape(t, live, fresh, table)
+	}
+}
+
+// requireSameTableShape fails unless table has an identical observable shape in
+// want (a database carrying the legacy DDL) and got (a database built by the
+// migrator): same columns, same foreign keys, same indexes — including the
+// WHERE predicate of a partial index, which PRAGMA index_list reports only as a
+// boolean.
+func requireSameTableShape(t *testing.T, want, got *sql.DB, table string) {
+	t.Helper()
+	const drift = "control.db baseline has DRIFTED from the shape live databases carry.\n" +
+		"internal/engine/store/migrate/control/000001_control_baseline.up.sql is a restatement of DDL\n" +
+		"that already exists on disk in every existing home, and its statements are all\n" +
+		"IF NOT EXISTS — so this difference in %q would NEVER be applied to an existing\n" +
+		"home. Fresh homes and existing homes would carry different schemas forever, with\n" +
+		"no error at runtime. Either restore the baseline to match the legacy DDL, or add\n" +
+		"a NEW numbered migration that moves existing homes to the new shape.\n" +
+		"(%s)"
+
+	require.Equal(t, tableColumns(t, want, table), tableColumns(t, got, table),
+		drift, table, "PRAGMA table_info")
+	require.Equal(t, tableForeignKeys(t, want, table), tableForeignKeys(t, got, table),
+		drift, table, "PRAGMA foreign_key_list")
+	require.Equal(t, tableIndexes(t, want, table), tableIndexes(t, got, table),
+		drift, table, "PRAGMA index_list / index_info / sqlite_master.sql")
+}
+
+// tableColumns renders PRAGMA table_info in declaration order: name, type,
+// notnull, dflt_value and pk, which together are what makes a column what it is.
+func tableColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	return pragmaRows(t, db, "pragma_table_info", table)
+}
+
+// tableForeignKeys renders PRAGMA foreign_key_list — the parent table, the
+// column pair and the ON UPDATE / ON DELETE actions. table_info cannot see any
+// of it, so a lost `ON DELETE CASCADE` would slip past a column-only comparison.
+func tableForeignKeys(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	return pragmaRows(t, db, "pragma_foreign_key_list", table)
+}
+
+// tableIndexes renders every index on table, sorted by name so creation order
+// cannot make two identical schemas compare unequal.
+//
+// PRAGMA index_list reports `partial` as a bare 0/1 and never exposes the WHERE
+// clause, so repos_active_name and repos_active_repo_id would compare equal even
+// if one database indexed a completely different subset of rows. The index's own
+// CREATE text from sqlite_master is what pins the predicate; SQLite strips
+// IF NOT EXISTS from what it stores but preserves the author's whitespace, so it
+// is compared with whitespace collapsed.
+func tableIndexes(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	names := []string{}
+	props := map[string]string{}
+	rows, err := db.Query(`SELECT name, "unique", origin, partial FROM pragma_index_list(?)`, table)
+	require.NoError(t, err)
+	for rows.Next() {
+		var name, origin string
+		var unique, partial int
+		require.NoError(t, rows.Scan(&name, &unique, &origin, &partial))
+		names = append(names, name)
+		props[name] = fmt.Sprintf("unique=%d origin=%s partial=%d", unique, origin, partial)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		var ddl sql.NullString
+		require.NoError(t, db.QueryRow(
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&ddl))
+		// Auto-indexes (PRIMARY KEY, UNIQUE) have a NULL sql; their shape is
+		// carried entirely by index_info below.
+		text := "<implicit>"
+		if ddl.Valid {
+			text = strings.Join(strings.Fields(ddl.String), " ")
+		}
+		out = append(out, fmt.Sprintf("%s %s sql=%s cols=%v",
+			name, props[name], text, pragmaRows(t, db, "pragma_index_info", name)))
+	}
+	return out
+}
+
+// pragmaRows renders every row of a single-argument table-valued PRAGMA as
+// "col=value col=value ...", preserving the PRAGMA's own row order (which is
+// meaningful: column position in a table, column position within an index).
+func pragmaRows(t *testing.T, db *sql.DB, pragma, arg string) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT * FROM `+pragma+`(?)`, arg)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+
+	var out []string
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		require.NoError(t, rows.Scan(ptrs...))
+
+		var b strings.Builder
+		for i, col := range cols {
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			v := "NULL"
+			if vals[i].Valid {
+				v = vals[i].String
+			}
+			fmt.Fprintf(&b, "%s=%s", col, v)
+		}
+		out = append(out, b.String())
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// An interrupted control.db migration self-heals rather than wedging every
+// repo behind a permanently dirty control plane (issue #33).
+func TestControl_RecoversDirtyVersion(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+
+	_, err := db.Exec(`UPDATE schema_migrations SET dirty = 1`)
+	require.NoError(t, err)
+
+	require.NoError(t, Control(db), "a dirty control.db must self-heal")
+
+	v, dirty := controlVersion(t, db)
+	require.Equal(t, newestControlVersion(t), v)
+	require.False(t, dirty)
+	require.True(t, objectExists(t, db, "repos"))
+}
+
+// The binding-handles migration goes up and comes back down cleanly, and the
+// down leaves the rest of the control schema standing: a rollback must cost the
+// operator their handles, not their registry.
+func TestControl_BindingHandlesUpDown(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+	require.True(t, objectExists(t, db, "binding_handles"))
+	require.True(t, objectExists(t, db, "binding_handles_last_used"))
+
+	m, err := newMigrator(db, controlFS, "control")
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(4), "000005 and 000006 must roll back")
+
+	require.False(t, objectExists(t, db, "binding_handles"), "down must drop the table")
+	require.False(t, objectExists(t, db, "binding_handles_last_used"), "down must drop the index")
+	for _, name := range []string{"repos", "lenses", "client_sessions"} {
+		require.True(t, objectExists(t, db, name), "%q must survive the rollback", name)
+	}
+	v, dirty := controlVersion(t, db)
+	require.Equal(t, 4, v)
+	require.False(t, dirty)
+
+	// And up again, so a rollback is not a one-way door.
+	require.NoError(t, Control(db))
+	require.True(t, objectExists(t, db, "binding_handles"))
+	v, dirty = controlVersion(t, db)
+	require.Equal(t, newestControlVersion(t), v)
+	require.False(t, dirty)
+}
+
+// The session binding-set migration goes up and comes back down cleanly, and
+// the down leaves the rest of the control schema standing.
+func TestControl_ClientSessionBindingsUpDown(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+	require.True(t, objectExists(t, db, "client_session_bindings"))
+	require.True(t, objectExists(t, db, "client_session_bindings_binding"))
+
+	m, err := newMigrator(db, controlFS, "control")
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(5), "000006 must roll back")
+
+	require.False(t, objectExists(t, db, "client_session_bindings"))
+	require.False(t, objectExists(t, db, "client_session_bindings_binding"))
+	for _, name := range []string{"repos", "lenses", "client_sessions", "binding_handles"} {
+		require.True(t, objectExists(t, db, name), "%q must survive the rollback", name)
+	}
+	v, dirty := controlVersion(t, db)
+	require.Equal(t, 5, v)
+	require.False(t, dirty)
+
+	require.NoError(t, Control(db))
+	require.True(t, objectExists(t, db, "client_session_bindings"))
+}
+
+// The OAuth migration goes down and up again cleanly, and its down costs the
+// operator their tokens and pending requests, never the grants they hold.
+func TestControl_OAuthUpDown(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+	oauth := []string{"oauth_pending", "oauth_pending_live", "oauth_families",
+		"oauth_codes", "oauth_codes_family", "oauth_tokens", "oauth_tokens_family"}
+	for _, name := range oauth {
+		require.True(t, objectExists(t, db, name), "expected %q", name)
+	}
+
+	m, err := newMigrator(db, controlFS, "control")
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(9), "000010 must roll back")
+	for _, name := range oauth {
+		require.False(t, objectExists(t, db, name), "down must drop %q", name)
+	}
+	require.True(t, objectExists(t, db, "grants"), "grants must survive the rollback")
+
+	require.NoError(t, Control(db))
+	for _, name := range oauth {
+		require.True(t, objectExists(t, db, name), "up again must recreate %q", name)
+	}
+}

@@ -36,7 +36,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/domain/fact/textnorm"
 )

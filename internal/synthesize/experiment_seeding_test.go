@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // writeFactOn is writeTestFact against an explicit branch.

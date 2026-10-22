@@ -16,8 +16,8 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // cosEmbedder gives every document the unit vector e0 and every query a unit

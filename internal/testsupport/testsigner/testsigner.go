@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store/storetest"
 
 	"golang.org/x/crypto/ssh"
 )

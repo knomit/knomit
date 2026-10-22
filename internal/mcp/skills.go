@@ -13,9 +13,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 )
 
 // Skills (F08 PR C, user rulings R6/R8/D2) are `.knomit/skills/<name>/SKILL.md`

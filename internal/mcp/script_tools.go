@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 

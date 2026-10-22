@@ -15,12 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/web/hal"
 )

@@ -41,9 +41,9 @@ func deps(t *testing.T, pkg string) []string {
 // "part of fact" while carrying 2.5x its dependency weight.
 func TestFactStaysPure(t *testing.T) {
 	forbiddenByFact := []string{
-		"knomit/internal/store",
+		"knomit/internal/engine/store",
 		"knomit/internal/repos",
-		"knomit/internal/embeddings",
+		"knomit/internal/engine/embeddings",
 		"knomit/internal/refs",
 		"knomit/internal/web",
 		"knomit/internal/mcp",
@@ -66,11 +66,11 @@ func TestFactStaysPure(t *testing.T) {
 //
 // params holds the cgo-free half of the embedding-model contract — the
 // calibrated cosine thresholds and the default model id — and sits UNDER
-// internal/embeddings, which carries cgo (ONNX via import "C"). The nesting is
+// internal/engine/embeddings, which carries cgo (ONNX via import "C"). The nesting is
 // what makes the tree honest about whose values these are, but it also puts an
 // import of the parent one line away.
 //
-// That import would be silent and expensive: internal/store, internal/foundation/config and
+// That import would be silent and expensive: internal/engine/store, internal/foundation/config and
 // internal/synthesize all import params, so an edge upward would link the ONNX
 // runtime into the store, the config loader, and every binary that touches
 // either. Being importable without cgo is the entire reason the package exists,
@@ -90,7 +90,7 @@ func TestParamsHasNoDependencies(t *testing.T) {
 			t.Errorf("internal/domain/modelparams imports %q — it must have ZERO non-stdlib "+
 				"dependencies so that store, config and synthesize can read model thresholds "+
 				"without linking cgo. In particular it must never import its own parent "+
-				"internal/embeddings, which carries the ONNX runtime.", dep)
+				"internal/engine/embeddings, which carries the ONNX runtime.", dep)
 		}
 	}
 }
@@ -173,7 +173,7 @@ func TestPlatformKnowsNothingAboutKnomit(t *testing.T) {
 // The obvious mistake is already foreclosed by the compiler rather than by
 // this test: fact imports textnorm, so an edge back to fact is an import cycle
 // and will not build. What is NOT foreclosed is the sideways edge. Reaching
-// for knomit/internal/store or knomit/internal/foundation/config from a normaliser
+// for knomit/internal/engine/store or knomit/internal/foundation/config from a normaliser
 // compiles fine and costs every consumer the whole store closure — and the
 // consumers are the ones that most want it cheap: fact itself, plus store and
 // synthesize, which call it per candidate pair while matching.

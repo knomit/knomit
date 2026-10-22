@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 )
 
 // Corruption helpers on RepoHandle. These exist ONLY for Verify-detection

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/repos"
-	"knomit/internal/store/merge"
 )
 
 func testRepo() *repos.RepoInstance {

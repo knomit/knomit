@@ -10,7 +10,7 @@ import "testing"
 // then ForModel — the cgo-free answer — is one model short again, discovered
 // only when a caller needs the shipped band. This asserts the property for
 // every registered model, so a new descriptor that inlines its numbers fails
-// here. (It used to live in internal/embeddings, which owned the registry
+// here. (It used to live in internal/engine/embeddings, which owned the registry
 // until the registry moved here.)
 func TestEveryDescriptorReadsItsThresholdsFromParams(t *testing.T) {
 	if len(registry) == 0 {

@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // mainLeaf is id's leaf on n's copy of the fleet's main.

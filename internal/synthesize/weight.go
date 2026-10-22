@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 )
 
 // SourceWeight holds the confidence and sources count from a single source fact,

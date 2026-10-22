@@ -1,11 +1,11 @@
 // Package params holds the cgo-free half of the embedding-model contract:
 // everything a non-cgo caller needs to know about a model, without linking one.
 //
-// It sits under internal/embeddings because that is whose values these are — a
+// It sits under internal/engine/embeddings because that is whose values these are — a
 // model's calibrated cutoffs and the shipped default model id — but it does NOT
 // import its parent, and must never start. The parent carries cgo (ONNX via
 // import "C"), so an import edge from here upward would silently link the ONNX
-// runtime into internal/store, internal/foundation/config and every one of their
+// runtime into internal/engine/store, internal/foundation/config and every one of their
 // consumers. Being importable by the store, the config loader and the synthesis
 // pipelines without dragging in cgo is the entire reason this package exists.
 //
@@ -52,7 +52,7 @@ const NomicModelID = "nomic-v1.5"
 // identity. Before this, params held DefaultModelID but not the thresholds it
 // names, so any non-cgo caller wanting the shipped band had to either import
 // the ONNX-linked parent or retype the numbers — and a retyped copy goes stale
-// silently at the next re-sweep. The descriptors in internal/embeddings read
+// silently at the next re-sweep. The descriptors in internal/engine/embeddings read
 // from this map, so there is exactly one place a calibration lands.
 //
 // This is data, not an import: TestParamsHasNoDependencies bans non-stdlib

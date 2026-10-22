@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/web/hal"
 )

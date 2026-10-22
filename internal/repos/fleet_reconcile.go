@@ -9,15 +9,15 @@ import (
 	"strconv"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/fleetrec"
+	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/platform/version"
-	"knomit/internal/store"
 )
 
 // gitPathSuffix is what a peer appends to one of this instance's addresses to

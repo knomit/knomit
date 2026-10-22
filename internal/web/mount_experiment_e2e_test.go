@@ -21,8 +21,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // repoMount is the URL-scoped mount a `kb --repo <name>` bridge connects to.

@@ -8,10 +8,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -103,7 +103,7 @@ func TestKnomitOrigin_SubscribeFollowsPeerMain(t *testing.T) {
 // HEAD and the agent branches, and nothing else. This is the curated view
 // arriving at a real client through GitRemoteHandler rather than at the
 // store's own handler — the hidden-ref cases, which need private refs planted
-// in the store, are pinned in internal/store's advertisement test.
+// in the store, are pinned in internal/engine/store's advertisement test.
 func TestKnomitOrigin_PeerSeesOnlyTheConsensusAndAgentBranches(t *testing.T) {
 	ctx := context.Background()
 	a := newPeerManager(t, "agent/a")

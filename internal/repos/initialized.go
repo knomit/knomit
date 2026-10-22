@@ -15,8 +15,8 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // A repository is a knomit knowledge base IF AND ONLY IF it has an ontology at

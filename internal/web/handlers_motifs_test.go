@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/repos"
 )

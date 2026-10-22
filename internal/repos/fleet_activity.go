@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/fleetrec"
+	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
 )
 
 // The kinds of a FleetEvent. Each has a source of record; nothing here

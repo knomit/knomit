@@ -13,12 +13,12 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // F22: merges and work items.

@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 

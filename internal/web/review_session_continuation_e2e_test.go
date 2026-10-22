@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // reviewE2E is the real API router over one writable repo seeded with enough

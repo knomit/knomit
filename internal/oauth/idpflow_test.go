@@ -22,11 +22,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/oauth/idp"
 	"knomit/internal/oauth/idp/idptest"
-	"knomit/internal/store/migrate"
 )
 
 // Consent path 3 (F19 phase 3c) end to end, in-process: the issuer on an

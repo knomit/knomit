@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
 )
 
 // The fleet is a product feature, not a template: its ontology is built into

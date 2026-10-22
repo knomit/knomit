@@ -21,14 +21,14 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
 )

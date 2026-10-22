@@ -15,8 +15,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // The master merges (R-merge, round 3): on the fleet repository only the

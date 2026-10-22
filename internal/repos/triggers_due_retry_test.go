@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 )
 
 // ---- F08 PR A, M3: a due fire dropped for CAPACITY is retried.

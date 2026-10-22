@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // The file must land at README.md with its case intact — a git provider looks

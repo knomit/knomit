@@ -12,19 +12,19 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 

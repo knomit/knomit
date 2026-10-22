@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // F23: the guidance reader. Everything is read at ONE commit, the tip of the

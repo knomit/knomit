@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 

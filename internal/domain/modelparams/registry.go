@@ -4,10 +4,10 @@ package modelparams
 // alone (where to fetch it, its tensor names, pooling, templates and its
 // calibrated thresholds), plus where its artifacts live in the cache.
 //
-// It moved here from internal/embeddings so a caller that only needs to KNOW
+// It moved here from internal/engine/embeddings so a caller that only needs to KNOW
 // about a model — knomit-desktop's "Downloading models…" caption asks
 // ModelCached — does not link the ONNX runtime and the tokenizers library to
-// do it. internal/embeddings re-exports Model, Pooling and Lookup as aliases,
+// do it. internal/engine/embeddings re-exports Model, Pooling and Lookup as aliases,
 // so the inference code reads exactly as before. Like the rest of this
 // package, it imports the standard library only.
 

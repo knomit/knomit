@@ -9,7 +9,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // ErrKnowledgeBaseAlreadyLocal refuses a create whose remote holds a knowledge
@@ -126,7 +126,7 @@ func identityFromAdv(adv *packp.AdvRefs) RemoteIdentity {
 	return id
 }
 
-// capKnomitRepoID is the capability internal/store advertises. Spelled here as
+// capKnomitRepoID is the capability internal/engine/store advertises. Spelled here as
 // a plain string because the capability package's type is what the store side
 // needs; the two must not drift, and store's own advertisement test pins the
 // wire spelling.

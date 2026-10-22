@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // newReviewTestRepoWithStore mirrors newLearnTestRepo but also returns the

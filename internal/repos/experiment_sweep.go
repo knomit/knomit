@@ -8,7 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // defaultExperimentSweepInterval is how often the sweeper looks.

@@ -5,8 +5,8 @@ package storytests
 import (
 	"testing"
 
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/test/testenv"
 )
 

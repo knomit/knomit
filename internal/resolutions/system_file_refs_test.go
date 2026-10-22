@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/storetest"
 )
 
 // #428 follow-up N1: a {body} resolution that ADDS a ref to a .knomit/ file

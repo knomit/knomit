@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/spf13/cobra"
 )

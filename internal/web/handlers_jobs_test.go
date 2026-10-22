@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/llm"
+	"knomit/internal/engine/llm"
 	"knomit/internal/repos"
 )
 

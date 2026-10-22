@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"

@@ -12,7 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/store/migrate"
+	"knomit/internal/engine/store/migrate"
 )
 
 // openControlDB opens control.db EXACTLY as production does — the same DSN

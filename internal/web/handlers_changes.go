@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 

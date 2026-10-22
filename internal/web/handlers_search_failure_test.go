@@ -11,14 +11,14 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // failEmb is a 768-dim embedder whose EmbedQuery can be switched to fail or to

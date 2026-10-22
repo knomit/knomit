@@ -25,8 +25,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 )
 
 // ---- helpers

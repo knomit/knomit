@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 
 	"github.com/go-chi/chi/v5"
 

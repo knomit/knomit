@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 

@@ -106,7 +106,7 @@ func ortSpec(goos, goarch string) (libSpec, error) {
 
 // tokenizersSpec resolves the daulet/tokenizers static-lib plan. The project
 // links libtokenizers.a statically (see the per-platform
-// internal/embeddings/cgo_link_*.go), so every build needs it.
+// internal/engine/embeddings/cgo_link_*.go), so every build needs it.
 //
 // darwin and linux download a published artifact. Windows BUILDS FROM SOURCE:
 // upstream publishes no windows asset (checked through v1.27.0), but the

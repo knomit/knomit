@@ -17,16 +17,16 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/serverkey"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
 )

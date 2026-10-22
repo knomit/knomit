@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"

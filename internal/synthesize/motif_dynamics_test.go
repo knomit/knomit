@@ -21,7 +21,7 @@ import (
 // df is the public surface Phase 1 actually ships, it is what later phases
 // consume, and it is the number a wrong answer here would corrupt. Per-path
 // junction correctness is asserted where the SQL lives, in
-// internal/store/fact_motifs_test.go.
+// internal/engine/store/fact_motifs_test.go.
 //
 // Phase 1's named question — does a motif written in session N survive
 // dedup-merge in session N+1 — is driven through the real knomit_learn handler

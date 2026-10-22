@@ -11,15 +11,15 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 )
 
 // DiscoverDirection distinguishes the two emergent-fact shapes the discovery

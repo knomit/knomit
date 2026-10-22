@@ -8,10 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 

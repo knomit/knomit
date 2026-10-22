@@ -13,11 +13,11 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/oauth"
-	"knomit/internal/store"
-	"knomit/internal/store/migrate"
 )
 
 const (

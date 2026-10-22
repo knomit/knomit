@@ -9,14 +9,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"

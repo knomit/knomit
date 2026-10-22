@@ -19,7 +19,7 @@ import (
 // object-store corruption for Verify tests.
 //
 // Uses real git via os/exec for ops the production code doesn't handle,
-// matching the exact pattern in internal/store/repo_test.go:
+// matching the exact pattern in internal/engine/store/repo_test.go:
 //
 //	exec.Command("git", "init", "--bare", remoteDir).Run()
 type RemoteHandle struct {

@@ -8,8 +8,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 

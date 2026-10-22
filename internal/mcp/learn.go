@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 	"knomit/internal/synthesize"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"

@@ -10,7 +10,7 @@ import (
 	"sort"
 	"sync"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"

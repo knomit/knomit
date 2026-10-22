@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/index"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/storetest"
 )
 
 // graphEnv is a real store opened for a test that drives the search handle

@@ -13,10 +13,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 

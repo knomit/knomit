@@ -8,7 +8,7 @@
 # The server requires CGO (mattn/go-sqlite3, sqlite-vec, ONNX Runtime,
 # daulet/tokenizers) and three native libraries:
 #   - libtokenizers.a   — STATIC, linked at build time (-L dist/lib via
-#                         internal/embeddings/cgo_link.go)
+#                         internal/engine/embeddings/cgo_link.go)
 #   - libonnxruntime.so — dlopen'd at runtime (ORT_LIB_PATH)
 # The embedding model files are downloaded at build time by `knomit warm-models`
 # and baked into the image at /data/models.

@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // knomit#249, option A. A prune-merge REPLACES its member facts, and its refs

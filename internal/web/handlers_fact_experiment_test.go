@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // newExperimentRESTManager builds a manager holding one repo with a REAL

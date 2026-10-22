@@ -355,7 +355,7 @@ var mechanicsPaths = map[string][]string{
 	// None of these entries licenses motifs reaching the SCORING or KNN paths.
 	// Those decide ranking rather than answering a caller's question, and a
 	// motif term arriving there is an MN6 violation this list does not cover.
-	"internal/store/index/search_query.go": {
+	"internal/engine/store/index/search_query.go": {
 		"RecentFacts", "recentFactsSearch", "search",
 		"newFactFilter", "addMotifClause", "expandMotifQuery",
 	},
@@ -423,7 +423,7 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 					mentions = true
 				}
 			case *ast.BasicLit:
-				// String literals count (Phase 2). In internal/store every
+				// String literals count (Phase 2). In internal/engine/store every
 				// mechanical decision this rule polices is expressed as SQL
 				// TEXT, not as Go identifiers: a WHERE clause selecting on
 				// motifs is a string, and an Ident-only walk cannot see it.
@@ -464,7 +464,7 @@ func TestMN2_NoLLMInMotifCode(t *testing.T) {
 		src, ok := sources[rel]
 		require.Truef(t, ok, "MN2 target %s is missing", rel)
 		lower := strings.ToLower(src)
-		for _, banned := range []string{"internal/llm", "anthropic", "openai", "completion"} {
+		for _, banned := range []string{"internal/engine/llm", "anthropic", "openai", "completion"} {
 			require.NotContainsf(t, lower, banned,
 				"MN2: %s must reach no LLM — all motif gating is mechanical", rel)
 		}

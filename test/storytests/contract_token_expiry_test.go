@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store/remotesync"
 	"knomit/test/testenv"
 	"knomit/test/testenv/gitserver"
 )

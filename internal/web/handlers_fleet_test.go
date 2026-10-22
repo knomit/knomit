@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/fleetrec"
+	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"

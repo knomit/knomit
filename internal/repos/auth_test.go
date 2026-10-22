@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 

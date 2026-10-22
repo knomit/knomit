@@ -18,11 +18,11 @@ var desktopForbidden = []string{"knomit/internal/app", "knomit/internal/web"}
 
 // desktopForbiddenExact are packages the desktop must not link, matched
 // exactly: the cgo inference stack (the ONNX runtime binding, the tokenizers
-// library, and internal/embeddings, which links both). The desktop only needs
+// library, and internal/engine/embeddings, which links both). The desktop only needs
 // to KNOW about the model for its boot caption, and that lives in the cgo-free
 // internal/domain/modelparams, which a prefix match would wrongly catch.
 var desktopForbiddenExact = []string{
-	"knomit/internal/embeddings",
+	"knomit/internal/engine/embeddings",
 	"github.com/yalue/onnxruntime_go",
 	"github.com/daulet/tokenizers",
 }

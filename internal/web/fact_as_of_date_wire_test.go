@@ -12,9 +12,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // The as_of.date wire tests.

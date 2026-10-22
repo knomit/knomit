@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // TestVerifyAccepts_Scope: an accept naming a repository matches only there;

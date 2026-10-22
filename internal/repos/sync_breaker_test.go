@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"

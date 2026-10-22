@@ -7,8 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 )
 
 // sessionReaperConfig holds the parsed runtime parameters for the background

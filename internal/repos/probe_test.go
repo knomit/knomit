@@ -261,7 +261,7 @@ func TestProbeFailureDetail_CallerCancelKeepsTheUnderlyingError(t *testing.T) {
 	require.Equal(t, "boom", probeFailureDetail(parent, derived, errors.New("boom"), time.Millisecond))
 }
 
-// timeout <= 0 keeps the legacy unbounded behaviour, matching internal/store's
+// timeout <= 0 keeps the legacy unbounded behaviour, matching internal/engine/store's
 // netCtxWith — a config that switches the bound off must not make every probe
 // fail instantly instead.
 func TestProbeCtx_ZeroTimeoutIsUnbounded(t *testing.T) {

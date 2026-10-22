@@ -11,10 +11,10 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"

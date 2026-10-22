@@ -32,7 +32,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/segmentio/ksuid"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 var (

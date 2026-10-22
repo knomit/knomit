@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // knomit#107a. prune's merge was the ONLY one of validateOutputPath's four

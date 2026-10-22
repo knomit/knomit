@@ -14,9 +14,9 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // seedFedMany writes n policy-typed principle facts into the repo bound to ctx
@@ -435,7 +435,7 @@ func TestQueryFederation_VanishedMountExpiresSession(t *testing.T) {
 // federates by a k-way committed_at merge (RFC §7.1 — timestamp merge, NOT RRF).
 // Commits are interleaved across A and B with a sleep between each so every fact
 // lands in a distinct committed_at second (committed_at is Unix-second
-// resolution — cf. TestRecentFacts_* in internal/store). Commit order over
+// resolution — cf. TestRecentFacts_* in internal/engine/store). Commit order over
 // wall-clock time is Alpha 0 (A), Bravo 0 (B), Alpha 1 (A), Bravo 1 (B), so the
 // strict committed_at-DESC order is Bravo 1, Alpha 1, Bravo 0, Alpha 0 — an
 // interleaving no per-mount concatenation could produce. limit=2 forces the

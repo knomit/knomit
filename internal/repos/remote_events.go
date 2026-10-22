@@ -11,8 +11,8 @@ package repos
 import (
 	"github.com/rs/zerolog"
 
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // RemoteEvent reports a repo's remote health: the two persisted status columns

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 )
 
 // TestTopicBrowsersSkipPrivateNamespace pins the same rule

@@ -19,8 +19,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/store"
-	storemigrate "knomit/internal/store/migrate"
+	"knomit/internal/engine/store"
+	storemigrate "knomit/internal/engine/store/migrate"
 )
 
 // RepoState is the STORED lifecycle state of a registered repo. Deliberately

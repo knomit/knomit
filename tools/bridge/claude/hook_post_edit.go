@@ -148,8 +148,8 @@ func relPath(cwd, abs string) string {
 // source-file entity as `internal/store/foo.go`, `src://knomit/internal/store/foo.go`,
 // or `src://knomit/internal/store/foo.go@abc123`. Suffix matching against
 // src:// entries covers all three. Bare entries (no scheme) are matched
-// exact-only, since accepting `other/internal/store/foo.go` as a hit for
-// `internal/store/foo.go` would over-match unrelated files.
+// exact-only, since accepting `other/internal/engine/store/foo.go` as a hit for
+// `internal/engine/store/foo.go` would over-match unrelated files.
 func filterByEntity(facts []knomitapi.FactSummary, rel string) []knomitapi.FactSummary {
 	out := make([]knomitapi.FactSummary, 0, len(facts))
 	for _, f := range facts {

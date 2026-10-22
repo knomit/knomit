@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 )
 
 // newLifetimeTestManager boots a Manager in a temp home and creates the test

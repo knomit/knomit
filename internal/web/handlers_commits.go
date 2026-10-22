@@ -5,14 +5,14 @@ import (
 	"errors"
 	"net/http"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 

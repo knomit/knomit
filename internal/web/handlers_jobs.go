@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"knomit/internal/llm"
+	"knomit/internal/engine/llm"
 	"knomit/internal/repos"
 	"knomit/internal/synthesize"
 	"knomit/internal/web/hal"

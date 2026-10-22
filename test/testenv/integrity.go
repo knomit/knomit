@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 )
 
 // AssertIntegrity runs Verify(Deep: true) against r's RepoInstance and fails

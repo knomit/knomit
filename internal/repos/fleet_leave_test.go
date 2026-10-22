@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/fleetrec"
+	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 
