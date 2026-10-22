@@ -68,7 +68,7 @@ func TestToucher_SamePathTwiceInOneMerge(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	base := writeF(t, svc, "agent/a", "kb/tasks/a/base.md")
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "peer", "agent/a"))
+	require.NoError(t, svc.CreateBranch(ctx, "peer", "agent/a"))
 	writeF(t, svc, "agent/a", "kb/tasks/a/mine.md")                   // the agent's own work, so the merge is a real merge
 	writeF(t, svc, "peer", "kb/tasks/a/x.md")                         // A
 	b := plumbing.NewHash(modifyF(t, svc, "peer", "kb/tasks/a/x.md")) // B
@@ -95,7 +95,7 @@ func TestToucher_BotMergeNotAuthor(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	writeF(t, svc, "agent/a", "kb/tasks/a/mine.md")
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "peer", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "peer", "main"))
 	theirs := plumbing.NewHash(writeF(t, svc, "peer", "kb/tasks/a/theirs.md"))
 	// A merge commit authored by a "bot", built by hand: the tree is the
 	// agent's tree plus theirs.md (exactly what a clean merge produces).
@@ -120,10 +120,10 @@ func TestToucher_MergeWithNoSameBlobParentIsTheToucher(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	c1 := plumbing.NewHash(writeF(t, svc, "agent/a", "kb/tasks/a/x.md"))
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "peer", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "peer", "main"))
 	c2 := plumbing.NewHash(modifyF(t, svc, "peer", "kb/tasks/a/x.md"))
 	// A third version of x, whose tree the hand-built merge will carry.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "third", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "third", "main"))
 	r, err := svc.Facts().WriteFact(ctx, "third", "kb/tasks/a/x.md", testFactBody("x v3", 0.5, nil), "v3", "update")
 	require.NoError(t, err)
 	third, err := svc.rh.Repository().CommitObject(plumbing.NewHash(r.CommitHash))

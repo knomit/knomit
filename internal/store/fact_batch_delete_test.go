@@ -142,7 +142,7 @@ func TestBatchWriteFacts_DeleteFailureCommitsNothing(t *testing.T) {
 		"bad", "learn")
 	require.Error(t, err)
 
-	head, err := svc.Branches().HeadCommit(ctx, "main")
+	head, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, before, head, "a failed batch must not move the branch")
 	_, err = facts.ReadFact(ctx, "main", "kb/b.md", nil)

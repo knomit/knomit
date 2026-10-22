@@ -30,7 +30,7 @@ func headOf(t *testing.T, ri *repos.RepoInstance, branch string) string {
 	t.Helper()
 	var head string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		h, err := svc.Branches().HeadCommit(context.Background(), branch)
+		h, err := svc.HeadCommit(context.Background(), branch)
 		if err != nil {
 			return
 		}
@@ -130,7 +130,7 @@ func TestRetract_BoundToExperiment_RemovesOnlyThere(t *testing.T) {
 func TestWriteHandlers_ForeignExperimentIsRefused(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/elsewhere", ri.AgentBranch()))
+		require.NoError(t, svc.CreateBranch(context.Background(), "agent/elsewhere", ri.AgentBranch()))
 		_, err := svc.Merge().OpenExperiment(context.Background(), "not-mine", "", "agent/elsewhere")
 		require.NoError(t, err)
 	}))

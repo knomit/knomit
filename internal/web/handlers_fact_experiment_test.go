@@ -75,14 +75,14 @@ func TestHandleFactCreate_AcceptsOwnExperimentBranch(t *testing.T) {
 func TestHandleFactCreate_RefusesForeignExperimentBranch(t *testing.T) {
 	m, svc := newExperimentRESTManager(t, "alpha")
 	ctx := context.Background()
-	if err := svc.Branches().CreateBranch(ctx, "agent/elsewhere", "agent/test"); err != nil {
+	if err := svc.CreateBranch(ctx, "agent/elsewhere", "agent/test"); err != nil {
 		t.Fatalf("create branch: %v", err)
 	}
 	if _, err := svc.Merge().OpenExperiment(ctx, "theirs", "", "agent/elsewhere"); err != nil {
 		t.Fatalf("open experiment: %v", err)
 	}
 	// A bare ref in the namespace with no experiments row behind it.
-	if err := svc.Branches().CreateBranch(ctx, "exp/unrecorded", "agent/test"); err != nil {
+	if err := svc.CreateBranch(ctx, "exp/unrecorded", "agent/test"); err != nil {
 		t.Fatalf("create branch: %v", err)
 	}
 

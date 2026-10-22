@@ -109,7 +109,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	scannedDirs := map[string]bool{}
 	for _, pkg := range []string{"../mcp", "../web", "../store"} {
 		// Recursive, not a flat glob: since the store was split into child
-		// packages (store/internal/sqlite, store/internal/sessions, ...) a flat
+		// packages (store/internal/sqlite, store/sessions, ...) a flat
 		// glob of ../store/*.go left every child outside the scan, so a real use
 		// moved into one would have passed silently. WalkDir also covers any
 		// child added later without this test being touched.

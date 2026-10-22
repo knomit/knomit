@@ -91,7 +91,7 @@ func TestRelevantMethodologyForFact_FiltersByTypeAndBranch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Methodology written on a different branch should be invisible.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/b", branch))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/b", branch))
 	_, err = svc.Facts().WriteFact(ctx, "agent/b", "kb/meta/reasoning/m3.md",
 		methFactBody("M3", "branch-b lesson", []string{"meta", "reasoning", "methodology"}, nil),
 		"add m3 on b", "")
@@ -514,7 +514,7 @@ func TestRelevantMethodologyForFact_VectorCoverage_WithSiblingBranchNoise(t *tes
 	// Create the test branch from the sibling at init time — BEFORE any
 	// noise is written — so the test branch does not inherit those rows
 	// in its branch_facts view.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/test", "agent/sibling"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/test", "agent/sibling"))
 
 	// Source fact on the test branch.
 	writeSrcFact(t, svc, "agent/test", "kb/synth/src.md",

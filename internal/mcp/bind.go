@@ -204,7 +204,7 @@ func resumeExperimentBinding(ctx context.Context, mgr *repos.Manager, b *repos.B
 	}
 	defer release()
 
-	exp, ok, err := svc.Branches().GetExperiment(ctx, experiment)
+	exp, ok, err := svc.GetExperiment(ctx, experiment)
 	if err != nil {
 		return nil, fmt.Errorf("could not read experiment %q: %w", experiment, err)
 	}

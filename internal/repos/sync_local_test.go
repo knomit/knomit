@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // A repo with no origin never starts a reconcile loop, so its consensus
@@ -28,12 +29,12 @@ func TestRunLocalReconcileLoop_AdvancesMainOnTick(t *testing.T) {
 	svc := testService(t, ri)
 	ctx := context.Background()
 
-	mainBefore, err := svc.Branches().HeadCommit(ctx, "main")
+	mainBefore, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/x.md",
 		adoptFact("written on the agent branch"), "x", "")
 	require.NoError(t, err)
-	agentTip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	agentTip, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 	require.NotEqual(t, mainBefore, agentTip, "the write must actually have moved the agent branch")
 
@@ -42,7 +43,7 @@ func TestRunLocalReconcileLoop_AdvancesMainOnTick(t *testing.T) {
 	wait := goLocalLoop(loopCtx, svc, ri.Name(), ri.AgentBranch(), 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		u, err := svc.Branches().HeadCommit(ctx, "main")
+		u, err := svc.HeadCommit(ctx, "main")
 		return err == nil && u == agentTip
 	}, 2*time.Second, 10*time.Millisecond, "main must reach the agent tip")
 
@@ -51,10 +52,10 @@ func TestRunLocalReconcileLoop_AdvancesMainOnTick(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/y.md",
 		adoptFact("a second fact"), "y", "")
 	require.NoError(t, err)
-	agentTip2, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	agentTip2, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		u, err := svc.Branches().HeadCommit(ctx, "main")
+		u, err := svc.HeadCommit(ctx, "main")
 		return err == nil && u == agentTip2
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -90,7 +91,7 @@ func TestRunLocalReconcileLoop_ConvergesAtStart(t *testing.T) {
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/x.md",
 		adoptFact("written before the loop starts"), "x", "")
 	require.NoError(t, err)
-	agentTip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	agentTip, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -99,7 +100,7 @@ func TestRunLocalReconcileLoop_ConvergesAtStart(t *testing.T) {
 	wait := goLocalLoop(loopCtx, svc, ri.Name(), ri.AgentBranch(), time.Hour)
 
 	require.Eventually(t, func() bool {
-		u, err := svc.Branches().HeadCommit(ctx, "main")
+		u, err := svc.HeadCommit(ctx, "main")
 		return err == nil && u == agentTip
 	}, 2*time.Second, 10*time.Millisecond)
 	cancel()
@@ -121,7 +122,7 @@ func TestRunLocalReconcileLoop_SkipsTheAdvanceWhileTheRepoHasAnOrigin(t *testing
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/x.md",
 		adoptFact("agent-only"), "x", "")
 	require.NoError(t, err)
-	mainBefore, err := svc.Branches().HeadCommit(ctx, "main")
+	mainBefore, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
 	var ticks atomic.Int64
@@ -144,7 +145,7 @@ func TestRunLocalReconcileLoop_SkipsTheAdvanceWhileTheRepoHasAnOrigin(t *testing
 	cancel()
 	<-stopped
 
-	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
+	mainAfter, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, mainBefore, mainAfter, "an origin-backed repo's main is reconcileMain's to move")
 }
@@ -160,8 +161,8 @@ func TestSyncEnter_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 			OntologyRoot: "kb",
 			Git:          config.GitConfig{LocalReconcileInterval: 20 * time.Millisecond},
 		},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
 		// Machine.Synchronous deliberately NOT set: the loop is the path under test.
 	})
 	t.Cleanup(func() { m.Close() })
@@ -172,11 +173,11 @@ func TestSyncEnter_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/x.md",
 		adoptFact("published by the local reconcile"), "x", "")
 	require.NoError(t, err)
-	agentTip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	agentTip, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		u, err := svc.Branches().HeadCommit(ctx, "main")
+		u, err := svc.HeadCommit(ctx, "main")
 		return err == nil && u == agentTip
 	}, 5*time.Second, 20*time.Millisecond, "nobody started the local reconcile loop")
 }
@@ -201,12 +202,12 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 
 	var originTip string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		tip, herr := svc.Branches().HeadCommit(ctx, "main")
+		tip, herr := svc.HeadCommit(ctx, "main")
 		require.NoError(t, herr)
 		originTip = tip
 		// Lose the local upstream while origin/main stays behind.
-		require.NoError(t, svc.Branches().DropBranch(ctx, "main"))
-		_, herr = svc.Branches().HeadCommit(ctx, "main")
+		require.NoError(t, svc.DropBranch(ctx, "main"))
+		_, herr = svc.HeadCommit(ctx, "main")
 		require.Error(t, herr, "the fixture must actually have removed main")
 	}))
 	m.Close()
@@ -224,7 +225,7 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 	ri2 := m2.Get("kb")
 	require.NotNil(t, ri2)
 	require.NoError(t, ri2.WithRead(func(svc *store.Service) {
-		got, herr := svc.Branches().HeadCommit(ctx, "main")
+		got, herr := svc.HeadCommit(ctx, "main")
 		require.NoError(t, herr, "local main was not bootstrapped from origin/main")
 		require.Equal(t, originTip, got)
 	}))

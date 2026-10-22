@@ -412,13 +412,13 @@ func TestChangesHandler_WritesNothing(t *testing.T) {
 	snapshot := func(svc *store.Service) map[string]string {
 		ctx := context.Background()
 		m := map[string]string{}
-		plain, agents, _ := svc.Branches().BranchInfo("")
+		plain, agents, _ := svc.BranchInfo("")
 		for _, br := range append(plain, agents...) {
-			h, err := svc.Branches().HeadCommit(ctx, br)
+			h, err := svc.HeadCommit(ctx, br)
 			require.NoError(t, err)
 			m["ref:"+br] = h
 		}
-		rows, err := svc.Branches().ListBranches(ctx)
+		rows, err := svc.ListBranches(ctx)
 		require.NoError(t, err)
 		for _, r := range rows {
 			m["row:"+r.Name] = r.GitRef

@@ -265,7 +265,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 			ok  bool
 		)
 		_ = ri.WithRead(func(svc *store.Service) {
-			exp, ok, _ = svc.Branches().GetExperiment(r.Context(), name)
+			exp, ok, _ = svc.GetExperiment(r.Context(), name)
 		})
 		if !ok {
 			w.WriteHeader(http.StatusNoContent)
@@ -300,7 +300,7 @@ func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name 
 		err error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
-		exp, ok, err = svc.Branches().GetExperiment(ctx, name)
+		exp, ok, err = svc.GetExperiment(ctx, name)
 	}); aerr != nil {
 		return model.Experiment{}, false, aerr
 	}

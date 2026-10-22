@@ -195,7 +195,7 @@ func TestReplay_UnsetDefaultBranchIsTheTargetsHead(t *testing.T) {
 	other, err := target.rh.Storer().Reference(plumbing.NewBranchReferenceName("agent/other"))
 	require.NoError(t, err)
 	require.NoError(t, target.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), other.Hash())))
-	require.NoError(t, target.Branches().SetDefaultBranch("trunk"), "a clone's HEAD is the remote's default branch")
+	require.NoError(t, target.SetDefaultBranch("trunk"), "a clone's HEAD is the remote's default branch")
 	trunk, err := target.rh.Storer().Reference(plumbing.NewBranchReferenceName("trunk"))
 	require.NoError(t, err)
 

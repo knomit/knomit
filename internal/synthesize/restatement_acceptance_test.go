@@ -53,7 +53,7 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 
 	branch := os.Getenv("KNOMIT_PHASE0_BRANCH")
 	if branch == "" {
-		branch, err = svc.Branches().DefaultBranch(ctx)
+		branch, err = svc.DefaultBranch(ctx)
 		require.NoError(t, err)
 	}
 
@@ -70,7 +70,7 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 		Files:       svc.FactsRepo(),
 		Search:      svc.Search(),
 		Pipeline:    svc.Pipeline(),
-		Branches:    svc.Branches(),
+		HeadCommit:  svc.HeadCommit,
 		Abstraction: svc.Abstraction(),
 		Effort:      EffortNormal,
 		OnProgress:  func(ProgressEvent) {},

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"knomit/internal/store/model"
+	"knomit/internal/store/sessions"
 
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
@@ -118,12 +119,12 @@ func errf(tool string, format string, args ...any) error {
 }
 
 // storeIndices returns the store indices under the repo read lock.
-func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, *index.Facade, store.PipelineIndex, store.BranchIndex, *vocab.AbstractionIndex, *vocab.MotifIndex) {
+func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, *index.Facade, *sessions.PipelineIndex, func(ctx context.Context, branch string) (string, error), *vocab.AbstractionIndex, *vocab.MotifIndex) {
 	var gs *facts.Index
 	var files *facts.Repo
 	var idx *index.Facade
-	var pipelineIdx store.PipelineIndex
-	var branches store.BranchIndex
+	var pipelineIdx *sessions.PipelineIndex
+	var headCommit func(ctx context.Context, branch string) (string, error)
 	var abstraction *vocab.AbstractionIndex
 	var motifs *vocab.MotifIndex
 	p.ri.WithRead(func(svc *store.Service) {
@@ -131,25 +132,25 @@ func (p *Pipeline) storeIndices() (*facts.Index, *facts.Repo, *index.Facade, sto
 		files = svc.FactsRepo()
 		idx = svc.Search()
 		pipelineIdx = svc.Pipeline()
-		branches = svc.Branches()
+		headCommit = svc.HeadCommit
 		abstraction = svc.Abstraction()
 		motifs = svc.Motifs()
 	})
-	return gs, files, idx, pipelineIdx, branches, abstraction, motifs
+	return gs, files, idx, pipelineIdx, headCommit, abstraction, motifs
 }
 
 // deps resolves the per-call dependency bundle handed to Strategy methods.
 // Resolved once per engine entry point (and once per dispatch hop) rather than
 // cached on the struct, so a store swap between turns is picked up.
 func (p *Pipeline) deps() Deps {
-	gs, files, idx, pipelineIdx, branches, abstraction, motifs := p.storeIndices()
+	gs, files, idx, pipelineIdx, headCommit, abstraction, motifs := p.storeIndices()
 	return Deps{
 		RI:          p.ri,
 		Facts:       gs,
 		Files:       files,
 		Search:      idx,
 		Pipeline:    pipelineIdx,
-		Branches:    branches,
+		HeadCommit:  headCommit,
 		Abstraction: abstraction,
 		Motifs:      motifs,
 		Effort:      p.effort,
@@ -863,7 +864,7 @@ const (
 // load-bearing: discovery seeding excludes origin=discovered facts, and
 // dropping Origin here previously let a discovered fact seed its own
 // discovery.
-func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx *index.Facade, pipelineIdx store.PipelineIndex) ([]fact.Fact, seedScan, error) {
+func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx *index.Facade, pipelineIdx *sessions.PipelineIndex) ([]fact.Fact, seedScan, error) {
 	tool := p.strategy.Tool()
 
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, tool, branch)
@@ -1281,7 +1282,7 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *model.PipelineSess
 	// unreliable here. This is the write half of the scoped exemption whose
 	// read half is in dirtyFacts; the two must always agree.
 	if ended && !sess.Scoped {
-		headHash, err := d.Branches.HeadCommit(ctx, branch)
+		headHash, err := d.HeadCommit(ctx, branch)
 		if err != nil {
 			log.Warn().Err(err).Str("tool", tool).Msg("pipeline: could not get HEAD for watermark")
 		} else if err := d.Pipeline.SetPipelineWatermark(ctx, tool, branch, headHash); err != nil {

@@ -62,7 +62,7 @@ func TestManagerStore_AuthorsAsThePersistedAgentID(t *testing.T) {
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/notes/a.md",
 		"---\ntype: observation\nconfidence: 0.9\n---\n# a\n\nbody\n", "learn: a", "learn")
 	require.NoError(t, err)
-	tip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	tip, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(tip))
 	require.NoError(t, err)

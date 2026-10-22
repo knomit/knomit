@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -27,8 +28,8 @@ import (
 // drop the ScriptTools wiring in app.go (the host throws "no script tools").
 func TestScript_RealToolsEndToEnd(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 		Machine:     repos.Options{Synchronous: true},
 		ScriptTools: mcp.NewScriptTools(nil),
 	})
@@ -56,7 +57,7 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 
 	var scriptCommit string
 	require.Eventually(t, func() bool {
-		h, err := svc.Branches().HeadCommit(ctx, branch)
+		h, err := svc.HeadCommit(ctx, branch)
 		if err != nil || h == firing.CommitHash {
 			return false
 		}
@@ -99,8 +100,8 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 // survives (and learn([]) is refused) → red.
 func TestScript_MoveThroughRealTools(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 		Machine:     repos.Options{Synchronous: true},
 		ScriptTools: mcp.NewScriptTools(nil),
 	})
@@ -131,7 +132,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 	waitTrigger := func(firing, trigger string) string {
 		var got string
 		require.Eventually(t, func() bool {
-			h, err := svc.Branches().HeadCommit(ctx, branch)
+			h, err := svc.HeadCommit(ctx, branch)
 			if err != nil || h == firing {
 				return false
 			}
@@ -220,8 +221,8 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 // sabotage.
 func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 		Machine:     repos.Options{Synchronous: true},
 		ScriptTools: mcp.NewScriptTools(nil),
 	})

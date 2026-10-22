@@ -110,7 +110,7 @@ func TestReceivePack_AdoptedHostHeldTipMergeRefused(t *testing.T) {
 	h.svc.SetSigner(newTestSigner(t))
 
 	const legacy = "agent/legacy-11111111"
-	require.NoError(t, h.svc.Branches().CreateBranch(ctx, legacy, "main"))
+	require.NoError(t, h.svc.CreateBranch(ctx, legacy, "main"))
 	evil := kbOntology(verify.VerifyOff) + "# legacy edit\n"
 	_, _, err := h.svc.Facts().WriteFileExactForTest(ctx, legacy, fact.OntologyFile, evil, "ontology", "edit", "")
 	require.NoError(t, err)

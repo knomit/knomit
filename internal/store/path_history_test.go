@@ -173,7 +173,7 @@ func TestPathHistory_MergeDeliveredWrites(t *testing.T) {
 
 	created, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("v0", 0.9, nil), "create", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent", "main"))
 
 	writes := []string{created.CommitHash}
 	var merges []string
@@ -187,7 +187,7 @@ func TestPathHistory_MergeDeliveredWrites(t *testing.T) {
 		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/other%d.md", k), testFactBody("x", 0.5, nil), "other", "")
 		require.NoError(t, err)
 		require.NoError(t, svc.Merge().MergeBranch(ctx, "agent", "main", merge.StrategyLocalWins))
-		tip, err := svc.Branches().HeadCommit(ctx, "main")
+		tip, err := svc.HeadCommit(ctx, "main")
 		require.NoError(t, err)
 		mc, err := svc.rh.Repository().CommitObject(plumbing.NewHash(tip))
 		require.NoError(t, err)
@@ -202,7 +202,7 @@ func TestPathHistory_MergeDeliveredWrites(t *testing.T) {
 
 	want := reversed(writes)
 	for _, br := range []string{"main", "agent"} {
-		anchor, err := svc.Branches().HeadCommit(ctx, br)
+		anchor, err := svc.HeadCommit(ctx, br)
 		require.NoError(t, err)
 		revs := fullHistory(t, svc, br, p, anchor)
 		require.Equal(t, want, historyCommits(revs), "%s: every write, newest first, and nothing else", br)
@@ -265,7 +265,7 @@ func TestPathHistory_DiffBaseIsTheEditedFromContent(t *testing.T) {
 
 	b, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("B", 0.5, nil), "B", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "side", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "side", "main"))
 	x, err := svc.Facts().WriteFact(ctx, "side", p, testFactBody("B", 0.7, nil), "X: confidence", "")
 	require.NoError(t, err)
 	y, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("B edited", 0.5, nil), "Y: body", "")
@@ -274,7 +274,7 @@ func TestPathHistory_DiffBaseIsTheEditedFromContent(t *testing.T) {
 		p: {Body: []byte(testFactBody("B edited", 0.7, nil))},
 	})
 	require.NoError(t, err)
-	m, err := svc.Branches().HeadCommit(ctx, "main")
+	m, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
 	revs := fullHistory(t, svc, "main", p, m)
@@ -328,7 +328,7 @@ func TestPathHistory_LocalWinsLoserExcluded(t *testing.T) {
 
 	v1, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.9, nil), "v1 on main", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	loser, err := svc.Facts().WriteFact(ctx, "feature", "kb/t.md", testFactBody("v2", 0.8, nil), "v2 on feature", "")
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, "feature", "kb/other.md", testFactBody("side", 0.5, nil), "side", "")
@@ -337,7 +337,7 @@ func TestPathHistory_LocalWinsLoserExcluded(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 
-	tip, err := svc.Branches().HeadCommit(ctx, "main")
+	tip, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	revs := fullHistory(t, svc, "main", "kb/t.md", tip)
 	require.Equal(t, []string{v3.CommitHash, v1.CommitHash}, historyCommits(revs))
@@ -384,7 +384,7 @@ func TestPathHistory_ScopedToBranch(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	r1, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.9, nil), "create t", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	r2, err := svc.Facts().WriteFact(ctx, "feature", "kb/t.md", testFactBody("v2", 0.8, nil), "edit on feature", "")
 	require.NoError(t, err)
 
@@ -431,7 +431,7 @@ func TestPathHistory_ContinuationAfterPurgeIsHistoryChanged(t *testing.T) {
 // derivation-version reset recomputes exactly the same history.
 func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent", "main"))
 	for k := range 3 {
 		for j := range 2 {
 			_, err := svc.Facts().WriteFact(ctx, "agent", "kb/t.md", testFactBody(fmt.Sprintf("%d-%d", k, j), 0.5, nil), "w", "")
@@ -441,7 +441,7 @@ func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, svc.Merge().MergeBranch(ctx, "agent", "main", merge.StrategyLocalWins))
 	}
-	tip, err := svc.Branches().HeadCommit(ctx, "main")
+	tip, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	before := historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip))
 	require.Len(t, before, 6)

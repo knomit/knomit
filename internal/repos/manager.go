@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/store/model"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
@@ -380,7 +381,7 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 				lookupErr = fmt.Errorf("repo %q: store unavailable", uid)
 				return
 			}
-			_, lookupErr = svc.Branches().HeadCommit(ctx, branch)
+			_, lookupErr = svc.HeadCommit(ctx, branch)
 		})
 		switch {
 		case lookupErr == nil:
@@ -548,15 +549,9 @@ func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
 // AgentID returns this instance's persisted agent id (Deps.AgentID), for a
 // caller that opens a Service of its own and writes through it, and for the
 // fleet code that finds this instance's member record. A Manager given none
-// has none, except inside a test binary, where the fixture fallback a test
-// package installed answers (store.TestFallbackAgentID). It is never derived
-// from the agent branch's name.
-func (m *Manager) AgentID() string {
-	if m.deps.AgentID != "" {
-		return m.deps.AgentID
-	}
-	return store.TestFallbackAgentID(m.deps.AgentBranch)
-}
+// has none, in a test binary as in production (a test that needs one sets
+// Deps.AgentID). It is never derived from the agent branch's name.
+func (m *Manager) AgentID() string { return m.deps.AgentID }
 
 // VerifyAccepts returns this instance's F09 accept list, or nil before Start.
 func (m *Manager) VerifyAccepts() *VerifyAccepts {
@@ -566,13 +561,15 @@ func (m *Manager) VerifyAccepts() *VerifyAccepts {
 }
 
 // acceptListFor is the accept list bound to repository uid (nil before Start).
-func (m *Manager) acceptListFor(uid string) model.AcceptList {
+func (m *Manager) acceptListFor(uid string) func(commit plumbing.Hash) (model.Accept, bool) {
 	return m.VerifyAccepts().For(uid)
 }
 
 // AcceptListFor is acceptListFor for a caller outside the package that opens
 // a Service of its own (the origin wizard's clone store).
-func (m *Manager) AcceptListFor(uid string) model.AcceptList { return m.acceptListFor(uid) }
+func (m *Manager) AcceptListFor(uid string) func(commit plumbing.Hash) (model.Accept, bool) {
+	return m.acceptListFor(uid)
+}
 
 // Origins returns the per-repo origin store, or nil before Start.
 func (m *Manager) Origins() *Origins {

@@ -212,7 +212,7 @@ func TestHighlights_OnlyTheRequestedBranch(t *testing.T) {
 
 	// A second branch off main, with a DIFFERENT version at the same path
 	// deriving from only one observation.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "other", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "other", "main"))
 	_, err = svc.Facts().WriteFact(ctx, "other", "kb/s/contested.md",
 		typedFactBody("other version", fact.Synthesis, 0.5,
 			[]string{"kb/o/a.md"}), "other version", "")

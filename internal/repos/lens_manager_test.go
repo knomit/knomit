@@ -10,10 +10,11 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 func TestManager_Registry_NilBeforeStart(t *testing.T) {
-	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
+	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
 	require.Nil(t, m.LensRegistry())
 }
 

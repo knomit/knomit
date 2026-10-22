@@ -550,7 +550,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 	// Resolve the anchor: the provided commit, else HEAD.
 	anchor := commit
 	if anchor == "" {
-		head, err := s.branches.HeadCommit(ctx, branch)
+		head, err := s.headCommit(ctx, branch)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("resolve HEAD error: %v", err)), nil
 		}

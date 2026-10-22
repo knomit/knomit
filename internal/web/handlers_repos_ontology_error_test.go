@@ -13,6 +13,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // What GET /repos says about a repo's ontology, for each way it can be wrong
@@ -36,7 +37,7 @@ import (
 func TestGetRepos_OntologyErrorOnTheWire(t *testing.T) {
 	const agentBranch = "machine/test"
 	home := t.TempDir()
-	m := repos.New(context.Background(), repos.Deps{Cfg: config.Config{Home: home}, AgentBranch: agentBranch})
+	m := repos.New(context.Background(), repos.Deps{Cfg: config.Config{Home: home}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch})
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
 	}

@@ -19,7 +19,7 @@ func (b *BranchHandle) Head() *Snapshot {
 	var hash string
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		hash, err = svc.Branches().HeadCommit(context.Background(), b.name)
+		hash, err = svc.HeadCommit(context.Background(), b.name)
 	})
 	if err != nil {
 		t.Fatalf("Head(%s): %v", b.name, err)

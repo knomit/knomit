@@ -6,11 +6,11 @@ import (
 	"fmt"
 
 	"knomit/internal/store/model"
+	"knomit/internal/store/sessions"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
@@ -29,9 +29,11 @@ type mcpStore struct {
 	factQuery   *index.FactQuery
 	graph       *index.GraphStore
 	history     *index.HistoryQuery
-	toolSession store.ToolSessionIndex
-	pipeline    store.PipelineIndex
-	branches    store.BranchIndex
+	toolSession *sessions.ToolIndex
+	pipeline    *sessions.PipelineIndex
+	// headCommit is the tip of a branch (Service.HeadCommit), bound under the
+	// same acquisition as the indices.
+	headCommit func(ctx context.Context, branch string) (string, error)
 	// motifs is alias resolution over the motif vocabulary — read-only here.
 	// The §6 explain surface resolves a fact's motifs to their cluster,
 	// definition and siblings; nothing on this path writes derived state.
@@ -61,7 +63,7 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 		history:     svc.HistoryQuery(),
 		toolSession: svc.ToolSession(),
 		pipeline:    svc.Pipeline(),
-		branches:    svc.Branches(),
+		headCommit:  svc.HeadCommit,
 		motifs:      svc.Motifs(),
 		files:       svc.FactsRepo(),
 	}, release, nil

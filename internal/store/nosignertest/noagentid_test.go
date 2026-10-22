@@ -34,8 +34,8 @@ func TestNoAgentID_AuthoredWriteIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.SetSigner(signer)
-	if got := store.TestFallbackAgentID("agent/test-deadbeef"); got != "" {
-		t.Fatalf("fixture: this binary must have no fallback agent id, got %q", got)
+	if vcs.TestFallbackAgentForTest() != nil {
+		t.Fatal("fixture: this binary must have no fallback agent id installed")
 	}
 	_, err = svc.Facts().WriteFact(ctx, "agent/test-deadbeef", "kb/notes/a.md", factBody, "learn: a", "created")
 	if !errors.Is(err, vcs.ErrNoAgentID) {

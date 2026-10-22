@@ -11,7 +11,7 @@ import (
 )
 
 // VerifyAccepts is this instance's F09 accept list, a tenant of control.db
-// (verify_accepted, control migration 000013). See model.AcceptList for what
+// (verify_accepted, control migration 000013). See internal/store/model/accept_list.go for what
 // an accept waives, and does not.
 type VerifyAccepts struct{ db *sql.DB }
 
@@ -51,26 +51,22 @@ func (a *VerifyAccepts) List() ([]model.Accept, error) {
 	return out, rows.Err()
 }
 
-// For binds the list to one repository: a waiver matches when it names that
-// repository or no repository. A nil receiver is the empty list.
-func (a *VerifyAccepts) For(repoUID string) model.AcceptList {
+// For binds the list to one repository, as the lookup a store takes
+// (store.Service.SetAcceptList): a waiver matches when it names that repository or
+// no repository. A nil receiver is the empty list (a nil func).
+func (a *VerifyAccepts) For(repoUID string) func(commit plumbing.Hash) (model.Accept, bool) {
 	if a == nil {
 		return nil
 	}
-	return acceptsFor{db: a.db, uid: repoUID}
+	return func(commit plumbing.Hash) (model.Accept, bool) { return a.lookup(repoUID, commit) }
 }
 
-type acceptsFor struct {
-	db  *sql.DB
-	uid string
-}
-
-func (f acceptsFor) Lookup(commit plumbing.Hash) (model.Accept, bool) {
+func (a *VerifyAccepts) lookup(repoUID string, commit plumbing.Hash) (model.Accept, bool) {
 	var x model.Accept
-	err := f.db.QueryRow(
+	err := a.db.QueryRow(
 		`SELECT commit_hash, COALESCE(repo_uid, ''), note FROM verify_accepted
 		  WHERE commit_hash = ? AND (repo_uid IS NULL OR repo_uid = ?)`,
-		commit.String(), f.uid).Scan(&x.Commit, &x.RepoUID, &x.Note)
+		commit.String(), repoUID).Scan(&x.Commit, &x.RepoUID, &x.Note)
 	if err != nil {
 		// No row, or any read failure: not accepted. A waiver that cannot be
 		// read waives nothing.

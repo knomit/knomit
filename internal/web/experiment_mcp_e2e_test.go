@@ -22,6 +22,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // experimentServer mirrors incidentServer but also hands back the Manager,
@@ -34,8 +35,8 @@ import (
 func experimentServer(t *testing.T) (http.Handler, *repos.Manager) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -344,7 +345,7 @@ func TestExperiment_LazyHealWhenEligibilityLapses(t *testing.T) {
 		AgentBranch: "agent/successor", Ontology: old.Ontology(), OntologyRoot: "kb",
 	}))
 	require.NoError(t, m.Get("jobA-repo").WithRead(func(svc *store.Service) {
-		_, ok, err := svc.Branches().GetExperiment(context.Background(), "orphaned")
+		_, ok, err := svc.GetExperiment(context.Background(), "orphaned")
 		require.NoError(t, err)
 		require.True(t, ok, "precondition: the row still EXISTS — only eligibility changed")
 	}))

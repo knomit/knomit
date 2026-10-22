@@ -32,7 +32,7 @@ type factsRepo = facts.Repo
 //
 // The plain data types and sentinels callers outside store use live in
 // store/model, which vcs and the callers import directly; nothing is
-// re-exported here but TestFallbackAgentID, below.
+// re-exported here.
 
 // mergeRepo names the embedded merge.Repo field (the alias keeps it apart from
 // the embedded *vcs.Repo's `Repo`). A parent-private name, not an export.
@@ -63,9 +63,3 @@ func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	mr := merge.NewRepo(r)
 	return &repoHandler{Repo: r, factsRepo: facts.NewRepo(r), mergeRepo: mr, syncRepo: remotesync.NewRepo(mr, r)}
 }
-
-// TestFallbackAgentID is vcs.TestFallbackAgentID (the read side; it returns
-// "" outside a test binary). It stays a forward because the installed fallback
-// is vcs package state, which model (a leaf) cannot hold; repos.Manager and
-// web tests call it.
-func TestFallbackAgentID(branch string) string { return vcs.TestFallbackAgentID(branch) }

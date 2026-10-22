@@ -21,6 +21,7 @@ import (
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/web/hal"
 )
 
@@ -499,10 +500,10 @@ func newControlDBTestServerOpt(t *testing.T, originsRoot string, withKey bool) (
 	}
 
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
-		AgentBranch: "agent/test",
-		KeyPath:     keyPath,
-		Machine:     repos.Options{Synchronous: true},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: keyPath,
+		Machine: repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {
@@ -912,8 +913,8 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 // ri.WithRead first would panic on it.
 func TestOriginWrites_RefuseAStoppedManager(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	p := defaultOriginProvider{}
 	calls := []struct {

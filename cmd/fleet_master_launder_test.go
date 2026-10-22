@@ -261,10 +261,10 @@ func (lf *launderFixture) requireNotLaundered(t *testing.T) {
 		t.Error("X reached the fleet's main")
 	}
 	if err := lf.ri.WithRead(func(s *store.Service) {
-		if tip, err := s.Branches().HeadCommit(lf.ctx, "agent/launder"); err == nil && tip != "" {
+		if tip, err := s.HeadCommit(lf.ctx, "agent/launder"); err == nil && tip != "" {
 			t.Errorf("agent/launder exists at %s", tip)
 		}
-		if tip, err := s.Branches().HeadCommit(lf.ctx, "agent/x"); err == nil && tip != "" {
+		if tip, err := s.HeadCommit(lf.ctx, "agent/x"); err == nil && tip != "" {
 			t.Errorf("the refused agent/x is a local branch at %s", tip)
 		}
 	}); err != nil {

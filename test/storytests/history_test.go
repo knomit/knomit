@@ -129,7 +129,7 @@ func TestHistory_LinearParentChain(t *testing.T) {
 	// the storer through Instance() — this is Phase 3 escape-hatch use
 	// for an assertion the DSL doesn't expose directly.
 	r.Instance().WithRead(func(svc *store.Service) {
-		hash, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
+		hash, err := svc.HeadCommit(context.Background(), "agent/test")
 		require.NoError(t, err)
 
 		// Walk via the production CommitObject API on the gogit repo.

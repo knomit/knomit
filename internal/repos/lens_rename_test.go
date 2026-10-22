@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestRenameLens_RekeysWithoutDeleteAndRecreate is the whole point of giving
@@ -211,9 +212,9 @@ func TestRenameLens_PersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *Manager {
 		m := New(context.Background(), Deps{
-			Cfg:         config.Config{Home: dir},
-			AgentBranch: "machine/test",
-			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+			Cfg:     config.Config{Home: dir},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		return m

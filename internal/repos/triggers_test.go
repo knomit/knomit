@@ -143,7 +143,7 @@ func write(t *testing.T, ri *RepoInstance, path string) string {
 
 func head(t *testing.T, ri *RepoInstance) string {
 	t.Helper()
-	h, err := testService(t, ri).Branches().HeadCommit(context.Background(), trigAgent)
+	h, err := testService(t, ri).HeadCommit(context.Background(), trigAgent)
 	require.NoError(t, err)
 	return h
 }
@@ -294,7 +294,7 @@ func TestDispatch_MergeAddModifyDeleteOncePerPath(t *testing.T) {
 	svc := testService(t, ri)
 	write(t, ri, "kb/tasks/b.md")
 	write(t, ri, "kb/tasks/c.md")
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "peer", trigAgent))
+	require.NoError(t, svc.CreateBranch(ctx, "peer", trigAgent))
 	write(t, ri, "kb/tasks/mine.md") // the agent's own work, so the merge is a real merge
 	before := len(firesOf(t, ri, "all"))
 
@@ -455,7 +455,7 @@ func TestDispatch_AuthorVerifiedOnlyUnderF09(t *testing.T) {
 // every fire as unverified. Sabotage: treat an empty cache as "not below".
 func TestDispatch_VerifiedAfterRestart(t *testing.T) {
 	home := t.TempDir()
-	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
+	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	m := New(context.Background(), deps)
 	ri := bootRepo(t, m)
@@ -780,7 +780,7 @@ func TestDispatch_OneRunRowPerRun(t *testing.T) {
 // move the watermark update into tx1, or before the emits.
 func TestDispatch_CrashBetweenFireAndWatermark(t *testing.T) {
 	home := t.TempDir()
-	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
+	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	m := New(context.Background(), deps)
 	ri := bootRepo(t, m)
@@ -918,10 +918,10 @@ func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 func TestDispatch_NotStartedReadOnlyOrSubscribed(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)

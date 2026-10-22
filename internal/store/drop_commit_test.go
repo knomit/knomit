@@ -80,7 +80,7 @@ func TestDrop_ReplaysMergesAndLeavesOutTheOneThatBroughtTheDroppedCommit(t *test
 	require.Contains(t, h.branchFiles(hostBranch), "kb/notes/exp.md", "fixture: the experiment is merged")
 
 	// A side branch whose commit is the one to drop, merged in.
-	require.NoError(t, h.svc.Branches().CreateBranch(ctx, "agent/side", hostBranch))
+	require.NoError(t, h.svc.CreateBranch(ctx, "agent/side", hostBranch))
 	bad, err := h.svc.rh.CommitFilesForTest("agent/side", map[string]string{"kb/notes/bad.md": testFactBody("bad", 0.9, nil)}, "bad")
 	require.NoError(t, err)
 	_, err = h.svc.MergePushed(ctx, "agent/side", hostBranch, plumbing.NewHash(bad), "")

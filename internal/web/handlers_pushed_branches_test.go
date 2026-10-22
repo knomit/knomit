@@ -16,6 +16,7 @@ import (
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 const (
@@ -33,8 +34,8 @@ func pbFact(line string) string {
 func pushedServer(t *testing.T, s *Server) (http.Handler, *repos.Manager) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: pbAgent,
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID(pbAgent), AgentBranch: pbAgent,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -42,7 +43,7 @@ func pushedServer(t *testing.T, s *Server) (http.Handler, *repos.Manager) {
 	require.NoError(t, m.Get(pbRepo).WithRead(func(svc *store.Service) {
 		_, err := svc.Facts().WriteFact(context.Background(), pbAgent, "kb/architecture/demo/aaaaaaaa.md", pbFact("original"), "seed", "learn")
 		require.NoError(t, err)
-		require.NoError(t, svc.Branches().CreateBranch(context.Background(), pbPeer, pbAgent))
+		require.NoError(t, svc.CreateBranch(context.Background(), pbPeer, pbAgent))
 	}))
 	s.Manager = m
 	s.OntologyRoot = "kb"
@@ -65,7 +66,7 @@ func pbHead(t *testing.T, m *repos.Manager, branch string) string {
 	var h string
 	require.NoError(t, m.Get(pbRepo).WithRead(func(svc *store.Service) {
 		var err error
-		h, err = svc.Branches().HeadCommit(context.Background(), branch)
+		h, err = svc.HeadCommit(context.Background(), branch)
 		require.NoError(t, err)
 	}))
 	return h

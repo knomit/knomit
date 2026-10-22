@@ -1151,12 +1151,12 @@ func (m *Manager) fleetBranchPublished(ctx context.Context, ri *RepoInstance) (b
 			rerr = errors.New("fleet repository is not open")
 			return
 		}
-		agent, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+		agent, err := svc.HeadCommit(ctx, ri.AgentBranch())
 		if err != nil {
 			rerr = err
 			return
 		}
-		main, err := svc.Branches().HeadCommit(ctx, svc.Remote().UpstreamBranch())
+		main, err := svc.HeadCommit(ctx, svc.Remote().UpstreamBranch())
 		if err != nil {
 			rerr = err
 			return

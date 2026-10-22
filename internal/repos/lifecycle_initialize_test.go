@@ -24,9 +24,9 @@ import (
 func newRemoteModeManager(t *testing.T, dir string) *Manager {
 	t.Helper()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: "agent/test-abc",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })
@@ -506,10 +506,10 @@ func TestCreate_InitializeSignsTheOntologyCommitWithTheInstanceKey(t *testing.T)
 
 	instance := testsigner.Named("initialize-instance")
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: "agent/test-abc",
-		Signer:      instance,
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+		Signer:  instance,
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })

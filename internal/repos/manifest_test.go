@@ -366,7 +366,7 @@ func mustHeadCommit(t *testing.T, ri *RepoInstance, ctx context.Context) string 
 	t.Helper()
 	var hash string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		h, herr := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+		h, herr := svc.HeadCommit(ctx, ri.AgentBranch())
 		require.NoError(t, herr)
 		hash = h
 	}))

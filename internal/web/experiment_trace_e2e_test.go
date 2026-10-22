@@ -22,7 +22,7 @@ func headIn(t *testing.T, m *repos.Manager, repo, branch string) string {
 	t.Helper()
 	var h string
 	require.NoError(t, m.Get(repo).WithRead(func(svc *store.Service) {
-		got, err := svc.Branches().HeadCommit(context.Background(), branch)
+		got, err := svc.HeadCommit(context.Background(), branch)
 		if err == nil {
 			h = got
 		}

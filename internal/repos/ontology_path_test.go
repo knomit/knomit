@@ -10,6 +10,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestOntologyPathsAreCanonicalAndLegacy pins the two ontology locations and
@@ -115,7 +116,7 @@ func TestLoadOntology_ReadsCanonicalPath(t *testing.T) {
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, canonicalWinsYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
+		Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -139,7 +140,7 @@ func TestLoadOntology_FallsBackToLegacyPath(t *testing.T) {
 	dir, agentBranch := bootKnomitWithLegacyOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
+		Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -165,7 +166,7 @@ func TestLoadOntology_FallsBackToPreDotPath(t *testing.T) {
 	dir, agentBranch := bootKnomitWithPreDotOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
+		Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -186,7 +187,7 @@ func TestLoadOntology_PresetRefreshWritesBackToThePreDotPath(t *testing.T) {
 	dir, agentBranch := bootKnomitWithPreDotOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
+		Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -219,7 +220,7 @@ func TestLoadOntology_PresetRefreshWritesBackToThePathItRead(t *testing.T) {
 	dir, agentBranch := bootKnomitWithLegacyOnlyOntology(t, staleCodeOntologyYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
+		Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

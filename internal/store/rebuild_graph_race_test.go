@@ -37,7 +37,7 @@ func TestRebuild_GraphSnapshotDoesNotResurrectAConcurrentCrossBranchDelete(t *te
 
 	// A second branch holding the ONLY version of a fact, so deleting it there
 	// removes its facts row and soft-deletes its node.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	const racePath = "kb/feature-only.md"
 	_, err = svc.Facts().WriteFact(ctx, "feature", racePath, testFactBody("feature only", 0.9, nil), "feature fact", "")
 	require.NoError(t, err)

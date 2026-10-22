@@ -39,10 +39,10 @@ func fleetHostDeps(t *testing.T, dir string) Deps {
 		Cfg: config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir,
 			TLS:               config.TLSConfig{Dir: filepath.Join(home, "pki"), Addr: "127.0.0.1:0"},
 			ExternalAddresses: []string{"https://fleet-host.example:19279"}},
-		AgentBranch: "agent/test-fleet",
-		Signer:      testsigner.Signer(),
-		KeyPath:     keyPath,
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		AgentID: testsigner.FixtureAgentID("agent/test-fleet"), AgentBranch: "agent/test-fleet",
+		Signer:  testsigner.Signer(),
+		KeyPath: keyPath,
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	}
 }
 

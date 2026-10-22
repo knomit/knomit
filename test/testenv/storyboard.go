@@ -213,6 +213,7 @@ func (sb *Storyboard) repoConfig(name string) config.Config {
 func (sb *Storyboard) bootManager(cfg config.Config, keyPath string) (*repos.Manager, error) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:         cfg,
+		AgentID:     "test", // the id the test fixture derives from agent/test; Manager.AgentID has no fallback
 		AgentBranch: "agent/test",
 		Embedder:    sb.embedder,
 		KeyPath:     keyPath,
@@ -391,7 +392,7 @@ func (r *RepoHandle) BranchFrom(name, fromBranch string) *BranchHandle {
 	}
 	var createErr error
 	r.ri.WithRead(func(svc *store.Service) {
-		createErr = svc.Branches().CreateBranch(context.Background(), name, fromBranch)
+		createErr = svc.CreateBranch(context.Background(), name, fromBranch)
 	})
 	if createErr != nil {
 		t.Fatalf("BranchFrom(%s from %s): %v", name, fromBranch, createErr)

@@ -20,6 +20,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // F07 PR 4: `do: push` and knomit.push() wake this machine's sync loop.
@@ -507,10 +508,10 @@ func newOriginTriggerRepo(t *testing.T, entries ...string) (ri *RepoInstance, ba
 	home := filepath.Join(dir, "home")
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -571,7 +572,7 @@ func TestPush_OwnBranchOnly(t *testing.T) {
 	base := ticks.Load()
 
 	svc := testService(t, ri)
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/peer-0badc0de", trigAgent))
+	require.NoError(t, svc.CreateBranch(context.Background(), "agent/peer-0badc0de", trigAgent))
 	h := write(t, ri, "kb/tasks/a.md")
 	require.Len(t, kickedOf(t, ri, "fast"), 1)
 	require.Eventually(t, func() bool { return bareRef(t, bare, "refs/heads/"+trigAgent) == h },
@@ -665,8 +666,8 @@ func TestPush_SyncStageWiresLocalLoop(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb",
 			Git: config.GitConfig{LocalReconcileInterval: time.Hour}},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
 		// Machine.Synchronous deliberately NOT set: the stage's loop is the point.
 	})
 	t.Cleanup(func() { _ = m.Close() })
@@ -680,7 +681,7 @@ func TestPush_SyncStageWiresLocalLoop(t *testing.T) {
 	require.Len(t, kickedOf(t, ri, "fast"), 1)
 	svc := testService(t, ri)
 	require.Eventually(t, func() bool {
-		m, err := svc.Branches().HeadCommit(context.Background(), svc.Remote().UpstreamBranch())
+		m, err := svc.HeadCommit(context.Background(), svc.Remote().UpstreamBranch())
 		return err == nil && m == h && localTicks.Load() == 2
 	}, 10*time.Second, 10*time.Millisecond, "a push fire must move main to the agent head within the countdown, not the hour")
 }
@@ -712,9 +713,9 @@ func TestPush_KickAcrossSyncRestart(t *testing.T) {
 		}
 	})
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
 		// Machine.Synchronous deliberately NOT set: the restarted loop is the point.
 	})
 	require.NoError(t, m.Start())

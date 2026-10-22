@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // remoteFrames pulls every `event: remote` payload out of an SSE body, in order.
@@ -90,10 +91,10 @@ func TestRepoRemoteEvents_EdgesOnly(t *testing.T) {
 	url := seedBareKBOn(t, filepath.Join(originsRoot, "alpha.git"), "main")
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     repos.Options{Synchronous: true},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: originsRoot},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: repos.Options{Synchronous: true},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {
@@ -223,8 +224,8 @@ func openIndexStream(t *testing.T, r http.Handler) (*streamRecorder, func()) {
 func TestRepoIndexEvents_StartupHealEmitsIndexingThenReady(t *testing.T) {
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
@@ -283,8 +284,8 @@ func heldIndexServer(t *testing.T) (http.Handler, *repos.Manager, func()) {
 	open := func() { releaseOnce.Do(func() { close(release) }) }
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		Machine: repos.Options{Synchronous: true, Hook: func(_ repos.StageID, point string, ctx context.Context) {
 			if point != "index-job" || !armed.Load() {
 				return

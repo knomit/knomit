@@ -29,7 +29,9 @@ func (s *Service) CommitAgent(h plumbing.Hash) string {
 
 // SetAcceptList installs the accept list, bound to this repository. Like
 // SetSigner it must be re-applied on every store reopen.
-func (s *Service) SetAcceptList(a model.AcceptList) { s.rh.SetAcceptList(a) }
+func (s *Service) SetAcceptList(a func(commit plumbing.Hash) (model.Accept, bool)) {
+	s.rh.SetAcceptList(a)
+}
 
 // SetOwnKeys installs the source of this instance's historical keys (its
 // fleet member record's versions) for E4. Re-applied on every store reopen,

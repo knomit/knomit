@@ -12,6 +12,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // originFactBody is a minimal valid fact: the frontmatter the indexer needs
@@ -27,10 +28,10 @@ func newPeerManager(t *testing.T, agent string) *repos.Manager {
 	t.Helper()
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
-		AgentBranch: agent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     repos.Options{Synchronous: true},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID(agent), AgentBranch: agent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

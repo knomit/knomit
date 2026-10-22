@@ -520,7 +520,7 @@ func TestMission_SameTaskEditedMerges(t *testing.T) {
 
 func (n *missionNode) agentTip(t *testing.T) string {
 	t.Helper()
-	tip, err := n.svc(t).Branches().HeadCommit(context.Background(), n.branch)
+	tip, err := n.svc(t).HeadCommit(context.Background(), n.branch)
 	require.NoError(t, err)
 	return tip
 }

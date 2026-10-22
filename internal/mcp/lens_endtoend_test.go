@@ -19,6 +19,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // This file is the ONE end-to-end federation test that goes through the REAL
@@ -50,8 +51,8 @@ func newLensE2E(t *testing.T) (m *repos.Manager, repoA, repoB *repos.RepoInstanc
 
 	dir := t.TempDir()
 	m = repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

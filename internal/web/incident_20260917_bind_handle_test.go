@@ -39,6 +39,7 @@ import (
 	"knomit/internal/client/sessions"
 	"knomit/internal/config"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // incidentServer stands up the real API router over a Manager holding two
@@ -49,8 +50,8 @@ import (
 func incidentServer(t *testing.T) (http.Handler, *sessions.Store) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

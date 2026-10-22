@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -22,7 +21,7 @@ const pathsAgentID = "opaque-1"
 
 func pathsManager(t *testing.T, root string) *Manager {
 	t.Helper()
-	require.NotEqual(t, pathsAgentID, store.TestFallbackAgentID(tmplAgent), "fixture: the id must differ from the fallback's")
+	require.NotEqual(t, pathsAgentID, testsigner.FixtureAgentID(tmplAgent), "fixture: the id must differ from the fallback's")
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: root},
@@ -45,7 +44,7 @@ func writeAndAuthor(t *testing.T, ri *RepoInstance) string {
 	_, err := svc.Facts().WriteFact(ctx, ri.AgentBranch(), "kb/notes/paths.md",
 		"---\ntype: observation\nconfidence: 0.9\n---\n# p\n\nbody\n", "learn: p", "learn")
 	require.NoError(t, err)
-	tip, err := svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+	tip, err := svc.HeadCommit(ctx, ri.AgentBranch())
 	require.NoError(t, err)
 	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(tip))
 	require.NoError(t, err)
@@ -104,4 +103,12 @@ func TestCreatePaths_AuthorAsThePersistedAgentID(t *testing.T) {
 			require.Regexp(t, `^`+pathsAgentID+`\+[a-z-]+@agents\.knomit\.io$`, got, "author of the %s path (want %s with an operation)", tc.name, want)
 		})
 	}
+}
+
+// TestManagerAgentID_NoneGivenReportsNone: a Manager built without
+// Deps.AgentID has no agent id, in a test binary as in production. It must not
+// derive one from the agent branch's name or from the fixture signer.
+func TestManagerAgentID_NoneGivenReportsNone(t *testing.T) {
+	m := New(context.Background(), Deps{AgentBranch: tmplAgent})
+	require.Equal(t, "", m.AgentID())
 }

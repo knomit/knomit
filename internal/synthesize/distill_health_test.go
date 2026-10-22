@@ -2,7 +2,7 @@ package synthesize
 
 import (
 	"context"
-	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -101,17 +101,6 @@ func TestDistillDeclines_NoLineWhenNoDistillItems(t *testing.T) {
 		"a prune-only session must not report a distill line; the line is about distill work that happened")
 }
 
-// failingPipelineIndex faults only AnsweredDistillResponses. The rest of the
-// interface is embedded and never called; a nil-method panic would be a louder
-// failure than a wrong assertion, which is the behaviour we want from a stub.
-type failingPipelineIndex struct {
-	store.PipelineIndex
-}
-
-func (failingPipelineIndex) AnsweredDistillResponses(context.Context, string) ([]string, error) {
-	return nil, errors.New("session db unavailable")
-}
-
 // A failed read must SAY so. It used to return "" and look exactly like a clean
 // session — one signal for two opposite situations, and the silent one was the
 // failure. It stays fail-soft: the function returns no error at all, so a
@@ -121,10 +110,21 @@ func (failingPipelineIndex) AnsweredDistillResponses(context.Context, string) ([
 // This exercises distillDeclineHealth directly rather than through
 // ContinueSession, because the engine reaches its indices through a concrete
 // *store.Service and there is no seam to fault the real store mid-session —
-// the same limitation pipeline.go records for the answer-write path.
+// the same limitation pipeline.go records for the answer-write path. The fault
+// is real: the Service is closed, which closes the session database the read
+// goes through. The same call on the open Service is the control: it must NOT
+// say unavailable, or the closure is not what the test is measuring.
 func TestDistillDeclineHealth_StoreErrorSaysUnavailable(t *testing.T) {
-	line := distillDeclineHealth(context.Background(),
-		Deps{Pipeline: failingPipelineIndex{}}, "any-session")
+	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	deps := Deps{Pipeline: svc.Pipeline()}
+
+	open := distillDeclineHealth(context.Background(), deps, "any-session")
+	require.NotContains(t, open, "unavailable", "control: an open session database must read cleanly")
+
+	require.NoError(t, svc.Close())
+	line := distillDeclineHealth(context.Background(), deps, "any-session")
 
 	require.Equal(t, "distill declines: unavailable (store read failed)", line,
 		"a failed read must be distinguishable from a session that declined nothing")

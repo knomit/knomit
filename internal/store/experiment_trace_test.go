@@ -42,7 +42,7 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	ctx, err := model.WithAgentTrace(context.Background(), model.Trailers{Trace: "task-2"})
 	require.NoError(t, err)
 	msgOf := func(branch string) string {
-		h, err := svc.Branches().HeadCommit(ctx, branch)
+		h, err := svc.HeadCommit(ctx, branch)
 		require.NoError(t, err)
 		info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(h))
 		require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	}
 
 	// A plain merge between two branches, under a traced ctx.
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "agent/peer", testAgentBranch))
+	require.NoError(t, svc.CreateBranch(context.Background(), "agent/peer", testAgentBranch))
 	writeMergeFact(t, svc, "agent/peer", "kb/peer.md", "peer", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/own.md", "own", "body")
 	require.NoError(t, svc.rh.MergeBranch(ctx, "agent/peer", testAgentBranch, merge.StrategyLocalWins))

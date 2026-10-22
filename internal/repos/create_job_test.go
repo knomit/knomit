@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestStartCreate_DeadlineRollsBackToTerminalState pins requirement (2) of the
@@ -25,8 +26,8 @@ import (
 func TestStartCreate_DeadlineRollsBackToTerminalState(t *testing.T) {
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		// Already expired by the time the goroutine runs.
 		CreateTimeout: time.Nanosecond,
 	})
@@ -81,8 +82,8 @@ func TestStartCreate_DeadlineRollsBackToTerminalState(t *testing.T) {
 // asserted in TestPostRepos_ClientDisconnectDoesNotAbortTheCreate.
 func TestStartCreate_DoesNotUseTheCallersContext(t *testing.T) {
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -132,10 +133,10 @@ func TestStartCreate_DoesNotUseTheCallersContext(t *testing.T) {
 func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	g := newGate(StageIndex, "index-job")
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "machine/test",
-		Embedder:    testEmbedder{},
-		Machine:     Options{Hook: g.hook},
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: testEmbedder{},
+		Machine:  Options{Hook: g.hook},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -210,9 +211,9 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 func TestManagerClose_DrainsInFlightCreate(t *testing.T) {
 	root := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch: "machine/test",
-		Embedder:    testEmbedder{},
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: testEmbedder{},
 	})
 	require.NoError(t, m.Start())
 	url := seedBareRemoteWithFact(t, filepath.Join(root, "remote.git"))
@@ -284,10 +285,10 @@ func TestManagerClose_DrainsInFlightCreate(t *testing.T) {
 func TestManagerClose_DrainsAnIndexJobHeldAtTheHook(t *testing.T) {
 	g := newGate(StageIndex, "index-job")
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "machine/test",
-		Embedder:    testEmbedder{},
-		Machine:     Options{Hook: g.hook},
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: testEmbedder{},
+		Machine:  Options{Hook: g.hook},
 	})
 	require.NoError(t, m.Start())
 

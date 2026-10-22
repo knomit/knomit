@@ -16,6 +16,7 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/playbooks"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // templatesServer is an API router over a Manager that mounts the pinned
@@ -24,8 +25,8 @@ func templatesServer(t *testing.T, mountPlaybooks bool) (http.Handler, *repos.Ma
 	t.Helper()
 	root := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb", LocalOriginRoot: root},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb", LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

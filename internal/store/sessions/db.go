@@ -1,9 +1,17 @@
 // Package sessions owns the ephemeral session database: the separate SQLite
 // file holding in-flight tool-session paging state and the review/hypothesize
 // work-stealing pipeline, plus the pipeline watermarks that live in the MAIN
-// database. It is a child of the store package; the store facade wires these
-// types into its Service; the row shapes callers outside store use live in
-// store/model.
+// database.
+//
+// It is a child of the store package and, unlike vcs, importable: it writes
+// only SQLite (never a git object or ref), so nothing outside the store needs
+// to be kept from holding its types. Callers get a *PipelineIndex from
+// Service.Pipeline and a *ToolIndex from Service.ToolSession and import this
+// package to name them; the row shapes live in store/model. Open, NewPipelineIndex,
+// NewToolIndex and ReapIdle take raw database handles and are exported only
+// because package store wires them (TestStoreSessionsPlumbing_OnlyInsideStore
+// keeps every other package from calling them). No method here assumes a
+// branch lock: each is a self-contained SQL statement or transaction.
 package sessions
 
 import (

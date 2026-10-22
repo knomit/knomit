@@ -17,6 +17,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // pathRecorder wraps a handler and records every request path, so a test can
@@ -114,8 +115,8 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 			OntologyRoot:    "kb",
 			LocalOriginRoot: f.originRoot,
 		},
-		AgentBranch: "machine/test",
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, f.m.Start())
 	t.Cleanup(func() { _ = f.m.Close() })

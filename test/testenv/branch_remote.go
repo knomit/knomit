@@ -57,7 +57,7 @@ func (b *BranchHandle) Sync() remotesync.SyncResult {
 		var headHash string
 		var headErr error
 		b.repo.ri.WithRead(func(svc *store.Service) {
-			headHash, headErr = svc.Branches().HeadCommit(context.Background(), b.name)
+			headHash, headErr = svc.HeadCommit(context.Background(), b.name)
 		})
 		if headErr != nil {
 			t.Fatalf("Sync(%s): resolve new HEAD: %v", b.name, headErr)

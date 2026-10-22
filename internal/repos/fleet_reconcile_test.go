@@ -37,11 +37,11 @@ func bootFleet(t *testing.T, dir string, mut func(*config.Config)) (*Manager, fu
 	key, err := testsigner.WriteNamedKey(cfg.Home, "fleet-test")
 	require.NoError(t, err)
 	m := New(context.Background(), Deps{
-		Cfg:         cfg,
-		AgentBranch: "agent/test-fleet",
-		Signer:      testsigner.Named("fleet-test"),
-		KeyPath:     key,
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     cfg,
+		AgentID: testsigner.FixtureAgentID("agent/test-fleet"), AgentBranch: "agent/test-fleet",
+		Signer:  testsigner.Named("fleet-test"),
+		KeyPath: key,
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start(), "the fleet reconcile never fails Start")
 	m.fleetBootWg.Wait()
@@ -288,7 +288,7 @@ func TestFleetRecord_OSArchFromRuntime(t *testing.T) {
 
 // F10-6: git: /git only when this instance mounts /git.
 func TestFleetRecord_GitOnlyWhenServed(t *testing.T) {
-	m := &Manager{deps: Deps{AgentBranch: "agent/x"}}
+	m := &Manager{deps: Deps{AgentID: testsigner.FixtureAgentID("agent/x"), AgentBranch: "agent/x"}}
 	require.Empty(t, m.advertised().Git, "git.serve off")
 	m.deps.Cfg.Git.Serve = true
 	require.Equal(t, "/git", m.advertised().Git)

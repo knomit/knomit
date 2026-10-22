@@ -30,7 +30,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter *index
 		// The target is a clone of the remote, so its HEAD is the branch the
 		// remote named as its default. Take the name from there, never from a
 		// guess.
-		b, err := target.Branches().DefaultBranch(ctx)
+		b, err := target.DefaultBranch(ctx)
 		if err != nil || b == "" {
 			return nil, fmt.Errorf("Replay: DefaultBranch not set and the target has no HEAD branch: %w", model.ErrNoConsensusBranch)
 		}

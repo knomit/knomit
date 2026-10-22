@@ -59,7 +59,7 @@ func (b *BranchHandle) mergeFrom(src *BranchHandle, strategy merge.ConflictStrat
 	var newHead string
 	var headErr error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		newHead, headErr = svc.Branches().HeadCommit(context.Background(), b.name)
+		newHead, headErr = svc.HeadCommit(context.Background(), b.name)
 	})
 	if headErr != nil {
 		t.Fatalf("MergeFrom(%s -> %s): resolve new HEAD: %v", src.name, b.name, headErr)

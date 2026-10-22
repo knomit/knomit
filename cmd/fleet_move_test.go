@@ -156,7 +156,7 @@ func localRev(t *testing.T, ri *repos.RepoInstance, branch string) string {
 	t.Helper()
 	var tip string
 	if err := ri.WithRead(func(s *store.Service) {
-		tip, _ = s.Branches().HeadCommit(context.Background(), branch)
+		tip, _ = s.HeadCommit(context.Background(), branch)
 	}); err != nil {
 		t.Fatal(err)
 	}

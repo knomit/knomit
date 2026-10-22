@@ -11,6 +11,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestOpenGit_UpstreamBranchSurvivesReboot pins that the resolved upstream
@@ -53,9 +54,9 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 
 	boot := func() (*Manager, func()) {
 		m := New(context.Background(), Deps{
-			Cfg:         cfg,
-			AgentBranch: "agent/test-abc",
-			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+			Cfg:     cfg,
+			AgentID: testsigner.FixtureAgentID("agent/test-abc"), AgentBranch: "agent/test-abc",
+			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 		require.NoError(t, m.Start())
 		// Start opens what the registry says exists — a reboot over an

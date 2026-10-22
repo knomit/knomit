@@ -14,7 +14,7 @@
 // the single chokepoint after a ref moves: commit log, then the index
 // manager's Sync, then experiment activity, then the onCommit observer. The
 // parent wires the index manager and the observers in as values
-// (SetIndexManager, SetOnCommit, SetOnDrop, SetOnDropBranchRows,
+// (SetIndexSync, SetOnCommit, SetOnDrop, SetOnDropBranchRows,
 // SetConsensusBranchFunc); this package never calls up into the parent, and
 // it names none of the review pipeline's tables (a dropped branch's rows in
 // those are deleted by the SetOnDropBranchRows hook).

@@ -18,6 +18,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // A text/plain body is what a cross-site HTML form or no-cors fetch sends. The
@@ -56,8 +57,8 @@ func TestDecodeJSON_PlainTextFactPostIsRefusedThroughTheRouter(t *testing.T) {
 // handler, while a body that is present must still be JSON.
 func TestDecodeOptionalJSON_ExperimentCommitThroughTheRouter(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

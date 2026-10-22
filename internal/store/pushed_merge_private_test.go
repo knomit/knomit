@@ -36,7 +36,7 @@ var guardedMerges = map[string]mergeFn{
 func (h *pushHost) branchWith(branch, from string, kv ...string) plumbing.Hash {
 	h.t.Helper()
 	ctx := context.Background()
-	require.NoError(h.t, h.svc.Branches().CreateBranch(ctx, branch, from))
+	require.NoError(h.t, h.svc.CreateBranch(ctx, branch, from))
 	fi := h.svc.Facts()
 	for i := 0; i+1 < len(kv); i += 2 {
 		_, _, err := fi.WriteFileExactForTest(ctx, branch, kv[i], kv[i+1], "write "+kv[i], "edit", "")
@@ -58,7 +58,7 @@ func TestMergeGuard_RefusesPrivateRevertMergesKB(t *testing.T) {
 			h.svc.SetSigner(newTestSigner(t))
 			old := h.branchFiles(hostBranch)[fact.OntologyFile]
 			fork := hostBranch + "-fork"
-			require.NoError(t, h.svc.Branches().CreateBranch(ctx, fork, hostBranch)) // pre-edit fork point
+			require.NoError(t, h.svc.CreateBranch(ctx, fork, hostBranch)) // pre-edit fork point
 
 			// The host's agent branch changes its ontology.
 			newer := kbOntology(verify.VerifyOff) + "# host edit\n"

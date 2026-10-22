@@ -10,34 +10,8 @@ import (
 	"knomit/internal/store/model"
 
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
-
-// stubBranchLister is a tiny stub of store.BranchIndex used by the branches
-// handler tests. Only ListBranches is exercised here; other methods panic
-// because they should never be called from these tests.
-type stubBranchLister struct {
-	store.BranchIndex
-	branches []model.Branch
-}
-
-func (s *stubBranchLister) ListBranches(_ context.Context) ([]model.Branch, error) {
-	return s.branches, nil
-}
-
-// newTestRepoWithBranches stashes a stub BranchIndex on a RepoInstance so
-// the branches handler can read it via the standard path. In the real code,
-// RepoInstance.WithRead exposes a *store.Service whose Branches() returns a
-// BranchIndex; for the test we intercept at the handler's entry point by
-// overriding the per-request branch lister via the test-only context helper
-// below.
-//
-// TODO(plan-02): replace this shim with a proper mock once uber-go/mock
-// generation is wired up for store interfaces.
-func newTestRepoWithBranches(_ *testing.T, _ []model.Branch) *repos.RepoInstance {
-	return &repos.RepoInstance{}
-}
 
 func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 	// Wire a manager with one repo.

@@ -23,6 +23,7 @@ import (
 	"knomit/internal/store/merge"
 	"knomit/internal/store/remotesync"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // ---- F07 PR 2: `on: due`.
@@ -376,7 +377,7 @@ func TestDue_BodyEditDoesNotRefire(t *testing.T) {
 // marks in tx1 (before the fire rows), or before the emits.
 func TestDue_CrashBeforeMarkRefiresAndLogsBoth(t *testing.T) {
 	home := t.TempDir()
-	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
+	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	clock := newFakeClock()
 	dueHooks(t, clock, triggerHooks{})
@@ -419,8 +420,8 @@ func TestDue_SweepRunsOnReconcileTick(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb",
 			Git: config.GitConfig{LocalReconcileInterval: 100 * time.Millisecond}},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
 		// Machine.Synchronous deliberately NOT set: the tick is the point.
 	})
 	t.Cleanup(func() { m.Close() })
@@ -713,10 +714,10 @@ func TestDue_NotOnReadOnlySubscribedOrExp(t *testing.T) {
 
 	home := t.TempDir()
 	ro := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch: trigAgent,
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = ro.Close() })
 	rri := bootRepo(t, ro)

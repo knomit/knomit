@@ -18,6 +18,7 @@ import (
 	"knomit/internal/pki"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // TestAuthConfigFromSpec_BasicSplitsUserPassword is the regression test for the
@@ -66,9 +67,9 @@ func TestManager_ResolveAuth_SSHUsesManagerKeyPath(t *testing.T) {
 	writeTestKey(t, keyPath)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{},
-		AgentBranch: "agent/test",
-		KeyPath:     keyPath,
+		Cfg:     config.Config{},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: keyPath,
 	})
 
 	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
@@ -83,9 +84,9 @@ func TestManager_ResolveAuth_SSHAutoDetectedFromURL(t *testing.T) {
 	writeTestKey(t, keyPath)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{},
-		AgentBranch: "agent/test",
-		KeyPath:     keyPath,
+		Cfg:     config.Config{},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: keyPath,
 	})
 
 	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{}, "git@github.com:user/repo.git")
@@ -97,9 +98,9 @@ func TestManager_ResolveAuth_SSHAutoDetectedFromURL(t *testing.T) {
 // has no key path configured.
 func TestManager_ResolveAuth_SSHNoKeyFails(t *testing.T) {
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{},
-		AgentBranch: "agent/test",
-		KeyPath:     "",
+		Cfg:     config.Config{},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: "",
 	})
 
 	_, _, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
@@ -110,9 +111,9 @@ func TestManager_ResolveAuth_SSHNoKeyFails(t *testing.T) {
 // TestManager_ResolveAuth_TokenNoKey verifies token auth works without a key path.
 func TestManager_ResolveAuth_TokenNoKey(t *testing.T) {
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{},
-		AgentBranch: "agent/test",
-		KeyPath:     "",
+		Cfg:     config.Config{},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: "",
 	})
 
 	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_abc"}, "https://github.com/user/repo.git")
@@ -130,9 +131,9 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 	writeTestKey(t, keyPath)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")},
-		AgentBranch: "agent/test",
-		KeyPath:     keyPath,
+		Cfg:     config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: keyPath,
 	})
 
 	for _, url := range []string{
@@ -154,14 +155,14 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 // while network origins are never gated.
 func TestManager_ResolveAuth_GatesLocalOrigin(t *testing.T) {
 	// No root configured: local origins are disabled, network origins pass.
-	off := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
+	off := New(context.Background(), Deps{Cfg: config.Config{}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
 	_, _, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/srv/kb"))
 	require.Error(t, err)
 	_, _, err = off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
 	require.NoError(t, err)
 
 	// Root configured: in-root local origin passes, out-of-root is rejected.
-	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")}, AgentBranch: "agent/test"})
+	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
 	_, _, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, filepath.Join(hostAbs(t, "/srv/kb"), "work"))
 	require.NoError(t, err)
 	_, _, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/etc/passwd"))
@@ -181,7 +182,7 @@ func TestResolveAuth_CertIsTransportLevel(t *testing.T) {
 // origin knomit did not decide (the edge's validateURLAuth refuses it first;
 // this pins the repos layer on its own).
 func TestResolveOrigin_CertIsNotAnInput(t *testing.T) {
-	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
+	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
 	for _, u := range []string{"https://github.com/o/r.git", "https://h:8443/git/kb", "ssh://git@h/kb"} {
 		_, err := m.ResolveOrigin(context.Background(), OriginSpec{URL: u, AuthMethod: "cert"})
 		require.ErrorIs(t, err, ErrCertNotAnInput, u)

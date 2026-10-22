@@ -14,6 +14,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 const webContextOntology = `id: t
@@ -34,7 +35,7 @@ topics:
 func contextManager(t *testing.T, names ...string) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg: config.Config{Home: t.TempDir()}, AgentBranch: "machine/test", Machine: repos.Options{Synchronous: true},
+		Cfg: config.Config{Home: t.TempDir()}, AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test", Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

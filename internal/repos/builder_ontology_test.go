@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // A repo whose Identify stage has not run (or has exited for a swap)
@@ -58,8 +59,8 @@ func bootKnomitWithStaleOntologyAt(t *testing.T, ontologyPath, staleYAML string)
 	agentBranch = "agent/test-stale"
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
@@ -92,8 +93,8 @@ func bootKnomitWithLegacyOnlyOntology(t *testing.T, staleYAML string) (dir, agen
 	agentBranch = "agent/test-stale"
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
@@ -126,8 +127,8 @@ func bootKnomitWithPreDotOnlyOntology(t *testing.T, staleYAML string) (dir, agen
 	agentBranch = "agent/test-stale"
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
@@ -185,8 +186,8 @@ func bootKnomitWithBothOntologies(t *testing.T, canonicalYAML, legacyYAML string
 	agentBranch = "agent/test-stale"
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
@@ -217,7 +218,7 @@ func TestLoadOntology_PrefersCanonicalOverLegacy(t *testing.T) {
 	dir, agentBranch := bootKnomitWithBothOntologies(t, canonicalWinsYAML, legacyLosesYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg: config.Config{Home: dir}, AgentBranch: agentBranch,
+		Cfg: config.Config{Home: dir}, AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -241,8 +242,8 @@ func TestLoadOntology_RefreshesPresetDerivedSubset(t *testing.T) {
 	// Reopen against the same on-disk state — loadOntology should now run
 	// the refresh path and rewrite the stored ontology to match CodeOntology.
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -288,8 +289,8 @@ topics:
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, divergedYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -339,8 +340,8 @@ topics:
 	t.Cleanup(func() { log.Logger = origLogger })
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -392,8 +393,8 @@ topics:
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, futureYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -429,8 +430,8 @@ func TestLoadOntology_MalformedOntologyRefusesWritesRatherThanSubstituting(t *te
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, brokenYAML)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -452,8 +453,8 @@ func TestLoadOntology_NoOntologyFileRefusesWrites(t *testing.T) {
 	dir, agentBranch := bootKnomitWithNoOntology(t)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -473,8 +474,8 @@ func bootKnomitWithNoOntology(t *testing.T) (dir, agentBranch string) {
 	agentBranch = "agent/test-stale"
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
@@ -498,8 +499,8 @@ func TestBindingOfLens_RefusesWritesToARepoWithNoOntology(t *testing.T) {
 	dir, agentBranch := bootKnomitWithNoOntology(t)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
@@ -542,8 +543,8 @@ topics:
 	t.Cleanup(func() { log.Logger = origLogger })
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: dir},
-		AgentBranch: agentBranch,
+		Cfg:     config.Config{Home: dir},
+		AgentID: testsigner.FixtureAgentID(agentBranch), AgentBranch: agentBranch,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

@@ -101,7 +101,7 @@ func TestDrop_AnUnfoldedSideIsReplayedParentsFirst(t *testing.T) {
 	ctx := context.Background()
 	h := newPushHost(t, verify.VerifyOff, 0)
 	h.svc.SetSigner(newTestSigner(t))
-	require.NoError(t, h.svc.Branches().CreateBranch(ctx, "agent/side", hostBranch))
+	require.NoError(t, h.svc.CreateBranch(ctx, "agent/side", hostBranch))
 	var side []plumbing.Hash
 	for _, w := range []struct{ p, title string }{
 		{"kb/notes/bad.md", "bad"},

@@ -11,6 +11,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // F08 PR C over the REAL router and MCP server: skills as prompts on the
@@ -20,8 +21,8 @@ import (
 func skillsE2E(t *testing.T) (http.Handler, *repos.Manager) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

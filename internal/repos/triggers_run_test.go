@@ -28,6 +28,7 @@ import (
 	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/playbooks"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // ---- Fixture (F07 PR 5, `do: run`)
@@ -505,7 +506,7 @@ var r = knomit.exec([%s, run.id], {env: %s});
 func TestRun_StopKillsAndRecords(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
-	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
+	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: &stubTools{}}
 	m := New(context.Background(), deps)
 	m.SetServerAddress(testServerAddr) // as a booted server records it
@@ -549,7 +550,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 	for _, crash := range []bool{true, false} {
 		t.Run(fmt.Sprintf("crash=%v", crash), func(t *testing.T) {
 			home := t.TempDir()
-			deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
+			deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 				KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}, ScriptTools: &stubTools{}}
 			m := New(context.Background(), deps)
 			m.SetServerAddress(testServerAddr) // as a booted server records it
@@ -715,8 +716,8 @@ func TestRun_NotOnReadOnlyOrSubscribed(t *testing.T) {
 	home := t.TempDir()
 	putLocalRecipe(t, home, "worker", `({status: "done"});`)
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
-		AgentBranch: trigAgent, KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", ReadOnly: true},
+		AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent, KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)

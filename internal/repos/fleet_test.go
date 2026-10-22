@@ -93,10 +93,10 @@ func newFleetManager(t *testing.T, dir string) *Manager {
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: dir,
 			TLS: config.TLSConfig{Dir: filepath.Join(home, "pki")}},
-		AgentBranch: "agent/test-fleet",
-		Signer:      testsigner.Named("fleet-test"),
-		KeyPath:     key,
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		AgentID: testsigner.FixtureAgentID("agent/test-fleet"), AgentBranch: "agent/test-fleet",
+		Signer:  testsigner.Named("fleet-test"),
+		KeyPath: key,
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })

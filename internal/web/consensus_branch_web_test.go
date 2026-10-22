@@ -15,6 +15,7 @@ import (
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // seedBareKBOn builds a bare knowledge-base remote (the default ontology, one
@@ -63,7 +64,7 @@ func newSyncingServer(t *testing.T, interval time.Duration) (*Server, *repos.Man
 	cfg.OntologyRoot = "kb"
 	cfg.LocalOriginRoot = originsRoot
 	cfg.Git.LocalReconcileInterval = interval
-	m := repos.New(context.Background(), repos.Deps{Cfg: cfg, AgentBranch: "agent/test", KeyPath: keyPath})
+	m := repos.New(context.Background(), repos.Deps{Cfg: cfg, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test", KeyPath: keyPath})
 	t.Cleanup(func() { _ = m.Close() })
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
@@ -80,7 +81,7 @@ func tipOf(t *testing.T, ri *repos.RepoInstance, branch string) string {
 	t.Helper()
 	var tip string
 	if err := ri.WithRead(func(svc *store.Service) {
-		tip, _ = svc.Branches().HeadCommit(context.Background(), branch)
+		tip, _ = svc.HeadCommit(context.Background(), branch)
 	}); err != nil {
 		t.Fatal(err)
 	}

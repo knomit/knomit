@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"knomit/internal/pki"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -12,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"knomit/internal/pki"
+	"knomit/internal/testsupport/testsigner"
 
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
@@ -21,8 +23,8 @@ import (
 func newRealManager(t *testing.T) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
@@ -39,8 +41,8 @@ func newRealManager(t *testing.T) *repos.Manager {
 func newRealManagerWithLocalOriginRoot(t *testing.T, root string) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 	})
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
@@ -426,8 +428,8 @@ func TestPostRepos_ClientDisconnectDoesNotAbortTheCreate(t *testing.T) {
 // create outlives the connection that started it.
 func TestGetRepoCreate_TimeoutIsReadableAsATerminalFailure(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "machine/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
 		// Already expired when the create's goroutine runs.
 		CreateTimeout: time.Nanosecond,
 	})

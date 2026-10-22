@@ -62,7 +62,7 @@ func (h threeRootsREST) tip(t *testing.T) string {
 	var head string
 	require.NoError(t, h.ri.WithRead(func(svc *store.Service) {
 		var err error
-		head, err = svc.Branches().HeadCommit(context.Background(), h.ri.AgentBranch())
+		head, err = svc.HeadCommit(context.Background(), h.ri.AgentBranch())
 		require.NoError(t, err)
 	}))
 	return head

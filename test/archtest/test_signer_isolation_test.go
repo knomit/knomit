@@ -42,8 +42,9 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 // Production never derives an agent id from a name (D18): a store given no id
 // fails with ErrNoAgentID. The setter refuses to work outside a test binary;
 // this keeps production SOURCE from naming it (or the fallback's installer)
-// at all. The READ side, store.TestFallbackAgentID, is deliberately not a
-// needle: repos.Manager calls it, and outside a test binary it returns "".
+// at all. There is no exported READ side: since E7a repos.Manager.AgentID
+// answers Deps.AgentID alone, and the fallback is read only by
+// vcs.Repo.OwnAgentID inside the store.
 func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
 	// The setter lives in the store's vcs child; tests outside the store reach
 	// it through storetest.SetFallbackAgentID (storetest.go).

@@ -104,7 +104,7 @@ func TestPackByTokenBudget_EmptyInput(t *testing.T) {
 // rows however short the rows are. That cap does two jobs: it bounds the
 // per-row overhead measured at batch=2048/seq=8 (1683 MiB delta vs ~1150 for
 // the same token count in fewer rows), and it preserves the cancellation
-// contract in store/interfaces.go — without it, learn.go (which embeds an
+// contract on model.BatchEmbedder (store/model/embedder.go) — without it, learn.go (which embeds an
 // entire incoming write request, uncapped) and motif_alias.go (a whole motif
 // vocabulary in one call) would each become one uninterruptible session.Run.
 func TestPackByTokenBudget_ChargesShortRowsAtTheMinimum(t *testing.T) {

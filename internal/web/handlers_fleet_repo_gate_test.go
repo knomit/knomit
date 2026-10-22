@@ -99,7 +99,7 @@ func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 	agentTip := func() string {
 		var tip string
 		require.NoError(t, ri.WithRead(func(svc *store.Service) {
-			tip, err = svc.Branches().HeadCommit(ctx, ri.AgentBranch())
+			tip, err = svc.HeadCommit(ctx, ri.AgentBranch())
 			require.NoError(t, err)
 		}))
 		return tip

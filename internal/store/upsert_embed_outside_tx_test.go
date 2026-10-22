@@ -108,7 +108,7 @@ func TestUpsert_CowHitStillSkipsInference(t *testing.T) {
 
 	// Re-index the identical content onto a second branch: same (path,
 	// blob_hash), so the COW-hit path applies and no inference is due.
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/other", "agent/test"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent/other", "agent/test"))
 	_, err = svc.Facts().WriteFact(ctx, "agent/other", "kb/a.md", content, "re-add a", "test")
 	require.NoError(t, err)
 

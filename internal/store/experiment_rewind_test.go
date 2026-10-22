@@ -127,7 +127,7 @@ func TestExperimentAcrossARewind_SyncKeepsTheScrub(t *testing.T) {
 	for _, p := range []string{"kb/e.md", "kb/w.md", "kb/u.md"} {
 		require.True(t, hasFileAt(t, svc, "exp/e", p), p)
 	}
-	exp, ok, err := svc.Branches().GetExperiment(ctx, "e")
+	exp, ok, err := svc.GetExperiment(ctx, "e")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, mustHeadHash(t, svc, "agent/test").String(), exp.ForkCommit,

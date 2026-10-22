@@ -179,7 +179,7 @@ func handlePushedMerge() http.HandlerFunc {
 			err    error
 		)
 		if aerr := ri.WithRead(func(svc *store.Service) {
-			if _, herr := svc.Branches().HeadCommit(r.Context(), branch); herr != nil {
+			if _, herr := svc.HeadCommit(r.Context(), branch); herr != nil {
 				return
 			}
 			exists = true

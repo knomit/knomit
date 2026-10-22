@@ -16,6 +16,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // F08 PR C: skills served as MCP prompts per binding, and by knomit_skill.
@@ -39,8 +40,8 @@ type skillFixture struct {
 func newSkillFixture(t *testing.T) *skillFixture {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         config.Config{Home: t.TempDir()},
-		AgentBranch: "agent/test",
+		Cfg:     config.Config{Home: t.TempDir()},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })

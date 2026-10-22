@@ -46,7 +46,7 @@ func systemFileSynthRepo(t *testing.T) *store.Service {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(ctx, map[string]string{sfFile: "---\nname: program-knomit\n---\nskill\n"}, sfMain))
-	require.NoError(t, svc.Branches().CreateBranch(ctx, sfSide, sfMain))
+	require.NoError(t, svc.CreateBranch(ctx, sfSide, sfMain))
 	_, err = storetest.RawWrite(ctx, svc, sfSide, sfSideOnly, "side\n", "seed")
 	require.NoError(t, err)
 	_, err = storetest.RawWrite(ctx, svc, sfMain, sfMainOnly, "main\n", "seed")
@@ -68,7 +68,7 @@ func sfCanonical(refs ...string) []string {
 
 func sfTip(t *testing.T, svc *store.Service) string {
 	t.Helper()
-	head, err := svc.Branches().HeadCommit(context.Background(), sfSide)
+	head, err := svc.HeadCommit(context.Background(), sfSide)
 	require.NoError(t, err)
 	return head
 }

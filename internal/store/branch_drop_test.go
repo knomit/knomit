@@ -25,13 +25,13 @@ func TestDropBranch_RemovesGitRef(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
 
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "feature", "main"))
+	require.NoError(t, svc.CreateBranch(context.Background(), "feature", "main"))
 
 	// Confirm the ref exists before the drop.
 	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("feature"))
 	require.NoError(t, err, "feature ref should exist after CreateBranch")
 
-	require.NoError(t, svc.Branches().DropBranch(context.Background(), "feature"))
+	require.NoError(t, svc.DropBranch(context.Background(), "feature"))
 
 	// After the drop, the ref must be gone.
 	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("feature"))
@@ -58,20 +58,20 @@ func TestDropBranch_DoesNotAffectOtherBranches(t *testing.T) {
 	_, err = svc.Facts().WriteFact(context.Background(), "main", "kb/main.md", mainFact, "add main fact", "test")
 	require.NoError(t, err)
 
-	mainHeadBefore, err := svc.Branches().HeadCommit(context.Background(), "main")
+	mainHeadBefore, err := svc.HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
 
 	// Create feature, write a fact to it.
-	require.NoError(t, svc.Branches().CreateBranch(context.Background(), "feature", "main"))
+	require.NoError(t, svc.CreateBranch(context.Background(), "feature", "main"))
 	featureFact := "---\ntype: observation\nconfidence: 0.5\nsources: 1\ndomain: [x]\nentities: []\nrefs: []\n---\n# feature fact\n\nbody\n"
 	_, err = svc.Facts().WriteFact(context.Background(), "feature", "kb/feature.md", featureFact, "add feature fact", "test")
 	require.NoError(t, err)
 
 	// Drop feature.
-	require.NoError(t, svc.Branches().DropBranch(context.Background(), "feature"))
+	require.NoError(t, svc.DropBranch(context.Background(), "feature"))
 
 	// main's HEAD must be unchanged.
-	mainHeadAfter, err := svc.Branches().HeadCommit(context.Background(), "main")
+	mainHeadAfter, err := svc.HeadCommit(context.Background(), "main")
 	require.NoError(t, err)
 	require.Equal(t, mainHeadBefore, mainHeadAfter, "main HEAD must not move when feature is dropped")
 

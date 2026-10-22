@@ -63,7 +63,7 @@ func TestConsensusBranch_RecordedNotDefaulted(t *testing.T) {
 		require.NoError(t, err)
 		defer svc.Close()
 		require.NoError(t, svc.OpenRepo())
-		tip, err := svc.Branches().HeadCommit(ctx, "agent/host-1")
+		tip, err := svc.HeadCommit(ctx, "agent/host-1")
 		require.NoError(t, err)
 		for _, b := range []string{"agent/peer-abcd1234", "exp/try"} {
 			require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(b), plumbing.NewHash(tip))))

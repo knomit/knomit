@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -33,9 +34,9 @@ func TestStart_skipsSessionSidecarDB(t *testing.T) {
 	home := t.TempDir()
 	newManager := func() *Manager {
 		return New(context.Background(), Deps{
-			Cfg:         config.Config{Home: home},
-			AgentBranch: "machine/test",
-			Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+			Cfg:     config.Config{Home: home},
+			AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+			Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 		})
 	}
 

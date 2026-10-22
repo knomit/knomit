@@ -16,6 +16,7 @@ import (
 	"knomit/internal/embeddings/params"
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 type testEmbedder struct{}
@@ -110,9 +111,9 @@ func TestMount_BackgroundsHeavyIndex(t *testing.T) {
 	emb := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
 	releaseOnce := sync.OnceFunc(func() { close(emb.release) })
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
-		Embedder:    emb,
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: emb,
 		// No origin is configured, so the sync loop is a harmless no-op.
 	})
 	t.Cleanup(func() { releaseOnce(); _ = m.Close() })
@@ -164,9 +165,9 @@ func TestManagerClose_WaitsForBackgroundIndex(t *testing.T) {
 	emb := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
 	releaseOnce := sync.OnceFunc(func() { close(emb.release) })
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
-		Embedder:    emb,
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: emb,
 	})
 	t.Cleanup(func() { releaseOnce() })
 
@@ -218,9 +219,9 @@ func TestMount_FailedBackgroundIndexReportsError(t *testing.T) {
 	home, dbPath := seedReembedRepo(t)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home},
-		AgentBranch: "machine/test",
-		Embedder:    failingEmbedder{},
+		Cfg:     config.Config{Home: home},
+		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Embedder: failingEmbedder{},
 	})
 	t.Cleanup(func() { _ = m.Close() })
 

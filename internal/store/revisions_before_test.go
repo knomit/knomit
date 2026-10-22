@@ -84,7 +84,7 @@ func TestRevisionsBefore_ScopedToBranch(t *testing.T) {
 	r1, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.9, nil), "create t", "")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	r2, err := svc.Facts().WriteFact(ctx, "feature", "kb/t.md", testFactBody("v2", 0.8, nil), "edit t on feature", "")
 	require.NoError(t, err)
 
@@ -146,7 +146,7 @@ func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.9, nil), "v1 on main", "")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	featureRes, err := svc.Facts().WriteFact(ctx, "feature", "kb/t.md", testFactBody("v2", 0.8, nil), "v2 on feature", "")
 	require.NoError(t, err)
 	// Also touch a disjoint path on feature so the merged tree differs from
@@ -161,7 +161,7 @@ func TestRevisionsBefore_MergeAnomalyPicksFirstParent(t *testing.T) {
 
 	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
 
-	tip, err := svc.Branches().HeadCommit(ctx, "main")
+	tip, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 
 	mergeCommit, err := svc.rh.Repository().CommitObject(plumbing.NewHash(tip))

@@ -258,7 +258,7 @@ func experimentExists(t *testing.T, ri *RepoInstance, name string) bool {
 	t.Helper()
 	var found bool
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, ok, err := svc.Branches().GetExperiment(context.Background(), name)
+		_, ok, err := svc.GetExperiment(context.Background(), name)
 		require.NoError(t, err)
 		found = ok
 	}))
@@ -269,7 +269,7 @@ func branchExists(t *testing.T, ri *RepoInstance, branch string) bool {
 	t.Helper()
 	var found bool
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, err := svc.Branches().HeadCommit(context.Background(), branch)
+		_, err := svc.HeadCommit(context.Background(), branch)
 		found = err == nil
 	}))
 	return found

@@ -123,7 +123,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 	ctx := context.Background()
 	base, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("base", 0.5, nil), "base", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "side", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "side", "main"))
 	var sides []string
 	for i := range 3 {
 		r, err := svc.Facts().WriteFact(ctx, "side", "kb/t.md", testFactBody(fmt.Sprintf("s%d", i), 0.5, nil), "s", "")
@@ -133,7 +133,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/other.md", testFactBody("o", 0.5, nil), "o", "")
 	require.NoError(t, err)
 	require.NoError(t, svc.Merge().MergeBranch(ctx, "side", "main", merge.StrategyLocalWins))
-	tip, err := svc.Branches().HeadCommit(ctx, "main")
+	tip, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	want := append(reversed(sides), base.CommitHash)
 	require.Equal(t, want, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))
@@ -143,7 +143,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 		_, err := svc.rh.DB().Exec(`DELETE FROM branch_commits WHERE commit_hash = ? AND branch_id = (SELECT id FROM branches WHERE name = 'main')`, h)
 		require.NoError(t, err)
 	}
-	require.NoError(t, svc.Branches().DropBranch(ctx, "side"))
+	require.NoError(t, svc.DropBranch(ctx, "side"))
 	clearDerived(t, svc, "0") // a STALE version: the reset path
 
 	svc = reopen(t, svc, dbPath)
@@ -240,7 +240,7 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 		require.NoError(t, err)
 		commits = append(commits, r.CommitHash)
 	}
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "other", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "other", "main"))
 	o, err := svc.Facts().WriteFact(ctx, "other", "kb/t.md", testFactBody("other", 0.5, nil), "o", "")
 	require.NoError(t, err)
 	wantMain := historyCommits(fullHistory(t, svc, "main", "kb/t.md", commits[3]))
@@ -543,7 +543,7 @@ func TestPathHistory_FrontierOffBranchIsHistoryChanged(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	r1, err := svc.Facts().WriteFact(ctx, "main", "kb/t.md", testFactBody("v1", 0.5, nil), "v1", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	side, err := svc.Facts().WriteFact(ctx, "feature", "kb/t.md", testFactBody("side", 0.5, nil), "side", "")
 	require.NoError(t, err)
 
@@ -637,7 +637,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	})
 	// The same append recorded without derivation (CommitLogApply with no
 	// hook — dev's cost) on its own branch, for the per-write overhead.
-	require.NoError(b, svc.Branches().CreateBranch(ctx, "nodrv", "main"))
+	require.NoError(b, svc.CreateBranch(ctx, "nodrv", "main"))
 	nodrvTip := tip
 	b.Run("AppendOneCommitWithoutDerive", func(b *testing.B) {
 		for i := 0; b.Loop(); i++ {
@@ -674,7 +674,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	})
 	// Rebuild of the 10k branch with everything derived (the common case),
 	// and the worst wait of a concurrent writer on another branch.
-	require.NoError(b, svc.Branches().CreateBranch(ctx, "writer", "main"))
+	require.NoError(b, svc.CreateBranch(ctx, "writer", "main"))
 	// Baseline: the same writer with no rebuild running.
 	var base time.Duration
 	for i := range 20 {
@@ -736,7 +736,7 @@ func TestLiveRevision_EqualsRevisionsBefore(t *testing.T) {
 	const p = "kb/t.md"
 	_, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("v0", 0.5, nil), "create", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent", "main"))
+	require.NoError(t, svc.CreateBranch(ctx, "agent", "main"))
 	for k := range 3 {
 		for j := range 2 {
 			_, err := svc.Facts().WriteFact(ctx, "agent", p, testFactBody(fmt.Sprintf("%d-%d", k, j), 0.5, nil), "w", "")
@@ -770,7 +770,7 @@ func TestLiveRevision_EqualsRevisionsBefore(t *testing.T) {
 
 	// A case-only rename is a commit_log row; LiveRevision sees it too.
 	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	tip, err := svc.Branches().HeadCommit(ctx, "main")
+	tip, err := svc.HeadCommit(ctx, "main")
 	require.NoError(t, err)
 	a := rawCommit(t, svc, "main", []string{tip}, map[string]string{"kb/Case.md": testFactBody("c", 0.5, nil)}, t0, "add")
 	b := rawCommit(t, svc, "main", []string{a}, map[string]string{"kb/case.md": testFactBody("c", 0.5, nil)}, t0.Add(time.Hour), "case-only rename")

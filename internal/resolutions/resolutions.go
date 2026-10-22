@@ -204,7 +204,7 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 		}
 		var versions []version
 		if name, ok := strings.CutPrefix(experiment, model.ExperimentPrefix); ok {
-			exp, found, err := svc.Branches().GetExperiment(ctx, name)
+			exp, found, err := svc.GetExperiment(ctx, name)
 			if err != nil {
 				outErr = fmt.Errorf("resolution for %q: read experiment: %w", file, err)
 				return

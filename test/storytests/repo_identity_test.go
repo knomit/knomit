@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
@@ -87,9 +88,9 @@ func TestCreate_MirrorCloneRejected(t *testing.T) {
 			OntologyRoot:    "kb",
 			LocalOriginRoot: sb.HomeDir(), // covers both origin and mirror, under sb's remotes/ dir
 		},
-		AgentBranch: "agent/test",
-		KeyPath:     filepath.Join(home, "agent.key"),
-		Machine:     repos.Options{Synchronous: true},
+		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
+		KeyPath: filepath.Join(home, "agent.key"),
+		Machine: repos.Options{Synchronous: true},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })

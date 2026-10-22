@@ -40,10 +40,10 @@ func tmplManager(t *testing.T, root, signer string) *Manager {
 	t.Helper()
 	home := t.TempDir()
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: root},
-		AgentBranch: tmplAgent,
-		Signer:      testsigner.Named(signer),
-		Machine:     Options{Synchronous: true, CrashBackoff: testCrashBackoff},
+		Cfg:     config.Config{Home: home, OntologyRoot: "kb", LocalOriginRoot: root},
+		AgentID: testsigner.FixtureAgentID(tmplAgent), AgentBranch: tmplAgent,
+		Signer:  testsigner.Named(signer),
+		Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { m.Close() })

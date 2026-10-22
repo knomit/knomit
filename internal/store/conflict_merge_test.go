@@ -89,7 +89,7 @@ func (r *cmRepo) del(branch, path string) {
 
 func (r *cmRepo) branch(name, from string) {
 	r.t.Helper()
-	require.NoError(r.t, r.svc.Branches().CreateBranch(context.Background(), name, from))
+	require.NoError(r.t, r.svc.CreateBranch(context.Background(), name, from))
 }
 
 func (r *cmRepo) tip(branch string) *object.Commit {

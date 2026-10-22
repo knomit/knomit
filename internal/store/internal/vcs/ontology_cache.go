@@ -5,8 +5,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"knomit/internal/fact"
 	"sync"
+
+	"knomit/internal/fact"
 
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
