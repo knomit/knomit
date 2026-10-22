@@ -16,6 +16,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/merge"
+	"knomit/internal/store/storetest"
 )
 
 type expHistoryPage struct {
@@ -290,7 +291,7 @@ func TestExplain_HistoryCursorAfterRewindIsHistoryChanged(t *testing.T) {
 	hc := firstHistoryCursor(t, ctx, "kb/r.md")
 
 	ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.DropBranch(ctx, explainTestBranch))
+		require.NoError(t, storetest.DropBranch(ctx, svc, explainTestBranch))
 		require.NoError(t, svc.CreateBranch(ctx, explainTestBranch, "old"))
 	})
 	text, isErr := callExplain(t, ctx, map[string]any{"file": "kb/r.md", "history_cursor": hc})

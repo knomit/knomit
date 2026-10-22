@@ -47,7 +47,7 @@ func vecRowCount(t *testing.T, si *index.Index) int {
 	return n
 }
 
-// openSI opens a fresh migrated store and returns its searchIndex. Open already
+// openSI opens a fresh migrated store and returns its index.Index. Open already
 // creates facts_vec at the default dim via ensureFactsVecDefault.
 func openSI(t *testing.T) *index.Index {
 	t.Helper()

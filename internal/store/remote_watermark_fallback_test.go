@@ -65,7 +65,7 @@ func wmSetOriginMain(t *testing.T, bare string, h plumbing.Hash) {
 func wmDropWatermark(t *testing.T, svc *Service) {
 	t.Helper()
 	require.NoError(t, svc.rh.Storer().RemoveReference(remotesync.AgentBaseRefNameForTest("agent/test")))
-	_, err := svc.rh.ReadAgentBaseForTest("agent/test")
+	_, err := svc.rr.ReadAgentBaseForTest("agent/test")
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "setup: no watermark")
 }
 
@@ -110,7 +110,7 @@ func TestSync_NoWatermarkResetToAnAncestorDoesNotKeepTheRemovedCommit(t *testing
 		require.Equal(t, merge.ModeRewound, res.Main.Mode)
 		require.False(t, hasFileAt(t, svc, "agent/test", "kb/secret.md"), "the removed file stays removed")
 		require.False(t, reachableFrom(t, svc, "agent/test", s), "the removed commit is not on the branch")
-		base, err := svc.rh.ReadAgentBaseForTest("agent/test")
+		base, err := svc.rr.ReadAgentBaseForTest("agent/test")
 		require.NoError(t, err)
 		require.Equal(t, r, base, "the watermark is written, so the fallback is used once")
 
@@ -149,7 +149,7 @@ func TestSync_ExistingWatermarkIsNotOverwritten(t *testing.T) {
 	wmPush(t, svc)
 	wmSetOriginMain(t, bare, s)
 	wmSync(t, svc)
-	base, err := svc.rh.ReadAgentBaseForTest("agent/test")
+	base, err := svc.rr.ReadAgentBaseForTest("agent/test")
 	require.NoError(t, err)
 	require.Equal(t, s, base, "setup: the watermark is s")
 
@@ -201,7 +201,7 @@ func TestSync_FirstSyncEverKeepsTheMergeBaseFallback(t *testing.T) {
 	require.Equal(t, merge.ModeRewound, res.Main.Mode)
 	require.Equal(t, merge.ModeNoop, res.Agent.Mode, "unchanged: the merge-base fallback reads the branch as ahead")
 	require.Equal(t, s, mustHeadHash(t, svc, "agent/test"))
-	base, err := svc.rh.ReadAgentBaseForTest("agent/test")
+	base, err := svc.rr.ReadAgentBaseForTest("agent/test")
 	require.NoError(t, err)
 	require.Equal(t, r, base, "the reconcile still writes the watermark afterwards")
 }

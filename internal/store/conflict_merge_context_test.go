@@ -36,7 +36,7 @@ func TestReplay_MergeFacts_ContextPerKeyTrailerNamesKeysOnly(t *testing.T) {
 	r.branch(agent, "main")
 	seed := r.write(agent, "kb/notes/f.md", cmContextFact(t, "base", 0.7, map[string]any{"task": "t-1", "verdict": "unsure"}))
 	require.NoError(t, r.svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
-	require.NoError(t, r.svc.rh.WriteAgentBase(agent, seed))
+	require.NoError(t, r.svc.rr.WriteAgentBase(agent, seed))
 	// The agent (more confident) changes verdict; main changes verdict
 	// differently AND changes task alone.
 	_, err := r.svc.Facts().WriteFact(context.Background(), agent, "kb/notes/f.md",
@@ -44,7 +44,7 @@ func TestReplay_MergeFacts_ContextPerKeyTrailerNamesKeysOnly(t *testing.T) {
 	require.NoError(t, err)
 	r.write("main", "kb/notes/f.md", cmContextFact(t, "base", 0.5, map[string]any{"task": "t-2", "verdict": "disagree"}))
 
-	_, err = r.svc.rh.ReconcileAgentForTest(context.Background(), agent, "main", stratMerge, true)
+	_, err = r.svc.rr.ReconcileAgentForTest(context.Background(), agent, "main", stratMerge, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, out := r.blob(tip, "kb/notes/f.md")

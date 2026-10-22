@@ -8,11 +8,9 @@
 // the unpublished-commit drop (verify_own.go, drop.go).
 //
 // It sits above vcs, verify and merge in the store's child order. Repo wraps
-// the merge handle (which wraps the one shared vcs handle), so the methods
-// that used to be declared on the parent's repoHandler stay reachable as
-// rh.<Name> by promotion; the parent embeds it next to the other children.
-// Embedding is not virtual: nothing here calls a method declared on the
-// parent. The consensus-branch record (consensus_branch.go, written by SetOrigin
+// the merge handle (a named field, mr) and the one shared vcs handle (vr); the
+// parent holds it as the named Service field rr. Nothing here calls a method
+// declared on the parent. The consensus-branch record (consensus_branch.go, written by SetOrigin
 // and the bootstraps), peer admission and the local-upstream methods
 // (peer_admit.go, local_reconcile.go) and the remote bootstrap (bootstrap.go:
 // CloneFrom, InitFromRemote, InitSubscription) are methods of Index, which

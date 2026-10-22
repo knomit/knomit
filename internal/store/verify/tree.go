@@ -18,7 +18,7 @@ import (
 // as a parent and is refused, the repair included, on every hosting and in
 // every verify_signatures mode (the receive-pack closure checks parents too).
 // The way out is a write that no gate judges. On a knomit host that is a
-// host-local write to main (factIndex.deleteFile of the bogus entry's path:
+// host-local write to main (facts.Index.deleteFile of the bogus entry's path:
 // fileExists finds the entry by name and deletePath drops it whatever its
 // mode). Only the immediate parents are checked, so commits on top of the
 // repair are admitted again. On a forge it is a push to main past the

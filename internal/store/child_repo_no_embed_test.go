@@ -19,8 +19,9 @@ import (
 //
 // A by-value embed (vcs.Repo) promotes the same methods as the pointer embed
 // and is flagged too. The walk follows embedded struct fields, so a child that embeds another
-// child which embeds *vcs.Repo (remotesync.Repo embeds *merge.Repo) is caught
-// too. It also requires that every type holds a vcs.Repo field somewhere, so
+// child which embeds *vcs.Repo is caught too (remotesync.Repo embedded
+// *merge.Repo until E7c; it holds it as the named field mr now, and
+// TestStoreTypes_DoNotEmbedStorePackageTypes forbids the embed itself). It also requires that every type holds a vcs.Repo field somewhere, so
 // the test cannot pass because the handle was removed.
 func TestChildRepos_DoNotEmbedVcsRepo(t *testing.T) {
 	vcsRepo := reflect.TypeOf((*vcs.Repo)(nil))

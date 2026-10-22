@@ -40,7 +40,8 @@ func seamAllowed(rel string) bool {
 // seamUses parses one Go source and returns, for every use of a test seam, a
 // "line N: <what>" string: an import of storetest, a selector `x.FooForTest` or
 // `x.TestingFoo` (called, passed as a method value, or assigned), or a bare
-// call `FooForTest(...)` from inside the declaring package. A declaration
+// identifier `FooForTest` (called or taken as a value, from inside the
+// declaring package or through a dot import). A declaration
 // (`func (r *Repo) FooForTest()`) is not a use.
 func seamUses(t *testing.T, fset *token.FileSet, name string, src any) []string {
 	t.Helper()
@@ -55,15 +56,49 @@ func seamUses(t *testing.T, fset *token.FileSet, name string, src any) []string 
 			uses = append(uses, "line "+strconv.Itoa(at(imp.Pos()))+": imports "+storetestImport)
 		}
 	}
+	// Identifiers that are DECLARATIONS or the selector half of `x.Name`, not
+	// bare uses: the second kind is reported by the SelectorExpr case below.
+	skip := map[*ast.Ident]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			skip[x.Name] = true
+		case *ast.TypeSpec:
+			skip[x.Name] = true
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				skip[id] = true
+			}
+		case *ast.Field:
+			for _, id := range x.Names {
+				skip[id] = true
+			}
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				for _, l := range x.Lhs {
+					if id, ok := l.(*ast.Ident); ok {
+						skip[id] = true
+					}
+				}
+			}
+		case *ast.SelectorExpr:
+			skip[x.Sel] = true
+		}
+		return true
+	})
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
 			if testSeamName.MatchString(x.Sel.Name) {
 				uses = append(uses, "line "+strconv.Itoa(at(x.Sel.Pos()))+": uses "+x.Sel.Name)
 			}
-		case *ast.CallExpr:
-			if id, ok := x.Fun.(*ast.Ident); ok && testSeamName.MatchString(id.Name) {
-				uses = append(uses, "line "+strconv.Itoa(at(id.Pos()))+": calls "+id.Name)
+		case *ast.Ident:
+			// A bare identifier: a call from inside the declaring package, a
+			// function value (`f := SetRefForTest`), or a use through a dot
+			// import (`import . "knomit/internal/store/..."`). A bare CALL was
+			// the only shape caught before.
+			if !skip[x] && testSeamName.MatchString(x.Name) {
+				uses = append(uses, "line "+strconv.Itoa(at(x.Pos()))+": uses bare "+x.Name)
 			}
 		}
 		return true
@@ -184,6 +219,9 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		"package-qualified ForTest": src("func f() { vcs.SetBatchWriteUnlockedHookForTest(nil) }\n"),
 		"Testing* call":             src("func f(s S) { s.TestingCommitFiles(\"a\", nil, \"m\") }\n"),
 		"bare in-package call":      src("func f() { MetaGetForTest(nil, nil, \"k\") }\n"),
+		"bare function value":       src("func f() { g := SetRefForTest; _ = g }\n"),
+		"bare as argument":          src("func f() { run(SetRefForTest) }\n"),
+		"bare dot-import use":       src("import . \"knomit/internal/store/x\"\nvar h = TestingCommitFiles\n"),
 	}
 	for name, s := range flagged {
 		if got := seamUses(t, token.NewFileSet(), name+".go", s); len(got) == 0 {
@@ -196,6 +234,8 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		"name in a comment":        src("// r.SetRefForTest and storetest.SetRef\nfunc f() {}\n"),
 		"name in a string":         src("var s = \"r.SetRefForTest\"\n"),
 		"lowercase suffix":         src("func f(r R) { r.SetRefforTest() }\n"),
+		"struct field decl":        src("type T struct{ SetRefForTest int }\n"),
+		"param named like a seam":  src("func f(SetRefForTest int) {}\n"),
 		"Register hook":            src("func f(r R) { r.RegisterServiceRepo(nil) }\n"),
 		"other storetest-ish path": src(`import "knomit/internal/store/storetest2"` + "\n"),
 	}

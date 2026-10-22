@@ -373,7 +373,7 @@ func (rh *Repo) replayCommit(
 		// side is ontoCommit (dst), and a key set to off keeps today's replay
 		// rule, the agent's commit (src) wins. Its lines go on the replayed
 		// commit's own message — a replay writes no merge commit.
-		res, lines, err := rh.FactMergeResolutions(ctx, baseCommit, orig, ontoCommit,
+		res, lines, err := rh.mr.FactMergeResolutions(ctx, baseCommit, orig, ontoCommit,
 			merge.FactMerge{Policy: policy, Consensus: fact.MergeDst, Fallback: merge.StrategyRemoteWins})
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: merge facts: %w", err)
@@ -392,7 +392,7 @@ func (rh *Repo) replayCommit(
 	// Three-way merge: base = baseCommit (orig's parent or empty),
 	//                  src  = orig (what orig adds),
 	//                  dst  = ontoCommit (what we're replaying on top of).
-	mergedTreeHash, walkTrailers, err := rh.MergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, resolutions)
+	mergedTreeHash, walkTrailers, err := rh.mr.MergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, resolutions)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: three-way merge: %w", err)
 	}
@@ -679,7 +679,7 @@ func (rh *Repo) reconcileAgentRebase(ctx context.Context, agentBranch, upstreamM
 	// rewind scrubs must be rebuilt by its next commit or sync, not merged
 	// (rebuildRewoundExperiment).
 	if agentRef, err := rh.vr.Storer().Reference(plumbing.NewBranchReferenceName(agentBranch)); err == nil {
-		if err := rh.MarkExperimentsRewound(ctx, agentBranch, agentRef.Hash()); err != nil {
+		if err := rh.mr.MarkExperimentsRewound(ctx, agentBranch, agentRef.Hash()); err != nil {
 			return merge.AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: %w", err)
 		}
 	}

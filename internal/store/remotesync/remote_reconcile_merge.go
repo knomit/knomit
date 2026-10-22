@@ -32,7 +32,7 @@ func (rh *Repo) reconcileAgentMerge(ctx context.Context, agentBranch, upstreamMa
 	unlock := rh.vr.LockBranch(agentBranch)
 	defer unlock()
 
-	res, err := rh.MergeIntoBranchLocked(ctx, upstreamMain, agentBranch, strategy)
+	res, err := rh.mr.MergeIntoBranchLocked(ctx, upstreamMain, agentBranch, strategy)
 	if err != nil {
 		return res, fmt.Errorf("reconcileAgentMerge: %w", err)
 	}

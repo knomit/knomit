@@ -34,7 +34,7 @@ const RuleValidation = "validation"
 // what a hand resolution would land on main cannot be judged.
 const RuleMergeConflict = "merge-conflict"
 
-// IsFactPathUnder is the fact index's location rule (repoHandler.IsFactPath)
+// IsFactPathUnder is the fact index's location rule (vcs.Repo.IsFactPath)
 // for an explicit root: a .md file under root with no dot-prefixed segment.
 // Artifacts live beside the root, never under it, so they are never facts.
 func IsFactPathUnder(root, p string) bool {

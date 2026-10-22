@@ -12,7 +12,7 @@ import (
 // the fact write path or the signing chokepoint, so writing a fact costs
 // exactly what it did before F09 (signing only).
 func TestVerifyIsNeverInTheWritePath(t *testing.T) {
-	forbidden := regexp.MustCompile(`\b(CheckRange|Audit|LoadFleet|LoadFleetAt|FleetMembersAt|FleetPKIAt|FleetAt|loadMembers|LoadMembers|LoadMembersOfTree|LoadFleetAtCommit|loadFleetPKI|newJudge|NewJudge|verifyCommitSignature|VerifyCommitSignature|checkM3|CheckM3|checkOwnLineage|CheckOwnLineage|judgeCommit|JudgeCommit|judgeIncoming|JudgeIncoming|judgeOwnRange|JudgeOwnRange)\(`)
+	forbidden := regexp.MustCompile(`\b(CheckRange|Audit|LoadFleet|LoadFleetAt|FleetMembersAt|FleetAt|loadMembers|LoadMembers|LoadMembersOfTree|LoadFleetAtCommit|loadFleetPKI|newJudge|NewJudge|verifyCommitSignature|VerifyCommitSignature|checkM3|CheckM3|checkOwnLineage|CheckOwnLineage|judgeCommit|JudgeCommit|judgeIncoming|JudgeIncoming|judgeOwnRange|JudgeOwnRange)\(`)
 	// The name list above is bound to spellings: after the fleet read moved
 	// into internal/store/fleetrec, fleetrec.At( reached the same read under
 	// a name the list does not hold. Reject ANY package-qualified call into

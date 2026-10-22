@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/store/storetest"
 )
 
 // The restored-home tests below all follow the same shape: boot a home under
@@ -241,7 +242,7 @@ func TestEnsureBranch_DoesNotTakeOverAnotherAgentsBranch(t *testing.T) {
 		adoptFact("written by a DIFFERENT agent sharing this origin"),
 		"test: foreign agent write", "created")
 	require.NoError(t, err)
-	require.NoError(t, svcA.SetDefaultBranch(foreign))
+	require.NoError(t, storetest.SetDefaultBranch(svcA, foreign))
 	_ = mA.Close()
 
 	// Reboot with a regenerated key. The takeover must seed from the recorded

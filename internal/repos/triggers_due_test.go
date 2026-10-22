@@ -156,7 +156,7 @@ var farFuture = time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)
 // even when fed a stale candidate (the dueCandidates hook appends the removed
 // path with its old instant on every run, so the confirmation is exercised).
 // Two sabotages, each reddening exactly one assertion: drop the branch_facts
-// DELETE in searchIndex.delete → (1) is red (the join lists the path) while
+// DELETE in index.Index.delete → (1) is red (the join lists the path) while
 // (2) stays green because the confirmation skips the absent blob — which is
 // why (1) must be asserted; skip the head confirmation → (2) is red (the
 // stale candidate fires). The last sub-case is named for what it proves: a

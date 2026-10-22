@@ -41,21 +41,11 @@ func (s *Service) CreateBranch(ctx context.Context, branch, fromBranch string) e
 	return s.rh.CreateBranch(ctx, branch, fromBranch)
 }
 
-// DropBranch removes branch from the git storer (ref deletion) and from every
-// SQLite table that references it; the commits themselves stay in the object
-// store.
-func (s *Service) DropBranch(ctx context.Context, name string) error {
-	return s.rh.DropBranch(ctx, name)
-}
-
 // DefaultBranch resolves the default branch name from the repo's HEAD ref.
 // Returns an empty string if HEAD is detached.
 func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
 	return s.rh.DefaultBranch(ctx)
 }
-
-// SetDefaultBranch sets the symbolic HEAD to point at the given branch.
-func (s *Service) SetDefaultBranch(branch string) error { return s.rh.SetDefaultBranch(branch) }
 
 // AgentBranchOwner is the agent branch this database was last booted as. An
 // empty result means "unknown" (a database created before the key existed, or

@@ -9,6 +9,6 @@
 // tree-shape check) and imports nothing else of the store; the verify
 // cluster (the judge and the integrity audit) and the parent's Service
 // facade both reach UP to it, never the reverse. It must not import its
-// parent package store: the parent re-exports the public names callers
-// outside store use (FleetMember, Fleet, FleetPKI, LoadFleet, ...).
+// parent package store; callers outside store import the plain data types
+// (Member, Fleet, PKI, ...) from here.
 package fleetrec

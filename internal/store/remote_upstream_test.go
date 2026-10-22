@@ -135,7 +135,7 @@ func TestReconcileMain_UsesConfiguredUpstream(t *testing.T) {
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "master"), plumbing.NewHash(newMasterCommit)),
 	))
 
-	res, err := svc.rh.ReconcileMainForTest(context.Background(), "master")
+	res, err := svc.rr.ReconcileMainForTest(context.Background(), "master")
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(newMasterCommit), mustHeadHash(t, svc, "master"))

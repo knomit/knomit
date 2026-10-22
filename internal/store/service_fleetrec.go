@@ -19,14 +19,6 @@ func (s *Service) FleetMembersAt(branch string) ([]fleetrec.Member, error) {
 	return f.Members, err
 }
 
-// FleetPKIAt returns the fleet's certificate artifacts at branch in THIS store
-// (a mounted fleet repository): nil, nil when that revision declares no
-// pki: root or holds no root file.
-func (s *Service) FleetPKIAt(branch string) (*fleetrec.PKI, error) {
-	f, err := s.FleetAt(branch)
-	return f.PKI, err
-}
-
 // FleetAt returns everything the judge reads from THIS store (a mounted fleet
 // repository) at branch, all from the ONE commit branch names: the member
 // records and the certificate artifacts. Reading them separately could pair

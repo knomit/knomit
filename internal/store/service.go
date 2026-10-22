@@ -34,12 +34,18 @@ import (
 // populated by the repo constructors (OpenRepo, InitRepo, etc.) and is nil/zero
 // when Service is used in DB-only mode via Open().
 type Service struct {
-	rh          *repoHandler
+	rh *repoHandler
+	// fr, mr and rr are the facts, merge and remotesync children over the same
+	// *vcs.Repo as rh, held as NAMED fields: embedding them in repoHandler
+	// promoted every child method onto rh and hid which child a call reached.
+	fr          *facts.Repo
+	mr          *merge.Repo
+	rr          *remotesync.Repo
 	handlerOnce sync.Once
 	handler     http.Handler
 	fi          *facts.Index
 	si          *index.Index
-	// The four query sub-services carved out of searchIndex (P1.3). searchIndex
+	// The four query sub-services carved out of the search index (P1.3). The index.Index
 	// (si) keeps IndexManager + the write/rebuild path; these own the read
 	// surface. search composes all four for the Search() composite.
 	fq *index.FactQuery
@@ -147,8 +153,11 @@ func Open(path string) (*Service, error) {
 
 	rh.SetOnDrop(si.GC)
 	rh.SetIndexSync(si.Sync) // NotifyCommit syncs the index after every commit.
-	fi := facts.NewIndex(rh.factsRepo)
-	ri := remotesync.NewIndex(rh.syncRepo)
+	fr := facts.NewRepo(rh.Repo)
+	mr := merge.NewRepo(rh.Repo)
+	rr := remotesync.NewRepo(mr, rh.Repo)
+	fi := facts.NewIndex(fr)
+	ri := remotesync.NewIndex(rr)
 	fq := index.NewFactQuery(rh.Repo)
 	gq := index.NewGraphStore(rh.Repo)
 	hq := index.NewHistoryQuery(rh.Repo)
@@ -171,6 +180,9 @@ func Open(path string) (*Service, error) {
 
 	s := &Service{
 		rh:            rh,
+		fr:            fr,
+		mr:            mr,
+		rr:            rr,
 		fi:            fi,
 		si:            si,
 		fq:            fq,
@@ -274,7 +286,7 @@ func (s *Service) Facts() *facts.Index { return s.fi }
 // files, templates, skills and trigger-dispatcher rows, plus the signer
 // fingerprint. It holds the vcs handle privately, so none of the git layer's
 // methods is reachable through it.
-func (s *Service) FactsRepo() *facts.Repo { return s.rh.factsRepo }
+func (s *Service) FactsRepo() *facts.Repo { return s.fr }
 
 // Search returns the search composite (a facade over the four query
 // sub-services). Prefer the narrow accessors below (FactQuery/GraphStore/
@@ -328,7 +340,7 @@ func (s *Service) ToolSession() *sessions.ToolIndex { return s.ti }
 // internal/store may call them (test/archtest TestStoreMergeCores_OnlyInsideStore).
 // A merge that must happen from outside is MergeBranch, or MergePushed and
 // MergeConsensus on the Service, which take the lock.
-func (s *Service) Merge() *merge.Repo { return s.rh.mergeRepo }
+func (s *Service) Merge() *merge.Repo { return s.mr }
 
 // RootCommit returns the hash of the repo's root commit — the `init: create
 // knowledge base` commit every knomit repo is born with — reached by a

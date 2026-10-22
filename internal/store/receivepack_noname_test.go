@@ -96,14 +96,14 @@ func TestReceivePack_UpstreamRefusedEvenUnderAgentPrefix(t *testing.T) {
 	req.Commands = []*packp.Command{{Name: plumbing.NewBranchReferenceName(upstream), Old: h.ref(upstream), New: h.ref("main")}}
 	pctx := gitserve.WithPushPolicy(ctx, gitserve.PushPolicy{Pusher: pushFP, OwnBranch: hostBranch})
 
-	cmd, refusal := gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rh.syncRepo, upstreamFn, req)
+	cmd, refusal := gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rr, upstreamFn, req)
 	require.Nil(t, cmd)
 	require.Equal(t, "knomit: refs/heads/agent/consensus is this repo's upstream branch; it is never pushed", refusal)
 
 	// Control: another agent/ ref passes the same request rules.
 	req.Commands[0].Name = plumbing.NewBranchReferenceName("agent/other")
 	req.Commands[0].Old = plumbing.ZeroHash
-	cmd, refusal = gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rh.syncRepo, upstreamFn, req)
+	cmd, refusal = gitserve.JudgeRequestForTest(pctx, h.svc.rh.Repo, h.svc.rr, upstreamFn, req)
 	require.Empty(t, refusal)
 	require.NotNil(t, cmd)
 }

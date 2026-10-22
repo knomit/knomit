@@ -75,7 +75,7 @@ type Index struct {
 	// Rebuild reconstructs afterward, so the ~N per-commit incremental syncs are
 	// pure waste. Instance-scoped: only the specific Service whose si carries
 	// this flag is affected — every other store (notably the live repo) indexes
-	// normally through its own searchIndex. NEVER leave a live store suspended:
+	// normally through its own index.Index. NEVER leave a live store suspended:
 	// its per-branch tables would drift from the git tree and trip Verify's
 	// facts-coherence check. See ReplayConfig.SkipIndexSync.
 	syncSuspended atomic.Bool
@@ -1637,7 +1637,7 @@ func localFactRefs(refs []string, localRepoID string) []string {
 //     *sql.DB deadlocks the pool under concurrency. See
 //     kb/invariants/store/no-reentrant-sql-from-vtab-cursors.
 //
-// The sync.Once keeps the cost to one walk per searchIndex, not one per ref.
+// The sync.Once keeps the cost to one walk per index.Index, not one per ref.
 // The branch argument is therefore only read on the first call — safe because
 // every branch of a repo shares the same root commit (see RootCommit).
 func (si *Index) localRepoID(ctx context.Context, branch string) string {

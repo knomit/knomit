@@ -255,7 +255,7 @@ func TestMergeIntoBranch_NoopWhenSrcAncestorOfDst(t *testing.T) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
 	// main and agent both at init commit; src=main, dst=agent → no-op.
-	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
+	res, err := svc.mr.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeNoop, res.Mode)
 }
@@ -269,7 +269,7 @@ func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
 
 	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
-	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
+	res, err := svc.mr.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeFF, res.Mode)
 	require.Equal(t, mainHash, res.NewTip)
@@ -290,7 +290,7 @@ func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
 	preAgentTip := mustHeadHash(t, svc, "agent/test")
 	preMainTip := mustHeadHash(t, svc, "main")
 
-	res, err := svc.rh.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
+	res, err := svc.mr.MergeIntoBranchForTest(context.Background(), "main", "agent/test", merge.StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, merge.ModeMerge, res.Mode)
 	require.NotEmpty(t, res.NewTip)

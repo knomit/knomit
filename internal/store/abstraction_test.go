@@ -223,7 +223,7 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 			"precondition: %s holds the doomed branch's state", table)
 	}
 
-	require.NoError(t, svc.DropBranch(ctx, "agent/doomed"),
+	require.NoError(t, svc.rh.DropBranch(ctx, "agent/doomed"),
 		"a branch carrying shortlist state must still drop cleanly")
 
 	branches, err := svc.ListBranches(ctx)
@@ -254,7 +254,7 @@ func TestAbstraction_DropBranchRefusesWithoutRowsHook(t *testing.T) {
 	require.NoError(t, err)
 
 	svc.rh.SetOnDropBranchRows(nil)
-	err = svc.DropBranch(ctx, "agent/kept")
+	err = svc.rh.DropBranch(ctx, "agent/kept")
 	require.ErrorIs(t, err, vcs.ErrNoDropBranchRowsHook)
 
 	// Nothing was removed: the ref still resolves and the branches row stays.

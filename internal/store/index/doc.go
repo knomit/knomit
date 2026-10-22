@@ -15,7 +15,7 @@ import (
 )
 
 // New returns the search index over rh. Every sub-index of one store is built
-// over the SAME *vcs.Repo, the one the parent's repoHandler embeds.
+// over the SAME *vcs.Repo, the one the parent's repoHandler wraps.
 func New(rh *vcs.Repo) *Index { return &Index{rh: rh} }
 
 // NewFactQuery returns the fact read/search/existence query service over rh.

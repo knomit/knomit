@@ -63,7 +63,7 @@ func TestFleetDrop_ALeftMembersTwoCommitsCanBeLeftOutWholeOnceConfirmed(t *testi
 		require.NoError(t, storetest.SetRef(svc, "refs/heads/agent/alpha-held", side[1]))
 		_, err := svc.MergePushed(ctx, "agent/alpha-held", f.mri.AgentBranch(), plumbing.NewHash(side[1]), "")
 		require.NoError(t, err)
-		require.NoError(t, svc.DropBranch(ctx, "agent/alpha-held"))
+		require.NoError(t, storetest.DropBranch(ctx, svc, "agent/alpha-held"))
 	}))
 	f.masterRounds(t)
 	roundOnPush(t, f.mri, f.master.fleetPushed) // the sync loop records its push outcome

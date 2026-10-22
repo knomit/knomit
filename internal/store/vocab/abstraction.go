@@ -53,7 +53,7 @@ func idPlaceholders(ids []int64) (string, []any) {
 type AbstractionIndex struct{ rh *vcs.Repo }
 
 // NewAbstractionIndex returns the axis over rh, the SAME *vcs.Repo the parent's
-// repoHandler embeds.
+// repoHandler wraps.
 func NewAbstractionIndex(rh *vcs.Repo) *AbstractionIndex { return &AbstractionIndex{rh: rh} }
 
 // epistemicLiveJoin is the join every query here shares: the version of each
@@ -750,7 +750,7 @@ func (ax *AbstractionIndex) pairQuantile(ctx context.Context, branch string, cou
 	return v, nil
 }
 
-// branchID resolves a branch name to its row id through repoHandler's cached
+// branchID resolves a branch name to its row id through vcs.Repo's cached
 // resolver, so this sub-service shares the cache and returns the same
 // ErrBranchNotFound every other caller matches on.
 func (ax *AbstractionIndex) branchID(ctx context.Context, branch string) (int64, error) {

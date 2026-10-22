@@ -31,7 +31,7 @@ func TestDropBranch_RemovesGitRef(t *testing.T) {
 	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("feature"))
 	require.NoError(t, err, "feature ref should exist after CreateBranch")
 
-	require.NoError(t, svc.DropBranch(context.Background(), "feature"))
+	require.NoError(t, svc.rh.DropBranch(context.Background(), "feature"))
 
 	// After the drop, the ref must be gone.
 	_, err = svc.rh.Storer().Reference(plumbing.NewBranchReferenceName("feature"))
@@ -68,7 +68,7 @@ func TestDropBranch_DoesNotAffectOtherBranches(t *testing.T) {
 	require.NoError(t, err)
 
 	// Drop feature.
-	require.NoError(t, svc.DropBranch(context.Background(), "feature"))
+	require.NoError(t, svc.rh.DropBranch(context.Background(), "feature"))
 
 	// main's HEAD must be unchanged.
 	mainHeadAfter, err := svc.HeadCommit(context.Background(), "main")

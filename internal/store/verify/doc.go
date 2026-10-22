@@ -11,10 +11,10 @@
 // It reads a store only through *vcs.Repo (the git layer) and a fleet
 // repository's records only through fleetrec; it never writes, never moves a
 // ref and is never called from the fact write path (TestVerifyIsNeverInTheWritePath
-// pins the names). It must not import its parent package store: the parent
-// re-exports the public names callers outside store use, and keeps the
-// repoHandler methods the receive-pack, sync and clone paths call (they pass
-// the embedded *vcs.Repo). The own-range judge that publishes the fleet's
+// pins the names). It must not import its parent package store; callers
+// outside store import the names they use from here, and the receive-pack,
+// sync and clone paths (store/gitserve, store/remotesync) pass it the one
+// shared *vcs.Repo. The own-range judge that publishes the fleet's
 // main (internal/store/remotesync/verify_own.go) is a publish-time concern and lives
 // in the remotesync child, driving a Judge with its Entry and OwnOntology flags.
 package verify

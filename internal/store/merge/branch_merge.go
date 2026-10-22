@@ -1,7 +1,7 @@
 // Real git merge for MergeBranch and the strategy-aware three-way tree merge
-// helper shared with remoteIndex.Sync. Lives on repoHandler because all the
+// helper shared with remotesync.Index.Sync. Lives on merge.Repo because all the
 // inputs (git storer, repo, signer, branch lock, commit-log plumbing) are
-// rooted there.
+// rooted in the vcs handle it wraps.
 package merge
 
 import (

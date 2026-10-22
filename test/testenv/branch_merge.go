@@ -15,7 +15,7 @@ import (
 // The merge is a real git merge: fast-forward when the receiver is an
 // ancestor of src, a merge commit with two parents for diverged histories,
 // or a no-op when src is already reachable from the receiver or the
-// strategy skips every conflicting change. See repoHandler.MergeBranch
+// strategy skips every conflicting change. See merge.Repo.MergeBranch
 // for the full semantics.
 //
 // Returns the Snapshot of the new HEAD on the receiver branch. If the

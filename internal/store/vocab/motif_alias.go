@@ -35,7 +35,7 @@ const (
 type MotifIndex struct{ rh *vcs.Repo }
 
 // NewMotifIndex returns motif alias resolution over rh, the SAME *vcs.Repo the
-// parent's repoHandler embeds.
+// parent's repoHandler wraps.
 func NewMotifIndex(rh *vcs.Repo) *MotifIndex { return &MotifIndex{rh: rh} }
 
 // spelling is one distinct motif string in the corpus, with its live df.

@@ -208,7 +208,7 @@ func TestLiveRevision_EqualsRevisionsBeforeEdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		y, err := svc.Facts().WriteFact(ctx, "main", p, testFactBody("B edited", 0.5, nil), "Y", "")
 		require.NoError(t, err)
-		_, err = svc.rh.MergeIntoBranchResolvedForTest(ctx, "side", "main", merge.StrategyRefuse, map[string]merge.Resolution{p: {Body: []byte(testFactBody("B edited", 0.7, nil))}})
+		_, err = svc.mr.MergeIntoBranchResolvedForTest(ctx, "side", "main", merge.StrategyRefuse, map[string]merge.Resolution{p: {Body: []byte(testFactBody("B edited", 0.7, nil))}})
 		require.NoError(t, err)
 		m, err := svc.HeadCommit(ctx, "main")
 		require.NoError(t, err)

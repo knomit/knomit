@@ -142,7 +142,7 @@ func (rh *Repo) NotifyCommit(ctx context.Context, branch string, hash plumbing.H
 
 // RootCommit walks first-parent ancestry from branch's head to the root commit
 // — the repo's stable identity. Lives on Repo because Repo owns
-// git reads; Service.RootCommit and searchIndex.localRepoID both delegate here
+// git reads; Service.RootCommit and index.Index.localRepoID both delegate here
 // rather than opening a second handle.
 //
 // First-parent (never wall-clock, never a merge parent) so a repo with a

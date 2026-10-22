@@ -19,7 +19,7 @@ import (
 //   - POST /git-receive-pack                   — accept a push
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = gitserve.NewHandler(s.rh.Repo, s.rh.syncRepo, s.ri.UpstreamBranch)
+		s.handler = gitserve.NewHandler(s.rh.Repo, s.rr, s.ri.UpstreamBranch)
 	})
 	return s.handler
 }
