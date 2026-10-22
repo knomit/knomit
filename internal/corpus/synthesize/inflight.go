@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -178,7 +179,7 @@ func refreshedPayload(ctx context.Context, d step.Deps, branch string, item mode
 		return refreshFactList(ctx, d, branch, item.FactsJSON, m, 1)
 
 	case "discover":
-		var payload DiscoverWorkPayload
+		var payload discovery.DiscoverWorkPayload
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 			return refreshUnchanged, "", fmt.Errorf("decode discover payload: %w", err)
 		}

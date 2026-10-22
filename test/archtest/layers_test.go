@@ -208,6 +208,12 @@ var sameLayerEdges = map[string]bool{
 	"corpus/synthesize/bridge -> corpus/repos":            true,
 	"corpus/synthesize/bridge -> corpus/synthesize/graph": true,
 	"corpus/synthesize/bridge -> corpus/synthesize/step":  true,
+	// The discovery child ingests discover work items: it reads the bridge seed
+	// sets the bridge child builds, rides step vocabulary, and resolves the repo
+	// instance for gates and ref canonicalisation.
+	"corpus/synthesize/discovery -> corpus/repos":             true,
+	"corpus/synthesize/discovery -> corpus/synthesize/bridge": true,
+	"corpus/synthesize/discovery -> corpus/synthesize/step":   true,
 	// synthtest is the test-support package of the synthesize tree; its
 	// environment builders stand up a repo instance.
 	"corpus/synthesize/internal/synthtest -> corpus/repos":           true,

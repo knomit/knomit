@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"testing"
@@ -294,8 +295,8 @@ func TestInFlightRefresh_ClearsAcrossVehicles(t *testing.T) {
 
 	distillID := env.queue("distill", "group-0",
 		members(dupBPath, "kb/other-x.md", "kb/other-y.md"), 0)
-	discoverID := env.queue("discover", "discover-fwd-0", DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	discoverID := env.queue("discover", "discover-fwd-0", discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{
 			Token:   "SmartConsole",
 			Members: members(dupBPath, "kb/other-x.md", "kb/other-y.md"),
@@ -312,7 +313,7 @@ func TestInFlightRefresh_ClearsAcrossVehicles(t *testing.T) {
 
 	item := env.itemByID(discoverID)
 	require.NotNil(t, item)
-	var payload DiscoverWorkPayload
+	var payload discovery.DiscoverWorkPayload
 	require.NoError(t, json.Unmarshal([]byte(item.FactsJSON), &payload))
 	require.Len(t, payload.Bridge.Members, 2)
 	for _, f := range payload.Bridge.Members {
@@ -411,8 +412,8 @@ func TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots(t *testing.T) {
 	before := sourcesOf(env.factsOf(queuedID), dupAPath)
 	require.GreaterOrEqual(t, before, 0, "the queued item must carry the fact under test")
 
-	discoverID := env.queue("discover", "discover-fwd-0", DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	discoverID := env.queue("discover", "discover-fwd-0", discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{
 			Token:   "SmartConsole",
 			Members: members(dupBPath, "kb/other-x.md"),

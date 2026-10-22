@@ -1,4 +1,4 @@
-package synthesize
+package discovery
 
 import (
 	"knomit/internal/corpus/synthesize/bridge"

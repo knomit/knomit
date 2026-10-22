@@ -1,4 +1,4 @@
-package synthesize
+package discovery
 
 import (
 	"context"
@@ -48,7 +48,7 @@ func TestRenderDiscoverPrompt_DefaultToNo(t *testing.T) {
 
 func TestParseDiscoverResponse(t *testing.T) {
 	raw := `{"proposals":[{"path":"kb/x/p.md","title":"P","body":"b","type":"synthesis","domain":["x"],"confidence":0.8,"entities":[],"refs":["kb/a.md","kb/b.md"]}]}`
-	got, err := parseDiscoverResponse(raw)
+	got, err := ParseDiscoverResponse(raw)
 	require.NoError(t, err)
 	require.Len(t, got.Proposals, 1)
 	require.Equal(t, "kb/x/p.md", got.Proposals[0].Path)
@@ -87,7 +87,7 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 		{Path: "kb/at.md", Title: "at", Body: "at", Type: "synthesis", Domain: []string{"x"}, Confidence: 0.6, Refs: []string{"kb/a.md", "kb/b.md"}},
 	}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, gates, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, gates, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "only the proposal at-threshold should survive: %v", written)
 	// Path normalization rewrites the basename to a UUID; the surviving fact is
@@ -131,7 +131,7 @@ func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 		Path: "kb/skipped.md", Title: "x", Body: "x", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "a proposal citing one seed of two must be rejected")
 }
@@ -161,7 +161,7 @@ func TestApplyDiscoveredProposals_OriginDiscovered(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 
@@ -197,7 +197,7 @@ func TestApplyDiscoveredProposals_TypeMustMatchDirection(t *testing.T) {
 		Path: "kb/bad.md", Title: "h", Body: "h", Type: "hypothesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "type/direction mismatch must reject the proposal")
 }
@@ -294,21 +294,6 @@ func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
 				"the instruction must tie origin to the bridge grouping method")
 		})
 	}
-}
-
-// TestRenderDistillWorkItem_MandatesDistilledOrigin verifies the symmetric
-// rule for the regular-cluster path: a fact distilled from a cluster is
-// origin=distilled, and saving it directly via knomit_learn after previewing
-// requires setting that origin and citing the cluster sources.
-func TestRenderDistillWorkItem_MandatesDistilledOrigin(t *testing.T) {
-	wic, err := RenderDistillWorkItem(
-		[]step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
-		"kb", "", false)
-	require.NoError(t, err)
-	require.Contains(t, wic.Prompt, "origin: distilled",
-		"distill prompt must name the distilled origin at proposal time")
-	require.Contains(t, wic.Prompt, "knomit_learn",
-		"distill prompt must address the direct-save path")
 }
 
 // TestRenderDiscoverPrompt_TokenEmpty_Backward verifies the token-optional
@@ -419,12 +404,12 @@ func TestApplyDiscoveredProposals_BackwardBlastGate(t *testing.T) {
 	}}
 
 	// Threshold=1 → reject (a and b have zero dependents).
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 1}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 1}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "backward proposal must be rejected when seed has no live dependents")
 
 	// Threshold=0 → accept.
-	written, err = applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err = ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{BlastRadiusThreshold: 0}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "with threshold=0 the proposal should land: %v", written)
 }
@@ -486,7 +471,7 @@ func TestApplyDiscoveredProposals_EmbedError_FallsThrough(t *testing.T) {
 		}
 	}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		mockEmb, payload, proposals, gates, branch, synthtest.BareRefFixture, "kb", onProgress)
 	require.NoError(t, err)
 	require.Len(t, written, 1,
@@ -523,7 +508,7 @@ func TestApplyDiscoveredProposals_NoEmbedder_NoDedup(t *testing.T) {
 		Path: "kb/d.md", Title: "d", Body: "d", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 999}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, payload, props, DiscoveryGates{ConfidenceThreshold: 0.5, DedupThreshold: 999}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 }

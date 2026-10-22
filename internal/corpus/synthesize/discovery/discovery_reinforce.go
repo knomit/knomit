@@ -1,4 +1,4 @@
-package synthesize
+package discovery
 
 // REINFORCE — discovery's third outcome (GATE rider 3, designer ruling
 // 2026-08-23).
@@ -35,7 +35,7 @@ var permittedRewriteLines = map[string]struct{}{
 	"refs": {}, "sources": {}, "evidence_weight": {},
 }
 
-// applyReinforcements runs every reinforcement through its gate chain and
+// ApplyReinforcements runs every reinforcement through its gate chain and
 // strengthens the survivors.
 //
 // The equivalence claim gets alias-judge discipline: a stated one-sentence
@@ -46,7 +46,7 @@ var permittedRewriteLines = map[string]struct{}{
 //
 // No error return: every rejection is per-reinforcement, warned and skipped,
 // like the proposal loop it runs beside.
-func applyReinforcements(
+func ApplyReinforcements(
 	ctx context.Context,
 	gs *facts.Index,
 	sysFiles *facts.Repo,

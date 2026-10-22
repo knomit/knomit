@@ -1,9 +1,9 @@
-// Package synthesize — discovery integrates the bridge engine, the discover
+// Package discovery — discovery integrates the bridge engine, the discover
 // work-item shape, the agent prompt, and the ingest path with its gates.
 //
 // Plan 03 Tasks 4 (forward — review/synthesis) and 5 (backward — hypothesize/
 // keystone), plus Plan 04 Tasks 1-4 (verification gates).
-package synthesize
+package discovery
 
 import (
 	"context"
@@ -98,12 +98,12 @@ type DiscoveredFact struct {
 	Motifs step.FlexStrings `json:"motifs"`
 }
 
-// parseDiscoverResponse is the symmetric companion of parseDistillResponse.
-func parseDiscoverResponse(text string) (DiscoverResponse, error) {
+// ParseDiscoverResponse is the symmetric companion of parseDistillResponse.
+func ParseDiscoverResponse(text string) (DiscoverResponse, error) {
 	raw := step.ExtractJSON(text)
 	var result DiscoverResponse
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return DiscoverResponse{}, fmt.Errorf("parseDiscoverResponse: %w (raw: %.200s)", err, raw)
+		return DiscoverResponse{}, fmt.Errorf("ParseDiscoverResponse: %w (raw: %.200s)", err, raw)
 	}
 	return result, nil
 }
@@ -293,7 +293,7 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 	return b.String()
 }
 
-// applyDiscoveredProposals runs every proposal through the strict gate chain
+// ApplyDiscoveredProposals runs every proposal through the strict gate chain
 // and writes the survivors as facts with origin=discovered.
 //
 // Gate order (cheapest-first, then load-bearing):
@@ -308,7 +308,7 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 // Each rejection is logged at debug and emitted as a "warn" ProgressEvent so
 // the surrounding session log surfaces it; nothing is fatal — bad proposals
 // are dropped, good ones land.
-func applyDiscoveredProposals(
+func ApplyDiscoveredProposals(
 	ctx context.Context,
 	gs *facts.Index,
 	sysFiles *facts.Repo,

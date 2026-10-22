@@ -1,4 +1,4 @@
-package synthesize
+package discovery
 
 import (
 	"context"
@@ -23,55 +23,15 @@ type reinforceEnv struct {
 }
 
 const (
-	seedOnePath   = "kb/gotchas/uitesting/agentclicks.md"
-	seedTwoPath   = "kb/technology/benchmarks/terminalscores.md"
-	existingRef   = "kb/conventions/verifiers/sandboxing.md"
-	reinforcePath = "kb/principles/evaluation/verifierreach.md"
+	seedOnePath   = synthtest.ReinforceSeedOnePath
+	seedTwoPath   = synthtest.ReinforceSeedTwoPath
+	existingRef   = synthtest.ReinforceExistingRef
+	reinforcePath = synthtest.ReinforceTargetPath
 )
 
 func newReinforceEnv(t *testing.T) *reinforceEnv {
 	t.Helper()
-	env := synthtest.NewRestatementEnv(t, 0)
-	ctx := context.Background()
-
-	write := func(path, title string, refs []string, sources int) {
-		f := fact.NewFact(path)
-		f.Title = title
-		f.Body = "Body of " + title + "."
-		f.Type = fact.Observation
-		f.Confidence = 0.8
-		f.Sources = sources
-		f.Refs = refs
-		content, err := fact.SerializeFact(f)
-		require.NoError(t, err)
-		_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, path, content, "write "+path, "test")
-		require.NoError(t, err)
-	}
-
-	write(seedOnePath, "An agent testing a UI will execute JavaScript instead of clicking", nil, 1)
-	write(seedTwoPath, "Coding agents cheated a terminal benchmark to 94%", nil, 1)
-	write(existingRef, "Verifiers run in a sandbox the agent cannot write to", nil, 1)
-
-	target := fact.NewFact(reinforcePath)
-	target.Title = "The verifier is inside the agent's action space"
-	target.Body = "Every recorded form of eval gaming is an action taken ON the measurement apparatus."
-	target.Type = fact.Synthesis
-	// Origin EXPLICIT. A synthesis fact with the line elided does not
-	// round-trip — ParseFact defaults it to distilled and SerializeFact then
-	// writes it — so under the write contract such a target is SKIPPED. Every
-	// pipeline-written synthesis fact carries it; the fixture matches.
-	target.Origin = fact.Distilled
-	target.Confidence = 0.75
-	target.Sources = 1
-	target.Domain = []string{"evaluation"}
-	target.Entities = []string{"verifier gaming"}
-	target.Motifs = []string{"measure-becomes-target"}
-	target.Refs = []string{existingRef}
-	content, err := fact.SerializeFact(target)
-	require.NoError(t, err)
-	_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, reinforcePath, content, "write target", "test")
-	require.NoError(t, err)
-
+	env := synthtest.NewReinforceCorpus(t)
 	return &reinforceEnv{
 		RestatementEnv: env,
 		repoID:         fact.ID12(env.RI.ID()),
@@ -91,7 +51,7 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 
 func (e *reinforceEnv) apply(rs ...FactReinforcement) []string {
 	e.T.Helper()
-	return applyReinforcements(context.Background(), e.Svc.Facts(), e.Svc.FactsRepo(), e.Svc.Search(),
+	return ApplyReinforcements(context.Background(), e.Svc.Facts(), e.Svc.FactsRepo(), e.Svc.Search(),
 		e.payload, rs, e.Branch, e.repoID, func(step.ProgressEvent) {})
 }
 
@@ -373,7 +333,7 @@ func TestApplyReinforcements_SkipsALossyTarget(t *testing.T) {
 	// asserted: "rewritten outside the permitted lines" would send a reader
 	// hunting a formatting problem instead of a deleted motif.
 	var warnings []string
-	applyReinforcements(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+	ApplyReinforcements(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
 		env.payload, []FactReinforcement{goodReinforcement()}, env.Branch, env.repoID,
 		func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
@@ -510,7 +470,7 @@ func TestApplyReinforcements_DoesNotRewriteExistingRefs(t *testing.T) {
 // that something did.
 func warnsOf(env *reinforceEnv, rs ...FactReinforcement) ([]string, []string) {
 	var warns []string
-	written := applyReinforcements(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+	written := ApplyReinforcements(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
 		env.payload, rs, env.Branch, env.repoID, func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
 				warns = append(warns, e.Message)
@@ -523,7 +483,7 @@ func warnsOf(env *reinforceEnv, rs ...FactReinforcement) ([]string, []string) {
 // check to the WRITE PATH (review M5).
 //
 // rewriteIsMeaningPreserving had thorough tests of its own, and none of them
-// reached it through applyReinforcements: deleting the call left the entire
+// reached it through ApplyReinforcements: deleting the call left the entire
 // repo suite green. The two write-path tests that should have caught it each
 // shadowed the other — the lossy-motif case is refused by the tripwire before
 // the fidelity check runs, and the byte-guard fixture round-trips cleanly, so

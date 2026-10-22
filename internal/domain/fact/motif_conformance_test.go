@@ -84,7 +84,7 @@ var motifGateCallSites = map[string]string{
 		"reject so one malformed name cannot discard an entire consolidation. It " +
 		"uses the gate's own definition rather than re-implementing one, which is " +
 		"what MN4 forbids",
-	"internal/corpus/synthesize/discovery.go": "same, for discovered facts — which cost a bridge enumeration and an " +
+	"internal/corpus/synthesize/discovery/discovery.go": "same, for discovered facts — which cost a bridge enumeration and an " +
 		"LLM call each, so discarding one over a malformed motif spends both for nothing",
 	"internal/edge/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
 		"apply the gate itself and reserialize when the gate changes anything; it is the one write " +

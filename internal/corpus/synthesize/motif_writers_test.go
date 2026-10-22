@@ -9,8 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
+	"knomit/internal/testsupport/modroot"
 )
 
 // §2.1's LLM half: every fact-producing path carries motifs, and every one of
@@ -24,7 +26,7 @@ func TestDerivedWriters_AllThreeSchemasCarryMotifs(t *testing.T) {
 	for name, schema := range map[string]string{
 		"prune":    pruneResponseSchema,
 		"distill":  distillResponseSchema,
-		"discover": discoverResponseSchema,
+		"discover": discoverSchema(),
 	} {
 		require.Containsf(t, schema, `"motifs"`, "%s schema must accept motifs", name)
 		require.Containsf(t, schema, "general regularity",
@@ -43,11 +45,11 @@ func TestDerivedWriters_AllThreeSchemasCarryMotifs(t *testing.T) {
 func TestDerivedWriters_CarryOverWordingDiffersForDiscovery(t *testing.T) {
 	require.Contains(t, pruneResponseSchema, "Carry over member motifs")
 	require.Contains(t, distillResponseSchema, "Carry over member motifs")
-	require.NotContains(t, discoverResponseSchema, "Carry over member motifs",
+	require.NotContains(t, discoverSchema(), "Carry over member motifs",
 		"a discovered fact is a NEW claim, not a replacement — telling it to carry "+
 			"member motifs over would stamp the seed's regularity onto a consequence "+
 			"that may not instantiate it")
-	require.Contains(t, discoverResponseSchema, "natural candidate")
+	require.Contains(t, discoverSchema(), "natural candidate")
 }
 
 // factForLLM must SHOW motifs, or the judges cannot carry over what they never
@@ -68,7 +70,7 @@ func TestDerivedWriters_FactForLLMShowsMotifs(t *testing.T) {
 // MN11 / §2.1: no mechanical stamping of the seed's motif onto a discovered
 // fact. The prompt may suggest it; nothing in the code may apply it.
 func TestDerivedWriters_NoMechanicalSeedStamping(t *testing.T) {
-	src := readSourceFile(t, "discovery.go")
+	src := readDiscoverySources(t)
 	// The proposal's own motifs are read; the SEED's are never copied onto it.
 	//
 	// Asserted on the SOURCE of the value (p.Motifs, the proposal) rather than
@@ -100,8 +102,7 @@ func TestDerivedWriters_NoMechanicalSeedStamping(t *testing.T) {
 // them. It nearly caused this one: the strict reading is what left the derived
 // writers assigning raw LLM motifs and discarding whole facts.
 func TestDerivedWriters_NoLocalMotifValidation(t *testing.T) {
-	for _, rel := range []string{"decision.go", "discovery.go"} {
-		src := readSourceFile(t, rel)
+	for rel, src := range derivedWriterSources(t) {
 		// Re-implementations: forbidden.
 		require.NotContainsf(t, strings.ToLower(src), "len(motifs) >",
 			"%s hand-rolls a motif count check — that is per-path validation by "+
@@ -220,12 +221,49 @@ func TestDerivedWriters_OneBadMotifDoesNotDiscardTheFact(t *testing.T) {
 // differed. The remaining two both drop, which is why this no longer needs to
 // distinguish between them.
 func TestDerivedWriters_DropRatherThanDiscard(t *testing.T) {
-	for _, rel := range []string{"decision.go", "discovery.go"} {
-		src := readSourceFile(t, rel)
+	for rel, src := range derivedWriterSources(t) {
 		require.Containsf(t, src, "fact.DropInvalidMotifs",
 			"%s assigns LLM-proposed motifs without dropping invalid ones — one "+
 				"malformed name would fail SerializeFact and the caller's warn+continue "+
 				"would discard the whole fact", rel)
+	}
+}
+
+// discoverSchema is the discover step's response schema, read through the
+// exported renderer (the schema constant itself is the discovery child's).
+func discoverSchema() string {
+	return discovery.RenderDiscoverWorkItem(discovery.DiscoverWorkPayload{}, "kb").ResponseSchema
+}
+
+// readDiscoverySources returns the concatenated text of every non-test .go file
+// of the discovery child. It walks the directory rather than naming files, so a
+// file added to the child is scanned too; the walk is non-vacuous.
+func readDiscoverySources(t *testing.T) string {
+	t.Helper()
+	files, err := filepath.Glob(modroot.Path(t, "internal", "corpus", "synthesize", "discovery", "*.go"))
+	require.NoError(t, err)
+	var b strings.Builder
+	n := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(f)
+		require.NoError(t, err)
+		b.Write(raw)
+		n++
+	}
+	require.GreaterOrEqual(t, n, 1, "fixture: the discovery child's sources must be found")
+	return b.String()
+}
+
+// derivedWriterSources maps each derived writer to the source text it must be
+// scanned over: decision.go in this package, and the whole discovery child.
+func derivedWriterSources(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{
+		"decision.go":    readSourceFile(t, "decision.go"),
+		"discovery/*.go": readDiscoverySources(t),
 	}
 }
 

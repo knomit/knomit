@@ -118,7 +118,7 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 		sfRepoID, "kb", 0.95, nil))
 	found := methodologyFactPaths(t, svc, sfSide)
 	require.Len(t, found, 1, "the reflect wrote its methodology")
-	got := readFactForTest(t, svc, sfSide, found[0]).Refs
+	got := synthtest.ReadFact(t, svc, sfSide, found[0]).Refs
 	for _, want := range sfCanonical(sfGood...) {
 		require.Contains(t, got, want, "stored canonical, case kept")
 	}
@@ -146,7 +146,7 @@ func TestApplyDistillDecisions_SystemFileRefs(t *testing.T) {
 		"test", sink, sfSide, sfRepoID, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1, "only the good fact lands: %v", *warns)
-	good := readFactForTest(t, svc, sfSide, written[0].Path)
+	good := synthtest.ReadFact(t, svc, sfSide, written[0].Path)
 	require.Equal(t, "S good", good.Title)
 	got := good.Refs
 	for _, want := range sfCanonical(sfGood...) {
@@ -172,7 +172,7 @@ func TestApplyPruneDecisions_MergeSystemFileRefs(t *testing.T) {
 			svc := systemFileSynthRepo(t)
 			members := []string{"kb/technology/a.md", "kb/technology/b.md"}
 			for _, m := range members {
-				require.Empty(t, readFactForTest(t, svc, sfSide, m).Refs, "fixture: no member carries the ref, so prior cannot exempt it")
+				require.Empty(t, synthtest.ReadFact(t, svc, sfSide, m).Refs, "fixture: no member carries the ref, so prior cannot exempt it")
 			}
 			sink, warns := synthtest.CollectWarns()
 			stats, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, []step.MergeEntry{{
@@ -183,14 +183,14 @@ func TestApplyPruneDecisions_MergeSystemFileRefs(t *testing.T) {
 			require.NoError(t, err)
 			if tc.good {
 				require.Equal(t, 1, stats.Merged, "warns: %v", *warns)
-				got := readFactForTest(t, svc, sfSide, mergedFactPath(t, svc, sfSide, "Merged")).Refs
+				got := synthtest.ReadFact(t, svc, sfSide, mergedFactPath(t, svc, sfSide, "Merged")).Refs
 				require.Contains(t, got, sfCanonical(tc.ref)[0], "stored canonical, case kept")
 				return
 			}
 			require.Equal(t, 0, stats.Merged)
 			requireFileRefusal(t, strings.Join(*warns, "\n"), tc.ref)
 			for _, m := range members {
-				readFactForTest(t, svc, sfSide, m) // the skipped merge retracted nothing
+				synthtest.ReadFact(t, svc, sfSide, m) // the skipped merge retracted nothing
 			}
 		})
 	}

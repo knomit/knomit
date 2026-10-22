@@ -1,4 +1,4 @@
-package synthesize
+package discovery
 
 import (
 	"context"
@@ -202,12 +202,12 @@ func TestApplyDiscoveredProposals_AcceptsTwoOfThreeSeeds(t *testing.T) {
 		Refs: []string{"kb/a.md", "kb/b.md"}, // kb/c.md genuinely does not fit
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "a two-of-three derivation must be recorded, not discarded")
 
-	f := readFactForTest(t, svc, branch, written[0])
+	f := synthtest.ReadFact(t, svc, branch, written[0])
 	require.Len(t, f.Refs, 2, "and it records only the seeds it actually rests on")
 	require.NotContains(t, strings.Join(f.Refs, " "), "kb/c.md",
 		"the seed that did not fit must not be forced into the derivation path")
@@ -232,7 +232,7 @@ func TestApplyDiscoveredProposals_DiscardsRefsOutsideTheBridge(t *testing.T) {
 	}}
 
 	var warned []string
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb",
 		func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
@@ -242,7 +242,7 @@ func TestApplyDiscoveredProposals_DiscardsRefsOutsideTheBridge(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, written, 1, "surplus citation must not kill an otherwise valid proposal")
 
-	f := readFactForTest(t, svc, branch, written[0])
+	f := synthtest.ReadFact(t, svc, branch, written[0])
 	require.NotContains(t, strings.Join(f.Refs, " "), "kb/elsewhere.md",
 		"a ref the bridge never offered must not become a derivation path")
 	require.Contains(t, strings.Join(warned, "\n"), "outside the bridge",
@@ -260,19 +260,10 @@ func TestApplyDiscoveredProposals_RejectsOneOfThreeSeeds(t *testing.T) {
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+	written, err := ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
 		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "one citation is not a derivation path")
-}
-
-func readFactForTest(t *testing.T, svc *store.Service, branch, path string) fact.Fact {
-	t.Helper()
-	res, err := svc.Facts().ReadFact(context.Background(), branch, path, nil)
-	require.NoError(t, err)
-	f, err := fact.ParseFact(path, res.Content)
-	require.NoError(t, err)
-	return f
 }
 
 // ── the reinforce path, end to end ──

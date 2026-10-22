@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
@@ -263,11 +264,11 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 		{File: "kb/a.md", Title: "Alpha", Body: "a body", Motifs: []string{marker}},
 		{File: "kb/b.md", Title: "Bravo", Body: "another body", Motifs: []string{marker}},
 	}
-	payload := DiscoverWorkPayload{
-		Direction: DiscoverBackward, Lane: bridge.LaneFar,
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverBackward, Lane: bridge.LaneFar,
 		Bridge: bridge.BridgeSeedSet{Token: marker, Kind: bridge.BridgeMotif, Members: members},
 	}
-	view := RenderDiscoverWorkItem(payload, "kb")
+	view := discovery.RenderDiscoverWorkItem(payload, "kb")
 
 	// The group's own token appears — that is the authorized exposure, and the
 	// far-lane SHIP line cannot say what the members claim without naming it.
@@ -284,8 +285,8 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 
 	// And a group whose members carry no motifs at all renders no motif
 	// vocabulary anywhere — the entity/domain bridges that share this renderer.
-	bare := RenderDiscoverWorkItem(DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	bare := discovery.RenderDiscoverWorkItem(discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{Token: "some-entity", Kind: bridge.BridgeEntity, Members: []step.FactForLLM{
 			{File: "kb/c.md", Title: "Charlie", Body: "body"}}},
 	}, "kb")

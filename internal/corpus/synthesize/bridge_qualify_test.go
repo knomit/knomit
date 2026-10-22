@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
@@ -96,8 +97,8 @@ func TestReviewQualifyGate_EntityBridgesAreNotEnqueued(t *testing.T) {
 // qualify gate must NOT have changed: a discover item's payload. The gate
 // decides WHETHER an item is made, never what is in it.
 func TestDiscoverPayloadShapeUnchanged(t *testing.T) {
-	b, err := json.Marshal(DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	b, err := json.Marshal(discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge:    bridge.BridgeSeedSet{Token: "x", Kind: bridge.BridgeMotif},
 	})
 	require.NoError(t, err)
