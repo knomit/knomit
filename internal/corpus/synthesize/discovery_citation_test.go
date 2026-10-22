@@ -2,12 +2,14 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -178,7 +180,7 @@ func threeSeedProposalEnv(t *testing.T) (*store.Service, string, DiscoverWorkPay
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/a.md", Title: "A"},
 				{File: "kb/b.md", Title: "B"},
 				{File: "kb/c.md", Title: "C"},
@@ -200,7 +202,7 @@ func TestApplyDiscoveredProposals_AcceptsTwoOfThreeSeeds(t *testing.T) {
 	}}
 
 	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "a two-of-three derivation must be recorded, not discarded")
 
@@ -230,8 +232,8 @@ func TestApplyDiscoveredProposals_DiscardsRefsOutsideTheBridge(t *testing.T) {
 
 	var warned []string
 	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb",
-		func(e ProgressEvent) {
+		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb",
+		func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
 				warned = append(warned, e.Message)
 			}
@@ -258,7 +260,7 @@ func TestApplyDiscoveredProposals_RejectsOneOfThreeSeeds(t *testing.T) {
 	}}
 
 	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, written, "one citation is not a derivation path")
 }
@@ -292,12 +294,12 @@ func threeSeedReinforceEnv(t *testing.T) *reinforceEnv {
 	f.Sources = 1
 	content, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(context.Background(), env.branch, seedThreePath,
+	_, err = env.Svc.Facts().WriteFact(context.Background(), env.Branch, seedThreePath,
 		content, "write third seed", "test")
 	require.NoError(t, err)
 
 	env.payload.Bridge.Members = append(env.payload.Bridge.Members,
-		factForLLM{File: seedThreePath})
+		step.FactForLLM{File: seedThreePath})
 	return env
 }
 
@@ -326,7 +328,7 @@ func TestApplyReinforcements_RejectsOneOfThreeSeeds(t *testing.T) {
 	before := env.read(reinforcePath)
 
 	r := goodReinforcement()
-	r.Refs = flexStrings{seedOnePath}
+	r.Refs = step.FlexStrings{seedOnePath}
 	require.Empty(t, env.apply(r))
 	require.Equal(t, before.Sources, env.read(reinforcePath).Sources,
 		"a rejected reinforcement must not move sources")
@@ -345,7 +347,7 @@ func TestApplyReinforcements_CanonicalSeedSpellingIsAccepted(t *testing.T) {
 	before := env.read(reinforcePath)
 
 	r := goodReinforcement()
-	r.Refs = flexStrings{
+	r.Refs = step.FlexStrings{
 		fact.QualifyKBPath(env.repoID, seedOnePath),
 		fact.QualifyKBPath(env.repoID, seedTwoPath),
 	}

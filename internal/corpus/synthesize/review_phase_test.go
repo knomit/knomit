@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -174,7 +176,7 @@ func TestReviewer_ConcurrentContinuations_EnqueueReflectOnce(t *testing.T) {
 	const callers = 2
 	var wg sync.WaitGroup
 	wg.Add(callers)
-	results := make([]*ReviewResult, callers)
+	results := make([]*step.ReviewResult, callers)
 	errs := make([]error, callers)
 	for i := range callers {
 		go func() {
@@ -346,7 +348,7 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 	// go through the same gate as every other write, so a response citing a
 	// path that does not exist is rejected — correct behaviour, but not what
 	// these dispatch/claim tests are about, so the fixture cites something real.
-	seedFactWithSources(t, svc, "agent/test", "kb/technology/a.md", 2)
+	synthtest.SeedFactWithSources(t, svc, "agent/test", "kb/technology/a.md", 2)
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
@@ -378,7 +380,7 @@ func manualSession(t *testing.T, svc *store.Service, branch string) *model.Pipel
 // no-op — exercising the dispatcher without dragging in real LLM output.
 func insertManualPruneItem(t *testing.T, svc *store.Service, sessionID, factPath string) {
 	t.Helper()
-	facts := []factForLLM{{File: factPath, Title: "x", Body: "x", Type: "observation"}}
+	facts := []step.FactForLLM{{File: factPath, Title: "x", Body: "x", Type: "observation"}}
 	body, err := json.Marshal(facts)
 	require.NoError(t, err)
 	err = svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{

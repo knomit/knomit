@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -23,7 +24,7 @@ import (
 // callers racing on the same item both saw it unanswered and both applied,
 // and a caller whose mark-answered failed left the item to be re-served and
 // re-applied. Because ApplyDistillDecisions mints a fresh UUID filename per
-// call (decision.go normalizeFactPath), each extra apply is a *new* fact, not
+// call (step.NormalizeFactPath, step/validation.go), each extra apply is a *new* fact, not
 // an overwrite — duplicate synthesis facts, i.e. corpus corruption.
 
 // distillResponseOneFact is a valid distill response that synthesizes exactly
@@ -259,7 +260,7 @@ const benignLoserRefusal = `is completed, not active|is being applied by another
 func insertManualDistillItem(t *testing.T, svc *store.Service, sessionID string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	facts := []factForLLM{
+	facts := []step.FactForLLM{
 		{File: "kb/technology/a.md", Title: "A", Body: "a", Type: "observation"},
 		{File: "kb/technology/b.md", Title: "B", Body: "b", Type: "observation"},
 	}

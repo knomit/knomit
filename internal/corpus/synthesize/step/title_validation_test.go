@@ -1,4 +1,4 @@
-package synthesize
+package step
 
 import (
 	"testing"
@@ -12,14 +12,14 @@ import (
 // applied. The validators refuse it up front with the same rule.
 func TestValidators_RefuseUnwritableTitles(t *testing.T) {
 	for _, title := range []string{"", "   ", "\nFoo", "Foo\nBar", "Foo\r\nBar"} {
-		merge := PruneResult{Merges: []MergeEntry{{Paths: []string{"kb/a.md"}, Merged: mergedFact{Title: title}}}}
-		require.Error(t, validatePrunePaths(merge, []string{"kb/a.md"}), "prune merge title %q", title)
+		merge := PruneResult{Merges: []MergeEntry{{Paths: []string{"kb/a.md"}, Merged: MergedFact{Title: title}}}}
+		require.Error(t, ValidatePrunePaths(merge, []string{"kb/a.md"}), "prune merge title %q", title)
 
 		propose := ReflectResult{Propose: []ProposeEntry{{
 			Title: title, Body: "B", TopicPath: "kb/meta/reasoning", Confidence: 0.7,
 			TransitionPaths: []string{"kb/h2.md"}, NoveltyArgument: "n",
 		}}}
-		err := validateReflectResponse(propose, []string{"kb/h2.md"}, 1)
+		err := ValidateReflectResponse(propose, []string{"kb/h2.md"}, 1)
 		require.Error(t, err, "reflect propose title %q", title)
 		require.Contains(t, err.Error(), "propose[0]: title")
 	}

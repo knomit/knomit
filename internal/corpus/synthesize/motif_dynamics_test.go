@@ -3,10 +3,12 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -28,9 +30,9 @@ import (
 // in internal/edge/mcp/learn_motif_test.go, because internal/edge/mcp imports this
 // package and the dependency cannot run the other way.
 
-func motifDF(t *testing.T, e *restatementEnv, motif string) int {
+func motifDF(t *testing.T, e *synthtest.RestatementEnv, motif string) int {
 	t.Helper()
-	n, err := e.svc.Search().TokenDF(context.Background(), e.branch, motif, "motif")
+	n, err := e.Svc.Search().TokenDF(context.Background(), e.Branch, motif, "motif")
 	require.NoError(t, err)
 	return n
 }
@@ -42,22 +44,22 @@ func motifDF(t *testing.T, e *restatementEnv, motif string) int {
 // and the loss would stay invisible until a much later phase went looking for a
 // bridge whose seed had quietly evaporated.
 func TestMotifDynamics_SurvivesEditAcrossSessions(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	// Session 1.
-	env.writeFactWithMotifs("kb/alpha/one.md", "Title one", "body one",
+	env.WriteFactWithMotifs("kb/alpha/one.md", "Title one", "body one",
 		[]string{"silent-fallback"})
 	require.Equal(t, 1, motifDF(t, env, "silent-fallback"))
 
 	// Session 2: edit the body, keep the motif. The fact is a new row; the
 	// motif must come with it.
-	env.writeFactWithMotifs("kb/alpha/one.md", "Title one", "body one, revised",
+	env.WriteFactWithMotifs("kb/alpha/one.md", "Title one", "body one, revised",
 		[]string{"silent-fallback"})
 	require.Equal(t, 1, motifDF(t, env, "silent-fallback"),
 		"an edit must neither drop the motif nor double-count it")
 
 	// Session 3: change the motif itself.
-	env.writeFactWithMotifs("kb/alpha/one.md", "Title one", "body one, revised again",
+	env.WriteFactWithMotifs("kb/alpha/one.md", "Title one", "body one, revised again",
 		[]string{"config-drift"})
 	require.Equal(t, 1, motifDF(t, env, "config-drift"))
 	require.Zero(t, motifDF(t, env, "silent-fallback"),
@@ -71,12 +73,12 @@ func TestMotifDynamics_SurvivesEditAcrossSessions(t *testing.T) {
 // regularity"), and edit churn is not corroboration. Getting this wrong would
 // promote a single much-edited fact into a df band it never earned.
 func TestMotifDynamics_DFTracksLivePathsNotRevisions(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	for i := range 3 {
-		env.writeFactWithMotifs("kb/alpha/one.md", "Title one",
+		env.WriteFactWithMotifs("kb/alpha/one.md", "Title one",
 			fmt.Sprintf("body revision %d", i), []string{"silent-fallback"})
 	}
-	env.writeFactWithMotifs("kb/alpha/two.md", "Title two", "body two",
+	env.WriteFactWithMotifs("kb/alpha/two.md", "Title two", "body two",
 		[]string{"silent-fallback"})
 
 	require.Equal(t, 2, motifDF(t, env, "silent-fallback"),
@@ -87,16 +89,16 @@ func TestMotifDynamics_DFTracksLivePathsNotRevisions(t *testing.T) {
 // junction rows with it, or df keeps counting a carrier that no longer exists
 // and every consumer inherits a phantom.
 func TestMotifDynamics_RetractionRemovesTheMotif(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	ctx := context.Background()
 
-	env.writeFactWithMotifs("kb/alpha/one.md", "Title one", "body one",
+	env.WriteFactWithMotifs("kb/alpha/one.md", "Title one", "body one",
 		[]string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/alpha/two.md", "Title two", "body two",
+	env.WriteFactWithMotifs("kb/alpha/two.md", "Title two", "body two",
 		[]string{"silent-fallback"})
 	require.Equal(t, 2, motifDF(t, env, "silent-fallback"))
 
-	_, err := env.svc.Facts().DeleteFact(ctx, env.branch, "kb/alpha/two.md", "retract two")
+	_, err := env.Svc.Facts().DeleteFact(ctx, env.Branch, "kb/alpha/two.md", "retract two")
 	require.NoError(t, err)
 
 	require.Equal(t, 1, motifDF(t, env, "silent-fallback"),
@@ -109,17 +111,17 @@ func TestMotifDynamics_RetractionRemovesTheMotif(t *testing.T) {
 // the same subject motif in on the second session, and nothing downstream would
 // question it.
 func TestMotifDynamics_SubjectStripHoldsAcrossSessions(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	// "widget-alpha" is entity ∪ domain for this helper's fixtures, so it is a
 	// subject motif and never lands.
-	env.writeFactWithMotifs("kb/alpha/one.md", "Title one", "body one",
+	env.WriteFactWithMotifs("kb/alpha/one.md", "Title one", "body one",
 		[]string{"widget-alpha", "silent-fallback"})
 	require.Equal(t, 1, motifDF(t, env, "silent-fallback"))
 	require.Zero(t, motifDF(t, env, "widget-alpha"))
 
 	// Session 2: offered again, dropped again.
-	env.writeFactWithMotifs("kb/alpha/one.md", "Title one", "body one, revised",
+	env.WriteFactWithMotifs("kb/alpha/one.md", "Title one", "body one, revised",
 		[]string{"widget-alpha", "silent-fallback"})
 	require.Equal(t, 1, motifDF(t, env, "silent-fallback"))
 	require.Zero(t, motifDF(t, env, "widget-alpha"),
@@ -130,13 +132,13 @@ func TestMotifDynamics_SubjectStripHoldsAcrossSessions(t *testing.T) {
 // a later phase's df band depends on: motifs written by unrelated sessions over
 // unrelated facts add up, and a motif nobody repeated stays at one.
 func TestMotifDynamics_AccumulatesAcrossSessions(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	for i := range 5 {
 		motifs := []string{"silent-fallback"}
 		if i == 0 {
 			motifs = append(motifs, "unmonitored-expiry")
 		}
-		env.writeFactWithMotifs(fmt.Sprintf("kb/alpha/f%d.md", i),
+		env.WriteFactWithMotifs(fmt.Sprintf("kb/alpha/f%d.md", i),
 			fmt.Sprintf("Title %d", i), fmt.Sprintf("body %d", i), motifs)
 	}
 
@@ -154,16 +156,16 @@ func TestMotifDynamics_AccumulatesAcrossSessions(t *testing.T) {
 // because the conformance test banned dedup.go from mentioning motifs at all —
 // an over-reading of MN6 that made the correct code look like a violation.
 func TestMotifDynamics_ReviewMergePreservesLoserMotifs(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	ctx := context.Background()
 
 	// Two near-identical facts. The higher-confidence one wins.
-	env.writeFactWithMotifsConf("kb/alpha/winner.md", "Cache invalidation on write",
+	env.WriteFactWithMotifsConf("kb/alpha/winner.md", "Cache invalidation on write",
 		"one account of it", []string{"stale-read-window"}, 0.9)
-	env.writeFactWithMotifsConf("kb/alpha/loser.md", "Cache invalidation on write",
+	env.WriteFactWithMotifsConf("kb/alpha/loser.md", "Cache invalidation on write",
 		"one account of it", []string{"silent-fallback"}, 0.5)
 
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: "kb/alpha/winner.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
 		{File: "kb/alpha/loser.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
@@ -171,8 +173,8 @@ func TestMotifDynamics_ReviewMergePreservesLoserMotifs(t *testing.T) {
 	}
 
 	// threshold 0 so the pair merges on the deterministic embedder's similarity.
-	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(), 0,
-		"test", func(ProgressEvent) {}, env.branch, bareRefFixture)
+	out, err := dedupCluster(ctx, cluster, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(), 0,
+		"test", func(step.ProgressEvent) {}, env.Branch, synthtest.BareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, out, 1, "the fixture must actually have merged, or this proves nothing")
 
@@ -183,9 +185,9 @@ func TestMotifDynamics_ReviewMergePreservesLoserMotifs(t *testing.T) {
 }
 
 // readFactFromStore reads and parses the committed fact at path.
-func readFactFromStore(t *testing.T, e *restatementEnv, path string) fact.Fact {
+func readFactFromStore(t *testing.T, e *synthtest.RestatementEnv, path string) fact.Fact {
 	t.Helper()
-	res, err := e.svc.Facts().ReadFact(context.Background(), e.branch, path, nil)
+	res, err := e.Svc.Facts().ReadFact(context.Background(), e.Branch, path, nil)
 	require.NoError(t, err)
 	f, err := fact.ParseFact(path, res.Content)
 	require.NoError(t, err)
@@ -199,7 +201,7 @@ func readFactFromStore(t *testing.T, e *restatementEnv, path string) fact.Fact {
 // dropped; here the operands overflow the cap, which is the case where
 // ordering stops being cosmetic and decides what is deleted with the loser.
 func TestMotifDynamics_ReviewMergeTrimsToTheCapWinnerFirst(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	ctx := context.Background()
 
 	winnerMotifs := []string{"stale-read-window", "silent-fallback"}
@@ -212,20 +214,20 @@ func TestMotifDynamics_ReviewMergeTrimsToTheCapWinnerFirst(t *testing.T) {
 		require.NotContains(t, loserMotifs, w)
 	}
 
-	env.writeFactWithMotifsConf("kb/alpha/winner.md", "Cache invalidation on write",
+	env.WriteFactWithMotifsConf("kb/alpha/winner.md", "Cache invalidation on write",
 		"one account of it", winnerMotifs, 0.9)
-	env.writeFactWithMotifsConf("kb/alpha/loser.md", "Cache invalidation on write",
+	env.WriteFactWithMotifsConf("kb/alpha/loser.md", "Cache invalidation on write",
 		"one account of it", loserMotifs, 0.5)
 
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: "kb/alpha/winner.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
 		{File: "kb/alpha/loser.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
 
-	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(), 0,
-		"test", func(ProgressEvent) {}, env.branch, bareRefFixture)
+	out, err := dedupCluster(ctx, cluster, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(), 0,
+		"test", func(step.ProgressEvent) {}, env.Branch, synthtest.BareRefFixture)
 	require.NoError(t, err)
 	require.Len(t, out, 1, "the fixture must actually have merged, or this proves nothing")
 

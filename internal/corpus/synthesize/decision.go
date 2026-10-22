@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -29,10 +30,10 @@ func ApplyPruneDecisions(ctx context.Context,
 	// idx supplies FactExistsAt — the same resolution predicate every READER
 	// uses, which the ref gate must match exactly.
 	idx *index.Facade,
-	decisions []PruneDecision,
-	merges []MergeEntry,
+	decisions []step.PruneDecision,
+	merges []step.MergeEntry,
 	recipeName string,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 	agentBranch string,
 	// localRepoID is this repo's 12-hex id. Refs are stored canonical
 	// (kb://<own-id>/<path>), so every lineage filter below needs it to tell a
@@ -42,8 +43,8 @@ func ApplyPruneDecisions(ctx context.Context,
 	// ontology decides which agreed context keys a merged fact may carry at
 	// its own topic (F22). nil carries none.
 	ontology *fact.Ontology,
-) (*ReviewStats, error) {
-	stats := &ReviewStats{}
+) (*step.ReviewStats, error) {
+	stats := &step.ReviewStats{}
 	// Track deleted paths to avoid double-deletion when a path appears in
 	// both "retract" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
@@ -53,7 +54,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	rewrittenPaths := make(map[string]bool)
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
-	mergeGate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
+	mergeGate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
 	// Each merge's prior: its members' refs, SNAPSHOTTED NOW, before the
 	// decision loop's retracts and the earlier merges below delete members on
 	// this branch. Read at the tip later, a member retracted or consumed
@@ -73,7 +74,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		case "retract":
 			msg := fmt.Sprintf("synthesize-%s: retract %s", recipeName, d.Path)
 			if _, err := gs.DeleteFact(ctx, agentBranch, d.Path, msg); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
 			// Recorded AFTER the delete succeeded. The merge loop below already
@@ -83,25 +84,25 @@ func ApplyPruneDecisions(ctx context.Context,
 			// not harmless now that the same set says which facts left the
 			// corpus.
 			deletedPaths[d.Path] = true
-			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
+			onProgress(step.ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
 		case "update":
 			readResult, err := gs.ReadFact(ctx, agentBranch, d.Path, nil)
 			if err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update read %s: %v", d.Path, err)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update read %s: %v", d.Path, err)})
 				continue
 			}
 			f, err := fact.ParseFact(d.Path, readResult.Content)
 			if err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update parse %s: %v", d.Path, err)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update parse %s: %v", d.Path, err)})
 				continue
 			}
 			// F22: a context map ParseFact had to drop (malformed, arrived
 			// via git) would be deleted by this rewrite. A confidence change
 			// is not worth losing authored data over: skip, and say why.
 			if len(f.ContextWarnings) > 0 {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 					"update %s skipped: its context is malformed and a rewrite would drop it (%s)",
 					d.Path, strings.Join(f.ContextWarnings, "; "))})
 				continue
@@ -109,15 +110,15 @@ func ApplyPruneDecisions(ctx context.Context,
 			f.Confidence = d.Confidence
 			updated, err := fact.SerializeFact(f)
 			if err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update serialize %s: %v", d.Path, err)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update serialize %s: %v", d.Path, err)})
 				continue
 			}
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
 			if _, err := gs.WriteFact(ctx, agentBranch, d.Path, updated, msg, "update"); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
+			onProgress(step.ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 			stats.Updated++
 			rewrittenPaths[d.Path] = true
 		}
@@ -126,12 +127,12 @@ func ApplyPruneDecisions(ctx context.Context,
 	// Apply merges.
 	for i, m := range merges {
 		mf := m.Merged
-		if err := validateOutputPath(mf.Path, ontologyRoot); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge rejected: %v", err)})
+		if err := step.ValidateOutputPath(mf.Path, ontologyRoot); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge rejected: %v", err)})
 			continue
 		}
-		if err := validateOutputType(mf.Type); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
+		if err := step.ValidateOutputType(mf.Type); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
 			continue
 		}
 		// Prune-merges cannot create hypothesis-type facts. Hypotheses
@@ -142,7 +143,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		// architectural invariant "review never creates hypotheses" is
 		// enforced server-side, not just by prompt.
 		if fact.Type(mf.Type) == fact.Hypothesis {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
 		// Replace the LLM-generated filename with a UUID, as distill does
@@ -163,18 +164,18 @@ func ApplyPruneDecisions(ctx context.Context,
 		// for, which is the argument the DropInvalidMotifs comment makes a few
 		// lines below; the LLM's DIRECTORY choice is still honoured, only the
 		// filename is replaced.
-		mf.Path = normalizeFactPath(mf.Path)
+		mf.Path = step.NormalizeFactPath(mf.Path)
 		// TRANSFER: pooled from the facts being subsumed, not from mf.Sources.
 		// The merged fact REPLACES its sources and they are deleted immediately
 		// below, so trusting the count the model happened to emit discards the
 		// corroborations the merge just absorbed. §5.3 already mandates summing
 		// for dedup-on-learn; this is the same merge.
-		weight, pooled, readable := computeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
+		weight, pooled, readable := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
 		// A merge that can read none of the facts it is about to delete is
 		// destroying evidence it never counted. The floor would otherwise
 		// dress that up as a plausible sources: 1.
 		if readable == 0 && len(m.Paths) > 0 {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"merge %s: none of the %d subsumed facts could be read — their corroborations are lost",
 				mf.Path, len(m.Paths))})
 		}
@@ -222,14 +223,14 @@ func ApplyPruneDecisions(ctx context.Context,
 		// whole merge was warn-and-skipped.
 		canonRefs, _, gerr := mergeGate.Apply(ctx, merged.Path(), mf.Refs, memberPrior[i])
 		if gerr != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", merged.Path(), gerr)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", merged.Path(), gerr)})
 			continue
 		}
 		merged.Refs = canonRefs
 
 		content, err := fact.SerializeFact(merged)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge serialize %s: %v", merged.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge serialize %s: %v", merged.Path(), err)})
 			continue
 		}
 		// ONE COMMIT for the whole merge (#101): the merged fact and every
@@ -279,7 +280,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			// (the L7 call again).
 			exists, eerr := gs.FactExists(ctx, agentBranch, src)
 			if eerr != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge source %s: %v", src, eerr)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge source %s: %v", src, eerr)})
 				continue
 			}
 			if !exists {
@@ -298,23 +299,23 @@ func ApplyPruneDecisions(ctx context.Context,
 		if _, _, err := gs.BatchWriteFacts(ctx, agentBranch, files, deletes, msg, "subsume"); err != nil {
 			// Atomic in both directions: nothing landed, so nothing is
 			// recorded. The sources stay live and the pair is offered again.
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s: %v", merged.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s: %v", merged.Path(), err)})
 			continue
 		}
 		for _, src := range deletes {
 			deletedPaths[src] = true
 		}
 		if len(notCarried) > 0 {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"merge %s: expires not carried (a merge writes a new fact, which carries none; set one with knomit_update if it should expire): %s",
 				merged.Path(), strings.Join(notCarried, ", "))})
 		}
 		if len(contextDropped) > 0 {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"merge %s: context keys not carried (a merge keeps only the keys every member carries with the same value, and only those the merged fact's topic declares; the members keep theirs in history): %s",
 				merged.Path(), strings.Join(contextDropped, ", "))})
 		}
-		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
+		onProgress(step.ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
 	}
 
@@ -351,42 +352,42 @@ func ApplyDistillDecisions(ctx context.Context,
 	sysFiles *facts.Repo,
 	// idx supplies FactExistsAt — the reader's resolution predicate.
 	idx *index.Facade,
-	synthesized []distillFact,
+	synthesized []step.DistillFact,
 	retract []string,
 	recipeName string,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 	agentBranch string,
 	// localRepoID is this repo's 12-hex id. Refs are stored canonical
 	// (kb://<own-id>/<path>), so every lineage filter below needs it to tell a
 	// local edge from a foreign one; passing "" reads them all as foreign.
 	localRepoID string,
 	ontologyRoot string,
-) (*ReviewStats, []distillFact, error) {
-	stats := &ReviewStats{}
-	var written []distillFact
-	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
+) (*step.ReviewStats, []step.DistillFact, error) {
+	stats := &step.ReviewStats{}
+	var written []step.DistillFact
+	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
 	// Commit synthesized facts.
 	for _, df := range synthesized {
-		if err := validateOutputPath(df.Path, ontologyRoot); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill rejected: %v", err)})
+		if err := step.ValidateOutputPath(df.Path, ontologyRoot); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill rejected: %v", err)})
 			continue
 		}
-		if err := validateOutputType(df.Type); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", df.Path, err)})
+		if err := step.ValidateOutputType(df.Type); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", df.Path, err)})
 			continue
 		}
 		// Distill cannot create hypothesis-type facts.
 		if fact.Type(df.Type) == fact.Hypothesis {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
 			continue
 		}
 		// Replace LLM-generated filename with a UUID to match learn convention.
-		df.Path = normalizeFactPath(df.Path)
-		localRefs := localFactRefPaths(df.Refs, localRepoID)
-		weight := computeWeight(ctx, gs, agentBranch, localRepoID, localRefs)
+		df.Path = step.NormalizeFactPath(df.Path)
+		localRefs := step.LocalFactRefPaths(df.Refs, localRepoID)
+		weight := step.ComputeWeight(ctx, gs, agentBranch, localRepoID, localRefs)
 		f := fact.NewFact(df.Path)
 		f.Title = df.Title
 		f.Body = df.Body
@@ -422,22 +423,22 @@ func ApplyDistillDecisions(ctx context.Context,
 		// none of their refs. Every ref here is authored now (knomit#249).
 		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), df.Refs, nil)
 		if gerr != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", f.Path(), gerr)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", f.Path(), gerr)})
 			continue
 		}
 		f.Refs = canonRefs
 
 		content, err := fact.SerializeFact(f)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill serialize %s: %v", f.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill serialize %s: %v", f.Path(), err)})
 			continue
 		}
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
 		if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}
-		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
+		onProgress(step.ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
 		written = append(written, df)
 	}
@@ -446,10 +447,10 @@ func ApplyDistillDecisions(ctx context.Context,
 	for _, path := range retract {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipeName)
 		if _, err := gs.DeleteFact(ctx, agentBranch, path, msg); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
-		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
+		onProgress(step.ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++
 		stats.Retired = append(stats.Retired, path)
 	}
@@ -485,16 +486,16 @@ func ApplyReflectDecisions(
 	gs *facts.Index,
 	sysFiles *facts.Repo,
 	idx *index.Facade,
-	result ReflectResult,
+	result step.ReflectResult,
 	sess *model.PipelineSession,
 	// localRepoID is this repo's 12-hex id, for the ref gate below.
 	localRepoID string,
 	ontologyRoot string,
 	noveltyThreshold float64,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 ) error {
 	if onProgress == nil {
-		onProgress = func(ProgressEvent) {}
+		onProgress = func(step.ProgressEvent) {}
 	}
 
 	branch := sess.Branch
@@ -511,7 +512,7 @@ func ApplyReflectDecisions(
 	// ref. Everything it already cited resolved at its own commit and is not
 	// re-judged here.
 	priorRefsByPath := make(map[string][]string)
-	reflectGate := writeGate(localRepoID, idx.FactQuery, sysFiles, branch)
+	reflectGate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, branch)
 
 	// Phase 1 — validate reinforce targets resolve to methodology facts and
 	// stage transition-fact updates appending the methodology path to refs.
@@ -549,7 +550,7 @@ func ApplyReflectDecisions(
 				priorRefsByPath[tf.Path()] = before
 			}
 		}
-		onProgress(ProgressEvent{Phase: "detail-reflect-reinforce",
+		onProgress(step.ProgressEvent{Phase: "detail-reflect-reinforce",
 			Message: fmt.Sprintf("reinforced %s with %d transitions", e.MethodologyPath, len(e.TransitionPaths))})
 	}
 
@@ -562,7 +563,7 @@ func ApplyReflectDecisions(
 			return fmt.Errorf("propose[%d]: %w", i, err)
 		}
 		path := fact.BuildFactPath(ontologyRoot, topic, category)
-		if err := validateOutputPath(path, ontologyRoot); err != nil {
+		if err := step.ValidateOutputPath(path, ontologyRoot); err != nil {
 			return fmt.Errorf("propose[%d]: %w", i, err)
 		}
 
@@ -609,7 +610,7 @@ func ApplyReflectDecisions(
 		files[f.Path()] = serialized
 		factsByPath[f.Path()] = f
 		refsByPath[f.Path()] = f.Refs
-		onProgress(ProgressEvent{Phase: "detail-reflect-propose", Message: "wrote methodology " + f.Path()})
+		onProgress(step.ProgressEvent{Phase: "detail-reflect-propose", Message: "wrote methodology " + f.Path()})
 	}
 
 	// Phase 3 — single atomic commit covering both arms. If there's
@@ -710,7 +711,7 @@ func memberRefs(ctx context.Context, gs *facts.Index, branch string, paths []str
 	var out []string
 	seen := make(map[string]bool)
 	for _, p := range paths {
-		f, ok := readFactAt(ctx, gs, branch, p)
+		f, ok := step.ReadFactAt(ctx, gs, branch, p)
 		if !ok {
 			continue
 		}

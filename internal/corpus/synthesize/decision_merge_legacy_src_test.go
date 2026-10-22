@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,9 +44,9 @@ func seedMergeMembers(t *testing.T) (*store.Service, string) {
 func runMerge(t *testing.T, svc *store.Service, branch, title string, refs []string) []string {
 	t.Helper()
 	var warns []string
-	merges := []MergeEntry{{
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path:  "kb/technology/merged.md",
 			Title: title,
 			Body:  "merged body",
@@ -53,11 +55,11 @@ func runMerge(t *testing.T, svc *store.Service, branch, title string, refs []str
 		},
 	}}
 	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"review-test", func(e ProgressEvent) {
+		"review-test", func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
 				warns = append(warns, e.Message)
 			}
-		}, branch, bareRefFixture, "kb", nil)
+		}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	return warns
 }
@@ -98,20 +100,20 @@ func TestApplyPruneDecisions_MergeInventingALegacySrcRefIsRejected(t *testing.T)
 func TestApplyPruneDecisions_MergeKeepsRefsOfAMemberRetractedEarlierInTheCall(t *testing.T) {
 	svc, branch := seedMergeMembers(t)
 	var warns []string
-	decisions := []PruneDecision{{Path: "kb/technology/a.md", Action: "retract"}}
-	merges := []MergeEntry{{
+	decisions := []step.PruneDecision{{Path: "kb/technology/a.md", Action: "retract"}}
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path: "kb/technology/merged.md", Title: "Merged", Body: "merged body", Type: "observation",
 			Refs: []string{"src://knomit/internal/a.go@ca1c272", "src://knomit/internal/b.go"},
 		},
 	}}
 	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), decisions, merges,
-		"review-test", func(e ProgressEvent) {
+		"review-test", func(e step.ProgressEvent) {
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)
 			}
-		}, branch, bareRefFixture, "kb", nil)
+		}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, warns, "a member's refs are carried even when the member was retracted first")
 	mergedFactPath(t, svc, branch, "Merged")
@@ -122,24 +124,24 @@ func TestApplyPruneDecisions_MergeKeepsRefsOfAMemberRetractedEarlierInTheCall(t 
 func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *testing.T) {
 	svc, branch := seedMergeMembers(t)
 	var warns []string
-	merges := []MergeEntry{
+	merges := []step.MergeEntry{
 		{
 			Paths: []string{"kb/technology/a.md", "kb/technology/b.md"},
-			Merged: mergedFact{Path: "kb/technology/m1.md", Title: "First", Body: "first", Type: "observation",
+			Merged: step.MergedFact{Path: "kb/technology/m1.md", Title: "First", Body: "first", Type: "observation",
 				Refs: []string{"src://knomit/internal/b.go"}},
 		},
 		{
 			Paths: []string{"kb/technology/a.md"},
-			Merged: mergedFact{Path: "kb/technology/m2.md", Title: "Second", Body: "second", Type: "observation",
+			Merged: step.MergedFact{Path: "kb/technology/m2.md", Title: "Second", Body: "second", Type: "observation",
 				Refs: []string{"src://knomit/internal/a.go@ca1c272"}},
 		},
 	}
 	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"review-test", func(e ProgressEvent) {
+		"review-test", func(e step.ProgressEvent) {
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)
 			}
-		}, branch, bareRefFixture, "kb", nil)
+		}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, warns, "a member consumed by an earlier merge in the call still carries its refs")
 }

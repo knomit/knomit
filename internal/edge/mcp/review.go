@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
@@ -127,7 +128,7 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError("takeover applies only to a start: omit session_id to start a new session with takeover:true, or omit takeover to continue this one"), nil
 		}
 
-		var result *synthesize.ReviewResult
+		var result *step.ReviewResult
 
 		switch {
 		case sessionID == "":
@@ -176,16 +177,16 @@ const errContinuationWithoutSession = "session_id is required with response, ite
 // effort falls back to the repo's configured default; the result is validated
 // and normalized so callers always receive a well-known Effort. A returned
 // error is a caller-facing validation message.
-func parseEffortAndScope(req mcpgo.CallToolRequest, ri *repos.RepoInstance) (synthesize.Effort, synthesize.ScopeFilter, error) {
-	effort := synthesize.Effort(req.GetString("effort", ""))
+func parseEffortAndScope(req mcpgo.CallToolRequest, ri *repos.RepoInstance) (step.Effort, step.ScopeFilter, error) {
+	effort := step.Effort(req.GetString("effort", ""))
 	if effort == "" {
-		effort = synthesize.Effort(ri.DiscoveryEffortDefault())
+		effort = step.Effort(ri.DiscoveryEffortDefault())
 	}
 	if err := effort.Validate(); err != nil {
-		return "", synthesize.ScopeFilter{}, err
+		return "", step.ScopeFilter{}, err
 	}
-	effort = synthesize.NormalizeEffort(effort)
-	scope := synthesize.ScopeFilter{
+	effort = step.NormalizeEffort(effort)
+	scope := step.ScopeFilter{
 		Domain:   req.GetStringSlice("domain", nil),
 		Entities: req.GetStringSlice("entities", nil),
 	}
@@ -196,7 +197,7 @@ func parseEffortAndScope(req mcpgo.CallToolRequest, ri *repos.RepoInstance) (syn
 // "warn" phases (e.g. validation rejections from ApplyDistillDecisions) go
 // out at WARN; everything else at DEBUG so the server log stays usable
 // during long review sessions.
-func logProgress(e synthesize.ProgressEvent) {
+func logProgress(e step.ProgressEvent) {
 	if e.Phase == "warn" {
 		log.Warn().Str("phase", e.Phase).Msg(e.Message)
 		return

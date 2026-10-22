@@ -1,6 +1,6 @@
-package synthesize
+package step
 
-func dot(a, b []float32) float64 {
+func Dot(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0
 	}

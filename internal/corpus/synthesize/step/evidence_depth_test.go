@@ -1,14 +1,15 @@
-package synthesize
+package step_test
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/engine/store"
 )
 
 // Tests for depth composition in evidence_weight (spec §5.2).
@@ -39,39 +40,19 @@ import (
 //     sources, or they were deleted under it) falls back to its own mass
 //     rather than contributing nothing.
 
-// seedOriginFact writes a fact with an explicit origin, type, confidence,
-// sources and refs — everything the lineage walk dispatches on.
-func seedOriginFact(t *testing.T, svc *store.Service, branch, path string,
-	typ fact.Type, origin fact.Origin, confidence float64, sources int, refs []string) {
-	t.Helper()
-	f := fact.NewFact(path)
-	f.Title = path
-	f.Body = "body of " + path
-	f.Type = typ
-	f.Origin = origin
-	f.Domain = []string{"test"}
-	f.Confidence = confidence
-	f.Sources = sources
-	f.Refs = refs
-	body, err := fact.SerializeFact(f)
-	require.NoError(t, err)
-	_, err = svc.Facts().WriteFact(context.Background(), branch, f.Path(), body, "seed", "")
-	require.NoError(t, err)
-}
-
 // TestComputeWeight_ComposesThroughDerivedRefs is the acceptance test. A fact
 // citing one distilled synthesis must see the synthesis's underlying leaves,
 // not the flat `confidence × 1` the synthesis carries.
 func TestComputeWeight_ComposesThroughDerivedRefs(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/l1.md", fact.Observation, fact.Authored, 0.8, 3, nil)
-	seedOriginFact(t, svc, branch, "kb/l2.md", fact.Observation, fact.Authored, 0.8, 4, nil)
-	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/l1.md", fact.Observation, fact.Authored, 0.8, 3, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/l2.md", fact.Observation, fact.Authored, 0.8, 4, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/l1.md", "kb/l2.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d1.md"})
 
 	// Σ = 0.8×3 + 0.8×4 = 5.6, not the 0.9×1 the synthesis itself carries.
 	require.InDelta(t, 5.6/6.6, got, 1e-9,
@@ -82,16 +63,16 @@ func TestComputeWeight_ComposesThroughDerivedRefs(t *testing.T) {
 // walk. Two syntheses sharing a leaf must count it once — this is precisely
 // what `w/(1-w)` mass recovery would get wrong.
 func TestComputeWeight_DeduplicatesSharedAncestry(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/shared.md", fact.Observation, fact.Authored, 0.8, 5, nil)
-	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/shared.md", fact.Observation, fact.Authored, 0.8, 5, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/shared.md"})
-	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/shared.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
 
 	// Σ = 0.8×5 = 4.0 — counted ONCE, not 8.0.
 	require.InDelta(t, 4.0/5.0, got, 1e-9,
@@ -103,18 +84,18 @@ func TestComputeWeight_DeduplicatesSharedAncestry(t *testing.T) {
 // must stop there and use that pooled count rather than chasing refs to files
 // that no longer exist.
 func TestComputeWeight_TransferOutputIsTerminal(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
 	// A merge survivor: authored-origin, sources pooled to 8. Its lineage ref
 	// points at a fact that is very much alive and carries a large count — so
 	// if the walk did NOT terminate here it would import 80 instead of 7.2,
 	// and the assertion below discriminates.
-	seedOriginFact(t, svc, branch, "kb/live-source.md", fact.Observation, fact.Authored, 0.8, 100, nil)
-	seedOriginFact(t, svc, branch, "kb/merged.md", fact.Observation, fact.Authored, 0.9, 8,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/live-source.md", fact.Observation, fact.Authored, 0.8, 100, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/merged.md", fact.Observation, fact.Authored, 0.9, 8,
 		[]string{"kb/live-source.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/merged.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/merged.md"})
 
 	require.InDelta(t, 7.2/8.2, got, 1e-9,
 		"a merge survivor's pooled sources ARE its evidence; the walk must terminate there "+
@@ -125,14 +106,14 @@ func TestComputeWeight_TransferOutputIsTerminal(t *testing.T) {
 // origin. An authored fact's refs are "see also", not "derived from", so
 // passing through them would import evidence the fact never rested on.
 func TestComputeWeight_AuthoredRefsAreCitationsNotLineage(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/big.md", fact.Observation, fact.Authored, 0.8, 10, nil)
-	seedOriginFact(t, svc, branch, "kb/a.md", fact.Observation, fact.Authored, 0.9, 2,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/big.md", fact.Observation, fact.Authored, 0.8, 10, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/a.md", fact.Observation, fact.Authored, 0.9, 2,
 		[]string{"kb/big.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/a.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/a.md"})
 
 	require.InDelta(t, 1.8/2.8, got, 1e-9,
 		"an authored fact is terminal — its refs are citations, not the evidence it rests on")
@@ -142,13 +123,13 @@ func TestComputeWeight_AuthoredRefsAreCitationsNotLineage(t *testing.T) {
 // distill-that-retracted-its-sources case. Contributing 0 would erase a fact
 // whose evidence was real but has since been consolidated away.
 func TestComputeWeight_DerivedWithDeadLineageFallsBackToOwnMass(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/d.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/retracted.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d.md"})
 
 	require.InDelta(t, 0.9/1.9, got, 1e-9,
 		"a synthesis whose lineage is gone still rests on its own act, not on nothing")
@@ -164,15 +145,15 @@ func TestComputeWeight_DerivedWithDeadLineageFallsBackToOwnMass(t *testing.T) {
 // The shape is not exotic: a distill round that retracts a source both of its
 // outputs cite produces it directly.
 func TestComputeWeight_SharedDeadLineageFallsBackForEveryParent(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/retracted.md"})
-	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/retracted.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
 
 	// Σ = 0.9×1 + 0.9×1 = 1.8. Both fall back; neither is silently dropped for
 	// having asked about the dead ref second.
@@ -181,7 +162,7 @@ func TestComputeWeight_SharedDeadLineageFallsBackForEveryParent(t *testing.T) {
 
 	// Order must not matter — the assertion above is only meaningful if the
 	// reversed walk agrees.
-	reversed := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d2.md", "kb/d1.md"})
+	reversed := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d2.md", "kb/d1.md"})
 	require.InDelta(t, got, reversed, 1e-9, "the weight must not depend on source order")
 }
 
@@ -191,16 +172,16 @@ func TestComputeWeight_SharedDeadLineageFallsBackForEveryParent(t *testing.T) {
 // second parent, or that parent would fall back to its own mass and
 // double-count the very thing the dedup exists to prevent.
 func TestComputeWeight_SharedLiveAncestryStillCountsOnce(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/shared.md", fact.Observation, fact.Authored, 0.8, 5, nil)
-	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/shared.md", fact.Observation, fact.Authored, 0.8, 5, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/shared.md"})
-	seedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d2.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/shared.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d1.md", "kb/d2.md"})
 
 	// Σ = 0.8×5 = 4.0 — the leaf once, and NEITHER synthesis's own 0.9 mass,
 	// because both are grounded.
@@ -211,15 +192,15 @@ func TestComputeWeight_SharedLiveAncestryStillCountsOnce(t *testing.T) {
 // TestComputeWeight_SkipsHypothesisAnywhereInLineage extends §5.2's exclusion
 // through the walk: a conjecture launders no evidence at depth 2 either.
 func TestComputeWeight_SkipsHypothesisAnywhereInLineage(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/l1.md", fact.Observation, fact.Authored, 0.8, 3, nil)
-	seedOriginFact(t, svc, branch, "kb/h.md", fact.Hypothesis, fact.Authored, 0.9, 9, nil)
-	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/l1.md", fact.Observation, fact.Authored, 0.8, 3, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/h.md", fact.Hypothesis, fact.Authored, 0.9, 9, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/l1.md", "kb/h.md"})
 
-	got := computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md"})
+	got := step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d1.md"})
 
 	require.InDelta(t, 2.4/3.4, got, 1e-9,
 		"a hypothesis in the lineage contributes nothing, at any depth")
@@ -228,19 +209,21 @@ func TestComputeWeight_SkipsHypothesisAnywhereInLineage(t *testing.T) {
 // TestComputeWeight_SurvivesRefCycle is the safety guard. Nothing forbids two
 // facts citing each other, and an unguarded walk would not terminate.
 func TestComputeWeight_SurvivesRefCycle(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/x.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/x.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/y.md"})
-	seedOriginFact(t, svc, branch, "kb/y.md", fact.Synthesis, fact.Distilled, 0.7, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/y.md", fact.Synthesis, fact.Distilled, 0.7, 1,
 		[]string{"kb/x.md"})
 
 	// A real deadline: context.Background().Done() is a nil channel, so
 	// selecting on it would block forever and turn a non-terminating walk into
 	// a hung test rather than a failing one.
 	done := make(chan float64, 1)
-	go func() { done <- computeWeight(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/x.md"}) }()
+	go func() {
+		done <- step.ComputeWeight(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/x.md"})
+	}()
 	select {
 	case got := <-done:
 		// x cites y, y cites x. y's only ref is a back-edge, so nothing
@@ -254,7 +237,7 @@ func TestComputeWeight_SurvivesRefCycle(t *testing.T) {
 		require.InDelta(t, 0.7/1.7, got, 1e-9,
 			"a circular lineage must ground on its own mass, not collapse to zero")
 	case <-time.After(10 * time.Second):
-		t.Fatal("computeWeight did not terminate on a ref cycle")
+		t.Fatal("ComputeWeight did not terminate on a ref cycle")
 	}
 }
 
@@ -263,14 +246,14 @@ func TestComputeWeight_SurvivesRefCycle(t *testing.T) {
 // corroboration count is over the DIRECT subsumed facts only, because those
 // are the ones the merge is about to delete.
 func TestComputeTransfer_PooledCountIgnoresLineageDepth(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedOriginFact(t, svc, branch, "kb/l1.md", fact.Observation, fact.Authored, 0.8, 6, nil)
-	seedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
+	synthtest.SeedOriginFact(t, svc, branch, "kb/l1.md", fact.Observation, fact.Authored, 0.8, 6, nil)
+	synthtest.SeedOriginFact(t, svc, branch, "kb/d1.md", fact.Synthesis, fact.Distilled, 0.9, 1,
 		[]string{"kb/l1.md"})
 
-	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/d1.md"})
+	_, pooled, readable := step.ComputeTransfer(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/d1.md"})
 
 	require.Equal(t, 1, pooled,
 		"pooled counts the DIRECT subsumed fact's own sources — the lineage below it is not being deleted")

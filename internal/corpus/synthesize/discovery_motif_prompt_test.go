@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
 
@@ -22,7 +23,7 @@ func farLanePayload() DiscoverWorkPayload {
 		Bridge: BridgeSeedSet{
 			Token: "measure-becomes-target",
 			Kind:  BridgeMotif,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: "kb/gotchas/uitesting/1.md", Title: "A", Body: "body a"},
 				{File: "kb/technology/benchmarks/2.md", Title: "B", Body: "body b"},
 			},

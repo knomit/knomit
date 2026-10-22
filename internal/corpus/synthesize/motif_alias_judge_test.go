@@ -176,14 +176,14 @@ func TestMotifAliasDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
 // regressing.
 func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.Branch, "")
 	require.NoError(t, err)
 
 	recordRestatementHealth(sess, restatementHealth{StandingPairs: 7})
 	before := len(sess.Health)
 	require.NotZero(t, before, "the restatement lines must be there to be clobbered")
 
-	require.NoError(t, planMotifAliasWork(context.Background(), env.deps(), sess, env.branch))
+	require.NoError(t, planMotifAliasWork(context.Background(), env.Deps(), sess, env.Branch))
 
 	require.Greater(t, len(sess.Health), before,
 		"the alias lines must be ADDED, not substituted for the shortlist's")
@@ -196,10 +196,10 @@ func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 // to stay distinguishable, which is the whole reason these descriptors exist.
 func TestMotifAliasHealth_BelowFloorIsReported(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary-1)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.Branch, "")
 	require.NoError(t, err)
 
-	require.NoError(t, planMotifAliasWork(context.Background(), env.deps(), sess, env.branch))
+	require.NoError(t, planMotifAliasWork(context.Background(), env.Deps(), sess, env.Branch))
 	require.Contains(t, strings.Join(sess.Health, "\n"), "validity floor")
 }
 
@@ -211,11 +211,11 @@ func TestMotifAliasHealth_BelowFloorIsReported(t *testing.T) {
 func TestMotifAliasWorkItem_PayloadCarriesTitlesForBothSides(t *testing.T) {
 	ctx := context.Background()
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planMotifAliasWork(ctx, env.deps(), sess, env.branch))
+	require.NoError(t, planMotifAliasWork(ctx, env.Deps(), sess, env.Branch))
 
-	item, err := env.svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
+	item, err := env.Svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotNil(t, item, "an above-floor corpus must enqueue an alias item")
 	require.Equal(t, motifAliasStepType, item.StepType)
@@ -235,13 +235,13 @@ func TestMotifAliasWorkItem_PayloadCarriesTitlesForBothSides(t *testing.T) {
 func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 	ctx := context.Background()
 	env := motifVocabEnv(t, minJudgeVocabulary+6)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planMotifAliasWork(ctx, env.deps(), sess, env.branch))
+	require.NoError(t, planMotifAliasWork(ctx, env.Deps(), sess, env.Branch))
 
 	n := 0
 	for {
-		item, err := env.svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
+		item, err := env.Svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
 		require.NoError(t, err)
 		if item == nil {
 			break
@@ -249,7 +249,7 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 		if item.StepType == motifAliasStepType {
 			n++
 		}
-		_, err = env.svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, "{}")
+		_, err = env.Svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, "{}")
 		require.NoError(t, err)
 	}
 	require.Equal(t, 1, n)

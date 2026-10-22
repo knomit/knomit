@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"knomit/internal/engine/store/model"
@@ -19,7 +21,7 @@ import (
 // inflightEnv is a corpus with a duplicate pair plus enough motif-less filler
 // that the backfill budget can be observed refilling.
 type inflightEnv struct {
-	*restatementEnv
+	*synthtest.RestatementEnv
 	sess *model.PipelineSession
 }
 
@@ -38,20 +40,20 @@ func newInflightEnv(t *testing.T) *inflightEnv {
 	// deliberately, so this removal does not quietly change the fixture the
 	// surviving refresh tests run against.
 	const fillerFacts = 12
-	env := newRestatementEnv(t, fillerFacts)
-	env.writeFact(dupAPath, "SmartConsole bypass", "one recording of the event")
-	env.writeFact(dupBPath, "SmartConsole bypass, again", "the same event, second category")
-	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), reviewTool, env.branch, "")
+	env := synthtest.NewRestatementEnv(t, fillerFacts)
+	env.WriteFact(dupAPath, "SmartConsole bypass", "one recording of the event")
+	env.WriteFact(dupBPath, "SmartConsole bypass, again", "the same event, second category")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(context.Background(), step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	return &inflightEnv{restatementEnv: env, sess: sess}
+	return &inflightEnv{RestatementEnv: env, sess: sess}
 }
 
 // queue inserts a work item exactly as Plan would, and returns its id.
 func (e *inflightEnv) queue(stepType, clusterKey string, payload any, priority float64) int64 {
-	e.t.Helper()
+	e.T.Helper()
 	blob, err := json.Marshal(payload)
-	require.NoError(e.t, err)
-	require.NoError(e.t, e.svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
+	require.NoError(e.T, err)
+	require.NoError(e.T, e.Svc.Pipeline().InsertPipelineWorkItem(context.Background(), model.PipelineWorkItem{
 		SessionID: e.sess.ID, StepType: stepType, ClusterKey: clusterKey,
 		FactsJSON: string(blob), Priority: priority,
 	}))
@@ -68,14 +70,14 @@ func (e *inflightEnv) queue(stepType, clusterKey string, payload any, priority f
 }
 
 func (e *inflightEnv) pending() []model.PipelineWorkItem {
-	e.t.Helper()
-	items, err := e.svc.Pipeline().PendingPipelineWorkItems(context.Background(), e.sess.ID)
-	require.NoError(e.t, err)
+	e.T.Helper()
+	items, err := e.Svc.Pipeline().PendingPipelineWorkItems(context.Background(), e.sess.ID)
+	require.NoError(e.T, err)
 	return items
 }
 
 func (e *inflightEnv) itemByID(id int64) *model.PipelineWorkItem {
-	e.t.Helper()
+	e.T.Helper()
 	for _, it := range e.pending() {
 		if it.ID == id {
 			return &it
@@ -84,10 +86,10 @@ func (e *inflightEnv) itemByID(id int64) *model.PipelineWorkItem {
 	return nil
 }
 
-func members(paths ...string) []factForLLM {
-	out := make([]factForLLM, 0, len(paths))
+func members(paths ...string) []step.FactForLLM {
+	out := make([]step.FactForLLM, 0, len(paths))
 	for _, p := range paths {
-		out = append(out, factForLLM{File: p, Title: p, Body: "b", Type: "observation"})
+		out = append(out, step.FactForLLM{File: p, Title: p, Body: "b", Type: "observation"})
 	}
 	return out
 }
@@ -102,21 +104,21 @@ func mergeResponse() string {
 
 // applyMerge answers the given prune item with the merge, through Decode+Apply.
 func (e *inflightEnv) applyMerge(itemID int64) {
-	e.t.Helper()
+	e.T.Helper()
 	ctx := context.Background()
 	item := e.itemByID(itemID)
-	require.NotNil(e.t, item, "the item to answer must still be queued")
+	require.NotNil(e.T, item, "the item to answer must still be queued")
 	dec, _, err := reviewStrategy{}.Decode(item, mergeResponse())
-	require.NoError(e.t, err)
-	claimed, err := e.svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, mergeResponse())
-	require.NoError(e.t, err)
-	require.True(e.t, claimed)
-	require.NoError(e.t, reviewStrategy{}.Apply(ctx, e.deps(), e.sess, item, dec))
+	require.NoError(e.T, err)
+	claimed, err := e.Svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, mergeResponse())
+	require.NoError(e.T, err)
+	require.True(e.T, claimed)
+	require.NoError(e.T, reviewStrategy{}.Apply(ctx, e.Deps(), e.sess, item, dec))
 	// The merge must actually have happened, or every assertion below is about
 	// a session in which nothing was retired.
-	gone, err := e.svc.Facts().FactExists(ctx, e.branch, dupBPath)
-	require.NoError(e.t, err)
-	require.False(e.t, gone, "the merge must have retired the loser, or this fixture proves nothing")
+	gone, err := e.Svc.Facts().FactExists(ctx, e.Branch, dupBPath)
+	require.NoError(e.T, err)
+	require.False(e.T, gone, "the merge must have retired the loser, or this fixture proves nothing")
 }
 
 // TestInFlightRefresh_QueuedPruneItemLosesTheMergedFact — a still-queued
@@ -124,8 +126,8 @@ func (e *inflightEnv) applyMerge(itemID int64) {
 // while keeping the members it can still judge.
 func TestInFlightRefresh_QueuedPruneItemLosesTheMergedFact(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
-	env.writeFact("kb/other-y.md", "Y", "y")
+	env.WriteFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-y.md", "Y", "y")
 
 	pruneID := env.queue("prune", "cluster-0", members(dupAPath, dupBPath), 2)
 	queuedID := env.queue("prune", "cluster-1", members(dupBPath, "kb/other-x.md", "kb/other-y.md"), 3)
@@ -134,7 +136,7 @@ func TestInFlightRefresh_QueuedPruneItemLosesTheMergedFact(t *testing.T) {
 
 	still := env.itemByID(queuedID)
 	require.NotNil(t, still, "two live members remain — the item is still judgeable")
-	var facts []factForLLM
+	var facts []step.FactForLLM
 	require.NoError(t, json.Unmarshal([]byte(still.FactsJSON), &facts))
 	require.Len(t, facts, 2)
 	for _, f := range facts {
@@ -148,7 +150,7 @@ func TestInFlightRefresh_QueuedPruneItemLosesTheMergedFact(t *testing.T) {
 // should be merged with itself.
 func TestInFlightRefresh_ItemBelowTheJudgeableFloorIsDropped(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-x.md", "X", "x")
 
 	pruneID := env.queue("prune", "cluster-0", members(dupAPath, dupBPath), 2)
 	queuedID := env.queue("prune", "cluster-1", members(dupBPath, "kb/other-x.md"), 3)
@@ -165,8 +167,8 @@ func TestInFlightRefresh_ItemBelowTheJudgeableFloorIsDropped(t *testing.T) {
 // the backfill item a different offer each time anything merged anywhere.
 func TestInFlightRefresh_UntouchedItemsKeepTheirExactPayload(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
-	env.writeFact("kb/other-y.md", "Y", "y")
+	env.WriteFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-y.md", "Y", "y")
 
 	// This test used to assert the same property on TWO vehicles: a queued
 	// backfill payload and a queued prune item. The backfill half left with the
@@ -195,28 +197,28 @@ func TestInFlightRefresh_UntouchedItemsKeepTheirExactPayload(t *testing.T) {
 // delete, which made a failed retract indistinguishable from a completed one.
 func TestApplyPrune_RetiredNamesOnlyFactsThatActuallyLeft(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/keep-me.md", "Keeps", "survives a failed delete")
-	env.writeFact("kb/goes.md", "Goes", "deleted for real")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/keep-me.md", "Keeps", "survives a failed delete")
+	env.WriteFact("kb/goes.md", "Goes", "deleted for real")
 
-	d := env.deps()
+	d := env.Deps()
 	// Refuse one path's delete so the corpus does NOT actually lose that fact.
-	defer env.svc.Facts().SetDeleteFaultForTest(func(path string) error {
+	defer env.Svc.Facts().SetDeleteFaultForTest(func(path string) error {
 		if path == "kb/keep-me.md" {
 			return fmt.Errorf("simulated delete failure for %s", path)
 		}
 		return nil
 	})()
-	stats, err := ApplyPruneDecisions(ctx, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
-		[]PruneDecision{{Path: "kb/keep-me.md", Action: "retract"}, {Path: "kb/goes.md", Action: "retract"}},
-		nil, reviewTool, d.OnProgress, env.branch, "", "kb", nil)
+	stats, err := ApplyPruneDecisions(ctx, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+		[]step.PruneDecision{{Path: "kb/keep-me.md", Action: "retract"}, {Path: "kb/goes.md", Action: "retract"}},
+		nil, step.ReviewTool, d.OnProgress, env.Branch, "", "kb", nil)
 	require.NoError(t, err)
 
 	require.NotContains(t, stats.Retired, "kb/keep-me.md",
 		"a fact whose delete FAILED is still live and must not be reported as retired")
 	require.Contains(t, stats.Retired, "kb/goes.md")
 
-	exists, err := env.svc.Facts().FactExists(ctx, env.branch, "kb/keep-me.md")
+	exists, err := env.Svc.Facts().FactExists(ctx, env.Branch, "kb/keep-me.md")
 	require.NoError(t, err)
 	require.True(t, exists, "the fixture must leave the refused fact live, or this test proves nothing")
 }
@@ -224,28 +226,28 @@ func TestApplyPrune_RetiredNamesOnlyFactsThatActuallyLeft(t *testing.T) {
 // applyResponse answers a queued item through Decode+Apply, the production
 // path, and asserts the claim was won.
 func (e *inflightEnv) applyResponse(itemID int64, response string) {
-	e.t.Helper()
+	e.T.Helper()
 	ctx := context.Background()
 	item := e.itemByID(itemID)
-	require.NotNil(e.t, item, "the item to answer must still be queued")
+	require.NotNil(e.T, item, "the item to answer must still be queued")
 	dec, _, err := reviewStrategy{}.Decode(item, response)
-	require.NoError(e.t, err)
-	claimed, err := e.svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, response)
-	require.NoError(e.t, err)
-	require.True(e.t, claimed)
-	require.NoError(e.t, reviewStrategy{}.Apply(ctx, e.deps(), e.sess, item, dec))
+	require.NoError(e.T, err)
+	claimed, err := e.Svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, response)
+	require.NoError(e.T, err)
+	require.True(e.T, claimed)
+	require.NoError(e.T, reviewStrategy{}.Apply(ctx, e.Deps(), e.sess, item, dec))
 }
 
-func (e *inflightEnv) factsOf(itemID int64) []factForLLM {
-	e.t.Helper()
+func (e *inflightEnv) factsOf(itemID int64) []step.FactForLLM {
+	e.T.Helper()
 	item := e.itemByID(itemID)
-	require.NotNil(e.t, item)
-	var facts []factForLLM
-	require.NoError(e.t, json.Unmarshal([]byte(item.FactsJSON), &facts))
+	require.NotNil(e.T, item)
+	var facts []step.FactForLLM
+	require.NoError(e.T, json.Unmarshal([]byte(item.FactsJSON), &facts))
 	return facts
 }
 
-func confidenceOf(facts []factForLLM, path string) (float64, bool) {
+func confidenceOf(facts []step.FactForLLM, path string) (float64, bool) {
 	for _, f := range facts {
 		if f.File == path {
 			return f.Confidence, true
@@ -263,7 +265,7 @@ func confidenceOf(facts []factForLLM, path string) (float64, bool) {
 // in the item. The member has to be RE-READ, not dropped.
 func TestInFlightRefresh_UpdateRefreshesQueuedSnapshots(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-x.md", "X", "x")
 
 	judgedID := env.queue("prune", "cluster-0", members(dupAPath, dupBPath), 2)
 	queuedID := env.queue("prune", "cluster-1", members(dupAPath, "kb/other-x.md"), 3)
@@ -286,8 +288,8 @@ func TestInFlightRefresh_UpdateRefreshesQueuedSnapshots(t *testing.T) {
 // minutes earlier, and 23 clusters this session reached prune AND distill.
 func TestInFlightRefresh_ClearsAcrossVehicles(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
-	env.writeFact("kb/other-y.md", "Y", "y")
+	env.WriteFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-y.md", "Y", "y")
 
 	distillID := env.queue("distill", "group-0",
 		members(dupBPath, "kb/other-x.md", "kb/other-y.md"), 0)
@@ -323,8 +325,8 @@ func TestInFlightRefresh_ClearsAcrossVehicles(t *testing.T) {
 // belong to other vehicles.
 func TestInFlightRefresh_DistillRetractClearsOtherQueues(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
-	env.writeFact("kb/other-y.md", "Y", "y")
+	env.WriteFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-y.md", "Y", "y")
 
 	queuedID := env.queue("prune", "cluster-1",
 		members(dupBPath, "kb/other-x.md", "kb/other-y.md"), 3)
@@ -336,7 +338,7 @@ func TestInFlightRefresh_DistillRetractClearsOtherQueues(t *testing.T) {
 		"domain":["security"],"confidence":0.8,"entities":["SmartConsole"],"refs":[]}],
 		"retract":[%q]}`, dupBPath))
 
-	gone, err := env.svc.Facts().FactExists(context.Background(), env.branch, dupBPath)
+	gone, err := env.Svc.Facts().FactExists(context.Background(), env.Branch, dupBPath)
 	require.NoError(t, err)
 	require.False(t, gone, "the distill must have retracted the fact, or this test proves nothing")
 
@@ -361,22 +363,22 @@ func TestInFlightRefresh_DistillRetractClearsOtherQueues(t *testing.T) {
 // contract.
 func TestApplyPrune_RewrittenExcludesPathsTheSameApplyRetired(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFact(dupAPath, "SmartConsole bypass", "one recording")
-	env.writeFact(dupBPath, "SmartConsole bypass, again", "the same event")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact(dupAPath, "SmartConsole bypass", "one recording")
+	env.WriteFact(dupBPath, "SmartConsole bypass, again", "the same event")
 
-	d := env.deps()
-	var merged mergedFact
+	d := env.Deps()
+	var merged step.MergedFact
 	require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{
 		"path":%q,"title":"SmartConsole bypass","body":"Both recordings, unioned.",
 		"type":"observation","domain":["security"],"confidence":0.9,"sources":2,
 		"entities":["SmartConsole"],"refs":[]}`, mergedPath)), &merged))
 
-	stats, err := ApplyPruneDecisions(ctx, env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
+	stats, err := ApplyPruneDecisions(ctx, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
 		// Raise dup-a's confidence, then merge it away in the same response.
-		[]PruneDecision{{Path: dupAPath, Action: "update", Confidence: 0.42}},
-		[]MergeEntry{{Paths: []string{dupAPath, dupBPath}, Merged: merged}},
-		reviewTool, d.OnProgress, env.branch, "", "kb", nil)
+		[]step.PruneDecision{{Path: dupAPath, Action: "update", Confidence: 0.42}},
+		[]step.MergeEntry{{Paths: []string{dupAPath, dupBPath}, Merged: merged}},
+		step.ReviewTool, d.OnProgress, env.Branch, "", "kb", nil)
 	require.NoError(t, err)
 
 	require.Contains(t, stats.Retired, dupAPath, "the fixture must actually retire the updated path")
@@ -397,12 +399,12 @@ func TestApplyPrune_RewrittenExcludesPathsTheSameApplyRetired(t *testing.T) {
 // carrying the count from before.
 func TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots(t *testing.T) {
 	env := newInflightEnv(t)
-	env.writeFact("kb/other-x.md", "X", "x")
+	env.WriteFact("kb/other-x.md", "X", "x")
 	// The reinforced fact is re-rendered through SerializeFact by the
 	// reinforce path, which refuses any fact whose stored bytes would not
 	// round-trip. Write it the way a real writer does, or the gate rejects it
 	// and the test measures a rejection rather than a refresh.
-	env.writeFactWithMotifsConf(dupAPath, "SmartConsole bypass", "one recording", nil, 0.7)
+	env.WriteFactWithMotifsConf(dupAPath, "SmartConsole bypass", "one recording", nil, 0.7)
 
 	queuedID := env.queue("prune", "cluster-1", members(dupAPath, "kb/other-x.md"), 3)
 	before := sourcesOf(env.factsOf(queuedID), dupAPath)
@@ -421,7 +423,7 @@ func TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots(t *testing.T) {
 		`{"proposals":[],"reinforcements":[{"path":%q,"reason":"the seeds independently re-derive this",
 		  "refs":[%q,%q]}]}`, dupAPath, dupBPath, "kb/other-x.md"))
 
-	live, err := env.svc.Search().GetByPath(context.Background(), env.branch, dupAPath)
+	live, err := env.Svc.Search().GetByPath(context.Background(), env.Branch, dupAPath)
 	require.NoError(t, err)
 	require.NotNil(t, live)
 	require.Greater(t, live.Sources, before,
@@ -432,7 +434,7 @@ func TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots(t *testing.T) {
 		"a reinforced fact's queued snapshot must show the sources the corpus now holds")
 }
 
-func sourcesOf(facts []factForLLM, path string) int {
+func sourcesOf(facts []step.FactForLLM, path string) int {
 	for _, f := range facts {
 		if f.File == path {
 			return f.Sources

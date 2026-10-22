@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -80,7 +81,7 @@ func TestPaging_ItemIsServedInPagesThatPartitionItsFacts(t *testing.T) {
 
 	item := currentDistillItem(t, svc, sessionID)
 
-	var stored []factForLLM
+	var stored []step.FactForLLM
 	require.NoError(t, json.Unmarshal([]byte(item.FactsJSON), &stored))
 	require.Greater(t, len(stored), 1)
 
@@ -98,7 +99,7 @@ func TestPaging_ItemIsServedInPagesThatPartitionItsFacts(t *testing.T) {
 		require.Equal(t, p, res.Item.Page)
 		require.Equal(t, pages, res.Item.Pages)
 
-		var pf []factForLLM
+		var pf []step.FactForLLM
 		require.NoError(t, json.Unmarshal(res.Item.Facts, &pf))
 		require.NotEmptyf(t, pf, "page %d is empty", p)
 		for _, f := range pf {
@@ -330,12 +331,12 @@ func TestPaging_EveryPageFitsTheDeliveredCap(t *testing.T) {
 				delivered, merr := json.MarshalIndent(res, "", "  ")
 				require.NoError(t, merr)
 
-				var onPage []factForLLM
+				var onPage []step.FactForLLM
 				require.NoError(t, json.Unmarshal(res.Item.Facts, &onPage))
 
-				require.LessOrEqualf(t, len(delivered), maxDeliveredItemBytes,
+				require.LessOrEqualf(t, len(delivered), step.MaxDeliveredItemBytes,
 					"body=%d: page %d of %d holds %d facts and delivers %d bytes, over the %d cap",
-					tc.bodyBytes, p, first.Item.Pages, len(onPage), len(delivered), maxDeliveredItemBytes)
+					tc.bodyBytes, p, first.Item.Pages, len(onPage), len(delivered), step.MaxDeliveredItemBytes)
 			}
 		})
 	}

@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/vocab"
 
@@ -224,7 +225,7 @@ func (k BridgeKind) Qualifies() bool { return k == BridgeMotif }
 // token-sorted output — deterministic in full, so map iteration order can never
 // reach a work item.
 func enumerateMotifCandidates(
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	clusters ClusterResult,
 	resolve motifResolver,
 	df motifDFFn,
@@ -238,7 +239,7 @@ func enumerateMotifCandidates(
 	pathCom := bridgePathCommunities(seeds, clusters)
 
 	// canonical id -> path -> fact.
-	byToken := map[string]map[string]factForLLM{}
+	byToken := map[string]map[string]step.FactForLLM{}
 	for _, f := range seeds {
 		// §7 idempotency: a discovered fact is never a seed, or discovery feeds
 		// on its own output (cf455b8f).
@@ -251,7 +252,7 @@ func enumerateMotifCandidates(
 				continue
 			}
 			if byToken[c] == nil {
-				byToken[c] = map[string]factForLLM{}
+				byToken[c] = map[string]step.FactForLLM{}
 			}
 			byToken[c][f.File] = f
 		}
@@ -350,14 +351,14 @@ func enumerateMotifCandidates(
 // other must not delete a group of four that is otherwise a genuine bridge.
 // Members are path-sorted first, so which member survives a collision is
 // deterministic rather than a function of map iteration order.
-func disjointMembers(members map[string]factForLLM, labels index.SubjectLabelDF, p disjointnessPoint) []factForLLM {
-	all := make([]factForLLM, 0, len(members))
+func disjointMembers(members map[string]step.FactForLLM, labels index.SubjectLabelDF, p disjointnessPoint) []step.FactForLLM {
+	all := make([]step.FactForLLM, 0, len(members))
 	for _, f := range members {
 		all = append(all, f)
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].File < all[j].File })
 
-	var kept []factForLLM
+	var kept []step.FactForLLM
 	for _, cand := range all {
 		ok := true
 		for _, k := range kept {
@@ -378,13 +379,13 @@ func disjointMembers(members map[string]factForLLM, labels index.SubjectLabelDF,
 // of them.
 type motifGroup struct {
 	key     string
-	members map[string]factForLLM
+	members map[string]step.FactForLLM
 	family  bool
 }
 
 // verbatimGroups projects the exact-tier map into groups, sorted by key so the
 // output order never depends on map iteration.
-func verbatimGroups(byToken map[string]map[string]factForLLM) []motifGroup {
+func verbatimGroups(byToken map[string]map[string]step.FactForLLM) []motifGroup {
 	keys := make([]string, 0, len(byToken))
 	for k := range byToken {
 		keys = append(keys, k)
@@ -415,7 +416,7 @@ func verbatimGroups(byToken map[string]map[string]factForLLM) []motifGroup {
 //
 // A family that adds no members beyond its verbatim group is dropped: it would
 // be the same candidate under a second name, and the agent would judge it twice.
-func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
+func token2Families(byToken map[string]map[string]step.FactForLLM) []motifGroup {
 	ids := make([]string, 0, len(byToken))
 	for id := range byToken {
 		ids = append(ids, id)
@@ -428,7 +429,7 @@ func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 	}
 
 	// families[i] accumulates the members of the family keyed by ids[i].
-	families := make([]map[string]factForLLM, len(ids))
+	families := make([]map[string]step.FactForLLM, len(ids))
 	folded := make([]bool, len(ids))
 	for i := range ids {
 		if folded[i] {
@@ -461,8 +462,8 @@ func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 	return out
 }
 
-func copyMembers(in map[string]factForLLM) map[string]factForLLM {
-	out := make(map[string]factForLLM, len(in))
+func copyMembers(in map[string]step.FactForLLM) map[string]step.FactForLLM {
+	out := make(map[string]step.FactForLLM, len(in))
 	for k, v := range in {
 		out[k] = v
 	}
@@ -574,7 +575,7 @@ func dedupThresholdFor(cfg QualityConfig) (float64, bool) {
 // vector source, so VectorsRead reports whether they mean anything — a zero
 // SeedCos from "no vectors" and a zero from "genuinely dissimilar" are opposite
 // findings and must not share a representation.
-func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCos pairCosFn,
+func noveltyOf(ctx context.Context, members []step.FactForLLM, paths []string, pairCos pairCosFn,
 	dedup float64, dedupKnown bool) (NoveltySignals, error) {
 	n := NoveltySignals{EntityJaccard: meanEntityJaccard(members), DedupKnown: dedupKnown}
 	if pairCos == nil {
@@ -609,7 +610,7 @@ func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCo
 // A pair with no entities on either side contributes 0, not 1: "two facts that
 // name nothing" is an absence of evidence about their subjects, and scoring it
 // as perfect disjointness would reward the corpus for being unlabelled.
-func meanEntityJaccard(members []factForLLM) float64 {
+func meanEntityJaccard(members []step.FactForLLM) float64 {
 	if len(members) < 2 {
 		return 0
 	}
@@ -783,8 +784,8 @@ func sharedMotifSpecificity(ctx context.Context, idx *index.Facade, branch strin
 // RECORDED EXPECTATION (designer, 2026-08-23): until Phase-4 calibration,
 // high-effort matching sits at the measured token-2 floor rather than the
 // research 68% — the delta is what calibration buys back, not a regression.
-func motifTier(e Effort) motifMatchTier {
-	if e == EffortHigh {
+func motifTier(e step.Effort) motifMatchTier {
+	if e == step.EffortHigh {
 		return tierToken2
 	}
 	return tierExact
@@ -817,15 +818,15 @@ func motifTier(e Effort) motifMatchTier {
 // budget arithmetic, not a monotonicity break. Phase 4 measures how often it
 // happens and whether the budgets should grow; exact-first ranking was
 // considered and rejected — it would starve token-2 families out entirely.
-func motifSubBudget(e Effort) (near, far int) {
+func motifSubBudget(e step.Effort) (near, far int) {
 	switch e {
-	case EffortHigh:
+	case step.EffortHigh:
 		// "Carved from 48" (§5): a sixth of the entity/domain budget to each
 		// lane, so motif bridging adds at most a third again to a session's
 		// discover items.
-		return effortBudget(EffortHigh) / 6, effortBudget(EffortHigh) / 6
-	case EffortMedium:
-		return min(4, effortBudget(EffortMedium)/3), 0
+		return effortBudget(step.EffortHigh) / 6, effortBudget(step.EffortHigh) / 6
+	case step.EffortMedium:
+		return min(4, effortBudget(step.EffortMedium)/3), 0
 	}
 	return 2, 0
 }
@@ -840,9 +841,9 @@ func buildMotifBridges(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	clusters ClusterResult,
-	eff Effort,
+	eff step.Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
 	labels index.SubjectLabelDF,
@@ -866,9 +867,9 @@ func buildMotifBridgesWithRows(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	clusters ClusterResult,
-	eff Effort,
+	eff step.Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
 	labels index.SubjectLabelDF,
@@ -1005,9 +1006,9 @@ func scoreMotifCandidates(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	clusters ClusterResult,
-	eff Effort,
+	eff step.Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
 	labels index.SubjectLabelDF,
@@ -1123,7 +1124,7 @@ func tallyMotifDrops(h *motifEnumHealth, rows []scoredMotifRow) {
 // fact carries, matching what TokenDF and the vocabulary health both do: a
 // fact using two spellings of one mechanism is one carrier, not two, or a
 // single author's phrasing habit would read as recurrence.
-func seedRecurrence(seeds []factForLLM, resolve motifResolver) (df2Clusters, pairs int) {
+func seedRecurrence(seeds []step.FactForLLM, resolve motifResolver) (df2Clusters, pairs int) {
 	carriers := map[string]map[string]struct{}{}
 	for _, f := range seeds {
 		// The SAME §7 exclusion enumeration applies: a discovered fact is never
@@ -1223,7 +1224,7 @@ type motifActivation struct {
 // motifActive decides whether this corpus has enough recurring vocabulary for
 // bridging to mean anything. Pure, and it costs no index call: the resolver is
 // already built and the seed pool is already in hand.
-func motifActive(seeds []factForLLM, resolve motifResolver) motifActivation {
+func motifActive(seeds []step.FactForLLM, resolve motifResolver) motifActivation {
 	clusters, pairs := seedRecurrence(seeds, resolve)
 	return motifActivation{
 		Evaluated:   true,
@@ -1235,7 +1236,7 @@ func motifActive(seeds []factForLLM, resolve motifResolver) motifActivation {
 }
 
 // anyMotifs reports whether the seed pool carries a motif at all.
-func anyMotifs(seeds []factForLLM) bool {
+func anyMotifs(seeds []step.FactForLLM) bool {
 	for _, f := range seeds {
 		if len(f.Motifs) > 0 {
 			return true
@@ -1363,7 +1364,7 @@ func pairCosFor(abstraction *vocab.AbstractionIndex, branch string) pairCosFn {
 				if len(a) == 0 || len(b) == 0 {
 					continue
 				}
-				out = append(out, dot(a, b))
+				out = append(out, step.Dot(a, b))
 			}
 		}
 		return out, nil

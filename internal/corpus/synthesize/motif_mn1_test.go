@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -75,24 +77,24 @@ var vocabularyBearingItems = map[string]string{
 func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 	const marker = "zzzmarker-unique-shape"
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	// A corpus that gives every pass something to do, with one motif whose
 	// name cannot occur by accident.
-	env.writeFactWithMotifs("kb/marked.md", "Marked fact", "a distinct body", []string{marker})
-	env.writeFactWithMotifs("kb/marked2.md", "Second marked", "another distinct body", []string{marker})
+	env.WriteFactWithMotifs("kb/marked.md", "Marked fact", "a distinct body", []string{marker})
+	env.WriteFactWithMotifs("kb/marked2.md", "Second marked", "another distinct body", []string{marker})
 	for i := range 16 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
-	env.writeFact("kb/bare.md", "Bare fact", "a body with no motif at all")
+	env.WriteFact("kb/bare.md", "Bare fact", "a body with no motif at all")
 
-	out := env.vocabSession()
+	out := vocabSession(env)
 	require.NotEmpty(t, out.restatementItems, "the session must produce items to inspect")
 
-	sess := model.PipelineSession{ID: out.sessionID, Branch: env.branch}
+	sess := model.PipelineSession{ID: out.sessionID, Branch: env.Branch}
 	seen := map[string]bool{}
 	// markedReached records whether a NON-excepted item was handed the marked
 	// facts at all. Without it the scan can pass for want of opportunity: if no
@@ -101,7 +103,7 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 	// response schema passed this test until this precondition was added.
 	markedReached := false
 	for _, item := range out.restatementItems {
-		view, err := (reviewStrategy{}).Render(ctx, env.deps(), &sess, &item)
+		view, err := (reviewStrategy{}).Render(ctx, env.Deps(), &sess, &item)
 		require.NoErrorf(t, err, "render %s", item.StepType)
 		seen[item.StepType] = true
 
@@ -175,14 +177,14 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 // conditional sections, so a corpus without the data sees neither.
 func TestMN1_AuthorizedTemplateCarriersAreConditional(t *testing.T) {
 	// distill: shared motifs of its own input facts.
-	withShared, err := RenderDistillWorkItem([]factForLLM{
+	withShared, err := RenderDistillWorkItem([]step.FactForLLM{
 		{File: "a", Motifs: []string{"silent-fallback"}},
 		{File: "b", Motifs: []string{"silent-fallback"}},
 	}, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, withShared.Prompt, "silent-fallback")
 
-	without, err := RenderDistillWorkItem([]factForLLM{{File: "a"}}, "kb", "", false)
+	without, err := RenderDistillWorkItem([]step.FactForLLM{{File: "a"}}, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, without.Prompt, "Motifs already shared",
 		"a cluster sharing no motifs must see no motif section")
@@ -209,7 +211,7 @@ func TestMN1_AuthorizedTemplateCarriersAreConditional(t *testing.T) {
 // renders the ordinary items directly, with facts that definitely carry motifs.
 func TestMN1_OrdinaryItemsNeverCarryVocabulary(t *testing.T) {
 	const marker = "zzzmarker-unique-shape"
-	marked := []factForLLM{
+	marked := []step.FactForLLM{
 		{File: "kb/a.md", Title: "Alpha", Body: "a body", Motifs: []string{marker}},
 		{File: "kb/b.md", Title: "Bravo", Body: "another body", Motifs: []string{marker}},
 	}
@@ -236,7 +238,7 @@ func TestMN1_OrdinaryItemsNeverCarryVocabulary(t *testing.T) {
 
 	// The distinction that makes distill's exposure safe: it is shown only what
 	// its OWN facts carry. A motif no input fact has must never appear.
-	unrelated := []factForLLM{{File: "kb/c.md", Title: "Charlie", Body: "body"}}
+	unrelated := []step.FactForLLM{{File: "kb/c.md", Title: "Charlie", Body: "body"}}
 	clean, err := RenderDistillWorkItem(unrelated, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, clean.Prompt, marker,
@@ -255,7 +257,7 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 	const marker = "zzzmarker-unique-shape"
 	const foreign = "zzzforeign-other-shape"
 
-	members := []factForLLM{
+	members := []step.FactForLLM{
 		{File: "kb/a.md", Title: "Alpha", Body: "a body", Motifs: []string{marker}},
 		{File: "kb/b.md", Title: "Bravo", Body: "another body", Motifs: []string{marker}},
 	}
@@ -282,7 +284,7 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 	// vocabulary anywhere — the entity/domain bridges that share this renderer.
 	bare := RenderDiscoverWorkItem(DiscoverWorkPayload{
 		Direction: DiscoverForward,
-		Bridge: BridgeSeedSet{Token: "some-entity", Kind: BridgeEntity, Members: []factForLLM{
+		Bridge: BridgeSeedSet{Token: "some-entity", Kind: BridgeEntity, Members: []step.FactForLLM{
 			{File: "kb/c.md", Title: "Charlie", Body: "body"}}},
 	}, "kb")
 	require.NotContains(t, bare.Prompt, marker)

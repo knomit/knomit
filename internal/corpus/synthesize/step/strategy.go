@@ -1,4 +1,4 @@
-// Package synthesize — the Strategy seam of the shared synthesis engine.
+// The Strategy seam of the shared synthesis engine.
 //
 // Pipeline (pipeline.go) owns everything that is true of *any* multi-turn
 // synthesis session: the session lifecycle, the work→reflect→done phase
@@ -15,7 +15,8 @@
 // structurally rather than by comment. Both the engine and its strategy are
 // rebuilt from scratch on every MCP call, so any field either one carried
 // across calls would silently be lost.
-package synthesize
+
+package step
 
 import (
 	"context"
@@ -68,7 +69,7 @@ type Deps struct {
 	OnProgress func(ProgressEvent)
 }
 
-// pagedStrategy is the optional half of Strategy: implemented only by
+// PagedStrategy is the optional half of Strategy: implemented only by
 // strategies whose work items can be served across several tool results.
 //
 // Optional rather than part of Strategy because paging is not universal —
@@ -76,7 +77,7 @@ type Deps struct {
 // the required interface would force a meaningless implementation on every
 // tool. The engine type-asserts; a strategy that does not implement this is
 // simply never asked.
-type pagedStrategy interface {
+type PagedStrategy interface {
 	// RequireCompletion rejects an answer to a multi-page item that does not
 	// carry proof the agent read every page. Called before Decode and before
 	// the claim, so returning an error leaves the item retryable.
@@ -255,7 +256,7 @@ type Strategy interface {
 	Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error)
 }
 
-// standingWorkStrategy is implemented by a strategy that owns work triggered by
+// StandingWorkStrategy is implemented by a strategy that owns work triggered by
 // CORPUS STATE rather than by the seed scan.
 //
 // The seed scan is EDGE-triggered: it asks what has CHANGED since the
@@ -273,7 +274,7 @@ type Strategy interface {
 //
 // Optional: a strategy that does not implement it behaves exactly as it did
 // before this existed.
-type standingWorkStrategy interface {
+type StandingWorkStrategy interface {
 	// PlanStandingWork enqueues work the corpus's own state calls for, on a
 	// session whose dirty set is EMPTY. It returns whether anything was
 	// enqueued, plus health lines to attach — which must be non-empty even

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -57,7 +58,7 @@ func TestReviewer_Summary_CountsPruneAndDistill(t *testing.T) {
 	require.True(t, res.Done, "session must complete once both items are answered")
 	require.NotNil(t, res.Summary, "a completed session must carry a summary")
 
-	require.Equal(t, ReviewStats{Pruned: 1, Synthesized: 1}, *res.Summary,
+	require.Equal(t, step.ReviewStats{Pruned: 1, Synthesized: 1}, *res.Summary,
 		"summary must report the work both items actually did")
 }
 
@@ -76,7 +77,7 @@ func TestReviewer_Summary_ZeroWhenNothingChanged(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res.Done)
 	require.NotNil(t, res.Summary)
-	require.Equal(t, ReviewStats{}, *res.Summary, "a no-op session must report zeros")
+	require.Equal(t, step.ReviewStats{}, *res.Summary, "a no-op session must report zeros")
 }
 
 // TestReviewer_Summary_SurvivesFreshReviewer is the regression anchor for

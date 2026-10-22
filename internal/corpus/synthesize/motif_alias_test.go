@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"hash/fnv"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"math"
 	"strings"
 	"testing"
@@ -21,15 +22,15 @@ import (
 
 // motifVocabEnv builds a corpus with n distinct motifs, one carrier each,
 // named so no two group mechanically.
-func motifVocabEnv(t *testing.T, n int) *restatementEnv {
+func motifVocabEnv(t *testing.T, n int) *synthtest.RestatementEnv {
 	t.Helper()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	for i := range n {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(context.Background(), env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 	return env
 }
 
@@ -47,7 +48,7 @@ func numberWord(i int) string {
 // merge costs proportionally most in a tiny vocabulary.
 func TestMotifJudgeSelection_BelowFloorOffersNothing(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary-1)
-	pairs, h, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	pairs, h, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err)
 	require.Empty(t, pairs, "a vocabulary below the floor must offer no comparisons")
 	require.True(t, h.BelowFloor)
@@ -56,7 +57,7 @@ func TestMotifJudgeSelection_BelowFloorOffersNothing(t *testing.T) {
 
 func TestMotifJudgeSelection_AtFloorOffersSomething(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary)
-	pairs, h, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	pairs, h, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err)
 	require.False(t, h.BelowFloor)
 	require.NotEmpty(t, pairs,
@@ -67,7 +68,7 @@ func TestMotifJudgeSelection_AtFloorOffersSomething(t *testing.T) {
 // The judge-slot budget is a hard cap whatever the corpus looks like: a corpus
 // where every name resembles every other must not be able to spend more.
 func TestMotifJudgeSelection_SlotBudgetCapsAFloodCorpus(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Names crowded into a narrow arc at DISTINCT angles. An earlier fixture put
 	// every name on the identical point; that made all cosines tie, so rank
 	// order became index order, every top-ranked pair shared cluster 0, and the
@@ -75,15 +76,15 @@ func TestMotifJudgeSelection_SlotBudgetCapsAFloodCorpus(t *testing.T) {
 	// The test passed with the slot cap deleted. Distinct-but-close angles
 	// spread the top of the ranking across many clusters, which is what a real
 	// flood corpus looks like and what the slot budget exists for.
-	env.emb.vectorFor = func(text string) []float32 { return axisVector(0.15 * unitHash(text)) }
+	env.Emb.VectorFor = func(text string) []float32 { return synthtest.AxisVector(0.15 * unitHash(text)) }
 	for i := range 40 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
 			[]string{fmt.Sprintf("mechanism-%s-%s", numberWord(i), numberWord(i/20))})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(context.Background(), env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 
-	pairs, h, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	pairs, h, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(pairs), maxJudgePairs,
 		"the slot budget must bound a flood corpus — this is what stops a repo where "+
@@ -95,24 +96,24 @@ func TestMotifJudgeSelection_SlotBudgetCapsAFloodCorpus(t *testing.T) {
 // Without it one hub-like name consumes every slot and the rest of the
 // vocabulary is never examined.
 func TestMotifJudgeSelection_NoClusterExceedsItsNeighbourBudget(t *testing.T) {
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// One name sits at the centre; all others cluster tightly around it, so
 	// unbudgeted selection would pair everything with the hub.
-	env.emb.vectorFor = func(text string) []float32 {
+	env.Emb.VectorFor = func(text string) []float32 {
 		if strings.Contains(text, "hub") {
-			return axisVector(0)
+			return synthtest.AxisVector(0)
 		}
-		return axisVector(0.01)
+		return synthtest.AxisVector(0.01)
 	}
-	env.writeFactWithMotifs("kb/hub.md", "Hub", "body", []string{"hub-mechanism"})
+	env.WriteFactWithMotifs("kb/hub.md", "Hub", "body", []string{"hub-mechanism"})
 	for i := range 20 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
 			[]string{fmt.Sprintf("spoke-%s", numberWord(i))})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(context.Background(), env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 
-	pairs, _, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	pairs, _, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err)
 
 	perCluster := map[string]int{}
@@ -133,18 +134,18 @@ func TestMotifJudgeSelection_AnsweredPairsAreNotReOffered(t *testing.T) {
 	ctx := context.Background()
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
 
-	first, _, err := selectMotifJudgePairs(ctx, env.deps(), env.branch)
+	first, _, err := selectMotifJudgePairs(ctx, env.Deps(), env.Branch)
 	require.NoError(t, err)
 	require.NotEmpty(t, first)
 
 	// Answer every offered pair — decline, so nothing merges and the vocabulary
 	// is unchanged apart from the verdicts themselves.
 	for _, p := range first {
-		require.NoError(t, env.svc.Motifs().RecordJudgeDecline(ctx, env.branch,
+		require.NoError(t, env.Svc.Motifs().RecordJudgeDecline(ctx, env.Branch,
 			p.A.CanonicalID, p.B.CanonicalID))
 	}
 
-	second, _, err := selectMotifJudgePairs(ctx, env.deps(), env.branch)
+	second, _, err := selectMotifJudgePairs(ctx, env.Deps(), env.Branch)
 	require.NoError(t, err)
 	for _, p := range second {
 		for _, done := range first {
@@ -174,7 +175,7 @@ func TestMotifJudgeSelection_IsDeterministic(t *testing.T) {
 
 	var runs [][]string
 	for range 3 {
-		pairs, _, err := selectMotifJudgePairs(ctx, env.deps(), env.branch)
+		pairs, _, err := selectMotifJudgePairs(ctx, env.Deps(), env.Branch)
 		require.NoError(t, err)
 		var keys []string
 		for _, p := range pairs {
@@ -191,7 +192,7 @@ func TestMotifJudgeSelection_IsDeterministic(t *testing.T) {
 // (§12-E3), and a pair shown without them asks the judge to decide on names.
 func TestMotifJudgeSelection_EveryPairCarriesTitlesForBothSides(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+2)
-	pairs, _, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	pairs, _, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err)
 	require.NotEmpty(t, pairs)
 	for _, p := range pairs {
@@ -203,15 +204,15 @@ func TestMotifJudgeSelection_EveryPairCarriesTitlesForBothSides(t *testing.T) {
 // Degradation, not failure: alias resolution is an ADDITION to review, so a
 // corpus that cannot embed its vocabulary still gets its ordinary pass.
 func TestMotifJudgeSelection_NoEmbedderDegradesQuietly(t *testing.T) {
-	env := newRestatementEnvWithoutEmbedder(t, 0)
+	env := synthtest.NewRestatementEnvWithoutEmbedder(t, 0)
 	for i := range minJudgeVocabulary + 2 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(context.Background(), env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(context.Background(), env.Branch))
 
-	pairs, h, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	pairs, h, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err, "a missing embedder must not fail the session")
 	require.Empty(t, pairs)
 	require.NotEmpty(t, h.Failure,
@@ -223,15 +224,15 @@ func TestMotifJudgeSelection_NoEmbedderDegradesQuietly(t *testing.T) {
 // selection used.
 func TestMotifJudgeSelection_MN9_NamesEmbedThroughTheShortStringTemplate(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+2)
-	before := env.emb.documentCalls.Load()
-	shortBefore := env.emb.shortStringCalls.Load()
+	before := env.Emb.DocumentCalls.Load()
+	shortBefore := env.Emb.ShortStringCalls.Load()
 
-	_, _, err := selectMotifJudgePairs(context.Background(), env.deps(), env.branch)
+	_, _, err := selectMotifJudgePairs(context.Background(), env.Deps(), env.Branch)
 	require.NoError(t, err)
 
-	require.Greater(t, env.emb.shortStringCalls.Load(), shortBefore,
+	require.Greater(t, env.Emb.ShortStringCalls.Load(), shortBefore,
 		"motif names must embed through EmbedShortStrings (the title-hack descriptor)")
-	require.Equal(t, before, env.emb.documentCalls.Load(),
+	require.Equal(t, before, env.Emb.DocumentCalls.Load(),
 		"a motif name is not a document — the task-prompt rendering measured WORSE, "+
 			"which is exactly the mistake this guard exists to catch")
 }
@@ -297,19 +298,19 @@ func TestMN13_OperatingPointIsPerCorpus(t *testing.T) {
 	// compared two constants. Distinct names must land at distinct angles or
 	// this asserts nothing about distributions.
 	arc := func(width float64) func(string) []float32 {
-		return func(text string) []float32 { return axisVector(width * unitHash(text)) }
+		return func(text string) []float32 { return synthtest.AxisVector(width * unitHash(text)) }
 	}
 
 	tight := motifVocabEnv(t, minJudgeVocabulary+6)
 	// Names crowded into a narrow arc: this corpus's pairs are all similar.
-	tight.emb.vectorFor = arc(0.2)
-	_, hTight, err := selectMotifJudgePairs(ctx, tight.deps(), tight.branch)
+	tight.Emb.VectorFor = arc(0.2)
+	_, hTight, err := selectMotifJudgePairs(ctx, tight.Deps(), tight.Branch)
 	require.NoError(t, err)
 
 	spread := motifVocabEnv(t, minJudgeVocabulary+6)
 	// Names spread around a half-circle: this corpus's pairs are dissimilar.
-	spread.emb.vectorFor = arc(math.Pi)
-	_, hSpread, err := selectMotifJudgePairs(ctx, spread.deps(), spread.branch)
+	spread.Emb.VectorFor = arc(math.Pi)
+	_, hSpread, err := selectMotifJudgePairs(ctx, spread.Deps(), spread.Branch)
 	require.NoError(t, err)
 
 	require.NotEqual(t, hTight.OperatingPoint, hSpread.OperatingPoint,

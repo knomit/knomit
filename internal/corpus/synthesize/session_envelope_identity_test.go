@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func TestStartSession_EnvelopeCarriesRepoIdentity(t *testing.T) {
 // result say what it displaced is what the campaign can honestly do.
 func TestStartSession_EnvelopeReportsAnAbandonedSession(t *testing.T) {
 	ctx := context.Background()
-	r := newEffortTestReviewer(t, EffortNormal)
+	r := newEffortTestReviewer(t, step.EffortNormal)
 
 	first, err := r.StartSession(ctx)
 	require.NoError(t, err)
@@ -84,7 +85,7 @@ func TestStartSession_EnvelopeReportsAnAbandonedSession(t *testing.T) {
 // and the notice would be alarming rather than informative.
 func TestStartSession_AbandonedSessionCannotBeContinued(t *testing.T) {
 	ctx := context.Background()
-	r := newEffortTestReviewer(t, EffortNormal)
+	r := newEffortTestReviewer(t, step.EffortNormal)
 
 	first, err := r.StartSession(ctx)
 	require.NoError(t, err)

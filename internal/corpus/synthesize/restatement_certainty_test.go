@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -30,26 +32,26 @@ const (
 // The two twins are placed by hand on the first two dimensions so the test
 // controls the cosine exactly; every other fact keeps the default hash vector,
 // which is far from both.
-func certaintyEnv(t *testing.T, n int) *restatementEnv {
+func certaintyEnv(t *testing.T, n int) *synthtest.RestatementEnv {
 	t.Helper()
 	titleB := certainTitle + " (weekly recap)"
 	bodyB := certainBody + " Filed a second time."
-	emb := &restatementEmbedder{vectorFor: func(text string) []float32 {
+	emb := &synthtest.RestatementEmbedder{VectorFor: func(text string) []float32 {
 		switch text {
 		case certainTitle:
-			return axisVector(0)
+			return synthtest.AxisVector(0)
 		case titleB:
-			return axisVector(0.02)
+			return synthtest.AxisVector(0.02)
 		case certainTitle + " " + certainBody:
-			return axisVector(0.01)
+			return synthtest.AxisVector(0.01)
 		case titleB + " " + bodyB:
-			return axisVector(0.03)
+			return synthtest.AxisVector(0.03)
 		}
 		return nil
 	}}
-	env := newRestatementEnvWith(t, n, emb)
-	env.writeFact(certainAPath, certainTitle, certainBody)
-	env.writeFact(certainBPath, titleB, bodyB)
+	env := synthtest.NewRestatementEnvWith(t, n, emb)
+	env.WriteFact(certainAPath, certainTitle, certainBody)
+	env.WriteFact(certainBPath, titleB, bodyB)
 	return env
 }
 
@@ -58,14 +60,14 @@ func certaintyEnv(t *testing.T, n int) *restatementEnv {
 // A fixture chosen to make a test discriminate must be ASSERTED, not assumed
 // (the campaign's fixture-vacuity lesson): if these vectors drifted below the
 // floor the tests below would pass while measuring nothing.
-func certainPairIsAboveTheFloor(t *testing.T, env *restatementEnv) {
+func certainPairIsAboveTheFloor(t *testing.T, env *synthtest.RestatementEnv) {
 	t.Helper()
-	ids := env.liveFactIDs()
-	vecs, err := env.svc.Abstraction().BodyVectorsByFactID(context.Background(),
+	ids := env.LiveFactIDs()
+	vecs, err := env.Svc.Abstraction().BodyVectorsByFactID(context.Background(),
 		[]int64{ids[certainAPath], ids[certainBPath]})
 	require.NoError(t, err)
 	cos := model.CosineSim(vecs[ids[certainAPath]], vecs[ids[certainBPath]])
-	require.GreaterOrEqual(t, cos, env.dedupThreshold(),
+	require.GreaterOrEqual(t, cos, env.DedupThreshold(),
 		"fixture must sit at or above the mechanical dedup floor, or these tests measure nothing")
 }
 
@@ -81,11 +83,11 @@ func TestShortlist_CertainDuplicatesReachTheStandingCache(t *testing.T) {
 	env := certaintyEnv(t, 0)
 	certainPairIsAboveTheFloor(t, env)
 
-	env.seedShortlist()
+	seedShortlist(env)
 
-	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
+	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100)
 	require.NoError(t, err)
-	require.True(t, containsPair(pairs, certainAPath, certainBPath),
+	require.True(t, synthtest.ContainsPair(pairs, certainAPath, certainBPath),
 		"a duplicate pair above the mechanical floor must stand in the shortlist — "+
 			"no cluster-scoped merge will ever reach it")
 }
@@ -103,10 +105,10 @@ func TestShortlist_CertainDuplicatesAreEnqueuedForTheJudge(t *testing.T) {
 	env := certaintyEnv(t, 200)
 	certainPairIsAboveTheFloor(t, env)
 
-	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	d := env.Deps()
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.branch, nil))
+	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.Branch, nil))
 
 	require.True(t, shortlistQueueHoldsPair(t, env, sess.ID, certainAPath, certainBPath),
 		"the certain duplicate must be enqueued as a shortlist prune item")
@@ -125,13 +127,13 @@ func TestShortlist_CoClusteredCertainDuplicatesAreNotEnqueued(t *testing.T) {
 	env := certaintyEnv(t, 200)
 	certainPairIsAboveTheFloor(t, env)
 
-	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	d := env.Deps()
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	coClustered := [][]factForLLM{{
+	coClustered := [][]step.FactForLLM{{
 		{File: certainAPath}, {File: certainBPath},
 	}}
-	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.branch, coClustered))
+	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.Branch, coClustered))
 
 	require.False(t, shortlistQueueHoldsPair(t, env, sess.ID, certainAPath, certainBPath),
 		"a pair prune already sees in one cluster must not also spend a shortlist slot")
@@ -139,11 +141,11 @@ func TestShortlist_CoClusteredCertainDuplicatesAreNotEnqueued(t *testing.T) {
 
 // shortlistQueueHoldsPair reports whether a shortlist-originated work item in
 // this session carries exactly the two named paths.
-func shortlistQueueHoldsPair(t *testing.T, env *restatementEnv, sessionID, a, b string) bool {
+func shortlistQueueHoldsPair(t *testing.T, env *synthtest.RestatementEnv, sessionID, a, b string) bool {
 	t.Helper()
 	ctx := context.Background()
 	for {
-		item, err := env.svc.Pipeline().NextPipelineWorkItem(ctx, sessionID)
+		item, err := env.Svc.Pipeline().NextPipelineWorkItem(ctx, sessionID)
 		require.NoError(t, err)
 		if item == nil {
 			return false
@@ -153,7 +155,7 @@ func shortlistQueueHoldsPair(t *testing.T, env *restatementEnv, sessionID, a, b 
 		}
 		// Consume it so the next peek advances; the queue is a priority queue,
 		// not a cursor.
-		ok, err := env.svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, "{}")
+		ok, err := env.Svc.Pipeline().AnswerPipelineWorkItem(ctx, item.ID, "{}")
 		require.NoError(t, err)
 		require.True(t, ok)
 	}
@@ -166,7 +168,7 @@ func isShortlistItem(clusterKey string) bool {
 
 func itemCarriesPaths(t *testing.T, factsJSON string, want ...string) bool {
 	t.Helper()
-	var facts []factForLLM
+	var facts []step.FactForLLM
 	require.NoError(t, json.Unmarshal([]byte(factsJSON), &facts))
 	if len(facts) != len(want) {
 		return false

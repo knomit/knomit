@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -20,7 +22,7 @@ import (
 
 // TestScopeLabel_EmptyFilter returns "" for an empty scope filter.
 func TestScopeLabel_EmptyFilter(t *testing.T) {
-	got := scopeLabel(ScopeFilter{})
+	got := scopeLabel(step.ScopeFilter{})
 	if got != "" {
 		t.Errorf("empty filter: want \"\", got %q", got)
 	}
@@ -28,7 +30,7 @@ func TestScopeLabel_EmptyFilter(t *testing.T) {
 
 // TestScopeLabel_DomainOnly formats domain-only scopes.
 func TestScopeLabel_DomainOnly(t *testing.T) {
-	got := scopeLabel(ScopeFilter{Domain: []string{"auth"}})
+	got := scopeLabel(step.ScopeFilter{Domain: []string{"auth"}})
 	if got == "" {
 		t.Error("domain-only scope must return non-empty label")
 	}
@@ -39,7 +41,7 @@ func TestScopeLabel_DomainOnly(t *testing.T) {
 
 // TestScopeLabel_MultiDomainAndEntity formats a full scope with domain+entities.
 func TestScopeLabel_MultiDomainAndEntity(t *testing.T) {
-	s := ScopeFilter{Domain: []string{"auth"}, Entities: []string{"permissions"}}
+	s := step.ScopeFilter{Domain: []string{"auth"}, Entities: []string{"permissions"}}
 	got := scopeLabel(s)
 	if !strings.Contains(got, "auth") {
 		t.Errorf("label must contain 'auth', got %q", got)
@@ -51,7 +53,7 @@ func TestScopeLabel_MultiDomainAndEntity(t *testing.T) {
 
 // TestScopeLabel_Deterministic confirms the same scope returns the same string.
 func TestScopeLabel_Deterministic(t *testing.T) {
-	s := ScopeFilter{Domain: []string{"auth", "billing"}, Entities: []string{"alice"}}
+	s := step.ScopeFilter{Domain: []string{"auth", "billing"}, Entities: []string{"alice"}}
 	a := scopeLabel(s)
 	b := scopeLabel(s)
 	if a != b {
@@ -119,8 +121,8 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 
 	// EffortNormal + scope: buildFilteredBridges returns nil immediately (gate).
 	// We verify via the absence of discover items — the scope routing is correct.
-	scope := ScopeFilter{Domain: []string{"auth"}}
-	r := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, scope)
+	scope := step.ScopeFilter{Domain: []string{"auth"}}
+	r := NewReviewerWithOptions(ri, func(step.ProgressEvent) {}, step.EffortNormal, scope)
 	res, err := r.StartSession(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, res.SessionID)
@@ -136,7 +138,7 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token:   "", // token-optional (filtered path)
 			Kind:    BridgeBoth,
-			Members: []factForLLM{{File: "kb/auth/a.md", Title: "A"}, {File: "kb/auth/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/auth/a.md", Title: "A"}, {File: "kb/auth/b.md", Title: "B"}},
 		},
 	}
 	pj, merr := json.Marshal(payload)
@@ -193,21 +195,21 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 // Direct unit: call buildFilteredBridges and verify BridgeSeedSet, then
 // simulate the payload-construction path to confirm ScopeLabel assignment.
 func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		makeFact("kb/auth/a.md", "authored", []string{"auth"}, []string{"permissions"}),
 		makeFact("kb/auth/b.md", "authored", []string{"auth"}, []string{"acl"}),
 	}
 	cr := ClusterResult{
 		Clusters: map[int][]string{0: {"kb/auth/a.md"}, 1: {"kb/auth/b.md"}},
 	}
-	scope := ScopeFilter{Domain: []string{"auth"}}
+	scope := step.ScopeFilter{Domain: []string{"auth"}}
 
 	// buildFilteredBridges reads SimilarityAdjacency and the reverse dependents
 	// (derivationGap), and must NOT read TokenDF (that is buildScoredBridges):
 	// the strict policy fails the test on any other read.
-	env := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/auth/a.md", "kb/auth/b.md"})
-	idx := env.idx()
-	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
+	env := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Similar([2]string{"kb/auth/a.md", "kb/auth/b.md"})
+	idx := env.Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	filteredCfg := QualityConfig{
 		CohFloor:     0.0, // accept all cohesion for this test
@@ -216,7 +218,7 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 		MaxMembers: 5,
 	}
 
-	bridges, err := buildFilteredBridges(context.Background(), idx, "main", seeds, cr, scope, EffortHigh, filteredCfg)
+	bridges, err := buildFilteredBridges(context.Background(), idx, "main", seeds, cr, scope, step.EffortHigh, filteredCfg)
 	require.NoError(t, err)
 	// At least one bridge should be found (two cross-community facts).
 	// If none: the cohesion + quality floors caused a drop — still valid for this test.
@@ -251,7 +253,7 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 // BuildBackwardBridges finds bridges under a non-empty scope,
 // the enqueueBackwardBridgeItems path sets ScopeLabel on each payload.
 func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
-	scope := ScopeFilter{Entities: []string{"alice", "bob"}}
+	scope := step.ScopeFilter{Entities: []string{"alice", "bob"}}
 	label := scopeLabel(scope)
 	require.NotEmpty(t, label, "scopeLabel must be non-empty for non-empty scope")
 
@@ -259,7 +261,7 @@ func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	b := BridgeSeedSet{
 		Token:   "", // token-optional backward bridge
 		Kind:    BridgeBoth,
-		Members: []factForLLM{{File: "a.md", Title: "A"}, {File: "b.md", Title: "B"}},
+		Members: []step.FactForLLM{{File: "a.md", Title: "A"}, {File: "b.md", Title: "B"}},
 	}
 	payload := DiscoverWorkPayload{
 		Direction:  DiscoverBackward,
@@ -287,7 +289,7 @@ func TestBackwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 // backward discover payload has empty ScopeLabel (and non-empty Token from the
 // standard buildScoredBridges path).
 func TestBackwardDispatch_Unscoped_EmptyScopeLabel(t *testing.T) {
-	scope := ScopeFilter{} // empty = unscoped
+	scope := step.ScopeFilter{} // empty = unscoped
 	label := scopeLabel(scope)
 	require.Empty(t, label, "scopeLabel(empty filter) must be empty")
 
@@ -298,7 +300,7 @@ func TestBackwardDispatch_Unscoped_EmptyScopeLabel(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token:   "auth",
 			Kind:    BridgeDomain,
-			Members: []factForLLM{{File: "a.md", Title: "A"}, {File: "b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "a.md", Title: "A"}, {File: "b.md", Title: "B"}},
 		},
 	}
 	// Token-present path — prompt must contain the token, not the scope label.
@@ -345,7 +347,7 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 		Bridge: BridgeSeedSet{
 			Token: "", // empty token — filtered bridge
 			Kind:  BridgeBoth,
-			Members: []factForLLM{
+			Members: []step.FactForLLM{
 				{File: memberPaths[0], Title: "Seed A"},
 				{File: memberPaths[1], Title: "Seed B"},
 			},
@@ -357,10 +359,10 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 		Title:      "T21 test discovery",
 		Body:       "Test body for T21.",
 		Type:       "synthesis",
-		Domain:     flexStrings([]string{"auth"}),
+		Domain:     step.FlexStrings([]string{"auth"}),
 		Confidence: 0.9,
-		Entities:   flexStrings([]string{}),
-		Refs:       flexStrings(memberPaths),
+		Entities:   step.FlexStrings([]string{}),
+		Refs:       step.FlexStrings(memberPaths),
 	}}
 
 	gates := DiscoveryGates{ConfidenceThreshold: 0.5}
@@ -373,8 +375,8 @@ func TestApplyDiscoveredProposals_EmptyToken_CommitMessage(t *testing.T) {
 		payload,
 		proposals,
 		gates,
-		branch, bareRefFixture, "kb",
-		func(ProgressEvent) {},
+		branch, synthtest.BareRefFixture, "kb",
+		func(step.ProgressEvent) {},
 	)
 	require.NoError(t, err)
 	require.Len(t, written, 1, "proposal should have been written")
@@ -430,7 +432,7 @@ func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *t
 		ScopeLabel: "", // empty scope label → fallback must be "scoped"
 		Bridge: BridgeSeedSet{
 			Token: "", Kind: BridgeBoth,
-			Members: []factForLLM{{File: memberPaths[0], Title: "C"}, {File: memberPaths[1], Title: "D"}},
+			Members: []step.FactForLLM{{File: memberPaths[0], Title: "C"}, {File: memberPaths[1], Title: "D"}},
 		},
 	}
 	proposals := []DiscoveredFact{{
@@ -438,14 +440,14 @@ func TestApplyDiscoveredProposals_EmptyToken_NoScopeLabel_FallsBackToScoped(t *t
 		Title:      "T21b",
 		Body:       "Body.",
 		Type:       "synthesis",
-		Domain:     flexStrings([]string{"auth"}),
+		Domain:     step.FlexStrings([]string{"auth"}),
 		Confidence: 0.9,
-		Refs:       flexStrings(memberPaths),
+		Refs:       step.FlexStrings(memberPaths),
 	}}
 
 	written, err := applyDiscoveredProposals(
 		context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil,
-		payload, proposals, DiscoveryGates{ConfidenceThreshold: 0.5}, branch, bareRefFixture, "kb", func(ProgressEvent) {},
+		payload, proposals, DiscoveryGates{ConfidenceThreshold: 0.5}, branch, synthtest.BareRefFixture, "kb", func(step.ProgressEvent) {},
 	)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
@@ -481,8 +483,8 @@ func TestForward_Unscoped_EffortNormal_ByteIdentical(t *testing.T) {
 		Name: "test", AgentBranch: branch, Svc: svc, OntologyRoot: "kb",
 	})
 
-	r := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{})
-	require.Equal(t, EffortNormal, r.Effort())
+	r := NewReviewerWithOptions(ri, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{})
+	require.Equal(t, step.EffortNormal, r.Effort())
 	res, err := r.StartSession(context.Background())
 	require.NoError(t, err)
 

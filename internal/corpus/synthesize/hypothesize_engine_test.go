@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -66,7 +67,7 @@ func writeTestFact(t *testing.T, svc *store.Service, path, title string, typ fac
 // drainHypothesizeSession answers every item with the empty response until the
 // session reports done, returning the item types in the order they were served.
 // It caps the walk so a queue that never drains fails loudly instead of hanging.
-func drainHypothesizeSession(t *testing.T, p *Pipeline, res *PipelineResult) []string {
+func drainHypothesizeSession(t *testing.T, p *Pipeline, res *step.PipelineResult) []string {
 	t.Helper()
 	ctx := context.Background()
 	var seen []string
@@ -98,8 +99,8 @@ func TestHypothesizer_NormalEffort_DefaultPath(t *testing.T) {
 		writeTestFact(t, svc, "kb/test/"+slug+".md", slug, fact.Synthesis, "test")
 	}
 
-	p := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{})
-	require.Equal(t, EffortNormal, p.Effort())
+	p := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{})
+	require.Equal(t, step.EffortNormal, p.Effort())
 
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
@@ -136,7 +137,7 @@ func TestHypothesizer_SeedsSynthesisOnly_BothScanPaths(t *testing.T) {
 	writeTestFact(t, svc, "kb/test/obs-a.md", "obs-a", fact.Observation, "test")
 	writeTestFact(t, svc, "kb/test/hyp-a.md", "hyp-a", fact.Hypothesis, "test")
 
-	p := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{})
+	p := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{"hypothesize"}, drainHypothesizeSession(t, p, res),
@@ -146,7 +147,7 @@ func TestHypothesizer_SeedsSynthesisOnly_BothScanPaths(t *testing.T) {
 	writeTestFact(t, svc, "kb/test/synth-b.md", "synth-b", fact.Synthesis, "test")
 	writeTestFact(t, svc, "kb/test/obs-b.md", "obs-b", fact.Observation, "test")
 
-	p2 := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{})
+	p2 := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{})
 	res2, err := p2.StartSession(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{"hypothesize"}, drainHypothesizeSession(t, p2, res2),
@@ -162,7 +163,7 @@ func TestHypothesizer_ZeroSeeds_CreatesAndCompletesSession(t *testing.T) {
 	svc, ri := newHypothesizeTestRepo(t)
 	ctx := context.Background()
 
-	res, err := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{}).StartSession(ctx)
+	res, err := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
 	require.NoError(t, err)
 	require.True(t, res.Done)
 	require.NotEmpty(t, res.SessionID, "D5: the zero-seed path creates a real session")
@@ -193,7 +194,7 @@ func TestHypothesizer_ScopedNonEmptyWatermark_StillSeedsInScope(t *testing.T) {
 	require.NotEmpty(t, head)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "hypothesize", "agent/test", head))
 
-	p := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	p := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 	require.False(t, res.Done,
@@ -211,7 +212,7 @@ func TestHypothesizer_BackwardDiscovery_SingleFact(t *testing.T) {
 
 	writeTestFact(t, svc, "kb/arch/only.md", "only", fact.Synthesis, "auth")
 
-	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{Domain: []string{"auth"}})
+	p := NewHypothesizer(ri, nil, step.EffortHigh, step.ScopeFilter{Domain: []string{"auth"}})
 	res, err := p.StartSession(ctx)
 	require.NoError(t, err)
 	require.False(t, res.Done, "one synthesis fact in scope → session should start")
@@ -249,7 +250,7 @@ func TestHypothesizer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	require.NoError(t, markErr)
 	insertManualDiscoverItem(t, svc, sess.ID)
 
-	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})
+	p := NewHypothesizer(ri, nil, step.EffortHigh, step.ScopeFilter{})
 	_, err = p.ContinueSession(ctx, sess.ID, `not json {{{`)
 	require.NoError(t, err, "a malformed discover response must be non-fatal")
 
@@ -317,7 +318,7 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 	require.NoError(t, markErr)
 	insertSeededDiscoverItem(t, svc, sess.ID)
 
-	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})
+	p := NewHypothesizer(ri, nil, step.EffortHigh, step.ScopeFilter{})
 	var start, done sync.WaitGroup
 	errs := make([]error, 2)
 	start.Add(1)
@@ -400,7 +401,7 @@ func TestHypothesizeStrategy_PerFactPriorityStaysPositive(t *testing.T) {
 		writeTestFact(t, svc, "kb/test/"+slug+".md", slug, fact.Synthesis, "test")
 	}
 
-	res, err := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{}).StartSession(ctx)
+	res, err := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
 	require.NoError(t, err)
 
 	// Walk the queue through the index rather than the engine, so the stored

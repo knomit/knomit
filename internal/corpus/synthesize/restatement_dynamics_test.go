@@ -3,10 +3,12 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -33,20 +35,20 @@ import (
 // would have emitted nothing for the entire life of every repo, with a full
 // pair cache sitting unread.
 func TestDynamics_IncrementalSessionsStillEmit(t *testing.T) {
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/restate-a.md", "Cache invalidation on write", "one account of it")
-	env.writeFact("kb/restate-b.md", "Cache invalidation on write", "a different account, at length, of the same thing")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/restate-a.md", "Cache invalidation on write", "one account of it")
+	env.WriteFact("kb/restate-b.md", "Cache invalidation on write", "a different account, at length, of the same thing")
 	for i := range 400 {
-		env.writeFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
+		env.WriteFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
 	}
 
 	// Session 1: the full scan. This is the session that always worked.
-	first := env.runSession()
+	first := runSession(env)
 	require.NotEmpty(t, first.restatementItems, "the full-scan session emits")
 
 	// Session 2: one fact edited, so the seed pool is a single fact.
-	env.writeFact("kb/filler7.md", "Filler 7 revised", "a revised filler body")
-	second := env.runSession()
+	env.WriteFact("kb/filler7.md", "Filler 7 revised", "a revised filler body")
+	second := runSession(env)
 	require.NotEmpty(t, second.restatementItems,
 		"an incremental session must still spend from the CORPUS budget — "+
 			"scaling by dirty seeds makes this zero forever after the first review")
@@ -61,41 +63,41 @@ func TestDynamics_IncrementalSessionsStillEmit(t *testing.T) {
 // is exactly what says "already covered".
 func TestDynamics_PartialBackfillClosesOverSessions(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 120)
-	env.emb.perBatchDelay = 15 * time.Millisecond // forces a partial first pass
+	env := synthtest.NewRestatementEnv(t, 120)
+	env.Emb.PerBatchDelay = 15 * time.Millisecond // forces a partial first pass
 
 	// A deliberately tiny backfill budget: a few batches per session.
 	const tinyBudget = 40 * time.Millisecond
 
-	have, total, err := ensureTitleVectors(ctx, env.deps(), env.branch, tinyBudget)
+	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, tinyBudget)
 	require.NoError(t, err)
 	require.Less(t, have, total, "the first session covers only part of the corpus")
 
-	_, err = refreshRestatementShortlist(ctx, env.deps(), env.branch)
+	_, err = refreshRestatementShortlist(ctx, env.Deps(), env.Branch)
 	require.NoError(t, err)
-	firstPairs := env.standingPairCount()
+	firstPairs := standingPairCount(env)
 
 	// Sessions continue until coverage closes. Pair growth must continue with
 	// it: a frozen cache would keep returning the same count forever.
 	for range 40 {
-		have, total, err = ensureTitleVectors(ctx, env.deps(), env.branch, tinyBudget)
+		have, total, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, tinyBudget)
 		require.NoError(t, err)
-		_, err = refreshRestatementShortlist(ctx, env.deps(), env.branch)
+		_, err = refreshRestatementShortlist(ctx, env.Deps(), env.Branch)
 		require.NoError(t, err)
 		if have == total {
 			break
 		}
 	}
 	require.Equal(t, total, have, "coverage closes")
-	require.Greater(t, env.standingPairCount(), firstPairs,
+	require.Greater(t, standingPairCount(env), firstPairs,
 		"pairs keep being discovered as the axis fills — a cache that stops growing "+
 			"has marked un-embedded facts as covered")
 
 	// And the finished corpus matches what a single-session backfill would have
 	// produced: partial coverage delays discovery, it does not lose it.
-	full := newRestatementEnv(t, 120)
-	full.seedShortlist()
-	require.Equal(t, full.standingPairCount(), env.standingPairCount(),
+	full := synthtest.NewRestatementEnv(t, 120)
+	seedShortlist(full)
+	require.Equal(t, standingPairCount(full), standingPairCount(env),
 		"a corpus backfilled across sessions ends up with the same pairs as one backfilled at once")
 }
 
@@ -105,9 +107,9 @@ func TestDynamics_PartialBackfillClosesOverSessions(t *testing.T) {
 // re-running only that fact's KNN destroys such pairs with nothing to
 // rediscover them.
 func TestDynamics_PairsSurviveAnUnrelatedEdit(t *testing.T) {
-	env := newRestatementEnv(t, 60)
-	env.seedShortlist()
-	before := env.standingPairSet()
+	env := synthtest.NewRestatementEnv(t, 60)
+	seedShortlist(env)
+	before := standingPairSet(env)
 	require.NotEmpty(t, before)
 
 	// Edit facts one at a time, refreshing between each, and require the pair
@@ -116,10 +118,10 @@ func TestDynamics_PairsSurviveAnUnrelatedEdit(t *testing.T) {
 	// between OTHER facts.
 	for _, i := range []int{3, 17, 42} {
 		path := fmt.Sprintf("kb/f%d.md", i)
-		env.writeFact(path, fmt.Sprintf("F%d", i), fmt.Sprintf("rewritten body %d", i))
-		env.seedShortlist()
+		env.WriteFact(path, fmt.Sprintf("F%d", i), fmt.Sprintf("rewritten body %d", i))
+		seedShortlist(env)
 
-		after := env.standingPairSet()
+		after := standingPairSet(env)
 		for key := range before {
 			if strings.Contains(key, path) {
 				continue // the edited fact's own pairs are re-minted, not preserved
@@ -141,8 +143,8 @@ func TestDynamics_PairsSurviveAnUnrelatedEdit(t *testing.T) {
 // which is exactly why the latch went unnoticed.
 func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 600)
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 600)
+	seedShortlist(env)
 
 	// Decline everything offered until the corpus stops offering. How many
 	// sessions that takes depends on the batch size, which is the corpus's
@@ -153,7 +155,7 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	var err error
 	sessions := 0
 	for ; sessions < throttleWindow; sessions++ {
-		pairs, health, err = selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		pairs, health, err = selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 		require.NoError(t, err)
 		if health.ThrottleState == throttleDefunded {
 			break
@@ -163,7 +165,7 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 			key := pathPairKey(p.APath, p.BPath)
 			require.False(t, declined[key], "a declined pair must never be offered twice")
 			declined[key] = true
-			env.recordVerdict(p.APath, p.BPath, false)
+			env.RecordVerdict(p.APath, p.BPath, false)
 		}
 	}
 	require.Equal(t, throttleDefunded, health.ThrottleState,
@@ -184,10 +186,10 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	probed := 0
 	var probeA, probeB string
 	for range throttleProbeInterval + 1 {
-		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+		sess, serr := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 		require.NoError(t, serr)
-		require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
-		items := env.workItems(sess.ID)
+		require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+		items := env.WorkItems(sess.ID)
 		if healthLineSaysProbing(sess) {
 			probed++
 			require.Len(t, items, 1, "a probe is one slot, not a batch")
@@ -200,8 +202,8 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 
 	// Resolve the probe: the corpus funds itself again from evidence only the
 	// probe could have produced.
-	env.recordVerdict(probeA, probeB, true)
-	pairs, health, err = selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+	env.RecordVerdict(probeA, probeB, true)
+	pairs, health, err = selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 	require.NoError(t, err)
 	require.Equal(t, throttleFunded, health.ThrottleState)
 	require.NotEmpty(t, pairs)
@@ -213,12 +215,12 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 // with pairs the judge had already refused, and a funded corpus went silent.
 func TestDynamics_DecliningSessionsKeepOfferingNewPairs(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 600)
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 600)
+	seedShortlist(env)
 
 	seen := map[string]bool{}
 	for session := range throttleMinVerdicts - 1 {
-		pairs, _, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		pairs, _, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 		require.NoError(t, err)
 		require.NotEmpty(t, pairs, "session %d went silent while still funded", session)
 		for _, p := range pairs {
@@ -226,7 +228,7 @@ func TestDynamics_DecliningSessionsKeepOfferingNewPairs(t *testing.T) {
 			require.False(t, seen[key], "session %d re-offered %s", session, key)
 			seen[key] = true
 			// Decline, but resolve one so the corpus stays funded throughout.
-			env.recordVerdict(p.APath, p.BPath, session == 0)
+			env.RecordVerdict(p.APath, p.BPath, session == 0)
 		}
 	}
 	require.GreaterOrEqual(t, len(seen), throttleMinVerdicts-1)
@@ -242,13 +244,13 @@ type sessionOutcome struct {
 
 // runSession drives one real review session through the engine and reports what
 // the shortlist contributed to it.
-func (e *restatementEnv) runSession() sessionOutcome {
-	e.t.Helper()
-	res, err := NewReviewerWithOptions(e.ri, nil, EffortNormal, ScopeFilter{}).StartSession(context.Background())
-	require.NoError(e.t, err)
+func runSession(e *synthtest.RestatementEnv) sessionOutcome {
+	e.T.Helper()
+	res, err := NewReviewerWithOptions(e.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(context.Background())
+	require.NoError(e.T, err)
 
 	out := sessionOutcome{sessionID: res.SessionID, health: res.Health}
-	for _, item := range e.workItems(res.SessionID) {
+	for _, item := range e.WorkItems(res.SessionID) {
 		if strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix) {
 			out.restatementItems = append(out.restatementItems, item)
 		}
@@ -256,17 +258,17 @@ func (e *restatementEnv) runSession() sessionOutcome {
 	return out
 }
 
-func (e *restatementEnv) standingPairCount() int {
-	e.t.Helper()
-	stats, err := e.svc.Abstraction().RestatementPairStats(context.Background(), e.branch)
-	require.NoError(e.t, err)
+func standingPairCount(e *synthtest.RestatementEnv) int {
+	e.T.Helper()
+	stats, err := e.Svc.Abstraction().RestatementPairStats(context.Background(), e.Branch)
+	require.NoError(e.T, err)
 	return stats.Count
 }
 
-func (e *restatementEnv) standingPairSet() map[string]bool {
-	e.t.Helper()
-	pairs, err := e.svc.Abstraction().RestatementPairsByRank(context.Background(), e.branch, 100_000)
-	require.NoError(e.t, err)
+func standingPairSet(e *synthtest.RestatementEnv) map[string]bool {
+	e.T.Helper()
+	pairs, err := e.Svc.Abstraction().RestatementPairsByRank(context.Background(), e.Branch, 100_000)
+	require.NoError(e.T, err)
 	out := make(map[string]bool, len(pairs))
 	for _, p := range pairs {
 		out[pathPairKey(p.APath, p.BPath)] = true
@@ -283,32 +285,32 @@ func (e *restatementEnv) standingPairSet() map[string]bool {
 // asks what the repair does when the thing it funds turns out to be empty.
 func TestDynamics_ProbeIsNotConsumedWhenNothingIsEmitted(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 600)
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 600)
+	seedShortlist(env)
 
 	// Decline until defunded.
 	for range throttleWindow {
-		pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		pairs, health, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 		require.NoError(t, err)
 		if health.ThrottleState == throttleDefunded {
 			break
 		}
 		for _, p := range pairs {
-			env.recordVerdict(p.APath, p.BPath, false)
+			env.RecordVerdict(p.APath, p.BPath, false)
 		}
 	}
 
 	// Retire every remaining standing pair, so a probe has nothing to offer.
-	standing, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100_000)
+	standing, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100_000)
 	require.NoError(t, err)
 	for _, p := range standing {
-		require.NoError(t, env.svc.Abstraction().DeleteRestatementPair(ctx, env.branch, p.AFactID, p.BFactID))
+		require.NoError(t, env.Svc.Abstraction().DeleteRestatementPair(ctx, env.Branch, p.AFactID, p.BFactID))
 	}
 
 	// Run well past a probe interval. No pair can be emitted, so no probe may
 	// be marked as spent.
 	for range throttleProbeInterval * 2 {
-		pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		pairs, health, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 		require.NoError(t, err)
 		require.Empty(t, pairs)
 		require.False(t, health.Probing, "a session that emits nothing has not probed")
@@ -317,17 +319,17 @@ func TestDynamics_ProbeIsNotConsumedWhenNothingIsEmitted(t *testing.T) {
 	// Put the pairs back. Re-running the refresh alone would not do it — every
 	// fact is already marked covered — so evict the cache state the way a
 	// partner requeue does, which forces a rescan.
-	ids := env.liveFactIDs()
+	ids := env.LiveFactIDs()
 	all := make([]int64, 0, len(ids))
 	for _, id := range ids {
 		all = append(all, id)
 	}
-	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, all, nil, nil))
-	env.seedShortlist()
-	require.Positive(t, env.standingPairCount(), "the corpus has pairs to offer again")
+	require.NoError(t, env.Svc.Abstraction().ReplaceRestatementPairs(ctx, env.Branch, all, nil, nil))
+	seedShortlist(env)
+	require.Positive(t, standingPairCount(env), "the corpus has pairs to offer again")
 	probed := false
 	for range throttleProbeInterval {
-		pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		pairs, health, err := selectRestatementCandidates(ctx, env.Deps(), env.Branch, nil, 600)
 		require.NoError(t, err)
 		if health.Probing {
 			probed = true

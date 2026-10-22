@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
@@ -45,21 +46,21 @@ var dedupSearchKinds = []string{string(fact.Epistemic)}
 // another "". A projection site that forgot to fill Kind must make its facts
 // unmergeable, never mergeable — normalising "" to epistemic at this check
 // would re-admit exactly the pragmatic fact whose kind was dropped.
-func sameKnownKind(a, b factForLLM) bool {
+func sameKnownKind(a, b step.FactForLLM) bool {
 	return a.Kind != "" && a.Kind == b.Kind
 }
 
 // mergePair represents two facts that are candidates for merging.
 type mergePair struct {
-	a          factForLLM
-	b          factForLLM
+	a          step.FactForLLM
+	b          step.FactForLLM
 	similarity float64
 }
 
 // mergeFacts applies the dedup merge rule to a and b, returning (winner, loser).
 // Non-hypothesis facts always win over hypothesis facts regardless of confidence.
 // Between same-category facts, winner is higher confidence; ties broken by higher sources.
-func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
+func mergeFacts(a, b step.FactForLLM) (winner, loser step.FactForLLM) {
 	aIsHyp := a.Type == string(fact.Hypothesis)
 	bIsHyp := b.Type == string(fact.Hypothesis)
 
@@ -95,7 +96,7 @@ func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
 
 // loserCorroborations is the sources count a dedup loser contributes to its
 // winner: its own, unless it is a hypothesis, which corroborates nothing.
-func loserCorroborations(loser factForLLM) int {
+func loserCorroborations(loser step.FactForLLM) int {
 	if loser.Type == string(fact.Hypothesis) {
 		return 0
 	}
@@ -182,27 +183,27 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 // re-embed here.
 func dedupCluster(
 	ctx context.Context,
-	cluster []factForLLM,
+	cluster []step.FactForLLM,
 	gs *facts.Index,
 	sysFiles *facts.Repo,
 	idx *index.Facade,
 	threshold float64,
 	recipeName string,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 	agentBranch string,
 	// localRepoID is this repo's 12-hex id, for the ref gate below.
 	localRepoID string,
-) ([]factForLLM, error) {
+) ([]step.FactForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
 	}
 
 	// The one gate the merged winners below go through, built once for the
 	// whole cluster rather than per merge.
-	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
+	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
 
 	// Build a set for fast path lookup.
-	clusterByPath := make(map[string]factForLLM, len(cluster))
+	clusterByPath := make(map[string]step.FactForLLM, len(cluster))
 	for _, f := range cluster {
 		clusterByPath[f.File] = f
 	}
@@ -289,7 +290,7 @@ func dedupCluster(
 			Float64("similarity", p.similarity).
 			Msg("dedup: merging near-duplicate facts")
 
-		onProgress(ProgressEvent{Phase: "dedup-merge", Message: fmt.Sprintf("%s <- %s (%.2f)", winnerFact.File, loserFact.File, p.similarity)})
+		onProgress(step.ProgressEvent{Phase: "dedup-merge", Message: fmt.Sprintf("%s <- %s (%.2f)", winnerFact.File, loserFact.File, p.similarity)})
 
 		// Every failure from here to the end of the iteration is scoped to
 		// THIS pair: warn, skip it, keep going — the same shape the merge and
@@ -303,18 +304,18 @@ func dedupCluster(
 		// Read the winner's full fact from git to get its Refs.
 		winnerResult, err := gs.ReadFact(ctx, agentBranch, winnerFact.File, nil)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read winner %s: %v", winnerFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read winner %s: %v", winnerFact.File, err)})
 			continue
 		}
 		fullWinner, err := fact.ParseFact(winnerFact.File, winnerResult.Content)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse winner %s: %v", winnerFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse winner %s: %v", winnerFact.File, err)})
 			continue
 		}
 		// F22: the winner is rewritten below; a context map ParseFact had to
 		// drop (malformed, arrived via git) would be deleted. Skip the pair.
 		if len(fullWinner.ContextWarnings) > 0 {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"dedup %s skipped: its context is malformed and a rewrite would drop it (%s)",
 				winnerFact.File, strings.Join(fullWinner.ContextWarnings, "; "))})
 			continue
@@ -323,12 +324,12 @@ func dedupCluster(
 		// Read the loser's full fact to get its Refs.
 		loserResult, err := gs.ReadFact(ctx, agentBranch, loserFact.File, nil)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read loser %s: %v", loserFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read loser %s: %v", loserFact.File, err)})
 			continue
 		}
 		fullLoser, err := fact.ParseFact(loserFact.File, loserResult.Content)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse loser %s: %v", loserFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse loser %s: %v", loserFact.File, err)})
 			continue
 		}
 
@@ -362,7 +363,7 @@ func dedupCluster(
 		// (loserCorroborations) is already pinned by tests; the two agree on
 		// every ordinary pair and disagree only when the WINNER is a
 		// hypothesis, where mergeFacts' answer is the tested one.
-		mergedWeight, _, _ := computeTransfer(ctx, gs, agentBranch, localRepoID,
+		mergedWeight, _, _ := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID,
 			[]string{winnerFact.File, loserFact.File})
 		fullWinner.EvidenceWeight = mergedWeight
 		// Refs = union of both refs + loser's path, minus the winner's own path
@@ -396,7 +397,7 @@ func dedupCluster(
 		// write list here is still gated (0ee925f4).
 		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, carriedRefs)
 		if gerr != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup merge %s rejected: %v", winnerFact.File, gerr)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup merge %s rejected: %v", winnerFact.File, gerr)})
 			continue
 		}
 		fullWinner.Refs = canonRefs
@@ -404,11 +405,11 @@ func dedupCluster(
 		// Serialize and write the winner back to git.
 		newContent, err := fact.SerializeFact(fullWinner)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup serialize winner %s: %v", winnerFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup serialize winner %s: %v", winnerFact.File, err)})
 			continue
 		}
 		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup write winner %s: %v", winnerFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup write winner %s: %v", winnerFact.File, err)})
 			continue
 		}
 
@@ -426,7 +427,7 @@ func dedupCluster(
 		// stays in the surviving cluster, so nothing downstream is handed a
 		// path that is still there.
 		if _, err := gs.DeleteFact(ctx, agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup delete loser %s: %v", loserFact.File, err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup delete loser %s: %v", loserFact.File, err)})
 			continue
 		}
 
@@ -434,7 +435,7 @@ func dedupCluster(
 	}
 
 	// Build surviving cluster (exclude losers).
-	surviving := make([]factForLLM, 0, len(cluster))
+	surviving := make([]step.FactForLLM, 0, len(cluster))
 	for _, f := range cluster {
 		if !removedPaths[f.File] {
 			surviving = append(surviving, clusterByPath[f.File])

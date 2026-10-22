@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,7 +18,7 @@ func TestScopedCluster_GroupsBySubgraphEdges(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/x"
 
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a.md", Title: "A"},
 		{File: "kb/b.md", Title: "B"},
 		{File: "kb/c.md", Title: "C"},
@@ -24,11 +26,11 @@ func TestScopedCluster_GroupsBySubgraphEdges(t *testing.T) {
 
 	// No neighbors: the subgraph is exactly the seed set. a–b are similar (a
 	// real SIMILAR_TO edge); c is isolated.
-	env := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/a.md", "kb/b.md"})
-	idx := env.idx()
-	reads := guardReads(t, idx, readPolicy{Allow: []string{"Search", "SubgraphEdges"}})
+	env := synthtest.NewGraphEnv(t, branch).SeedAll(seeds).Similar([2]string{"kb/a.md", "kb/b.md"})
+	idx := env.Idx()
+	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"Search", "SubgraphEdges"}})
 
-	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, 2, testNeighborKinds, nil, branch)
+	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, 2, synthtest.DefaultNeighborKinds, nil, branch)
 	require.NoError(t, err)
 
 	require.Len(t, clusters, 1, "exactly one cluster survives minCommunitySize=2")

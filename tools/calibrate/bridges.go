@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"text/tabwriter"
 
@@ -69,7 +70,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 				MaxMembers:   maxMembers,
 			}
 
-			eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
+			eff := step.NormalizeEffort(step.Effort(effortStr))
 			if err := eff.Validate(); err != nil {
 				return fmt.Errorf("--effort: %w", err)
 			}
@@ -255,7 +256,7 @@ func sortedCopy(vs []float64) []float64 {
 // header rather than inheriting a sentence written about another axis.
 func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	resolution float64, minCommunity int, neighborKinds []string, cfg synthesize.QualityConfig) error {
-	eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
+	eff := step.NormalizeEffort(step.Effort(effortStr))
 	if err := eff.Validate(); err != nil {
 		return fmt.Errorf("--effort: %w", err)
 	}

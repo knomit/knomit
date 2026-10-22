@@ -188,8 +188,16 @@ var sameLayerEdges = map[string]bool{
 	"corpus/federate -> corpus/repos":    true,
 	"corpus/resolutions -> corpus/refs":  true,
 	"corpus/resolutions -> corpus/repos": true,
-	"corpus/synthesize -> corpus/refs":   true,
 	"corpus/synthesize -> corpus/repos":  true,
+	// The step child holds the vocabulary the synthesize engine and its
+	// strategies share: Deps carries the repo instance, and the write gate
+	// builds a ref gate.
+	"corpus/synthesize/step -> corpus/refs":  true,
+	"corpus/synthesize/step -> corpus/repos": true,
+	// synthtest is the test-support package of the synthesize tree; its
+	// environment builders stand up a repo instance.
+	"corpus/synthesize/internal/synthtest -> corpus/repos":           true,
+	"corpus/synthesize/internal/synthtest -> corpus/synthesize/step": true,
 	// edge
 	"edge/web -> edge/mcp":   true,
 	"edge/web -> edge/oauth": true,

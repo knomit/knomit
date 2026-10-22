@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"sort"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/vocab"
 
@@ -199,7 +200,7 @@ func MotifComponentReport(
 	abstraction *vocab.AbstractionIndex,
 	branch string,
 	localRepoID string,
-	eff Effort,
+	eff step.Effort,
 	resolution float64,
 	minCommunitySize int,
 	neighborKinds []string,
@@ -216,13 +217,13 @@ func MotifComponentReport(
 		return rep, err
 	}
 	var strat reviewStrategy
-	seeds := make([]factForLLM, 0, len(results))
+	seeds := make([]step.FactForLLM, 0, len(results))
 	for _, r := range results {
-		f := factFromSearchResult(r)
+		f := step.FactFromSearchResult(r)
 		if !strat.AcceptSeed(f) {
 			continue
 		}
-		seeds = append(seeds, factsForLLM([]fact.Fact{f}, localRepoID)...)
+		seeds = append(seeds, step.FactsForLLM([]fact.Fact{f}, localRepoID)...)
 	}
 	rep.Seeds = len(seeds)
 	for _, s := range seeds {
@@ -234,7 +235,7 @@ func MotifComponentReport(
 		}
 	}
 
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(ProgressEvent) {}, branch)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
 	if err != nil {
 		return rep, err
 	}
@@ -299,7 +300,7 @@ func (r MotifReport) Summary() string {
 // Computed over the ids the seed pool actually carries — the population the
 // tier acts on — rather than over the whole alias table, so the number means
 // "folds this corpus's bridging population would see".
-func token2PairsOf(seeds []factForLLM, resolve motifResolver) []Token2Pair {
+func token2PairsOf(seeds []step.FactForLLM, resolve motifResolver) []Token2Pair {
 	idSet := map[string]struct{}{}
 	for _, f := range seeds {
 		for _, m := range f.Motifs {

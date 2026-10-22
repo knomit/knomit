@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/model"
 
@@ -51,7 +52,7 @@ type discoverDecision struct {
 func decodeDiscoverStep(tool string, item *model.PipelineWorkItem, response string) (*discoverDecision, error) {
 	var payload DiscoverWorkPayload
 	if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
-		return nil, wrapf(tool, err, "unmarshal discover payload")
+		return nil, step.Wrapf(tool, err, "unmarshal discover payload")
 	}
 	d := &discoverDecision{payload: payload}
 	parsed, perr := parseDiscoverResponse(response)
@@ -72,7 +73,7 @@ func decodeDiscoverStep(tool string, item *model.PipelineWorkItem, response stri
 // proposals are dropped, good ones land.
 //
 // The branch comes from sess.Branch, never from d.RI.AgentBranch().
-func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *model.PipelineSession, dec *discoverDecision) error {
+func applyDiscoverStep(ctx context.Context, tool string, d step.Deps, sess *model.PipelineSession, dec *discoverDecision) error {
 	if !dec.parsed {
 		return nil
 	}
@@ -92,7 +93,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *model.Pip
 	// writes hypotheses, which the same field counts as facts this session
 	// created rather than leaving invisible.
 	if len(written) > 0 {
-		recordStats(ctx, tool, d, sess, &ReviewStats{Synthesized: len(written)})
+		recordStats(ctx, tool, d, sess, &step.ReviewStats{Synthesized: len(written)})
 	}
 
 	// REINFORCE runs after the proposals, on the same decision. An agent that
@@ -113,7 +114,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *model.Pip
 		// contribution to in-session staleness, and it is the mutated-but-live
 		// half rather than the retired half.
 		if rerr := refreshInFlightItems(ctx, d, sess, sess.Branch,
-			&ReviewStats{Rewritten: reinforced}); rerr != nil {
+			&step.ReviewStats{Rewritten: reinforced}); rerr != nil {
 			log.Warn().Err(rerr).Str("tool", tool).Str("session", sess.ID).
 				Msg("in-flight work items could not be refreshed after reinforcement")
 		}
@@ -132,10 +133,10 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *model.Pip
 // enqueueDiscover writes one discover work item. One definition, so the
 // entity/domain path and both motif lanes cannot drift apart in how an item is
 // shaped, keyed, or prioritised.
-func enqueueDiscover(ctx context.Context, d Deps, sess *model.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
+func enqueueDiscover(ctx context.Context, d step.Deps, sess *model.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return wrapf(reviewTool, err, "marshal discover payload %s", clusterKey)
+		return step.Wrapf(step.ReviewTool, err, "marshal discover payload %s", clusterKey)
 	}
 	if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
@@ -144,7 +145,7 @@ func enqueueDiscover(ctx context.Context, d Deps, sess *model.PipelineSession, p
 		FactsJSON:  string(payloadJSON),
 		Priority:   priority,
 	}); err != nil {
-		return wrapf(reviewTool, err, "insert discover item %s", clusterKey)
+		return step.Wrapf(step.ReviewTool, err, "insert discover item %s", clusterKey)
 	}
 	return nil
 }

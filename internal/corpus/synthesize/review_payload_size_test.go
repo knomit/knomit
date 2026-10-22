@@ -3,6 +3,7 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"testing"
 
@@ -57,10 +58,10 @@ func maxMethodologySection() string {
 // sizedFacts builds facts of a given body size. Everything but the body is held
 // at a realistic ceiling — a deep path, two domains, two entities — because
 // those fields are what indentation expands hardest.
-func sizedFacts(n, bodySize int) []factForLLM {
-	facts := make([]factForLLM, 0, n)
+func sizedFacts(n, bodySize int) []step.FactForLLM {
+	facts := make([]step.FactForLLM, 0, n)
 	for i := 0; i < n; i++ {
-		facts = append(facts, factForLLM{
+		facts = append(facts, step.FactForLLM{
 			File:       fmt.Sprintf("kb/architecture/subsystem/area/fact-%05d.md", i),
 			Title:      fmt.Sprintf("fact %05d", i),
 			Body:       strings.Repeat("x", bodySize),
@@ -102,8 +103,8 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 		t.Run(fmt.Sprintf("body=%d", bodySize), func(t *testing.T) {
 			// Enough facts to overflow a whole ITEM, so chunkFacts closes one
 			// and we measure the largest item a session can actually produce.
-			facts := sizedFacts(3*maxItemBytes/(bodySize+200), bodySize)
-			chunks := chunkFacts(facts, maxItemBytes)
+			facts := sizedFacts(3*step.MaxItemBytes/(bodySize+200), bodySize)
+			chunks := step.ChunkFacts(facts, step.MaxItemBytes)
 			require.Greater(t, len(chunks), 1,
 				"precondition: the corpus must be large enough that the chunker closes a full item")
 
@@ -114,14 +115,14 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 			content, err := RenderDistillWorkItem(chunks[0], "kb", maxMethodologySection(), true)
 			require.NoError(t, err)
 
-			res := &PipelineResult{
+			res := &step.PipelineResult{
 				SessionID: "00000000-0000-0000-0000-000000000000",
-				Item: &PipelineItem{
+				Item: &step.PipelineItem{
 					ID: 1, Type: "distill",
 					Prompt: content.Prompt, ResponseSchema: content.ResponseSchema,
 					Facts: content.Facts, FactsJSON: content.Facts,
 				},
-				Progress: &ReviewProgress{Completed: 3, Remaining: 17},
+				Progress: &step.ReviewProgress{Completed: 3, Remaining: 17},
 			}
 
 			first, err := reviewResultPage(res, 1)
@@ -136,13 +137,13 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 				delivered, merr := json.MarshalIndent(out, "", "  ")
 				require.NoError(t, merr)
 
-				var onPage []factForLLM
+				var onPage []step.FactForLLM
 				require.NoError(t, json.Unmarshal(out.Item.Facts, &onPage))
 
-				require.LessOrEqualf(t, len(delivered), maxDeliveredItemBytes,
+				require.LessOrEqualf(t, len(delivered), step.MaxDeliveredItemBytes,
 					"body=%d: page %d/%d holds %d facts and delivers %d bytes, over the %d-byte cap; "+
 						"the page budget bounds a different artifact than the one that ships",
-					bodySize, p, first.Item.Pages, len(onPage), len(delivered), maxDeliveredItemBytes)
+					bodySize, p, first.Item.Pages, len(onPage), len(delivered), step.MaxDeliveredItemBytes)
 			}
 		})
 	}
@@ -179,36 +180,36 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		stepType  string
-		content   func() (*WorkItemContent, error)
+		content   func() (*step.WorkItemContent, error)
 		multipage bool
 	}{
-		{"distill-cluster", "distill", func() (*WorkItemContent, error) {
+		{"distill-cluster", "distill", func() (*step.WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), false)
 		}, false},
-		{"distill-remainder", "distill", func() (*WorkItemContent, error) {
+		{"distill-remainder", "distill", func() (*step.WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), true)
 		}, false},
-		{"prune", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }, false},
-		{"distill-cluster-multipage", "distill", func() (*WorkItemContent, error) {
+		{"prune", "prune", func() (*step.WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }, false},
+		{"distill-cluster-multipage", "distill", func() (*step.WorkItemContent, error) {
 			return RenderDistillWorkItem(many, "kb", maxMethodologySection(), false)
 		}, true},
-		{"distill-remainder-multipage", "distill", func() (*WorkItemContent, error) {
+		{"distill-remainder-multipage", "distill", func() (*step.WorkItemContent, error) {
 			return RenderDistillWorkItem(many, "kb", maxMethodologySection(), true)
 		}, true},
-		{"prune-multipage", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(many, "kb") }, true},
+		{"prune-multipage", "prune", func() (*step.WorkItemContent, error) { return RenderPruneWorkItem(many, "kb") }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content, err := tc.content()
 			require.NoError(t, err)
 
-			res := &PipelineResult{
+			res := &step.PipelineResult{
 				SessionID: "00000000-0000-0000-0000-000000000000",
-				Item: &PipelineItem{
+				Item: &step.PipelineItem{
 					ID: 999999, Type: tc.stepType,
 					Prompt: content.Prompt, ResponseSchema: content.ResponseSchema,
 					Facts: content.Facts, FactsJSON: content.Facts,
 				},
-				Progress: &ReviewProgress{Completed: 3, Remaining: 17},
+				Progress: &step.ReviewProgress{Completed: 3, Remaining: 17},
 			}
 			out, err := reviewResultPage(res, 1)
 			require.NoError(t, err)
@@ -231,12 +232,12 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			delivered, err := json.MarshalIndent(out, "", "  ")
 			require.NoError(t, err)
 			envelope := len(delivered) - deliveredFactsLen(out.Item.Facts)
-			t.Logf("%s: envelope %d of %d", tc.name, envelope, pageEnvelopeReserveBytes)
+			t.Logf("%s: envelope %d of %d", tc.name, envelope, step.PageEnvelopeReserveBytes)
 
-			require.LessOrEqualf(t, envelope, pageEnvelopeReserveBytes,
+			require.LessOrEqualf(t, envelope, step.PageEnvelopeReserveBytes,
 				"%s: the non-facts part of a delivered page is %d bytes, over the %d reserved for it; "+
 					"maxPageFactBytes is derived by subtracting that reserve, so it now over-promises",
-				tc.name, envelope, pageEnvelopeReserveBytes)
+				tc.name, envelope, step.PageEnvelopeReserveBytes)
 		})
 	}
 }
@@ -261,7 +262,7 @@ func TestFactPages_SizeModelNeverUnderCounts(t *testing.T) {
 
 			estimate := 0
 			for _, f := range facts {
-				one, merr := json.Marshal([]factForLLM{f})
+				one, merr := json.Marshal([]step.FactForLLM{f})
 				require.NoError(t, merr)
 				estimate += deliveredFactsLen(one)
 			}
@@ -288,7 +289,7 @@ func TestFactPages_SizeModelNeverUnderCounts(t *testing.T) {
 // is what hypothesize already does (HypothesizeItem.Fact, internal/edge/mcp/
 // hypothesize.go). Review is the outlier.
 func TestRenderDistillWorkItem_FactsAreStructuralNotSerializedIntoThePrompt(t *testing.T) {
-	facts := []factForLLM{{
+	facts := []step.FactForLLM{{
 		File:       "kb/test/only.md",
 		Title:      "the only fact",
 		Body:       "SENTINEL-BODY-must-not-appear-inside-the-prompt",
@@ -307,7 +308,7 @@ func TestRenderDistillWorkItem_FactsAreStructuralNotSerializedIntoThePrompt(t *t
 	require.NotEmpty(t, content.Facts,
 		"the rendered item must carry its facts as a structured field")
 
-	var round []factForLLM
+	var round []step.FactForLLM
 	require.NoError(t, json.Unmarshal([]byte(content.Facts), &round),
 		"the structured facts field must be a well-formed fact array")
 	require.Len(t, round, 1)
@@ -321,9 +322,9 @@ func TestRenderDistillWorkItem_FactsAreStructuralNotSerializedIntoThePrompt(t *t
 func TestReviewResultPage_MeasuresWithNext(t *testing.T) {
 	content, err := RenderPruneWorkItem(sizedFacts(1, 16), "kb")
 	require.NoError(t, err)
-	out, err := reviewResultPage(&PipelineResult{
+	out, err := reviewResultPage(&step.PipelineResult{
 		SessionID: "00000000-0000-0000-0000-000000000000",
-		Item: &PipelineItem{ID: 7, Type: "prune", Prompt: content.Prompt,
+		Item: &step.PipelineItem{ID: 7, Type: "prune", Prompt: content.Prompt,
 			ResponseSchema: content.ResponseSchema, Facts: content.Facts, FactsJSON: content.Facts},
 	}, 1)
 	require.NoError(t, err)

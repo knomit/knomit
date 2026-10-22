@@ -1,6 +1,9 @@
 package synthesize
 
-import "testing"
+import (
+	"knomit/internal/corpus/synthesize/step"
+	"testing"
+)
 
 // TestForwardDiscoverPriority_StrictlyNegativeRanked is the regression guard for
 // the priority-leak bug. Forward "discover" work items must run AFTER the
@@ -26,17 +29,17 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 	}
 
 	// Highest-Q bridge (rank 0) sits at the top of the discover band.
-	if got := forwardDiscoverPriority(0); got != forwardDiscoverPriorityBase {
-		t.Errorf("rank 0 priority = %v, want %v (top of discover band)", got, forwardDiscoverPriorityBase)
+	if got := forwardDiscoverPriority(0); got != step.ForwardDiscoverPriorityBase {
+		t.Errorf("rank 0 priority = %v, want %v (top of discover band)", got, step.ForwardDiscoverPriorityBase)
 	}
 
 	// The base must sit below distill (0) and above reflect, matching the
 	// intended prune > distill > discover > reflect ordering.
-	if forwardDiscoverPriorityBase >= 0 {
-		t.Errorf("discover band base %v must be below distill (0)", forwardDiscoverPriorityBase)
+	if step.ForwardDiscoverPriorityBase >= 0 {
+		t.Errorf("discover band base %v must be below distill (0)", step.ForwardDiscoverPriorityBase)
 	}
-	if forwardDiscoverPriorityBase <= reflectPriority {
-		t.Errorf("discover band base %v must be above reflect (%d)", forwardDiscoverPriorityBase, reflectPriority)
+	if step.ForwardDiscoverPriorityBase <= step.ReflectPriority {
+		t.Errorf("discover band base %v must be above reflect (%d)", step.ForwardDiscoverPriorityBase, step.ReflectPriority)
 	}
 
 	// The maxBridgeSeeds cap (bridge.go) is what makes "discover > reflect" hold
@@ -44,8 +47,8 @@ func TestForwardDiscoverPriority_StrictlyNegativeRanked(t *testing.T) {
 	// and its priority must stay strictly above reflect. Without the cap, an
 	// unbounded scoped pool would push rank ≥ 90 and collide with reflect's -100.
 	deepest := forwardDiscoverPriority(maxBridgeSeeds - 1)
-	if deepest <= reflectPriority {
+	if deepest <= step.ReflectPriority {
 		t.Errorf("deepest capped discover priority %v (rank %d) must stay above reflect %d",
-			deepest, maxBridgeSeeds-1, reflectPriority)
+			deepest, maxBridgeSeeds-1, step.ReflectPriority)
 	}
 }

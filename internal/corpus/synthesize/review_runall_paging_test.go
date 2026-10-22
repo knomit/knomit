@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -86,7 +87,7 @@ func TestRunAll_AnswersItemsThatSpanSeveralPages(t *testing.T) {
 	// second session: at least one message RunAll sent was larger than a page.
 	// Without this the test would pass against the broken build for the
 	// uninteresting reason that nothing ever triggered the guard.
-	require.Greater(t, adapter.maxSeen.Load(), int64(maxPageFactBytes),
+	require.Greater(t, adapter.maxSeen.Load(), int64(step.MaxPageFactBytes),
 		"precondition: RunAll must have been handed an item too large for one page")
 }
 
@@ -154,7 +155,7 @@ type renderCountingStrategy struct {
 	payloads *atomic.Int64
 }
 
-func (s renderCountingStrategy) Render(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*WorkItemView, error) {
+func (s renderCountingStrategy) Render(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) (*step.WorkItemView, error) {
 	s.renders.Add(1)
 	return s.reviewStrategy.Render(ctx, d, sess, item)
 }
@@ -181,7 +182,7 @@ func TestPaging_LaterPagesDoNotRerenderThePrompt(t *testing.T) {
 	ctx := context.Background()
 
 	var renders, payloads atomic.Int64
-	p := NewPipeline(r.ri, nil, DefaultEffort, ScopeFilter{},
+	p := NewPipeline(r.ri, nil, step.DefaultEffort, step.ScopeFilter{},
 		renderCountingStrategy{renders: &renders, payloads: &payloads})
 
 	res, err := p.StartSession(ctx)

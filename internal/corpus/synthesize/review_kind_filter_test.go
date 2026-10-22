@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -81,7 +82,7 @@ func writeKindFact(t *testing.T, svc *store.Service, branch, path string, kind f
 	require.NoError(t, err)
 }
 
-func seedPaths(seeds []factForLLM) []string {
+func seedPaths(seeds []step.FactForLLM) []string {
 	out := make([]string, 0, len(seeds))
 	for _, s := range seeds {
 		out = append(out, s.File)

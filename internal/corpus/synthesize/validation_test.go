@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,14 +61,14 @@ func TestReview_AWriteThatFailsTheOntologyIsRefusedAtTheSource(t *testing.T) {
 	}
 	before := read(legacy)
 
-	sink, warns := collectWarns()
+	sink, warns := synthtest.CollectWarns()
 	_, err = ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(),
-		[]PruneDecision{{Path: legacy, Action: "update", Confidence: 0.5}},
-		[]MergeEntry{{
+		[]step.PruneDecision{{Path: legacy, Action: "update", Confidence: 0.5}},
+		[]step.MergeEntry{{
 			Paths:  []string{a, b},
-			Merged: mergedFact{Path: "kb/principles/ui/merged.md", Title: "Merged principle", Body: "merged", Type: "observation"},
+			Merged: step.MergedFact{Path: "kb/principles/ui/merged.md", Title: "Merged principle", Body: "merged", Type: "observation"},
 		}},
-		"review-test", sink, branch, bareRefFixture, "kb", fact.CodeOntology())
+		"review-test", sink, branch, synthtest.BareRefFixture, "kb", fact.CodeOntology())
 	require.NoError(t, err)
 
 	joined := strings.Join(*warns, "\n")

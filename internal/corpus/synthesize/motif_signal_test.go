@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/vocab"
 
 	"github.com/stretchr/testify/require"
@@ -37,12 +39,12 @@ const corpusSizeForBudget = 2000
 // exists for. This is the test that could not be written before it.
 func TestShortlistWidener_ReservedSlotFiresOnAFullBand(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	// Crowd facts crowd the TOP of the ranking with distinct bodies, so they
 	// are candidates rather than near-duplicates and the ordinary band fills.
 	// The motif pair sits further apart, so it ranks below them.
-	env.emb.vectorFor = titleAxisVector("body", func(text string) float64 {
+	env.Emb.VectorFor = titleAxisVector("body", func(text string) float64 {
 		switch {
 		case strings.Contains(text, "Distant one"):
 			return 0.90
@@ -59,26 +61,26 @@ func TestShortlistWidener_ReservedSlotFiresOnAFullBand(t *testing.T) {
 	// too — where the widener cannot see it either. The pair must land BETWEEN
 	// the bands, which means bounding how many pairs sit above it.
 	for i := range 6 {
-		env.writeFact(fmt.Sprintf("kb/crowd%02d.md", i),
+		env.WriteFact(fmt.Sprintf("kb/crowd%02d.md", i),
 			fmt.Sprintf("Crowd member %d", i),
 			fmt.Sprintf("A distinct body about subject number %d and its particulars.", i))
 	}
-	env.writeFactWithMotifs("kb/far1.md", "Distant one", "One body entirely of its own.",
+	env.WriteFactWithMotifs("kb/far1.md", "Distant one", "One body entirely of its own.",
 		[]string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/far2.md", "Distant two", "Another body entirely of its own.",
+	env.WriteFactWithMotifs("kb/far2.md", "Distant two", "Another body entirely of its own.",
 		[]string{"silent-fallback"})
 	// A THIRD sharer, so more than one widened pair is available. With only one
 	// in supply, an off-by-one that let the reservation ENLARGE the budget
 	// could not be observed — the loop would run out of widened pairs before
 	// exceeding the cap, and the sabotage would pass.
-	env.writeFactWithMotifs("kb/far3.md", "Distant three", "A third body of its own.",
+	env.WriteFactWithMotifs("kb/far3.md", "Distant three", "A third body of its own.",
 		[]string{"silent-fallback"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	// Budget >= 2, so a slot can be reserved without consuming the whole
@@ -87,7 +89,7 @@ func TestShortlistWidener_ReservedSlotFiresOnAFullBand(t *testing.T) {
 	require.GreaterOrEqual(t, shortlistBudget(corpus), 2,
 		"precondition: the reservation is skipped at budget 1, by design")
 
-	pairs, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, corpus)
+	pairs, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, corpus)
 	require.NoError(t, err)
 	t.Logf("emitted=%d widened=%d slotUsed=%v standing=%d",
 		h.Emitted, h.MotifWidened, h.MotifSlotUsed, h.StandingPairs)
@@ -107,28 +109,28 @@ func TestShortlistWidener_ReservedSlotFiresOnAFullBand(t *testing.T) {
 // lower-ranked one.
 func TestShortlistWidener_NoReservationAtBudgetOne(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.emb.vectorFor = titleAxisVector("body", func(text string) float64 {
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.Emb.VectorFor = titleAxisVector("body", func(text string) float64 {
 		return 0.02 * unitHash(text)
 	})
 	for i := range 12 {
-		env.writeFactWithMotifs(fmt.Sprintf("kb/f%02d.md", i),
+		env.WriteFactWithMotifs(fmt.Sprintf("kb/f%02d.md", i),
 			fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{"silent-fallback"})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	const corpus = 200
 	require.Equal(t, 1, shortlistBudget(corpus), "precondition: this corpus funds one slot")
 
-	pairs, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, corpus)
+	pairs, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, corpus)
 	require.NoError(t, err)
 	require.Len(t, pairs, 1)
 	require.Zero(t, h.MotifWidened,
@@ -138,27 +140,27 @@ func TestShortlistWidener_NoReservationAtBudgetOne(t *testing.T) {
 
 func TestShortlistWidener_IsInertWhenTheOrdinaryBandFillsTheBudget(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.emb.vectorFor = titleAxisVector("body", func(text string) float64 {
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.Emb.VectorFor = titleAxisVector("body", func(text string) float64 {
 		return 0.02 * unitHash(text)
 	})
 	for i := range 30 {
-		env.writeFactWithMotifs(fmt.Sprintf("kb/f%02d.md", i),
+		env.WriteFactWithMotifs(fmt.Sprintf("kb/f%02d.md", i),
 			fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{"silent-fallback"})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	// Every fact shares a motif, so every pair is widenable — yet nothing is
 	// widened, because the ordinary band fills the budget on its own.
-	_, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, 200)
+	_, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 200)
 	require.NoError(t, err)
 	require.Zero(t, h.MotifWidened,
 		"with a full unexcluded ordinary band the widener must contribute nothing — "+
@@ -169,21 +171,21 @@ func TestShortlistWidener_IsInertWhenTheOrdinaryBandFillsTheBudget(t *testing.T)
 // better candidates for the same spend, never more of them.
 func TestShortlistWidener_DoesNotEnlargeTheBudget(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Every fact shares one motif, so the widener applies to every pair it sees.
 	for i := range 14 {
-		env.writeFactWithMotifs("kb/f"+string(rune('a'+i))+".md", "Fact", "body",
+		env.WriteFactWithMotifs("kb/f"+string(rune('a'+i))+".md", "Fact", "body",
 			[]string{"silent-fallback"})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
-	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, corpusSizeForBudget)
+	pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, corpusSizeForBudget)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(pairs), shortlistBudget(corpusSizeForBudget),
 		"the widener changes ELIGIBILITY, never spend — a corpus where every pair "+
@@ -193,14 +195,14 @@ func TestShortlistWidener_DoesNotEnlargeTheBudget(t *testing.T) {
 // Inert on a motif-free corpus: the ordinary band is exactly what it was.
 func TestShortlistWidener_IsInertWithoutMotifs(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 12)
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	env := synthtest.NewRestatementEnv(t, 12)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
-	_, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, corpusSizeForBudget)
+	_, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, corpusSizeForBudget)
 	require.NoError(t, err)
 	require.Zero(t, h.MotifWidened,
 		"a corpus with no motifs must widen nothing — the signal is an addition, "+
@@ -211,13 +213,13 @@ func TestShortlistWidener_IsInertWithoutMotifs(t *testing.T) {
 // this decides whether to spend a judge slot.
 func TestShortlistWidener_UsesTheExactTierOnly(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Two facts whose motifs share a TOKEN but are different mechanisms.
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "body", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "body", []string{"silent-retry"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "body", []string{"silent-fallback"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "body", []string{"silent-retry"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	shared, err := pairSharesCanonicalMotif(ctx, env.deps(), env.branch,
+	shared, err := pairSharesCanonicalMotif(ctx, env.Deps(), env.Branch,
 		storeRestatementPair("kb/a.md", "kb/b.md"))
 	require.NoError(t, err)
 	require.False(t, shared,
@@ -228,12 +230,12 @@ func TestShortlistWidener_UsesTheExactTierOnly(t *testing.T) {
 // Aliased spellings DO share: that is what resolving the vocabulary bought.
 func TestShortlistWidener_AliasedSpellingsShare(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "body", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "body", []string{"silent-fallbacks"})
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "body", []string{"silent-fallback"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "body", []string{"silent-fallbacks"})
+	require.NoError(t, env.Svc.Motifs().RebuildAliases(ctx, env.Branch))
 
-	shared, err := pairSharesCanonicalMotif(ctx, env.deps(), env.branch,
+	shared, err := pairSharesCanonicalMotif(ctx, env.Deps(), env.Branch,
 		storeRestatementPair("kb/a.md", "kb/b.md"))
 	require.NoError(t, err)
 	require.True(t, shared,
@@ -247,7 +249,7 @@ func TestShortlistWidener_AliasedSpellingsShare(t *testing.T) {
 // member; a motif on several says something about the group, which is what the
 // synthesized claim is about.
 func TestDistillEnrichment_ListsOnlySharedMotifs(t *testing.T) {
-	got := sharedClusterMotifs([]factForLLM{
+	got := sharedClusterMotifs([]step.FactForLLM{
 		{File: "a", Motifs: []string{"silent-fallback", "only-mine-here"}},
 		{File: "b", Motifs: []string{"silent-fallback"}},
 		{File: "c", Motifs: []string{"config-drift"}},
@@ -260,19 +262,19 @@ func TestDistillEnrichment_ListsOnlySharedMotifs(t *testing.T) {
 // One fact is one carrier however often it repeats itself, or a single fact
 // listing a motif twice would look like a shared one.
 func TestDistillEnrichment_OneFactIsOneCarrier(t *testing.T) {
-	require.Empty(t, sharedClusterMotifs([]factForLLM{
+	require.Empty(t, sharedClusterMotifs([]step.FactForLLM{
 		{File: "a", Motifs: []string{"silent-fallback", "silent-fallback"}},
 	}))
 }
 
 // A cluster sharing nothing gets no line at all — not an empty one.
 func TestDistillEnrichment_NoSharedMotifsMeansNoLine(t *testing.T) {
-	require.Empty(t, sharedClusterMotifs([]factForLLM{
+	require.Empty(t, sharedClusterMotifs([]step.FactForLLM{
 		{File: "a", Motifs: []string{"silent-fallback"}},
 		{File: "b", Motifs: []string{"config-drift"}},
 	}))
 
-	content, err := RenderDistillWorkItem([]factForLLM{{File: "a"}}, "kb", "", false)
+	content, err := RenderDistillWorkItem([]step.FactForLLM{{File: "a"}}, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, content.Prompt, "Motifs already shared",
 		"a motif-free cluster must see no motif line — free context that says "+
@@ -280,7 +282,7 @@ func TestDistillEnrichment_NoSharedMotifsMeansNoLine(t *testing.T) {
 }
 
 func TestDistillEnrichment_SharedMotifsReachThePrompt(t *testing.T) {
-	content, err := RenderDistillWorkItem([]factForLLM{
+	content, err := RenderDistillWorkItem([]step.FactForLLM{
 		{File: "a", Motifs: []string{"silent-fallback"}},
 		{File: "b", Motifs: []string{"silent-fallback"}},
 	}, "kb", "", false)
@@ -312,8 +314,8 @@ func storeRestatementPair(a, b string) vocab.RestatementPair {
 func titleAxisVector(bodyMarker string, place func(string) float64) func(string) []float32 {
 	return func(text string) []float32 {
 		if strings.Contains(text, bodyMarker) {
-			return hashVector(text) // the BODY axis: spread, so pairs are not duplicates
+			return synthtest.HashVector(text) // the BODY axis: spread, so pairs are not duplicates
 		}
-		return axisVector(place(text)) // the TITLE axis: placed by the test
+		return synthtest.AxisVector(place(text)) // the TITLE axis: placed by the test
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -56,7 +57,7 @@ const titleBackfillBatch = 32
 //
 // A repo with no embedder (read-only tooling, tests) is a no-op rather than an
 // error: the axis simply stays empty and the shortlist finds nothing.
-func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.Duration) (int, int, error) {
+func ensureTitleVectors(ctx context.Context, d step.Deps, branch string, budget time.Duration) (int, int, error) {
 	emb := d.RI.Embedder()
 	if emb == nil {
 		return 0, 0, nil
@@ -65,7 +66,7 @@ func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.
 	for time.Now().Before(deadline) {
 		targets, err := d.Abstraction.LiveFactsMissingTitleVector(ctx, branch, titleBackfillBatch)
 		if err != nil {
-			return 0, 0, wrapf(reviewTool, err, "title backfill: list missing")
+			return 0, 0, step.Wrapf(step.ReviewTool, err, "title backfill: list missing")
 		}
 		if len(targets) == 0 {
 			break
@@ -79,17 +80,17 @@ func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.
 		// (embeddings.Model.ShortStringTemplate).
 		vecs, err := emb.EmbedShortStrings(ctx, titles)
 		if err != nil {
-			return 0, 0, wrapf(reviewTool, err, "title backfill: embed")
+			return 0, 0, step.Wrapf(step.ReviewTool, err, "title backfill: embed")
 		}
 		if len(vecs) != len(targets) {
-			return 0, 0, errf(reviewTool, "title backfill: embedder returned %d vectors for %d titles", len(vecs), len(targets))
+			return 0, 0, step.Errf(step.ReviewTool, "title backfill: embedder returned %d vectors for %d titles", len(vecs), len(targets))
 		}
 		out := make([]vocab.TitleVector, 0, len(targets))
 		for i, t := range targets {
 			out = append(out, vocab.TitleVector{FactID: t.FactID, Vec: vecs[i]})
 		}
 		if err := d.Abstraction.PutTitleVectors(ctx, out); err != nil {
-			return 0, 0, wrapf(reviewTool, err, "title backfill: store")
+			return 0, 0, step.Wrapf(step.ReviewTool, err, "title backfill: store")
 		}
 	}
 	return d.Abstraction.TitleVectorCoverage(ctx, branch)
@@ -123,7 +124,7 @@ type refreshStats struct {
 //
 // NO clustering runs in this path. The neighbour lookup is the same KNN the
 // similarity graph uses.
-func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (refreshStats, error) {
+func refreshRestatementShortlist(ctx context.Context, d step.Deps, branch string) (refreshStats, error) {
 	var stats refreshStats
 
 	// Diff against facts that are actually ON THE AXIS. A fact with no title
@@ -133,15 +134,15 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 	// freeze the cache at whatever the first session managed.
 	onAxis, err := d.Abstraction.LiveEpistemicFactsOnAxis(ctx, branch)
 	if err != nil {
-		return stats, wrapf(reviewTool, err, "shortlist: live facts on axis")
+		return stats, step.Wrapf(step.ReviewTool, err, "shortlist: live facts on axis")
 	}
 	live, err := d.Abstraction.LiveEpistemicFacts(ctx, branch)
 	if err != nil {
-		return stats, wrapf(reviewTool, err, "shortlist: live facts")
+		return stats, step.Wrapf(step.ReviewTool, err, "shortlist: live facts")
 	}
 	cached, err := d.Abstraction.CachedPairFactIDs(ctx, branch)
 	if err != nil {
-		return stats, wrapf(reviewTool, err, "shortlist: cached fact ids")
+		return stats, step.Wrapf(step.ReviewTool, err, "shortlist: cached fact ids")
 	}
 
 	// While the axis is incomplete, every on-axis fact is in play: see the
@@ -174,7 +175,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 	// — bounded at K per dropped fact.
 	partners, err := d.Abstraction.PartnersOfFacts(ctx, branch, dropped)
 	if err != nil {
-		return stats, wrapf(reviewTool, err, "shortlist: partners of dropped facts")
+		return stats, step.Wrapf(step.ReviewTool, err, "shortlist: partners of dropped facts")
 	}
 	requeue := append([]int64(nil), added...)
 	for id := range partners {
@@ -194,7 +195,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 	// content-addressed ids, and therefore genuinely unseen).
 	declined, err := d.Abstraction.KeptPairFactIDs(ctx, branch)
 	if err != nil {
-		return stats, wrapf(reviewTool, err, "shortlist: declined pairs")
+		return stats, step.Wrapf(step.ReviewTool, err, "shortlist: declined pairs")
 	}
 
 	var candidates []vocab.RestatementPair
@@ -202,7 +203,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (re
 		stats.NeighbourQueries++
 		neighbours, err := d.Abstraction.TopTitleNeighbours(ctx, branch, id, pairNeighbourK)
 		if err != nil {
-			return stats, wrapf(reviewTool, err, "shortlist: neighbours for fact %d", id)
+			return stats, step.Wrapf(step.ReviewTool, err, "shortlist: neighbours for fact %d", id)
 		}
 		for _, n := range neighbours {
 			if _, ok := declined[vocab.FactIDPairKey(id, n.FactID)]; ok {
@@ -534,7 +535,7 @@ func throttleState(verdicts []vocab.RestatementVerdict) (float64, string) {
 // membership check, never re-clustered: a pair already sitting in one cluster
 // is a pair prune sees anyway, so spending a shortlist slot on it is spending
 // twice for one judgement.
-func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clusters [][]factForLLM, n int) ([]vocab.RestatementPair, restatementHealth, error) {
+func selectRestatementCandidates(ctx context.Context, d step.Deps, branch string, clusters [][]step.FactForLLM, n int) ([]vocab.RestatementPair, restatementHealth, error) {
 	var h restatementHealth
 
 	// Coverage is read here rather than passed in, so every caller that builds
@@ -546,14 +547,14 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 
 	stats, err := d.Abstraction.RestatementPairStats(ctx, branch)
 	if err != nil {
-		return nil, h, wrapf(reviewTool, err, "shortlist: stats")
+		return nil, h, step.Wrapf(step.ReviewTool, err, "shortlist: stats")
 	}
 	h.StandingPairs, h.TailP99, h.TailP999 = stats.Count, stats.P99, stats.P999
 	h.StandingStructural = stats.Structural
 
 	verdicts, err := d.Abstraction.RecentRestatementVerdicts(ctx, branch, throttleWindow)
 	if err != nil {
-		return nil, h, wrapf(reviewTool, err, "shortlist: verdicts")
+		return nil, h, step.Wrapf(step.ReviewTool, err, "shortlist: verdicts")
 	}
 	h.ResolutionRate, h.ThrottleState = throttleState(verdicts)
 	h.Judged = len(verdicts)
@@ -604,7 +605,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	} else if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
 		// A funded corpus owes no probe; reset so a later defunding starts its
 		// wait from now rather than inheriting an ancient count.
-		return nil, h, wrapf(reviewTool, err, "shortlist: reset probe wait")
+		return nil, h, step.Wrapf(step.ReviewTool, err, "shortlist: reset probe wait")
 	}
 	if budget == 0 {
 		throttleClosed = true
@@ -621,7 +622,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// throttle had funded.
 	raw, err := d.Abstraction.RestatementPairsByRank(ctx, branch, budget*shortlistOverfetch)
 	if err != nil {
-		return nil, h, wrapf(reviewTool, err, "shortlist: rank")
+		return nil, h, step.Wrapf(step.ReviewTool, err, "shortlist: rank")
 	}
 
 	// The motif widener (§6): pairs sharing an exact canonical motif are
@@ -630,7 +631,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// exactly what it was before motifs existed.
 	widened, err := d.Abstraction.RestatementPairsByRank(ctx, branch, budget*shortlistOverfetch*shortlistMotifWiden)
 	if err != nil {
-		return nil, h, wrapf(reviewTool, err, "shortlist: widened rank")
+		return nil, h, step.Wrapf(step.ReviewTool, err, "shortlist: widened rank")
 	}
 	ordinaryDepth := len(raw)
 
@@ -786,14 +787,14 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 // construction, and there is no scoped view that would ever co-present the two
 // halves. The widening is real, so it is COUNTED and reported rather than done
 // quietly (h.StructuralOutOfScope).
-func selectStructuralSweep(ctx context.Context, d Deps, branch string, coGrouped map[string]struct{}) ([]vocab.RestatementPair, error) {
+func selectStructuralSweep(ctx context.Context, d step.Deps, branch string, coGrouped map[string]struct{}) ([]vocab.RestatementPair, error) {
 	// Over-fetch for the same reason the ordinary band does: the exclusion
 	// below is decided per candidate, so cutting to the allowance first would
 	// let one co-clustered pair silently shrink the sweep.
 	sp, err := d.Abstraction.RestatementPairsByMatchKindOldest(ctx, branch,
 		[]string{vocab.MatchPathIdentity}, structuralAllowance*shortlistOverfetch)
 	if err != nil {
-		return nil, wrapf(reviewTool, err, "shortlist: structural sweep")
+		return nil, step.Wrapf(step.ReviewTool, err, "shortlist: structural sweep")
 	}
 	var out []vocab.RestatementPair
 	for _, p := range sp {
@@ -828,7 +829,7 @@ func emitStructuralOnly(structural []vocab.RestatementPair, h *restatementHealth
 // already places in one cluster — the exact "prune already sees them together"
 // exclusion. A membership check over clusters the caller already computed; no
 // clustering runs here.
-func clusterCoMembership(clusters [][]factForLLM) map[string]struct{} {
+func clusterCoMembership(clusters [][]step.FactForLLM) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, c := range clusters {
 		for i := range c {
@@ -856,7 +857,7 @@ func pathPairKey(a, b string) string {
 // asked to work on one area should not spend its judge slots on two facts that
 // are both somewhere else. A fully out-of-scope pair simply waits for an
 // unscoped session.
-func pairTouchesScope(ctx context.Context, d Deps, branch string, p vocab.RestatementPair) bool {
+func pairTouchesScope(ctx context.Context, d step.Deps, branch string, p vocab.RestatementPair) bool {
 	for _, path := range []string{p.APath, p.BPath} {
 		f, err := d.Search.GetByPath(ctx, branch, path)
 		if err != nil || f == nil {
@@ -884,13 +885,13 @@ func pairTouchesScope(ctx context.Context, d Deps, branch string, p vocab.Restat
 // restate- items in a fully-drained 48-item queue. The number was not wrong
 // about what it counted — it counted SELECTION and was read as SERVICE, and
 // nothing in the output could tell the two apart.
-func enqueueRestatementItems(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, pairs []vocab.RestatementPair) (served, dropped int, err error) {
+func enqueueRestatementItems(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string, pairs []vocab.RestatementPair) (served, dropped int, err error) {
 	for i, p := range pairs {
-		facts := make([]factForLLM, 0, 2)
+		facts := make([]step.FactForLLM, 0, 2)
 		for _, path := range []string{p.APath, p.BPath} {
 			f, err := d.Search.GetByPath(ctx, branch, path)
 			if err != nil {
-				return served, dropped, wrapf(reviewTool, err, "shortlist: read %s", path)
+				return served, dropped, step.Wrapf(step.ReviewTool, err, "shortlist: read %s", path)
 			}
 			if f == nil {
 				// Raced a retraction, or the pair names a path that no longer
@@ -898,7 +899,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *model.PipelineSe
 				// right; doing it silently was not.
 				break
 			}
-			facts = append(facts, factForLLM{
+			facts = append(facts, step.FactForLLM{
 				File:       f.Path,
 				Title:      f.Title,
 				Body:       f.Body,
@@ -926,7 +927,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *model.PipelineSe
 		}
 		factsJSON, err := json.Marshal(facts)
 		if err != nil {
-			return served, dropped, wrapf(reviewTool, err, "shortlist: marshal pair %d", i)
+			return served, dropped, step.Wrapf(step.ReviewTool, err, "shortlist: marshal pair %d", i)
 		}
 		if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID:  sess.ID,
@@ -935,7 +936,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *model.PipelineSe
 			FactsJSON:  string(factsJSON),
 			Priority:   restatementPriority,
 		}); err != nil {
-			return served, dropped, wrapf(reviewTool, err, "shortlist: insert item %d", i)
+			return served, dropped, step.Wrapf(step.ReviewTool, err, "shortlist: insert item %d", i)
 		}
 		served++
 	}
@@ -970,7 +971,7 @@ func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
 // candidates and a health line saying so": this mechanism is an ADDITION to
 // consolidation, and a corpus whose axis cannot be built should still get its
 // ordinary review rather than an error.
-func planRestatementShortlist(ctx context.Context, d Deps, sess *model.PipelineSession, branch string, clusters [][]factForLLM) error {
+func planRestatementShortlist(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string, clusters [][]step.FactForLLM) error {
 	// health is emitted on EVERY path, including the failures below. The error
 	// path is exactly where "the shortlist found nothing" has to stay
 	// distinguishable from "the shortlist could not run" — a silent skip on a
@@ -1206,11 +1207,11 @@ type judgedPair struct {
 //
 // Called BEFORE the decisions are applied, because applying them can rewrite a
 // fact, and a rewritten fact is a new row with a new id.
-func resolveShortlistPair(ctx context.Context, d Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) *judgedPair {
+func resolveShortlistPair(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) *judgedPair {
 	if !strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix) {
 		return nil
 	}
-	paths, err := itemInputPaths(item)
+	paths, err := step.ItemInputPaths(item)
 	if err != nil || len(paths) != 2 {
 		return nil
 	}
@@ -1236,7 +1237,7 @@ func resolveShortlistPair(ctx context.Context, d Deps, sess *model.PipelineSessi
 //
 // A confidence "update" is deliberately NOT a resolution: it leaves both facts
 // standing, so the redundancy this pair was offered for is still there.
-func recordShortlistVerdict(ctx context.Context, d Deps, sess *model.PipelineSession, judged *judgedPair, res *PruneResult) {
+func recordShortlistVerdict(ctx context.Context, d step.Deps, sess *model.PipelineSession, judged *judgedPair, res *step.PruneResult) {
 	if judged == nil || res == nil {
 		return
 	}
@@ -1314,14 +1315,14 @@ func pairCovered(mergePaths []string, a, b string) bool {
 // The waiting counter is advanced here but CONSUMED by the caller, and only
 // when a pair was actually emitted: a probe that found nothing to offer has
 // bought no information and must not cost an interval.
-func probeAllowed(ctx context.Context, d Deps, branch string) (bool, error) {
+func probeAllowed(ctx context.Context, d step.Deps, branch string) (bool, error) {
 	waited, err := d.Abstraction.ProbeSessionsWaited(ctx, branch)
 	if err != nil {
-		return false, wrapf(reviewTool, err, "shortlist: probe wait")
+		return false, step.Wrapf(step.ReviewTool, err, "shortlist: probe wait")
 	}
 	if waited+1 < throttleProbeInterval {
 		if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, waited+1); err != nil {
-			return false, wrapf(reviewTool, err, "shortlist: bump probe wait")
+			return false, step.Wrapf(step.ReviewTool, err, "shortlist: bump probe wait")
 		}
 		return false, nil
 	}
@@ -1340,7 +1341,7 @@ func probeAllowed(ctx context.Context, d Deps, branch string) (bool, error) {
 // Degrades to false on any error: the widener is an ADDITION to the shortlist,
 // and a corpus whose vocabulary cannot be read should still get its ordinary
 // candidates rather than none.
-func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p vocab.RestatementPair) (bool, error) {
+func pairSharesCanonicalMotif(ctx context.Context, d step.Deps, branch string, p vocab.RestatementPair) (bool, error) {
 	if d.Motifs == nil {
 		return false, nil
 	}
@@ -1383,13 +1384,13 @@ func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p voca
 // placeholder there would be a number no measurement produced. The pair is not
 // lost — the axis backfill fills in over sessions, and the next refresh that
 // rescans either fact mints it.
-func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64, declined map[string]struct{}) ([]vocab.RestatementPair, error) {
+func structuralPairs(ctx context.Context, d step.Deps, branch string, requeue []int64, declined map[string]struct{}) ([]vocab.RestatementPair, error) {
 	if len(requeue) == 0 {
 		return nil, nil
 	}
 	titles, err := d.Abstraction.LiveEpistemicFactTitles(ctx, branch)
 	if err != nil {
-		return nil, wrapf(reviewTool, err, "shortlist: live fact titles")
+		return nil, step.Wrapf(step.ReviewTool, err, "shortlist: live fact titles")
 	}
 	matches := buildIdentityIndex(titles).structuralCandidates(requeue)
 	if len(matches) == 0 {
@@ -1407,7 +1408,7 @@ func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64
 	}
 	vecs, err := d.Abstraction.TitleVectorsByFactID(ctx, ids)
 	if err != nil {
-		return nil, wrapf(reviewTool, err, "shortlist: title vectors for structural pairs")
+		return nil, step.Wrapf(step.ReviewTool, err, "shortlist: title vectors for structural pairs")
 	}
 
 	out := make([]vocab.RestatementPair, 0, len(matches))

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/rs/zerolog/log"
@@ -90,11 +91,11 @@ type cousinHealth struct {
 // get its ordinary review. A failure becomes a health line, never silence.
 func joinCousinsForPrune(
 	ctx context.Context,
-	d Deps,
+	d step.Deps,
 	branch string,
-	pruneClusters [][]factForLLM,
+	pruneClusters [][]step.FactForLLM,
 	threshold float64,
-) ([][]factForLLM, cousinHealth) {
+) ([][]step.FactForLLM, cousinHealth) {
 	var h cousinHealth
 	if len(pruneClusters) == 0 {
 		return pruneClusters, h
@@ -145,7 +146,7 @@ func joinCousinsForPrune(
 	// A cousin edge: a fact in a prune cluster, and a neighbour outside it.
 	type cousinEdge struct {
 		from string // path in a prune cluster
-		hit  factForLLM
+		hit  step.FactForLLM
 	}
 	var edges []cousinEdge
 	var mu sync.Mutex
@@ -186,7 +187,7 @@ func joinCousinsForPrune(
 				// neighbourhood must admit the same kinds: filtering only one
 				// would let a cousin sweep attach what the fenced expansion
 				// refuses, or the reverse.
-				edges = append(edges, cousinEdge{from: path, hit: factForLLM{
+				edges = append(edges, cousinEdge{from: path, hit: step.FactForLLM{
 					File: r.Path, Title: r.Title, Body: r.Body,
 					Type: r.Type, Kind: r.Kind, Domain: r.Domain, Entities: r.Entities,
 					Motifs: r.Motifs, Confidence: r.Confidence, Sources: r.Sources,
@@ -234,7 +235,7 @@ func joinCousinsForPrune(
 		return x
 	}
 
-	attached := make(map[int][]factForLLM)
+	attached := make(map[int][]step.FactForLLM)
 	attachedSeen := map[string]bool{}
 	for _, e := range edges {
 		src := find(clusterOf[e.from])
@@ -256,7 +257,7 @@ func joinCousinsForPrune(
 
 	// Rebuild. Iterating by index keeps the output order a function of the
 	// input order, so cluster keys stay stable for an unchanged corpus.
-	merged := make(map[int][]factForLLM)
+	merged := make(map[int][]step.FactForLLM)
 	var roots []int
 	for i, c := range pruneClusters {
 		root := find(i)
@@ -283,7 +284,7 @@ func joinCousinsForPrune(
 	// An unreachable guard is worse than no guard: it invites a test that
 	// asserts nothing (fixture vacuity) and it implies a hazard that does not
 	// exist.
-	out := make([][]factForLLM, 0, len(roots))
+	out := make([][]step.FactForLLM, 0, len(roots))
 	for _, root := range roots {
 		out = append(out, merged[root])
 	}

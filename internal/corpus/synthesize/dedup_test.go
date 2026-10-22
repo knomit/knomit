@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"sync"
 	"testing"
 
@@ -43,7 +45,7 @@ func captureSearchCtx(t *testing.T) (*index.Facade, *ctxCapture) {
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	c := &ctxCapture{}
-	overridesOf(t, svc.Search()).search(func(index.SearchFunc) index.SearchFunc {
+	synthtest.OverridesOf(t, svc.Search()).Search(func(index.SearchFunc) index.SearchFunc {
 		return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 			c.mu.Lock()
 			c.called++
@@ -78,10 +80,10 @@ func captureSearchCtx(t *testing.T) (*index.Facade, *ctxCapture) {
 func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
 	cases := []struct {
 		name    string
-		cluster []factForLLM
+		cluster []step.FactForLLM
 	}{
 		{"empty cluster", nil},
-		{"single fact cluster", []factForLLM{{File: "kb/a.md", Title: "a", Body: "b"}}},
+		{"single fact cluster", []step.FactForLLM{{File: "kb/a.md", Title: "a", Body: "b"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,9 +95,9 @@ func TestDedupCluster_NoEmbedderDependency(t *testing.T) {
 				nil, // *index.Facade — never reached
 				0.92,
 				"test",
-				func(ProgressEvent) {},
+				func(step.ProgressEvent) {},
 				"agent/test",
-				bareRefFixture,
+				synthtest.BareRefFixture,
 			)
 			if err != nil {
 				t.Fatalf("dedupCluster err = %v", err)
@@ -117,13 +119,13 @@ func TestDedupCluster_RespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancelled — first idx.Search must surface ctx.Err()
 
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: "kb/a.md", Title: "a", Body: "ba"},
 		{File: "kb/b.md", Title: "b", Body: "bb"},
 	}
 	idx, cap := captureSearchCtx(t)
 
-	_, err := dedupCluster(ctx, cluster, nil, nil, idx, 0.92, "test", func(ProgressEvent) {}, "agent/test", bareRefFixture)
+	_, err := dedupCluster(ctx, cluster, nil, nil, idx, 0.92, "test", func(step.ProgressEvent) {}, "agent/test", synthtest.BareRefFixture)
 	if err == nil {
 		t.Fatal("dedupCluster with a canceled ctx must return an error")
 	}
@@ -169,7 +171,7 @@ func errorsIs(err, target error) bool {
 // discovery.go warns and continues; this one now does too.
 func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 	ctx := context.Background()
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 
 	const (
 		winnerPath = "kb/technology/winner.md"
@@ -181,8 +183,8 @@ func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 	const winnerConf, loserConf = 0.9, 0.5
 	require.NotEqual(t, winnerConf, loserConf)
 
-	seedOriginFact(t, svc, branch, winnerPath, fact.Observation, fact.Authored, winnerConf, 1, nil)
-	seedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, loserConf, 1, nil)
+	synthtest.SeedOriginFact(t, svc, branch, winnerPath, fact.Observation, fact.Authored, winnerConf, 1, nil)
+	synthtest.SeedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, loserConf, 1, nil)
 
 	// Corrupt the loser in place: still a blob at that path, no longer a
 	// parsable fact. The cluster and the index still know about it, which is
@@ -190,7 +192,7 @@ func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 	_, err := svc.Facts().WriteFact(ctx, branch, loserPath, "not a fact any more\n", "corrupt", "")
 	require.NoError(t, err)
 
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 	}
@@ -201,11 +203,11 @@ func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
 
 	var warnings []string
 	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
-		func(e ProgressEvent) {
+		func(e step.ProgressEvent) {
 			if e.Phase == "warn" {
 				warnings = append(warnings, e.Message)
 			}
-		}, branch, bareRefFixture)
+		}, branch, synthtest.BareRefFixture)
 	require.NoError(t, err, "an unparsable cluster member must cost its own merge, not the whole pass")
 
 	require.Len(t, warnings, 1, "the skipped merge must be reported, not swallowed")

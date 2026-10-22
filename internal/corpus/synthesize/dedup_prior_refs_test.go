@@ -5,6 +5,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,7 +29,7 @@ import (
 func fixedPairSearch(t *testing.T, svc *store.Service, results []index.SearchResult) *index.Facade {
 	t.Helper()
 	idx := svc.Search()
-	overridesOf(t, idx).search(func(index.SearchFunc) index.SearchFunc {
+	synthtest.OverridesOf(t, idx).Search(func(index.SearchFunc) index.SearchFunc {
 		return func(context.Context, string, index.SearchOptions) ([]index.SearchResult, error) {
 			return results, nil
 		}
@@ -65,7 +67,7 @@ func searchHit(path string) index.SearchResult {
 // editable.
 func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 	ctx := context.Background()
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 
 	const (
 		winnerPath  = "kb/technology/winner.md"
@@ -82,13 +84,13 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 
 	// A real, resolvable citation alongside the stale ones, so the assertion
 	// below distinguishes "refs survived" from "ref list was emptied".
-	seedOriginFact(t, svc, branch, liveRefPath, fact.Observation, fact.Authored, 0.7, 1, nil)
-	seedOriginFact(t, svc, branch, winnerPath, fact.Observation, fact.Authored, winnerConf, 1,
+	synthtest.SeedOriginFact(t, svc, branch, liveRefPath, fact.Observation, fact.Authored, 0.7, 1, nil)
+	synthtest.SeedOriginFact(t, svc, branch, winnerPath, fact.Observation, fact.Authored, winnerConf, 1,
 		[]string{winnerStale, liveRefPath})
-	seedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, loserConf, 1,
+	synthtest.SeedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, loserConf, 1,
 		[]string{loserStale})
 
-	cluster := []factForLLM{
+	cluster := []step.FactForLLM{
 		{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
 		{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 	}
@@ -98,7 +100,7 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 	})
 
 	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), svc.FactsRepo(), idx, 0.92, "test",
-		func(ProgressEvent) {}, branch, bareRefFixture)
+		func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture)
 	require.NoError(t, err, "a carried ref that no longer resolves must not abort the dedup pass")
 
 	require.Len(t, surviving, 1)
@@ -140,7 +142,7 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 // arguments are meant to produce.
 func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	ctx := context.Background()
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 
 	const (
 		winnerPath = "kb/technology/winner.md"
@@ -148,8 +150,8 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 		staleRef   = "kb/technology/cited-gone.md"
 		liveRef    = "kb/technology/still-here.md"
 	)
-	seedOriginFact(t, svc, branch, liveRef, fact.Observation, fact.Authored, 0.7, 1, nil)
-	seedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, 0.5, 1, nil)
+	synthtest.SeedOriginFact(t, svc, branch, liveRef, fact.Observation, fact.Authored, 0.7, 1, nil)
+	synthtest.SeedOriginFact(t, svc, branch, loserPath, fact.Observation, fact.Authored, 0.5, 1, nil)
 
 	winnerRefs := []string{staleRef}
 	loserRefs := []string{liveRef}
@@ -157,7 +159,7 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	// dropped one of them would still look right.
 	require.NotEqual(t, winnerRefs, loserRefs)
 
-	write, carried := dedupMergeRefs(winnerRefs, loserRefs, winnerPath, loserPath, bareRefFixture)
+	write, carried := dedupMergeRefs(winnerRefs, loserRefs, winnerPath, loserPath, synthtest.BareRefFixture)
 
 	// The merge's own behaviour is unchanged: union of both, plus the loser.
 	require.ElementsMatch(t, []string{staleRef, liveRef, loserPath}, write)
@@ -171,7 +173,7 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	require.NotSame(t, &write[0], &carried[0],
 		"prior must be its own list, not the write list under a second name")
 
-	gate := refs.New(bareRefFixture, refs.FromFactQuery(svc.FactQuery(), branch))
+	gate := refs.New(synthtest.BareRefFixture, refs.FromFactQuery(svc.FactQuery(), branch))
 
 	// Positive control: the carried set, unresolvable member and all, passes.
 	// This is the #103 case and it must not be rejected.
@@ -336,7 +338,7 @@ func TestDedupMergeRefs_CarriedIsBuiltOnlyFromTheOperands(t *testing.T) {
 // sites and agreeing is still a reading; this is the tripwire, and it names
 // where to look when it fires.
 func TestFactForLLM_CarriesNoRefs(t *testing.T) {
-	typ := reflect.TypeOf(factForLLM{})
+	typ := reflect.TypeOf(step.FactForLLM{})
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
 		name := strings.ToLower(f.Name)

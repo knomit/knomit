@@ -3,9 +3,11 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/vocab"
 
 	"github.com/stretchr/testify/require"
@@ -30,22 +32,22 @@ import (
 // Defunding is done through the real verdict path rather than by poking the
 // throttle, because the latch is a composition of two mechanisms and a test
 // that fakes one of them cannot see it.
-func structuralDefundedEnv(t *testing.T, a, b string) (*restatementEnv, Deps) {
+func structuralDefundedEnv(t *testing.T, a, b string) (*synthtest.RestatementEnv, step.Deps) {
 	t.Helper()
 	ctx := context.Background()
 	env := structuralEnv(t, [2]struct{ Path, Title string }{
 		namedFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload"),
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
-	env.seedShortlist()
-	d := env.deps()
+	seedShortlist(env)
+	d := env.Deps()
 
 	// The fixture MUST reach the defunded state, and MUST still hold the
 	// structural pair when it gets there. Both are asserted below rather than
 	// assumed: a fixture chosen to make a test discriminate is a claim, and an
 	// unasserted claim is how a test ends up comparing zero against zero.
 	for range throttleMinVerdicts {
-		pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, structuralFiller+2)
+		pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, structuralFiller+2)
 		require.NoError(t, err)
 		require.NotEmpty(t, pairs, "the corpus must still be spending while it is being defunded")
 		// Decline an ORDINARY pair. Declining the structural pair would retire
@@ -53,7 +55,7 @@ func structuralDefundedEnv(t *testing.T, a, b string) (*restatementEnv, Deps) {
 		var declined bool
 		for _, p := range pairs {
 			if p.MatchKind == vocab.MatchTitleKNN {
-				env.recordVerdict(p.APath, p.BPath, false)
+				env.RecordVerdict(p.APath, p.BPath, false)
 				declined = true
 				break
 			}
@@ -78,7 +80,7 @@ func TestStructural_AllowanceFiresOnADefundedCorpus(t *testing.T) {
 	b := "kb/technology/security/vulnerabilities/networking/cisco/bfbb31b8.md"
 	env, d := structuralDefundedEnv(t, a, b)
 
-	pairs, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, structuralFiller+2)
+	pairs, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, structuralFiller+2)
 	require.NoError(t, err)
 
 	// Fixture assertions FIRST — without these, every assertion below could
@@ -94,7 +96,7 @@ func TestStructural_AllowanceFiresOnADefundedCorpus(t *testing.T) {
 	require.Positive(t, h.StructuralOffered,
 		"a defunded corpus must still be shown structural evidence — its verdict "+
 			"history is about title-ranked pairs and says nothing about this route")
-	require.True(t, containsPair(pairs, a, b),
+	require.True(t, synthtest.ContainsPair(pairs, a, b),
 		"the structurally matched pair is what must reach the judge, not merely a count")
 }
 
@@ -110,7 +112,7 @@ func TestStructural_AllowanceIsBoundedOnADefundedCorpus(t *testing.T) {
 	b := "kb/technology/security/vulnerabilities/networking/cisco/bfbb31b8.md"
 	env, d := structuralDefundedEnv(t, a, b)
 
-	pairs, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, structuralFiller+2)
+	pairs, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, structuralFiller+2)
 	require.NoError(t, err)
 	require.Equal(t, throttleDefunded, h.ThrottleState)
 	// Fixture assertion, and it is not ceremony: `0 <= structuralAllowance` is
@@ -141,13 +143,13 @@ func TestStructural_AllowanceIsBoundedOnADefundedCorpus(t *testing.T) {
 func TestStructural_SweepIsOldestFirstNotHighestCosine(t *testing.T) {
 	ctx := context.Background()
 	env := sweepOrderEnv(t)
-	env.seedShortlist()
-	ax := env.svc.Abstraction()
+	seedShortlist(env)
+	ax := env.Svc.Abstraction()
 
-	byCos, err := ax.RestatementPairsByMatchKind(ctx, env.branch,
+	byCos, err := ax.RestatementPairsByMatchKind(ctx, env.Branch,
 		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
-	byAge, err := ax.RestatementPairsByMatchKindOldest(ctx, env.branch,
+	byAge, err := ax.RestatementPairsByMatchKindOldest(ctx, env.Branch,
 		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 
@@ -186,16 +188,16 @@ func TestStructural_RareTokenStaysClosed(t *testing.T) {
 		namedFact(a, "CVE-2026-16232 forces an emergency storage firmware recall"),
 		namedFact(b, "Procurement halts after CVE-2026-16232 lands in the catalogue"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 
 	// Fixture assertion: the pair must actually have been DETECTED as
 	// rare-token, or "not offered" says nothing about the gate under test.
 	require.Equal(t, vocab.MatchRareToken, pairKindIn(t, env, a, b),
 		"fixture must produce a rare-token match, or the gate is not being tested")
 
-	sweep, err := selectStructuralSweep(ctx, env.deps(), env.branch, map[string]struct{}{})
+	sweep, err := selectStructuralSweep(ctx, env.Deps(), env.Branch, map[string]struct{}{})
 	require.NoError(t, err)
-	require.False(t, containsPair(sweep, a, b),
+	require.False(t, synthtest.ContainsPair(sweep, a, b),
 		"rare-token is the weaker, wider net and stays closed until the "+
 			"path-identity sample says what a structural offer is worth")
 	for _, p := range sweep {
@@ -218,21 +220,21 @@ func TestStructural_CoClusteredPairIsStillExcluded(t *testing.T) {
 		namedFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload"),
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
-	env.seedShortlist()
-	d := env.deps()
+	seedShortlist(env)
+	d := env.Deps()
 
 	// Fixture assertion: unclustered, the pair IS offered. Without this the
 	// test below passes against a route that offers nothing at all.
-	free, err := selectStructuralSweep(ctx, d, env.branch, map[string]struct{}{})
+	free, err := selectStructuralSweep(ctx, d, env.Branch, map[string]struct{}{})
 	require.NoError(t, err)
-	require.True(t, containsPair(free, a, b),
+	require.True(t, synthtest.ContainsPair(free, a, b),
 		"fixture must offer the pair when it is NOT co-clustered, or the "+
 			"exclusion is being credited for a route that was already empty")
 
-	coGrouped := clusterCoMembership([][]factForLLM{{{File: a}, {File: b}}})
-	held, err := selectStructuralSweep(ctx, d, env.branch, coGrouped)
+	coGrouped := clusterCoMembership([][]step.FactForLLM{{{File: a}, {File: b}}})
+	held, err := selectStructuralSweep(ctx, d, env.Branch, coGrouped)
 	require.NoError(t, err)
-	require.False(t, containsPair(held, a, b),
+	require.False(t, synthtest.ContainsPair(held, a, b),
 		"a pair prune already sees in one cluster must not also cost a shortlist slot")
 }
 
@@ -253,20 +255,20 @@ func TestStructural_ScopedSessionIsOfferedOutOfScopePairsAndToldSo(t *testing.T)
 		namedFact(a, "Cisco patches nine flaws across Crosswork and Secure Workload"),
 		namedFact(b, "Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
-	env.seedShortlist()
+	seedShortlist(env)
 
-	scoped := env.deps()
+	scoped := env.Deps()
 	// A domain no fact in this corpus carries, so EVERY structural pair the
 	// sweep returns is out of scope by construction.
-	scoped.Scope = ScopeFilter{Domain: []string{"a-domain-no-fact-here-carries"}}
+	scoped.Scope = step.ScopeFilter{Domain: []string{"a-domain-no-fact-here-carries"}}
 
-	pairs, h, err := selectRestatementCandidates(ctx, scoped, env.branch, nil, structuralFiller+2)
+	pairs, h, err := selectRestatementCandidates(ctx, scoped, env.Branch, nil, structuralFiller+2)
 	require.NoError(t, err)
 
 	require.Positive(t, h.StructuralOffered,
 		"the structural route does not answer to the scope filter — a cross-category "+
 			"structural pair is corpus-wide evidence by construction")
-	require.True(t, containsPair(pairs, a, b))
+	require.True(t, synthtest.ContainsPair(pairs, a, b))
 	require.Equal(t, h.StructuralOffered, h.StructuralOutOfScope,
 		"every pair offered here is outside the scope, and the count must say so")
 	require.Contains(t, structuralSignalLine(h), "OUTSIDE this session's scope",
@@ -302,8 +304,8 @@ func TestStructural_SweepRegimeIsDerivedNotDeclared(t *testing.T) {
 
 	// A corpus with NO embedder never puts a fact on the title axis, so
 	// coverage is zero and the sweep order cannot be age-stable.
-	bare := newRestatementEnvWithoutEmbedder(t, 12)
-	_, hBare, err := selectRestatementCandidates(ctx, bare.deps(), bare.branch, nil, 12)
+	bare := synthtest.NewRestatementEnvWithoutEmbedder(t, 12)
+	_, hBare, err := selectRestatementCandidates(ctx, bare.Deps(), bare.Branch, nil, 12)
 	require.NoError(t, err)
 	require.Zero(t, hBare.Coverage, "fixture must have an EMPTY axis, or it is not the filling regime")
 	require.False(t, hBare.SweepOrderStable,
@@ -317,8 +319,8 @@ func TestStructural_SweepRegimeIsDerivedNotDeclared(t *testing.T) {
 		namedFact("kb/technology/security/vulnerabilities/networking/cisco/aaaaaa08.md",
 			"Nine Cisco advisories cover Crosswork and Secure Workload"),
 	})
-	full.seedShortlist()
-	_, hFull, err := selectRestatementCandidates(ctx, full.deps(), full.branch, nil, structuralFiller+2)
+	seedShortlist(full)
+	_, hFull, err := selectRestatementCandidates(ctx, full.Deps(), full.Branch, nil, structuralFiller+2)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, hFull.Coverage,
 		"fixture must have a COMPLETE axis, or it is not the stable regime")
@@ -339,19 +341,19 @@ func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 	ctx := context.Background()
 	const pairs = structuralAllowance + 3
 	env := manyTwinsEnv(t, pairs)
-	env.seedShortlist()
-	d := env.deps()
+	seedShortlist(env)
+	d := env.Deps()
 
 	// Fixture assertion: the corpus must hold MORE structural pairs than the
 	// allowance, or the cap is never reached and this measures nothing.
-	standing, err := env.svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.branch,
+	standing, err := env.Svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.Branch,
 		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
 	require.Greater(t, len(standing), structuralAllowance,
 		"fixture must hold more standing path-identity pairs than the allowance, "+
 			"or the cap under test is never reached")
 
-	sweep, err := selectStructuralSweep(ctx, d, env.branch, map[string]struct{}{})
+	sweep, err := selectStructuralSweep(ctx, d, env.Branch, map[string]struct{}{})
 	require.NoError(t, err)
 	require.Len(t, sweep, structuralAllowance,
 		"the sweep spends the allowance and stops — an unbounded sweep would hand "+
@@ -360,7 +362,7 @@ func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 
 // manyTwinsEnv builds a corpus with n path-identity twin pairs on the standard
 // filler, for tests about SELECTION (which is corpus-scaled).
-func manyTwinsEnv(t *testing.T, n int) *restatementEnv {
+func manyTwinsEnv(t *testing.T, n int) *synthtest.RestatementEnv {
 	t.Helper()
 	return manyTwinsEnvWithFiller(t, n, structuralFiller)
 }
@@ -375,7 +377,7 @@ func manyTwinsEnv(t *testing.T, n int) *restatementEnv {
 // allowance fires whatever the budget is, and 404 facts make the distill item
 // span six pages, which turns an unrelated paging contract into a fixture
 // problem. So they pass a smaller number and assert the detection still fires.
-func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *restatementEnv {
+func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *synthtest.RestatementEnv {
 	t.Helper()
 	// Subject tokens chosen to be rare in this corpus and unrelated to each
 	// other; the prefix-EXTENSION shape (subject vs vendor/subject) is the one
@@ -386,14 +388,14 @@ func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *restatementEnv {
 	}
 	require.LessOrEqual(t, n, len(subjects), "manyTwinsEnv has only %d subjects", len(subjects))
 
-	env := newRestatementEnv(t, 0)
-	env.writeFiller(filler)
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFiller(filler)
 	for i, s := range subjects[:n] {
-		env.writeFact(
+		env.WriteFact(
 			fmt.Sprintf("kb/technology/security/vulnerabilities/%s/%08x.md", s, 0xAA0000+i*2),
 			fmt.Sprintf("%s advisory covers a remote code execution flaw", s),
 			"a body about the event")
-		env.writeFact(
+		env.WriteFact(
 			fmt.Sprintf("kb/technology/security/vulnerabilities/vendor/%s/%08x.md", s, 0xAA0001+i*2),
 			fmt.Sprintf("Remote code execution flaw disclosed in %s", s),
 			"the same event, filed again")
@@ -415,7 +417,7 @@ func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *restatementEnv {
 // the others, so no cross-pair title-KNN pair can crowd the population under
 // test; and each carries its own discriminating path token, so no cross-pair
 // PATH-IDENTITY match can form either.
-func sweepOrderEnv(t *testing.T) *restatementEnv {
+func sweepOrderEnv(t *testing.T) *synthtest.RestatementEnv {
 	t.Helper()
 	type twin struct {
 		aPath, bPath   string
@@ -451,22 +453,22 @@ func sweepOrderEnv(t *testing.T) *restatementEnv {
 
 	placed := map[string][]float32{}
 	for _, tw := range twins {
-		placed[tw.aTitle] = axisVector(tw.base)
-		placed[tw.bTitle] = axisVector(tw.base + tw.delta)
+		placed[tw.aTitle] = synthtest.AxisVector(tw.base)
+		placed[tw.bTitle] = synthtest.AxisVector(tw.base + tw.delta)
 	}
-	emb := &restatementEmbedder{vectorFor: func(text string) []float32 {
+	emb := &synthtest.RestatementEmbedder{VectorFor: func(text string) []float32 {
 		return placed[text] // nil for anything else — the hash vector is used
 	}}
 
-	env := newRestatementEnvWith(t, 0, emb)
+	env := synthtest.NewRestatementEnvWith(t, 0, emb)
 	// The filler first, and it is not decoration: both rarity cuts are read off
 	// the corpus's own token distribution, so a corpus with no distribution has
 	// nothing rare in it and no pair is ever classified.
-	env.writeFiller(structuralFiller)
+	env.WriteFiller(structuralFiller)
 	// Then the twins, IN ORDER. This sequence is the mint order under test.
 	for _, tw := range twins {
-		env.writeFact(tw.aPath, tw.aTitle, "a body about the event")
-		env.writeFact(tw.bPath, tw.bTitle, "the same event, filed again")
+		env.WriteFact(tw.aPath, tw.aTitle, "a body about the event")
+		env.WriteFact(tw.bPath, tw.bTitle, "the same event, filed again")
 	}
 	return env
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -141,10 +142,10 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			return mcpgo.NewToolResultError("current=true takes session_id alone: it returns the current item and answers nothing"), nil
 		}
 
-		var result *synthesize.PipelineResult
+		var result *step.PipelineResult
 
 		if current {
-			result, err = synthesize.NewHypothesizer(ri, logProgress, synthesize.DefaultEffort, synthesize.ScopeFilter{}).
+			result, err = synthesize.NewHypothesizer(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}).
 				Current(ctx, sessionID)
 		} else if sessionID == "" {
 			effort, scope, perr := parseEffortAndScope(req, ri)
@@ -164,7 +165,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			// Effort and scope are deliberately NOT parsed on the continue path:
 			// an invalid effort must not be able to wedge a live session, and the
 			// scope that matters was persisted on the session row at start.
-			result, err = synthesize.NewHypothesizer(ri, logProgress, synthesize.DefaultEffort, synthesize.ScopeFilter{}).
+			result, err = synthesize.NewHypothesizer(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}).
 				ContinueSessionForItem(ctx, sessionID, response, itemID)
 		}
 
@@ -188,7 +189,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 // `fact` field — hypothesize is the tool that ships its payload to the agent
 // verbatim, which is what PipelineItem.FactsJSON exists for. And the engine's
 // Summary is dropped: see HypothesizeResult.
-func hypothesizeResult(res *synthesize.PipelineResult) *HypothesizeResult {
+func hypothesizeResult(res *step.PipelineResult) *HypothesizeResult {
 	if res == nil {
 		return nil
 	}

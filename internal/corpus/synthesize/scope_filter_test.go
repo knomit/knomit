@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -51,7 +52,7 @@ func TestScopeFilter_FirstRun_RestrictsToDomain(t *testing.T) {
 		OntologyRoot: "kb",
 	})
 
-	r := NewReviewerWithOptions(ri, nil, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	r := NewReviewerWithOptions(ri, nil, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	seeds, err := r.dirtyFacts(context.Background(), branch, gs, idx, pipelineIdx)
@@ -107,8 +108,8 @@ func TestScopeFilter_FirstRun_UnionAcrossDomainAndEntity(t *testing.T) {
 		OntologyRoot: "kb",
 	})
 
-	scope := ScopeFilter{Domain: []string{"auth"}, Entities: []string{"alice"}}
-	r := NewReviewerWithOptions(ri, nil, EffortNormal, scope)
+	scope := step.ScopeFilter{Domain: []string{"auth"}, Entities: []string{"alice"}}
+	r := NewReviewerWithOptions(ri, nil, step.EffortNormal, scope)
 
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	seeds, err := r.dirtyFacts(context.Background(), branch, gs, idx, pipelineIdx)
@@ -145,7 +146,7 @@ func TestScopeFilter_Empty_WholeCorpus(t *testing.T) {
 		OntologyRoot: "kb",
 	})
 
-	r := NewReviewerWithOptions(ri, nil, EffortNormal, ScopeFilter{}) // empty
+	r := NewReviewerWithOptions(ri, nil, step.EffortNormal, step.ScopeFilter{}) // empty
 
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	seeds, err := r.dirtyFacts(context.Background(), branch, gs, idx, pipelineIdx)
@@ -155,9 +156,9 @@ func TestScopeFilter_Empty_WholeCorpus(t *testing.T) {
 
 // TestScopeFilter_IsEmpty asserts the predicate is the union zero.
 func TestScopeFilter_IsEmpty(t *testing.T) {
-	require.True(t, ScopeFilter{}.IsEmpty())
-	require.False(t, ScopeFilter{Domain: []string{"x"}}.IsEmpty())
-	require.False(t, ScopeFilter{Entities: []string{"y"}}.IsEmpty())
+	require.True(t, step.ScopeFilter{}.IsEmpty())
+	require.False(t, step.ScopeFilter{Domain: []string{"x"}}.IsEmpty())
+	require.False(t, step.ScopeFilter{Entities: []string{"y"}}.IsEmpty())
 }
 
 // TestScopedReview_ZeroSeeds_DoesNotAdvanceWatermark is the regression guard for
@@ -186,7 +187,7 @@ func TestScopedReview_ZeroSeeds_DoesNotAdvanceWatermark(t *testing.T) {
 	})
 
 	// Review scoped to "auth": zero seeds → completeSession is called.
-	r := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	r := NewReviewerWithOptions(ri, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 	result, err := r.StartSession(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, result, "StartSession must return a result")
@@ -237,7 +238,7 @@ func TestScopedReview_NonEmptyWatermark_StillSeedsInScope(t *testing.T) {
 	require.NotEmpty(t, head)
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(context.Background(), "review", branch, head))
 
-	r := NewReviewerWithOptions(ri, nil, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	r := NewReviewerWithOptions(ri, nil, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	seeds, err := r.dirtyFacts(context.Background(), branch, gs, idx, pipelineIdx)
 	require.NoError(t, err)
@@ -251,23 +252,23 @@ func TestScopedReview_NonEmptyWatermark_StillSeedsInScope(t *testing.T) {
 
 func TestScopeFilterMatchesTokenized(t *testing.T) {
 	// Domain: case-insensitive, hierarchy, plural — all must match now.
-	f := ScopeFilter{Domain: []string{"Store"}}
+	f := step.ScopeFilter{Domain: []string{"Store"}}
 	if !f.Matches([]string{"store/sqlite"}, nil) {
 		t.Error("scope 'Store' should match fact domain 'store/sqlite' (case + hierarchy)")
 	}
-	if !(ScopeFilter{Domain: []string{"migrations"}}).Matches([]string{"migration"}, nil) {
+	if !(step.ScopeFilter{Domain: []string{"migrations"}}).Matches([]string{"migration"}, nil) {
 		t.Error("scope 'migrations' should match fact domain 'migration' (stem)")
 	}
 	// Entity: case-insensitive.
-	if !(ScopeFilter{Entities: []string{"anthropic"}}).Matches(nil, []string{"Anthropic"}) {
+	if !(step.ScopeFilter{Entities: []string{"anthropic"}}).Matches(nil, []string{"Anthropic"}) {
 		t.Error("entity scope should be case-insensitive")
 	}
 	// Empty filter still matches everything.
-	if !(ScopeFilter{}).Matches([]string{"x"}, []string{"y"}) {
+	if !(step.ScopeFilter{}).Matches([]string{"x"}, []string{"y"}) {
 		t.Error("empty filter must match all")
 	}
 	// Non-match still rejects.
-	if (ScopeFilter{Domain: []string{"auth"}}).Matches([]string{"store"}, nil) {
+	if (step.ScopeFilter{Domain: []string{"auth"}}).Matches([]string{"store"}, nil) {
 		t.Error("unrelated domain must not match")
 	}
 }
@@ -299,7 +300,7 @@ func TestScopedReview_CompletionOnFreshReviewer_DoesNotAdvanceWatermark(t *testi
 	})
 
 	// Start scoped: StartSession persists Scoped=true on the session row.
-	scoped := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+	scoped := NewReviewerWithOptions(ri, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 	res, err := scoped.StartSession(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, res.SessionID, "scoped review with seeds must open a session")
@@ -311,7 +312,7 @@ func TestScopedReview_CompletionOnFreshReviewer_DoesNotAdvanceWatermark(t *testi
 	require.NoError(t, err)
 	require.True(t, sess.Scoped, "StartSession must persist the scoped flag")
 
-	fresh := NewReviewerWithOptions(ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{})
+	fresh := NewReviewerWithOptions(ri, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{})
 	_, err = fresh.completeSession(context.Background(), sess)
 	require.NoError(t, err)
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -50,14 +51,14 @@ func TestDerivedWriters_CarryOverWordingDiffersForDiscovery(t *testing.T) {
 // factForLLM must SHOW motifs, or the judges cannot carry over what they never
 // saw.
 func TestDerivedWriters_FactForLLMShowsMotifs(t *testing.T) {
-	f := factForLLM{File: "kb/a.md", Motifs: []string{"silent-fallback"}}
-	blob, err := json.Marshal([]factForLLM{f})
+	f := step.FactForLLM{File: "kb/a.md", Motifs: []string{"silent-fallback"}}
+	blob, err := json.Marshal([]step.FactForLLM{f})
 	require.NoError(t, err)
 	require.Contains(t, string(blob), "silent-fallback")
 
 	// ...and omits the key entirely when there are none, so a motif-less corpus
 	// sends the same payload it always did.
-	blob, err = json.Marshal([]factForLLM{{File: "kb/b.md"}})
+	blob, err = json.Marshal([]step.FactForLLM{{File: "kb/b.md"}})
 	require.NoError(t, err)
 	require.NotContains(t, string(blob), "motifs")
 }

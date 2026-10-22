@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -25,9 +27,9 @@ import (
 // synthesis fabricated corroboration out of one claim recorded twice.
 
 func pruneItem(clusterKey string, paths ...string) *model.PipelineWorkItem {
-	facts := make([]factForLLM, 0, len(paths))
+	facts := make([]step.FactForLLM, 0, len(paths))
 	for _, p := range paths {
-		facts = append(facts, factForLLM{File: p, Title: "t " + p, Body: "b " + p, Type: "observation"})
+		facts = append(facts, step.FactForLLM{File: p, Title: "t " + p, Body: "b " + p, Type: "observation"})
 	}
 	payload, err := json.Marshal(facts)
 	if err != nil {
@@ -38,12 +40,12 @@ func pruneItem(clusterKey string, paths ...string) *model.PipelineWorkItem {
 	}
 }
 
-func keeps(paths ...string) PruneResult {
-	d := make([]PruneDecision, 0, len(paths))
+func keeps(paths ...string) step.PruneResult {
+	d := make([]step.PruneDecision, 0, len(paths))
 	for _, p := range paths {
-		d = append(d, PruneDecision{Path: p, Action: "keep"})
+		d = append(d, step.PruneDecision{Path: p, Action: "keep"})
 	}
-	return PruneResult{Decisions: d}
+	return step.PruneResult{Decisions: d}
 }
 
 // TestProgression_ExplicitCompleteAllKeepCertifies is the promotion signal.
@@ -62,9 +64,9 @@ func TestProgression_ExplicitCompleteAllKeepCertifies(t *testing.T) {
 // all-KEEP would make that fixture start producing distill items.
 func TestProgression_EmptyDecisionsIsNotAllKeep(t *testing.T) {
 	paths := []string{"kb/a.md", "kb/b.md"}
-	require.False(t, pruneVerdictCertifiesDistinct(PruneResult{}, paths),
+	require.False(t, pruneVerdictCertifiesDistinct(step.PruneResult{}, paths),
 		"an empty decision list is silence, and synthesis is never planned on silence")
-	require.False(t, pruneVerdictCertifiesDistinct(PruneResult{Decisions: []PruneDecision{}}, paths),
+	require.False(t, pruneVerdictCertifiesDistinct(step.PruneResult{Decisions: []step.PruneDecision{}}, paths),
 		"an explicitly empty list is the same non-answer as a missing one")
 
 	// AND with no input paths either. This is the case that separates the
@@ -79,7 +81,7 @@ func TestProgression_EmptyDecisionsIsNotAllKeep(t *testing.T) {
 	// that would not actually enqueue anything today. The guard stays anyway:
 	// a predicate that is correct only because of what its caller happens to do
 	// next is a trap for the next caller.
-	require.False(t, pruneVerdictCertifiesDistinct(PruneResult{}, nil),
+	require.False(t, pruneVerdictCertifiesDistinct(step.PruneResult{}, nil),
 		"a verdict over NO facts certifies nothing — vacuous truth is not a "+
 			"judge's classification")
 }
@@ -96,7 +98,7 @@ func TestProgression_PartialCoverageIsNotAllKeep(t *testing.T) {
 	// Fixture assertion: the partial answer is genuinely VALID input, or this
 	// test is asserting against something the pipeline would have rejected
 	// upstream and the coverage check is being credited for the validator's work.
-	require.NoError(t, validatePrunePaths(partial, paths),
+	require.NoError(t, step.ValidatePrunePaths(partial, paths),
 		"fixture must be a verdict the validator ACCEPTS, or the coverage check "+
 			"under test is unreachable in production")
 
@@ -123,7 +125,7 @@ func TestProgression_AnyActionStopsTheCluster(t *testing.T) {
 			"what the progression exists to prevent")
 
 	merged := keeps(paths...)
-	merged.Merges = []MergeEntry{{Paths: paths}}
+	merged.Merges = []step.MergeEntry{{Paths: paths}}
 	require.False(t, pruneVerdictCertifiesDistinct(merged, paths),
 		"a merge is the judge saying these facts overlap — the exact case that "+
 			"fabricated corroboration when distill ran anyway")
@@ -167,11 +169,11 @@ func TestProgression_NonPruneItemsDoNotPromote(t *testing.T) {
 // the double-reasoning #135 removes: that was distill firing on prune's OWN
 // clusters.
 func TestProgression_RemainderIsPlannedAtSessionStart(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/x/1.md"}, {File: "kb/x/2.md"}, // one clustered pair
 		{File: "kb/lonely.md"}, // in no cluster at all
 	}
-	clusters := [][]factForLLM{{seeds[0], seeds[1]}}
+	clusters := [][]step.FactForLLM{{seeds[0], seeds[1]}}
 
 	groups := distillGroups(seeds, clusters)
 
@@ -213,14 +215,14 @@ func TestProgression_StopIsStatedNotInferred(t *testing.T) {
 	item := pruneItem("cluster-1", "kb/a.md", "kb/b.md")
 
 	acted := &model.PipelineSession{}
-	recordProgressionStop(acted, item, &ReviewStats{Merged: 1})
+	recordProgressionStop(acted, item, &step.ReviewStats{Merged: 1})
 	require.Len(t, acted.Health, 1)
 	require.Contains(t, acted.Health[0], "ACTED on")
 	require.Contains(t, acted.Health[0], "NEXT session",
 		"the line must say where the cluster went, not merely that it stopped")
 
 	silent := &model.PipelineSession{}
-	recordProgressionStop(silent, item, &ReviewStats{})
+	recordProgressionStop(silent, item, &step.ReviewStats{})
 	require.Len(t, silent.Health, 1)
 	require.Contains(t, silent.Health[0], "not promoted")
 	require.NotContains(t, silent.Health[0], "ACTED on",
@@ -242,36 +244,36 @@ func TestProgression_StopIsStatedNotInferred(t *testing.T) {
 // forms in this harness (the same wall knomit#149 hit), so a Plan-driven
 // fixture would produce no prune item and every assertion below would pass
 // vacuously against an empty queue.
-func progressionEnv(t *testing.T, clusterKey string) (*restatementEnv, *Pipeline, *model.PipelineSession) {
+func progressionEnv(t *testing.T, clusterKey string) (*synthtest.RestatementEnv, *Pipeline, *model.PipelineSession) {
 	t.Helper()
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/prog/alpha.md", "alpha", "body of alpha")
-	env.writeFact("kb/prog/beta.md", "beta", "body of beta")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/prog/alpha.md", "alpha", "body of alpha")
+	env.WriteFact("kb/prog/beta.md", "beta", "body of beta")
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	_, markErr := env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	_, markErr := env.Svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
 	require.NoError(t, markErr)
 
-	facts := []factForLLM{
+	facts := []step.FactForLLM{
 		{File: "kb/prog/alpha.md", Title: "alpha", Body: "body of alpha", Type: "observation"},
 		{File: "kb/prog/beta.md", Title: "beta", Body: "body of beta", Type: "observation"},
 	}
 	payload, err := json.Marshal(facts)
 	require.NoError(t, err)
-	require.NoError(t, env.svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
+	require.NoError(t, env.Svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: clusterKey,
 		FactsJSON: string(payload), Priority: 2,
 	}))
 
-	p := NewPipeline(env.ri, func(ProgressEvent) {}, EffortNormal, ScopeFilter{}, reviewStrategy{})
+	p := NewPipeline(env.RI, func(step.ProgressEvent) {}, step.EffortNormal, step.ScopeFilter{}, reviewStrategy{})
 	return env, p, sess
 }
 
-func promotedItems(t *testing.T, env *restatementEnv, sessionID string) []model.PipelineWorkItem {
+func promotedItems(t *testing.T, env *synthtest.RestatementEnv, sessionID string) []model.PipelineWorkItem {
 	t.Helper()
-	items, err := env.svc.Pipeline().PendingPipelineWorkItems(context.Background(), sessionID)
+	items, err := env.Svc.Pipeline().PendingPipelineWorkItems(context.Background(), sessionID)
 	require.NoError(t, err)
 	var out []model.PipelineWorkItem
 	for _, it := range items {
@@ -378,37 +380,37 @@ func TestProgression_ShortlistItemPromotesNothingThroughApply(t *testing.T) {
 func edgeReadFails(t *testing.T, svc *store.Service) *index.Facade {
 	t.Helper()
 	idx := svc.Search()
-	guardReads(t, idx, readPolicy{AllowAll: true,
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{AllowAll: true,
 		Fail: map[string]error{"SubgraphEdges": errors.New("test: forced subgraph edge-read failure")}})
 	return idx
 }
 
 // planFixture seeds n facts in ONE directory and plans a session over them with
 // clustering forced through the fallback.
-func planFixture(t *testing.T, n int) (*restatementEnv, *model.PipelineSession, []model.PipelineWorkItem) {
+func planFixture(t *testing.T, n int) (*synthtest.RestatementEnv, *model.PipelineSession, []model.PipelineWorkItem) {
 	t.Helper()
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	var seeds []fact.Fact
 	for i := range n {
 		path := fmt.Sprintf("kb/topic/f%d.md", i)
-		env.writeFact(path, fmt.Sprintf("note %d", i), "body")
-		r, err := env.svc.Facts().ReadFact(ctx, env.branch, path, nil)
+		env.WriteFact(path, fmt.Sprintf("note %d", i), "body")
+		r, err := env.Svc.Facts().ReadFact(ctx, env.Branch, path, nil)
 		require.NoError(t, err)
 		f, err := fact.ParseFact(path, r.Content)
 		require.NoError(t, err)
 		seeds = append(seeds, f)
 	}
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	_, markErr := env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	_, markErr := env.Svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
 	require.NoError(t, markErr)
-	d := env.deps()
-	d.Search = edgeReadFails(t, env.svc)
+	d := env.Deps()
+	d.Search = edgeReadFails(t, env.Svc)
 	require.NoError(t, reviewStrategy{}.Plan(ctx, d, sess, seeds))
 
-	items, err := env.svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
+	items, err := env.Svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
 	require.NoError(t, err)
 	return env, sess, items
 }
@@ -449,28 +451,28 @@ func TestProgression_PlanDoesNotEnqueueClusteredDistillUpFront(t *testing.T) {
 // it on nothing.
 func TestProgression_PlanStillEnqueuesTheRemainder(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Two facts in one directory (they cluster via the fallback) plus one
 	// filed alone, which the category grouping cannot pair with anything.
 	paths := []string{"kb/topic/a.md", "kb/topic/b.md", "kb/alone/c.md"}
 	var seeds []fact.Fact
 	for _, p := range paths {
-		env.writeFact(p, "note "+p, "body")
-		r, err := env.svc.Facts().ReadFact(ctx, env.branch, p, nil)
+		env.WriteFact(p, "note "+p, "body")
+		r, err := env.Svc.Facts().ReadFact(ctx, env.Branch, p, nil)
 		require.NoError(t, err)
 		f, err := fact.ParseFact(p, r.Content)
 		require.NoError(t, err)
 		seeds = append(seeds, f)
 	}
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	_, markErr := env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	_, markErr := env.Svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
 	require.NoError(t, markErr)
-	d := env.deps()
-	d.Search = edgeReadFails(t, env.svc)
+	d := env.Deps()
+	d.Search = edgeReadFails(t, env.Svc)
 	require.NoError(t, reviewStrategy{}.Plan(ctx, d, sess, seeds))
 
-	items, err := env.svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
+	items, err := env.Svc.Pipeline().PendingPipelineWorkItems(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, keysWithPrefix(items, "distill-rest"),
 		"the remainder is NOT promotion-gated: those seeds never become a prune "+

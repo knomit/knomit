@@ -1,4 +1,4 @@
-package synthesize
+package step
 
 import "context"
 
@@ -29,11 +29,11 @@ func WithActor(ctx context.Context, actor string) context.Context {
 	return context.WithValue(ctx, actorKey{}, actor)
 }
 
-// actorFromContext returns the handle WithActor stored, or "" when there is
+// ActorFromContext returns the handle WithActor stored, or "" when there is
 // none. Empty is a legitimate, reachable answer — every in-process caller
 // (tests, local tools driving Reviewer directly) has no request to attribute
 // to — so this deliberately has no "unknown" sentinel and no error.
-func actorFromContext(ctx context.Context) string {
+func ActorFromContext(ctx context.Context) string {
 	actor, _ := ctx.Value(actorKey{}).(string)
 	return actor
 }

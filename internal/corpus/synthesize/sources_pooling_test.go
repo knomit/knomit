@@ -2,7 +2,8 @@ package synthesize
 
 import (
 	"context"
-	"path/filepath"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"knomit/internal/engine/store/index"
@@ -31,71 +32,6 @@ import (
 // Hypothesis-typed sources are excluded from every pool, matching §5.2's
 // exclusion from evidence_weight: a conjecture corroborates nothing.
 
-// bareRefFixture is the localRepoID these fixtures pass. It is deliberately
-// empty: every fixture below seeds facts with BARE refs (kb/topic/x.md), and
-// repo identity only ever matters for distinguishing a kb://<own-id>/… ref
-// from a foreign one — so with bare refs the id changes nothing.
-//
-// Production never passes empty: refs are stored canonical, and classifying a
-// canonical ref without the id reads it as foreign, which silently empties the
-// lineage walk. That path is covered by
-// TestLineageWalk_FollowsCanonicalSelfQualifiedRefs.
-const bareRefFixture = ""
-
-func newSourcesTestRepo(t *testing.T) (*store.Service, string) {
-	t.Helper()
-	dir := t.TempDir()
-	svc, err := store.Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
-	return svc, "agent/test"
-}
-
-// seedFactWithSources writes an observation carrying an explicit sources
-// count, so a test can assert on a pooled total rather than on a count that
-// happens to equal the number of inputs.
-func seedFactWithSources(t *testing.T, svc *store.Service, branch, path string, sources int) {
-	t.Helper()
-	seedTypedFactWithSources(t, svc, branch, path, sources, fact.Observation)
-}
-
-func seedTypedFactWithSources(t *testing.T, svc *store.Service, branch, path string, sources int, typ fact.Type) {
-	t.Helper()
-	f := fact.NewFact(path)
-	f.Title = path
-	f.Body = "body of " + path
-	f.Type = typ
-	f.Domain = []string{"test"}
-	f.Confidence = 0.8
-	f.Sources = sources
-	body, err := fact.SerializeFact(f)
-	require.NoError(t, err)
-	_, err = svc.Facts().WriteFact(context.Background(), branch, f.Path(), body, "seed", "")
-	require.NoError(t, err)
-}
-
-// readSources parses the fact at path and returns its sources count.
-func readSources(t *testing.T, svc *store.Service, branch, path string) int {
-	t.Helper()
-	rf, err := svc.Facts().ReadFact(context.Background(), branch, path, nil)
-	require.NoError(t, err)
-	parsed, err := fact.ParseFact(path, rf.Content)
-	require.NoError(t, err)
-	return parsed.Sources
-}
-
-// collectWarns returns an onProgress sink plus a pointer to the warn messages
-// it accumulates.
-func collectWarns() (func(ProgressEvent), *[]string) {
-	var warns []string
-	return func(e ProgressEvent) {
-		if e.Phase == "warn" {
-			warns = append(warns, e.Message)
-		}
-	}, &warns
-}
-
 // ── SHARE: distill, discover, reflect-propose ─────────────────────────────
 
 // TestApplyDistillDecisions_SourcesIsOne_NotPooled is the acceptance test for
@@ -103,31 +39,31 @@ func collectWarns() (func(ProgressEvent), *[]string) {
 // survive the distill, so the new fact claims one — its own act of synthesis
 // — rather than the twelve that are still recorded on the living sources.
 func TestApplyDistillDecisions_SourcesIsOne_NotPooled(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedFactWithSources(t, svc, branch, "kb/technology/a.md", 3)
-	seedFactWithSources(t, svc, branch, "kb/technology/b.md", 4)
-	seedFactWithSources(t, svc, branch, "kb/technology/c.md", 5)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/a.md", 3)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/b.md", 4)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/c.md", 5)
 
-	df := distillFact{
+	df := step.DistillFact{
 		Path: "kb/technology/synth.md", Title: "S", Body: "distilled", Type: "synthesis",
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md", "kb/technology/c.md"},
 	}
-	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
+	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Synthesized)
 	require.Len(t, written, 1)
 
-	require.Equal(t, 1, readSources(t, svc, branch, written[0].Path),
+	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, written[0].Path),
 		"a distilled fact shares its sources with facts that stay alive, so it claims one act of synthesis, not their pooled counts")
 
 	// The inputs are untouched — which is exactly why pooling would double-count.
-	require.Equal(t, 3, readSources(t, svc, branch, "kb/technology/a.md"))
-	require.Equal(t, 4, readSources(t, svc, branch, "kb/technology/b.md"))
-	require.Equal(t, 5, readSources(t, svc, branch, "kb/technology/c.md"))
+	require.Equal(t, 3, synthtest.ReadSources(t, svc, branch, "kb/technology/a.md"))
+	require.Equal(t, 4, synthtest.ReadSources(t, svc, branch, "kb/technology/b.md"))
+	require.Equal(t, 5, synthtest.ReadSources(t, svc, branch, "kb/technology/c.md"))
 }
 
 // TestApplyDistillDecisions_EvidenceWeightStillPoolsRefs pins the other half
@@ -135,19 +71,19 @@ func TestApplyDistillDecisions_SourcesIsOne_NotPooled(t *testing.T) {
 // evidence_weight must still carry it, or the depth information is simply
 // gone.
 func TestApplyDistillDecisions_EvidenceWeightStillPoolsRefs(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedFactWithSources(t, svc, branch, "kb/technology/a.md", 3)
-	seedFactWithSources(t, svc, branch, "kb/technology/b.md", 4)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/a.md", 3)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/b.md", 4)
 
-	df := distillFact{
+	df := step.DistillFact{
 		Path: "kb/technology/synth.md", Title: "S", Body: "distilled", Type: "synthesis",
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []distillFact{df}, nil,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
+	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 
 	rf, err := svc.Facts().ReadFact(ctx, branch, written[0].Path, nil)
@@ -164,17 +100,17 @@ func TestApplyDistillDecisions_EvidenceWeightStillPoolsRefs(t *testing.T) {
 // would be worse than in distill: a bridge is selected for facts that already
 // co-occur, so shared ancestry is the expected case.
 func TestApplyDiscoveredProposals_SourcesIsOne(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedFactWithSources(t, svc, branch, "kb/a.md", 4)
-	seedFactWithSources(t, svc, branch, "kb/b.md", 7)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/a.md", 4)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/b.md", 7)
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
 	props := []DiscoveredFact{{
@@ -183,11 +119,11 @@ func TestApplyDiscoveredProposals_SourcesIsOne(t *testing.T) {
 	}}
 
 	written, err := applyDiscoveredProposals(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil,
-		payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
+		payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 
-	require.Equal(t, 1, readSources(t, svc, branch, written[0]),
+	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, written[0]),
 		"a discovered fact shares its bridge members, which stay alive; it claims one act of discovery")
 }
 
@@ -199,24 +135,24 @@ func TestApplyReflectDecisions_ProposeSourcesIsOne(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/test"
 
-	seedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
-	seedFactWithSources(t, svc, branch, "kb/technology/b.md", 3)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/b.md", 3)
 
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "review", branch, "")
 	require.NoError(t, err)
 
-	result := ReflectResult{Propose: []ProposeEntry{{
+	result := step.ReflectResult{Propose: []step.ProposeEntry{{
 		TopicPath: "meta/reasoning", Title: "M", Body: "a methodology",
 		NoveltyArgument: "nothing like it exists", Confidence: 0.8,
 		TransitionPaths: []string{"kb/technology/a.md"},
 		Refs:            []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}}}
 	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess,
-		bareRefFixture, ri.OntologyRoot(), 0.95, nil))
+		synthtest.BareRefFixture, ri.OntologyRoot(), 0.95, nil))
 
 	found := methodologyFactPaths(t, svc, branch)
 	require.Len(t, found, 1, "precondition: the propose arm must have written one methodology")
-	require.Equal(t, 1, readSources(t, svc, branch, found[0]),
+	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, found[0]),
 		"a proposed methodology cites its motivating transitions; they do not corroborate it")
 }
 
@@ -241,26 +177,26 @@ func methodologyFactPaths(t *testing.T, svc *store.Service, branch string) []str
 // move to the survivor — and the count the model proposed is ignored, because
 // the facts that carried the real counts are about to stop existing.
 func TestApplyPruneDecisions_MergePoolsSubsumedSources(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
-	seedFactWithSources(t, svc, branch, "kb/technology/b.md", 6)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/b.md", 6)
 
-	merges := []MergeEntry{{
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
 			Domain: []string{"technology"}, Confidence: 0.9,
 			Sources: 1, // the model lowballs; the server must not trust it
 		},
 	}}
 	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
+		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged)
 
-	require.Equal(t, 8, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
+	require.Equal(t, 8, synthtest.ReadSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"a merge deletes its inputs, so their corroborations must transfer to the survivor")
 
 	// And they really are gone, which is what makes the transfer mandatory.
@@ -271,24 +207,24 @@ func TestApplyPruneDecisions_MergePoolsSubsumedSources(t *testing.T) {
 // TestApplyPruneDecisions_MergeExcludesHypothesisSources keeps a conjecture
 // from laundering into the survivor's evidence count.
 func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
-	seedTypedFactWithSources(t, svc, branch, "kb/technology/h.md", 9, fact.Hypothesis)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
+	synthtest.SeedTypedFactWithSources(t, svc, branch, "kb/technology/h.md", 9, fact.Hypothesis)
 
-	merges := []MergeEntry{{
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/a.md", "kb/technology/h.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
 	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
+		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
-	require.Equal(t, 2, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
+	require.Equal(t, 2, synthtest.ReadSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"a hypothesis is a conjecture; its count must not pool into the merged fact")
 }
 
@@ -296,21 +232,21 @@ func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
 // failure on the destructive path. Flooring silently at 1 would dress up
 // "I deleted N facts whose evidence I never counted" as a plausible number.
 func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	onProgress, warns := collectWarns()
-	merges := []MergeEntry{{
+	onProgress, warns := synthtest.CollectWarns()
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/gone.md"}, // never written
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
+	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"the floor still applies — 0 would make the fact invisible to every downstream weight")
 	require.NotEmpty(t, *warns, "a merge that could read none of its sources must say so")
 	require.Contains(t, (*warns)[0], "could be read",
@@ -322,8 +258,8 @@ func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
 // TestMergeFacts_SumsSourcesOfBothWinnerAndLoser covers the dedup transfer.
 // The loser is deleted by dedupCluster, so its corroborations move.
 func TestMergeFacts_SumsSourcesOfBothWinnerAndLoser(t *testing.T) {
-	a := factForLLM{File: "a.md", Type: "observation", Confidence: 0.9, Sources: 3}
-	b := factForLLM{File: "b.md", Type: "observation", Confidence: 0.5, Sources: 4}
+	a := step.FactForLLM{File: "a.md", Type: "observation", Confidence: 0.9, Sources: 3}
+	b := step.FactForLLM{File: "b.md", Type: "observation", Confidence: 0.5, Sources: 4}
 
 	winner, loser := mergeFacts(a, b)
 	require.Equal(t, "a.md", winner.File, "higher confidence wins")
@@ -338,8 +274,8 @@ func TestMergeFacts_SumsSourcesOfBothWinnerAndLoser(t *testing.T) {
 // correctly refuse to. Write five hypotheses, let dedup absorb them, and the
 // survivor read as well-corroborated.
 func TestMergeFacts_ExcludesHypothesisLoserSources(t *testing.T) {
-	obs := factForLLM{File: "obs.md", Type: "observation", Confidence: 0.4, Sources: 2}
-	hyp := factForLLM{File: "hyp.md", Type: "hypothesis", Confidence: 0.99, Sources: 9}
+	obs := step.FactForLLM{File: "obs.md", Type: "observation", Confidence: 0.4, Sources: 2}
+	hyp := step.FactForLLM{File: "hyp.md", Type: "hypothesis", Confidence: 0.99, Sources: 9}
 
 	winner, loser := mergeFacts(obs, hyp)
 	require.Equal(t, "obs.md", winner.File, "non-hypothesis wins regardless of confidence")
@@ -353,8 +289,8 @@ func TestMergeFacts_ExcludesHypothesisLoserSources(t *testing.T) {
 // evidence for the other — the exclusion is about what a hypothesis
 // CONTRIBUTES, not about hypotheses being uncountable.
 func TestMergeFacts_HypothesisWinnerKeepsOwnSources(t *testing.T) {
-	h1 := factForLLM{File: "h1.md", Type: "hypothesis", Confidence: 0.9, Sources: 2}
-	h2 := factForLLM{File: "h2.md", Type: "hypothesis", Confidence: 0.5, Sources: 3}
+	h1 := step.FactForLLM{File: "h1.md", Type: "hypothesis", Confidence: 0.9, Sources: 2}
+	h2 := step.FactForLLM{File: "h2.md", Type: "hypothesis", Confidence: 0.5, Sources: 3}
 
 	winner, _ := mergeFacts(h1, h2)
 	require.Equal(t, 2, winner.Sources,
@@ -367,10 +303,10 @@ func TestMergeFacts_HypothesisWinnerKeepsOwnSources(t *testing.T) {
 // value: evidence_weight multiplies by sources, so a 0-source fact is
 // permanently invisible to every weight computed over it.
 func TestComputeTransfer_FloorsAtOne(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	weight, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/missing.md"})
+	weight, pooled, readable := step.ComputeTransfer(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/missing.md"})
 	require.Equal(t, 1, pooled, "an unreadable source set still floors at one, never zero")
 	require.Equal(t, 0, readable, "readable must report the truth so a destructive caller can warn")
 	require.Zero(t, weight, "no readable source means no evidence weight")
@@ -379,12 +315,12 @@ func TestComputeTransfer_FloorsAtOne(t *testing.T) {
 // TestComputeTransfer_ZeroSourceFactsStillFloor covers the other route to
 // zero: sources that read fine but genuinely carry 0.
 func TestComputeTransfer_ZeroSourceFactsStillFloor(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedFactWithSources(t, svc, branch, "kb/z.md", 0)
+	synthtest.SeedFactWithSources(t, svc, branch, "kb/z.md", 0)
 
-	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/z.md"})
+	_, pooled, readable := step.ComputeTransfer(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/z.md"})
 	require.Equal(t, 1, pooled)
 	require.Equal(t, 1, readable, "the source WAS readable — it just carried no corroborations")
 }
@@ -395,12 +331,12 @@ func TestComputeTransfer_ZeroSourceFactsStillFloor(t *testing.T) {
 // into the readable counter made a merge over conjecture indistinguishable
 // from a merge whose inputs it could not load at all.
 func TestComputeTransfer_HypothesisSourceCountsAsReadable(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedTypedFactWithSources(t, svc, branch, "kb/h.md", 9, fact.Hypothesis)
+	synthtest.SeedTypedFactWithSources(t, svc, branch, "kb/h.md", 9, fact.Hypothesis)
 
-	_, pooled, readable := computeTransfer(ctx, svc.Facts(), branch, bareRefFixture, []string{"kb/h.md"})
+	_, pooled, readable := step.ComputeTransfer(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/h.md"})
 	require.Equal(t, 1, readable, "a hypothesis reads fine; readable answers 'could I see it', not 'did it corroborate'")
 	require.Equal(t, 1, pooled, "and it still contributes nothing, so the floor is what remains")
 }
@@ -411,24 +347,24 @@ func TestComputeTransfer_HypothesisSourceCountsAsReadable(t *testing.T) {
 // whoever finds it looking for a storage fault instead of an honest
 // "these facts carried no corroborations".
 func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing.T) {
-	svc, branch := newSourcesTestRepo(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
 	ctx := context.Background()
 
-	seedTypedFactWithSources(t, svc, branch, "kb/technology/h1.md", 3, fact.Hypothesis)
-	seedTypedFactWithSources(t, svc, branch, "kb/technology/h2.md", 4, fact.Hypothesis)
+	synthtest.SeedTypedFactWithSources(t, svc, branch, "kb/technology/h1.md", 3, fact.Hypothesis)
+	synthtest.SeedTypedFactWithSources(t, svc, branch, "kb/technology/h2.md", 4, fact.Hypothesis)
 
-	onProgress, warns := collectWarns()
-	merges := []MergeEntry{{
+	onProgress, warns := synthtest.CollectWarns()
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/h1.md", "kb/technology/h2.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
 			Domain: []string{"technology"}, Confidence: 0.9,
 		},
 	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb", nil)
+	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
+	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"conjecture pools nothing, so the merged fact rests on the floor")
 	for _, w := range *warns {
 		require.NotContains(t, w, "could be read",

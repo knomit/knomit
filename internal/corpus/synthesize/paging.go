@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"strconv"
 )
 
@@ -71,13 +72,13 @@ func deliveredFactsLen(compact []byte) int {
 // A single fact larger than the budget still gets its own page, since it cannot
 // be split; the bound is best-effort for a pathological fact exactly as
 // chunkFacts is for the item budget.
-func packFactPages(facts []factForLLM, maxBytes int) [][]factForLLM {
-	var pages [][]factForLLM
-	var current []factForLLM
+func packFactPages(facts []step.FactForLLM, maxBytes int) [][]step.FactForLLM {
+	var pages [][]step.FactForLLM
+	var current []step.FactForLLM
 	currentSize := 0
 
 	for _, f := range facts {
-		one, err := json.Marshal([]factForLLM{f})
+		one, err := json.Marshal([]step.FactForLLM{f})
 		if err != nil {
 			continue
 		}
@@ -122,7 +123,7 @@ func factPages(stepType, factsJSON string) ([]json.RawMessage, error) {
 	if !pagedStepTypes[stepType] {
 		return []json.RawMessage{json.RawMessage(factsJSON)}, nil
 	}
-	var facts []factForLLM
+	var facts []step.FactForLLM
 	if err := json.Unmarshal([]byte(factsJSON), &facts); err != nil {
 		return []json.RawMessage{json.RawMessage(factsJSON)}, nil
 	}
@@ -130,7 +131,7 @@ func factPages(stepType, factsJSON string) ([]json.RawMessage, error) {
 		return []json.RawMessage{json.RawMessage(factsJSON)}, nil
 	}
 
-	chunks := packFactPages(facts, maxPageFactBytes)
+	chunks := packFactPages(facts, step.MaxPageFactBytes)
 	pages := make([]json.RawMessage, 0, len(chunks))
 	for i, c := range chunks {
 		b, err := json.Marshal(c)

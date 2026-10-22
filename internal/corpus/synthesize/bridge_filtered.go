@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
@@ -17,7 +18,7 @@ import (
 // Declaration order is preserved (not sorted) so the label is stable across
 // calls with the same ScopeFilter value — callers that need canonical ordering
 // must sort before passing.
-func scopeLabel(s ScopeFilter) string {
+func scopeLabel(s step.ScopeFilter) string {
 	if s.IsEmpty() {
 		return ""
 	}
@@ -40,7 +41,7 @@ const neutralSpec = 0.0
 //   - BridgeEntity: any Entities entry matches via store.EntityTagMatches
 //     (case-fold equality).
 //   - BridgeBoth (or ""): either axis matches.
-func factCarriesToken(f factForLLM, token string, kind BridgeKind) bool {
+func factCarriesToken(f step.FactForLLM, token string, kind BridgeKind) bool {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -71,7 +72,7 @@ func factCarriesToken(f factForLLM, token string, kind BridgeKind) bool {
 //	df=0 → 1.0   (absent token is maximally specific)
 //	df=1 → 1.0
 //	df=4 → 0.25
-func specificityWithinScope(token string, kind BridgeKind, pool []factForLLM) float64 {
+func specificityWithinScope(token string, kind BridgeKind, pool []step.FactForLLM) float64 {
 	df := 0
 	for _, f := range pool {
 		if factCarriesToken(f, token, kind) {
@@ -96,7 +97,7 @@ type tokenAxis struct {
 // returning them in entity-first order (entity beats domain, mirroring
 // enumerateBridgeCandidates). Each canonical form is returned at most once;
 // if the same canonical form appears on both axes, the entity kind wins.
-func tokensCarriedBy(f factForLLM, kind BridgeKind) []tokenAxis {
+func tokensCarriedBy(f step.FactForLLM, kind BridgeKind) []tokenAxis {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -151,7 +152,7 @@ func tokensCarriedBy(f factForLLM, kind BridgeKind) []tokenAxis {
 //     generator only calls this for subsets of size ≥ 2 in practice, but the
 //     function is safe for smaller inputs.
 //   - No shared token: returns ("", BridgeBoth, neutralSpec).
-func sharedSubToken(members []factForLLM, kind BridgeKind, pool []factForLLM) (token string, tkind BridgeKind, spec float64) {
+func sharedSubToken(members []step.FactForLLM, kind BridgeKind, pool []step.FactForLLM) (token string, tkind BridgeKind, spec float64) {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -248,10 +249,10 @@ func buildFilteredBridges(
 	ctx context.Context,
 	idx *index.Facade,
 	branch string,
-	seeds []factForLLM,
+	seeds []step.FactForLLM,
 	clusters ClusterResult,
-	scope ScopeFilter,
-	eff Effort,
+	scope step.ScopeFilter,
+	eff step.Effort,
 	cfg QualityConfig,
 ) ([]BridgeSeedSet, error) {
 	// §1 gate — must be first, before any idx call.
@@ -260,7 +261,7 @@ func buildFilteredBridges(
 	}
 
 	// §2 — build non-discovered pool.
-	byPath := make(map[string]factForLLM, len(seeds))
+	byPath := make(map[string]step.FactForLLM, len(seeds))
 	for _, f := range seeds {
 		if f.Origin == string(fact.Discovered) {
 			continue
@@ -301,7 +302,7 @@ func buildFilteredBridges(
 		}
 
 		// §5 — label: find shared sub-token; demote scope token to "".
-		members := make([]factForLLM, 0, len(sub))
+		members := make([]step.FactForLLM, 0, len(sub))
 		for _, p := range sub { // sub is already path-sorted by reshapeCohesiveSubset
 			if f, ok := byPath[p]; ok {
 				members = append(members, f)

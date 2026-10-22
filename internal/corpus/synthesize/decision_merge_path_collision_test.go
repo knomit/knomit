@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,9 +15,9 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// knomit#107a. prune's merge was the ONLY one of validateOutputPath's four
-// callers that never ran normalizeFactPath — distill does it at decision.go's
-// distill loop, discovery does it in discovery.go. validateOutputPath checks
+// knomit#107a. prune's merge was the ONLY one of step.ValidateOutputPath's four
+// callers that never ran step.NormalizeFactPath (step/validation.go) — distill does it at decision.go's
+// distill loop, discovery does it in discovery.go. ValidateOutputPath checks
 // the ontology root and private paths, and nothing else: there is no collision
 // check anywhere on that path.
 //
@@ -55,9 +57,9 @@ func TestApplyPruneDecisions_MergeDoesNotOverwriteAnExistingFact(t *testing.T) {
 
 	// The LLM names the victim's path as its merge output. Nothing in the
 	// prompt stops it, and nothing downstream checked.
-	merges := []MergeEntry{{
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path:  victim,
 			Title: "Merged",
 			Body:  "merged body",
@@ -66,7 +68,7 @@ func TestApplyPruneDecisions_MergeDoesNotOverwriteAnExistingFact(t *testing.T) {
 	}}
 
 	_, err = ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"review-test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
+		"review-test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 
 	// THE ASSERTION. The victim must still be there, unchanged.
@@ -127,9 +129,9 @@ func TestApplyPruneDecisions_MergeStillWritesUnderANormalizedPath(t *testing.T) 
 		require.NoError(t, err)
 	}
 
-	merges := []MergeEntry{{
+	merges := []step.MergeEntry{{
 		Paths: []string{"kb/technology/a.md", "kb/technology/b.md"},
-		Merged: mergedFact{
+		Merged: step.MergedFact{
 			Path:  "kb/technology/human-chosen-name.md",
 			Title: "Merged",
 			Body:  "MERGED-BODY-MARKER",
@@ -138,7 +140,7 @@ func TestApplyPruneDecisions_MergeStillWritesUnderANormalizedPath(t *testing.T) 
 	}}
 
 	stats, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
-		"review-test", func(ProgressEvent) {}, branch, bareRefFixture, "kb", nil)
+		"review-test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "the merge must still commit")
 

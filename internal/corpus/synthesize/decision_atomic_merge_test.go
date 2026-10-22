@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,9 +23,9 @@ import (
 // the work took one commit or four.
 
 // branchCommits counts commits on the branch.
-func branchCommits(t *testing.T, env *restatementEnv) int {
+func branchCommits(t *testing.T, env *synthtest.RestatementEnv) int {
 	t.Helper()
-	entries, err := env.svc.Search().Log(context.Background(), env.branch, "")
+	entries, err := env.Svc.Search().Log(context.Background(), env.Branch, "")
 	require.NoError(t, err)
 	return len(entries)
 }
@@ -37,27 +39,27 @@ const mergedTitle = "Merged claim"
 
 // mergeTwoInto runs ApplyPruneDecisions with a single merge subsuming the two
 // given paths, and returns the merged fact's ACTUAL path.
-func mergeTwoInto(t *testing.T, env *restatementEnv, a, b string) (*ReviewStats, string) {
+func mergeTwoInto(t *testing.T, env *synthtest.RestatementEnv, a, b string) (*step.ReviewStats, string) {
 	t.Helper()
 	out := "kb/alpha/merged-result.md"
-	var mf mergedFact
+	var mf step.MergedFact
 	require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{
 		"path":%q,"title":"Merged claim","body":"Both recordings, unioned.",
 		"type":"observation","domain":["alpha"],"confidence":0.9,"sources":2,
 		"entities":["Widget"],"refs":[]}`, out)), &mf))
 
-	d := env.deps()
-	stats, err := ApplyPruneDecisions(context.Background(), env.svc.Facts(), env.svc.FactsRepo(), env.svc.Search(),
-		nil, []MergeEntry{{Paths: []string{a, b}, Merged: mf}},
-		reviewTool, d.OnProgress, env.branch, "", "kb", nil)
+	d := env.Deps()
+	stats, err := ApplyPruneDecisions(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+		nil, []step.MergeEntry{{Paths: []string{a, b}, Merged: mf}},
+		step.ReviewTool, d.OnProgress, env.Branch, "", "kb", nil)
 	require.NoError(t, err)
-	return stats, mergedFactPath(t, env.svc, env.branch, mergedTitle)
+	return stats, mergedFactPath(t, env.Svc, env.Branch, mergedTitle)
 }
 
 func TestApplyPruneMerge_WriteAndSourceDeletesShareOneCommit(t *testing.T) {
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/alpha/one.md", "One", "first recording")
-	env.writeFact("kb/alpha/two.md", "Two", "second recording")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/alpha/one.md", "One", "first recording")
+	env.WriteFact("kb/alpha/two.md", "Two", "second recording")
 
 	before := branchCommits(t, env)
 	stats, _ := mergeTwoInto(t, env, "kb/alpha/one.md", "kb/alpha/two.md")
@@ -88,14 +90,14 @@ func TestApplyPruneMerge_WriteAndSourceDeletesShareOneCommit(t *testing.T) {
 // nothing removed it deletes a LIVE fact from the judge's view.
 func TestApplyPruneMerge_RetiredNamesOnlyTheSourcesThisCallRemoved(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/alpha/one.md", "One", "first recording")
-	env.writeFact("kb/alpha/two.md", "Two", "second recording")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/alpha/one.md", "One", "first recording")
+	env.WriteFact("kb/alpha/two.md", "Two", "second recording")
 
 	// A source that is already gone by the time the merge runs.
-	_, err := env.svc.Facts().DeleteFact(ctx, env.branch, "kb/alpha/two.md", "gone already")
+	_, err := env.Svc.Facts().DeleteFact(ctx, env.Branch, "kb/alpha/two.md", "gone already")
 	require.NoError(t, err)
-	exists, err := env.svc.Facts().FactExists(ctx, env.branch, "kb/alpha/two.md")
+	exists, err := env.Svc.Facts().FactExists(ctx, env.Branch, "kb/alpha/two.md")
 	require.NoError(t, err)
 	require.False(t, exists, "fixture: the source must really be absent")
 
@@ -107,7 +109,7 @@ func TestApplyPruneMerge_RetiredNamesOnlyTheSourcesThisCallRemoved(t *testing.T)
 		"fixture: exactly one source was removable, so the two outcomes are "+
 			"distinguishable — Merged says the merge landed, Retired says which "+
 			"source it took")
-	merged, err := env.svc.Facts().FactExists(ctx, env.branch, out)
+	merged, err := env.Svc.Facts().FactExists(ctx, env.Branch, out)
 	require.NoError(t, err)
 	require.True(t, merged, "the merged fact must have been written")
 	require.Equal(t, []string{"kb/alpha/one.md"}, stats.Retired,

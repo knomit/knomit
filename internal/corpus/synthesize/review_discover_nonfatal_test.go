@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -45,7 +46,7 @@ func TestReviewer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "test", AgentBranch: branch, Svc: svc, OntologyRoot: "kb",
 	})
-	r := NewReviewerWithEffort(ri, nil, EffortHigh)
+	r := NewReviewerWithEffort(ri, nil, step.EffortHigh)
 
 	res, err := r.StartSession(context.Background())
 	require.NoError(t, err)
@@ -58,7 +59,7 @@ func TestReviewer_DiscoverParseFailure_NonFatal(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
+			Members: []step.FactForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
 		},
 	}
 	pj, err := json.Marshal(payload)
@@ -106,7 +107,7 @@ func TestReviewer_EmptyDiscoverResponse_AnswersItem(t *testing.T) {
 		Direction: DiscoverForward,
 		Bridge: BridgeSeedSet{
 			Token: "x", Kind: BridgeEntity,
-			Members: []factForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
+			Members: []step.FactForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
 		},
 	}
 	pj, err := json.Marshal(payload)

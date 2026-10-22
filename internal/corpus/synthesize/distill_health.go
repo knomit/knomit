@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/step"
 	"sort"
 	"strings"
 
@@ -69,7 +70,7 @@ func distillDeclineHealthLine(counts map[string]int, total int) string {
 // A parse failure is skipped rather than failing the session: this line is
 // informational, the session's mutations are already committed, and a summary
 // that errors would be strictly worse than one that undercounts.
-func distillDeclineHealth(ctx context.Context, d Deps, sessionID string) string {
+func distillDeclineHealth(ctx context.Context, d step.Deps, sessionID string) string {
 	responses, err := d.Pipeline.AnsweredDistillResponses(ctx, sessionID)
 	if err != nil {
 		// SAY the tally is unavailable rather than going quiet. A failed read
@@ -85,7 +86,7 @@ func distillDeclineHealth(ctx context.Context, d Deps, sessionID string) string 
 	}
 	counts := map[string]int{}
 	for _, raw := range responses {
-		res, perr := parseDistillResponse(raw)
+		res, perr := step.ParseDistillResponse(raw)
 		if perr != nil {
 			continue
 		}

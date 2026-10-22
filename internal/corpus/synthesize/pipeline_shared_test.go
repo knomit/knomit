@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -22,15 +23,15 @@ import (
 
 // allTools names every strategy the engine drives. A new strategy belongs
 // here, which is the point: the subtests below then cover it for free.
-var allTools = []string{reviewTool, hypothesizeTool}
+var allTools = []string{step.ReviewTool, hypothesizeTool}
 
 // enginePipelineFor constructs the engine for one tool. Review is reached
 // through its facade (Reviewer wraps the same Pipeline) so the test exercises
 // the construction path production uses.
-func enginePipelineFor(t *testing.T, tool string, ri *repos.RepoInstance, effort Effort, scope ScopeFilter) *Pipeline {
+func enginePipelineFor(t *testing.T, tool string, ri *repos.RepoInstance, effort step.Effort, scope step.ScopeFilter) *Pipeline {
 	t.Helper()
 	switch tool {
-	case reviewTool:
+	case step.ReviewTool:
 		return NewReviewerWithOptions(ri, nil, effort, scope).p
 	case hypothesizeTool:
 		return NewHypothesizer(ri, nil, effort, scope)
@@ -53,7 +54,7 @@ func TestPipeline_ScopedEmptyPool_DoesNotAdvanceWatermark(t *testing.T) {
 			ctx := context.Background()
 
 			// Empty corpus → empty seed pool for either strategy.
-			p := enginePipelineFor(t, tool, ri, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+			p := enginePipelineFor(t, tool, ri, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 			res, err := p.StartSession(ctx)
 			require.NoError(t, err)
 			require.True(t, res.Done, "empty pool → done immediately")
@@ -76,7 +77,7 @@ func TestPipeline_UnscopedEmptyPool_AdvancesWatermark(t *testing.T) {
 			svc, ri := newHypothesizeTestRepo(t)
 			ctx := context.Background()
 
-			p := enginePipelineFor(t, tool, ri, EffortNormal, ScopeFilter{})
+			p := enginePipelineFor(t, tool, ri, step.EffortNormal, step.ScopeFilter{})
 			res, err := p.StartSession(ctx)
 			require.NoError(t, err)
 			require.True(t, res.Done)
@@ -104,7 +105,7 @@ func TestPipeline_ScopedSessionRowMarked(t *testing.T) {
 			writeTestFact(t, svc, "kb/arch/a.md", "a", fact.Synthesis, "auth")
 			writeTestFact(t, svc, "kb/arch/b.md", "b", fact.Observation, "auth")
 
-			p := enginePipelineFor(t, tool, ri, EffortNormal, ScopeFilter{Domain: []string{"auth"}})
+			p := enginePipelineFor(t, tool, ri, step.EffortNormal, step.ScopeFilter{Domain: []string{"auth"}})
 			res, err := p.StartSession(ctx)
 			require.NoError(t, err)
 			require.NotEmpty(t, res.SessionID)
@@ -132,7 +133,7 @@ func TestPipeline_UnknownSession_TouchesNothing(t *testing.T) {
 	svc, ri := newHypothesizeTestRepo(t)
 	ctx := context.Background()
 
-	p := NewHypothesizer(ri, nil, EffortNormal, ScopeFilter{})
+	p := NewHypothesizer(ri, nil, step.EffortNormal, step.ScopeFilter{})
 	_, err := p.ContinueSession(ctx, "no-such-session", "ack")
 	require.Error(t, err)
 
@@ -164,10 +165,10 @@ func TestFactFromSearchResult_PropagatesOrigin(t *testing.T) {
 		return r
 	}
 
-	discovered := factFromSearchResult(mk("discovered"))
+	discovered := step.FactFromSearchResult(mk("discovered"))
 	require.Equal(t, fact.Discovered, discovered.Origin,
 		"discovered-origin facts must carry Origin so bridge seeding can exclude them (§7 idempotency)")
-	require.Equal(t, fact.Authored, factFromSearchResult(mk("authored")).Origin)
+	require.Equal(t, fact.Authored, step.FactFromSearchResult(mk("authored")).Origin)
 
 	// The other index-sourced fields must survive the projection too.
 	require.Equal(t, fact.Synthesis, discovered.Type)
@@ -221,7 +222,7 @@ func TestPipeline_DefaultsToAgentBranch(t *testing.T) {
 			svc, ri := newHypothesizeTestRepo(t)
 			ctx := context.Background()
 
-			p := enginePipelineFor(t, tool, ri, EffortNormal, ScopeFilter{})
+			p := enginePipelineFor(t, tool, ri, step.EffortNormal, step.ScopeFilter{})
 			res, err := p.StartSession(ctx)
 			require.NoError(t, err)
 
@@ -237,10 +238,10 @@ func TestPipeline_DefaultsToAgentBranch(t *testing.T) {
 func enginePipelineOnBranchFor(t *testing.T, tool string, ri *repos.RepoInstance, branch string) *Pipeline {
 	t.Helper()
 	switch tool {
-	case reviewTool:
-		return NewReviewerOnBranch(ri, nil, EffortNormal, ScopeFilter{}, branch).p
+	case step.ReviewTool:
+		return NewReviewerOnBranch(ri, nil, step.EffortNormal, step.ScopeFilter{}, branch).p
 	case hypothesizeTool:
-		return NewHypothesizerOnBranch(ri, nil, EffortNormal, ScopeFilter{}, branch)
+		return NewHypothesizerOnBranch(ri, nil, step.EffortNormal, step.ScopeFilter{}, branch)
 	default:
 		t.Fatalf("no on-branch engine constructor for tool %q", tool)
 		return nil

@@ -1,6 +1,9 @@
 package synthesize
 
-import "sort"
+import (
+	"knomit/internal/corpus/synthesize/step"
+	"sort"
+)
 
 // ClusterResult holds a community partition over fact paths. It is the currency
 // the bridge engine consumes: enumerateBridgeCandidates and buildScoredBridges
@@ -45,7 +48,7 @@ func (c ClusterResult) ClusterOf() map[string]int {
 // empty and facts absent from every group are handled downstream by
 // bridgePathCommunities' synthetic-negative-id fallback (identical to the prior
 // per-noise-fact assignment).
-func clusterResultFromGroups(groups [][]factForLLM) ClusterResult {
+func clusterResultFromGroups(groups [][]step.FactForLLM) ClusterResult {
 	cr := ClusterResult{Clusters: make(map[int][]string, len(groups))}
 	for i, g := range groups {
 		paths := make([]string, 0, len(g))

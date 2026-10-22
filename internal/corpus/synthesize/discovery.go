@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/facts"
 )
@@ -74,31 +75,31 @@ type FactReinforcement struct {
 	// Reason is the agent's one sentence on why the two claims are the same.
 	Reason string `json:"reason"`
 	// Refs are the seeds to join the fact's derivation paths.
-	Refs flexStrings `json:"refs"`
+	Refs step.FlexStrings `json:"refs"`
 }
 
 // DiscoveredFact is one proposed emergent fact. Mirrors distillFact so prompt
 // authors can keep the schema vocabulary consistent.
 type DiscoveredFact struct {
-	Path       string      `json:"path"`
-	Title      string      `json:"title"`
-	Body       string      `json:"body"`
-	Type       string      `json:"type"`
-	Domain     flexStrings `json:"domain"`
-	Confidence float64     `json:"confidence"`
-	Entities   flexStrings `json:"entities"`
-	Refs       flexStrings `json:"refs"`
+	Path       string           `json:"path"`
+	Title      string           `json:"title"`
+	Body       string           `json:"body"`
+	Type       string           `json:"type"`
+	Domain     step.FlexStrings `json:"domain"`
+	Confidence float64          `json:"confidence"`
+	Entities   step.FlexStrings `json:"entities"`
+	Refs       step.FlexStrings `json:"refs"`
 	// Optional; absence means none. There is deliberately NO mechanical
 	// stamping of the seed's motif (§2.1): wrong for a consequence whose
 	// regularity is not the seed's, and futile for a keystone, whose subject IS
 	// the mechanism and whose motif the ordinary subject strip therefore
 	// removes. Keystones stay motif-less by design, with no strip exemption.
-	Motifs flexStrings `json:"motifs"`
+	Motifs step.FlexStrings `json:"motifs"`
 }
 
 // parseDiscoverResponse is the symmetric companion of parseDistillResponse.
 func parseDiscoverResponse(text string) (DiscoverResponse, error) {
-	raw := extractJSON(text)
+	raw := step.ExtractJSON(text)
 	var result DiscoverResponse
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return DiscoverResponse{}, fmt.Errorf("parseDiscoverResponse: %w (raw: %.200s)", err, raw)
@@ -182,8 +183,8 @@ const discoverResponseSchema = `{
 // from Plan 04 Task 1. Unlike the prune/distill/reflect renderers it cannot
 // fail — the prompt is assembled from an in-memory payload with no marshal or
 // template step — so it returns no error.
-func RenderDiscoverWorkItem(payload DiscoverWorkPayload, ontologyRoot string) *WorkItemContent {
-	return &WorkItemContent{
+func RenderDiscoverWorkItem(payload DiscoverWorkPayload, ontologyRoot string) *step.WorkItemContent {
+	return &step.WorkItemContent{
 		Prompt:         renderDiscoverPrompt(payload, ontologyRoot),
 		ResponseSchema: discoverResponseSchema,
 	}
@@ -321,10 +322,10 @@ func applyDiscoveredProposals(
 	// local edge from a foreign one; passing "" reads them all as foreign.
 	localRepoID string,
 	ontologyRoot string,
-	onProgress func(ProgressEvent),
+	onProgress func(step.ProgressEvent),
 ) ([]string, error) {
 	if onProgress == nil {
-		onProgress = func(ProgressEvent) {}
+		onProgress = func(step.ProgressEvent) {}
 	}
 	wantType := fact.Synthesis
 	if payload.Direction == DiscoverBackward {
@@ -337,20 +338,20 @@ func applyDiscoveredProposals(
 		seedPaths[m.File] = struct{}{}
 	}
 
-	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, branch)
+	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, branch)
 
 	var written []string
 	for _, p := range proposals {
 		if fact.Type(p.Type) != wantType {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: type=%s does not match direction=%s", p.Type, payload.Direction)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: type=%s does not match direction=%s", p.Type, payload.Direction)})
 			continue
 		}
-		if err := validateOutputPath(p.Path, ontologyRoot); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %v", err)})
+		if err := step.ValidateOutputPath(p.Path, ontologyRoot); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %v", err)})
 			continue
 		}
-		if err := validateOutputType(p.Type); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", p.Path, err)})
+		if err := step.ValidateOutputType(p.Type); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", p.Path, err)})
 			continue
 		}
 		// ONE expression of the floor, both call sites. The proposal and
@@ -360,7 +361,7 @@ func applyDiscoveredProposals(
 		// and the discard list; the DECISION is refsCiteSeedSubset's alone.
 		if !refsCiteSeedSubset(p.Refs, seedPaths, localRepoID) {
 			_, _, distinctSeeds := splitSeedRefs(p.Refs, seedPaths, localRepoID)
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"discovery rejected: %s cites %d of the bridge's seeds as its derivation path, needs at least %d",
 				p.Path, distinctSeeds, minCitedSeeds)})
 			continue
@@ -382,19 +383,19 @@ func applyDiscoveredProposals(
 		// the discover prompt asks for a derivation path over the seeds, not a
 		// bibliography.
 		if len(extraRefs) > 0 {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"discovery %s: discarded %d ref(s) naming facts outside the bridge: %s",
 				p.Path, len(extraRefs), strings.Join(extraRefs, ", "))})
 		}
 		if p.Confidence < gates.ConfidenceThreshold {
 			log.Debug().Str("path", p.Path).Float64("confidence", p.Confidence).Float64("threshold", gates.ConfidenceThreshold).Msg("discovery gate: confidence below threshold")
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s confidence %.2f < threshold %.2f", p.Path, p.Confidence, gates.ConfidenceThreshold)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s confidence %.2f < threshold %.2f", p.Path, p.Confidence, gates.ConfidenceThreshold)})
 			continue
 		}
 
-		path := normalizeFactPath(p.Path)
-		localRefs := localFactRefPaths(p.Refs, localRepoID)
-		weight := computeWeight(ctx, gs, branch, localRepoID, localRefs)
+		path := step.NormalizeFactPath(p.Path)
+		localRefs := step.LocalFactRefPaths(p.Refs, localRepoID)
+		weight := step.ComputeWeight(ctx, gs, branch, localRepoID, localRefs)
 
 		f := fact.NewFact(path)
 		f.Title = p.Title
@@ -425,7 +426,7 @@ func applyDiscoveredProposals(
 		// decision.go, which replaces its members and passes their refs.
 		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), citedSeeds, nil)
 		if gerr != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", f.Path(), gerr)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", f.Path(), gerr)})
 			continue
 		}
 		f.Refs = canonRefs
@@ -435,9 +436,9 @@ func applyDiscoveredProposals(
 			// Embedder error → cannot determine duplicity; treat as non-duplicate so
 			// the remaining gates (BlastRadius etc.) decide. Dropping would silently
 			// discard valid proposals whenever the embedder is unavailable.
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery dedup check failed for %s: %v; treating as non-duplicate", f.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery dedup check failed for %s: %v; treating as non-duplicate", f.Path(), err)})
 		} else if dup {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s is a near-duplicate of an existing live fact", f.Path())})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s is a near-duplicate of an existing live fact", f.Path())})
 			continue
 		}
 
@@ -455,14 +456,14 @@ func applyDiscoveredProposals(
 				}
 			}
 			if !keep {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s seed-anchor BlastRadius below threshold %d", f.Path(), gates.BlastRadiusThreshold)})
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s seed-anchor BlastRadius below threshold %d", f.Path(), gates.BlastRadiusThreshold)})
 				continue
 			}
 		}
 
 		content, err := fact.SerializeFact(f)
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery serialize %s: %v", f.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery serialize %s: %v", f.Path(), err)})
 			continue
 		}
 		// Commit message: token-anchored when Token is set; fall back to the
@@ -477,10 +478,10 @@ func applyDiscoveredProposals(
 		}
 		msg := fmt.Sprintf("discover-%s: emergent fact via bridge %q", payload.Direction, bridgeRef)
 		if _, err := gs.WriteFact(ctx, branch, f.Path(), content, msg, "discover"); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery write %s: %v", f.Path(), err)})
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery write %s: %v", f.Path(), err)})
 			continue
 		}
-		onProgress(ProgressEvent{Phase: "detail-discover", Message: "discover " + f.Path()})
+		onProgress(step.ProgressEvent{Phase: "detail-discover", Message: "discover " + f.Path()})
 		written = append(written, f.Path())
 	}
 	return written, nil

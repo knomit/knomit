@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -29,7 +31,7 @@ func twoCommunities(a, b string) ClusterResult {
 }
 
 func TestEnumerateMotifCandidates_GroupsOnCanonicalIDAcrossSpellings(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/gotchas/uitesting/1.md", Motifs: []string{"measure-becomes-target"},
 			Entities: []string{"Cognition"}},
 		{File: "kb/technology/rewardhacking/2.md", Motifs: []string{"metric-becomes-target"},
@@ -50,7 +52,7 @@ func TestEnumerateMotifCandidates_GroupsOnCanonicalIDAcrossSpellings(t *testing.
 }
 
 func TestEnumerateMotifCandidates_DFBandExcludesBothEnds(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"hapax-shape", "generic-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"hapax-shape", "generic-shape"}, Entities: []string{"Beta"}},
 	}
@@ -72,7 +74,7 @@ func TestEnumerateMotifCandidates_DFBandExcludesBothEnds(t *testing.T) {
 }
 
 func TestEnumerateMotifCandidates_DFCeilingScalesWithTheCorpus(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
 	}
@@ -92,7 +94,7 @@ func TestEnumerateMotifCandidates_DFCeilingScalesWithTheCorpus(t *testing.T) {
 }
 
 func TestEnumerateMotifCandidates_RequiresTwoCommunities(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
 	}
@@ -107,7 +109,7 @@ func TestEnumerateMotifCandidates_RequiresTwoCommunities(t *testing.T) {
 // MN7's fixture asserted at the enumeration boundary the consumer actually
 // reads, not only at the gate helper.
 func TestEnumerateMotifCandidates_DropsTheNearDuplicatePair(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/technology/ai/agents/1.md", Motifs: []string{"shared-shape"},
 			Entities: []string{"Cognition", "Devin"}},
 		{File: "kb/technology/ai/agents/2.md", Motifs: []string{"shared-shape"},
@@ -126,7 +128,7 @@ func TestEnumerateMotifCandidates_DropsTheNearDuplicatePair(t *testing.T) {
 // The complement: the same shape, subject-disjoint, DOES enumerate. Without
 // this the test above would pass on a gate that rejected everything.
 func TestEnumerateMotifCandidates_KeepsTheSubjectDisjointPair(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/gotchas/uitesting/1.md", Motifs: []string{"shared-shape"},
 			Entities: []string{"Cognition"}, Domain: []string{"evaluation"}},
 		{File: "kb/technology/rewardhacking/2.md", Motifs: []string{"shared-shape"},
@@ -145,7 +147,7 @@ func TestEnumerateMotifCandidates_KeepsTheSubjectDisjointPair(t *testing.T) {
 // drops, the bridge survives. All-or-nothing rejection would let a single
 // near-duplicate delete a genuine three-way group.
 func TestEnumerateMotifCandidates_DropsOffendingMemberNotTheGroup(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
 		// Same rare entity as the first member — a near-duplicate of it.
@@ -164,7 +166,7 @@ func TestEnumerateMotifCandidates_DropsOffendingMemberNotTheGroup(t *testing.T) 
 }
 
 func TestEnumerateMotifCandidates_Token2TierGroupsDistinctCanonicalIDs(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"stale-cache-capture"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"cache-capture-drift"}, Entities: []string{"Beta"}},
 	}
@@ -180,7 +182,7 @@ func TestEnumerateMotifCandidates_Token2TierGroupsDistinctCanonicalIDs(t *testin
 }
 
 func TestEnumerateMotifCandidates_Token2NeedsTwoSharedTokens(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"stale-cache-capture"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"cache-warming-strategy"}, Entities: []string{"Beta"}},
 	}
@@ -191,7 +193,7 @@ func TestEnumerateMotifCandidates_Token2NeedsTwoSharedTokens(t *testing.T) {
 
 // §7 idempotency (cf455b8f): discovery never feeds on its own output.
 func TestEnumerateMotifCandidates_ExcludesDiscoveredOrigin(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"},
 			Origin: "discovered"},
 		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
@@ -202,7 +204,7 @@ func TestEnumerateMotifCandidates_ExcludesDiscoveredOrigin(t *testing.T) {
 }
 
 func TestEnumerateMotifCandidates_IsDeterministic(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"bravo-shape", "alpha-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"bravo-shape", "alpha-shape"}, Entities: []string{"Beta"}},
 	}
@@ -235,13 +237,13 @@ func TestLaneOf_SplitsOnSimilarityAdjacency(t *testing.T) {
 // TokenDF read, since the shared-motif specificity is passed in already summed.
 func motifScoreEnv(t *testing.T, paths ...string) (context.Context, *index.Facade) {
 	t.Helper()
-	idx := newGraphEnv(t, "main").idx()
-	guardReads(t, idx, readPolicy{Allow: []string{"ReverseDependentPaths"}})
+	idx := synthtest.NewGraphEnv(t, "main").Idx()
+	synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"ReverseDependentPaths"}})
 	return context.Background(), idx
 }
 
 func motifCandidate() BridgeSeedSet {
-	return BridgeSeedSet{Token: "shared-shape", Kind: BridgeMotif, Members: []factForLLM{
+	return BridgeSeedSet{Token: "shared-shape", Kind: BridgeMotif, Members: []step.FactForLLM{
 		{File: "kb/alpha/1.md"}, {File: "kb/beta/2.md"}}}
 }
 
@@ -314,7 +316,7 @@ func TestScoreMotifCandidate_FarLaneDropsOversizedGroups(t *testing.T) {
 	cand := BridgeSeedSet{Token: "shared-shape", Kind: BridgeMotif}
 	clusterOf := map[string]int{}
 	for i, p := range paths {
-		cand.Members = append(cand.Members, factForLLM{File: p})
+		cand.Members = append(cand.Members, step.FactForLLM{File: p})
 		clusterOf[p] = i
 	}
 	cfg := motifQualityConfig()
@@ -356,15 +358,15 @@ func constPairCos(v float64) pairCosFn {
 func TestSharedMotifSpecificity_SecondSharedMotifBoostsNeverGates(t *testing.T) {
 	ctx := context.Background()
 	// alpha-shape and bravo-shape are each carried by exactly two live facts.
-	idx := newGraphEnv(t, "main").seed(
-		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "bravo-shape"}},
-		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape", "bravo-shape"}},
-	).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(
+		synthtest.SeedFact{Path: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
+		synthtest.SeedFact{Path: "kb/beta/2.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
+	).Allow("TokenDF").Idx()
 
-	one := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+	one := BridgeSeedSet{Token: "alpha-shape", Members: []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape"}},
 		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape"}}}}
-	two := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+	two := BridgeSeedSet{Token: "alpha-shape", Members: []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
 		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape", "bravo-shape"}}}}
 
@@ -380,12 +382,12 @@ func TestSharedMotifSpecificity_SecondSharedMotifBoostsNeverGates(t *testing.T) 
 func TestSharedMotifSpecificity_OnlyMotifsEveryMemberCarriesCount(t *testing.T) {
 	ctx := context.Background()
 	// alpha-shape is carried by exactly two live facts.
-	idx := newGraphEnv(t, "main").seed(
-		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "bravo-shape"}},
-		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape"}},
-	).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(
+		synthtest.SeedFact{Path: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
+		synthtest.SeedFact{Path: "kb/beta/2.md", Motifs: []string{"alpha-shape"}},
+	).Allow("TokenDF").Idx()
 
-	cand := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+	cand := BridgeSeedSet{Token: "alpha-shape", Members: []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
 		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape"}}}}
 
@@ -397,17 +399,17 @@ func TestSharedMotifSpecificity_OnlyMotifsEveryMemberCarriesCount(t *testing.T) 
 // Rarity is what the term measures: a motif on fewer facts contributes more.
 func TestSharedMotifSpecificity_IsInverseInDF(t *testing.T) {
 	// rare-shape is carried by 2 live facts, common-shape by 10.
-	specs := []seedFact{
-		{path: "kb/alpha/1.md", motifs: []string{"rare-shape", "common-shape"}},
-		{path: "kb/beta/2.md", motifs: []string{"rare-shape", "common-shape"}},
+	specs := []synthtest.SeedFact{
+		{Path: "kb/alpha/1.md", Motifs: []string{"rare-shape", "common-shape"}},
+		{Path: "kb/beta/2.md", Motifs: []string{"rare-shape", "common-shape"}},
 	}
 	for i := 0; i < 8; i++ {
-		specs = append(specs, seedFact{path: fmt.Sprintf("kb/more/%d.md", i), motifs: []string{"common-shape"}})
+		specs = append(specs, synthtest.SeedFact{Path: fmt.Sprintf("kb/more/%d.md", i), Motifs: []string{"common-shape"}})
 	}
-	idx := newGraphEnv(t, "main").seed(specs...).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(specs...).Allow("TokenDF").Idx()
 
 	mk := func(m string) BridgeSeedSet {
-		return BridgeSeedSet{Token: m, Members: []factForLLM{
+		return BridgeSeedSet{Token: m, Members: []step.FactForLLM{
 			{File: "kb/alpha/1.md", Motifs: []string{m}}, {File: "kb/beta/2.md", Motifs: []string{m}}}}
 	}
 	rare, err := sharedMotifSpecificity(context.Background(), idx, "main", mk("rare-shape"), identityResolver)
@@ -421,14 +423,14 @@ func TestSharedMotifSpecificity_IsInverseInDF(t *testing.T) {
 // would be a member reinforcing a group on its own authorship habit.
 func TestSharedMotifSpecificity_OneMemberCannotVoteTwiceForACluster(t *testing.T) {
 	// alpha-shape (in either spelling) is carried by exactly two live facts.
-	idx := newGraphEnv(t, "main").seed(
-		seedFact{path: "kb/alpha/1.md", motifs: []string{"alpha-shape", "alpha-shaped"}},
-		seedFact{path: "kb/beta/2.md", motifs: []string{"alpha-shape"}},
-	).allow("TokenDF").idx()
+	idx := synthtest.NewGraphEnv(t, "main").Seed(
+		synthtest.SeedFact{Path: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "alpha-shaped"}},
+		synthtest.SeedFact{Path: "kb/beta/2.md", Motifs: []string{"alpha-shape"}},
+	).Allow("TokenDF").Idx()
 
 	// Both spellings resolve to one canonical id.
 	resolve := func(string) string { return "alpha-shape" }
-	cand := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+	cand := BridgeSeedSet{Token: "alpha-shape", Members: []step.FactForLLM{
 		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "alpha-shaped"}},
 		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape"}}}}
 
@@ -440,9 +442,9 @@ func TestSharedMotifSpecificity_OneMemberCannotVoteTwiceForACluster(t *testing.T
 // ── effort binding and per-lane sub-budgets (§5) ──────────────────────────
 
 func TestMotifSubBudget_IsMonotoneAndLaneBound(t *testing.T) {
-	nN, fN := motifSubBudget(EffortNormal)
-	nM, fM := motifSubBudget(EffortMedium)
-	nH, fH := motifSubBudget(EffortHigh)
+	nN, fN := motifSubBudget(step.EffortNormal)
+	nM, fM := motifSubBudget(step.EffortMedium)
+	nH, fH := motifSubBudget(step.EffortHigh)
 
 	require.Equal(t, 2, nN, "§5: normal's bounded 6ce866f8 amendment is a hard cap of 2")
 	require.Zero(t, fN, "normal is near lane only")
@@ -460,21 +462,21 @@ func TestMotifSubBudget_IsMonotoneAndLaneBound(t *testing.T) {
 // pool — the axes have different df distributions and one pool would let the
 // densest starve the others.
 func TestMotifSubBudget_DoesNotDrawOnTheEntityDomainBudget(t *testing.T) {
-	require.Equal(t, 48, effortBudget(EffortHigh))
-	require.Equal(t, 12, effortBudget(EffortMedium))
-	require.Zero(t, effortBudget(EffortNormal))
+	require.Equal(t, 48, effortBudget(step.EffortHigh))
+	require.Equal(t, 12, effortBudget(step.EffortMedium))
+	require.Zero(t, effortBudget(step.EffortNormal))
 }
 
 func TestMotifTier_IsMonotoneInEffort(t *testing.T) {
-	require.Equal(t, tierExact, motifTier(EffortNormal))
-	require.Equal(t, tierExact, motifTier(EffortMedium))
-	require.Equal(t, tierToken2, motifTier(EffortHigh))
+	require.Equal(t, tierExact, motifTier(step.EffortNormal))
+	require.Equal(t, tierExact, motifTier(step.EffortMedium))
+	require.Equal(t, tierToken2, motifTier(step.EffortHigh))
 }
 
 // MN10 as a PROPERTY, not an arrangement: each level's candidate set is a
 // subset of the next level's, before any budget truncation.
 func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		// A verbatim pair — matches at every tier.
 		{File: "kb/alpha/1.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
@@ -486,7 +488,7 @@ func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
 		0: {"kb/alpha/1.md"}, 1: {"kb/beta/2.md"}, 2: {"kb/gamma/3.md"}, 3: {"kb/delta/4.md"}}}
 	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2, "delta": 2})
 
-	setOf := func(e Effort) map[string]struct{} {
+	setOf := func(e step.Effort) map[string]struct{} {
 		got, _ := enumerateMotifCandidates(seeds, clusters, identityResolver, constDF(2), labels, motifTier(e))
 		out := map[string]struct{}{}
 		for _, b := range got {
@@ -496,7 +498,7 @@ func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
 		}
 		return out
 	}
-	normal, medium, high := setOf(EffortNormal), setOf(EffortMedium), setOf(EffortHigh)
+	normal, medium, high := setOf(step.EffortNormal), setOf(step.EffortMedium), setOf(step.EffortHigh)
 
 	require.NotEmpty(t, normal, "a vacuous subset assertion tests nothing")
 	require.Subset(t, medium, normal)
@@ -510,11 +512,11 @@ func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
 // later gates: on a corpus with no motifs the tier does nothing and costs
 // nothing — which is why the EffortNormal contract test passes vacuously.
 func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
-	seeds := []factForLLM{{File: "kb/alpha/1.md"}, {File: "kb/beta/2.md"}}
+	seeds := []step.FactForLLM{{File: "kb/alpha/1.md"}, {File: "kb/beta/2.md"}}
 	idx, reads := countedMotifIdx(t, seeds, nil)
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		twoCommunities("kb/alpha/1.md", "kb/beta/2.md"), EffortNormal, motifQualityConfig(),
+		twoCommunities("kb/alpha/1.md", "kb/beta/2.md"), step.EffortNormal, motifQualityConfig(),
 		identityResolver, labelsWith(200, nil), nil)
 
 	require.NoError(t, err)
@@ -526,8 +528,8 @@ func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
 
 // saturatedMotifCorpus builds n verbatim-matching, subject-disjoint,
 // cross-community pairs — more than any lane's budget.
-func saturatedMotifCorpus(n int) ([]factForLLM, ClusterResult, index.SubjectLabelDF) {
-	var seeds []factForLLM
+func saturatedMotifCorpus(n int) ([]step.FactForLLM, ClusterResult, index.SubjectLabelDF) {
+	var seeds []step.FactForLLM
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(400, nil)
 	com := 0
@@ -544,7 +546,7 @@ func saturatedMotifCorpus(n int) ([]factForLLM, ClusterResult, index.SubjectLabe
 			// share a subject token and the gate correctly rejects the pair.
 			path := fmt.Sprintf("kb/%s%02d/f%s%02d.md", side, i, side, i)
 			ent := fmt.Sprintf("ent%s%02d", side, i)
-			seeds = append(seeds, factForLLM{File: path, Motifs: []string{motif},
+			seeds = append(seeds, step.FactForLLM{File: path, Motifs: []string{motif},
 				Entities: []string{ent}})
 			clusters.Clusters[com] = []string{path}
 			labels.DF[ent] = 2
@@ -560,7 +562,7 @@ func TestBuildMotifBridges_NormalEmitsAtMostTwoNearAndNoFar(t *testing.T) {
 	idx := motifIdx(t, seeds, motifGroupEdges(seeds)) // every group is a near-lane group
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0))
+		clusters, step.EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0))
 
 	require.NoError(t, err)
 	require.Equal(t, 6, health.Candidates, "precondition: more candidates than the budget")
@@ -577,7 +579,7 @@ func TestBuildMotifBridges_NormalEmitsNothingForFarLaneGroups(t *testing.T) {
 	idx := motifIdx(t, seeds, nil) // no adjacency: every group is far
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 6, health.Candidates, "precondition: the candidates exist")
@@ -590,12 +592,12 @@ func TestBuildMotifBridges_HighOpensBothLanesWithinTheirBudgets(t *testing.T) {
 	idx := motifIdx(t, seeds, nil) // no SIMILAR_TO edges => every group is far
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 20, health.Candidates)
 	require.Empty(t, near, "no adjacency was offered, so nothing is in the near lane")
-	nearBudget, farBudget := motifSubBudget(EffortHigh)
+	nearBudget, farBudget := motifSubBudget(step.EffortHigh)
 	require.Len(t, far, farBudget)
 	require.LessOrEqual(t, len(near), nearBudget)
 }
@@ -608,11 +610,11 @@ func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 	idx := motifIdx(t, seeds, [][2]string{[2]string{"kb/a00/fa00.md", "kb/b00/fb00.md"}})
 
 	near, far, _, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Len(t, near, 1, "the one adjacent group takes a near slot")
-	nearBudget, farBudget := motifSubBudget(EffortHigh)
+	nearBudget, farBudget := motifSubBudget(step.EffortHigh)
 	require.Len(t, far, farBudget, "the far lane still fills its own budget in full")
 	require.LessOrEqual(t, len(near), nearBudget)
 }
@@ -625,22 +627,22 @@ func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 //
 // The read policy is strict: buildMotifBridges may read the adjacency, the
 // reverse dependents and the token document frequency, and nothing else.
-func motifIdx(t *testing.T, seeds []factForLLM, edges [][2]string) *index.Facade {
+func motifIdx(t *testing.T, seeds []step.FactForLLM, edges [][2]string) *index.Facade {
 	idx, _ := countedMotifIdx(t, seeds, edges)
 	return idx
 }
 
 // countedMotifIdx is motifIdx plus the log of the reads made, for a test that
 // asserts the builder touched the index not at all.
-func countedMotifIdx(t *testing.T, seeds []factForLLM, edges [][2]string) (*index.Facade, *readLog) {
+func countedMotifIdx(t *testing.T, seeds []step.FactForLLM, edges [][2]string) (*index.Facade, *synthtest.ReadLog) {
 	t.Helper()
-	idx := newGraphEnv(t, "main").seedAll(seeds).similar(edges...).idx()
-	return idx, guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths", "TokenDF"}})
+	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Similar(edges...).Idx()
+	return idx, synthtest.GuardReads(t, idx, synthtest.ReadPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths", "TokenDF"}})
 }
 
 // motifGroupEdges connects every pair of seeds that share a motif, so every
 // group is fully adjacent (cohesion 1) and lands in the near lane.
-func motifGroupEdges(seeds []factForLLM) [][2]string {
+func motifGroupEdges(seeds []step.FactForLLM) [][2]string {
 	byMotif := map[string][]string{}
 	for _, f := range seeds {
 		for _, m := range f.Motifs {
@@ -688,9 +690,9 @@ func TestMotifBridgeHealthLines_FailureIsNotSuccessShapedZeros(t *testing.T) {
 // mc builds an enumerated candidate at a named tier. Explicit at every call
 // site, because the tier is now what decides which of two nested groups wins.
 func mc(token string, q float64, family bool, files ...string) enumeratedMotif {
-	ms := make([]factForLLM, 0, len(files))
+	ms := make([]step.FactForLLM, 0, len(files))
 	for _, f := range files {
-		ms = append(ms, factForLLM{File: f})
+		ms = append(ms, step.FactForLLM{File: f})
 	}
 	return enumeratedMotif{
 		BridgeSeedSet: BridgeSeedSet{Token: token, Kind: BridgeMotif, Q: q, Members: ms},
@@ -780,7 +782,7 @@ func TestRankAndCap_SuppressionPrecedesTheBudget(t *testing.T) {
 // two-thirds mutually dissimilar — far-lane material by any reading of §4 — and
 // it used to vanish with no trace. It still vanishes; now it is counted.
 func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/one.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/two.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/three.md", Motifs: []string{"shared-shape"}, Entities: []string{"Gamma"}},
@@ -793,7 +795,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 	cfg := motifQualityConfig() // CohFloor 0.5
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 1, health.Candidates, "precondition: the group enumerated")
@@ -820,7 +822,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 	// Group A: three members, one edge => density 0.33, under the floor.
 	// Group B: four mutually adjacent members => cohesion 1.0, over the cap.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/one.md", Motifs: []string{"sparse-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/two.md", Motifs: []string{"sparse-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/three.md", Motifs: []string{"sparse-shape"}, Entities: []string{"Gamma"}},
@@ -848,7 +850,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 	cfg.MaxMembers = 3 // group B has four
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Candidates, "precondition: both groups enumerated")
@@ -871,7 +873,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 	// Four members, ZERO similarity edges => density 0 => far lane. Each in its
 	// own community, so separation cannot be the cause. Cap at three.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/one.md", Motifs: []string{"wide-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/two.md", Motifs: []string{"wide-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/three.md", Motifs: []string{"wide-shape"}, Entities: []string{"Gamma"}},
@@ -889,7 +891,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 	cfg.MaxMembers = 3
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 1, health.Candidates, "precondition: the group enumerated")
@@ -912,7 +914,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 	// Group A: four members, no edges => far, over a cap of three.
 	// Group B: two members, no edges => far, within the cap, but the quality
 	// floor is set above anything it can score.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/one.md", Motifs: []string{"wide-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/two.md", Motifs: []string{"wide-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/three.md", Motifs: []string{"wide-shape"}, Entities: []string{"Gamma"}},
@@ -937,7 +939,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 	require.NotEqual(t, 4, 2, "group sizes straddle the cap")
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Candidates, "precondition: both groups enumerated")
@@ -962,11 +964,11 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 	seeds, clusters, labels, idx, cfg := laneMixtureFixture(t)
 
 	rows, rowHealth, err := scoreMotifCandidates(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
 	near, far, buildHealth, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	// buildMotifBridges' health carries ONE field the rows' does not:
 	// FamilySuppressedByExact, which only exists once suppression has run. Set
@@ -989,7 +991,7 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 			wantFar = append(wantFar, c)
 		}
 	}
-	nb, fb := motifSubBudget(EffortHigh)
+	nb, fb := motifSubBudget(step.EffortHigh)
 	gotNearPre, nearSup := rankAndCap(wantNear, nb)
 	gotFarPre, farSup := rankAndCap(wantFar, fb)
 	rowHealth.FamilySuppressedByExact = nearSup + farSup
@@ -1020,7 +1022,7 @@ func TestScoreMotifCandidates_CarryDroppedCandidatesWithTheirCause(t *testing.T)
 	seeds, clusters, labels, idx, cfg := laneMixtureFixture(t)
 
 	rows, health, err := scoreMotifCandidates(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
 	byCause := map[motifDropCause]int{}
@@ -1051,12 +1053,12 @@ func TestScoreMotifCandidates_CarryDroppedCandidatesWithTheirCause(t *testing.T)
 // cap. Deliberately non-degenerate (lesson 5) — the four groups differ in the
 // properties the attribution turns on, and the test asserts that as a
 // precondition rather than trusting the construction.
-func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, index.SubjectLabelDF, *index.Facade, QualityConfig) {
+func laneMixtureFixture(t *testing.T) ([]step.FactForLLM, ClusterResult, index.SubjectLabelDF, *index.Facade, QualityConfig) {
 	t.Helper()
-	mk := func(file, motif, entity string) factForLLM {
-		return factForLLM{File: file, Motifs: []string{motif}, Entities: []string{entity}}
+	mk := func(file, motif, entity string) step.FactForLLM {
+		return step.FactForLLM{File: file, Motifs: []string{motif}, Entities: []string{entity}}
 	}
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		// tight-shape: two members, one edge => cohesion 1.0 => near, survives.
 		mk("kb/a/1.md", "tight-shape", "Alpha"), mk("kb/b/2.md", "tight-shape", "Beta"),
 		// dense-shape: THREE members, all three pairs edged => cohesion 1.0 =>
@@ -1100,7 +1102,7 @@ func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, index.Subjec
 // find that out — the same property that keeps MN5's vacuous pass vacuous.
 func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T) {
 	// Two recurring clusters. The floor is three.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"first-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"first-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/3.md", Motifs: []string{"second-shape"}, Entities: []string{"Gamma"}},
@@ -1110,7 +1112,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 	idx, reads := countedMotifIdx(t, seeds, nil)
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Activation.DF2Clusters, "precondition: below the floor of 3")
@@ -1128,7 +1130,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 // At the floor it enumerates normally. The two tests differ by ONE cluster, so
 // the assertion is about the floor rather than about the fixtures.
 func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"first-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"first-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/3.md", Motifs: []string{"second-shape"}, Entities: []string{"Gamma"}},
@@ -1140,7 +1142,7 @@ func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) 
 	idx := motifIdx(t, seeds, nil)
 
 	_, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, motifActivationFloor, health.Activation.DF2Clusters,
@@ -1153,9 +1155,9 @@ func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) 
 // The floor counts RECURRING clusters, not motifed facts: a corpus can carry
 // plenty of motifs and still have nothing that repeats.
 func TestMotifActive_CountsRecurrenceNotVolume(t *testing.T) {
-	var hapax []factForLLM
+	var hapax []step.FactForLLM
 	for i := range 40 {
-		hapax = append(hapax, factForLLM{
+		hapax = append(hapax, step.FactForLLM{
 			File:   fmt.Sprintf("kb/h/%d.md", i),
 			Motifs: []string{fmt.Sprintf("unique-shape-%d", i)},
 		})
@@ -1175,7 +1177,7 @@ func TestSeedRecurrence_TwoSpellingsOnOneFactAreOneCarrier(t *testing.T) {
 		}
 		return m
 	}
-	seeds := []factForLLM{{File: "kb/a/1.md", Motifs: []string{"silent-drop", "drops-silently"}}}
+	seeds := []step.FactForLLM{{File: "kb/a/1.md", Motifs: []string{"silent-drop", "drops-silently"}}}
 
 	clusters, pairs := seedRecurrence(seeds, resolve)
 	require.Zero(t, clusters, "one fact cannot make a motif recur")
@@ -1184,7 +1186,7 @@ func TestSeedRecurrence_TwoSpellingsOnOneFactAreOneCarrier(t *testing.T) {
 
 // oneCommunityEach puts every seed in its own community and gives every entity
 // a df that clears the disjointness gate.
-func oneCommunityEach(seeds []factForLLM) (ClusterResult, index.SubjectLabelDF) {
+func oneCommunityEach(seeds []step.FactForLLM) (ClusterResult, index.SubjectLabelDF) {
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
@@ -1204,8 +1206,8 @@ func oneCommunityEach(seeds []factForLLM) (ClusterResult, index.SubjectLabelDF) 
 // counted over the seed pool BEFORE any gate, so these move the activation
 // count and leave every candidate assertion untouched. A filler that enumerated
 // would silently change the numbers the calling test is about.
-func activationFillers() []factForLLM {
-	return []factForLLM{
+func activationFillers() []step.FactForLLM {
+	return []step.FactForLLM{
 		{File: "kb/fill/a1.md", Motifs: []string{"filler-shape-one"}, Entities: []string{"FillerAlpha"}},
 		{File: "kb/fill/a2.md", Motifs: []string{"filler-shape-one"}, Entities: []string{"FillerAlpha"}},
 		{File: "kb/fill/b1.md", Motifs: []string{"filler-shape-two"}, Entities: []string{"FillerBeta"}},
@@ -1216,7 +1218,7 @@ func activationFillers() []factForLLM {
 // ── P3: §8's novelty signals ──────────────────────────────────────────────
 
 func TestNoveltyOf_VectorsReadDistinguishesUnknownFromZero(t *testing.T) {
-	members := []factForLLM{{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}
+	members := []step.FactForLLM{{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}
 	paths := []string{"kb/a/1.md", "kb/b/2.md"}
 
 	// No provider at all: SeedCos and OverDedup are UNKNOWN, and the flag is
@@ -1234,7 +1236,7 @@ func TestNoveltyOf_VectorsReadDistinguishesUnknownFromZero(t *testing.T) {
 }
 
 func TestNoveltyOf_OverDedupIsAFractionOfPairs(t *testing.T) {
-	members := []factForLLM{{File: "a"}, {File: "b"}, {File: "c"}}
+	members := []step.FactForLLM{{File: "a"}, {File: "b"}, {File: "c"}}
 	paths := []string{"a", "b", "c"}
 	// Three pairs; one of them at/above the threshold.
 	pc := func(context.Context, []string) ([]float64, error) {
@@ -1249,18 +1251,18 @@ func TestNoveltyOf_OverDedupIsAFractionOfPairs(t *testing.T) {
 }
 
 func TestMeanEntityJaccard_DisjointAndOverlapping(t *testing.T) {
-	disjoint := []factForLLM{
+	disjoint := []step.FactForLLM{
 		{Entities: []string{"Redis"}}, {Entities: []string{"SWIFT"}}}
 	require.Zero(t, meanEntityJaccard(disjoint))
 
-	overlap := []factForLLM{
+	overlap := []step.FactForLLM{
 		{Entities: []string{"Redis", "Kafka"}}, {Entities: []string{"Redis"}}}
 	require.InDelta(t, 0.5, meanEntityJaccard(overlap), 1e-9, "one shared of two distinct")
 
 	// Two facts naming NOTHING are an absence of evidence about their subjects,
 	// not perfect disjointness. Scoring them 1.0 would reward a corpus for
 	// being unlabelled.
-	require.Zero(t, meanEntityJaccard([]factForLLM{{}, {}}))
+	require.Zero(t, meanEntityJaccard([]step.FactForLLM{{}, {}}))
 }
 
 // H-2. seedRecurrence excludes discovered-origin facts, matching the §7
@@ -1277,7 +1279,7 @@ func TestMeanEntityJaccard_DisjointAndOverlapping(t *testing.T) {
 // session. It is also self-amplifying — the corpus activating on its own
 // discovery output is cf455b8f's idempotency concern one layer out.
 func TestSeedRecurrence_DoesNotCountDiscoveredFacts(t *testing.T) {
-	authored := []factForLLM{
+	authored := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"first-shape"}},
 		{File: "kb/b/2.md", Motifs: []string{"first-shape"}},
 		{File: "kb/c/3.md", Motifs: []string{"second-shape"}},
@@ -1286,7 +1288,7 @@ func TestSeedRecurrence_DoesNotCountDiscoveredFacts(t *testing.T) {
 	// The case no lab corpus holds: a DISCOVERED fact carrying motifs. MN11 puts
 	// `motifs` on discover's output schema, so this is reachable the moment
 	// discovery answers an item.
-	discovered := []factForLLM{
+	discovered := []step.FactForLLM{
 		{File: "kb/e/5.md", Motifs: []string{"third-shape"}, Origin: string(fact.Discovered)},
 		{File: "kb/f/6.md", Motifs: []string{"third-shape"}, Origin: string(fact.Discovered)},
 	}
@@ -1295,7 +1297,7 @@ func TestSeedRecurrence_DoesNotCountDiscoveredFacts(t *testing.T) {
 	require.Equal(t, 2, base, "precondition: two recurring clusters from authored facts")
 	require.Equal(t, 2, basePairs)
 
-	withDiscovered, pairs := seedRecurrence(append(append([]factForLLM{}, authored...), discovered...),
+	withDiscovered, pairs := seedRecurrence(append(append([]step.FactForLLM{}, authored...), discovered...),
 		identityResolver)
 	require.Equal(t, base, withDiscovered,
 		"a discovered fact's motifs must not count toward recurrence — enumeration cannot see them, "+
@@ -1310,7 +1312,7 @@ func TestSeedRecurrence_DoesNotCountDiscoveredFacts(t *testing.T) {
 // because "the axis switched on and found nothing" is the failure, and that is
 // visible only where activation meets enumeration (lesson 8).
 func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"first-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"first-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/3.md", Motifs: []string{"second-shape"}, Entities: []string{"Gamma"}},
@@ -1323,7 +1325,7 @@ func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing
 	clusters, labels := oneCommunityEach(seeds)
 
 	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main", seeds,
-		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+		clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Activation.DF2Clusters,
@@ -1399,7 +1401,7 @@ func TestScoreMotifCandidate_UnembeddedFarGroupDoesNotOutrankAnEmbeddedOne(t *te
 func TestBuildMotifBridgesWithRows_KeptEqualsServedPlusBudgetDropped(t *testing.T) {
 	// A fixture with a real cross-tier suppression in it: the verbatim pair and
 	// the family that contains it, plus filler to clear the activation floor.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"own-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"own-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/3.md", Motifs: []string{"own-shape", "invents-shape"}, Entities: []string{"Gamma"}},
@@ -1409,7 +1411,7 @@ func TestBuildMotifBridgesWithRows_KeptEqualsServedPlusBudgetDropped(t *testing.
 	clusters, labels := oneCommunityEach(seeds)
 
 	near, far, rows, health, err := buildMotifBridgesWithRows(context.Background(),
-		motifIdx(t, seeds, nil), "main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		motifIdx(t, seeds, nil), "main", seeds, clusters, step.EffortHigh, motifQualityConfig(),
 		identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	require.True(t, health.Activation.Active, "precondition: the axis ran")
@@ -1435,7 +1437,7 @@ func TestBuildMotifBridgesWithRows_KeptEqualsServedPlusBudgetDropped(t *testing.
 // And the state that had no cause at all: a suppressed candidate must say so.
 func TestBuildMotifBridgesWithRows_SuppressionReportsIntoTheRow(t *testing.T) {
 	// Verbatim {1,2}; a same-tier superset {1,2,3} that swallows it.
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"small-shape", "big-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"small-shape", "big-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/3.md", Motifs: []string{"big-shape"}, Entities: []string{"Gamma"}},
@@ -1444,7 +1446,7 @@ func TestBuildMotifBridgesWithRows_SuppressionReportsIntoTheRow(t *testing.T) {
 	clusters, labels := oneCommunityEach(seeds)
 
 	_, _, rows, _, err := buildMotifBridgesWithRows(context.Background(),
-		motifIdx(t, seeds, nil), "main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		motifIdx(t, seeds, nil), "main", seeds, clusters, step.EffortHigh, motifQualityConfig(),
 		identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
@@ -1466,7 +1468,7 @@ func TestBuildMotifBridgesWithRows_SuppressionReportsIntoTheRow(t *testing.T) {
 // report 0.000 for a pair genuinely above its corpus's own gate — breaking the
 // one direction OverDedup's doc promises is safe.
 func TestNoveltyOf_UnknownDedupThresholdIsNotADefault(t *testing.T) {
-	members := []factForLLM{{File: "a"}, {File: "b"}}
+	members := []step.FactForLLM{{File: "a"}, {File: "b"}}
 	paths := []string{"a", "b"}
 	// A pair at 0.85: above embeddinggemma's 0.82, below the 0.92 default.
 	pc := func(context.Context, []string) ([]float64, error) { return []float64{0.85}, nil }
@@ -1532,14 +1534,14 @@ func TestScoreMotifCandidate_DedupThresholdRidesTheConfig(t *testing.T) {
 // recurring motif(s) … too little repeated vocabulary", sending an operator to
 // look at a vocabulary when the truth is that backfill has never run.
 func TestBuildMotifBridges_MotifFreeCorpusIsNotEvaluatedAtAll(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Entities: []string{"Beta"}},
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
 	near, far, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
-		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+		seeds, clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Empty(t, near)
@@ -1557,14 +1559,14 @@ func TestBuildMotifBridges_MotifFreeCorpusIsNotEvaluatedAtAll(t *testing.T) {
 // The complement, so the pair covers both directions: a corpus that DOES carry
 // motifs and falls below the floor must say so.
 func TestBuildMotifBridges_BelowFloorCorpusIsEvaluatedAndSpeaks(t *testing.T) {
-	seeds := []factForLLM{
+	seeds := []step.FactForLLM{
 		{File: "kb/a/1.md", Motifs: []string{"lone-shape"}, Entities: []string{"Alpha"}},
 		{File: "kb/b/2.md", Motifs: []string{"lone-shape"}, Entities: []string{"Beta"}},
 	}
 	clusters, labels := oneCommunityEach(seeds)
 
 	_, _, health, err := buildMotifBridges(context.Background(), motifIdx(t, seeds, nil), "main",
-		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+		seeds, clusters, step.EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.True(t, health.Activation.Evaluated, "this corpus WAS asked")
@@ -1579,7 +1581,7 @@ func TestBuildMotifBridges_BelowFloorCorpusIsEvaluatedAndSpeaks(t *testing.T) {
 // vanish-rate population (Kept && !Served) by construction.
 func TestScoredMotifBridgeOf_CarriesTheRowsOwnDisposition(t *testing.T) {
 	cand := enumeratedMotif{
-		BridgeSeedSet: BridgeSeedSet{Token: "shape", Members: []factForLLM{
+		BridgeSeedSet: BridgeSeedSet{Token: "shape", Members: []step.FactForLLM{
 			{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}},
 		family: true,
 	}

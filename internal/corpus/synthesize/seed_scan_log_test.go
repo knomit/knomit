@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 )
 
@@ -64,7 +65,7 @@ func TestSeedScanLogLine_CarriesScopedPathAndWatermark(t *testing.T) {
 		head, err := svc.HeadCommit(ctx, branch)
 		require.NoError(t, err)
 		require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
-		r.p.scope = ScopeFilter{Domain: []string{"technology"}}
+		r.p.scope = step.ScopeFilter{Domain: []string{"technology"}}
 
 		line := captureSeedScanLine(t, func() { _, _ = r.StartSession(ctx) })
 

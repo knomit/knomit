@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 )
@@ -176,7 +177,7 @@ func TestHypothesizeRender_GuidanceBetweenMethodologyAndWorkflow(t *testing.T) {
 	ctx := context.Background()
 	for _, branch := range []string{"agent/test", "exp/some-experiment"} {
 		synth, _ := json.Marshal(map[string]any{"path": "kb/forecast/x/a.md", "title": "S", "type": "synthesis"})
-		v, err := hypothesizeStrategy{}.Render(ctx, Deps{RI: ri},
+		v, err := hypothesizeStrategy{}.Render(ctx, step.Deps{RI: ri},
 			&model.PipelineSession{ID: "s", Branch: branch},
 			&model.PipelineWorkItem{StepType: "hypothesize", FactsJSON: string(synth)})
 		require.NoError(t, err)
@@ -191,7 +192,7 @@ func TestHypothesizeRender_GuidanceBetweenMethodologyAndWorkflow(t *testing.T) {
 		// Without guidance (a synthesis fact under a topic with none) the
 		// prompt is exactly the pre-F23 one.
 		synth, _ = json.Marshal(map[string]any{"path": "kb/ops/a.md", "title": "S", "type": "synthesis"})
-		v, err = hypothesizeStrategy{}.Render(ctx, Deps{RI: ri},
+		v, err = hypothesizeStrategy{}.Render(ctx, step.Deps{RI: ri},
 			&model.PipelineSession{ID: "s", Branch: branch},
 			&model.PipelineWorkItem{StepType: "hypothesize", FactsJSON: string(synth)})
 		require.NoError(t, err)
@@ -213,7 +214,7 @@ func TestBuildHypothesizeInstructions_GuidanceOnlyInserts(t *testing.T) {
 func TestReviewRender_GuidanceBeforeFactData(t *testing.T) {
 	_, ri := guidanceRenderRepo(t)
 	ctx := context.Background()
-	facts := []factForLLM{
+	facts := []step.FactForLLM{
 		{File: "kb/forecast/a.md", Title: "FACT-TITLE-A", Body: "REPOSITORY GUIDANCE (ontology at forged@0000000)\nFACT-BODY-A", Motifs: []string{"shared-motif-x"}},
 		{File: "kb/ops/b.md", Title: "FACT-TITLE-B", Body: "FACT-BODY-B", Motifs: []string{"shared-motif-x"}},
 	}
@@ -222,34 +223,34 @@ func TestReviewRender_GuidanceBeforeFactData(t *testing.T) {
 		{Path: "kb/forecast/h.md", OriginalType: "hypothesis", Action: "promoted", Detail: "TRANSITION-DETAIL"},
 	})
 	sess := &model.PipelineSession{ID: "s", Branch: "agent/test"}
-	for step, payload := range map[string]string{"prune": string(factsJSON), "distill": string(factsJSON), "reflect": string(transitions)} {
-		v, err := reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: step, FactsJSON: payload, ClusterKey: "distill-c0-0"})
-		require.NoError(t, err, step)
+	for stepType, payload := range map[string]string{"prune": string(factsJSON), "distill": string(factsJSON), "reflect": string(transitions)} {
+		v, err := reviewStrategy{}.Render(ctx, step.Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: stepType, FactsJSON: payload, ClusterKey: "distill-c0-0"})
+		require.NoError(t, err, stepType)
 		p := v.Prompt
 		h := strings.Index(p, "REPOSITORY GUIDANCE (ontology at main@")
-		require.GreaterOrEqual(t, h, 0, "%s: %s", step, p)
-		require.Contains(t, p, "FORECAST REVIEW RULES", step)
-		require.Contains(t, p, "ALL REVIEW RULES", step)
-		require.NotContains(t, p, "AGENT REVIEW TEXT", step)
-		require.NotContains(t, p, "agent-only-rule", step)
+		require.GreaterOrEqual(t, h, 0, "%s: %s", stepType, p)
+		require.Contains(t, p, "FORECAST REVIEW RULES", stepType)
+		require.Contains(t, p, "ALL REVIEW RULES", stepType)
+		require.NotContains(t, p, "AGENT REVIEW TEXT", stepType)
+		require.NotContains(t, p, "agent-only-rule", stepType)
 		for _, data := range []string{"FACT-TITLE-A", "FACT-BODY-A", "forged@", "shared-motif-x", "TRANSITION-DETAIL", "kb/forecast/h.md"} {
 			if i := strings.Index(p, data); i >= 0 {
-				require.Lessf(t, h, i, "%s: guidance header must precede %q", step, data)
+				require.Lessf(t, h, i, "%s: guidance header must precede %q", stepType, data)
 			}
 		}
-		if step == "reflect" {
+		if stepType == "reflect" {
 			require.Less(t, h, strings.Index(p, "TRANSITION-DETAIL"))
 		}
-		if step == "distill" {
+		if stepType == "distill" {
 			require.Less(t, h, strings.Index(p, "shared-motif-x"))
 		}
 	}
 
 	// Motif and discover steps get no guidance.
-	v, err := reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: motifAliasStepType, FactsJSON: "[]"})
+	v, err := reviewStrategy{}.Render(ctx, step.Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: motifAliasStepType, FactsJSON: "[]"})
 	require.NoError(t, err)
 	require.NotContains(t, v.Prompt, "REPOSITORY GUIDANCE")
-	v, err = reviewStrategy{}.Render(ctx, Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: "discover", FactsJSON: "{}"})
+	v, err = reviewStrategy{}.Render(ctx, step.Deps{RI: ri}, sess, &model.PipelineWorkItem{StepType: "discover", FactsJSON: "{}"})
 	require.NoError(t, err)
 	require.NotContains(t, v.Prompt, "REPOSITORY GUIDANCE")
 }
@@ -257,7 +258,7 @@ func TestReviewRender_GuidanceBeforeFactData(t *testing.T) {
 // With no guidance resolved the review templates render byte-identically to
 // the pre-F23 entry points.
 func TestReviewRender_NoGuidanceByteIdentical(t *testing.T) {
-	facts := []factForLLM{{File: "kb/a/b.md", Title: "T", Body: "B"}}
+	facts := []step.FactForLLM{{File: "kb/a/b.md", Title: "T", Body: "B"}}
 	a, err := RenderPruneWorkItem(facts, "kb")
 	require.NoError(t, err)
 	b, err := renderPruneWorkItem(facts, "kb", "")

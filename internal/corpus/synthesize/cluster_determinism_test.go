@@ -3,6 +3,8 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/step"
 	"slices"
 	"testing"
 
@@ -64,12 +66,12 @@ func capturePathOrder(t *testing.T) []string {
 	t.Helper()
 	branch := "agent/x"
 
-	seeds := make([]factForLLM, 0, determinismSeedCount)
+	seeds := make([]step.FactForLLM, 0, determinismSeedCount)
 	for i := range determinismSeedCount {
 		// Names deliberately NOT in insertion order alphabetically, so a test
 		// that passes cannot be passing because the map happened to be walked
 		// in the order the slice was built.
-		seeds = append(seeds, factForLLM{
+		seeds = append(seeds, step.FactForLLM{
 			File:  fmt.Sprintf("kb/%02d-%c.md", determinismSeedCount-i, 'a'+rune(i%26)),
 			Title: fmt.Sprintf("fact %d", i),
 		})
@@ -77,17 +79,17 @@ func capturePathOrder(t *testing.T) []string {
 
 	// No seeded facts or edges: the neighbour searches find nothing, and the
 	// edge read only has to report the node list it was handed.
-	env := newGraphEnv(t, branch)
-	idx := env.allow("Search", "SubgraphEdges").idx()
+	env := synthtest.NewGraphEnv(t, branch)
+	idx := env.Allow("Search", "SubgraphEdges").Idx()
 	var captured []string
 	calls := 0
-	overridesOf(t, idx).subgraphEdges(func(_ context.Context, paths []string) ([][2]string, error) {
+	synthtest.OverridesOf(t, idx).SubgraphEdges(func(_ context.Context, paths []string) ([][2]string, error) {
 		calls++
 		captured = append([]string(nil), paths...)
 		return nil, nil
 	})
 
-	_, err := ScopedCluster(context.Background(), seeds, idx, 1.0, 2, testNeighborKinds, nil, branch)
+	_, err := ScopedCluster(context.Background(), seeds, idx, 1.0, 2, synthtest.DefaultNeighborKinds, nil, branch)
 	require.NoError(t, err)
 	require.Equal(t, 1, calls, "the edge read happens once")
 	require.NotEmpty(t, captured, "SubgraphEdges must have been called with the node list")

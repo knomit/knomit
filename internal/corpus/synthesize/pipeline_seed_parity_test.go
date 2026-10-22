@@ -2,10 +2,12 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"reflect"
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
@@ -29,7 +31,7 @@ import (
 // to run one path passes.
 func TestSeedScanPaths_ProduceTheSameFact(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	const path = "kb/gotchas/uitesting/agentclicks.md"
 	f := fact.NewFact(path)
@@ -48,17 +50,17 @@ func TestSeedScanPaths_ProduceTheSameFact(t *testing.T) {
 	f.Refs = []string{"kb/gotchas/uitesting/other.md"}
 	content, err := fact.SerializeFact(f)
 	require.NoError(t, err)
-	_, err = env.svc.Facts().WriteFact(ctx, env.branch, path, content, "write", "test")
+	_, err = env.Svc.Facts().WriteFact(ctx, env.Branch, path, content, "write", "test")
 	require.NoError(t, err)
 
 	// Path 1 — the full scan's projection of a search hit.
-	results, err := env.svc.Search().Search(ctx, env.branch, index.SearchOptions{Limit: 100})
+	results, err := env.Svc.Search().Search(ctx, env.Branch, index.SearchOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	fromSearch := factFromSearchResult(results[0])
+	fromSearch := step.FactFromSearchResult(results[0])
 
 	// Path 2 — the incremental scan's parse of the same bytes.
-	read, err := env.svc.Facts().ReadFact(ctx, env.branch, path, nil)
+	read, err := env.Svc.Facts().ReadFact(ctx, env.Branch, path, nil)
 	require.NoError(t, err)
 	fromParse, err := fact.ParseFact(path, read.Content)
 	require.NoError(t, err)

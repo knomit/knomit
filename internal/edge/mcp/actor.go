@@ -2,14 +2,13 @@ package mcp
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/step"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-
-	"knomit/internal/corpus/synthesize"
 )
 
 // actorMaxLen caps each component of the composed handle.
@@ -97,5 +96,5 @@ func sanitizeActorPart(s string) string {
 // bind onto the session row. Called by the two handlers that open pipeline
 // sessions (knomit_review and knomit_hypothesize); both drive the same engine.
 func withActor(ctx context.Context, req mcpgo.CallToolRequest) context.Context {
-	return synthesize.WithActor(ctx, actorFromRequest(ctx, req))
+	return step.WithActor(ctx, actorFromRequest(ctx, req))
 }

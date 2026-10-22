@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store"
 )
 
@@ -118,7 +119,7 @@ func TestDistillDeclineHealth_StoreErrorSaysUnavailable(t *testing.T) {
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	deps := Deps{Pipeline: svc.Pipeline()}
+	deps := step.Deps{Pipeline: svc.Pipeline()}
 
 	open := distillDeclineHealth(context.Background(), deps, "any-session")
 	require.NotContains(t, open, "unavailable", "control: an open session database must read cleanly")

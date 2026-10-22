@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/vocab"
@@ -24,28 +26,28 @@ import (
 // TestEnsureTitleVectors_StopsAtTheLatencyBudget for that half.
 func TestEnsureTitleVectors_WatermarkIncremental(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 3)
+	env := synthtest.NewRestatementEnv(t, 3)
 
-	have, total, err := ensureTitleVectors(ctx, env.deps(), env.branch, titleBackfillBudget)
+	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Equal(t, 3, have)
 	require.Equal(t, 3, total, "coverage completes in one session at this size")
-	require.Equal(t, int64(3), env.emb.titles.Load())
+	require.Equal(t, int64(3), env.Emb.Titles.Load())
 
-	env.emb.titles.Store(0)
-	have, _, err = ensureTitleVectors(ctx, env.deps(), env.branch, titleBackfillBudget)
+	env.Emb.Titles.Store(0)
+	have, _, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Equal(t, 3, have)
-	require.Equal(t, int64(0), env.emb.titles.Load(), "unchanged corpus embeds ZERO titles")
+	require.Equal(t, int64(0), env.Emb.Titles.Load(), "unchanged corpus embeds ZERO titles")
 
-	env.writeFact("kb/f1.md", "F1 revised", "body-1-v2")
+	env.WriteFact("kb/f1.md", "F1 revised", "body-1-v2")
 
-	env.emb.titles.Store(0)
-	have, total, err = ensureTitleVectors(ctx, env.deps(), env.branch, titleBackfillBudget)
+	env.Emb.Titles.Store(0)
+	have, total, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Equal(t, 3, have)
 	require.Equal(t, 3, total)
-	require.Equal(t, int64(1), env.emb.titles.Load(), "one edited fact embeds exactly one title")
+	require.Equal(t, int64(1), env.Emb.Titles.Load(), "one edited fact embeds exactly one title")
 }
 
 // TestEnsureTitleVectors_UsesTheShortStringTemplate — MN9's guard on this side
@@ -53,18 +55,18 @@ func TestEnsureTitleVectors_WatermarkIncremental(t *testing.T) {
 // them through a rendering nothing in the motif work was calibrated under.
 func TestEnsureTitleVectors_UsesTheShortStringTemplate(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 2)
+	env := synthtest.NewRestatementEnv(t, 2)
 
 	// Writing the facts embeds their bodies through the document path, which is
 	// the write path's business — snapshot that counter so this test speaks
 	// only about what the BACKFILL does.
-	docsBefore := env.emb.documentCalls.Load()
+	docsBefore := env.Emb.DocumentCalls.Load()
 
-	_, _, err := ensureTitleVectors(ctx, env.deps(), env.branch, titleBackfillBudget)
+	_, _, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 
-	require.Positive(t, env.emb.shortStringCalls.Load(), "titles embed as short strings")
-	require.Equal(t, docsBefore, env.emb.documentCalls.Load(),
+	require.Positive(t, env.Emb.ShortStringCalls.Load(), "titles embed as short strings")
+	require.Equal(t, docsBefore, env.Emb.DocumentCalls.Load(),
 		"the backfill never embeds a title through the document path")
 }
 
@@ -73,17 +75,17 @@ func TestEnsureTitleVectors_UsesTheShortStringTemplate(t *testing.T) {
 // axis reads as "nothing to find".
 func TestEnsureTitleVectors_StopsAtTheLatencyBudget(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 200)
-	env.emb.perBatchDelay = 20 * time.Millisecond
+	env := synthtest.NewRestatementEnv(t, 200)
+	env.Emb.PerBatchDelay = 20 * time.Millisecond
 
-	have, total, err := ensureTitleVectors(ctx, env.deps(), env.branch, 50*time.Millisecond)
+	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, 50*time.Millisecond)
 	require.NoError(t, err)
 	require.Greater(t, have, 0, "it makes progress")
 	require.Less(t, have, total, "and stops before coverage completes")
 
 	// Coverage completes over subsequent sessions rather than being abandoned.
 	for range 20 {
-		have, total, err = ensureTitleVectors(ctx, env.deps(), env.branch, 50*time.Millisecond)
+		have, total, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, 50*time.Millisecond)
 		require.NoError(t, err)
 		if have == total {
 			break
@@ -105,9 +107,9 @@ func TestEnsureTitleVectors_StopsAtTheLatencyBudget(t *testing.T) {
 // timing.
 func TestEnsureTitleVectors_ExpiredBudgetReturnsPartialCoverageWithoutError(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, titleBackfillBatch+10)
+	env := synthtest.NewRestatementEnv(t, titleBackfillBatch+10)
 
-	have, total, err := ensureTitleVectors(ctx, env.deps(), env.branch, 0)
+	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, 0)
 	require.NoError(t, err, "an expired budget is not an error")
 	require.Equal(t, titleBackfillBatch+10, total)
 	require.Less(t, have, total, "coverage is reported as it stood, partial")
@@ -117,9 +119,9 @@ func TestEnsureTitleVectors_ExpiredBudgetReturnsPartialCoverageWithoutError(t *t
 // without an embedder; the axis stays empty and nothing errors.
 func TestEnsureTitleVectors_NoEmbedderIsANoOp(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnvWithoutEmbedder(t, 2)
+	env := synthtest.NewRestatementEnvWithoutEmbedder(t, 2)
 
-	have, total, err := ensureTitleVectors(ctx, env.deps(), env.branch, titleBackfillBudget)
+	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Zero(t, have)
 	require.Zero(t, total)
@@ -131,31 +133,31 @@ func TestEnsureTitleVectors_NoEmbedderIsANoOp(t *testing.T) {
 // corpus's.
 func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 40)
-	d := env.deps()
+	env := synthtest.NewRestatementEnv(t, 40)
+	d := env.Deps()
 	// time.Hour, not titleBackfillBudget: 40 facts is two batches, and a stall
 	// must not cut coverage short (see seedShortlist, knomit#298).
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, time.Hour)
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, time.Hour)
 	require.NoError(t, err)
 
-	refresh, err := refreshRestatementShortlist(ctx, d, env.branch)
+	refresh, err := refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.Equal(t, 40, refresh.NeighbourQueries, "first refresh seeds every fact")
 
-	stats, err := env.svc.Abstraction().RestatementPairStats(ctx, env.branch)
+	stats, err := env.Svc.Abstraction().RestatementPairStats(ctx, env.Branch)
 	require.NoError(t, err)
 	require.Positive(t, stats.Count, "the cache is populated")
 
-	refresh, err = refreshRestatementShortlist(ctx, d, env.branch)
+	refresh, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.Zero(t, refresh.NeighbourQueries, "unchanged corpus does no work")
 
-	env.writeFact("kb/f7.md", "F7 revised", "body-7-v2")
+	env.WriteFact("kb/f7.md", "F7 revised", "body-7-v2")
 	// Same reason as above (see seedShortlist, knomit#298).
-	_, _, err = ensureTitleVectors(ctx, d, env.branch, time.Hour)
+	_, _, err = ensureTitleVectors(ctx, d, env.Branch, time.Hour)
 	require.NoError(t, err)
 
-	refresh, err = refreshRestatementShortlist(ctx, d, env.branch)
+	refresh, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.LessOrEqual(t, refresh.NeighbourQueries, 1+pairNeighbourK,
 		"one edited fact costs its own lookup plus at most its partners'")
@@ -166,19 +168,19 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 // that no longer exists would be offered to the judge and fail to resolve.
 func TestRefreshShortlist_DropsPairsOfDepartedFacts(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 6)
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	env := synthtest.NewRestatementEnv(t, 6)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
-	require.NoError(t, err)
-
-	_, err = env.svc.Facts().DeleteFact(ctx, env.branch, "kb/f3.md", "retract f3")
-	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
-	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 1000)
+	_, err = env.Svc.Facts().DeleteFact(ctx, env.Branch, "kb/f3.md", "retract f3")
+	require.NoError(t, err)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	require.NoError(t, err)
+
+	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 1000)
 	require.NoError(t, err)
 	for _, p := range pairs {
 		require.NotEqual(t, "kb/f3.md", p.APath)
@@ -200,29 +202,29 @@ func TestRefreshShortlist_DropsPairsOfDepartedFacts(t *testing.T) {
 // but is never enqueued.
 func TestRefreshShortlist_KeepsPairsAtOrAboveDedup(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Two facts with identical text: identical blended vectors, cosine 1.
-	env.writeFact("kb/twin-a.md", "Twin", "identical body")
-	env.writeFact("kb/twin-b.md", "Twin", "identical body")
+	env.WriteFact("kb/twin-a.md", "Twin", "identical body")
+	env.WriteFact("kb/twin-b.md", "Twin", "identical body")
 	// ...and two whose titles are close while their bodies are not.
-	env.writeFact("kb/near-a.md", "Near", "body one is about a thing")
-	env.writeFact("kb/near-b.md", "Near two", "body two is about something else entirely")
+	env.WriteFact("kb/near-a.md", "Near", "body one is about a thing")
+	env.WriteFact("kb/near-b.md", "Near two", "body two is about something else entirely")
 
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
-	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
+	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100)
 	require.NoError(t, err)
-	require.True(t, containsPair(pairs, "kb/twin-a.md", "kb/twin-b.md"),
+	require.True(t, synthtest.ContainsPair(pairs, "kb/twin-a.md", "kb/twin-b.md"),
 		"a certain duplicate is the shortlist's best candidate, not its waste — "+
 			"no cluster-scoped merge reaches it when its halves cluster apart")
 	// ...and the sub-floor pair still stands, so the assertion above is about
 	// the removed filter rather than about the shortlist keeping everything
 	// indiscriminately.
-	require.True(t, containsPair(pairs, "kb/near-a.md", "kb/near-b.md"),
+	require.True(t, synthtest.ContainsPair(pairs, "kb/near-a.md", "kb/near-b.md"),
 		"a pair below the dedup floor is exactly what the judge should see")
 }
 
@@ -234,17 +236,17 @@ func TestRefreshShortlist_KeepsPairsAtOrAboveDedup(t *testing.T) {
 // and must still be candidates.
 func TestRefreshShortlist_KeepsSimilarToNeighbours(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/adjacent-a.md", "Adjacent restatement", "one body about the mechanism")
-	env.writeFact("kb/adjacent-b.md", "Adjacent restatement", "another body about the same mechanism, worded differently and at greater length so the blended vectors diverge")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/adjacent-a.md", "Adjacent restatement", "one body about the mechanism")
+	env.WriteFact("kb/adjacent-b.md", "Adjacent restatement", "another body about the same mechanism, worded differently and at greater length so the blended vectors diverge")
 
-	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	d := env.Deps()
+	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch)
+	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
-	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
+	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100)
 	require.NoError(t, err)
 	require.Len(t, pairs, 1)
 	require.Equal(t, "kb/adjacent-a.md", pairs[0].APath)
@@ -276,14 +278,14 @@ func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution(t *t
 	// above named the property actually under test. Judged-with-nothing-resolved
 	// is its own state now (knomit#117b); both halves are asserted so the
 	// not-defunded property cannot silently ride on the state name again.
-	_, state = throttleState(keepVerdicts(throttleMinVerdicts - 1))
+	_, state = throttleState(synthtest.KeepVerdicts(throttleMinVerdicts - 1))
 	require.Equal(t, throttleUnproven, state)
 	require.NotEqual(t, throttleDefunded, state, "a couple of keeps must not defund a corpus")
 
-	_, state = throttleState(keepVerdicts(throttleMinVerdicts))
+	_, state = throttleState(synthtest.KeepVerdicts(throttleMinVerdicts))
 	require.Equal(t, throttleDefunded, state, "enough judged, none resolved")
 
-	withResolution := append(keepVerdicts(throttleMinVerdicts), vocab.RestatementVerdict{Resolved: true})
+	withResolution := append(synthtest.KeepVerdicts(throttleMinVerdicts), vocab.RestatementVerdict{Resolved: true})
 	rate, state = throttleState(withResolution)
 	require.Equal(t, throttleFunded, state, "one resolution restores funding")
 	require.Positive(t, rate)
@@ -296,32 +298,32 @@ func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution(t *t
 // change. Recovery has to come from a path the system can actually walk.
 func TestSelect_DefundedCorpusProbesAndRecovers(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 400)
-	d := env.deps()
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 400)
+	d := env.Deps()
+	seedShortlist(env)
 
 	// Decline enough pairs to defund the corpus.
 	for range throttleMinVerdicts {
-		pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+		pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 		require.NoError(t, err)
 		require.NotEmpty(t, pairs)
-		env.recordVerdict(pairs[0].APath, pairs[0].BPath, false)
+		env.RecordVerdict(pairs[0].APath, pairs[0].BPath, false)
 	}
-	pairs, health, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, health, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	require.Empty(t, pairs, "an all-keep history stops the spending")
 	require.Equal(t, throttleDefunded, health.ThrottleState)
 
 	// Quiet sessions while the probe interval elapses.
 	for range throttleProbeInterval - 2 {
-		pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+		pairs, health, err = selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 		require.NoError(t, err)
 		require.Empty(t, pairs)
 		require.False(t, health.Probing)
 	}
 
 	// Then one probe slot, unprompted.
-	pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, health, err = selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	require.Len(t, pairs, 1, "a defunded corpus spends exactly one slot to test its own verdict")
 	require.True(t, health.Probing)
@@ -329,8 +331,8 @@ func TestSelect_DefundedCorpusProbesAndRecovers(t *testing.T) {
 
 	// The probe resolves — and the corpus funds itself again, from evidence it
 	// could only have generated by probing.
-	env.recordVerdict(pairs[0].APath, pairs[0].BPath, true)
-	pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	env.RecordVerdict(pairs[0].APath, pairs[0].BPath, true)
+	pairs, health, err = selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	require.Equal(t, throttleFunded, health.ThrottleState)
 	require.NotEmpty(t, pairs, "funding restored")
@@ -342,20 +344,20 @@ func TestSelect_DefundedCorpusProbesAndRecovers(t *testing.T) {
 // clusters the caller already computed.
 func TestSelect_ExcludesPairsCoGroupedByThisSessionsClusters(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 400)
-	d := env.deps()
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 400)
+	d := env.Deps()
+	seedShortlist(env)
 
-	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	require.NotEmpty(t, pairs)
 	top := pairs[0]
 
 	// Put the top pair in one cluster and it stops being worth a slot.
-	clusters := [][]factForLLM{{{File: top.APath}, {File: top.BPath}}}
-	pairs, _, err = selectRestatementCandidates(ctx, d, env.branch, clusters, 400)
+	clusters := [][]step.FactForLLM{{{File: top.APath}, {File: top.BPath}}}
+	pairs, _, err = selectRestatementCandidates(ctx, d, env.Branch, clusters, 400)
 	require.NoError(t, err)
-	require.False(t, containsPair(pairs, top.APath, top.BPath),
+	require.False(t, synthtest.ContainsPair(pairs, top.APath, top.BPath),
 		"a pair prune already sees in one cluster must not also cost a shortlist slot")
 }
 
@@ -366,26 +368,26 @@ func TestSelect_ExcludesPairsCoGroupedByThisSessionsClusters(t *testing.T) {
 // and nothing new could be offered.
 func TestSelect_DeclinedPairIsRetiredNotJustSkipped(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 400)
-	d := env.deps()
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 400)
+	d := env.Deps()
+	seedShortlist(env)
 
-	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	require.NotEmpty(t, pairs)
 	top := pairs[0]
 
-	env.recordVerdict(top.APath, top.BPath, false)
+	env.RecordVerdict(top.APath, top.BPath, false)
 
-	standing, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 10_000)
+	standing, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 10_000)
 	require.NoError(t, err)
-	require.False(t, containsPair(standing, top.APath, top.BPath),
+	require.False(t, synthtest.ContainsPair(standing, top.APath, top.BPath),
 		"the declined pair is gone from the standing set, not merely skipped")
 
-	pairs, _, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, _, err = selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	require.NotEmpty(t, pairs, "and the slot goes to the next-ranked pair")
-	require.False(t, containsPair(pairs, top.APath, top.BPath))
+	require.False(t, synthtest.ContainsPair(pairs, top.APath, top.BPath))
 }
 
 // TestRefresh_DeclinedPairIsNotReMintedByALaterRescan — retiring the pair is
@@ -393,24 +395,24 @@ func TestSelect_DeclinedPairIsRetiredNotJustSkipped(t *testing.T) {
 // elsewhere) would happily rediscover it, so the verdict log gates minting too.
 func TestRefresh_DeclinedPairIsNotReMintedByALaterRescan(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 400)
-	d := env.deps()
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 400)
+	d := env.Deps()
+	seedShortlist(env)
 
-	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	top := pairs[0]
-	env.recordVerdict(top.APath, top.BPath, false)
+	env.RecordVerdict(top.APath, top.BPath, false)
 
 	// Force both endpoints back through KNN by evicting them from the cache
 	// state — exactly what a partner requeue does.
-	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch,
-		[]int64{env.liveFactIDs()[top.APath], env.liveFactIDs()[top.BPath]}, nil, nil))
-	env.seedShortlist()
+	require.NoError(t, env.Svc.Abstraction().ReplaceRestatementPairs(ctx, env.Branch,
+		[]int64{env.LiveFactIDs()[top.APath], env.LiveFactIDs()[top.BPath]}, nil, nil))
+	seedShortlist(env)
 
-	standing, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 10_000)
+	standing, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 10_000)
 	require.NoError(t, err)
-	require.False(t, containsPair(standing, top.APath, top.BPath),
+	require.False(t, synthtest.ContainsPair(standing, top.APath, top.BPath),
 		"a rescan must not resurrect a pair the judge has already refused")
 }
 
@@ -419,23 +421,23 @@ func TestRefresh_DeclinedPairIsNotReMintedByALaterRescan(t *testing.T) {
 // structurally when either fact changes rather than by any staleness rule.
 func TestSelect_EditingEitherFactReEligibilizesTheDeclinedPair(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 400)
-	d := env.deps()
-	env.seedShortlist()
+	env := synthtest.NewRestatementEnv(t, 400)
+	d := env.Deps()
+	seedShortlist(env)
 
-	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, _, err := selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
 	top := pairs[0]
-	env.recordVerdict(top.APath, top.BPath, false)
+	env.RecordVerdict(top.APath, top.BPath, false)
 
 	// Rewrite one endpoint with the same title (so it stays a candidate pair)
 	// but a different body: new blob, new facts row, new id.
-	env.writeFact(top.APath, env.titleOf(top.APath), "a materially rewritten body for the same claim")
-	env.seedShortlist()
+	env.WriteFact(top.APath, env.TitleOf(top.APath), "a materially rewritten body for the same claim")
+	seedShortlist(env)
 
-	pairs, _, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	pairs, _, err = selectRestatementCandidates(ctx, d, env.Branch, nil, 400)
 	require.NoError(t, err)
-	require.True(t, containsPair(pairs, top.APath, top.BPath),
+	require.True(t, synthtest.ContainsPair(pairs, top.APath, top.BPath),
 		"an edited fact is a new version, and the judge has not seen this one")
 }
 
@@ -444,28 +446,28 @@ func TestSelect_EditingEitherFactReEligibilizesTheDeclinedPair(t *testing.T) {
 // one area does not spend its slots on two facts that are both elsewhere.
 func TestSelect_ScopedSessionEmitsOnlyPairsTouchingScope(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithDomain("kb/auth-a.md", "Token refresh", "one body", "auth")
-	env.writeFactWithDomain("kb/auth-b.md", "Token refresh", "another body entirely, worded differently", "auth")
-	env.writeFactWithDomain("kb/store-a.md", "Row locking", "one body", "store")
-	env.writeFactWithDomain("kb/store-b.md", "Row locking", "another body entirely, worded differently", "store")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithDomain("kb/auth-a.md", "Token refresh", "one body", "auth")
+	env.WriteFactWithDomain("kb/auth-b.md", "Token refresh", "another body entirely, worded differently", "auth")
+	env.WriteFactWithDomain("kb/store-a.md", "Row locking", "one body", "store")
+	env.WriteFactWithDomain("kb/store-b.md", "Row locking", "another body entirely, worded differently", "store")
 
-	d := env.deps()
-	env.seedShortlist()
+	d := env.Deps()
+	seedShortlist(env)
 
 	// Corpus-wide: both pairs stand.
-	all, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
+	all, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100)
 	require.NoError(t, err)
-	require.True(t, containsPair(all, "kb/auth-a.md", "kb/auth-b.md"))
-	require.True(t, containsPair(all, "kb/store-a.md", "kb/store-b.md"))
+	require.True(t, synthtest.ContainsPair(all, "kb/auth-a.md", "kb/auth-b.md"))
+	require.True(t, synthtest.ContainsPair(all, "kb/store-a.md", "kb/store-b.md"))
 
 	// Scoped emission: only the pair touching the scope is offered.
 	scoped := d
-	scoped.Scope = ScopeFilter{Domain: []string{"auth"}}
-	pairs, _, err := selectRestatementCandidates(ctx, scoped, env.branch, nil, 4000)
+	scoped.Scope = step.ScopeFilter{Domain: []string{"auth"}}
+	pairs, _, err := selectRestatementCandidates(ctx, scoped, env.Branch, nil, 4000)
 	require.NoError(t, err)
-	require.True(t, containsPair(pairs, "kb/auth-a.md", "kb/auth-b.md"))
-	require.False(t, containsPair(pairs, "kb/store-a.md", "kb/store-b.md"),
+	require.True(t, synthtest.ContainsPair(pairs, "kb/auth-a.md", "kb/auth-b.md"))
+	require.False(t, synthtest.ContainsPair(pairs, "kb/store-a.md", "kb/store-b.md"),
 		"a scoped session does not spend its slots outside its scope")
 }
 
@@ -479,14 +481,14 @@ func TestSelect_OperatingPointIsPercentileDerivedPerCorpus(t *testing.T) {
 	// they crowd together, in the other they stand apart. The seed count passed
 	// to the selector is the same for both, so any difference in the reported
 	// cut comes from the corpora, not from the budget.
-	tight := newRestatementEnvOnAxis(t, 20, 0.01)
-	tight.seedShortlist()
-	_, tightHealth, err := selectRestatementCandidates(ctx, tight.deps(), tight.branch, nil, 400)
+	tight := synthtest.NewRestatementEnvOnAxis(t, 20, 0.01)
+	seedShortlist(tight)
+	_, tightHealth, err := selectRestatementCandidates(ctx, tight.Deps(), tight.Branch, nil, 400)
 	require.NoError(t, err)
 
-	loose := newRestatementEnvOnAxis(t, 20, 0.25)
-	loose.seedShortlist()
-	_, looseHealth, err := selectRestatementCandidates(ctx, loose.deps(), loose.branch, nil, 400)
+	loose := synthtest.NewRestatementEnvOnAxis(t, 20, 0.25)
+	seedShortlist(loose)
+	_, looseHealth, err := selectRestatementCandidates(ctx, loose.Deps(), loose.Branch, nil, 400)
 	require.NoError(t, err)
 
 	require.Positive(t, tightHealth.OperatingPoint)
@@ -500,20 +502,20 @@ func TestSelect_OperatingPointIsPercentileDerivedPerCorpus(t *testing.T) {
 // these unchanged.
 func TestPlan_EmitsRestatementItemsAsOrdinaryPruneItems(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Two facts with near-identical titles and unrelated bodies, plus filler so
 	// the corpus is large enough to fund a slot.
-	env.writeFact("kb/restate-a.md", "Cache invalidation on write", "one account of it")
-	env.writeFact("kb/restate-b.md", "Cache invalidation on write", "a different account, at length, of the same thing")
+	env.WriteFact("kb/restate-a.md", "Cache invalidation on write", "one account of it")
+	env.WriteFact("kb/restate-b.md", "Cache invalidation on write", "a different account, at length, of the same thing")
 	for i := range 400 {
-		env.writeFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
+		env.WriteFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
 	}
 
-	res, err := NewReviewerWithOptions(env.ri, nil, EffortNormal, ScopeFilter{}).StartSession(ctx)
+	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, res.SessionID)
 
-	items := env.workItems(res.SessionID)
+	items := env.WorkItems(res.SessionID)
 	var restatement []model.PipelineWorkItem
 	for _, it := range items {
 		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
@@ -523,7 +525,7 @@ func TestPlan_EmitsRestatementItemsAsOrdinaryPruneItems(t *testing.T) {
 	require.NotEmpty(t, restatement, "the shortlist put something in front of the judge")
 	for _, it := range restatement {
 		require.Equal(t, "prune", it.StepType, "a restatement item IS a prune item")
-		var facts []factForLLM
+		var facts []step.FactForLLM
 		require.NoError(t, json.Unmarshal([]byte(it.FactsJSON), &facts))
 		require.Len(t, facts, 2, "exactly the pair")
 		require.NotEmpty(t, facts[0].Body, "with the bodies the judge needs")
@@ -534,9 +536,9 @@ func TestPlan_EmitsRestatementItemsAsOrdinaryPruneItems(t *testing.T) {
 // has to be visible, or "no candidates" reads as "nothing to find".
 func TestPlan_HealthLinesReachTheCaller(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 30)
+	env := synthtest.NewRestatementEnv(t, 30)
 
-	res, err := NewReviewerWithOptions(env.ri, nil, EffortNormal, ScopeFilter{}).StartSession(ctx)
+	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
 	require.NoError(t, err)
 
 	joined := strings.Join(res.Health, "\n")
@@ -552,19 +554,19 @@ func TestPlan_HealthLinesReachTheCaller(t *testing.T) {
 // a cap-sized batch, and it is that corpus's OWN verdicts that defund it.
 func TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// Every title identical: on this corpus the axis says everything restates
 	// everything.
 	for i := range 600 {
-		env.writeFact(fmt.Sprintf("kb/flood%d.md", i), "Same headline every time",
+		env.WriteFact(fmt.Sprintf("kb/flood%d.md", i), "Same headline every time",
 			fmt.Sprintf("body %d, quite different in wording from the others", i))
 	}
 
-	res, err := NewReviewerWithOptions(env.ri, nil, EffortNormal, ScopeFilter{}).StartSession(ctx)
+	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
 	require.NoError(t, err)
 
 	emitted := 0
-	for _, it := range env.workItems(res.SessionID) {
+	for _, it := range env.WorkItems(res.SessionID) {
 		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
 			emitted++
 		}
@@ -580,53 +582,53 @@ func TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed(t *testing.T) {
 // cluster merges would keep a useless shortlist funded forever.
 func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFact("kb/pair-a.md", "Shared headline", "one account")
-	env.writeFact("kb/pair-b.md", "Shared headline", "a different account of the same thing, longer")
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFact("kb/pair-a.md", "Shared headline", "one account")
+	env.WriteFact("kb/pair-b.md", "Shared headline", "a different account of the same thing, longer")
 	for i := range 400 {
-		env.writeFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
+		env.WriteFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
 	}
 
-	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
+	d := env.Deps()
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
-	env.seedShortlist()
+	seedShortlist(env)
 
 	// An ordinary cluster item, answered with a merge: must NOT be attributed.
 	clusterItem := &model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: "cluster-0",
-		FactsJSON: env.factsJSON("kb/filler0.md", "kb/filler1.md"),
+		FactsJSON: env.FactsJSON("kb/filler0.md", "kb/filler1.md"),
 	}
 	judged := resolveShortlistPair(ctx, d, sess, clusterItem)
 	require.Nil(t, judged, "a cluster item is not a shortlist outcome")
-	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
-		Merges: []MergeEntry{{Paths: []string{"kb/filler0.md", "kb/filler1.md"}}},
+	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+		Merges: []step.MergeEntry{{Paths: []string{"kb/filler0.md", "kb/filler1.md"}}},
 	})
 
-	verdicts, err := env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	verdicts, err := env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.Empty(t, verdicts)
 
 	// A shortlist item, answered with keep: attributed, and not merged.
 	restateItem := &model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
-		FactsJSON: env.factsJSON("kb/pair-a.md", "kb/pair-b.md"),
+		FactsJSON: env.FactsJSON("kb/pair-a.md", "kb/pair-b.md"),
 	}
 	judged = resolveShortlistPair(ctx, d, sess, restateItem)
 	require.NotNil(t, judged)
 	require.NotZero(t, judged.AFactID, "the versions the judge saw are captured by id")
-	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{})
+	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{})
 
-	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.Len(t, verdicts, 1)
 	require.False(t, verdicts[0].Resolved)
 
 	// The same item answered with a merge OF THAT PAIR is attributed as resolved.
-	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
-		Merges: []MergeEntry{{Paths: []string{"kb/pair-a.md", "kb/pair-b.md"}}},
+	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+		Merges: []step.MergeEntry{{Paths: []string{"kb/pair-a.md", "kb/pair-b.md"}}},
 	})
-	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.Len(t, verdicts, 2)
 	require.True(t, verdicts[0].Resolved, "newest first")
@@ -634,19 +636,19 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	// ...and so is a RETRACT of either half. A judge that consolidates by
 	// retracting the redundant fact has done the work this mechanism buys;
 	// counting only merges would defund a corpus that is succeeding.
-	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
-		Decisions: []PruneDecision{{Path: "kb/pair-b.md", Action: "retract"}},
+	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+		Decisions: []step.PruneDecision{{Path: "kb/pair-b.md", Action: "retract"}},
 	})
-	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.True(t, verdicts[0].Resolved, "a retract of one half resolves the pair")
 
 	// A confidence update does NOT: both facts still stand, so the redundancy
 	// the pair was offered for is still there.
-	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
-		Decisions: []PruneDecision{{Path: "kb/pair-a.md", Action: "update", Confidence: 0.9}},
+	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+		Decisions: []step.PruneDecision{{Path: "kb/pair-a.md", Action: "update", Confidence: 0.9}},
 	})
-	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.False(t, verdicts[0].Resolved, "an update leaves the redundancy in place")
 }
@@ -658,27 +660,27 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 // throttle window on a non-event.
 func TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 4)
-	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
+	env := synthtest.NewRestatementEnv(t, 4)
+	d := env.Deps()
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
 	require.NoError(t, err)
 
 	item := &model.PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
-		FactsJSON: env.factsJSON("kb/f0.md", "kb/f1.md"),
+		FactsJSON: env.FactsJSON("kb/f0.md", "kb/f1.md"),
 	}
 	judged := resolveShortlistPair(ctx, d, sess, item)
 	require.NotNil(t, judged)
 
 	// f1 is retracted before the verdict is recorded — the earlier-item case.
-	_, err = env.svc.Facts().DeleteFact(ctx, env.branch, "kb/f1.md", "retract f1")
+	_, err = env.Svc.Facts().DeleteFact(ctx, env.Branch, "kb/f1.md", "retract f1")
 	require.NoError(t, err)
 	gone := resolveShortlistPair(ctx, d, sess, item)
 	require.NotNil(t, gone)
 	require.Zero(t, gone.BFactID, "the retracted endpoint no longer resolves")
 
-	recordShortlistVerdict(ctx, d, sess, gone, &PruneResult{})
-	verdicts, err := env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	recordShortlistVerdict(ctx, d, sess, gone, &step.PruneResult{})
+	verdicts, err := env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.Empty(t, verdicts, "no verdict is recorded for a pair that no longer exists")
 }

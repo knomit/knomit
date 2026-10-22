@@ -3,8 +3,10 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -31,27 +33,27 @@ import (
 
 func TestBootstrap_SessionBuildsItsOwnAliasTableFromNothing(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 
 	// Twenty facts carrying twenty motifs, written exactly as a user would.
 	// NOTHING is pre-built: no RebuildAliases, no seeded alias rows.
 	for i := range 20 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i),
 			fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
 
-	before, err := env.svc.Motifs().AliasTable(ctx, env.branch)
+	before, err := env.Svc.Motifs().AliasTable(ctx, env.Branch)
 	require.NoError(t, err)
 	require.Empty(t, before, "precondition: nothing has built the alias table yet")
 
 	// One real session, at an effort that maintains the vocabulary.
-	out := env.vocabSession()
+	out := vocabSession(env)
 	require.NotEmpty(t, out.sessionID)
 
-	after, err := env.svc.Motifs().AliasTable(ctx, env.branch)
+	after, err := env.Svc.Motifs().AliasTable(ctx, env.Branch)
 	require.NoError(t, err)
 	require.NotEmpty(t, after,
 		"a review session must BUILD the mechanical alias layer. Nothing else can: "+
@@ -65,40 +67,40 @@ func TestBootstrap_SessionBuildsItsOwnAliasTableFromNothing(t *testing.T) {
 // which is why the deadlock was invisible.
 func TestBootstrap_ConsumersComeAliveAfterOneSession(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
+	env := synthtest.NewRestatementEnv(t, 0)
 	// A corpus with real aliasing in it: two spellings of one mechanism.
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
 	for i := range 14 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
 
-	env.vocabSession()
+	vocabSession(env)
 
 	// Alias resolution: the two spellings are ONE cluster.
-	a, err := env.svc.Motifs().CanonicalID(ctx, env.branch, "silent-fallback")
+	a, err := env.Svc.Motifs().CanonicalID(ctx, env.Branch, "silent-fallback")
 	require.NoError(t, err)
-	b, err := env.svc.Motifs().CanonicalID(ctx, env.branch, "silent-fallbacks")
+	b, err := env.Svc.Motifs().CanonicalID(ctx, env.Branch, "silent-fallbacks")
 	require.NoError(t, err)
 	require.Equal(t, a, b, "aliasing must work after one session, with no hand-seeding")
 
 	// TokenDF counts the cluster, not the spelling.
-	df, err := env.svc.Search().TokenDF(ctx, env.branch, a, "motif")
+	df, err := env.Svc.Search().TokenDF(ctx, env.Branch, a, "motif")
 	require.NoError(t, err)
 	require.Equal(t, 2, df, "df must span the cluster — the singleton fallback reads 1")
 
 	// Definitions have something to queue.
-	need, err := env.svc.Motifs().ClustersNeedingDefinition(ctx, env.branch)
+	need, err := env.Svc.Motifs().ClustersNeedingDefinition(ctx, env.Branch)
 	require.NoError(t, err)
 	require.NotEmpty(t, need,
 		"an unresolved vocabulary queues NOTHING for definition, which looks exactly "+
 			"like a fully-defined corpus")
 
 	// Health reports a real vocabulary rather than a permanent below-floor.
-	vh, err := env.svc.Motifs().VocabularyHealth(ctx, env.branch)
+	vh, err := env.Svc.Motifs().VocabularyHealth(ctx, env.Branch)
 	require.NoError(t, err)
 	require.Positive(t, vh.Clusters)
 	require.Positive(t, vh.Recurring, "the aliased pair is the corpus's recurrence")
@@ -113,18 +115,18 @@ func TestBootstrap_ConsumersComeAliveAfterOneSession(t *testing.T) {
 // the omission lived — no test opened it before.
 func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
 	for i := range 16 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
-	env.writeFact("kb/bare.md", "Bare fact", "a body with no motif")
+	env.WriteFact("kb/bare.md", "Bare fact", "a body with no motif")
 
-	out := env.vocabSession()
+	out := vocabSession(env)
 
 	seen := map[string]bool{}
 	for _, item := range out.restatementItems {
@@ -132,7 +134,7 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 		case motifAliasStepType, motifDefineStepType:
 			seen[item.StepType] = true
 			sess := pipelineSessionFor(env, out.sessionID)
-			view, err := (reviewStrategy{}).Render(ctx, env.deps(), &sess, &item)
+			view, err := (reviewStrategy{}).Render(ctx, env.Deps(), &sess, &item)
 			require.NoErrorf(t, err, "render %s", item.StepType)
 			require.NotEmptyf(t, view.Facts,
 				"%s ships an EMPTY payload while its prompt says the data rides in the "+
@@ -146,8 +148,8 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 }
 
 // pipelineSessionFor rebuilds the session record Render needs.
-func pipelineSessionFor(env *restatementEnv, id string) model.PipelineSession {
-	return model.PipelineSession{ID: id, Branch: env.branch}
+func pipelineSessionFor(env *synthtest.RestatementEnv, id string) model.PipelineSession {
+	return model.PipelineSession{ID: id, Branch: env.Branch}
 }
 
 // What the ENGINE SERVES, not what Render returns.
@@ -168,18 +170,18 @@ func pipelineSessionFor(env *restatementEnv, id string) model.PipelineSession {
 // asserted Render's output and passed throughout.
 func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
 	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
+	env := synthtest.NewRestatementEnv(t, 0)
+	env.WriteFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
+	env.WriteFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
 	for i := range 16 {
-		env.writeFactWithMotifs(
+		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
 			fmt.Sprintf("A distinct body about subject number %d.", i),
 			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
-	env.writeFact("kb/bare.md", "Bare fact", "a body with no motif")
+	env.WriteFact("kb/bare.md", "Bare fact", "a body with no motif")
 
-	rv := NewReviewerWithOptions(env.ri, nil, EffortMedium, ScopeFilter{})
+	rv := NewReviewerWithOptions(env.RI, nil, step.EffortMedium, step.ScopeFilter{})
 	res, err := rv.StartSession(ctx)
 	require.NoError(t, err)
 
