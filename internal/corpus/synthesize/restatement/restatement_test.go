@@ -1,11 +1,9 @@
-package synthesize
+package restatement
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
-	"strings"
 	"testing"
 	"time"
 
@@ -28,14 +26,14 @@ func TestEnsureTitleVectors_WatermarkIncremental(t *testing.T) {
 	ctx := context.Background()
 	env := synthtest.NewRestatementEnv(t, 3)
 
-	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
+	have, total, err := EnsureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Equal(t, 3, have)
 	require.Equal(t, 3, total, "coverage completes in one session at this size")
 	require.Equal(t, int64(3), env.Emb.Titles.Load())
 
 	env.Emb.Titles.Store(0)
-	have, _, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
+	have, _, err = EnsureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Equal(t, 3, have)
 	require.Equal(t, int64(0), env.Emb.Titles.Load(), "unchanged corpus embeds ZERO titles")
@@ -43,7 +41,7 @@ func TestEnsureTitleVectors_WatermarkIncremental(t *testing.T) {
 	env.WriteFact("kb/f1.md", "F1 revised", "body-1-v2")
 
 	env.Emb.Titles.Store(0)
-	have, total, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
+	have, total, err = EnsureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Equal(t, 3, have)
 	require.Equal(t, 3, total)
@@ -62,7 +60,7 @@ func TestEnsureTitleVectors_UsesTheShortStringTemplate(t *testing.T) {
 	// only about what the BACKFILL does.
 	docsBefore := env.Emb.DocumentCalls.Load()
 
-	_, _, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
+	_, _, err := EnsureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 
 	require.Positive(t, env.Emb.ShortStringCalls.Load(), "titles embed as short strings")
@@ -78,14 +76,14 @@ func TestEnsureTitleVectors_StopsAtTheLatencyBudget(t *testing.T) {
 	env := synthtest.NewRestatementEnv(t, 200)
 	env.Emb.PerBatchDelay = 20 * time.Millisecond
 
-	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, 50*time.Millisecond)
+	have, total, err := EnsureTitleVectors(ctx, env.Deps(), env.Branch, 50*time.Millisecond)
 	require.NoError(t, err)
 	require.Greater(t, have, 0, "it makes progress")
 	require.Less(t, have, total, "and stops before coverage completes")
 
 	// Coverage completes over subsequent sessions rather than being abandoned.
 	for range 20 {
-		have, total, err = ensureTitleVectors(ctx, env.Deps(), env.Branch, 50*time.Millisecond)
+		have, total, err = EnsureTitleVectors(ctx, env.Deps(), env.Branch, 50*time.Millisecond)
 		require.NoError(t, err)
 		if have == total {
 			break
@@ -109,7 +107,7 @@ func TestEnsureTitleVectors_ExpiredBudgetReturnsPartialCoverageWithoutError(t *t
 	ctx := context.Background()
 	env := synthtest.NewRestatementEnv(t, titleBackfillBatch+10)
 
-	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, 0)
+	have, total, err := EnsureTitleVectors(ctx, env.Deps(), env.Branch, 0)
 	require.NoError(t, err, "an expired budget is not an error")
 	require.Equal(t, titleBackfillBatch+10, total)
 	require.Less(t, have, total, "coverage is reported as it stood, partial")
@@ -121,7 +119,7 @@ func TestEnsureTitleVectors_NoEmbedderIsANoOp(t *testing.T) {
 	ctx := context.Background()
 	env := synthtest.NewRestatementEnvWithoutEmbedder(t, 2)
 
-	have, total, err := ensureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
+	have, total, err := EnsureTitleVectors(ctx, env.Deps(), env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
 	require.Zero(t, have)
 	require.Zero(t, total)
@@ -137,10 +135,10 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	d := env.Deps()
 	// time.Hour, not titleBackfillBudget: 40 facts is two batches, and a stall
 	// must not cut coverage short (see seedShortlist, knomit#298).
-	_, _, err := ensureTitleVectors(ctx, d, env.Branch, time.Hour)
+	_, _, err := EnsureTitleVectors(ctx, d, env.Branch, time.Hour)
 	require.NoError(t, err)
 
-	refresh, err := refreshRestatementShortlist(ctx, d, env.Branch)
+	refresh, err := RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.Equal(t, 40, refresh.NeighbourQueries, "first refresh seeds every fact")
 
@@ -148,16 +146,16 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, stats.Count, "the cache is populated")
 
-	refresh, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	refresh, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.Zero(t, refresh.NeighbourQueries, "unchanged corpus does no work")
 
 	env.WriteFact("kb/f7.md", "F7 revised", "body-7-v2")
 	// Same reason as above (see seedShortlist, knomit#298).
-	_, _, err = ensureTitleVectors(ctx, d, env.Branch, time.Hour)
+	_, _, err = EnsureTitleVectors(ctx, d, env.Branch, time.Hour)
 	require.NoError(t, err)
 
-	refresh, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	refresh, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.LessOrEqual(t, refresh.NeighbourQueries, 1+pairNeighbourK,
 		"one edited fact costs its own lookup plus at most its partners'")
@@ -170,14 +168,14 @@ func TestRefreshShortlist_DropsPairsOfDepartedFacts(t *testing.T) {
 	ctx := context.Background()
 	env := synthtest.NewRestatementEnv(t, 6)
 	d := env.Deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
+	_, _, err := EnsureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	_, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	_, err = env.Svc.Facts().DeleteFact(ctx, env.Branch, "kb/f3.md", "retract f3")
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	_, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 1000)
@@ -211,9 +209,9 @@ func TestRefreshShortlist_KeepsPairsAtOrAboveDedup(t *testing.T) {
 	env.WriteFact("kb/near-b.md", "Near two", "body two is about something else entirely")
 
 	d := env.Deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
+	_, _, err := EnsureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	_, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100)
@@ -241,9 +239,9 @@ func TestRefreshShortlist_KeepsSimilarToNeighbours(t *testing.T) {
 	env.WriteFact("kb/adjacent-b.md", "Adjacent restatement", "another body about the same mechanism, worded differently and at greater length so the blended vectors diverge")
 
 	d := env.Deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
+	_, _, err := EnsureTitleVectors(ctx, d, env.Branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	_, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 
 	pairs, err := env.Svc.Abstraction().RestatementPairsByRank(ctx, env.Branch, 100)
@@ -261,7 +259,7 @@ func TestShortlistBudget_ScalesWithCorpusAndCapsOut(t *testing.T) {
 	require.Equal(t, 0, shortlistBudget(150), "a tiny corpus spends nothing")
 	require.Equal(t, 1, shortlistBudget(300))
 	require.Equal(t, 4, shortlistBudget(800))
-	require.Equal(t, maxShortlistItems, shortlistBudget(50_000), "capped however large the corpus")
+	require.Equal(t, MaxShortlistItems, shortlistBudget(50_000), "capped however large the corpus")
 }
 
 // TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution is the
@@ -497,86 +495,6 @@ func TestSelect_OperatingPointIsPercentileDerivedPerCorpus(t *testing.T) {
 		"the cut is a percentile of each repo's own distribution, not a fixed cosine")
 }
 
-// TestPlan_EmitsRestatementItemsAsOrdinaryPruneItems — shape parity with
-// cluster items is what lets the existing prompt, schema, and apply path serve
-// these unchanged.
-func TestPlan_EmitsRestatementItemsAsOrdinaryPruneItems(t *testing.T) {
-	ctx := context.Background()
-	env := synthtest.NewRestatementEnv(t, 0)
-	// Two facts with near-identical titles and unrelated bodies, plus filler so
-	// the corpus is large enough to fund a slot.
-	env.WriteFact("kb/restate-a.md", "Cache invalidation on write", "one account of it")
-	env.WriteFact("kb/restate-b.md", "Cache invalidation on write", "a different account, at length, of the same thing")
-	for i := range 400 {
-		env.WriteFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
-	}
-
-	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
-	require.NoError(t, err)
-	require.NotEmpty(t, res.SessionID)
-
-	items := env.WorkItems(res.SessionID)
-	var restatement []model.PipelineWorkItem
-	for _, it := range items {
-		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
-			restatement = append(restatement, it)
-		}
-	}
-	require.NotEmpty(t, restatement, "the shortlist put something in front of the judge")
-	for _, it := range restatement {
-		require.Equal(t, "prune", it.StepType, "a restatement item IS a prune item")
-		var facts []step.FactForLLM
-		require.NoError(t, json.Unmarshal([]byte(it.FactsJSON), &facts))
-		require.Len(t, facts, 2, "exactly the pair")
-		require.NotEmpty(t, facts[0].Body, "with the bodies the judge needs")
-	}
-}
-
-// TestPlan_HealthLinesReachTheCaller — a partial axis or a defunded shortlist
-// has to be visible, or "no candidates" reads as "nothing to find".
-func TestPlan_HealthLinesReachTheCaller(t *testing.T) {
-	ctx := context.Background()
-	env := synthtest.NewRestatementEnv(t, 30)
-
-	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
-	require.NoError(t, err)
-
-	joined := strings.Join(res.Health, "\n")
-	require.Contains(t, joined, "abstraction coverage")
-	require.Contains(t, joined, "standing restatement pairs")
-	require.Contains(t, joined, "operating point")
-	require.Contains(t, joined, "restatement candidates emitted")
-	require.Contains(t, joined, "shortlist throttle")
-}
-
-// TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed — the design has no
-// density cut: a corpus where title similarity does not discriminate still gets
-// a cap-sized batch, and it is that corpus's OWN verdicts that defund it.
-func TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed(t *testing.T) {
-	ctx := context.Background()
-	env := synthtest.NewRestatementEnv(t, 0)
-	// Every title identical: on this corpus the axis says everything restates
-	// everything.
-	for i := range 600 {
-		env.WriteFact(fmt.Sprintf("kb/flood%d.md", i), "Same headline every time",
-			fmt.Sprintf("body %d, quite different in wording from the others", i))
-	}
-
-	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
-	require.NoError(t, err)
-
-	emitted := 0
-	for _, it := range env.WorkItems(res.SessionID) {
-		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
-			emitted++
-		}
-	}
-	require.LessOrEqual(t, emitted, maxShortlistItems,
-		"bounded by the judge-slot budget, never by a rate anyone hard-coded")
-	require.Contains(t, strings.Join(res.Health, "\n"), "standing restatement pairs",
-		"and the flood is visible in the health output")
-}
-
 // TestApply_AttributesOnlyShortlistVerdicts — the throttle is only as good as
 // its attribution. If an ordinary cluster prune counted, a healthy corpus's
 // cluster merges would keep a useless shortlist funded forever.
@@ -599,9 +517,9 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 		SessionID: sess.ID, StepType: "prune", ClusterKey: "cluster-0",
 		FactsJSON: env.FactsJSON("kb/filler0.md", "kb/filler1.md"),
 	}
-	judged := resolveShortlistPair(ctx, d, sess, clusterItem)
+	judged := ResolveShortlistPair(ctx, d, sess, clusterItem)
 	require.Nil(t, judged, "a cluster item is not a shortlist outcome")
-	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+	RecordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
 		Merges: []step.MergeEntry{{Paths: []string{"kb/filler0.md", "kb/filler1.md"}}},
 	})
 
@@ -611,13 +529,13 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 
 	// A shortlist item, answered with keep: attributed, and not merged.
 	restateItem := &model.PipelineWorkItem{
-		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
+		SessionID: sess.ID, StepType: "prune", ClusterKey: ClusterKeyPrefix + "0",
 		FactsJSON: env.FactsJSON("kb/pair-a.md", "kb/pair-b.md"),
 	}
-	judged = resolveShortlistPair(ctx, d, sess, restateItem)
+	judged = ResolveShortlistPair(ctx, d, sess, restateItem)
 	require.NotNil(t, judged)
 	require.NotZero(t, judged.AFactID, "the versions the judge saw are captured by id")
-	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{})
+	RecordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{})
 
 	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
@@ -625,7 +543,7 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	require.False(t, verdicts[0].Resolved)
 
 	// The same item answered with a merge OF THAT PAIR is attributed as resolved.
-	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+	RecordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
 		Merges: []step.MergeEntry{{Paths: []string{"kb/pair-a.md", "kb/pair-b.md"}}},
 	})
 	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
@@ -636,7 +554,7 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	// ...and so is a RETRACT of either half. A judge that consolidates by
 	// retracting the redundant fact has done the work this mechanism buys;
 	// counting only merges would defund a corpus that is succeeding.
-	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+	RecordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
 		Decisions: []step.PruneDecision{{Path: "kb/pair-b.md", Action: "retract"}},
 	})
 	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
@@ -645,7 +563,7 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 
 	// A confidence update does NOT: both facts still stand, so the redundancy
 	// the pair was offered for is still there.
-	recordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
+	RecordShortlistVerdict(ctx, d, sess, judged, &step.PruneResult{
 		Decisions: []step.PruneDecision{{Path: "kb/pair-a.md", Action: "update", Confidence: 0.9}},
 	})
 	verdicts, err = env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
@@ -666,20 +584,20 @@ func TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone(t *testing.T) {
 	require.NoError(t, err)
 
 	item := &model.PipelineWorkItem{
-		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
+		SessionID: sess.ID, StepType: "prune", ClusterKey: ClusterKeyPrefix + "0",
 		FactsJSON: env.FactsJSON("kb/f0.md", "kb/f1.md"),
 	}
-	judged := resolveShortlistPair(ctx, d, sess, item)
+	judged := ResolveShortlistPair(ctx, d, sess, item)
 	require.NotNil(t, judged)
 
 	// f1 is retracted before the verdict is recorded — the earlier-item case.
 	_, err = env.Svc.Facts().DeleteFact(ctx, env.Branch, "kb/f1.md", "retract f1")
 	require.NoError(t, err)
-	gone := resolveShortlistPair(ctx, d, sess, item)
+	gone := ResolveShortlistPair(ctx, d, sess, item)
 	require.NotNil(t, gone)
 	require.Zero(t, gone.BFactID, "the retracted endpoint no longer resolves")
 
-	recordShortlistVerdict(ctx, d, sess, gone, &step.PruneResult{})
+	RecordShortlistVerdict(ctx, d, sess, gone, &step.PruneResult{})
 	verdicts, err := env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.Empty(t, verdicts, "no verdict is recorded for a pair that no longer exists")

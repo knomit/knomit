@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -94,7 +94,7 @@ func TestShortlist_CertainDuplicatesReachTheStandingCache(t *testing.T) {
 
 // TestShortlist_CertainDuplicatesAreEnqueuedForTheJudge is the wiring half.
 //
-// Deliberately drives planRestatementShortlist rather than the helper: a test
+// Deliberately drives PlanShortlist rather than the helper: a test
 // that calls the helper asserts the helper works, not that anything calls it
 // (the campaign's path-vs-state rule). It asserts the item actually reaches the
 // queue, carrying both halves of the pair.
@@ -108,7 +108,7 @@ func TestShortlist_CertainDuplicatesAreEnqueuedForTheJudge(t *testing.T) {
 	d := env.Deps()
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, d, sess, env.Branch, nil))
 
 	require.True(t, shortlistQueueHoldsPair(t, env, sess.ID, certainAPath, certainBPath),
 		"the certain duplicate must be enqueued as a shortlist prune item")
@@ -133,7 +133,7 @@ func TestShortlist_CoClusteredCertainDuplicatesAreNotEnqueued(t *testing.T) {
 	coClustered := [][]step.FactForLLM{{
 		{File: certainAPath}, {File: certainBPath},
 	}}
-	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.Branch, coClustered))
+	require.NoError(t, PlanShortlist(ctx, d, sess, env.Branch, coClustered))
 
 	require.False(t, shortlistQueueHoldsPair(t, env, sess.ID, certainAPath, certainBPath),
 		"a pair prune already sees in one cluster must not also spend a shortlist slot")
@@ -162,8 +162,8 @@ func shortlistQueueHoldsPair(t *testing.T, env *synthtest.RestatementEnv, sessio
 }
 
 func isShortlistItem(clusterKey string) bool {
-	return len(clusterKey) > len(restatementClusterKeyPrefix) &&
-		clusterKey[:len(restatementClusterKeyPrefix)] == restatementClusterKeyPrefix
+	return len(clusterKey) > len(ClusterKeyPrefix) &&
+		clusterKey[:len(ClusterKeyPrefix)] == ClusterKeyPrefix
 }
 
 func itemCarriesPaths(t *testing.T, factsJSON string, want ...string) bool {

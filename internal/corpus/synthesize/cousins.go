@@ -40,7 +40,7 @@ import (
 //
 // WHAT THIS DELIBERATELY DOES NOT TOUCH. `clusters` has FIVE consumers in
 // reviewStrategy.Plan: dedupCluster's mechanical merge, the prune items,
-// planRestatementShortlist's co-membership, distillGroups, and
+// restatement.PlanShortlist's co-membership, distillGroups, and
 // clusterResultFromGroups (which feeds both bridge axes and discover). The
 // ruling scopes this to prune, so this function takes and returns a SEPARATE
 // prune-cluster slice and never mutates the one those other four read.

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -170,7 +171,7 @@ func TestMotifAliasDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
 //
 // TestHealthRecorders_NeverDestroyExistingLines below is the real guard. THIS
 // test only proves the two compose in the order Plan happens to call them, and
-// that is worth stating: when recordRestatementHealth still assigned, this test
+// that is worth stating: when restatement.RecordHealth still assigned, this test
 // passed anyway, because the test called it first — the safe order. A test that
 // guards an arrangement rather than a property survives its own subject
 // regressing.
@@ -179,7 +180,7 @@ func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.Branch, "")
 	require.NoError(t, err)
 
-	recordRestatementHealth(sess, restatementHealth{StandingPairs: 7})
+	restatement.RecordHealth(sess, restatement.Health{StandingPairs: 7})
 	before := len(sess.Health)
 	require.NotZero(t, before, "the restatement lines must be there to be clobbered")
 
@@ -265,13 +266,13 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 // today's arrangement of callers.
 //
 // The distinction is not academic. This file's first version tested only the
-// arrangement, and it passed with recordRestatementHealth still assigning.
+// arrangement, and it passed with restatement.RecordHealth still assigning.
 func TestHealthRecorders_NeverDestroyExistingLines(t *testing.T) {
 	const seed = "seeded by another producer"
 
 	for name, record := range map[string]func(*model.PipelineSession){
 		"restatement": func(s *model.PipelineSession) {
-			recordRestatementHealth(s, restatementHealth{StandingPairs: 3})
+			restatement.RecordHealth(s, restatement.Health{StandingPairs: 3})
 		},
 		"motif-alias": func(s *model.PipelineSession) {
 			recordMotifAliasHealth(s, motifAliasHealth{Vocabulary: 20, Emitted: 2})

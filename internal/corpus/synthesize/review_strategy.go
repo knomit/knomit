@@ -26,6 +26,7 @@ import (
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
@@ -125,7 +126,7 @@ func (reviewStrategy) PlanStandingWork(ctx context.Context, d step.Deps, sess *m
 	// co-membership to exclude against. That is not a degradation — the
 	// exclusion means "prune already sees this pair THIS SESSION", and this
 	// session's prune sees nothing at all.
-	if err := planRestatementShortlist(ctx, d, sess, branch, nil); err != nil {
+	if err := restatement.PlanShortlist(ctx, d, sess, branch, nil); err != nil {
 		return false, nil, err
 	}
 	// Whether anything reached the queue is read from the QUEUE, not inferred
@@ -140,7 +141,7 @@ func (reviewStrategy) PlanStandingWork(ctx context.Context, d step.Deps, sess *m
 	}
 	pending := len(items)
 	// The shortlist's own health lines were hung on the session by
-	// planRestatementShortlist; hand back only what it added, so the caller can
+	// restatement.PlanShortlist; hand back only what it added, so the caller can
 	// place them without duplicating what it already holds.
 	health := append([]string(nil), sess.Health[before:]...)
 	if pending == 0 {
@@ -272,7 +273,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// list because it also carries the single-fact clusters, which contribute
 	// no pairs but cost nothing to pass; clusterCoMembership unions pairs, so
 	// the overlap between the two slices is harmless.
-	if err := planRestatementShortlist(ctx, d, sess, branch,
+	if err := restatement.PlanShortlist(ctx, d, sess, branch,
 		append(append([][]step.FactForLLM{}, clusters...), pruneClusters...)); err != nil {
 		return err
 	}
@@ -875,7 +876,7 @@ func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.Pipeli
 		// rewrites a fact, and a rewritten fact is a new row with a new id, so
 		// ids read afterwards would not be the versions the judge saw.
 		// Returns nil for ordinary cluster items.
-		judged := resolveShortlistPair(ctx, d, sess, item)
+		judged := restatement.ResolveShortlistPair(ctx, d, sess, item)
 
 		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Files, d.Search, dec.prune.Decisions, dec.prune.Merges, step.ReviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.RI.Ontology())
 		if err != nil {
@@ -901,7 +902,7 @@ func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.Pipeli
 		// items count: a cluster prune's merges say nothing about whether the
 		// shortlist is earning its slots, and counting them would keep a
 		// useless shortlist funded forever on any healthy corpus.
-		recordShortlistVerdict(ctx, d, sess, judged, dec.prune)
+		restatement.RecordShortlistVerdict(ctx, d, sess, judged, dec.prune)
 
 		// The prune→distill progression (knomit#135). The verdict just applied
 		// is a free classifier: all-KEEP means the judge certified this cluster

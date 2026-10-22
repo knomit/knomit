@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -47,7 +47,7 @@ const titleBackfillBudget = 15 * time.Second
 // budget above.
 const titleBackfillBatch = 32
 
-// ensureTitleVectors fills the abstraction axis for live epistemic facts that
+// EnsureTitleVectors fills the abstraction axis for live epistemic facts that
 // lack a title vector, bounded by budget. It returns coverage (have, total)
 // after the attempt, whether or not the budget ran out.
 //
@@ -57,7 +57,7 @@ const titleBackfillBatch = 32
 //
 // A repo with no embedder (read-only tooling, tests) is a no-op rather than an
 // error: the axis simply stays empty and the shortlist finds nothing.
-func ensureTitleVectors(ctx context.Context, d step.Deps, branch string, budget time.Duration) (int, int, error) {
+func EnsureTitleVectors(ctx context.Context, d step.Deps, branch string, budget time.Duration) (int, int, error) {
 	emb := d.RI.Embedder()
 	if emb == nil {
 		return 0, 0, nil
@@ -113,7 +113,7 @@ type refreshStats struct {
 	StructuralAdded  int  // pairs found by path identity or a rare identifier
 }
 
-// refreshRestatementShortlist brings the standing candidate cache up to date.
+// RefreshShortlist brings the standing candidate cache up to date.
 //
 // Pairing is CORPUS-WIDE and session-independent: the session's scope and the
 // session's clusters play no part here (scope is applied at emission,
@@ -124,7 +124,7 @@ type refreshStats struct {
 //
 // NO clustering runs in this path. The neighbour lookup is the same KNN the
 // similarity graph uses.
-func refreshRestatementShortlist(ctx context.Context, d step.Deps, branch string) (refreshStats, error) {
+func RefreshShortlist(ctx context.Context, d step.Deps, branch string) (refreshStats, error) {
 	var stats refreshStats
 
 	// Diff against facts that are actually ON THE AXIS. A fact with no title
@@ -318,11 +318,11 @@ func newRestatementPair(id int64, path string, n vocab.TitleNeighbour) vocab.Res
 // threshold here to configure, and no constant that claims a fact about any
 // corpus (MN13).
 
-// maxShortlistItems is a JUDGE-SLOT BUDGET: the most restatement pairs one
+// MaxShortlistItems is a JUDGE-SLOT BUDGET: the most restatement pairs one
 // review session will ever put in front of the judge, whatever the corpus
 // looks like. It bounds what a corpus where title similarity does not
 // discriminate can waste before its own verdicts defund it.
-const maxShortlistItems = 8
+const MaxShortlistItems = 8
 
 // shortlistPerMille scales that budget to corpus size — five slots per thousand
 // facts. Also a JUDGE-SLOT BUDGET: it allocates spend, it does not claim a
@@ -374,7 +374,7 @@ const shortlistOverfetch = 4
 // A SELECTION-POLICY constant, the same class as judgePairPermille (MN13).
 const shortlistMotifWiden = 3
 
-// structuralAllowance is how many judge slots ONE SESSION may spend on the
+// StructuralAllowance is how many judge slots ONE SESSION may spend on the
 // structural detection route, and it is spent WHATEVER THE THROTTLE SAYS.
 //
 // MN13 classification: a RESOURCE BUDGET, the same class as shortlistOverfetch
@@ -393,7 +393,7 @@ const shortlistMotifWiden = 3
 // The throttle governs how much a corpus spends on TITLE-RANKED candidates,
 // which is what its verdict history is evidence about; it has never judged a
 // structural pair, so it has no evidence to withhold one on.
-const structuralAllowance = 5
+const StructuralAllowance = 5
 
 // Throttle states, reported in health output.
 //
@@ -410,22 +410,22 @@ const (
 	throttleDefunded   = "defunded"   // enough judged, none resolved: stop spending
 )
 
-// restatementClusterKeyPrefix marks a prune work item as shortlist-originated.
+// ClusterKeyPrefix marks a prune work item as shortlist-originated.
 // Verdict attribution reads it, so an ordinary cluster prune can never be
 // mistaken for evidence that the shortlist is earning its slots.
-const restatementClusterKeyPrefix = "restate-"
+const ClusterKeyPrefix = "restate-"
 
-// restatementPriority places shortlist items inside prune's positive band but
+// ItemPriority places shortlist items inside prune's positive band but
 // below every real cluster (a prune cluster always has at least two facts, so
 // its priority is >= 2). Ordinary cluster consolidation — the bulk of the work
 // and the part that never needed this mechanism — therefore always runs first.
-const restatementPriority = 1.5
+const ItemPriority = 1.5
 
-// restatementHealth is what a session reports about the axis and the shortlist.
+// Health is what a session reports about the axis and the shortlist.
 // Every field is OBSERVABILITY: descriptors of this corpus, read by no branch.
 // A corpus descriptor that decided anything would be the corpus-property
 // constant this design exists without.
-type restatementHealth struct {
+type Health struct {
 	Coverage       float64 // fraction of live epistemic facts on the axis
 	StandingPairs  int
 	TailP99        float64
@@ -485,8 +485,8 @@ type restatementHealth struct {
 // shortlistBudget is how many judge slots this session may spend.
 func shortlistBudget(n int) int {
 	b := n * shortlistPerMille / 1000
-	if b > maxShortlistItems {
-		return maxShortlistItems
+	if b > MaxShortlistItems {
+		return MaxShortlistItems
 	}
 	return b
 }
@@ -535,8 +535,8 @@ func throttleState(verdicts []vocab.RestatementVerdict) (float64, string) {
 // membership check, never re-clustered: a pair already sitting in one cluster
 // is a pair prune sees anyway, so spending a shortlist slot on it is spending
 // twice for one judgement.
-func selectRestatementCandidates(ctx context.Context, d step.Deps, branch string, clusters [][]step.FactForLLM, n int) ([]vocab.RestatementPair, restatementHealth, error) {
-	var h restatementHealth
+func selectRestatementCandidates(ctx context.Context, d step.Deps, branch string, clusters [][]step.FactForLLM, n int) ([]vocab.RestatementPair, Health, error) {
+	var h Health
 
 	// Coverage is read here rather than passed in, so every caller that builds
 	// health gets a complete one. A health block that silently reports 0%
@@ -744,7 +744,7 @@ func selectRestatementCandidates(ctx context.Context, d step.Deps, branch string
 
 	// Selection can only PROPOSE a probe; whether the slot is spent depends on
 	// what reached the judge, and only enqueue knows that. So the consumption
-	// moved to planRestatementShortlist (knomit#117b).
+	// moved to PlanShortlist (knomit#117b).
 	//
 	// probeAllowed has always documented the contract as "consumed by the
 	// caller, and only when a pair was actually emitted" — this is the first
@@ -792,13 +792,13 @@ func selectStructuralSweep(ctx context.Context, d step.Deps, branch string, coGr
 	// below is decided per candidate, so cutting to the allowance first would
 	// let one co-clustered pair silently shrink the sweep.
 	sp, err := d.Abstraction.RestatementPairsByMatchKindOldest(ctx, branch,
-		[]string{vocab.MatchPathIdentity}, structuralAllowance*shortlistOverfetch)
+		[]string{vocab.MatchPathIdentity}, StructuralAllowance*shortlistOverfetch)
 	if err != nil {
 		return nil, step.Wrapf(step.ReviewTool, err, "shortlist: structural sweep")
 	}
 	var out []vocab.RestatementPair
 	for _, p := range sp {
-		if len(out) >= structuralAllowance {
+		if len(out) >= StructuralAllowance {
 			break
 		}
 		// The one exclusion that survives on this route: prune already sees
@@ -819,7 +819,7 @@ func selectStructuralSweep(ctx context.Context, d step.Deps, branch string, coGr
 // detection inert exactly where it mattered: the corpus with the least evidence
 // that consolidation is worth anything is the corpus most in need of being
 // shown a near-certain duplicate. The allowance is spent; the budget is not.
-func emitStructuralOnly(structural []vocab.RestatementPair, h *restatementHealth) []vocab.RestatementPair {
+func emitStructuralOnly(structural []vocab.RestatementPair, h *Health) []vocab.RestatementPair {
 	h.StructuralOffered = len(structural)
 	h.Emitted = len(structural)
 	return structural
@@ -932,9 +932,9 @@ func enqueueRestatementItems(ctx context.Context, d step.Deps, sess *model.Pipel
 		if err := d.Pipeline.InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "prune",
-			ClusterKey: fmt.Sprintf("%s%d", restatementClusterKeyPrefix, i),
+			ClusterKey: fmt.Sprintf("%s%d", ClusterKeyPrefix, i),
 			FactsJSON:  string(factsJSON),
-			Priority:   restatementPriority,
+			Priority:   ItemPriority,
 		}); err != nil {
 			return served, dropped, step.Wrapf(step.ReviewTool, err, "shortlist: insert item %d", i)
 		}
@@ -952,7 +952,7 @@ func enqueueRestatementItems(ctx context.Context, d step.Deps, sess *model.Pipel
 // keeps reporting selection while the queue reflects service. That gap is the
 // whole bug, and a fix that only changed enqueue's return value would leave the
 // number an operator READS exactly as wrong as before.
-func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
+func applyEmissionOutcome(h *Health, served, dropped int) {
 	h.Emitted = served
 	h.Dropped = dropped
 	// The same correction applied to the probe (knomit#117b). Selection
@@ -963,7 +963,7 @@ func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
 	h.Probing = h.Probing && served > 0
 }
 
-// planRestatementShortlist runs the whole phase-0 sequence for one session:
+// PlanShortlist runs the whole phase-0 sequence for one session:
 // top up the axis, refresh the standing pair cache, select what this corpus's
 // own history says it may spend, and enqueue the result as prune items.
 //
@@ -971,15 +971,15 @@ func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
 // candidates and a health line saying so": this mechanism is an ADDITION to
 // consolidation, and a corpus whose axis cannot be built should still get its
 // ordinary review rather than an error.
-func planRestatementShortlist(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string, clusters [][]step.FactForLLM) error {
+func PlanShortlist(ctx context.Context, d step.Deps, sess *model.PipelineSession, branch string, clusters [][]step.FactForLLM) error {
 	// health is emitted on EVERY path, including the failures below. The error
 	// path is exactly where "the shortlist found nothing" has to stay
 	// distinguishable from "the shortlist could not run" — a silent skip on a
 	// corpus with 2,000 standing pairs reads as a clean bill of health.
-	var health restatementHealth
-	defer func() { recordRestatementHealth(sess, health) }()
+	var health Health
+	defer func() { RecordHealth(sess, health) }()
 
-	have, total, err := ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
+	have, total, err := EnsureTitleVectors(ctx, d, branch, titleBackfillBudget)
 	if err != nil {
 		health.Failure = "title backfill failed"
 		log.Warn().Err(err).Str("session", sess.ID).
@@ -991,7 +991,7 @@ func planRestatementShortlist(ctx context.Context, d step.Deps, sess *model.Pipe
 	}
 	health.Coverage = float64(have) / float64(total)
 
-	refresh, err := refreshRestatementShortlist(ctx, d, branch)
+	refresh, err := RefreshShortlist(ctx, d, branch)
 	if err != nil {
 		health.Failure = "shortlist refresh failed"
 		log.Warn().Err(err).Str("session", sess.ID).
@@ -1024,7 +1024,7 @@ func planRestatementShortlist(ctx context.Context, d step.Deps, sess *model.Pipe
 	// Emitted was recorded by selection; only enqueue knows what survived to
 	// the queue. An enqueue that fails PART WAY through has already inserted
 	// some items, and returning without reconciling leaves the deferred
-	// recordRestatementHealth reporting selection's count over a partial
+	// RecordHealth reporting selection's count over a partial
 	// queue — this issue's own bug, re-opened on the error path.
 	//
 	// Unobservable today (StartSession discards the result on error), which is
@@ -1062,7 +1062,7 @@ func planRestatementShortlist(ctx context.Context, d step.Deps, sess *model.Pipe
 // prints two different cosines, which is what it means for the selection to be
 // a percentile of each repo's own distribution rather than a threshold someone
 // picked (MN13).
-func healthLines(h restatementHealth) []string {
+func healthLines(h Health) []string {
 	if h.Failure != "" {
 		return []string{
 			fmt.Sprintf("restatement shortlist unavailable this session: %s "+
@@ -1096,7 +1096,7 @@ func healthLines(h restatementHealth) []string {
 // The drop clause appears ONLY when something dropped. A block that mentions
 // drops every session trains a reader to skip the line, which is how the
 // original silence would come back wearing a number.
-func emittedLine(h restatementHealth) string {
+func emittedLine(h Health) string {
 	if h.Dropped == 0 {
 		return fmt.Sprintf("restatement candidates emitted: %d", h.Emitted)
 	}
@@ -1111,7 +1111,7 @@ func emittedLine(h restatementHealth) string {
 // between them are the interesting part: pairs detected but ineligible are
 // pairs prune already sees, while pairs eligible but not offered are the
 // budget saying no.
-func structuralSignalLine(h restatementHealth) string {
+func structuralSignalLine(h Health) string {
 	if h.StandingStructural == 0 {
 		return "structural duplicate detection: no path-identity or rare-token pairs stand in this corpus"
 	}
@@ -1119,7 +1119,7 @@ func structuralSignalLine(h restatementHealth) string {
 		"structural duplicate detection: %d standing, %d eligible this session, %d offered "+
 			"(allowance %d/session, path-identity only — rare-token stays closed until the "+
 			"path-identity merge rate justifies it)",
-		h.StandingStructural, h.StructuralAvailable, h.StructuralOffered, structuralAllowance)
+		h.StandingStructural, h.StructuralAvailable, h.StructuralOffered, StructuralAllowance)
 	// Say which order the sweep is actually in. "Oldest-first" is exact only on
 	// a complete axis; while the axis fills, every pair is re-minted each
 	// session and the order is deterministic but not age-stable. A sweep that
@@ -1141,7 +1141,7 @@ func structuralSignalLine(h restatementHealth) string {
 }
 
 // motifSignalLine reports what the §7 motif widener contributed this session.
-func motifSignalLine(h restatementHealth) string {
+func motifSignalLine(h Health) string {
 	switch {
 	case h.MotifWidened == 0:
 		return "motif signal: no pair admitted by shared motif this session"
@@ -1154,14 +1154,14 @@ func motifSignalLine(h restatementHealth) string {
 	}
 }
 
-func probeSuffix(h restatementHealth) string {
+func probeSuffix(h Health) string {
 	if h.Probing {
 		return " (probing)"
 	}
 	return ""
 }
 
-// recordRestatementHealth hangs the session's health lines on the session
+// RecordHealth hangs the session's health lines on the session
 // object StartSession is holding.
 //
 // In memory, not in the session row: planning and responding happen inside the
@@ -1184,7 +1184,7 @@ func probeSuffix(h restatementHealth) string {
 // Called once per session, so this is behaviourally identical for the
 // shortlist itself. TestMotifAliasHealth_CoexistsWithRestatementLines covers
 // the interaction.
-func recordRestatementHealth(sess *model.PipelineSession, h restatementHealth) {
+func RecordHealth(sess *model.PipelineSession, h Health) {
 	if sess == nil {
 		return
 	}
@@ -1200,15 +1200,15 @@ type judgedPair struct {
 	AFactID, BFactID int64
 }
 
-// resolveShortlistPair identifies the pair a shortlist-originated prune item
+// ResolveShortlistPair identifies the pair a shortlist-originated prune item
 // put in front of the judge, capturing the fact ids of the versions shown.
 // Returns nil for ordinary cluster items — those say nothing about whether the
 // shortlist is earning its slots.
 //
 // Called BEFORE the decisions are applied, because applying them can rewrite a
 // fact, and a rewritten fact is a new row with a new id.
-func resolveShortlistPair(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) *judgedPair {
-	if !strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix) {
+func ResolveShortlistPair(ctx context.Context, d step.Deps, sess *model.PipelineSession, item *model.PipelineWorkItem) *judgedPair {
+	if !strings.HasPrefix(item.ClusterKey, ClusterKeyPrefix) {
 		return nil
 	}
 	paths, err := step.ItemInputPaths(item)
@@ -1226,7 +1226,7 @@ func resolveShortlistPair(ctx context.Context, d step.Deps, sess *model.Pipeline
 	}
 }
 
-// recordShortlistVerdict records what the judge did with a shortlist pair, and
+// RecordShortlistVerdict records what the judge did with a shortlist pair, and
 // retires the pair when the judge declined it.
 //
 // RESOLVED, not merged. A judge that consolidates a restatement by retracting
@@ -1237,7 +1237,7 @@ func resolveShortlistPair(ctx context.Context, d step.Deps, sess *model.Pipeline
 //
 // A confidence "update" is deliberately NOT a resolution: it leaves both facts
 // standing, so the redundancy this pair was offered for is still there.
-func recordShortlistVerdict(ctx context.Context, d step.Deps, sess *model.PipelineSession, judged *judgedPair, res *step.PruneResult) {
+func RecordShortlistVerdict(ctx context.Context, d step.Deps, sess *model.PipelineSession, judged *judgedPair, res *step.PruneResult) {
 	if judged == nil || res == nil {
 		return
 	}

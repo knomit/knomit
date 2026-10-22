@@ -6,7 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"hash/fnv"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"math"
 	"strings"
@@ -76,7 +75,7 @@ func TestMotifJudgeSelection_SlotBudgetCapsAFloodCorpus(t *testing.T) {
 	// The test passed with the slot cap deleted. Distinct-but-close angles
 	// spread the top of the ranking across many clusters, which is what a real
 	// flood corpus looks like and what the slot budget exists for.
-	env.Emb.VectorFor = func(text string) []float32 { return synthtest.AxisVector(0.15 * unitHash(text)) }
+	env.Emb.VectorFor = func(text string) []float32 { return synthtest.AxisVector(0.15 * synthtest.UnitHash(text)) }
 	for i := range 40 {
 		env.WriteFactWithMotifs(
 			fmt.Sprintf("kb/m%d.md", i), fmt.Sprintf("Carrier %d", i), "body",
@@ -298,7 +297,7 @@ func TestMN13_OperatingPointIsPerCorpus(t *testing.T) {
 	// compared two constants. Distinct names must land at distinct angles or
 	// this asserts nothing about distributions.
 	arc := func(width float64) func(string) []float32 {
-		return func(text string) []float32 { return synthtest.AxisVector(width * unitHash(text)) }
+		return func(text string) []float32 { return synthtest.AxisVector(width * synthtest.UnitHash(text)) }
 	}
 
 	tight := motifVocabEnv(t, minJudgeVocabulary+6)
@@ -318,14 +317,4 @@ func TestMN13_OperatingPointIsPerCorpus(t *testing.T) {
 			"if these matched, the operating point would be a constant in disguise")
 	require.Greater(t, hTight.OperatingPoint, hSpread.OperatingPoint,
 		"the crowded corpus should cut higher: its own distribution is tighter")
-}
-
-// unitHash maps text to a stable value in [0,1). Used to place motif names at
-// distinct, deterministic angles: a fixture that derives position from a
-// property several names share (length, a small modulus) puts them on top of
-// each other and silently turns a distribution test into a constant test.
-func unitHash(text string) float64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(text))
-	return float64(h.Sum64()%1_000_000) / 1_000_000
 }

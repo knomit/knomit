@@ -1,8 +1,7 @@
-package synthesize
+package restatement
 
 import (
 	"context"
-	"fmt"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
@@ -115,14 +114,14 @@ func TestStructural_AllowanceIsBoundedOnADefundedCorpus(t *testing.T) {
 	pairs, h, err := selectRestatementCandidates(ctx, d, env.Branch, nil, structuralFiller+2)
 	require.NoError(t, err)
 	require.Equal(t, throttleDefunded, h.ThrottleState)
-	// Fixture assertion, and it is not ceremony: `0 <= structuralAllowance` is
+	// Fixture assertion, and it is not ceremony: `0 <= StructuralAllowance` is
 	// true, so without this the bound below is satisfied by a route that offers
 	// NOTHING — which is precisely the bug this whole commit removes. Caught by
 	// sabotage S1, which nulled the sweep on the throttle-closed path and left
 	// this test green.
 	require.Positive(t, h.StructuralOffered,
 		"fixture must actually offer structural pairs, or the bound is asserted against zero")
-	require.LessOrEqual(t, len(pairs), structuralAllowance,
+	require.LessOrEqual(t, len(pairs), StructuralAllowance,
 		"a defunded corpus spends the allowance and NOTHING else — the ordinary "+
 			"band stays shut, which is what the throttle actually decided")
 	require.Equal(t, h.StructuralOffered, len(pairs),
@@ -281,10 +280,10 @@ func TestStructural_ScopedSessionIsOfferedOutOfScopePairsAndToldSo(t *testing.T)
 // age-stable. A degenerated sweep order reads identically to a working one from
 // outside, which is why the regime is stated rather than implied.
 func TestStructural_HealthNamesTheSweepRegime(t *testing.T) {
-	full := restatementHealth{StandingStructural: 3, Coverage: 1, SweepOrderStable: true}
+	full := Health{StandingStructural: 3, Coverage: 1, SweepOrderStable: true}
 	require.Contains(t, structuralSignalLine(full), "oldest-first (axis complete)")
 
-	filling := restatementHealth{StandingStructural: 3, Coverage: 0.4, SweepOrderStable: false}
+	filling := Health{StandingStructural: 3, Coverage: 0.4, SweepOrderStable: false}
 	require.Contains(t, structuralSignalLine(filling), "NOT yet age-stable")
 	require.NotContains(t, structuralSignalLine(filling), "oldest-first (axis complete)",
 		"a filling axis must not be described as if its sweep order were age-stable")
@@ -339,7 +338,7 @@ func TestStructural_SweepRegimeIsDerivedNotDeclared(t *testing.T) {
 // over-fetch limit does the capping and the test credits the wrong line.
 func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 	ctx := context.Background()
-	const pairs = structuralAllowance + 3
+	const pairs = StructuralAllowance + 3
 	env := manyTwinsEnv(t, pairs)
 	seedShortlist(env)
 	d := env.Deps()
@@ -349,13 +348,13 @@ func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 	standing, err := env.Svc.Abstraction().RestatementPairsByMatchKindOldest(ctx, env.Branch,
 		[]string{vocab.MatchPathIdentity}, 100_000)
 	require.NoError(t, err)
-	require.Greater(t, len(standing), structuralAllowance,
+	require.Greater(t, len(standing), StructuralAllowance,
 		"fixture must hold more standing path-identity pairs than the allowance, "+
 			"or the cap under test is never reached")
 
 	sweep, err := selectStructuralSweep(ctx, d, env.Branch, map[string]struct{}{})
 	require.NoError(t, err)
-	require.Len(t, sweep, structuralAllowance,
+	require.Len(t, sweep, StructuralAllowance,
 		"the sweep spends the allowance and stops — an unbounded sweep would hand "+
 			"a whole session's judge budget to one route")
 }
@@ -364,43 +363,7 @@ func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 // filler, for tests about SELECTION (which is corpus-scaled).
 func manyTwinsEnv(t *testing.T, n int) *synthtest.RestatementEnv {
 	t.Helper()
-	return manyTwinsEnvWithFiller(t, n, structuralFiller)
-}
-
-// manyTwinsEnvWithFiller is manyTwinsEnv with the filler size chosen by the
-// caller.
-//
-// The filler exists for ONE reason — both rarity cuts are read off the corpus's
-// own token distribution, so a corpus with no distribution has nothing rare in
-// it — and the standard 404 is sized for `shortlistBudget`, which is a
-// SELECTION concern. Tests about the standing channel do not need it: the
-// allowance fires whatever the budget is, and 404 facts make the distill item
-// span six pages, which turns an unrelated paging contract into a fixture
-// problem. So they pass a smaller number and assert the detection still fires.
-func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *synthtest.RestatementEnv {
-	t.Helper()
-	// Subject tokens chosen to be rare in this corpus and unrelated to each
-	// other; the prefix-EXTENSION shape (subject vs vendor/subject) is the one
-	// measured on the live corpus.
-	subjects := []string{
-		"cisco", "gitlab", "geoserver", "sharepoint", "ivanti",
-		"sonicwall", "fortinet", "confluence", "jenkins", "grafana",
-	}
-	require.LessOrEqual(t, n, len(subjects), "manyTwinsEnv has only %d subjects", len(subjects))
-
-	env := synthtest.NewRestatementEnv(t, 0)
-	env.WriteFiller(filler)
-	for i, s := range subjects[:n] {
-		env.WriteFact(
-			fmt.Sprintf("kb/technology/security/vulnerabilities/%s/%08x.md", s, 0xAA0000+i*2),
-			fmt.Sprintf("%s advisory covers a remote code execution flaw", s),
-			"a body about the event")
-		env.WriteFact(
-			fmt.Sprintf("kb/technology/security/vulnerabilities/vendor/%s/%08x.md", s, 0xAA0001+i*2),
-			fmt.Sprintf("Remote code execution flaw disclosed in %s", s),
-			"the same event, filed again")
-	}
-	return env
+	return synthtest.ManyTwinsEnvWithFiller(t, n, structuralFiller)
 }
 
 // sweepOrderEnv builds a corpus where MINT ORDER and COSINE RANK are exact

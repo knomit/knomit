@@ -194,6 +194,10 @@ var sameLayerEdges = map[string]bool{
 	// builds a ref gate.
 	"corpus/synthesize/step -> corpus/refs":  true,
 	"corpus/synthesize/step -> corpus/repos": true,
+	// The restatement child plans and judges the corpus-wide shortlist; its
+	// work items and Deps are step vocabulary. (Not a parent edge: the parent
+	// imports restatement, never the reverse.)
+	"corpus/synthesize/restatement -> corpus/synthesize/step": true,
 	// synthtest is the test-support package of the synthesize tree; its
 	// environment builders stand up a repo instance.
 	"corpus/synthesize/internal/synthtest -> corpus/repos":           true,

@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"crypto/sha256"
@@ -27,7 +27,7 @@ import (
 // to every corpus. A resource constant allocates OUR spend and is honest about
 // it. The first kind is forbidden; the second has to say what it budgets.
 var budgetLiterals = map[string]string{
-	"1.5":   "restatementPriority: ordering within prune's band, below every real cluster",
+	"1.5":   "ItemPriority: ordering within prune's band, below every real cluster",
 	"1e-12": "degenerate-norm guard in cosine; a numerical floor, not a similarity threshold",
 	"0.99":  "p99 of the standing pair distribution — a REPORTED quantile of this repo's own data",
 	"0.999": "p99.9 of the standing pair distribution — reported, read by no branch",
@@ -41,7 +41,7 @@ var budgetLiterals = map[string]string{
 // Slash paths from the module root (modroot), not "../store/...": a layer move
 // changes both the depth and the sibling names of every cross-package path.
 var phase0Files = []string{
-	"internal/corpus/synthesize/restatement.go",
+	"internal/corpus/synthesize/restatement/restatement.go",
 	"internal/engine/store/vocab/abstraction.go",
 }
 
@@ -81,7 +81,7 @@ func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
 		{"titleBackfillBudget", "LATENCY BUDGET"},
 		{"titleBackfillBatch", "THROUGHPUT BUDGET"},
 		{"pairNeighbourK", "STRUCTURAL BUDGET"},
-		{"maxShortlistItems", "JUDGE-SLOT BUDGET"},
+		{"MaxShortlistItems", "JUDGE-SLOT BUDGET"},
 		{"shortlistPerMille", "JUDGE-SLOT BUDGET"},
 		{"throttleWindow", "PATIENCE BUDGET"},
 		{"shortlistOverfetch", "RESOURCE BUDGET"},
@@ -242,7 +242,7 @@ func TestConformance_NoConfigSurface(t *testing.T) {
 const effortNormalTestSHA256 = "edc9a1cffa207354844ea6f6441358214abefe53dc051a2cce15babcd06b7cd3"
 
 // effortNormalTestFile is the one file MN5 protects.
-const effortNormalTestFile = "review_effort_normal_test.go"
+const effortNormalTestFile = "internal/corpus/synthesize/review_effort_normal_test.go"
 
 // TestConformance_EffortNormalTestByteIdentical enforces MN5: the EffortNormal
 // contract test stays byte-identical.
@@ -282,7 +282,7 @@ func TestConformance_EffortNormalTestByteIdentical(t *testing.T) {
 	// zero-byte .go file does not compile ("expected 'package', found 'EOF'"),
 	// so the test binary would never run to make the assertion — a guard
 	// nothing can trip reads as coverage it does not provide.
-	b, err := os.ReadFile(filepath.Clean(effortNormalTestFile))
+	b, err := os.ReadFile(modroot.Path(t, filepath.FromSlash(effortNormalTestFile)))
 	require.NoError(t, err,
 		"%s could not be read. MN5 protects that file; if it was renamed or "+
 			"deleted, this test is the thing that has to be updated deliberately, "+
@@ -320,7 +320,7 @@ DID YOU MEAN TO EDIT IT?
         output. Do all three:
           1. Put the observed hash above into effortNormalTestSHA256 in this
              file. (Or recompute it:
-                 shasum -a 256 internal/corpus/synthesize/%s
+                 shasum -a 256 %s
              — sha256sum on Linux.)
           2. Say in the PR what the contract now is and why it is still the
              contract. This sentence is the entire point of the mechanism; a

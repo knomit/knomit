@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -212,7 +212,7 @@ func TestStructural_ReachesTheJudge(t *testing.T) {
 	d := env.Deps()
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, d, sess, env.Branch, nil))
 
 	// The fixture must actually budget more than one slot, or the reservation
 	// under test does not exist.
@@ -258,7 +258,7 @@ func TestStructural_AllowanceSurvivesAFullOrdinaryBand(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, h.StructuralOffered,
 		"the allowance must be spent even when the ordinary band could have filled the budget")
-	require.LessOrEqual(t, h.StructuralOffered, structuralAllowance,
+	require.LessOrEqual(t, h.StructuralOffered, StructuralAllowance,
 		"the allowance bounds the route; an unbounded sweep would drown the session")
 	require.True(t, synthtest.ContainsPair(pairs, a, b))
 	require.Len(t, pairs, budget+h.StructuralOffered,
@@ -295,7 +295,7 @@ func TestStructural_NoTitleVectorIsDroppedNotScored(t *testing.T) {
 
 	// One batch fits in the budget; the rest of the corpus does not.
 	d := env.Deps()
-	have, total, err := ensureTitleVectors(ctx, d, env.Branch, time.Millisecond)
+	have, total, err := EnsureTitleVectors(ctx, d, env.Branch, time.Millisecond)
 	require.NoError(t, err)
 	require.Greater(t, have, 0, "fixture needs SOME facts on the axis")
 	require.Less(t, have, total,
@@ -310,7 +310,7 @@ func TestStructural_NoTitleVectorIsDroppedNotScored(t *testing.T) {
 	require.True(t, byPath[a], "fixture: the first twin must be on the axis")
 	require.False(t, byPath[b], "fixture: the second twin must NOT be on the axis")
 
-	_, err = refreshRestatementShortlist(ctx, d, env.Branch)
+	_, err = RefreshShortlist(ctx, d, env.Branch)
 	require.NoError(t, err)
 	require.Equal(t, "", pairKindIn(t, env, a, b),
 		"a pair that cannot be scored on the title axis must not be stored with an invented score")

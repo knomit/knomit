@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 	items := env.WorkItems(sess.ID)
 	var restate int
 	for _, it := range items {
-		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
+		if strings.HasPrefix(it.ClusterKey, ClusterKeyPrefix) {
 			restate++
 		}
 	}
@@ -64,7 +64,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 // wearing a return value.
 func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 	t.Run("drops are stated", func(t *testing.T) {
-		lines := strings.Join(healthLines(restatementHealth{Emitted: 1, Dropped: 2}), "\n")
+		lines := strings.Join(healthLines(Health{Emitted: 1, Dropped: 2}), "\n")
 		require.Contains(t, lines, "restatement candidates emitted: 1",
 			"the emitted number is what reached the judge")
 		require.Contains(t, lines, "2",
@@ -76,7 +76,7 @@ func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 	// The common case must not gain a noise line. A health block that always
 	// mentions drops trains a reader to skip the line that matters.
 	t.Run("no drop line when nothing dropped", func(t *testing.T) {
-		lines := strings.Join(healthLines(restatementHealth{Emitted: 3, Dropped: 0}), "\n")
+		lines := strings.Join(healthLines(Health{Emitted: 3, Dropped: 0}), "\n")
 		require.Contains(t, lines, "restatement candidates emitted: 3")
 		require.NotContains(t, strings.ToLower(lines), "drop",
 			"no drop line when there were no drops")
@@ -93,14 +93,14 @@ func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 // which asserts that the helper works, not that anything CALLS it. Under a
 // sabotage that deleted the call site, it passed.
 //
-// So: drive planRestatementShortlist, and read the health block it actually
+// So: drive PlanShortlist, and read the health block it actually
 // produced. The invariant asserted is the one that failed on core — the number
 // printed equals the number of restate- items in the queue.
 func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	ctx := context.Background()
 
 	// CORPUS SIZE IS LOAD-BEARING, AND SO IS THE PAIR COUNT. Re-derived from
-	// shortlistPerMille (5 per 1000, capped at maxShortlistItems):
+	// shortlistPerMille (5 per 1000, capped at MaxShortlistItems):
 	//
 	//     200 facts → budget 1      400 facts → budget 2
 	//
@@ -137,7 +137,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 			},
 		}, nil))
 
-	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 
 	// What the operator reads.
 	var emitted string
@@ -151,7 +151,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	// What is actually in the queue.
 	var restate int
 	for _, it := range env.WorkItems(sess.ID) {
-		if strings.HasPrefix(it.ClusterKey, restatementClusterKeyPrefix) {
+		if strings.HasPrefix(it.ClusterKey, ClusterKeyPrefix) {
 			restate++
 		}
 	}

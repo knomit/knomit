@@ -1,4 +1,4 @@
-package synthesize
+package restatement
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 //
 // The first two are display defects and the third is behavioural, so they are
 // pinned separately below. Assertions read the RENDERED health line wherever
-// the issue was filed on the rendered line — a restatementHealth field can be
+// the issue was filed on the rendered line — a Health field can be
 // right while the line an operator reads is wrong, which is the whole family
 // of bugs this file covers.
 
@@ -121,7 +121,7 @@ func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 
 	line := throttleHealthLine(sess)
 	require.NotEmpty(t, line, "no throttle line rendered — every assertion below would be vacuous")
@@ -144,7 +144,7 @@ func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 
 	sess2, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess2, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, env.Deps(), sess2, env.Branch, nil))
 	require.Contains(t, throttleHealthLine(sess2), fmt.Sprintf("over last %d judged", judged))
 }
 
@@ -170,7 +170,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// enough to guarantee it is the pair selected.
 	//
 	// Deliberately NOT done by clearing the other pairs: dropping every fact id
-	// also marks those facts uncovered, and planRestatementShortlist refreshes
+	// also marks those facts uncovered, and PlanShortlist refreshes
 	// the cache before selecting, so the organic pairs come straight back.
 	// Out-rank, do not clear.
 	ids := env.LiveFactIDs()
@@ -187,7 +187,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	for range throttleProbeInterval {
 		sess, serr := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 		require.NoError(t, serr)
-		require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+		require.NoError(t, PlanShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 		require.Empty(t, env.WorkItems(sess.ID), "nothing servable can reach the queue")
 		if strings.Contains(emittedHealthLine(sess), "dropped unserved") {
 			dropped++
@@ -214,7 +214,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, step.ReviewTool, env.Branch, "")
 	require.NoError(t, err)
-	require.NoError(t, planRestatementShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+	require.NoError(t, PlanShortlist(ctx, env.Deps(), sess, env.Branch, nil))
 	require.True(t, healthLineSaysProbing(sess),
 		"the probe budget was still owed, not burned on a session that served nothing")
 	require.Len(t, env.WorkItems(sess.ID), 1, "a probe is one slot")

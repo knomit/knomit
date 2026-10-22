@@ -178,7 +178,7 @@ var mechanicsPaths = map[string][]string{
 	// motif buys a look further down this repo's own ranking; it does not
 	// change where a pair sits in that ranking, which would be a corpus-property
 	// claim in disguise (MN13, Q2 ruling).
-	"internal/corpus/synthesize/restatement.go": {
+	"internal/corpus/synthesize/restatement/restatement.go": {
 		"selectRestatementCandidates", "pairSharesCanonicalMotif",
 		// REPORTING, not deciding. These render the signal's contribution into
 		// the session's health lines so the GATE package can state how often it
