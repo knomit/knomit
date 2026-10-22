@@ -13,15 +13,9 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// activityProvider is the narrow interface the activity handler depends on.
-type activityProvider interface {
-	Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error)
-}
-
-// defaultActivityProvider implements activityProvider using the store.
-type defaultActivityProvider struct{}
-
-func (defaultActivityProvider) Activity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error) {
+// loadActivity reads one repo's commit activity. A repo whose store is not
+// live yields the zero ActivityResult and a nil error.
+func loadActivity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error) {
 	var (
 		result index.ActivityResult
 		err    error
@@ -46,7 +40,7 @@ type activityView struct {
 }
 
 // handleHALActivity serves GET /repos/{repo}/branches/{branch}/activity.
-func handleHALActivity(b hal.URLBuilder, provider activityProvider) http.HandlerFunc {
+func handleHALActivity(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -55,7 +49,7 @@ func handleHALActivity(b hal.URLBuilder, provider activityProvider) http.Handler
 		a := hal.Anchor{Branch: branch}
 		path := r.URL.Query().Get("path")
 
-		result, err := provider.Activity(r.Context(), ri, branch, path)
+		result, err := loadActivity(r.Context(), ri, branch, path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load activity", branch)
 			return
