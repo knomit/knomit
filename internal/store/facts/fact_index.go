@@ -19,8 +19,8 @@ func ParseFactRecord(path, content string) (FactRecord, error) {
 }
 
 // Index owns all git-backed fact operations: reading and writing.
-// All shared git-level plumbing lives on repoHandler — Index reaches up
-// via fi.rh.*. In particular, index sync after a commit happens inside
+// All shared git-level plumbing lives on vcs.Repo — Index reaches up
+// through its Repo (fi.rh.vr.*). In particular, index sync after a commit happens inside
 // rh.NotifyCommit (which is called from WriteFile / deleteFile / batchWrite),
 // so Index no longer holds its own IndexManager back-reference.
 type Index struct {

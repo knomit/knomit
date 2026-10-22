@@ -20,7 +20,7 @@ import (
 // (commit, path) costs at most one blob read + one content read — a bound of
 // 2× the commit_log ref-event count.
 //
-// The gitTreeReads counter on repoHandler (branch.go) is the observability
+// The gitTreeReads counter on vcs.Repo (internal/vcs/branch.go) is the observability
 // seam: it increments once per ReadFileAtCommit / ReadBlobHashAtCommit tree
 // walk. Within rebuildGraph, the shared walk reads happen ONLY in Phase A.5
 // and Phase B, so measuring the counter delta across a single rebuildGraph

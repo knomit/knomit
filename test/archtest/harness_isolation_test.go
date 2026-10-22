@@ -38,9 +38,12 @@ var shippedGroups = []struct {
 		name: "default binaries",
 		pkgs: []string{
 			"knomit",
+			"knomit/tools/appcast",
 			"knomit/tools/bridge",
 			"knomit/tools/calibrate",
 			"knomit/tools/fetchlibs",
+			"knomit/tools/okf",
+			"knomit/tools/relnotes",
 		},
 	},
 	{
@@ -79,5 +82,43 @@ func TestHarnessNotLinkedIntoShippedBinaries(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestShippedGroupsListEveryMainPackage keeps shippedGroups complete: B1 only
+// checks the binaries it lists, so a new `package main` (tools/appcast,
+// tools/okf and tools/relnotes were missing for a while) would otherwise ship
+// without the storetest and harness checks. It asks `go list` for every main
+// package in the module under the default tags and the desktop tag and fails
+// on one that no group names.
+func TestShippedGroupsListEveryMainPackage(t *testing.T) {
+	listed := map[string]bool{}
+	for _, grp := range shippedGroups {
+		for _, p := range grp.pkgs {
+			listed[p] = true
+		}
+	}
+	seen := 0
+	for _, tags := range []string{"", "desktop"} {
+		args := []string{"list", "-f", "{{if eq .Name \"main\"}}{{.ImportPath}}{{end}}"}
+		if tags != "" {
+			args = append(args, "-tags", tags)
+		}
+		args = append(args, "./...")
+		cmd := exec.Command("go", args...)
+		cmd.Dir = moduleRoot(t)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go list (tags %q): %v", tags, err)
+		}
+		for _, p := range strings.Fields(string(out)) {
+			seen++
+			if !listed[p] {
+				t.Errorf("main package %s is not in shippedGroups: add it so TestHarnessNotLinkedIntoShippedBinaries checks it", p)
+			}
+		}
+	}
+	if seen < len(listed) {
+		t.Errorf("go list found %d main packages, shippedGroups names %d: the listing matches nothing", seen, len(listed))
 	}
 }

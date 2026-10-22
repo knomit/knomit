@@ -720,7 +720,7 @@ export default function App() {
           if (cancelled || stateRef.current.headCommit !== issuedAt) return;
           // Advance to the INDEXED head, not raw git HEAD. The two differ, and
           // only during the window this poll is most likely to fire in. The
-          // branch root reports `head` straight off Branches().HeadCommit,
+          // branch root reports `head` straight off the git branch tip,
           // while the SSE `status` broadcast is emitted only AFTER the commit
           // observer's IndexManager().SyncLocked returns — so every head the
           // stream delivers is one the index has already absorbed, and this

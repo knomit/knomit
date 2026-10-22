@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -730,114 +731,296 @@ var indexInternals = map[string]bool{
 
 const indexImport = "knomit/internal/store/index"
 
-// indexInternalsUses returns one "line N: <name>" string per selector `x.<name>`
-// for a name in indexInternals (runtime.GC, the standard library's, is not
-// one), and, when lockFree is set, per `x.Sync` whose receiver is a
-// *index.Index: a call chain ending in IndexManager(), or an identifier or
-// field that the same file declares as *index.Index or assigns from
-// IndexManager(). Sync is the lock-FREE in-lock primitive
-// (kb/invariants/store/index/branch-locking/f4911495.md); out-of-band callers
-// use SyncLocked. Other types' Sync (os.File, remotesync's Sync) do not match.
-func indexInternalsUses(t *testing.T, fset *token.FileSet, name string, src any, lockFree bool) []string {
-	t.Helper()
-	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", name, err)
-	}
-	local := ""
+// indexScope is what the lock-free Sync half knows about ONE Go package (all
+// of its files, test files included) plus what is exported module-wide: the
+// names that hold or return an *index.Index. It is name-based, not
+// type-checked (go/types would need every dependency of the module resolved,
+// and x/tools is not a dependency), and deliberately over-approximate within a
+// package: a field named im that is an *index.Index in one file makes every
+// `.im.Sync` of the package a hit, which is the safe direction for a guard.
+type indexScope struct {
+	// bound: identifier or field names that hold an *index.Index in this
+	// package (parameters, fields, vars, results of assignments).
+	bound map[string]bool
+	// producers: function and method names of this package whose result list
+	// holds an *index.Index, with the result positions.
+	producers map[string][]int
+}
+
+// indexFileLocal is the name file f gives the index package ("" if not imported).
+func indexFileLocal(f *ast.File) string {
 	for _, imp := range f.Imports {
 		if p, _ := strconv.Unquote(imp.Path.Value); p == indexImport {
-			local = "index"
 			if imp.Name != nil {
-				local = imp.Name.Name
+				return imp.Name.Name
+			}
+			return "index"
+		}
+	}
+	return ""
+}
+
+func isIndexPtrIn(local string, e ast.Expr) bool {
+	st, ok := e.(*ast.StarExpr)
+	if !ok || local == "" {
+		return false
+	}
+	sel, ok := st.X.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Index" {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == local
+}
+
+// indexProducerPositions reports, for a call expression, the result positions
+// that hold an *index.Index: Service.IndexManager() (position 0), index.New,
+// and any function or method that scope or global (module-wide exported
+// producers) records as returning one.
+func indexProducerPositions(call ast.Expr, local string, sc *indexScope, global map[string][]int) []int {
+	for {
+		pe, ok := call.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		call = pe.X
+	}
+	c, ok := call.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	switch fn := c.Fun.(type) {
+	case *ast.Ident:
+		if ps, ok := sc.producers[fn.Name]; ok {
+			return ps
+		}
+	case *ast.SelectorExpr:
+		if fn.Sel.Name == "IndexManager" {
+			return []int{0}
+		}
+		if id, ok := fn.X.(*ast.Ident); ok && local != "" && id.Name == local && fn.Sel.Name == "New" {
+			return []int{0}
+		}
+		if ps, ok := sc.producers[fn.Sel.Name]; ok {
+			return ps
+		}
+		if ast.IsExported(fn.Sel.Name) {
+			if ps, ok := global[fn.Sel.Name]; ok {
+				return ps
 			}
 		}
 	}
-	isIndexPtr := func(e ast.Expr) bool {
-		st, ok := e.(*ast.StarExpr)
-		if !ok || local == "" {
-			return false
-		}
-		sel, ok := st.X.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Index" {
-			return false
-		}
-		id, ok := sel.X.(*ast.Ident)
-		return ok && id.Name == local
-	}
-	isManagerCall := func(e ast.Expr) bool {
-		c, ok := e.(*ast.CallExpr)
-		if !ok {
-			return false
-		}
-		sel, ok := c.Fun.(*ast.SelectorExpr)
-		return ok && sel.Sel.Name == "IndexManager"
-	}
-	bound := map[string]bool{}
+	return nil
+}
+
+// indexProducers collects, from one parsed file, the functions and methods
+// whose results include an *index.Index (name -> result positions) and the
+// exported field names of type *index.Index.
+func indexProducers(f *ast.File, into map[string][]int, exportedFields map[string]bool) {
+	local := indexFileLocal(f)
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
-		case *ast.Field:
-			if isIndexPtr(x.Type) {
-				for _, nm := range x.Names {
-					bound[nm.Name] = true
+		case *ast.FuncDecl:
+			if x.Type.Results == nil {
+				return true
+			}
+			pos := 0
+			for _, r := range x.Type.Results.List {
+				w := len(r.Names)
+				if w == 0 {
+					w = 1
+				}
+				for i := 0; i < w; i++ {
+					if isIndexPtrIn(local, r.Type) {
+						into[x.Name.Name] = append(into[x.Name.Name], pos)
+					}
+					pos++
 				}
 			}
-		case *ast.ValueSpec:
-			if x.Type != nil && isIndexPtr(x.Type) {
-				for _, nm := range x.Names {
-					bound[nm.Name] = true
-				}
-			}
-		case *ast.AssignStmt:
-			for i, rhs := range x.Rhs {
-				if isManagerCall(rhs) && i < len(x.Lhs) {
-					switch l := x.Lhs[i].(type) {
-					case *ast.Ident:
-						bound[l.Name] = true
-					case *ast.SelectorExpr:
-						bound[l.Sel.Name] = true
+		case *ast.StructType:
+			for _, fl := range x.Fields.List {
+				if isIndexPtrIn(local, fl.Type) {
+					for _, nm := range fl.Names {
+						if nm.IsExported() {
+							exportedFields[nm.Name] = true
+						}
 					}
 				}
 			}
-		case *ast.KeyValueExpr:
-			if isManagerCall(x.Value) {
-				if k, ok := x.Key.(*ast.Ident); ok {
-					bound[k.Name] = true
+		}
+		return true
+	})
+}
+
+// indexBindings adds to sc.bound every name one file binds to an *index.Index:
+// a parameter, field or var declared with the type; a var, := or = from a
+// producer call (including the multi-value form `im, err := f()`); a struct
+// literal key set from one; and a copy of an already bound name. It reports
+// whether it added anything, so the caller can run it to a fixed point.
+func indexBindings(f *ast.File, sc *indexScope, global map[string][]int, globalFields map[string]bool) bool {
+	local := indexFileLocal(f)
+	grew := false
+	bind := func(e ast.Expr) {
+		name := ""
+		switch l := e.(type) {
+		case *ast.Ident:
+			name = l.Name
+		case *ast.SelectorExpr:
+			name = l.Sel.Name
+		}
+		if name != "" && name != "_" && !sc.bound[name] {
+			sc.bound[name] = true
+			grew = true
+		}
+	}
+	isBound := func(e ast.Expr) bool {
+		switch r := e.(type) {
+		case *ast.Ident:
+			return sc.bound[r.Name]
+		case *ast.SelectorExpr:
+			return sc.bound[r.Sel.Name] || (ast.IsExported(r.Sel.Name) && globalFields[r.Sel.Name])
+		}
+		return false
+	}
+	pair := func(lhs []ast.Expr, rhs []ast.Expr) {
+		if len(rhs) == 1 && len(lhs) > 1 {
+			for _, p := range indexProducerPositions(rhs[0], local, sc, global) {
+				if p < len(lhs) {
+					bind(lhs[p])
 				}
 			}
+			return
 		}
-		return true
-	})
-	var uses []string
+		for i, r := range rhs {
+			if i >= len(lhs) {
+				break
+			}
+			if len(indexProducerPositions(r, local, sc, global)) > 0 || isBound(r) {
+				bind(lhs[i])
+			}
+		}
+	}
 	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		line := "line " + strconv.Itoa(fset.Position(sel.Sel.Pos()).Line) + ": " + sel.Sel.Name
-		if indexInternals[sel.Sel.Name] {
-			if id, ok := sel.X.(*ast.Ident); !(ok && id.Name == "runtime") {
-				uses = append(uses, line)
+		switch x := n.(type) {
+		case *ast.Field:
+			if isIndexPtrIn(local, x.Type) {
+				for _, nm := range x.Names {
+					bind(nm)
+				}
 			}
-			return true
-		}
-		if lockFree && sel.Sel.Name == "Sync" {
-			recv := false
-			switch x := sel.X.(type) {
-			case *ast.CallExpr:
-				recv = isManagerCall(x)
-			case *ast.Ident:
-				recv = bound[x.Name]
-			case *ast.SelectorExpr:
-				recv = bound[x.Sel.Name]
+		case *ast.ValueSpec:
+			if x.Type != nil && isIndexPtrIn(local, x.Type) {
+				for _, nm := range x.Names {
+					bind(nm)
+				}
 			}
-			if recv {
-				uses = append(uses, line)
+			lhs := make([]ast.Expr, len(x.Names))
+			for i, nm := range x.Names {
+				lhs[i] = nm
+			}
+			pair(lhs, x.Values)
+		case *ast.AssignStmt:
+			pair(x.Lhs, x.Rhs)
+		case *ast.KeyValueExpr:
+			if len(indexProducerPositions(x.Value, local, sc, global)) > 0 || isBound(x.Value) {
+				bind(x.Key)
 			}
 		}
 		return true
 	})
+	return grew
+}
+
+// indexInternalsUsesPkg scans the files of ONE package (name -> source, or nil
+// source to read the file) and returns "<file> line N: <name>" strings: one per
+// selector `x.<name>` for a name in indexInternals (runtime.GC, the standard
+// library's, is not one), and, in the files lockFree reports true for, per
+// `x.Sync` whose receiver is an *index.Index: a call that produces one
+// (IndexManager(), index.New, a function or method of the package or an
+// exported one of the module that returns one), or a name the package binds to
+// one in ANY of its files (a parameter, field or var of that type, a variable
+// assigned from a producer, a copy of a bound name). Sync is the lock-FREE
+// in-lock primitive (kb/invariants/store/index/branch-locking/f4911495.md);
+// out-of-band callers use SyncLocked. Other types' Sync (os.File, remotesync's
+// Sync) do not match.
+func indexInternalsUsesPkg(t *testing.T, fset *token.FileSet, files map[string]any, lockFree func(file string) bool, global map[string][]int, globalFields map[string]bool) []string {
+	t.Helper()
+	parsed := map[string]*ast.File{}
+	names := make([]string, 0, len(files))
+	for name, src := range files {
+		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		parsed[name] = f
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	sc := &indexScope{bound: map[string]bool{}, producers: map[string][]int{}}
+	for _, name := range names {
+		indexProducers(parsed[name], sc.producers, map[string]bool{})
+	}
+	for pass := 0; pass < 8; pass++ {
+		grew := false
+		for _, name := range names {
+			if indexBindings(parsed[name], sc, global, globalFields) {
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	var uses []string
+	for _, name := range names {
+		f := parsed[name]
+		local := indexFileLocal(f)
+		lf := lockFree(name)
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			line := name + " line " + strconv.Itoa(fset.Position(sel.Sel.Pos()).Line) + ": " + sel.Sel.Name
+			if indexInternals[sel.Sel.Name] {
+				if id, ok := sel.X.(*ast.Ident); !(ok && id.Name == "runtime") {
+					uses = append(uses, line)
+				}
+				return true
+			}
+			if lf && sel.Sel.Name == "Sync" {
+				recv := false
+				x := sel.X
+				for {
+					pe, ok := x.(*ast.ParenExpr)
+					if !ok {
+						break
+					}
+					x = pe.X
+				}
+				switch r := x.(type) {
+				case *ast.CallExpr:
+					recv = len(indexProducerPositions(r, local, sc, global)) > 0
+				case *ast.Ident:
+					recv = sc.bound[r.Name]
+				case *ast.SelectorExpr:
+					recv = sc.bound[r.Sel.Name] || (ast.IsExported(r.Sel.Name) && globalFields[r.Sel.Name])
+				}
+				if recv {
+					uses = append(uses, line)
+				}
+			}
+			return true
+		})
+	}
 	return uses
+}
+
+// indexInternalsUses is indexInternalsUsesPkg for a package of one file and no
+// module-wide producers, the shape the discrimination table uses.
+func indexInternalsUses(t *testing.T, fset *token.FileSet, name string, src any, lockFree bool) []string {
+	t.Helper()
+	return indexInternalsUsesPkg(t, fset, map[string]any{name: src}, func(string) bool { return lockFree }, nil, nil)
 }
 
 // TestStoreIndexInternals_OnlyInsideStore (PR E7a): Service.IndexManager()
@@ -859,6 +1042,12 @@ func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
 	fset := token.NewFileSet()
 	var offenders []string
 	scanned := 0
+	// The lock-free Sync half is per PACKAGE: a field declared as *index.Index
+	// in one file is used in another, so the files of a directory are
+	// analysed together (indexInternalsUsesPkg). The module-wide pass first
+	// collects the exported functions that return an *index.Index and the
+	// exported fields of that type, which another package can reach.
+	byDir := map[string][]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -879,13 +1068,42 @@ func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
 			return nil
 		}
 		scanned++
-		for _, u := range indexInternalsUses(t, fset, path, nil, !strings.HasSuffix(rel, "_test.go")) {
-			offenders = append(offenders, rel+" "+u)
-		}
+		byDir[filepath.Dir(path)] = append(byDir[filepath.Dir(path)], path)
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	globalProducers := map[string][]int{}
+	globalFields := map[string]bool{}
+	for _, paths := range byDir {
+		for _, path := range paths {
+			f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if perr != nil {
+				t.Fatalf("parse %s: %v", path, perr)
+			}
+			local := map[string][]int{}
+			indexProducers(f, local, globalFields)
+			for name, ps := range local {
+				if ast.IsExported(name) {
+					globalProducers[name] = ps
+				}
+			}
+		}
+	}
+	dirs := make([]string, 0, len(byDir))
+	for d := range byDir {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	for _, d := range dirs {
+		files := map[string]any{}
+		for _, path := range byDir[d] {
+			files[path] = nil
+		}
+		for _, u := range indexInternalsUsesPkg(t, fset, files, func(file string) bool { return !strings.HasSuffix(file, "_test.go") }, globalProducers, globalFields) {
+			offenders = append(offenders, filepath.ToSlash(strings.TrimPrefix(u, root+string(filepath.Separator))))
+		}
 	}
 	if scanned < minFiles {
 		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
@@ -981,5 +1199,57 @@ func TestStoreIndexInternals_GuardDiscriminates(t *testing.T) {
 		if len(got) != c.want {
 			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
 		}
+	}
+
+	// The lock-free Sync half works per package and follows producers, so the
+	// shapes a one-file, assignment-only scan missed are flagged:
+	//   V2 var x = svc.IndexManager(); x.Sync(...)
+	//   V3 func f(svc) *index.Index, then f(svc).Sync(...)
+	//   V4 a field declared *index.Index in one file, .Sync in another.
+	pkgCases := []struct {
+		name  string
+		files map[string]any
+		want  int
+	}{
+		{"V2 var spec", map[string]any{"a.go": "package p\nvar im = svc.IndexManager()\nfunc f() { im.Sync(ctx, b) }"}, 1},
+		{"V2 local var spec", map[string]any{"a.go": "package p\nfunc f() { var im = svc.IndexManager(); im.Sync(ctx, b) }"}, 1},
+		{"V2 typed var spec", map[string]any{"a.go": imp + "func f() { var im *index.Index; im.Sync(ctx, b) }"}, 1},
+		{"V3 helper call", map[string]any{"a.go": imp + "func get(svc S) *index.Index { return svc.IndexManager() }\nfunc f() { get(svc).Sync(ctx, b) }"}, 1},
+		{"V3 helper assigned", map[string]any{"a.go": imp + "func get(svc S) *index.Index { return svc.IndexManager() }\nfunc f() { im := get(svc); im.Sync(ctx, b) }"}, 1},
+		{"V3 helper in another file", map[string]any{
+			"a.go": imp + "func get(svc S) *index.Index { return svc.IndexManager() }",
+			"b.go": "package p\nfunc f() { get(svc).Sync(ctx, b) }"}, 1},
+		{"V3 method helper", map[string]any{"a.go": imp + "func (h H) idx() *index.Index { return h.svc.IndexManager() }\nfunc f(h H) { h.idx().Sync(ctx, b) }"}, 1},
+		{"V3 multi-result helper", map[string]any{"a.go": imp + "func get() (*index.Index, error) { return nil, nil }\nfunc f() { im, err := get(); _ = err; im.Sync(ctx, b) }"}, 1},
+		{"V4 field in another file", map[string]any{
+			"a.go": imp + "type holder struct{ im *index.Index }",
+			"b.go": "package p\nfunc (h holder) f() { h.im.Sync(ctx, b) }"}, 1},
+		{"V4 field set from IndexManager in another file", map[string]any{
+			"a.go": "package p\nfunc mk() holder { return holder{im: svc.IndexManager()} }",
+			"b.go": "package p\nfunc (h holder) f() { h.im.Sync(ctx, b) }"}, 1},
+		{"copy of a bound name", map[string]any{"a.go": "package p\nfunc f() { im := svc.IndexManager(); other := im; other.Sync(ctx, b) }"}, 1},
+		{"SyncLocked through V2/V3/V4 shapes", map[string]any{
+			"a.go": imp + "var im = svc.IndexManager()\nfunc get() *index.Index { return nil }\ntype holder struct{ x *index.Index }\nfunc f(h holder) { im.SyncLocked(ctx, b); get().SyncLocked(ctx, b); h.x.SyncLocked(ctx, b) }"}, 0},
+		{"other type's Sync in a package with a bound name", map[string]any{
+			"a.go": imp + "type holder struct{ im *index.Index }",
+			"b.go": "package p\nfunc f(file F) { file.Sync(); tmp.Sync() }"}, 0},
+		{"helper returning another type", map[string]any{"a.go": imp + "func get() *os.File { return nil }\nfunc f() { get().Sync() }"}, 0},
+	}
+	for _, c := range pkgCases {
+		got := indexInternalsUsesPkg(t, token.NewFileSet(), c.files, func(string) bool { return true }, nil, nil)
+		if len(got) != c.want {
+			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
+		}
+	}
+	// A producer or field EXPORTED by another package of the module is found
+	// through the module-wide sets the walk passes in.
+	global := map[string][]int{"Idx": {0}}
+	gotX := indexInternalsUsesPkg(t, token.NewFileSet(), map[string]any{"a.go": "package q\nfunc f() { other.Idx(svc).Sync(ctx, b) }"}, func(string) bool { return true }, global, nil)
+	if len(gotX) != 1 {
+		t.Errorf("exported producer of another package: %d uses, want 1 (%v)", len(gotX), gotX)
+	}
+	gotF := indexInternalsUsesPkg(t, token.NewFileSet(), map[string]any{"a.go": "package q\nfunc f(h other.H) { h.Im.Sync(ctx, b) }"}, func(string) bool { return true }, nil, map[string]bool{"Im": true})
+	if len(gotF) != 1 {
+		t.Errorf("exported field of another package: %d uses, want 1 (%v)", len(gotF), gotF)
 	}
 }

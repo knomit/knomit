@@ -53,7 +53,7 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 	if side == "" {
 		strategy = s.hostConflictStrategy(ctx, &o)
 	}
-	return rh.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
+	return s.mr.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }
 
 // hostConflictStrategy is the strategy a host merge of a peer's branch runs
@@ -63,7 +63,7 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 // follows) as the consensus side and Refuse for whatever a key set to off
 // leaves.
 func (s *Service) hostConflictStrategy(ctx context.Context, o *merge.MergeOpts) merge.ConflictStrategy {
-	strategy, on := s.rh.ConflictsStrategy(ctx, s.ri.UpstreamBranch())
+	strategy, on := s.mr.ConflictsStrategy(ctx, s.ri.UpstreamBranch())
 	if !on {
 		return merge.StrategyRefuse
 	}
@@ -100,5 +100,5 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 	defer unlock()
 	o := merge.MergeOpts{SrcTip: srcTip, Record: true, SkipMergeOnly: true, GuardPrivate: true, ValidateFacts: true}
 	strategy := s.hostConflictStrategy(ctx, &o)
-	return rh.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
+	return s.mr.MergeIntoBranchLockedOpts(ctx, src, dst, strategy, nil, o)
 }

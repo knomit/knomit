@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"knomit/internal/store/internal/sqlite"
 	"path/filepath"
 	"testing"
 
@@ -27,7 +28,7 @@ import (
 // created would mean 000022 broke, which every other store test would catch.
 func TestMigrate_DropsMotifBackfillJudged(t *testing.T) {
 	dir := t.TempDir()
-	registerVec() // migrations 000002/000009 need vec0
+	sqlite.Register() // migrations 000002/000009 need vec0
 	path := filepath.Join(dir, "m.db") + "?_foreign_keys=1"
 
 	db, err := sql.Open("sqlite3_knomit", path)

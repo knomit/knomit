@@ -168,7 +168,7 @@ func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 // The target Fact node already exists if resolveTargetCommit succeeds — it
 // was upserted when refPath was originally indexed at target_commit. The
 // target's blob_hash is the blob in the target_commit's tree for refPath,
-// resolved via repoHandler.ReadBlobHashAtCommit.
+// resolved via vcs.Repo.ReadBlobHashAtCommit.
 //
 // Called AFTER the source Fact node's merge has been committed. The original
 // reason was that direct-SQL reads could not see nodes MERGE'd through Cypher

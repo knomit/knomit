@@ -19,8 +19,8 @@
 // it names none of the review pipeline's tables (a dropped branch's rows in
 // those are deleted by the SetOnDropBranchRows hook).
 //
-// It must not import its parent package store. The parent embeds *Repo in its
-// repoHandler, so the sub-indices reach Repo's exported methods by promotion,
-// and callers outside store import the plain data types and sentinels from
+// It must not import its parent package store. The parent's repoHandler embeds
+// *Repo (the one documented vcs embed) and the facts, merge and remotesync
+// children hold it as a named field, and callers outside store import the plain data types and sentinels from
 // store/model, not from the parent.
 package vcs

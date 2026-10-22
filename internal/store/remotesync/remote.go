@@ -12,7 +12,7 @@ import (
 
 // Index owns remote configuration and git sync/push operations.
 // All git-level plumbing (signer, authorSig, committerSig, NotifyCommit,
-// PopulateCommitLog) lives on repoHandler; Index reaches UP via ri.rh.*
+// PopulateCommitLog) lives on vcs.Repo; Index reaches UP through its Repo (rh)
 // and never through a sibling subsystem.
 type Index struct {
 	rh *Repo

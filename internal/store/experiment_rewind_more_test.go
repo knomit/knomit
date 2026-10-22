@@ -162,7 +162,7 @@ func TestExperimentAcrossARewind_OpenRacingTheRewind(t *testing.T) {
 		// The rewind starts now, between the fork and the row. Give it the
 		// time to finish if nothing holds it back.
 		go func() {
-			_, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins)
+			_, err := svc.rr.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins)
 			done <- err
 		}()
 		select {

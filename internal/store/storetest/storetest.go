@@ -90,6 +90,22 @@ func SetExperimentActivity(ctx context.Context, s *store.Service, name string, w
 	return s.Merge().SetExperimentActivityForTest(ctx, name, when)
 }
 
+// DropBranch removes branch from the git storer (ref deletion) and from every
+// SQLite table that references it; the commits themselves stay in the object
+// store. No production code outside the store drops a branch (the store's own
+// experiment and lifecycle paths call the vcs handle), so the door is a test
+// door rather than a Service method.
+func DropBranch(ctx context.Context, s *store.Service, name string) error {
+	return vcs.ServiceRepoForTest(s).DropBranch(ctx, name)
+}
+
+// SetDefaultBranch points the repository's symbolic HEAD at branch, for a test
+// that needs a default branch other than the one InitRepo chose (a clone whose
+// remote HEAD is not main, a foreign repo being adopted).
+func SetDefaultBranch(s *store.Service, branch string) error {
+	return vcs.ServiceRepoForTest(s).SetDefaultBranch(branch)
+}
+
 // SetFallbackSigner installs signer as the commit signer of every Service in
 // this test binary that was given none, so fixtures that open a store without
 // SetSigner can still commit. Nil removes it.

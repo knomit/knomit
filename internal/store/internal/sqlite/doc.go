@@ -1,5 +1,5 @@
 // Package sqlite is the bottom of the store's internal layering: everything
-// that is about the SQLite engine itself and knows nothing about repoHandler
+// that is about the SQLite engine itself and knows nothing about the vcs handle
 // or any sub-index. It owns the "sqlite3_knomit" driver (sqlite-vec plus
 // knomit's SQL functions and per-connection pragmas), the float32 vector codec
 // and the ctx-carried transaction helpers (Conn, BeginTxIfNeeded), the

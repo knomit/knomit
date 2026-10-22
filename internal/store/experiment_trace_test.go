@@ -53,7 +53,7 @@ func TestExperimentTrace_OnlyTheExperimentsOwnMerge(t *testing.T) {
 	require.NoError(t, svc.CreateBranch(context.Background(), "agent/peer", testAgentBranch))
 	writeMergeFact(t, svc, "agent/peer", "kb/peer.md", "peer", "body")
 	writeMergeFact(t, svc, testAgentBranch, "kb/own.md", "own", "body")
-	require.NoError(t, svc.rh.MergeBranch(ctx, "agent/peer", testAgentBranch, merge.StrategyLocalWins))
+	require.NoError(t, svc.mr.MergeBranch(ctx, "agent/peer", testAgentBranch, merge.StrategyLocalWins))
 	plain := msgOf(testAgentBranch)
 	require.Contains(t, plain, "merge: agent/peer into", "fixture: a merge commit was written")
 	require.Empty(t, model.TrailerValue(plain, model.TrailerTrace), "a transport merge is never stamped: %q", plain)

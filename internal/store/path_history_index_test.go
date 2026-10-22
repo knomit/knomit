@@ -143,7 +143,7 @@ func TestPathHistory_VersionBumpOverDeletedSideBranch(t *testing.T) {
 		_, err := svc.rh.DB().Exec(`DELETE FROM branch_commits WHERE commit_hash = ? AND branch_id = (SELECT id FROM branches WHERE name = 'main')`, h)
 		require.NoError(t, err)
 	}
-	require.NoError(t, svc.DropBranch(ctx, "side"))
+	require.NoError(t, svc.rh.DropBranch(ctx, "side"))
 	clearDerived(t, svc, "0") // a STALE version: the reset path
 
 	svc = reopen(t, svc, dbPath)

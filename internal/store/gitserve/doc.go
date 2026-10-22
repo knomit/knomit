@@ -9,6 +9,6 @@
 // store through the one shared vcs handle, judges a push with verify
 // (JudgeIncoming, PrivatePathClosure, VerifyModeAt), and moves a pushed branch
 // through remotesync's AdvanceBranchTo; it never reaches the Service. The parent
-// builds the handler once per Service (NewHandler) and re-exports PushPolicy
-// and WithPushPolicy, which the web edge builds per request.
+// builds the handler once per Service (NewHandler); PushPolicy and
+// WithPushPolicy, which the web edge builds per request, are imported from here.
 package gitserve

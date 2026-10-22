@@ -472,7 +472,7 @@ func remoteTrackingBranches(repo *gogit.Repository) []string {
 // branch by the same rule (resolveUpstream), track that branch alone, and set
 // the local branch and HEAD to its tip. No agent branch is cut, no watermark
 // is written, and nothing here ever pushes. Sync for such a repo is
-// reconcileMain alone (remoteIndex.reconcileNow with an empty agent branch).
+// reconcileMain alone (remotesync.Index.reconcileNow with an empty agent branch).
 //
 // The resolved upstream is RETURNED for the same reason InitFromRemote returns
 // it: the caller persists what was adopted, never what it asked for.

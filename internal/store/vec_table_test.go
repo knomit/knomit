@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/store/internal/sqlite"
 	"path/filepath"
 	"testing"
 
@@ -35,7 +36,7 @@ func seedEmbedIdentity(t *testing.T, si *index.Index, modelID string, dim int) {
 func insertVec(t *testing.T, si *index.Index, rowid int64, vec []float32) error {
 	t.Helper()
 	_, err := si.RepoForTest().DB().ExecContext(context.Background(),
-		`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`, rowid, float32SliceToBytes(vec))
+		`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`, rowid, sqlite.Float32SliceToBytes(vec))
 	return err
 }
 
@@ -47,7 +48,7 @@ func vecRowCount(t *testing.T, si *index.Index) int {
 	return n
 }
 
-// openSI opens a fresh migrated store and returns its searchIndex. Open already
+// openSI opens a fresh migrated store and returns its index.Index. Open already
 // creates facts_vec at the default dim via ensureFactsVecDefault.
 func openSI(t *testing.T) *index.Index {
 	t.Helper()

@@ -95,7 +95,7 @@ func TestMount_SubscriptionBuildsAgentlessReadOnlyInstance(t *testing.T) {
 }
 
 // A store swap must not resurrect write access. readOnly lives on the store's
-// repoHandler, which store.Open rebuilds from disk, so it survives a reopen
+// vcs.Repo, which store.Open rebuilds from disk, so it survives a reopen
 // ONLY because the Open stage applies it on every Enter — the one wiring
 // function for the first open and every reopen alike. Without it a
 // subscription silently becomes writable: no error, no log, and every other

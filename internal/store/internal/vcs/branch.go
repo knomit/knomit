@@ -55,7 +55,7 @@ func (c *branchCache) remove(name string) {
 
 // Repo owns the database handle, branch cache, and branch operations.
 // It is also the home for shared git-level plumbing that used to be scattered
-// across factIndex / searchIndex: the SSH commit signer, the onCommit
+// across facts.Index / index.Index: the SSH commit signer, the onCommit
 // observer, the author/committer signature helpers, and the commit-log
 // maintenance methods. Consumers reach UP to Repo for these — they
 // never reach sideways through a sibling subsystem.
@@ -143,7 +143,7 @@ type Repo struct {
 	embedMu  sync.RWMutex // guards embedder
 	embedder model.Embedder
 	branchMu sync.Map // per-branch write serialization
-	// pushMu serializes PUSHES of a branch (remoteIndex.Push), and only
+	// pushMu serializes PUSHES of a branch (remotesync.Index.Push), and only
 	// pushes: it is not the write lock, so a fact write never waits on it.
 	pushMu sync.Map
 
@@ -160,7 +160,7 @@ type Repo struct {
 func (rh *Repo) GitTreeReadCount() int64 { return rh.gitTreeReads.Load() }
 
 // LockBranch acquires the per-branch write lock and returns an unlock function.
-// Used by factIndex, remoteIndex, and MergeBranch to serialize writes on a
+// Used by facts.Index, remotesync.Index, and MergeBranch to serialize writes on a
 // given branch AND to exclude concurrent Verify runs (which take the read side
 // via LockBranchRead). The lock is held for the full mutation — from the
 // initial ref resolution through SetReference AND NotifyCommit's index sync —
@@ -173,7 +173,7 @@ func (rh *Repo) LockBranch(branch string) func() {
 	return mu.Unlock
 }
 
-// LockPush acquires the per-branch push mutex (see remoteIndex.Push) and
+// LockPush acquires the per-branch push mutex (see remotesync.Index.Push) and
 // returns its unlock. It is held for a whole push, network included, which is
 // why it must never be the write lock.
 func (rh *Repo) LockPush(branch string) func() {

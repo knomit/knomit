@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"knomit/internal/store/internal/sqlite"
 	"path/filepath"
 	"testing"
 
@@ -20,7 +21,7 @@ func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 	branchID, err := si.RepoForTest().BranchID(context.Background(), branch)
 	require.NoError(t, err)
 	var data []byte
-	err = conn(context.Background(), si.RepoForTest().DB()).QueryRowContext(context.Background(), `
+	err = sqlite.Conn(context.Background(), si.RepoForTest().DB()).QueryRowContext(context.Background(), `
 		SELECT fv.embedding
 		FROM facts_vec fv
 		JOIN branch_facts bf ON bf.fact_id = fv.rowid

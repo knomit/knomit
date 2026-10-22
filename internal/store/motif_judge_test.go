@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/store/internal/sqlite"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -104,7 +105,7 @@ func TestMotifJudge_MergeGoesInertWhenItsVocabularyVanishes(t *testing.T) {
 	// retirement rather than to a change in meaning.
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.Equal(t, groupingKey("silent-fallback"), key,
+	require.Equal(t, sqlite.GroupingKey("silent-fallback"), key,
 		"a surviving cluster must be identified by a LIVE key, never by the key of "+
 			"vocabulary that has left the corpus")
 }
@@ -206,7 +207,7 @@ func TestMotifJudge_ChainSurvivesTheRetirementOfItsMiddle(t *testing.T) {
 	// retired middle's.
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.Contains(t, []string{groupingKey("silent-fallback"), groupingKey("mute-failover")}, key,
+	require.Contains(t, []string{sqlite.GroupingKey("silent-fallback"), sqlite.GroupingKey("mute-failover")}, key,
 		"the surviving cluster must be keyed by live vocabulary")
 
 	// The retired spelling itself is gone.

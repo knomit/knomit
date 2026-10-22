@@ -28,7 +28,7 @@ func (b *BranchHandle) Drop() {
 	t.Helper()
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		err = svc.DropBranch(context.Background(), b.name)
+		err = storetest.DropBranch(context.Background(), svc, b.name)
 	})
 	if err != nil {
 		t.Fatalf("Drop(%s): %v", b.name, err)

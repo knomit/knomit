@@ -49,8 +49,8 @@ const FirstParentChainCTE = `
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
 // ResolveActiveCommitForPath lives on Repo (it only needs rh.db) so its
-// callers — factIndex, searchIndex, factQuery and graphStore — share it directly —
-// factIndex's fallback-before read resolves the last-valid version through the
+// callers — facts.Index, index.Index, index.FactQuery and index.GraphStore — share it directly —
+// facts.Index's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
 func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {

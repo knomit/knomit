@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/store/internal/sqlite"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -125,7 +126,7 @@ func TestTokenDF_Motif_UnresolvedCorpusStillSeparatesDistinctMechanisms(t *testi
 	// The precondition: these two share no stemmed tokens, so only a judge could
 	// ever join them. A fixture where they happened to group would be testing
 	// nothing about the distinction.
-	require.NotEqual(t, groupingKey("silent-fallback"), groupingKey("quiet-degradation"),
+	require.NotEqual(t, sqlite.GroupingKey("silent-fallback"), sqlite.GroupingKey("quiet-degradation"),
 		"precondition: token-disjoint spellings")
 
 	// No RebuildAliases, no judge decision.

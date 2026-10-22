@@ -12,14 +12,13 @@ import "knomit/internal/store/internal/vcs"
 // vcs.Repo (vr, never embedded, so none of its methods is promoted onto this
 // type or onto whatever holds it) plus the merge and experiment methods.
 // Service.Merge hands this type out to callers outside the store, which is why
-// it must stay free of vcs methods; the parent's repoHandler embeds it beside
-// *vcs.Repo for its own calls. Embedding is not virtual: nothing in here calls
-// a method declared on the parent's repoHandler.
+// it must stay free of vcs methods; the parent holds it as the named Service
+// field mr for its own calls.
 type Repo struct {
 	vr *vcs.Repo
 }
 
 // NewRepo wraps the vcs handle. The wrapper holds no state of its own; the
-// vcs.Repo pointer is shared with the parent's repoHandler, so setters called
-// on either side configure the same handle.
+// vcs.Repo pointer is shared with the parent's other handles, so setters called
+// on any of them configure the same handle.
 func NewRepo(r *vcs.Repo) *Repo { return &Repo{vr: r} }

@@ -137,7 +137,7 @@ func (s *Service) InitRepoWithUpstream(ctx context.Context, initFiles map[string
 	// Seed the per-agent watermark to the initial commit (which is exactly
 	// the local-upstream hash at this point). On the next reconcileAgent the
 	// walk will use this as its stop point.
-	if err := s.rh.WriteAgentBase(agentBranch, lastCommit); err != nil {
+	if err := s.rr.WriteAgentBase(agentBranch, lastCommit); err != nil {
 		return fmt.Errorf("InitRepo: seed agent watermark: %w", err)
 	}
 

@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
+	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -206,7 +207,7 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 		require.NoError(t, herr)
 		originTip = tip
 		// Lose the local upstream while origin/main stays behind.
-		require.NoError(t, svc.DropBranch(ctx, "main"))
+		require.NoError(t, storetest.DropBranch(ctx, svc, "main"))
 		_, herr = svc.HeadCommit(ctx, "main")
 		require.Error(t, herr, "the fixture must actually have removed main")
 	}))

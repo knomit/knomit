@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"knomit/internal/store/internal/sqlite"
 	"testing"
 
 	"knomit/internal/store/vocab"
@@ -173,9 +174,9 @@ func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 	// two spellings DIFFER and share a grouping key. A fixture that can
 	// degenerate silently, will.
 	require.NotEqual(t, "silent-fallback", "silent-fallbacks")
-	require.Equal(t, groupingKey("silent-fallback"), groupingKey("silent-fallbacks"),
+	require.Equal(t, sqlite.GroupingKey("silent-fallback"), sqlite.GroupingKey("silent-fallbacks"),
 		"the fixture only exercises collapsing if the two spellings group together")
-	require.NotEqual(t, groupingKey("silent-fallback"), groupingKey("config-drift"),
+	require.NotEqual(t, sqlite.GroupingKey("silent-fallback"), sqlite.GroupingKey("config-drift"),
 		"...and only exercises separation if the third does not")
 
 	table, err := svc.Motifs().AliasTable(ctx, branch)

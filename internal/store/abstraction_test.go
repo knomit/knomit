@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/store/internal/sqlite"
 	"path/filepath"
 	"testing"
 
@@ -223,7 +224,7 @@ func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
 			"precondition: %s holds the doomed branch's state", table)
 	}
 
-	require.NoError(t, svc.DropBranch(ctx, "agent/doomed"),
+	require.NoError(t, svc.rh.DropBranch(ctx, "agent/doomed"),
 		"a branch carrying shortlist state must still drop cleanly")
 
 	branches, err := svc.ListBranches(ctx)
@@ -254,7 +255,7 @@ func TestAbstraction_DropBranchRefusesWithoutRowsHook(t *testing.T) {
 	require.NoError(t, err)
 
 	svc.rh.SetOnDropBranchRows(nil)
-	err = svc.DropBranch(ctx, "agent/kept")
+	err = svc.rh.DropBranch(ctx, "agent/kept")
 	require.ErrorIs(t, err, vcs.ErrNoDropBranchRowsHook)
 
 	// Nothing was removed: the ref still resolves and the branches row stays.
@@ -444,13 +445,13 @@ func TestCosineSim_OrthogonalIsZeroNotNull(t *testing.T) {
 
 	var sim *float64
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
-		float32SliceToBytes(a), float32SliceToBytes(b)).Scan(&sim))
+		sqlite.Float32SliceToBytes(a), sqlite.Float32SliceToBytes(b)).Scan(&sim))
 	require.NotNil(t, sim, "orthogonal vectors have a similarity, and it is 0")
 	require.InDelta(t, 0.0, *sim, 1e-9)
 
 	// A zero-norm vector genuinely has none.
 	require.NoError(t, svc.rh.DB().QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
-		float32SliceToBytes(a), float32SliceToBytes(make([]float32, 8))).Scan(&sim))
+		sqlite.Float32SliceToBytes(a), sqlite.Float32SliceToBytes(make([]float32, 8))).Scan(&sim))
 	require.Nil(t, sim, "a degenerate vector has no similarity to anything")
 
 	require.InDelta(t, 0.0, model.CosineSim(a, b), 1e-9)

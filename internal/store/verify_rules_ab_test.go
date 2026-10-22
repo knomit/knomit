@@ -728,15 +728,16 @@ func TestRulesAB_NoPKIIsToday(t *testing.T) {
 	require.Equal(t, 14, ran)
 }
 
-// FleetPKIAt reads nothing when there is no root.crt, and the three paths
+// FleetAt's PKI reads nothing when there is no root.crt, and the three paths
 // when there is, from the store's own branch.
-func TestFleetPKIAt_ReadsArtifacts(t *testing.T) {
+func TestFleetAt_ReadsPKIArtifacts(t *testing.T) {
 	p := newTestFleetPKI(t)
 	x := namedSigner(t, "x")
 	leaf, serial := p.leaf("agent-x", x)
 	h := newFleetPushHost(t, with(p.artifacts(p.crl(serial), map[string]string{"agent-x": leaf})))
-	got, err := h.svc.FleetPKIAt("main")
+	fleet, err := h.svc.FleetAt("main")
 	require.NoError(t, err)
+	got := fleet.PKI
 	require.NotNil(t, got)
 	require.NoError(t, got.RootErr)
 	require.Equal(t, p.root.Cert.Raw, got.Root.Raw)
@@ -754,7 +755,7 @@ func TestFleetPKIAt_ReadsArtifacts(t *testing.T) {
 	require.Nil(t, upper, "no case folding")
 
 	bare := newFleetPushHost(t, nil)
-	got, err = bare.svc.FleetPKIAt("main")
+	bareFleet, err := bare.svc.FleetAt("main")
 	require.NoError(t, err)
-	require.Nil(t, got, "no root.crt: no PKI")
+	require.Nil(t, bareFleet.PKI, "no root.crt: no PKI")
 }

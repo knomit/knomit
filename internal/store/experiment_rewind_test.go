@@ -30,7 +30,7 @@ func expRwSetup(t *testing.T) (*Service, plumbing.Hash) {
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	c1 := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), c1)))
-	require.NoError(t, svc.rh.WriteAgentBase("agent/test", c1))
+	require.NoError(t, svc.rr.WriteAgentBase("agent/test", c1))
 	return svc, c1
 }
 
@@ -40,7 +40,7 @@ func expRwPushSecret(t *testing.T, svc *Service) plumbing.Hash {
 	t.Helper()
 	x := plumbing.NewHash(writeMergeFact(t, svc, "agent/test", scrubbedPath, "S", "scrub me"))
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), x)))
-	require.NoError(t, svc.rh.WriteAgentBase("agent/test", x))
+	require.NoError(t, svc.rr.WriteAgentBase("agent/test", x))
 	return x
 }
 
@@ -50,7 +50,7 @@ func expRwRewind(t *testing.T, svc *Service, parent plumbing.Hash, path string) 
 	t.Helper()
 	u := upstreamCommit(t, svc, parent, path, "---\ntype: observation\n---\n# U\n\n"+path+"\n")
 	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), u)))
-	res, err := svc.rh.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins)
+	res, err := svc.rr.ReconcileAgentRebaseForTest(context.Background(), "agent/test", "main", merge.StrategyLocalWins)
 	require.NoError(t, err)
 	// Each test gives the agent branch a write of its own first: a branch with
 	// nothing of its own beyond the watermark is kept as it stands by a rewind
