@@ -139,7 +139,7 @@ func productionSourceNaming(t *testing.T, needles []string, allowed ...string) [
 		}
 		if d.IsDir() {
 			// Skipped by PATH at the module root, never by name: a name match
-			// ("web") also exempted internal/web, the package the wizard fix
+			// ("web") also exempted internal/edge/web, the package the wizard fix
 			// lives in.
 			rel, _ := filepath.Rel(root, path)
 			switch rel {

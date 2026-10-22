@@ -33,7 +33,7 @@ import (
 //   - store/remotesync/remote_sync.go Sync() persists last_status/last_error on EVERY return
 //     (updateRemoteStatus in the deferred block), so a 401 that reaches Sync's
 //     fetch and returns an error is recorded → expected GREEN for this path.
-//   - The known silent-anonymous downgrade lives in internal/repos/sync.go
+//   - The known silent-anonymous downgrade lives in internal/corpus/repos/sync.go
 //     makeRemoteAuthFn (line ~27): if resolveAuthWithOrigin RETURNS AN ERROR it
 //     logs "using anonymous" and returns nil. That path is only hit when auth
 //     RESOLUTION fails (e.g. an unreadable SSH key), NOT when a well-formed

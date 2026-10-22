@@ -13,10 +13,10 @@ import (
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	kmcp "knomit/internal/edge/mcp"
 	"knomit/internal/engine/store"
-	kmcp "knomit/internal/mcp"
-	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
 )
 

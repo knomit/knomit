@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/repos"
 	"knomit/test/testenv/gitserver"
 )
 

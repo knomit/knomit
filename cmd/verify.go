@@ -13,8 +13,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"knomit/internal/app"
+	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/config"
-	"knomit/internal/repos"
 )
 
 // Exit codes. Kept as named constants because the difference between 1 and 2 is

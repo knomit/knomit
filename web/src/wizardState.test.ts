@@ -622,7 +622,7 @@ describe('authFor', () => {
 });
 
 describe('isValidRepoName', () => {
-  // Mirrors internal/repos/manager.go's isValidRepoName exactly: non-empty,
+  // Mirrors internal/corpus/repos/manager.go's isValidRepoName exactly: non-empty,
   // lowercase alphanumerics, '-' and '_'. Anything else is a 400 from POST
   // /repos, and the point of having this client-side is that the user never
   // meets that 400.

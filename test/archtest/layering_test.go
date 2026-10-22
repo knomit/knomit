@@ -31,7 +31,7 @@ func deps(t *testing.T, pkg string) []string {
 // the test harness — several of them precisely because it is pure: it classifies
 // and formats, it does not read a corpus. The split is deliberate and recorded:
 // fact.ClassifyRef answers what KIND a ref is, while whether a ref RESOLVES is
-// commit-dependent and lives in internal/refs, which may import the store.
+// commit-dependent and lives in internal/corpus/refs, which may import the store.
 //
 // Without this guard the boundary is a doc comment. The failure it prevents is
 // silent rather than loud: adding a store call to internal/domain/fact still compiles,
@@ -42,12 +42,12 @@ func deps(t *testing.T, pkg string) []string {
 func TestFactStaysPure(t *testing.T) {
 	forbiddenByFact := []string{
 		"knomit/internal/engine/store",
-		"knomit/internal/repos",
+		"knomit/internal/corpus/repos",
 		"knomit/internal/engine/embeddings",
-		"knomit/internal/refs",
-		"knomit/internal/web",
-		"knomit/internal/mcp",
-		"knomit/internal/synthesize",
+		"knomit/internal/corpus/refs",
+		"knomit/internal/edge/web",
+		"knomit/internal/edge/mcp",
+		"knomit/internal/corpus/synthesize",
 	}
 
 	for _, dep := range deps(t, "knomit/internal/domain/fact") {
@@ -55,7 +55,7 @@ func TestFactStaysPure(t *testing.T) {
 			if dep == f || strings.HasPrefix(dep, f+"/") {
 				t.Errorf("internal/domain/fact transitively imports %q — it must stay the pure leaf that "+
 					"every other layer can import cheaply. Ref classification belongs here; anything "+
-					"needing corpus access or repo identity belongs in internal/refs.", dep)
+					"needing corpus access or repo identity belongs in internal/corpus/refs.", dep)
 			}
 		}
 	}
@@ -71,7 +71,7 @@ func TestFactStaysPure(t *testing.T) {
 // import of the parent one line away.
 //
 // That import would be silent and expensive: internal/engine/store, internal/foundation/config and
-// internal/synthesize all import params, so an edge upward would link the ONNX
+// internal/corpus/synthesize all import params, so an edge upward would link the ONNX
 // runtime into the store, the config loader, and every binary that touches
 // either. Being importable without cgo is the entire reason the package exists,
 // so the check here is the strictest available — zero non-stdlib imports, which

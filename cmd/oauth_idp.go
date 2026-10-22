@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"knomit/internal/edge/oauth/idp"
 	"knomit/internal/foundation/config"
-	"knomit/internal/oauth/idp"
 )
 
 // githubAPIBase, when set (tests only), points the resolve helper at a

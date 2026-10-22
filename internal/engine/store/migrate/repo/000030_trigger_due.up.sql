@@ -1,6 +1,6 @@
 -- F07 PR 2: the trigger dispatcher's third table, the `on: due` marks (see
 -- internal/engine/store/triggers.go DueMarks/AdvanceTriggerWatermarks and the sweep in
--- internal/repos/triggers.go). LOCAL CACHE like the other two: never synced,
+-- internal/corpus/repos/triggers.go). LOCAL CACHE like the other two: never synced,
 -- never copied onto exp/<name>, untouched by an index rebuild (rebuildFacts
 -- writes facts, fact_expires, the junctions and branch_facts only), so a
 -- rebuild neither re-arms a processed fact nor forgets a mark; a lost table

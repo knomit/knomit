@@ -1,0 +1,548 @@
+// Package synthesize — shared types and helpers used across synthesis steps
+// (prune, distill, decision, dedup, validation, review).
+package synthesize
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// ProgressEvent carries progress information from the pipeline to the caller.
+type ProgressEvent struct {
+	Phase   string
+	Message string
+}
+
+// flexStrings unmarshals from either a JSON string ("x") or array (["x","y"]).
+// Small LLMs sometimes return a bare string where an array is expected.
+type flexStrings []string
+
+func (f *flexStrings) UnmarshalJSON(b []byte) error {
+	// Try array first.
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+	// Fall back to single string.
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		*f = []string{}
+	} else {
+		*f = []string{s}
+	}
+	return nil
+}
+
+// PruneDecision is the LLM's decision for a single fact.
+type PruneDecision struct {
+	Path       string  `json:"path"`
+	Action     string  `json:"action"` // "keep" | "retract" | "update"
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
+// mergedFact is the embedded merged fact object from the LLM response.
+type mergedFact struct {
+	Path       string      `json:"path"`
+	Title      string      `json:"title"`
+	Body       string      `json:"body"`
+	Type       string      `json:"type"`
+	Domain     flexStrings `json:"domain"`
+	Confidence float64     `json:"confidence"`
+	Sources    int         `json:"sources"`
+	Entities   flexStrings `json:"entities"`
+	Refs       flexStrings `json:"refs"`
+	// Motifs is OPTIONAL and its absence is meaningful: §2.1 says zero is
+	// correct. That is why it gets no requireResponseKey probe — the probe
+	// exists for ENVELOPE keys, where a missing key means content was lost
+	// under a wrong name (invariant 51d85fcd). Here a missing key means the
+	// merged claim exemplifies no regularity its members named, which is a
+	// legitimate answer and the commonest one.
+	Motifs flexStrings `json:"motifs"`
+}
+
+// MergeEntry groups source paths with the merged replacement fact.
+type MergeEntry struct {
+	Paths  []string   `json:"paths"`
+	Merged mergedFact `json:"merged"`
+}
+
+// PruneResult is the full JSON response from the LLM prune call.
+type PruneResult struct {
+	Decisions []PruneDecision `json:"decisions"`
+	Merges    []MergeEntry    `json:"merges"`
+}
+
+// factForLLM is the subset of fact fields sent to the LLM.
+// The Path field uses json:"path" to match the output schema (PruneDecision.Path,
+// distillFact.Path) so small models don't have to map between field names.
+//
+// Origin (Plan 01 fact.Origin) is included so the bridge-seeding pass can
+// exclude facts that were themselves discovered — Plan 03 §7 idempotency: a
+// discovered fact must never become the seed for another discovery, otherwise
+// the engine drifts away from the human-authored substrate.
+type factForLLM struct {
+	File     string   `json:"path"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	Type     string   `json:"type"`
+	Domain   []string `json:"domain"`
+	Entities []string `json:"entities"`
+	// Motifs is what the judges see of the members' aspect axis (§2.1). It is
+	// shown so prune and distill can carry a motif over to the fact that
+	// replaces them; without it the merged claim silently loses the regularity
+	// its members named, and no derived state can rebuild it.
+	Motifs     []string `json:"motifs,omitempty"`
+	Confidence float64  `json:"confidence"`
+	Sources    int      `json:"sources"`
+	Origin     string   `json:"origin,omitempty"`
+	// Context (F22) is shown to the judges as DATA inside the fact's JSON,
+	// next to its body — never interpolated into instruction text (no prompt
+	// template references it). omitempty, so a context-free cluster's bytes,
+	// goldens and page sizes are unchanged. Filled where a projection reads an
+	// existing fact (prune and distill members, cousins, the in-flight
+	// refresh, the restatement shortlist); bridge and discovery seeds and
+	// freshly distilled facts carry none.
+	Context map[string]any `json:"context,omitempty"`
+	// Kind is the fact's kind as the index or the parsed fact carries it
+	// ("epistemic" / "pragmatic"). It exists for dedupCluster's cross-kind
+	// guard (knomit#308): that guard fails CLOSED on "", so every projection
+	// site must fill it — a site that forgets makes its facts unmergeable,
+	// which is safe, rather than mergeable with anything, which is not.
+	// Never normalise "" to epistemic at a use site: that would silently
+	// re-admit a pragmatic fact whose kind a projection dropped.
+	//
+	// json:"-" for the same reason as LineageRefs: judges are not shown it, so
+	// no prompt, golden or paging byte moves.
+	Kind string `json:"-"`
+	// LineageRefs holds this fact's refs REDUCED TO THE LOCAL FACT PATHS THEY
+	// NAME, canonicalized — not the raw ref strings. It exists for the one-hop
+	// lineage exclusion in bridge candidate scoring (#125), which needs to ask
+	// "does this member cite that member?" without an index or a graph walk.
+	//
+	// Normalization happens at the projection sites, not here, because it needs
+	// this repo's own 12-hex id: refs are STORED CANONICAL as
+	// kb://<own-id12>/<path>, so a raw ref string never equals a member's path
+	// and a lineage test over unnormalized refs excludes NOTHING while looking
+	// like it works. Populate it only via localFactRefPaths(f.Refs, localRepoID).
+	//
+	// json:"-" deliberately: this is scoring data, never prompt data. The LLM
+	// payload's bytes are unchanged by its presence, so no prompt, golden, or
+	// paging expectation moves.
+	LineageRefs []string `json:"-"`
+}
+
+// extractJSON strips optional markdown code fences from LLM output.
+func extractJSON(text string) string {
+	text = strings.TrimSpace(text)
+	// Strip <think>...</think> blocks (used by small models for chain-of-thought)
+	if idx := strings.Index(text, "</think>"); idx >= 0 {
+		text = strings.TrimSpace(text[idx+len("</think>"):])
+	}
+	// Strip ```json ... ``` or ``` ... ```
+	if strings.HasPrefix(text, "```") {
+		end := strings.LastIndex(text, "```")
+		if end > 3 {
+			inner := text[3:end]
+			if idx := strings.IndexByte(inner, '\n'); idx >= 0 {
+				inner = inner[idx+1:]
+			}
+			return strings.TrimSpace(inner)
+		}
+	}
+	return text
+}
+
+// requireResponseKey enforces the `required` list that a work item's
+// response_schema already advertises. encoding/json silently drops keys it
+// does not recognise, so a response that carried its content under the wrong
+// name — {"facts": [...]} against a distill item, say — unmarshalled into a
+// zero-valued result, passed the path validators (which only inspect fields
+// that were never populated), and applied as a no-op. The item advanced, no
+// error surfaced, and the work was gone. Checking presence on the raw object
+// is what turns that into a loud, retryable failure.
+//
+// Presence, not non-emptiness: an explicitly empty array is a legitimate
+// "nothing to do" for every step, and rejecting it would wedge any session
+// whose agent honestly had nothing to contribute.
+//
+// A raw payload that is not a JSON object at all yields nil here; the typed
+// unmarshal the caller already ran is the authority on malformed input, and
+// its message is the more useful one.
+func requireResponseKey(raw, key string) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return nil
+	}
+	if _, ok := probe[key]; ok {
+		return nil
+	}
+	if len(probe) == 0 {
+		return fmt.Errorf("response object is empty: required key %q is missing", key)
+	}
+	got := make([]string, 0, len(probe))
+	for k := range probe {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	return fmt.Errorf("response is missing required key %q; got: %s", key, strings.Join(got, ", "))
+}
+
+// parsePruneResponse parses the LLM JSON response for a prune step.
+func parsePruneResponse(text string) (PruneResult, error) {
+	raw := extractJSON(text)
+	var result PruneResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w (raw: %.200s)", err, raw)
+	}
+	if err := requireResponseKey(raw, "decisions"); err != nil {
+		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w", err)
+	}
+	return result, nil
+}
+
+// maxDeliveredItemBytes bounds ONE delivered PAGE — the whole marshalled
+// ReviewResult as internal/edge/mcp/review.go returns it, not just its facts.
+//
+// This is the budget that actually binds, and naming it is the point. The
+// previous single constant was derived from a MODEL CONTEXT rationale ("~16K
+// tokens: comfortably inside every hosting model's context window"), which was
+// true and irrelevant: the model's context never rejected anything. The
+// CLIENT's MCP tool-result cap did. Seven real distill payloads (sessions
+// 2b56c148-…, 284faa87-…) each sat just under the old 64 KiB fact budget, were
+// delivered at 68.6–73.9 KB, and were spilled to disk unread.
+//
+// 32 KiB against a limit known only by observation — Claude Code defaults
+// MAX_MCP_OUTPUT_TOKENS to 25,000 — leaves headroom for fact bodies that grow
+// over time. Raising MAX_MCP_OUTPUT_TOKENS is a per-user harness setting, never
+// something this package may assume.
+const maxDeliveredItemBytes = 32 * 1024
+
+// pageEnvelopeReserveBytes reserves everything on a delivered page that is not
+// facts: the prompt, the response schema, the paging fields, and the
+// ReviewResult envelope around them. Page 1 is the tight case — it alone
+// carries the prompt and schema — so later pages simply run with more slack.
+//
+// Measured, and pinned: TestDeliveredPage_EnvelopeFitsItsReserve renders every
+// paging step type with a full-size methodology section (the largest prompt the
+// distill path can produce) and fails if the envelope outgrows this.
+//
+// The measured worst case is 9,881 bytes (2026-09-14), against the 5,893 this
+// comment recorded when the reserve was 8 KiB. That drift is the reason the
+// reserve moved to 12 KiB: the distill prompt gained the positive mechanism
+// test, the load-bearing/provenance split and the retraction section, and at
+// 8 KiB the envelope had 103 bytes of headroom left — it was one prompt edit
+// from over-promising.
+//
+// The rest-bucket and declined-reason work has since landed and was measured
+// rather than projected: the worst case is the distill REMAINDER branch at
+// 11,847 bytes, leaving 441. (The projection was 11,558; the difference is a
+// description on the subgroups_considered schema property, kept deliberately —
+// it helps the model more than the headroom helps us.) Both distill branches
+// are measured by the test above, because the remainder ask is the larger of
+// the two. 441 bytes is thin: trim prose here before raising the reserve again,
+// and re-measure rather than assume.
+//
+// Measure with the item's PRODUCTION step type. An earlier reading said 11,857
+// because the test's subtest name had been reused as Item.Type, which is
+// delivered on the page — a fixture measuring a payload the system never emits.
+//
+// The envelope also carries what a page-1 START result adds: the repo
+// identity and abandoned_* fields, and the `next` line every result carries
+// (longest on the unscoped endpoint). On a multi-page item page 1 also carries
+// page, pages, more_available, the item's paging line and the longer "read
+// on" `next`. Measured with all of those, the worst case is page 1 of a
+// multi-page distill remainder at 12,432 bytes (a single-page one is 12,302),
+// over 12 KiB; the reserve is 12.5 KiB, leaving 368. Trim prose before raising
+// it again, and re-measure.
+const pageEnvelopeReserveBytes = 12*1024 + 512
+
+// maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
+// — after the indentation json.MarshalIndent applies in internal/edge/mcp/review.go,
+// not in the compact form the store holds.
+//
+// The unit is the whole point, and it is why this is a subtraction rather than
+// a percentage of the compact size. Indentation adds a newline plus indent per
+// JSON TOKEN, not per byte, so the expansion factor is a function of how MANY
+// facts a page holds, not how large each one is. A ratio calibrated on the
+// incident's ~2 KiB-body facts held only there: at 1 KiB bodies a full page
+// delivered 33.5 KB, at 200 B bodies 40.6 KB, at 50 B bodies 46.4 KB — all
+// against a 32 KiB cap, which is the original defect reproduced at a different
+// fact size. deliveredFactsLen measures the artifact instead of predicting it.
+const maxPageFactBytes = maxDeliveredItemBytes - pageEnvelopeReserveBytes
+
+// maxItemBytes bounds what ONE work item holds — i.e. what the agent must
+// accumulate across pages before answering. This is the second of the two
+// budgets whose conflation was the original defect: maxPageFactBytes is a
+// TRANSPORT limit (client-side, what fits in one tool result), maxItemBytes is
+// a COGNITION limit (model-side, what can be reasoned over at once).
+//
+// Paging is what let them separate. Before it, an item shipped in a single
+// response, so the transport limit doubled as the item limit and the only lever
+// for an undeliverable item was to show the model less.
+//
+// It is a backstop, not a routine constraint. Since depth-0 distill groups by
+// cluster (see distillGroups), item size is normally bounded by the community's
+// own size; this catches the pathological mega-community, and — until every
+// step type pages — keeps a first run over a large corpus from becoming one
+// prompt. It is the knob most likely to want per-repo tuning, because unlike
+// the transport limit it genuinely differs per deployment: this package
+// accommodates small local models that cannot hold what a long-context hosted
+// model can, however small each page is.
+const maxItemBytes = 256 * 1024
+
+// chunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
+//
+// A single fact larger than maxBytes still gets its own chunk (it cannot be
+// split further), so the bound is best-effort for pathological facts.
+func chunkFacts(facts []factForLLM, maxBytes int) [][]factForLLM {
+	var chunks [][]factForLLM
+	var current []factForLLM
+	currentSize := 0
+
+	for _, f := range facts {
+		b, _ := json.Marshal(f)
+		size := len(b)
+		if currentSize+size > maxBytes && len(current) > 0 {
+			chunks = append(chunks, current)
+			current = nil
+			currentSize = 0
+		}
+		current = append(current, f)
+		currentSize += size
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+	return chunks
+}
+
+// ReviewResult is returned from StartSession and ContinueSession.
+type ReviewResult struct {
+	SessionID string `json:"session_id"`
+	// Repo, RepoID and WriteBranch say WHERE this session operates
+	// (knomit#113). knomit_review takes no repo argument — the binding decides
+	// — so without these a session through a multi-mount lens cannot confirm
+	// which corpus it seeded from or where its answers will write. The fleet
+	// had to derive it from path-prefix formatting: a correct instrument
+	// nobody should have had to invent. knomit_learn already returns where it
+	// wrote; this makes review match.
+	//
+	// Start turn only. The identity does not change mid-session, and repeating
+	// it on every continue is noise that trains a reader to skip the envelope.
+	Repo        string `json:"repo,omitempty"`
+	RepoID      string `json:"repo_id,omitempty"`
+	WriteBranch string `json:"write_branch,omitempty"`
+	// AbandonedSession names the in-flight session this one DISPLACED, if any.
+	//
+	// Starting a session abandons any active session for the same tool+branch.
+	// Deliberate, but silent on both sides: the winner did not know it took the
+	// slot, and the loser found out only when its next answer was rejected as
+	// "not active" — after composing one. Nothing can notify the loser; this
+	// lets the winner's result say what it displaced.
+	AbandonedSession string `json:"abandoned_session,omitempty"`
+	// AbandonedSessionCreatedBy names WHO opened the session this one
+	// displaced. `abandoned_session` alone is an id with nothing behind it —
+	// the loser's row is reapable and a resuming caller cannot look it up
+	// later. Read it as a correlation handle, not an identity: see the
+	// created_by column comment (knomit#123).
+	AbandonedSessionCreatedBy string `json:"abandoned_session_created_by,omitempty"`
+	// Resumed is true when a start joined the session already in progress on
+	// this branch instead of opening one; session_id and item are that
+	// session's.
+	Resumed  bool            `json:"resumed,omitempty"`
+	Item     *ReviewItem     `json:"item,omitempty"`
+	Done     bool            `json:"done,omitempty"`
+	Summary  *ReviewStats    `json:"summary,omitempty"`
+	Progress *ReviewProgress `json:"progress,omitempty"`
+	// Health carries corpus-health descriptors for this session. Read by the
+	// agent, by nothing in the engine.
+	Health []string `json:"health,omitempty"`
+	// Next says what to call now, naming the session_id to pass. Set by the
+	// MCP handler, which knows whether the caller must also pass a binding.
+	Next string `json:"next,omitempty"`
+}
+
+// ReviewItem describes a single work item for the hosting model.
+type ReviewItem struct {
+	// ID identifies this specific work item. Clients should echo it back as
+	// `item_id` on the continue call: the queue can grow between render and
+	// answer (applying a distill item enqueues RAPTOR follow-ups), so echoing
+	// the id is what proves the response is for the item that was rendered.
+	// Additive and optional — omitting it preserves the pre-D2 behaviour of
+	// answering whatever item is current.
+	ID             int64  `json:"id"`
+	Type           string `json:"type"` // "prune", "distill", or "reflect"
+	Prompt         string `json:"prompt"`
+	ResponseSchema string `json:"response_schema"`
+	// Facts is THIS PAGE of the item's payload, carried as structural JSON
+	// rather than serialized into Prompt. RawMessage and not string on purpose:
+	// as a string every quote in the payload is escaped a second time on the
+	// wire, which is pure cost on the exact items that are already too large.
+	// Mirrors HypothesizeItem.Fact, which has always shipped this way.
+	Facts json.RawMessage `json:"facts,omitempty"`
+	// ClusterKey identifies what this item was grouped FROM, so an answering
+	// agent can tell what it is holding (knomit#120).
+	//
+	// Read it before deciding to no-op. Item types differ in what a non-answer
+	// costs: an ordinary prune cluster (`cluster-N`) is safe to skip, while a
+	// restatement pair (`restate-N`) is not — a no-op there records a declined
+	// verdict AND permanently retires the standing pair, recoverable only by an
+	// edit that re-mints it. Before this field the two were identical on the
+	// wire and the only safe rule was to judge every 2-fact prune as though it
+	// were destructive.
+	ClusterKey string `json:"cluster_key,omitempty"`
+
+	// Paging. An item whose facts exceed one tool result is served across
+	// several; the agent accumulates every page and answers once at the end.
+	// Page/Pages are 1-based. Prompt and ResponseSchema appear on page 1 only —
+	// they are already in context by the time later pages arrive.
+	Page  int `json:"page,omitempty"`
+	Pages int `json:"pages,omitempty"`
+	// MoreAvailable is true while pages remain. An answer submitted before it
+	// goes false is rejected; see CompletionToken.
+	//
+	// Deliberately NOT omitempty, unlike every other optional field here. The
+	// tool description, both paged prompt templates, and the `page` argument's
+	// own documentation all tell the agent to keep paging "until more_available
+	// is false" — and omitempty makes the final page carry no such field at all,
+	// so the one condition the protocol is expressed in terms of never appears.
+	// Absent is not false to a reader that was told to look for false. Twenty-two
+	// bytes on the final page against a ~3 KB margin is not a trade worth making
+	// on the single field the accumulate-then-respond contract turns on.
+	MoreAvailable bool `json:"more_available"`
+	// CompletionToken appears on the FINAL page only and must be echoed back
+	// with the response. Emitting it solely on the last page is what makes it
+	// proof the agent got there — the server can check that a multi-page item
+	// was actually read, rather than asking politely and hoping.
+	CompletionToken string `json:"completion_token,omitempty"`
+	// Next is the human-readable instruction for what to do with this page,
+	// carried beside the value it refers to so the agent does not have to
+	// reconstruct the protocol from the tool description mid-item.
+	Next string `json:"next,omitempty"`
+}
+
+// ReviewProgress tracks completed/remaining counts.
+type ReviewProgress struct {
+	Completed int `json:"completed"`
+	Remaining int `json:"remaining"`
+}
+
+// DistillResult is the LLM JSON response for a distill step.
+type DistillResult struct {
+	Synthesize []distillFact `json:"synthesize"`
+	Retract    []string      `json:"retract"`
+
+	// SubgroupsConsidered records the sub-groups weighed inside an unclustered
+	// remainder item, including rejected ones. Nothing branches on it; it is
+	// durable evidence of a choice the pipeline previously could not see, since
+	// an agent handed a leftover bin sub-clusters it silently and the system
+	// had no record of which groups were weighed or dropped.
+	SubgroupsConsidered []distillSubgroup `json:"subgroups_considered,omitempty"`
+
+	// DeclinedReason is set when Synthesize is empty. It is stored with the
+	// response and counted into the session health lines; nothing throttles on
+	// it. The enum lives in the schema, not here: an unknown value is kept as
+	// written so a future prompt can add one without a parser change.
+	DeclinedReason string `json:"declined_reason,omitempty"`
+	DeclinedNote   string `json:"declined_note,omitempty"`
+}
+
+// distillSubgroup is one sub-group an agent weighed inside a remainder item.
+// Synthesized false with a mechanism stated is the interesting row: it records
+// a group that was considered and rejected, which is exactly what was invisible
+// before.
+type distillSubgroup struct {
+	Members     []string `json:"members"`
+	Mechanism   string   `json:"mechanism"`
+	Synthesized bool     `json:"synthesized"`
+}
+
+// distillFact is a synthesized fact returned by the LLM in a distill step.
+type distillFact struct {
+	Path       string      `json:"path"`
+	Title      string      `json:"title"`
+	Body       string      `json:"body"`
+	Type       string      `json:"type"`
+	Domain     flexStrings `json:"domain"`
+	Confidence float64     `json:"confidence"`
+	Entities   flexStrings `json:"entities"`
+	Refs       flexStrings `json:"refs"`
+	// Optional; absence means none. See mergedFact.Motifs.
+	Motifs flexStrings `json:"motifs"`
+}
+
+// parseDistillResponse parses the LLM JSON response for a distill step.
+func parseDistillResponse(text string) (DistillResult, error) {
+	raw := extractJSON(text)
+	var result DistillResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w (raw: %.200s)", err, raw)
+	}
+	if err := requireResponseKey(raw, "synthesize"); err != nil {
+		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w", err)
+	}
+	return result, nil
+}
+
+// ReflectResult is the LLM JSON response for a reflect step. The contract
+// is a forced choice between reinforcing existing methodologies (the
+// default action) and proposing a new one (capped, dedup-checked, requires
+// a novelty argument). The server applies both arms — reinforce appends
+// the methodology fact's path to each cited transition fact's refs (so
+// reinforcement count is "facts that ref it"); propose writes a new
+// methodology fact via the standard fact-write path.
+type ReflectResult struct {
+	Reasoning string           `json:"reasoning"`
+	Reinforce []ReinforceEntry `json:"reinforce"`
+	Propose   []ProposeEntry   `json:"propose"`
+}
+
+// ReinforceEntry binds existing methodologies to the transitions they
+// explain. transition_paths must be a non-empty subset of the session's
+// recorded transitions; methodology_path must resolve to an existing
+// type=methodology fact on the branch.
+type ReinforceEntry struct {
+	MethodologyPath string   `json:"methodology_path"`
+	TransitionPaths []string `json:"transition_paths"`
+	Rationale       string   `json:"rationale"`
+}
+
+// ProposeEntry describes a brand-new methodology fact the agent wants the
+// server to write. NoveltyArgument is the agent's case for why no existing
+// methodology already captures this lesson — required because the prompt
+// already injects a candidate-existing-methodologies section, so the agent
+// has been shown what's available before proposing.
+//
+// Type is implicitly "methodology" — the server stamps it; agent input is
+// ignored here to keep the contract crisp.
+type ProposeEntry struct {
+	Title           string      `json:"title"`
+	Body            string      `json:"body"`
+	Domain          flexStrings `json:"domain"`
+	Entities        flexStrings `json:"entities"`
+	TopicPath       string      `json:"topic_path"`
+	Confidence      float64     `json:"confidence"`
+	Refs            flexStrings `json:"refs"`
+	TransitionPaths []string    `json:"transition_paths"`
+	NoveltyArgument string      `json:"novelty_argument"`
+}
+
+// parseReflectResponse parses the LLM JSON response for a reflect step.
+// It accepts code-fenced output (extractJSON strips fences and <think>
+// blocks) and returns a structurally-typed result; semantic validation
+// (cap, transition-path scope, novelty, etc.) lives in
+// validateReflectResponse and ApplyReflectDecisions.
+func parseReflectResponse(text string) (ReflectResult, error) {
+	raw := extractJSON(text)
+	var result ReflectResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return ReflectResult{}, fmt.Errorf("parseReflectResponse: %w (raw: %.200s)", err, raw)
+	}
+	return result, nil
+}

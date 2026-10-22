@@ -155,7 +155,7 @@ export type LensMembership = Pick<Lens, 'write' | 'reads'>;
 // store, or null when every member is readable.
 //
 // A lens binds ALL of its members or none. NewBindingOfLens
-// (internal/repos/binding.go) fails the whole lens the moment one member has no
+// (internal/corpus/repos/binding.go) fails the whole lens the moment one member has no
 // live instance — "a lens must never silently shrink its read set" — so a lens
 // with one dead mount is not a lens that lost a mount: every read endpoint
 // under it answers 503. GET /lenses/{lens} sits OUTSIDE the lens middleware and
@@ -260,8 +260,8 @@ function withEmbeddedBranch<T>(data: EmbeddedBranchEnvelope, key: 'branch' | 'wr
  * and its cap is more than an order of magnitude smaller. An editor shared by
  * both must say which one it is holding, or the difference only surfaces as a
  * 422.
- *   repos.MaxRepoDescriptionBytes — internal/repos/manifest.go
- *   repos.MaxLensDescriptionBytes — internal/repos/lens.go */
+ *   repos.MaxRepoDescriptionBytes — internal/corpus/repos/manifest.go
+ *   repos.MaxLensDescriptionBytes — internal/corpus/repos/lens.go */
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 
@@ -369,7 +369,7 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 // neither.
 export interface LensDirChild extends DirChild { path?: string; source?: { repo: string; id: string } }
 export interface LensBrowseResponse { path: string; children: LensDirChild[] }
-// FactRef mirrors internal/web/ref_view.go's RefView. `kind` is decided
+// FactRef mirrors internal/edge/web/ref_view.go's RefView. `kind` is decided
 // server-side by fact.ClassifyRef; for a fact in this repo, "fact" vs "broken"
 // additionally reflects existence AT THE VIEWED COMMIT, which only the server
 // can know. Never re-derive any of this from `raw` in the client.
@@ -1790,7 +1790,7 @@ export interface MotifCluster extends MotifEntry {
 }
 
 /** The server caps `limit` at 200 and 400s anything larger rather than clamping
- *  silently (internal/web/params.go). Clamping here keeps a caller's optimism
+ *  silently (internal/edge/web/params.go). Clamping here keeps a caller's optimism
  *  from becoming a failed request. */
 const MOTIFS_MAX_LIMIT = 200;
 
@@ -1981,7 +1981,7 @@ async function deleteLens(name: string): Promise<void> {
 // The operator's side of an OAuth login: a client such as Claude Code parked
 // a request on the OAuth listener, and this instance's operator approves or
 // denies it. The server admits these calls from the browser only with the
-// same-origin proof (internal/web/oauth_pending_api.go, browserProof): the
+// same-origin proof (internal/edge/web/oauth_pending_api.go, browserProof): the
 // custom header below, the Origin the browser adds to a POST by itself, and a
 // JSON body type on every mutation. ONLY these calls send the header — on the
 // desktop, where every call is cross-origin, adding it anywhere else would

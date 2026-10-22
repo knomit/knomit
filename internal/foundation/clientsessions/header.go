@@ -17,7 +17,7 @@ import (
 const ClientHeader = "X-Knomit-Client"
 
 // MaxFieldLen caps every client-supplied value — the same bound
-// internal/web/observability.go applies to logged request fields, for the
+// internal/edge/web/observability.go applies to logged request fields, for the
 // same reason: an unbounded value would ride into a DB column.
 const MaxFieldLen = 256
 

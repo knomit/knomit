@@ -120,7 +120,7 @@ func VerifyInstanceChain(leaf *x509.Certificate, intermediates []*x509.Certifica
 
 // IdentityOf reads the Identity of a leaf WITHOUT verifying it: fingerprint
 // and email SAN only. It must not be used to decide whether to trust a
-// certificate; its callers sit behind VerifyInstanceChain (internal/web's
+// certificate; its callers sit behind VerifyInstanceChain (internal/edge/web's
 // AuthMiddleware on the TLS listener, where every connection has already
 // passed VerifyConnection; the fleet judge, after its own chain check). The
 // fingerprint is computed from the leaf's public key, never read from a

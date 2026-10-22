@@ -16,10 +16,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
-	"knomit/internal/repos"
 )
 
 // StoryboardOpts controls Storyboard behavior. Zero value uses sensible

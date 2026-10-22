@@ -1,6 +1,6 @@
 // Package auth defines WHO a request comes from (Principal) and WHAT that
 // principal may do (Permission). It has no store dependency and no HTTP
-// dependency: internal/web and internal/mcp translate their transports
+// dependency: internal/edge/web and internal/edge/mcp translate their transports
 // into a Principal at the edge, and everything downstream reads only this.
 //
 // F19 revision 2: three ways in (certificate, token, socket), one principal,

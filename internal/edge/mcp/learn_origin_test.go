@@ -1,0 +1,348 @@
+package mcp
+
+import (
+	"context"
+	"maps"
+	"path/filepath"
+	"testing"
+
+	"knomit/internal/engine/store/model"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+)
+
+// newOriginTestRepo opens a fresh store with no ontology (so any topic is
+// writable) and a deterministic embedder, returning the service and a
+// repo-scoped context for driving LearnHandler.
+func newOriginTestRepo(t *testing.T) (*store.Service, context.Context, model.BatchEmbedder) {
+	t.Helper()
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	emb := newLenEmbedder(t)
+	svc.SetEmbedder(emb)
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "test",
+		AgentBranch:  "agent/test",
+		Svc:          svc,
+		OntologyRoot: "kb",
+		Embedder:     emb,
+	})
+	return svc, repos.WithRepoInstance(context.Background(), ri), emb
+}
+
+func learnReq(moment string, f map[string]any) mcpgo.CallToolRequest {
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"moment_name": moment,
+		"facts":       []any{f},
+	}
+	return req
+}
+
+func readBack(t *testing.T, svc *store.Service, path string) fact.Fact {
+	t.Helper()
+	res, err := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
+	require.NoError(t, err)
+	f, err := fact.ParseFact(path, res.Content)
+	require.NoError(t, err)
+	return f
+}
+
+// TestLearnHandler_OriginDiscoveredPersistsAndWeighs verifies that a fact an
+// agent saves with origin=discovered (the previewed-discovery workflow) is
+// written as discovered AND gets an evidence_weight computed from its local
+// refs — matching what the auto-apply discovery path would have produced.
+func TestLearnHandler_OriginDiscoveredPersistsAndWeighs(t *testing.T) {
+	svc, ctx, emb := newOriginTestRepo(t)
+
+	// Seed a source observation the discovered fact will cite.
+	r1, err := LearnHandler(emb)(ctx, learnReq("seed-source", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Source observation about agent memory",
+		"body":  "Agents persist memory across sessions.",
+		"type":  "observation", "confidence": 0.8, "sources": 2,
+		"domain": []any{"ai"}, "entities": []any{"memory"}, "refs": []any{},
+	}))
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "seed write failed: %s", resultText(t, r1))
+	sourcePath := mergedFactPath(t, r1)
+
+	// Save a discovered synthesis fact citing the source.
+	r2, err := LearnHandler(emb)(ctx, learnReq("save-discovered", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Emergent bridge: memory portability becomes the competitive axis",
+		"body":  "Bridging the source cluster yields this emergent claim.",
+		"type":  "synthesis", "confidence": 0.75, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"memory"},
+		"refs":   []any{sourcePath},
+		"origin": "discovered",
+	}))
+	require.NoError(t, err)
+	require.False(t, r2.IsError, "discovered write failed: %s", resultText(t, r2))
+
+	got := readBack(t, svc, mergedFactPath(t, r2))
+	require.Equal(t, fact.Discovered, got.Origin, "origin must persist as discovered")
+	require.Greater(t, got.EvidenceWeight, 0.0,
+		"evidence_weight must be computed from the local ref (source conf 0.8 × 2 sources)")
+}
+
+// TestLearnHandler_OriginDefaultsAuthored verifies that omitting origin leaves
+// the fact authored (the default) — ordinary learn calls are unchanged, and no
+// evidence_weight is computed for authored facts even when they cite a ref.
+func TestLearnHandler_OriginDefaultsAuthored(t *testing.T) {
+	svc, ctx, emb := newOriginTestRepo(t)
+
+	r1, err := LearnHandler(emb)(ctx, learnReq("seed-source", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Another source observation",
+		"body":  "Some grounded observation.",
+		"type":  "observation", "confidence": 0.9, "sources": 3,
+		"domain": []any{"ai"}, "entities": []any{"x"}, "refs": []any{},
+	}))
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "seed write failed: %s", resultText(t, r1))
+	sourcePath := mergedFactPath(t, r1)
+
+	// Use a non-synthesis type: a synthesis fact with omitted origin would
+	// parse back as distilled via the legacy frontmatter heuristic, which is a
+	// separate (pre-existing) behavior. An observation cleanly exercises the
+	// authored default.
+	r2, err := LearnHandler(emb)(ctx, learnReq("save-authored", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "A hand-authored observation that cites a fact",
+		"body":  "Authored, not from the discovery engine.",
+		"type":  "observation", "confidence": 0.7, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"x"},
+		"refs": []any{sourcePath},
+		// origin omitted
+	}))
+	require.NoError(t, err)
+	require.False(t, r2.IsError, "authored write failed: %s", resultText(t, r2))
+
+	got := readBack(t, svc, mergedFactPath(t, r2))
+	require.Equal(t, fact.Authored, got.Origin, "omitted origin must default to authored")
+	require.Equal(t, 0.0, got.EvidenceWeight,
+		"authored facts must not get an auto-computed weight (only distilled/discovered do)")
+}
+
+// TestLearnHandler_RejectsInvalidOrigin verifies a bad origin value is a clean
+// error, not a silent default.
+func TestLearnHandler_RejectsInvalidOrigin(t *testing.T) {
+	_, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("bad-origin", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Fact with a bogus origin",
+		"body":  "body",
+		"type":  "observation", "confidence": 0.7, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"x"}, "refs": []any{},
+		"origin": "invented",
+	}))
+	require.NoError(t, err)
+	require.True(t, r.IsError, "invalid origin must produce an error result")
+	require.Contains(t, resultText(t, r), "invalid origin")
+}
+
+// TestLearnHandler_RejectsDiscoveredObservation is a regression test for the
+// 2026-07-15 incident: an agent transcribing newsletter facts reasoned "I
+// didn't author this, I read it in the world → discovered" and wrote 15
+// observations with origin=discovered. origin records which pipeline minted
+// the fact, so discovered is only legal on the types the discovery engine
+// emits (synthesis, hypothesis); the error must steer the caller to authored.
+func TestLearnHandler_RejectsDiscoveredObservation(t *testing.T) {
+	_, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("newsletter-ingest", map[string]any{
+		"topic": "technology", "category": "security/advisories",
+		"title": "Vendor patched 57 CVEs this Patch Tuesday",
+		"body":  "Transcribed from a newsletter the agent read.",
+		"type":  "observation", "confidence": 0.8, "sources": 1,
+		"domain": []any{"security"}, "entities": []any{"cve"}, "refs": []any{},
+		"origin": "discovered",
+	}))
+	require.NoError(t, err)
+	require.True(t, r.IsError, "discovered+observation must be rejected")
+	msg := resultText(t, r)
+	require.Contains(t, msg, "discovery-engine output")
+	require.Contains(t, msg, "authored", "error must name the correct origin for source-transcribed facts")
+}
+
+// TestLearnHandler_RejectsDistilledNonSynthesis mirrors the discovered check
+// for the distill pipeline: distilled is only legal on type synthesis.
+func TestLearnHandler_RejectsDistilledNonSynthesis(t *testing.T) {
+	_, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("bad-distilled", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "An observation mislabeled as distilled",
+		"body":  "body",
+		"type":  "observation", "confidence": 0.7, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"x"}, "refs": []any{},
+		"origin": "distilled",
+	}))
+	require.NoError(t, err)
+	require.True(t, r.IsError, "distilled+observation must be rejected")
+	require.Contains(t, resultText(t, r), "synthesis-pipeline output")
+}
+
+// TestLearnHandler_AllowsDiscoveredHypothesis verifies the backward-bridge
+// preview path stays open: discovered pairs with type hypothesis.
+func TestLearnHandler_AllowsDiscoveredHypothesis(t *testing.T) {
+	svc, ctx, emb := newOriginTestRepo(t)
+
+	r, err := LearnHandler(emb)(ctx, learnReq("save-backward-bridge", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Abductive keystone that would entail the seed cluster",
+		"body":  "Hypothesis statement; evidence chain; reasoning; gaps; falsification condition.",
+		"type":  "hypothesis", "confidence": 0.5, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"memory"}, "refs": []any{},
+		"origin": "discovered",
+	}))
+	require.NoError(t, err)
+	require.False(t, r.IsError, "discovered+hypothesis must be accepted: %s", resultText(t, r))
+
+	got := readBack(t, svc, mergedFactPath(t, r))
+	require.Equal(t, fact.Discovered, got.Origin)
+}
+
+// TestLearnHandler_DedupMergeEmitsNoSelfCitation inverts what this test used to
+// assert. It pinned that the merge APPENDS the fact's own resulting path as
+// lineage, and that evidence_weight excludes it. #132 removed the append: a
+// fact citing itself is not lineage, because the retarget preserves the file
+// and git history already records the subsumption.
+//
+// The WEIGHT assertion is kept unchanged and is the more important half — it
+// held before via the read-side exclusion in localEvidenceRefs and must still
+// hold now that the ref is not written at all. Two independent reasons for one
+// number, which is why the merge change cannot quietly alter it.
+func TestLearnHandler_DedupMergeEmitsNoSelfCitation(t *testing.T) {
+	svc, ctx, emb := newOriginTestRepo(t)
+
+	// Seed the only legitimate source. weight must derive from THIS alone.
+	rs, err := LearnHandler(emb)(ctx, learnReq("seed-source", map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Grounded source for the bridge",
+		"body":  "An observation the discovered fact cites.",
+		"type":  "observation", "confidence": 0.8, "sources": 2,
+		"domain": []any{"ai"}, "entities": []any{"memory"}, "refs": []any{},
+	}))
+	require.NoError(t, err)
+	require.False(t, rs.IsError, "seed write failed: %s", resultText(t, rs))
+	sourcePath := mergedFactPath(t, rs)
+
+	// First discovered fact citing only the source. Its weight is the baseline
+	// (computed from the source alone).
+	discoveredFact := map[string]any{
+		"topic": "technology", "category": "ai/agents",
+		"title": "Emergent bridge claim about memory portability",
+		"body":  "Bridging the cluster yields this emergent claim.",
+		"type":  "synthesis", "confidence": 0.75, "sources": 1,
+		"domain": []any{"ai"}, "entities": []any{"memory"},
+		"refs":   []any{sourcePath},
+		"origin": "discovered",
+	}
+	r1, err := LearnHandler(emb)(ctx, learnReq("save-discovered-1", discoveredFact))
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "first discovered write failed: %s", resultText(t, r1))
+	firstPath := mergedFactPath(t, r1)
+	baseline := readBack(t, svc, firstPath).EvidenceWeight
+	require.Greater(t, baseline, 0.0, "baseline weight must be computed from the source")
+
+	// Save an identical-content discovered fact: the len-stub embedder yields an
+	// identical vector, forcing a dedup-merge into firstPath. The merge appends
+	// firstPath (the fact's own resulting path) to refs.
+	merging := map[string]any{}
+	maps.Copy(merging, discoveredFact)
+	merging["confidence"] = 0.85 // new fact wins, stays discovered
+	r2, err := LearnHandler(emb)(ctx, learnReq("save-discovered-2", merging))
+	require.NoError(t, err)
+	require.False(t, r2.IsError, "merging discovered write failed: %s", resultText(t, r2))
+
+	merged := readBack(t, svc, mergedFactPath(t, r2))
+	require.Equal(t, firstPath, merged.Path(), "second fact must merge into the first's path")
+	// Refs are stored canonical (kb://<own-id>/<path>) — bare paths are accepted
+	// on input and qualified on write, so an author never needs a repo id. The
+	// lineage ref is therefore the qualified form of firstPath.
+	br, berr := svc.DefaultBranch(context.Background())
+	require.NoError(t, berr)
+	root, rerr := svc.RootCommit(context.Background(), br)
+	require.NoError(t, rerr)
+	require.NotContains(t, merged.Refs, fact.QualifyKBPath(fact.ID12(root), firstPath),
+		"the merge must not write the fact's own path as a ref (#132)")
+	require.NotContains(t, merged.Refs, firstPath,
+		"nor the bare spelling of it — both forms occur in stored corpora")
+	// The genuine source SURVIVES: this is the boundary. #132 removes the
+	// self-reference, not lineage — a merged fact keeps every ref naming some
+	// OTHER fact.
+	require.Contains(t, merged.Refs, fact.QualifyKBPath(fact.ID12(root), sourcePath),
+		"the real source citation must survive the merge")
+	require.Equal(t, fact.Discovered, merged.Origin, "merged fact must stay discovered")
+	require.InDelta(t, baseline, merged.EvidenceWeight, 1e-9,
+		"weight must derive from the genuine source only, not inflate by counting the fact's own predecessor path as evidence")
+}
+
+// TestLocalEvidenceRefs pins the evidence-weight local-ref filter against
+// drift: only refs naming a fact in THIS repo may contribute weight.
+//
+// A cross-repo kb:// ref is excluded even though it ends in ".md", and a
+// SOURCE citation is excluded even when the file it cites is markdown — which
+// the previous ".md suffix" rule got wrong, counting src://…/plans/x.md as
+// local evidence. The fact's own path is excluded — the merge no longer
+// writes one (#132), but facts written before that change still carry one.
+//
+// A schemeless ref like "docs/x.txt" IS a repo-relative fact path — that is
+// what schemeless means — so it is kept here. It cannot reach this function in
+// practice: the write gate rejects a fact citing a local path that does not
+// resolve. Were it to slip through, ComputeEvidenceWeight's ReadFact simply
+// finds nothing and it contributes zero.
+func TestLocalEvidenceRefs(t *testing.T) {
+	const localID = "3ec012f5b4d2"
+	f := fact.NewFact("kb/observations/ai/derived.md")
+	localRef := "kb/observations/ai/source.md"
+	kbRef := "kb://3f9a2c1e8b7d/kb/observations/ai/foreign.md"
+	srcMarkdownRef := "src://knomit/.claude/plans/design.md@ca1c272"
+	f.Refs = []string{
+		localRef,       // genuinely local: kept
+		kbRef,          // cross-repo kb:// (ends in .md): dropped
+		f.Path(),       // the fact's own path (legacy, pre-#132): dropped
+		srcMarkdownRef, // markdown SOURCE citation (ends in .md): dropped
+		"https://example.com/paper",
+	}
+
+	got := localEvidenceRefs(f, localID)
+	require.Equal(t, []string{localRef}, got,
+		"only the genuinely-local fact ref contributes evidence weight")
+	require.NotContains(t, got, kbRef,
+		"a kb:// cross-repo ref must never enter the local evidence set")
+	require.NotContains(t, got, srcMarkdownRef,
+		"a source citation is not local evidence, whatever the cited file's extension")
+}
+
+// Refs are STORED canonical, so by the time a merged fact's refs reach this
+// filter they read kb://<own-id>/<path>. Both of the rules above must survive
+// that form: a self-qualified ref to another fact still counts as evidence, and
+// a self-qualified ref to the fact's OWN path is still excluded as merge
+// lineage. Classifying with an empty id would fail both — every local ref would
+// read as foreign, and the weight would be computed from nothing.
+func TestLocalEvidenceRefs_CanonicalStoredForm(t *testing.T) {
+	const localID = "3ec012f5b4d2"
+	f := fact.NewFact("kb/observations/ai/derived.md")
+	f.Refs = []string{
+		fact.QualifyKBPath(localID, "kb/observations/ai/source.md"), // evidence
+		fact.QualifyKBPath(localID, f.Path()),                       // own path (legacy): never evidence
+		fact.QualifyKBPath("7b4887ce51d9", "kb/elsewhere.md"),       // foreign: excluded
+	}
+
+	require.Equal(t, []string{"kb/observations/ai/source.md"}, localEvidenceRefs(f, localID),
+		"canonical refs must be recognized as local evidence, by repo-relative path")
+}

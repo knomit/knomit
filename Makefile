@@ -303,11 +303,11 @@ desktop-ui:
 # derived from, right is CI's windows-2025 runner (single samples, 2026-09-17,
 # see .github/workflows/tests.yml):
 #
-#   internal/synthesize  1776s / 1533s  (macOS/Linux: minutes)
+#   internal/corpus/synthesize  1776s / 1533s  (macOS/Linux: minutes)
 #   internal/engine/store        816s /  212s  — grew past the default with #208-#211;
 #                         it used to sit under it, so an older reading of this
 #                         list is not wrong so much as out of date
-#   internal/repos    441-639s /  307s  — straddles the 600s default on the
+#   internal/corpus/repos    441-639s /  307s  — straddles the 600s default on the
 #                         laptop, so whether it fails depends on what else the
 #                         machine is doing
 #

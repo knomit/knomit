@@ -79,14 +79,14 @@ var motifGateNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|Dr
 // caller has to be justified, because needing one usually means the path is not
 // reaching SerializeFact, which is the actual defect.
 var motifGateCallSites = map[string]string{
-	"internal/synthesize/decision.go": "prune-merge and distill consume LLM-PROPOSED motifs on facts whose " +
+	"internal/corpus/synthesize/decision.go": "prune-merge and distill consume LLM-PROPOSED motifs on facts whose " +
 		"other content is good; DropInvalidMotifs drops what SerializeFact would " +
 		"reject so one malformed name cannot discard an entire consolidation. It " +
 		"uses the gate's own definition rather than re-implementing one, which is " +
 		"what MN4 forbids",
-	"internal/synthesize/discovery.go": "same, for discovered facts — which cost a bridge enumeration and an " +
+	"internal/corpus/synthesize/discovery.go": "same, for discovered facts — which cost a bridge enumeration and an " +
 		"LLM call each, so discarding one over a malformed motif spends both for nothing",
-	"internal/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
+	"internal/edge/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
 		"apply the gate itself and reserialize when the gate changes anything; it is the one write " +
 		"path that does not reach SerializeFact on its own",
 }
@@ -95,8 +95,8 @@ var motifGateCallSites = map[string]string{
 // Both are the SAME operation in two locations; the list exists so a third one
 // cannot appear unnoticed.
 var motifMergeSites = map[string]string{
-	"internal/mcp/learn.go":        "learn-time dedup merge",
-	"internal/synthesize/dedup.go": "review-session consolidation merge",
+	"internal/edge/mcp/learn.go":          "learn-time dedup merge",
+	"internal/corpus/synthesize/dedup.go": "review-session consolidation merge",
 }
 
 // TestMN4_MotifValidationHasOneCallSite is the roadmap's MN4 grep, as a test.
@@ -157,11 +157,11 @@ var mechanicsPaths = map[string][]string{
 	// function here — the similarity scoring, the threshold comparison, the
 	// greedy pair selection — must stay blind to motifs, which is the actual
 	// MN6 constraint.
-	"internal/synthesize/dedup.go":           {"dedupCluster"},
-	"internal/synthesize/bridge.go":          nil,
-	"internal/synthesize/bridge_score.go":    nil,
-	"internal/synthesize/bridge_filtered.go": nil,
-	"internal/synthesize/bridge_reshape.go":  nil,
+	"internal/corpus/synthesize/dedup.go":           {"dedupCluster"},
+	"internal/corpus/synthesize/bridge.go":          nil,
+	"internal/corpus/synthesize/bridge_score.go":    nil,
+	"internal/corpus/synthesize/bridge_filtered.go": nil,
+	"internal/corpus/synthesize/bridge_reshape.go":  nil,
 	// The §7 shortlist is a path MN6 names EXPLICITLY as designed for motifs
 	// ("anything that spawns work outside the §4/§5/§7 synthesis paths designed
 	// for them"), so this is the rule's exemption rather than an exception to
@@ -178,7 +178,7 @@ var mechanicsPaths = map[string][]string{
 	// motif buys a look further down this repo's own ranking; it does not
 	// change where a pair sits in that ranking, which would be a corpus-property
 	// claim in disguise (MN13, Q2 ruling).
-	"internal/synthesize/restatement.go": {
+	"internal/corpus/synthesize/restatement.go": {
 		"selectRestatementCandidates", "pairSharesCanonicalMotif",
 		// REPORTING, not deciding. These render the signal's contribution into
 		// the session's health lines so the GATE package can state how often it
@@ -252,7 +252,7 @@ var mechanicsPaths = map[string][]string{
 	// entity term deciding whether a candidate EXISTS. The tiebreaker sits
 	// strictly below Q for exactly that reason, and is a sort term rather than
 	// a weight so no constant has to be invented to mean "small" (MN13).
-	"internal/synthesize/bridge_motif.go": {
+	"internal/corpus/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
 		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
 		"rankAndCap", "rankAndCapRows", "DFCeiling",
@@ -316,7 +316,7 @@ var mechanicsPaths = map[string][]string{
 	// token2PairsOf reports which canonical ids the token-2 tier WOULD fold,
 	// using the tier's own predicate. It decides nothing — the report is
 	// read-only and no branch consults it.
-	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf",
+	"internal/corpus/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf",
 		// The row-to-report projection (M-8). It moves a candidate's own
 		// disposition into the reported shape and decides nothing.
 		"scoredMotifBridgeOf"},
@@ -324,9 +324,9 @@ var mechanicsPaths = map[string][]string{
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted
 	// function so that a motif-reading function added here must be declared.
-	"internal/synthesize/motif_disjoint.go": {},
-	"internal/synthesize/cluster.go":        {"ScopedCluster"},
-	"internal/synthesize/louvain.go":        nil,
+	"internal/corpus/synthesize/motif_disjoint.go": {},
+	"internal/corpus/synthesize/cluster.go":        {"ScopedCluster"},
+	"internal/corpus/synthesize/louvain.go":        nil,
 
 	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
 	// these names a SELECT column list and hands the row to a scanner; carrying
@@ -459,7 +459,7 @@ func TestMN2_NoLLMInMotifCode(t *testing.T) {
 		// Phase 3's enumeration and its gate. The detector stays mechanical:
 		// the connected agent is the only reasoner in the read path, and it
 		// already exists (cf455b8f).
-		"internal/synthesize/bridge_motif.go", "internal/synthesize/motif_disjoint.go",
+		"internal/corpus/synthesize/bridge_motif.go", "internal/corpus/synthesize/motif_disjoint.go",
 	} {
 		src, ok := sources[rel]
 		require.Truef(t, ok, "MN2 target %s is missing", rel)
@@ -584,12 +584,12 @@ func parseGo(t *testing.T, rel string) *ast.File {
 // clothes.
 func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
 	for rel, want := range map[string]map[string]string{
-		"internal/synthesize/motif_disjoint.go": {
+		"internal/corpus/synthesize/motif_disjoint.go": {
 			"disjointnessPercentile": "SELECTION POINT",
 			"minLabelsForPercentile": "STATISTICAL-VALIDITY FLOOR",
 			"umbrellaPerCent":        "RATIO",
 		},
-		"internal/synthesize/bridge_motif.go": {
+		"internal/corpus/synthesize/bridge_motif.go": {
 			"motifDFCeilingFloor":   "STATISTICAL-VALIDITY FLOOR",
 			"motifDFCeilingPerCent": "RATIO",
 			"motifActivationFloor":  "STATISTICAL-VALIDITY FLOOR",

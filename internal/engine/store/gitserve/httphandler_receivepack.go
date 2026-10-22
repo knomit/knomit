@@ -30,7 +30,7 @@ import (
 
 // PushPolicy is what the HTTP edge knows about ONE receive-pack request and
 // the store does not: who is pushing and what this repo's instance allows.
-// internal/web builds it per request from the principal and the repo and
+// internal/edge/web builds it per request from the principal and the repo and
 // attaches it with WithPushPolicy; the store handler is built once and cached
 // (Service.Handler), so the policy can never be a construction argument.
 //

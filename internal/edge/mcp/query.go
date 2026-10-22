@@ -1,0 +1,1131 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"knomit/internal/engine/store/model"
+
+	"knomit/internal/corpus/federate"
+	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
+)
+
+// sort constants for knomit_query.
+const (
+	sortRelevance = "relevance"
+	sortRecent    = "recent"
+)
+
+// Paging / size constants for knomit_query.
+const (
+	// defaultPageSize / maxPageSize bound the per-call page in snippet mode.
+	defaultPageSize = 20
+	maxPageSize     = 100
+
+	// include_body pages are kept small: full bodies are heavy, and a page of
+	// them must stay under the MCP tool-result size cap. For many full bodies,
+	// callers should fetch per-fact via knomit_explain instead.
+	includeBodyDefaultPage = 3
+	includeBodyMaxPage     = 5
+
+	// maxCandidates is the DEFAULT and CEILING for the max_results argument:
+	// the total result set materialised into a snapshot for one query.
+	// Paging walks within this set; it is NOT the page size.
+	maxCandidates = 500
+
+	// snippetMaxRunes is the snippet body length (in runes) returned by default
+	// when include_body is false. Cut to a word/line boundary; "…" appended.
+	snippetMaxRunes = 400
+)
+
+// pageSizeFor normalises the caller-supplied page size for the active mode.
+func pageSizeFor(limit int, includeBody bool) int {
+	def, max := defaultPageSize, maxPageSize
+	if includeBody {
+		def, max = includeBodyDefaultPage, includeBodyMaxPage
+	}
+	if limit <= 0 {
+		return def
+	}
+	if limit > max {
+		return max
+	}
+	return limit
+}
+
+// queryTool returns the Tool definition for knomit_query.
+func queryTool() mcpgo.Tool {
+	return mcpgo.NewTool("knomit_query",
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, origin, context, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
+		bindingArg(true),
+		mcpgo.WithString("text",
+			mcpgo.Description("Full-text search query."),
+		),
+		mcpgo.WithArray("entities",
+			mcpgo.Description("Filter by entities (all must be present)."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("domain",
+			mcpgo.Description("Filter by domain tags."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("applies_to",
+			mcpgo.Description("Filter by ancestor-or-equal domain match. Use when you want facts whose declared scope INCLUDES one of these areas (e.g. 'store/resolver' surfaces facts scoped to 'store' or 'store/resolver')."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithString("path",
+			mcpgo.Description("Filter by path prefix. Only facts are searched: a path with a segment beginning with a dot (.knomit/, kb/.drafts/) is refused, and artifacts/ returns nothing — read an artifact by its exact path with knomit_explain."),
+		),
+		mcpgo.WithNumber("min_confidence",
+			mcpgo.Description("Minimum confidence threshold (0–1)."),
+		),
+		mcpgo.WithNumber("min_similarity",
+			mcpgo.Description("Minimum RAW cosine similarity for text search, in [0, 1]; values outside that range are rejected. Leave it unset (0) unless you have a reason: 0 uses the active embedding model's calibrated recall floor. Achievable cosines depend on the embedding model and are usually well below 1, so a high cutoff can return nothing; 0 is not \"no cutoff\" but the loaded model's calibrated floor. The `score` shown on results is cosine×100 — do NOT pass it back as min_similarity (a score of 45 means 0.45). When a cutoff you supplied removes every candidate, the response says so in `notice`."),
+		),
+		mcpgo.WithNumber("limit",
+			mcpgo.Description("Page size (results per call). Default 20, max 100 in snippet mode; default 3, max 5 when include_body=true."),
+		),
+		mcpgo.WithBoolean("include_body",
+			mcpgo.Description("Return full fact bodies instead of snippets. Page size is capped low (default 3, max 5). For a single fact's full body, prefer knomit_explain."),
+		),
+		mcpgo.WithString("sort",
+			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
+		),
+		mcpgo.WithString("cursor",
+			mcpgo.Description("Opaque page token from a previous response's `cursor`. When set, all filter arguments are ignored (the result set is frozen); only `limit` and `include_body` still apply."),
+		),
+		mcpgo.WithNumber("max_results",
+			mcpgo.Description("Maximum total results materialised for this query across all pages (snapshot depth). Default 500; values above 500 are clamped. Page size is controlled by `limit`, not this."),
+		),
+		mcpgo.WithArray("type",
+			mcpgo.Description("Filter to these epistemic types (e.g. observation, policy, principle, hypothesis)."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithBoolean("domain_exact",
+			mcpgo.Description("Match `domain` by exact canonical tag only (no token containment / hierarchy). Default false: 'ai' also matches 'ai governance', etc."),
+		),
+		mcpgo.WithArray("origin",
+			mcpgo.Description("Filter by fact origin: authored (hand-written), distilled (synthesis-pipeline output), or discovered (emergent — surfaced by the discovery engine). Accepts a single value or a list."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("motifs",
+			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing. Through a lens the mounts share ONE motif vocabulary, so a term reaches every spelling any mount groups with it, on every mount."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithBoolean("expired",
+			mcpgo.Description(expiredParamDescription),
+		),
+		mcpgo.WithString("expires_before",
+			mcpgo.Description(expiresBeforeParamDescription),
+		),
+		mcpgo.WithString("expires_after",
+			mcpgo.Description(expiresAfterParamDescription),
+		),
+		mcpgo.WithObject("context",
+			mcpgo.Description(contextParamDescription),
+			mcpgo.AdditionalProperties(map[string]any{"type": []string{"string", "number", "boolean"}}),
+		),
+		mcpgo.WithString("motif_match",
+			mcpgo.Description("How strictly `motifs` must match, loosest last: exact (default; the same motif, however it is spelled), stem, token-2, token-1 (noisiest), soft (not yet available). Only meaningful alongside `motifs`."),
+			mcpgo.Enum(motifMatchEnum()...),
+		),
+	)
+}
+
+// factOutput is one result row. It is also the unit stored (JSON-encoded) in a
+// session snapshot, so it must round-trip cleanly — hence Frontmatter is a
+// concrete type, not interface{}.
+type factOutput struct {
+	File          string  `json:"file"`
+	Title         string  `json:"title"`
+	Kind          string  `json:"kind,omitempty"` // omitted when epistemic (the default)
+	Type          string  `json:"type"`
+	Score         float64 `json:"score"` // relevance score in [0,100]; 100 for filter-only queries
+	Body          string  `json:"body"`
+	BodyTruncated bool    `json:"body_truncated,omitempty"` // true only when body is a snippet
+	Commit        string  `json:"commit"`
+	// Expired is true when frontmatter.expires is at or before the query's
+	// clock (one instant per query, fixed when the result set was built, so
+	// every page of a cursor agrees with the filter that selected it).
+	// Knomit never acts on it.
+	Expired     bool              `json:"expired,omitempty"`
+	Frontmatter frontmatterOutput `json:"frontmatter"`
+}
+
+type frontmatterOutput struct {
+	Domain     []string `json:"domain"`
+	Confidence float64  `json:"confidence"`
+	Sources    int      `json:"sources"`
+	Entities   []string `json:"entities"`
+	// Motifs is omitted when empty, so a motif-free corpus's responses are
+	// byte-identical to what they were before the axis existed.
+	Motifs         []string `json:"motifs,omitempty"`
+	Refs           []string `json:"refs"`
+	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	CommittedAt    int64    `json:"committed_at,omitempty"`
+	// Expires is the fact's optional RFC 3339 expiry, as written.
+	Expires string `json:"expires,omitempty"`
+	// Context is the fact's F22 context map, omitted when empty.
+	Context map[string]any `json:"context,omitempty"`
+}
+
+// queryResponse is the knomit_query envelope. Cursor is non-nil only while more
+// pages remain.
+type queryResponse struct {
+	Facts   []factOutput `json:"facts"`
+	Cursor  *string      `json:"cursor"`
+	HasMore bool         `json:"has_more"`
+	// Notice explains an empty text result that is NOT "nothing matched": the
+	// caller-supplied min_similarity removed every candidate. Omitted otherwise,
+	// so every other response is byte-identical to before.
+	Notice string `json:"notice,omitempty"`
+}
+
+// pagedRowState is the minimal per-row state persisted in a session snapshot.
+// Only the search score is stored — it is the one field a resumed page cannot
+// re-derive from the fact. Everything else (title, type, body, frontmatter) is
+// re-read lazily from the fact at its frozen commit when the page is served, so
+// the snapshot stays tiny regardless of body size.
+type pagedRowState struct {
+	Score       float64 `json:"score"`
+	CommittedAt int64   `json:"committed_at"`
+	// AsOf is the query's clock (unix seconds) — the SAME instant the expiry
+	// filters used when this snapshot was built. A resumed page computes the
+	// `expired` marker from it, not from the time the page is served, so a
+	// query run with expired=false never shows expired:true on page 3.
+	AsOf int64 `json:"as_of,omitempty"`
+}
+
+// QueryHandler returns the handler function for knomit_query.
+// The repo is resolved from the request context at call time via RepoMiddleware.
+//
+// If an embedder is supplied it is used to embed a text query ONCE for the
+// whole fan-out (see fanoutQueryVec); without one, each mount falls back to
+// embedding the query itself, which is what this handler did before. Variadic
+// for the same reason LearnHandler is: the embedder is optional, and callers
+// that have none (tests, embeddings-disabled builds) pass nothing.
+func QueryHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var emb model.Embedder
+	if len(embedders) > 0 && embedders[0] != nil {
+		emb = embedders[0]
+	}
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		// A binding federates one write repo and N read mounts. Sessions and
+		// snapshots always live in the WRITE repo's store (sWrite); relevance
+		// reads fan out across every mount (queryFirstCall).
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		sWrite, releaseWrite, err := storeIndices(b.Write())
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer releaseWrite()
+
+		includeBody := req.GetBool("include_body", false)
+		pageSize := pageSizeFor(req.GetInt("limit", 0), includeBody)
+
+		maxResults := req.GetInt("max_results", maxCandidates)
+		if maxResults <= 0 {
+			return mcpgo.NewToolResultError("max_results must be a positive integer"), nil
+		}
+		if maxResults > maxCandidates {
+			maxResults = maxCandidates
+		}
+
+		sort := req.GetString("sort", sortRelevance)
+		if sort != sortRelevance && sort != sortRecent {
+			return mcpgo.NewToolResultError("sort must be \"relevance\" or \"recent\""), nil
+		}
+
+		// Resume path: a cursor pages a frozen snapshot; filters and sort are ignored.
+		if cursor := req.GetString("cursor", ""); cursor != "" {
+			return queryResume(ctx, b, sWrite, cursor, pageSize, includeBody)
+		}
+
+		if sort == sortRecent {
+			return queryRecent(ctx, b, sWrite, emb, req, pageSize, maxResults, includeBody)
+		}
+		return queryFirstCall(ctx, b, sWrite, emb, req, pageSize, maxResults, includeBody)
+	}
+}
+
+// recoverFanout converts a panic inside a fan-out goroutine into the mount's
+// error slot. net/http only recovers panics raised on the REQUEST goroutine, so
+// a panic in one of these bare per-mount goroutines would otherwise crash the
+// WHOLE process — not merely the offending connection (pre-lens, the same store
+// call ran on the request goroutine, so its blast radius was one connection;
+// federation widened it to process death). A concrete source: an
+// archive/shutdown race can leave a mount's svc == nil, so storeIndices returns
+// a zero mcpStore whose index fields are nil interfaces and the first index call
+// panics. Routing the panic into *slot lets it flow through the existing "any
+// mount error fails the whole query" path (RFC §9.1) — a lens must never
+// silently shrink its read set — instead of taking the server down. mount names
+// the offending mount so the failure stays diagnosable.
+func recoverFanout(mount string, slot *error) {
+	if p := recover(); p != nil {
+		*slot = fmt.Errorf("mount %s panicked: %v", mount, p)
+	}
+}
+
+// mountLabel is a human-legible mount identity for fan-out error messages: the
+// mount's repo name and its pinned branch. Name() never touches the store, so it
+// is safe to call even on a mount whose svc is nil.
+func mountLabel(rt repos.ReadTarget) string {
+	return rt.RI.Name() + "@" + rt.Branch
+}
+
+// queryRecent serves the recency-ordered browse (sort=recent). It draws the
+// ordered candidate set from RecentFacts (already filtered + committed_at
+// DESC), snapshots it into a session, and serves the first page through the
+// shared resume path so body hydration and pagination match relevance mode.
+func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb model.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	q, err := parseQueryFilters(req)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	if msg := motifMatchUnavailable(q); msg != "" {
+		return mcpgo.NewToolResultError(msg), nil
+	}
+	// Widen motif terms to the lens's merged clusters BEFORE the fan-out.
+	if err := widenMotifsForLens(ctx, b, &q); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	targets, err := federate.ReadTargetsFor(b, q.Path)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	// Embed the query ONCE for the whole fan-out rather than once per mount —
+	// see fanoutQueryVec. A failed or empty embedding fails the query
+	// here, once; nil with no error (no text, or no embedder handed in) leaves
+	// every mount to embed for itself. Text search is vector-only: there is no
+	// keyword fallback.
+	if q.QueryVec, err = fanoutQueryVec(ctx, emb, q.Text); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+
+	// Fan out in parallel; any mount error fails the whole query — a lens must
+	// never silently shrink its read set (RFC §9.1).
+	lists := make([][]index.RecentFactEntry, len(targets))
+	errs := make([]error, len(targets))
+	diags := make([]index.SearchDiag, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t federate.Target) {
+			defer wg.Done()
+			// A panic here (e.g. nil-svc mount) must become this mount's error, not
+			// crash the process — net/http recovers only the request goroutine.
+			defer recoverFanout(mountLabel(t.RT), &errs[i])
+			mq := q
+			mq.Path = t.Path
+			mq.Diag = &diags[i]
+			sm, release, serr := storeIndices(t.RT.RI)
+			if serr != nil {
+				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
+				return
+			}
+			defer release()
+			lists[i], _, errs[i] = sm.factQuery.RecentFacts(ctx, t.RT.Branch, mq)
+		}(i, t)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", e)), nil
+		}
+	}
+
+	returned := make([]int, len(lists))
+	for i, l := range lists {
+		returned[i] = len(l)
+	}
+	logQueryDiag(sortRecent, b, q, targets, diags, returned)
+
+	// RecentFacts orders its per-mount list by committed_at DESC WITHOUT a text
+	// query, but by RELEVANCE score WITH one (store.recentFactsSearch — a
+	// deliberate store-level fix pinned by
+	// TestRecentFacts_WithQuery_SortsByRelevanceNotDate). The federated merge
+	// must honour whichever key each mount ordered by: commit timestamps are
+	// directly comparable across mounts (a k-way timestamp merge is correct), but
+	// per-mount relevance ranks are NOT comparable across mounts (RFC §7.1) —
+	// they must be fused by reciprocal rank fusion, exactly as the relevance
+	// path does. federate.FuseRRF's N=1 identity also restores lens-of-one byte-identity,
+	// which a global timestamp re-sort would silently break. So: text query →
+	// RRF; text-less recency → committed_at merge.
+	var order []federate.MountRef
+	if q.Text != "" {
+		order = federate.FuseRRF(listLens(lists))
+	} else {
+		// Text-less recency: each mount's list is already committed_at-DESC
+		// (RecentFacts), the precondition federate.MergeRecent relies on. Merge
+		// the FULL set (totalEntries, not maxResults) so the dedupe below runs on
+		// every candidate before the snapshot cap is applied — exactly as the web
+		// /facts union does.
+		totalEntries := 0
+		for _, l := range lists {
+			totalEntries += len(l)
+		}
+		stamps := make([][]int64, len(targets))
+		for i, list := range lists {
+			stamps[i] = make([]int64, len(list))
+			for j, e := range list {
+				stamps[i][j] = e.CommittedAt
+			}
+		}
+		order = federate.MergeRecent(stamps, totalEntries)
+	}
+	// Dedupe by repo-relative path (write mount wins) BEFORE truncating to the
+	// snapshot depth, so a shadowed cross-mount copy never consumes a slot and the
+	// snapshot agrees with the web /facts union.
+	order = keepWinners(order, targets, b.Write(), lists,
+		func(e index.RecentFactEntry) string { return e.Path })
+	if len(order) > maxResults {
+		order = order[:maxResults]
+	}
+	if len(order) == 0 {
+		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
+			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
+	}
+
+	// Recent mode snapshots ALL merged rows into the session and serves page 1
+	// through the shared resume path, so body hydration + paging match relevance
+	// mode. Each row's WIRE path (bare for the write mount, kb://-qualified for a
+	// foreign mount — RFC §6.2 uniformity) carries the mount identity on resume.
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
+	}
+	items := make([]model.QueueItem, len(order))
+	for i, ref := range order {
+		e := lists[ref.Mount][ref.Rank]
+		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt, AsOf: q.Now.Unix()})
+		if mErr != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
+		}
+		items[i] = model.QueueItem{
+			Path:       wirePath(b, targets[ref.Mount].RT, e.Path),
+			CommitHash: e.CommitHash,
+			SortKey:    i,
+			State:      string(state),
+		}
+	}
+	if err := sWrite.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("snapshot enqueue error: %v", err)), nil
+	}
+	// Serve the first page (and compute cursor/has_more) through the shared
+	// resume path — every recent row is hydrated from its pinned commit.
+	return queryResume(ctx, b, sWrite, sess.ID, pageSize, includeBody)
+}
+
+// mcpMotifClusters reads one mount's resolved motif vocabulary — the union's
+// per-mount read, in MCP's own store-acquisition idiom.
+//
+// Branch-wide (no path scope): cluster identity is a property of the lens, not
+// of the path filter the caller happened to send.
+func mcpMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error) {
+	s, release, err := storeIndices(rt.RI)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.motifs.ClustersUnder(ctx, rt.Branch, "")
+}
+
+// widenMotifsForLens replaces each caller-supplied motif term with every
+// spelling in its MERGED cluster, so a lens-bound query asks every mount about
+// the whole shape rather than about one mount's name for it.
+//
+// The SAME seam the REST lens reads go through (federate.ExpandMotifTerms), and
+// deliberately not a second implementation: without it a motif-filtered
+// knomit_query against a lens silently drops every mount that spells the shape
+// differently — the store's exact tier is per-branch canonical equality, and a
+// judge merge is per-branch. That makes recall, the most-used motif path,
+// answer from a smaller read set than the lens has, which is precisely what
+// RFC §9.1 forbids. A single-mount binding is skipped: with nothing to merge
+// the expansion is provably an identity.
+func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *index.SearchOptions) error {
+	widened, err := federate.ExpandMotifTerms(ctx, b, mcpMotifClusters, q.Motifs)
+	if err != nil {
+		return err
+	}
+	q.Motifs = widened
+	return nil
+}
+
+// parseQueryFilters reads the shared filter arguments into SearchOptions.
+// Limit is set by the caller per mode.
+func parseQueryFilters(req mcpgo.CallToolRequest) (index.SearchOptions, error) {
+	// A dot path is closed to the fact tools for reads as well as writes
+	// (F25). The index never holds one, so this would answer "nothing"
+	// anyway — refusing says why, instead of reading as an empty folder.
+	if p := req.GetString("path", ""); fact.IsPrivatePath(p) {
+		return index.SearchOptions{}, fmt.Errorf("path %q is private: %s", p, closedSuffix)
+	}
+	tier, err := parseMotifMatch(req.GetString("motif_match", ""))
+	if err != nil {
+		return index.SearchOptions{}, err
+	}
+	before, err := parseExpiryBound(req, "expires_before")
+	if err != nil {
+		return index.SearchOptions{}, err
+	}
+	after, err := parseExpiryBound(req, "expires_after")
+	if err != nil {
+		return index.SearchOptions{}, err
+	}
+	var expired *bool
+	if _, set := req.GetArguments()["expired"]; set {
+		v := req.GetBool("expired", false)
+		expired = &v
+	}
+	minSim := req.GetFloat("min_similarity", 0)
+	if err := index.ValidateMinSimilarity(minSim); err != nil {
+		return index.SearchOptions{}, err
+	}
+	ctxFilter, err := parseContextFilter(req)
+	if err != nil {
+		return index.SearchOptions{}, err
+	}
+	return index.SearchOptions{
+		Context: ctxFilter,
+		// ONE clock per query: the expiry filters and every page's `expired`
+		// marker are computed from this instant (see pagedRowState.AsOf).
+		Now:            timeNow(),
+		Expired:        expired,
+		ExpiresBefore:  before,
+		ExpiresAfter:   after,
+		Text:           req.GetString("text", ""),
+		Entities:       req.GetStringSlice("entities", nil),
+		Domain:         req.GetStringSlice("domain", nil),
+		DomainAncestor: req.GetStringSlice("applies_to", nil),
+		Path:           req.GetString("path", ""),
+		MinConfidence:  req.GetFloat("min_confidence", 0),
+		MinSimilarity:  minSim,
+		IncludeTypes:   req.GetStringSlice("type", nil),
+		IncludeOrigins: stringOrSlice(req, "origin"),
+		DomainExact:    req.GetBool("domain_exact", false),
+		Motifs:         stringOrSlice(req, "motifs"),
+		MotifMatch:     tier,
+	}, nil
+}
+
+// stringOrSlice reads an argument that may be either a single string or a
+// list of strings — clients (and hand-written test inputs) routinely supply
+// a single value where the schema declares an array. Returns nil for an
+// absent or empty argument.
+func stringOrSlice(req mcpgo.CallToolRequest, key string) []string {
+	if v := req.GetString(key, ""); v != "" {
+		return []string{v}
+	}
+	return req.GetStringSlice(key, nil)
+}
+
+// hasAnyFilter reports whether any selecting filter was supplied.
+func hasAnyFilter(q index.SearchOptions) bool {
+	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
+		len(q.DomainAncestor) > 0 || q.Path != "" || q.MinConfidence > 0 ||
+		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0 ||
+		// A motif-only query is a legitimate query: "what else instantiates
+		// this mechanism?" is the question the axis exists to answer, and
+		// omitting it here would reject that as "no filter supplied".
+		len(q.Motifs) > 0 ||
+		// So is an expiry-only one: "every expired fact" is the review list.
+		q.Expired != nil || !q.ExpiresBefore.IsZero() || !q.ExpiresAfter.IsZero() ||
+		// And a context-only one (F22): "every verdict for task t-17".
+		len(q.Context) > 0
+}
+
+// contextParamDescription is knomit_query's `context` filter (F22).
+const contextParamDescription = `Filter by the facts' context map (F22): an object of key: value pairs, ALL of which must match exactly, ` +
+	`e.g. {"task": "t-17", "verdict": "disagree"}. Values are strings, numbers or booleans, compared by their canonical text ` +
+	`(a number in shortest form, true/false; a time in UTC with a Z, as stored). Combines with every other filter, path included. ` +
+	`With text, the filter applies after the semantic nearest-neighbour window, so it can return fewer matches than exist; without text the result is exact.`
+
+// parseContextFilter reads knomit_query's `context` argument into canonical
+// text per key. A key that is not a legal context key, or a value that is not
+// a scalar, is refused rather than silently matching nothing.
+func parseContextFilter(req mcpgo.CallToolRequest) (map[string]string, error) {
+	raw, ok := req.GetArguments()["context"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("context must be an object of key: value pairs")
+	}
+	m = fact.NormalizeContextValues(m)
+	if err := fact.ValidateContextShape(m); err != nil {
+		return nil, fmt.Errorf("context filter: %v", err)
+	}
+	if len(m) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = fact.ContextText(v)
+	}
+	return out, nil
+}
+
+// Parameter descriptions for the expiry filters, shared with the REST docs'
+// wording. Each states what happens to a fact with NO expires, because that
+// is the case a caller gets wrong.
+const (
+	expiredParamDescription = `true: only facts whose expires is at or before now. false: only facts NOT expired — ` +
+		`expired=false INCLUDES facts with no expires (absent means never). Omit for no expiry filter. ` +
+		`Nothing is ever hidden by default: expired facts appear in every query, marked "expired": true. ` +
+		`"now" is the server's clock, fixed once per query (all pages of a cursor use the same instant). ` +
+		`Combined with text, the filter applies after the semantic nearest-neighbour window, so it can return ` +
+		`fewer matches than exist; without text the result is exact.`
+	expiresBeforeParamDescription = `RFC 3339 timestamp: only facts whose expires is strictly before it. ` +
+		`expires_before alone EXCLUDES facts with no expires (absent means never, so they are never before anything). ` +
+		`"Expiring within a window" is expires_after=<now> plus expires_before=<now + window>.`
+	expiresAfterParamDescription = `RFC 3339 timestamp: only facts whose expires is strictly after it. ` +
+		`Like expires_before, it EXCLUDES facts with no expires.`
+)
+
+// timeNow is this package's clock for everything expiry-related: the query's
+// one instant (parseQueryFilters), a resumed page's fallback, and explain's
+// markers. A var so tests can pin it — without that, the "filter and marker
+// share one clock" contract could not be tested at the boundary.
+var timeNow = time.Now
+
+// parseExpiryBound reads an optional RFC 3339 bound; "" is no bound.
+func parseExpiryBound(req mcpgo.CallToolRequest, key string) (time.Time, error) {
+	v := req.GetString(key, "")
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be an RFC 3339 timestamp with an offset (e.g. 2026-10-01T00:00:00Z): %q", key, v)
+	}
+	return t, nil
+}
+
+// snapshotClock is the instant a resumed page marks `expired` against: the
+// query's own clock, recorded in each snapshot row. A row written before the
+// field existed carries 0 and falls back to now.
+func snapshotClock(st pagedRowState) time.Time {
+	if st.AsOf == 0 {
+		return timeNow()
+	}
+	return time.Unix(st.AsOf, 0)
+}
+
+// queryFirstCall fans a relevance query out across every read mount in
+// parallel, fuses the per-mount ranked lists with reciprocal rank fusion,
+// returns the first page, and (only when the fused set exceeds one page)
+// snapshots the remainder into the write repo's session DB with WIRE paths.
+func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb model.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	q, err := parseQueryFilters(req)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	if msg := motifMatchUnavailable(q); msg != "" {
+		return mcpgo.NewToolResultError(msg), nil
+	}
+	if !hasAnyFilter(q) {
+		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, motifs, or min_confidence is required"), nil
+	}
+	// Widen motif terms to the lens's merged clusters BEFORE the fan-out. After
+	// hasAnyFilter, so the "no filter supplied" message stays about what the
+	// caller actually sent.
+	if err := widenMotifsForLens(ctx, b, &q); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	targets, err := federate.ReadTargetsFor(b, q.Path)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	// Embed the query ONCE for the whole fan-out rather than once per mount —
+	// see fanoutQueryVec. A failed or empty embedding fails the query
+	// here, once; nil with no error (no text, or no embedder handed in) leaves
+	// every mount to embed for itself. Text search is vector-only: there is no
+	// keyword fallback.
+	if q.QueryVec, err = fanoutQueryVec(ctx, emb, q.Text); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+
+	// Fan out in parallel; any mount error fails the whole query — a lens must
+	// never silently shrink its read set (RFC §9.1).
+	lists := make([][]index.SearchResult, len(targets))
+	errs := make([]error, len(targets))
+	diags := make([]index.SearchDiag, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t federate.Target) {
+			defer wg.Done()
+			// A panic here (e.g. nil-svc mount) must become this mount's error, not
+			// crash the process — net/http recovers only the request goroutine.
+			defer recoverFanout(mountLabel(t.RT), &errs[i])
+			mq := q
+			mq.Path = t.Path
+			mq.Diag = &diags[i]
+			sm, release, serr := storeIndices(t.RT.RI)
+			if serr != nil {
+				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
+				return
+			}
+			defer release()
+			lists[i], errs[i] = sm.factQuery.Search(ctx, t.RT.Branch, mq)
+		}(i, t)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", e)), nil
+		}
+	}
+
+	logQueryDiag(sortRelevance, b, q, targets, diags, listLens(lists))
+	order := federate.FuseRRF(listLens(lists))
+	// Dedupe by repo-relative path (write mount wins) BEFORE truncating, so a
+	// shadowed cross-mount copy never consumes a result slot and the page agrees
+	// with the web /search union.
+	order = keepWinners(order, targets, b.Write(), lists,
+		func(r index.SearchResult) string { return r.Path })
+	if len(order) > maxResults {
+		order = order[:maxResults]
+	}
+	if len(order) == 0 {
+		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
+			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
+	}
+
+	// renderRow builds one output row from its fused reference. The displayed
+	// Score stays the mount's NATIVE relevance score — RRF only orders, it does
+	// not rescore — so across a fused (multi-mount) order the displayed scores
+	// may be non-monotonic; that is the faithful representation of per-repo
+	// relevance. File is the wire path: bare for the write repo, kb://-qualified
+	// for a foreign mount (RFC §6.2 uniformity).
+	renderRow := func(ref federate.MountRef) factOutput {
+		r := lists[ref.Mount][ref.Rank]
+		out := buildFactOutput(r, includeBody, q.Now)
+		out.File = wirePath(b, targets[ref.Mount].RT, r.Path)
+		return out
+	}
+
+	// Fast path: the whole fused set fits in one page — no session needed.
+	// Bodies are already in hand (search returns full bodies), so include_body
+	// needs no re-fetch here.
+	if len(order) <= pageSize {
+		page := make([]factOutput, len(order))
+		for i, ref := range order {
+			page[i] = renderRow(ref)
+		}
+		return marshalQueryResponse(queryResponse{Facts: page, Cursor: nil, HasMore: false})
+	}
+
+	// Snapshot the remainder ([pageSize:]) into the write repo's session DB; the
+	// first page is rendered directly (full bodies available, no re-fetch).
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
+	}
+	items := make([]model.QueueItem, 0, len(order)-pageSize)
+	for i := pageSize; i < len(order); i++ {
+		ref := order[i]
+		r := lists[ref.Mount][ref.Rank]
+		// Snapshot only what a resumed page can't re-derive: the rank score.
+		// The WIRE path + commit pin the version; title/body/frontmatter are
+		// re-read from the fact on resume, so the snapshot carries no heavy body.
+		state, mErr := json.Marshal(pagedRowState{Score: r.Score, CommittedAt: r.CommittedAt, AsOf: q.Now.Unix()})
+		if mErr != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
+		}
+		items = append(items, model.QueueItem{
+			Path:       wirePath(b, targets[ref.Mount].RT, r.Path),
+			CommitHash: r.CommitHash,
+			SortKey:    i,
+			State:      string(state),
+		})
+	}
+	if err := sWrite.toolSession.EnqueuePaths(ctx, sess.ID, items); err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("snapshot enqueue error: %v", err)), nil
+	}
+
+	page := make([]factOutput, pageSize)
+	for i := range pageSize {
+		page[i] = renderRow(order[i])
+	}
+	cursor := sess.ID
+	return marshalQueryResponse(queryResponse{Facts: page, Cursor: &cursor, HasMore: true})
+}
+
+// keepWinners filters a fused/merged order down to the write-first dedupe
+// winners, dropping a fact's shadowed copy on a non-winning mount. It reuses the
+// SAME federate.WriteFirstWinners the web /facts + /search + /topics unions use,
+// so knomit_query agrees with the web views on a lens whose mounts share fact
+// UUIDs (a fork of a read-mounted upstream) instead of double-listing the fact
+// once bare (write mount) and once kb://-qualified (read mount).
+func keepWinners[T any](order []federate.MountRef, targets []federate.Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) []federate.MountRef {
+	winner := federate.WriteFirstWinners(targets, write, lists, pathOf)
+	kept := make([]federate.MountRef, 0, len(order))
+	for _, ref := range order {
+		if winner[pathOf(lists[ref.Mount][ref.Rank])] == ref.Mount {
+			kept = append(kept, ref)
+		}
+	}
+	return kept
+}
+
+// listLens returns each list's length, the shape federate.FuseRRF consumes.
+func listLens[T any](lists [][]T) []int {
+	ns := make([]int, len(lists))
+	for i, l := range lists {
+		ns[i] = len(l)
+	}
+	return ns
+}
+
+// wirePath renders a result path as addressed on the wire: qualified iff the
+// mount is not the binding's write repo (RFC §6.2 uniformity invariant).
+func wirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
+	if rt.RI == b.Write() {
+		return rel
+	}
+	return federate.QualifyPath(federate.ID12(rt.RI.ID()), rel)
+}
+
+// queryResume serves the next page from a frozen session snapshot, routing each
+// item back to its mount (RFC §7.3): the item's wire path carries the mount
+// identity, the current binding supplies the mount's instance and pinned branch.
+// Session state (dequeue, size, status) lives in the WRITE repo's session DB.
+func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor string, pageSize int, includeBody bool) (*mcpgo.CallToolResult, error) {
+	sess, err := sWrite.toolSession.GetToolSession(ctx, cursor)
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
+	}
+	if sess == nil || sess.Status != "active" {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+	}
+	// A cursor is a frozen view of ONE binding's read set (lenses RFC §7.3).
+	// A different binding — even one sharing the write repo — must not see it;
+	// the error is indistinguishable from expiry by design. sess.Binding holds
+	// PinID(), the binding's stable id (repo:<uid> / lens:<uid>), not Name() —
+	// a repo or lens rename changes Name but never moves the pin, so a rename
+	// cannot orphan an in-flight cursor.
+	//
+	// Sessions minted before the pin moved onto ids hold a bare name and will
+	// not match, so they read as expired. That is deliberate and needs no
+	// migration: "expired" is already the designed-safe answer here, and tool
+	// sessions idle out after defaultToolIdleTTL (15 minutes).
+	//
+	// PinID() (via pinOf) fails CLOSED on an empty uid: it returns "", never a
+	// bare "repo:"/"lens:" prefix. "" must never match here even though a
+	// stored "" and a computed "" are byte-equal — a uid-less binding must be
+	// able to MINT a session (that half is unguarded) but never RESUME one, or
+	// two uid-less bindings would positively match instead of merely
+	// colliding on a shared prefix. Reject an empty sess.Binding outright,
+	// before the equality check gets the chance to agree with itself.
+	if sess.Binding == "" || sess.Binding != b.PinID() {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+	}
+	// A cursor is a frozen view of the binding's READ SET at mint time — and the
+	// write mount's branch (WriteMountBranch) is one term of that fingerprint, so
+	// a resume bound to a different branch, a read mount re-pinned to a different
+	// branch, or a changed mount set all diverge the fingerprint here. Reject it
+	// before any dequeue side effect: resuming against another branch's state
+	// would silently leak the wrong deleted/superseded flags. The error is
+	// indistinguishable from expiry BY DESIGN (lenses RFC §7.3): a caller must not
+	// be able to tell a re-pinned read set — or a branch change — from an expired
+	// cursor, or it could probe how a shared name's read mounts changed.
+	if sess.ReadSet != federate.ReadSetFingerprint(b) {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+	}
+
+	// Per-mount store handles, resolved once per resume. Non-write mounts are
+	// acquired on first use and released when the resume returns; the write
+	// mount's acquisition is owned by the calling handler.
+	stores := map[*repos.RepoInstance]mcpStore{b.Write(): sWrite}
+	var mountReleases []func()
+	defer func() {
+		for _, r := range mountReleases {
+			r()
+		}
+	}()
+	// Non-nil so a fully-unreadable resume still marshals facts:[] (never null).
+	page := []factOutput{}
+
+	// A dequeued window can be entirely unreadable — every row pinned at a commit
+	// that no longer resolves. Skipping those rows alone would return an empty
+	// page while has_more stays true (a spurious empty page). Mirror
+	// explainResume: dequeue the next window, bounded at the same attempt count,
+	// until a window yields a readable row or the queue drains.
+	for range 3 {
+		items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, pageSize)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("page error: %v", err)), nil
+		}
+		if len(items) == 0 {
+			break
+		}
+		for _, it := range items {
+			var st pagedRowState
+			if err := json.Unmarshal([]byte(it.State), &st); err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
+			}
+			id, rel, qualified, perr := federate.ParseQualifiedPath(it.Path)
+			if perr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", perr)), nil
+			}
+			// Unqualified rows route to the write mount; qualified rows route to the
+			// mount their kb:// id names in the current binding.
+			rt := repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}
+			if qualified {
+				var ok bool
+				if rt, ok = b.ByID(id); !ok {
+					// A mount this snapshot referenced is gone from the binding —
+					// the frozen view no longer exists (RFC §7.3).
+					return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+				}
+			}
+			sm, ok := stores[rt.RI]
+			if !ok {
+				var release func()
+				var serr error
+				sm, release, serr = storeIndices(rt.RI)
+				if serr != nil {
+					// This row's mount is closing or replacing its store; the
+					// frozen view cannot be served consistently right now.
+					return mcpgo.NewToolResultError(serr.Error()), nil
+				}
+				mountReleases = append(mountReleases, release)
+				stores[rt.RI] = sm
+			}
+			// Re-read at the frozen commit on the mount's pinned branch; a row
+			// unreadable at its pin is skipped, not fatal (as today). The wire path
+			// (it.Path) is carried through untouched so qualified rows stay qualified.
+			parsed, _, _, okRead := readNode(ctx, sm, rt.Branch, rel, it.CommitHash)
+			if !okRead {
+				continue
+			}
+			page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody, snapshotClock(st)))
+		}
+		if len(page) > 0 {
+			break
+		}
+		// Whole window unreadable — try the next.
+	}
+
+	remaining, err := sWrite.toolSession.QueueSize(ctx, cursor)
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("page size error: %v", err)), nil
+	}
+	resp := queryResponse{Facts: page, HasMore: remaining > 0}
+	if remaining > 0 {
+		resp.Cursor = &cursor
+	} else {
+		// Drained: mark completed so it is obvious in the session table; the
+		// idle reaper removes the empty row in due course.
+		_ = sWrite.toolSession.UpdateToolSession(ctx, cursor, sess.LastCommit, "completed")
+	}
+	return marshalQueryResponse(resp)
+}
+
+// buildFactOutput renders a search result (first-page rows, whose full body is
+// already in hand). When includeBody is false the body is truncated to a
+// snippet (body_truncated set); otherwise the full body is returned as-is.
+func buildFactOutput(r index.SearchResult, includeBody bool, now time.Time) factOutput {
+	body, truncated := bodyView(r.Body, includeBody)
+	return factOutput{
+		Expired:       fact.IsExpiredAt(r.Expires, now),
+		File:          r.Path,
+		Title:         r.Title,
+		Kind:          wireKind(r.Kind),
+		Type:          r.Type,
+		Score:         r.Score,
+		Body:          body,
+		BodyTruncated: truncated,
+		Commit:        r.CommitHash,
+		Frontmatter: frontmatterOutput{
+			Domain:         orEmpty(r.Domain),
+			Confidence:     r.Confidence,
+			Sources:        r.Sources,
+			Entities:       orEmpty(r.Entities),
+			Motifs:         r.Motifs,
+			Refs:           orEmpty(r.Refs),
+			EvidenceWeight: r.EvidenceWeight,
+			CommittedAt:    r.CommittedAt,
+			Expires:        r.Expires,
+			Context:        r.Context,
+		},
+	}
+}
+
+// buildFactOutputFromFact renders a resumed-page row from a fact re-read at its
+// frozen commit, carrying the search score the snapshot preserved (the only
+// field not re-derivable from the fact file itself).
+func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, committedAt int64, includeBody bool, now time.Time) factOutput {
+	body, truncated := bodyView(f.Body, includeBody)
+	return factOutput{
+		Expired:       f.IsExpired(now),
+		File:          path,
+		Title:         f.Title,
+		Kind:          wireKind(string(f.Kind)),
+		Type:          string(f.Type),
+		Score:         score,
+		Body:          body,
+		BodyTruncated: truncated,
+		Commit:        commit,
+		Frontmatter: frontmatterOutput{
+			Domain:         orEmpty(f.Domain),
+			Confidence:     f.Confidence,
+			Sources:        f.Sources,
+			Entities:       orEmpty(f.Entities),
+			Motifs:         f.Motifs,
+			Refs:           orEmpty(f.Refs),
+			EvidenceWeight: f.EvidenceWeight,
+			CommittedAt:    committedAt,
+			Expires:        f.Expires,
+			Context:        f.Context,
+		},
+	}
+}
+
+// wireKind elides the default (epistemic) kind so it is omitted on the wire,
+// mirroring fact.Fact.MarshalJSON.
+func wireKind(kind string) string {
+	if fact.Kind(kind) == fact.DefaultKind {
+		return ""
+	}
+	return kind
+}
+
+// bodyView returns the body to emit and whether it was truncated: the full body
+// when includeBody, else a bounded snippet.
+func bodyView(full string, includeBody bool) (string, bool) {
+	if includeBody {
+		return full, false
+	}
+	return snippetBody(full, snippetMaxRunes)
+}
+
+// snippetBody truncates body to at most maxRunes runes, cutting back to a
+// word/line boundary when one is reasonably close to the end, and appends an
+// ellipsis. Returns (snippet, true) when truncation happened.
+func snippetBody(body string, maxRunes int) (string, bool) {
+	r := []rune(body)
+	if len(r) <= maxRunes {
+		return body, false
+	}
+	cut := string(r[:maxRunes])
+	if i := strings.LastIndexAny(cut, " \n\t"); i > maxRunes/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(cut, " \n\t") + "…", true
+}
+
+// marshalQueryResponse encodes the envelope, mapping JSON errors to a tool error.
+func marshalQueryResponse(resp queryResponse) (*mcpgo.CallToolResult, error) {
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
+	}
+	return mcpgo.NewToolResultText(string(out)), nil
+}
+
+// orEmpty returns the slice or an empty slice if nil.
+func orEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// motifMatchEnum is the motif_match tier list for the tool schema, read from
+// the store's own definition so the parameter surface and the implementation
+// cannot drift — the fact-schema single-source pattern (invariant 2061717e)
+// applied to this knob.
+func motifMatchEnum() []string {
+	out := make([]string, 0, len(index.AllMotifMatchTiers))
+	for _, t := range index.AllMotifMatchTiers {
+		out = append(out, string(t))
+	}
+	return out
+}
+
+// motifMatchUnavailable returns the reason a requested tier cannot run, or "".
+//
+// `soft` is accepted as a parameter and answers with WHY it is not available,
+// rather than returning an empty result set. Those two are very different to a
+// caller: an empty result reads as "nothing matches", which is a claim about
+// the corpus. This is a claim about the tier, and only one of them is true.
+//
+// It cannot be a parse error either — that would say the value is invalid,
+// when it is a valid tier that is not yet calibrated. The distinction is the
+// difference between "you asked wrongly" and "we cannot answer that yet".
+func motifMatchUnavailable(q index.SearchOptions) string {
+	if q.MotifMatch != index.MotifMatchSoft || len(q.Motifs) == 0 {
+		return ""
+	}
+	return "motif_match=soft is not available: it needs an operating point calibrated " +
+		"on real motif definitions, which is Phase-4 work. Use exact (default), stem, " +
+		"token-2, or token-1."
+}
+
+// parseMotifMatch validates the caller's tier.
+//
+// An unrecognised value is an ERROR, not a silent fall back to the default.
+// Falling back would answer a differently-scoped question than the one asked
+// while looking like it succeeded — and for this knob specifically, a typo in
+// a loose tier would silently return the strict tier's results, which a caller
+// checking for breadth cannot distinguish from "there is nothing looser".
+func parseMotifMatch(raw string) (index.MotifMatchTier, error) {
+	if raw == "" {
+		return index.MotifMatchExact, nil
+	}
+	for _, t := range index.AllMotifMatchTiers {
+		if string(t) == raw {
+			return t, nil
+		}
+	}
+	return "", fmt.Errorf("motif_match must be one of %v", motifMatchEnum())
+}
+
+// logQueryDiag writes the ONE Info line per text-or-filter query (relevance and
+// sort=recent alike): whether it had text, the caller's min_similarity, the
+// binding, and per-mount cutoff and counts after the vector step and after the
+// cutoff. returned[i] is how many rows mount i handed back.
+func logQueryDiag(mode string, b *repos.Binding, q index.SearchOptions, targets []federate.Target, diags []index.SearchDiag, returned []int) {
+	type mountCounts struct {
+		Mount      string  `json:"mount"`
+		VecHits    int     `json:"vec_hits"`
+		AfterCut   int     `json:"after_cutoff"`
+		Returned   int     `json:"returned"`
+		BestCosine float64 `json:"best_cosine"`
+		Cutoff     float64 `json:"cutoff"`
+	}
+	counts := make([]mountCounts, len(targets))
+	for i, t := range targets {
+		counts[i] = mountCounts{Mount: mountLabel(t.RT), VecHits: diags[i].VecHits, AfterCut: diags[i].Candidates,
+			Returned: returned[i], BestCosine: diags[i].BestCosine, Cutoff: diags[i].Cutoff}
+	}
+	log.Info().
+		Str("mode", mode).
+		Bool("text", q.Text != "").
+		Float64("min_similarity", q.MinSimilarity).
+		Str("binding", b.Name()).
+		Bool("lens", b.IsLens()).
+		Interface("mounts", counts).
+		Msg("knomit_query search")
+}

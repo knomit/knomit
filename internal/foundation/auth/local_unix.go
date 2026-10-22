@@ -32,7 +32,7 @@ func localID(uid int) string { return "uid:" + strconv.Itoa(uid) }
 // listener: who the OS says we are, named exactly as PeerCred will name us
 // when we dial our own socket.
 //
-// app's boot seeding calls this, and internal/web's AuthMiddleware calls
+// app's boot seeding calls this, and internal/edge/web's AuthMiddleware calls
 // Peer.Principal; local_test.go connects this process to itself and asserts
 // the two render the same string. That agreement is the whole point of the
 // function — seeding a grant for one spelling while the middleware produces

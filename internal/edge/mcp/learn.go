@@ -1,0 +1,1371 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"knomit/internal/engine/store/model"
+
+	"knomit/internal/engine/store/index"
+
+	"knomit/internal/corpus/federate"
+	"knomit/internal/corpus/refs"
+	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize"
+	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
+)
+
+// localEvidenceRefs returns the subset of a fact's refs that are genuinely-local
+// fact edges eligible to contribute evidence weight. It drops:
+//   - the fact's own path (a fact is never its own evidence source), and
+//   - everything ClassifyRef does not call a local fact: a FOREIGN kb:// ref
+//     points into another repo, and a source citation is not a fact edge even
+//     when the file it cites is markdown (src://…/plans/x.md ends in ".md").
+//
+// localRepoID must be the writing repo's id, NOT "". Refs are stored canonical
+// (kb://<own-id>/<path>), so a merged fact carries the existing fact's refs in
+// qualified form; classifying those with an empty id would read every one of
+// them as foreign and silently compute the weight from nothing.
+func localEvidenceRefs(f fact.Fact, localRepoID string) []string {
+	var localRefs []string
+	// KEPT after #132 stopped the merge writing a self-ref, because facts
+	// written BEFORE that change still carry one on disk, in BOTH forms —
+	// measured: kb://<id>/…/69694fd7.md canonical, …/f1d14b64.md bare. A
+	// read-side drop is what keeps those legacy rows from inflating a weight,
+	// and it costs one comparison. Compare on the CLASSIFIED path, never the
+	// raw string, precisely because the two stored forms differ.
+	self := fact.ClassifyRef(f.Path(), localRepoID).Path
+	for _, r := range f.Refs {
+		c := fact.ClassifyRef(r, localRepoID)
+		if c.Kind != fact.RefLocalFact || c.Path == self {
+			continue
+		}
+		localRefs = append(localRefs, c.Path)
+	}
+	return localRefs
+}
+
+// defaultConfidence and defaultSources are the values knomit_learn assumes
+// for a fact that omits them. They are declared here and substituted into the
+// input schema below so the number the tool advertises and the number the
+// handler applies cannot drift — the failure mode that let the schema promise
+// `sources: 1` while every omitting caller wrote 0.
+const (
+	defaultConfidence = 0.7
+	defaultSources    = 1
+)
+
+// learnTool returns the Tool definition for knomit_learn.
+func learnTool() mcpgo.Tool {
+	return mcpgo.NewTool("knomit_learn",
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis."),
+		bindingArg(true),
+		mcpgo.WithString("moment_name",
+			mcpgo.Required(),
+			mcpgo.Description("A short label for this learning moment."),
+		),
+		mcpgo.WithArray("facts",
+			mcpgo.Required(),
+			mcpgo.Description("Array of fact objects to write."),
+			mcpgo.Items(map[string]any{
+				"type":                 "object",
+				"properties":           learnToolSchemaProperties(),
+				"required":             []string{"title", "body"},
+				"additionalProperties": false,
+			}),
+		),
+		mcpgo.WithArray("retract",
+			mcpgo.Description(retractArgDescription),
+			mcpgo.Items(map[string]any{"type": "string"}),
+		),
+		traceArg(),
+	)
+}
+
+// retractArgDescription is knomit_learn's `retract` argument (F04, the atomic
+// move). Kept beside the schema so the text a client reads and the rules the
+// handler applies are reviewed together.
+const retractArgDescription = "Optional: fact paths to RETRACT in the SAME commit as the facts written — an atomic move (write the working copy AND delete the task, or neither). " +
+	"Every path must exist on this branch at the moment of the write, checked under the branch's write lock: if any is already gone (another move took it first), the WHOLE call is refused and nothing is written. " +
+	"A path may not be both written and retracted. `facts` may be empty when `retract` is not: a batch retraction in one commit. " +
+	"Atomic on THIS branch only: two agents on two branches can each move the same fact; nothing in knomit makes a move exclusive across agents."
+
+// learnToolSchemaProperties is the knomit_learn input schema's properties map.
+//
+// Extracted from the registration literal above so conformance tests can read
+// the bytes actually served — in particular that the motifs description is
+// blueprint §2 Block A verbatim. The registration is its only production
+// caller.
+func learnToolSchemaProperties() map[string]any {
+	return map[string]any{
+		// topic and category are REQUIRED for knowledge, but cannot
+		// say so in the schema's `required` list: `path` replaces
+		// them for private state, and JSON Schema cannot express
+		// "one or the other" in a list. The descriptions carry the
+		// rule instead.
+		"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
+		"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
+		"path":     map[string]any{"type": "string", "description": "ARTIFACTS ONLY. An explicit repo path under " + fact.ArtifactsRoot + "/<area>/, e.g. " + fact.ArtifactsRoot + "/<area>/<name>.md, for an agent's working file that is not knowledge — a periodic job's bookkeeping. At least one folder deep; no segment may be empty or begin with a dot, and no \"..\". Mutually exclusive with topic/category: supply one or the other, never both. A file written here is INVISIBLE to knomit_query, knomit_changes, triggers, the UI and export, by design; address it later by this exact path. " + fact.PrivateRoot + "/ (the system: ontology, triggers, recipes, skills) and every path with a segment beginning with a dot are closed to the fact tools — they change only through git. Fails if the path already exists — use knomit_update to write a new revision."},
+		"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
+		"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
+		// kind/type/origin come from the shared fragments in
+		// factschema.go so this schema, knomit_update's, and the
+		// server instructions cannot disagree. knomit_learn mints
+		// facts, so it declares the defaults it will assume.
+		"kind":          kindProperty(fact.DefaultKind),
+		"type":          typeProperty(fact.DefaultEpistemicType),
+		"origin":        originProperty(),
+		"domain":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
+		"confidence":    map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
+		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
+		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
+		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
+		"motifs":        motifsProperty(),
+		"expires":       expiresProperty(),
+		"context":       contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
+		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in five forms. " +
+			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
+			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
+			"(3) Source code: `src://<source-repo-id>/<path>@<commit>:<blob>`, with FULL 40-hex commit and blob, optionally `#L<start>-L<end>`. This id is the SOURCE repo's, not a knomit repo id — get all three components by running git in the checkout you are citing: `git rev-list --max-parents=0 HEAD | cut -c1-12` (repo id), `git rev-parse HEAD` (commit), `git rev-parse <commit>:<path>` (blob). That last command failing IS the check — the server holds no source objects and cannot verify src refs for you, so never cite source that does not exist in the repo's history. A src ref short of this full form is refused when added. Leave src refs already on a fact as they are. " +
+			"(4) An external URL: `https://…` or `file:///…`. " +
+			"(5) A system file in THIS repo: `.knomit/<path>` — any file type, its EXACT path with case kept (`SKILL.md`), never a directory. It MUST exist at the branch tip or the whole call is refused; the server rewrites it to `kb://<repo-id>/.knomit/<path>`. knomit_explain then shows the file as it stood when this fact was written. `.knomit/` stays read-only: a ref reads it, nothing writes it."},
+	}
+}
+
+// learnFactInput is the JSON shape of a single fact in the input array.
+type learnFactInput struct {
+	Topic    string `json:"topic"`
+	Category string `json:"category"`
+	// Path, when set, is an explicit artifact path under
+	// fact.ArtifactsRoot/<area>/ and REPLACES topic+category: no ontology
+	// validation, no UUID minting, no dedup-merge. See learnTool's description.
+	Path   string   `json:"path"`
+	Title  string   `json:"title"`
+	Body   string   `json:"body"`
+	Kind   string   `json:"kind"`
+	Type   string   `json:"type"`
+	Domain []string `json:"domain"`
+	// Confidence and Sources are pointers so an ABSENT field can be told
+	// apart from an explicit zero. Both advertise a JSON Schema `default`
+	// (0.7 and 1), but a schema default is documentation for the client, not
+	// server-side coercion — as plain scalars they silently wrote Go's zero
+	// whenever a caller omitted them, and a fact with sources 0 contributes
+	// nothing to any downstream evidence weight (§5.2 multiplies by sources).
+	// An explicit 0 stays 0: §2.2 requires only >= 0.
+	Confidence *float64 `json:"confidence"`
+	Sources    *int     `json:"sources"`
+	Entities   []string `json:"entities"`
+	Motifs     []string `json:"motifs"`
+	// DistinctFrom names existing facts the caller has read and judged to be
+	// about a different subject. It is the escape from the same-subject
+	// refusal and nothing else reads it: an entry that names no candidate is
+	// inert, and an entry naming a path that does not exist is an error rather
+	// than a silently accepted bypass.
+	DistinctFrom []string `json:"distinct_from"`
+	Refs         []string `json:"refs"`
+	Origin       string   `json:"origin"`
+	// Expires is passed through to SerializeFact, the single gate that
+	// refuses a non-RFC 3339 value.
+	Expires string `json:"expires"`
+	// Context (F22) is checked for shape first (so a newline or a list value
+	// is refused naming the fact and the key), then normalised and checked
+	// against the ontology's declarations by ValidateFact. Scripts reach this
+	// struct through the same JSON round trip, so their numbers are float64
+	// here too.
+	Context map[string]any `json:"context"`
+}
+
+// reserialize re-renders f and overwrites the entry at path in the
+// pending-write map.
+//
+// Every stage after the initial build mutates a fact in place (refs gain a
+// subsumed hypothesis, a merge replaces it wholesale, an evidence weight is
+// stamped on) and must push the new bytes back into files. Doing that by hand
+// at four sites is how a stage silently ends up writing a stale rendering.
+//
+// path is an explicit parameter rather than f.Path() because the two are NOT
+// interchangeable, and conflating them writes the fact to the wrong place.
+// fact.NewFact lowercases the ENTIRE path it is given, ontology root
+// included, whereas fact.BuildFactPath and fact.NormalizePath pass the root
+// through verbatim and normalize only the segments beneath it — and
+// config.Validate accepts an ontology_root of "KB". So for an uppercase root
+// f.Path() is "kb/tech/x.md" while the fact's real home is "KB/tech/x.md":
+// keying off f.Path() commits the file OUTSIDE the ontology root, where every
+// ontology-scoped query misses it.
+//
+// The invariant this encodes, and which the rest of learn.go now follows: the
+// on-disk path preserves the configured root verbatim and is carried
+// explicitly alongside the fact, while f.Path() is a NORMALIZED IDENTITY —
+// good for comparing two facts, never for locating one on disk.
+//
+// reserialize only ever adds. A merge that retargets a fact to the existing
+// fact's path must delete the old key itself.
+func reserialize(files map[string]string, path string, f fact.Fact) error {
+	serialized, err := fact.SerializeFact(f)
+	if err != nil {
+		return err
+	}
+	files[path] = serialized
+	return nil
+}
+
+// validateBatchTypeConsistency rejects a batch that mixes observed types with
+// inferred ones (hypothesis, methodology).
+//
+// The two arise from different acts: observed facts record something the agent
+// saw, inferred facts record something it reasoned to. A single commit that
+// contains both makes the moment's provenance ambiguous — a later reader
+// cannot tell which half the moment was actually about.
+func validateBatchTypeConsistency(inputs []learnFactInput) error {
+	hasObserved, hasInferred := false, false
+	for _, fi := range inputs {
+		eType := fact.Type(fi.Type)
+		if eType == "" {
+			eType = fact.DefaultEpistemicType
+		}
+		if eType == fact.Hypothesis || eType == fact.Methodology {
+			hasInferred = true
+		} else {
+			hasObserved = true
+		}
+	}
+	if hasObserved && hasInferred {
+		return fmt.Errorf("cannot mix observed types (observation, concept, etc.) and inferred types (hypothesis, methodology) in a single learn call")
+	}
+	return nil
+}
+
+// validateAndBuildFacts validates each input against the ontology, assigns it a
+// server-generated path, and renders it into the pending-write map.
+//
+// It touches neither ctx nor the store: nothing here reads or writes the repo,
+// so the whole stage is a pure function of (ontology, inputs). Returns the
+// built facts, their ontology topic paths (cached because the dedup-merge stage
+// must re-run ValidateFact and would otherwise have to re-derive them from the
+// on-disk path), their on-disk paths, and the files to write.
+//
+// The paths slice is returned rather than recovered from facts[i].Path()
+// because those two disagree under an uppercase ontology_root — see
+// reserialize for the full reasoning. paths[i] is the authoritative location
+// of facts[i]; later stages that retarget a fact (dedup-merge) update it.
+func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs []learnFactInput) ([]fact.Fact, []string, []string, map[string]string, error) {
+	files := make(map[string]string, len(inputs))
+	facts := make([]fact.Fact, len(inputs))
+	topicCategories := make([]string, len(inputs))
+	paths := make([]string, len(inputs))
+	for i, fi := range inputs {
+		// Checked first, so a missing title is reported as that and not as
+		// whatever later rule it happens to trip. SerializeFact enforces the
+		// same rule for every write path; this is the same rule, reported
+		// with the fact's index.
+		if err := fact.ValidateTitle(fi.Title); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+		}
+		var path string
+		var topicCategory string
+		if fi.Path != "" {
+			// Artifact: an explicit caller-chosen path, no ontology.
+			if fi.Topic != "" || fi.Category != "" {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"fact %d: path cannot be combined with topic or category — supply one or the other", i)
+			}
+			path = fact.NormalizePath(ontologyRoot, fi.Path)
+			if msg := closedToFactTools(path); msg != "" {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %s", i, msg)
+			}
+			if !fact.IsArtifactPath(path) {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %s", i, notAnArtifactPath(path))
+			}
+			// Empty topicCategory is the downstream signal: skip ontology
+			// validation and skip dedup-merge for this fact.
+			topicCategory = ""
+		} else {
+			topicCategory = fi.Topic
+			if fi.Category != "" {
+				topicCategory = fi.Topic + "/" + fi.Category
+			}
+			if ontology != nil {
+				if err := ontology.ValidatePath(topicCategory); err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+				}
+			}
+			if strings.TrimSpace(fi.Category) == "" {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: category is required", i)
+			}
+			path = fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
+			// A private path can only be reached deliberately, via `path`.
+			// Reaching one from topic/category means the ontology has a
+			// dot-prefixed topic, which is a corrupt ontology, not a request.
+			if fact.IsPrivatePath(path) {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"fact %d: topic/category resolves to %s; a path segment beginning with '.' is private and cannot hold a fact", i, path)
+			}
+		}
+		topicCategories[i] = topicCategory
+
+		domain := fi.Domain
+		if domain == nil {
+			domain = []string{}
+		}
+		entities := fi.Entities
+		if entities == nil {
+			entities = []string{}
+		}
+		refs := fi.Refs
+		if refs == nil {
+			refs = []string{}
+		}
+		// Resolve kind and leaf type. SerializeFact (called below)
+		// validates the (kind, type) pair via the same path that
+		// ParseFact uses, so we don't pre-validate here.
+		kind := fact.Kind(fi.Kind)
+		if kind == "" {
+			kind = fact.DefaultKind
+		}
+		eType := fact.Type(fi.Type)
+		if eType == "" && kind == fact.Epistemic {
+			eType = fact.DefaultEpistemicType
+		}
+		f := fact.NewFact(path)
+		// Validated above on the raw input; trimmed here so what is stored is
+		// what ParseFact reads back, as knomit_update does.
+		f.Title = strings.TrimSpace(fi.Title)
+		f.Body = fi.Body
+		f.Kind = kind
+		f.Type = eType
+		f.Domain = domain
+		f.Confidence = defaultConfidence
+		if fi.Confidence != nil {
+			f.Confidence = *fi.Confidence
+		}
+		f.Sources = defaultSources
+		if fi.Sources != nil {
+			f.Sources = *fi.Sources
+		}
+		f.Entities = entities
+		// Passed through untouched: SerializeFact is the single gate (MN4). A
+		// subject motif is dropped there, silently, and a malformed one fails
+		// the call there — neither decision belongs in a handler.
+		f.Motifs = fi.Motifs
+		f.Refs = refs
+		f.Expires = fi.Expires
+		// Explicit origin: set it and let SerializeFact validate, the
+		// same way (kind, type) is handled above — one chokepoint, so
+		// synthesize and web write paths get the identical check.
+		// Empty is left unset so SerializeFact/ParseFact apply their
+		// defaults (authored, or distilled for legacy synthesis facts).
+		// This is how an agent persists a previewed discovery proposal
+		// as origin=discovered.
+		if fi.Origin != "" {
+			f.Origin = fact.Origin(fi.Origin)
+		}
+		// F22 context: shape first, so a newline or a list value is refused
+		// as that, naming the fact and the key, before any typed rule.
+		if err := fact.ValidateContextShape(fact.NormalizeContextValues(fi.Context)); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+		}
+		f.Context = fact.NormalizeContext(ontology, topicCategory, fi.Context)
+		// A private-state fact has no ontology placement to validate against,
+		// so nothing declares a context key there; and with no ontology at
+		// all nothing does either. Both refuse a non-empty context rather
+		// than skipping the typed gate.
+		if topicCategory == "" || ontology == nil {
+			if len(f.Context) > 0 {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, fact.ErrContextWithoutOntology)
+			}
+		}
+		if ontology != nil && topicCategory != "" {
+			if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+			}
+		}
+		facts[i] = f
+		paths[i] = path
+		if err := reserialize(files, path, f); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: serialize: %v", i, err)
+		}
+	}
+	return facts, topicCategories, paths, files, nil
+}
+
+// newFactWins reports whether the incoming fact's IDENTITY (title, body, kind,
+// type, origin) survives a dedup merge. Higher confidence wins; on a tie the
+// incoming fact wins unless it is backed by strictly fewer sources.
+//
+// Split out from mergeFacts because the caller needs the same answer for a
+// different reason: the precomputed dedup vector was embedded over the incoming
+// fact's title+body, so it is only donatable when the incoming identity wins.
+func newFactWins(newFact, existing fact.Fact) bool {
+	if newFact.Confidence != existing.Confidence {
+		return newFact.Confidence > existing.Confidence
+	}
+	return newFact.Sources >= existing.Sources
+}
+
+// mergeCorroborates reports whether folding newFact into existing counts as a
+// new corroboration, and when it does not, why (for the learn-response note).
+// It is the single decision behind mergeFacts' sources arithmetic.
+func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, string) {
+	if newFact.Type == fact.Hypothesis {
+		return false, "incoming is a hypothesis"
+	}
+	if !fact.HasNovelRef(newFact.Refs, existing.Refs, existing.Path(), localRepoID) {
+		return false, "no new refs"
+	}
+	return true, ""
+}
+
+// mergeFacts folds an incoming near-duplicate into the existing fact it
+// matched, returning the fact to write at the EXISTING path.
+//
+// The merge is asymmetric by design: the winner (see newFactWins) contributes
+// the identity — title, body, kind, type, origin — while the metadata is
+// always pooled, because both facts are evidence of the same thing. Confidence
+// takes the max rather than the winner's, and sources add WHEN the incoming fact brings a novel ref (#361): two independent
+// observations of one fact are worth more than either alone. Motifs are the
+// one field that unions WINNER-first, because they are capped and so their
+// order decides what survives — see the call site. Pure.
+//
+// THE MERGE EMITS NO SELF-REFERENCE, and that is the point of #132. Two
+// separate ways one used to arise, and BOTH have to be closed — removing only
+// the first leaves the second producing them:
+//
+//  1. The merge APPENDED the existing fact's path as lineage. Because the merge
+//     RETARGETS onto that path, the appended path is the merged fact's OWN
+//     path, by construction. That append is gone: the retarget preserves the
+//     file, so git history for it already records that this version subsumed a
+//     duplicate, and the ref added nothing a reader could not get from
+//     `git log`.
+//
+//  2. The union can CONVERT a legitimate ref into a self-reference. An incoming
+//     fact may cite the very fact it then dedup-merges into — a perfectly
+//     ordinary "B cites A" that becomes "A cites A" the moment B is retargeted
+//     onto A. Nothing was appended; the ref was already there and only its
+//     meaning changed. So the union is FILTERED against the merged path rather
+//     than merely not added to. (Found by the suite, not by reading: it is
+//     exactly what TestLearnHandler_OriginDefaultsAuthored does.)
+//
+// Nothing downstream loses information. localEvidenceRefs already dropped the
+// self-path so it could not inflate evidence weight, and the recursive ref
+// walks in internal/corpus/synthesize/weight.go absorb it as a back-edge — the ref was
+// discarded by every consumer that read it.
+//
+// localRepoID is needed to CLASSIFY, not to decorate: refs arrive bare from the
+// caller and canonical from storage, and ClassifyRef with an empty id reads
+// every kb://<id>/… ref as FOREIGN — so a filter without it would silently miss
+// every canonical self-ref, which is the majority form on disk.
+//
+// Note what is NOT affected: refs to OTHER facts, including retired ones, are
+// unioned as before. Citing a retired predecessor at a DIFFERENT path is
+// genuine lineage and stays.
+func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
+	merged := fact.NewFact(existing.Path())
+	winner, loser := existing, newFact
+	if newFactWins(newFact, existing) {
+		winner, loser = newFact, existing
+	}
+	merged.Title = winner.Title
+	merged.Body = winner.Body
+	merged.Kind = winner.Kind
+	merged.Type = winner.Type
+	// The winner's identity wins, so its origin wins too.
+	merged.Origin = winner.Origin
+	// And its expiry: a merge never invents, inherits or pools one. When the
+	// existing fact wins, an incoming explicit expires is NOT applied — the
+	// handler says so in its result (expiresNotAppliedNotes) rather than
+	// dropping it silently.
+	merged.Expires = winner.Expires
+	// And its context map, WHOLE (F22, the same rule): two different facts'
+	// keys mixed would describe neither. When the existing fact wins, an
+	// incoming context is not applied and the result says so
+	// (contextNotAppliedNotes).
+	merged.Context = fact.CopyContext(winner.Context)
+
+	merged.Domain = fact.UnionStrings(newFact.Domain, existing.Domain)
+	merged.Entities = fact.UnionStrings(newFact.Entities, existing.Entities)
+	// Motifs union WINNER-first and trim at the cap — deliberately unlike the
+	// incoming-first domain and entity unions two lines above. The rule and the
+	// reasoning live in fact.MergeMotifs, shared with the review-session merge
+	// so the two cannot drift.
+	merged.Motifs = fact.MergeMotifs(winner.Motifs, loser.Motifs)
+	merged.Confidence = max(newFact.Confidence, existing.Confidence)
+	// SOURCES COUNT CORROBORATION, NOT RE-READS (#361). The incoming count is
+	// added to the EXISTING count — whichever fact won the identity tiebreak —
+	// only when the incoming fact is not a hypothesis and cites a ref the
+	// existing fact does not already carry (compared by classified identity;
+	// see mergeCorroborates). Refs and confidence still merge either way.
+	merged.Sources = existing.Sources
+	if ok, _ := mergeCorroborates(newFact, existing, localRepoID); ok {
+		merged.Sources += newFact.Sources
+	}
+	// CARRY THE WEIGHT ACROSS (#94). Without this the merged fact starts at 0
+	// and stays there whenever computeEvidenceWeights declines to restamp it —
+	// which is the common case, because that gate reads the RAW Origin field
+	// and an agent writing through knomit_learn normally omits origin. The
+	// existing fact's stored weight then vanishes from the file, the index, and
+	// every weight-ordered query (knomit f62378e5, reproduced by
+	// TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight).
+	//
+	// MAX, not the winner's: the merged fact pools BOTH facts' sources, and
+	// evidence weight is monotone in pooled evidence, so the larger of the two
+	// is a LOWER BOUND on what a full recompute would produce. Taking the
+	// winner's would still erase a weight whenever the unweighted fact won.
+	// This never overstates the evidence, and computeEvidenceWeights still
+	// overrides with a true recompute wherever its origin gate applies.
+	//
+	// TODAY THE FIRST OPERAND IS ALWAYS ZERO, and that is worth stating rather
+	// than leaving for a reader to discover: `evidence_weight` is not a field
+	// of the learn schema, and computeEvidenceWeights runs AFTER this merge —
+	// so an incoming fact never arrives carrying one, and max() currently
+	// reduces to "keep the existing fact's weight". It is written as max
+	// because that is the RULE (never lose the larger evidence claim), and it
+	// stays correct if either of those two facts changes. Unlike a guard for an
+	// impossible failure, this costs no branch and asserts nothing false — but
+	// no test can exercise the other operand, so none pretends to.
+	//
+	// KNOWN BOUND (cold review, tracked follow-up): max is a lower bound on a
+	// true recompute, not the recompute itself — an existing weight of ~0.47
+	// merged with an incoming fact carrying sources: 20 justifies ~0.94. Left
+	// deliberately: it never overstates and never erases, and the correct fix
+	// is a hybrid, since a naive recompute mishandles a DERIVED existing fact
+	// whose lineage-composed weight max preserves better.
+	merged.EvidenceWeight = max(newFact.EvidenceWeight, existing.EvidenceWeight)
+	// Union, then drop any ref that names the merged fact itself — in either
+	// stored form. See the doc comment above (#132).
+	self := fact.ClassifyRef(merged.Path(), localRepoID).Path
+	union := fact.UnionStrings(newFact.Refs, existing.Refs)
+	kept := make([]string, 0, len(union))
+	for _, r := range union {
+		if c := fact.ClassifyRef(r, localRepoID); c.Kind == fact.RefLocalFact && c.Path == self {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	merged.Refs = kept
+	return merged
+}
+
+// subsumeHypothesis records that incoming fact f supersedes the hypothesis at
+// hypothesisPath: f cites it as lineage, and the hypothesis is STAGED for
+// retraction rather than deleted now.
+//
+// The staging is the point. The retraction is applied by the same
+// BatchWriteFacts call that writes f, so the two are one commit. A separate
+// DeleteFact would be a second commit: if it failed we would have written an
+// observation whose refs point at a live hypothesis it claims to have
+// subsumed, and if the batch write then failed we would have retracted a fact
+// for nothing. AppendUnique on both sides: two incoming observations can match
+// the same hypothesis, and deleting one path twice in a batch is at best
+// wasted tree work.
+func subsumeHypothesis(f fact.Fact, retract []string, hypothesisPath string) (fact.Fact, []string) {
+	retract = fact.AppendUnique(retract, hypothesisPath)
+	f.Refs = fact.AppendUnique(f.Refs, hypothesisPath)
+	return f, retract
+}
+
+// hypothesisMergeNote is the learn-response note for incoming hypothesis i
+// folded into the existing hypothesis at path. mergeFacts keeps ONE title and
+// body — the winner's (newFactWins) — so one of the two predictions is gone,
+// and the note says which, in words a caller cannot read as "both stored".
+// When the incoming one wins, the original prediction at path was overwritten.
+func hypothesisMergeNote(i int, path string, incoming, existing fact.Fact) string {
+	kept, keptSide, dropped, droppedSide := existing, "existing", incoming, "incoming"
+	if newFactWins(incoming, existing) {
+		kept, keptSide, dropped, droppedSide = incoming, "incoming", existing, "existing"
+	}
+	return fmt.Sprintf(
+		"fact %d: merged into existing hypothesis %s; kept the %s prediction %q (confidence %g) and DROPPED the %s prediction %q (confidence %g); sources unchanged. To keep both as separate hypotheses, resubmit with distinct_from: [%q].",
+		i, path, keptSide, kept.Title, kept.Confidence, droppedSide, dropped.Title, dropped.Confidence, path)
+}
+
+// dedupEmbed batch-embeds every incoming fact upfront so each dedup Search can
+// reuse a precomputed vector instead of paying a fresh ONNX call. Returns nil
+// when no embedder is configured or the batch fails — both are non-fatal, and
+// callers fall back to per-fact embedding inside Search.
+func dedupEmbed(ctx context.Context, batchEmb model.BatchEmbedder, facts []fact.Fact) [][]float32 {
+	if batchEmb == nil || len(facts) == 0 {
+		return nil
+	}
+	titles := make([]string, len(facts))
+	bodies := make([]string, len(facts))
+	for i, f := range facts {
+		titles[i] = f.Title
+		bodies[i] = f.Body
+	}
+	vecs, err := batchEmb.EmbedDocuments(ctx, titles, bodies)
+	if err != nil {
+		log.Warn().Err(err).Int("count", len(titles)).Msg("learn: batch embed failed; dedup falls back to per-fact embedding and donations are skipped")
+		return nil
+	}
+	return vecs
+}
+
+// topicPathOf returns the ontology topic path ("topic/category/…") of an
+// on-disk fact path: the path with the ontology root and the file name removed.
+// The root is matched case-insensitively — the configured root keeps its real
+// case on disk — and a path outside it yields "", which resolves no attribute.
+func topicPathOf(ontologyRoot, path string) string {
+	prefix := ontologyRoot + "/"
+	if len(path) <= len(prefix) || !strings.EqualFold(path[:len(prefix)], prefix) {
+		return ""
+	}
+	return categoryDirOf(path[len(prefix):])
+}
+
+// onDedupSkipRetracted, when set, is told every dedup match declined because
+// the call retracts it (F08 T-A5 proves with it that dedup scored the
+// retracted candidate, so the exclusion is exercised, not bypassed). Tests
+// only.
+var onDedupSkipRetracted func(path string)
+
+// applyDedupMerge searches under each incoming fact's category directory — a
+// raw path PREFIX, see the scope comment at the search — for a near-duplicate
+// and folds any match in, mutating facts and files in place.
+// Three outcomes per fact: no match (write as-is), the match is a hypothesis
+// this fact subsumes (write as-is, stage the hypothesis for retraction), or a
+// genuine duplicate (merge and write at the EXISTING path).
+//
+// Returns the precomputed-embedding donation map keyed by FINAL on-disk path —
+// upsert reads it from ctx and skips its own ONNX call — plus the hypothesis
+// paths to retract in the same commit as the write that subsumes them.
+func applyDedupMerge(
+	ctx context.Context,
+	s mcpStore,
+	writeBranch string,
+	ontology *fact.Ontology,
+	ontologyRoot string,
+	batchEmb model.BatchEmbedder,
+	dedupVecs [][]float32,
+	facts []fact.Fact,
+	topicCategories []string,
+	paths []string,
+	files map[string]string,
+	localRepoID string,
+	retracting map[string]bool,
+	distinctFrom [][]string,
+) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, error) {
+	// The near-duplicate cosine floor is model-dependent (see internal/domain/modelparams).
+	dedupThreshold := model.EmbedderThresholds(batchEmb).Dedup
+	// dedupVecs is computed by the CALLER now, because the same-subject stage
+	// downstream needs the same vectors and re-embedding for it would be a
+	// second ONNX pass over the identical text. It is still the first thing
+	// that happens to this fact set, before any mutation here.
+
+	// touched[i] is an input this function rewrote: merged into an existing
+	// fact, or given a subsumed hypothesis's lineage. The same-subject stage
+	// skips them. It must, and not merely to avoid double-judging: mergeFacts
+	// inherits title and body from whichever fact WON, so for a merged index
+	// dedupVecs[i] — computed over the incoming title+body — no longer
+	// describes what will be written.
+	touched := make(map[int]bool)
+	// uncounted[i] is why the merge at index i did not add the incoming
+	// sources (#361); it feeds the learn response's notes.
+	uncounted := make(map[int]string)
+	// hypMerged[i] is the note for a hypothesis folded into an existing
+	// hypothesis: which prediction was kept and which was DROPPED. Only one
+	// of the two predictions survives such a merge, so "wrote 1 fact" alone
+	// would hide a lost claim.
+	hypMerged := make(map[int]string)
+
+	// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to, or
+	// "" to suppress donation (used when the merge kept the EXISTING fact's
+	// title+body, so our vector — computed over the incoming title+body —
+	// would not describe what actually gets written).
+	// Seeded from paths, not facts[i].Path(): this map is consumed by upsert to
+	// key embeddings by the path actually committed, so it must track the
+	// on-disk location. See reserialize.
+	donatePaths := make([]string, len(facts))
+	copy(donatePaths, paths)
+	var retract []string
+	// priorRefs[onDiskPath] is what the EXISTING fact at that path already
+	// cited, for facts this merge folds into one. Those refs resolved at the
+	// commit that wrote them; the ref gate must not re-judge them just because
+	// a merge is rewriting the file that carries them.
+	priorRefs := make(map[string][]string)
+	// An existing fact absorbs at most ONE incoming fact per call. Search runs
+	// with Limit: 1, so two inputs whose search scopes overlap can both come
+	// back pointing at the same existing fact — and without this set the second
+	// one retargets paths[i] onto a path the first already claimed, AFTER the
+	// duplicate-path guard in the handler has run and can no longer see it.
+	// That is the exact loss that guard describes: one file, two commit
+	// entries, one body silently gone, and a summary that reports both as
+	// written. It also double-lists a subsumed hypothesis in retract.
+	//
+	// A second matcher is SKIPPED rather than chained onto the in-progress
+	// merge — the same choice applyGreedyMerges makes with its `consumed` set
+	// ("each fact index participates in at most one merge"). Skipping writes
+	// the fact at its own freshly-minted path: two near-duplicates land instead
+	// of one, which a later review prune collapses. Chaining would instead pick
+	// a tiebreak winner among three bodies and drop two, silently, inside a
+	// call the caller thinks wrote everything it sent. A redundant fact is
+	// recoverable; a discarded one is not.
+	consumed := make(map[string]bool)
+
+	for i, f := range facts {
+		// Private-state facts are not knowledge and have no category
+		// neighbourhood to merge with. They are also unindexed, so the search
+		// below would return nothing anyway — skipping is explicit rather than
+		// accidental, and saves the Search round trip. It saves no embedding:
+		// dedupEmbed above batch-embeds the WHOLE input list before this loop
+		// starts, private facts included.
+		//
+		// The donation is dropped for the same reason the "existing wins"
+		// branch below drops it: embByPath is consumed by upsert, and nothing
+		// ever calls upsert for a private path (every indexing walker skips
+		// it), so an entry here would be a vector for a row that is never
+		// written. Leaving it in was harmless but described a data flow that
+		// does not happen.
+		if topicCategories[i] == "" {
+			donatePaths[i] = ""
+			continue
+		}
+		// learn_dedup: off (ontology attribute) — the topic holds facts that
+		// are near-identical BY DESIGN (templated protocol messages, two
+		// agents' takes of one task), so the search is skipped and the fact is
+		// written at its own freshly-minted path. This classifies the INCOMING
+		// fact and sits on the BEFORE-merge side: it reads only the topic path,
+		// which the merge never changes.
+		//
+		// Unlike the private-state skip above, the donation is KEPT: this fact
+		// is written at paths[i] and indexed like any other, so dedupVecs[i]
+		// describes exactly what upsert will embed. topicCategories[i] is the
+		// same string ValidateFact receives, which is what Attr expects.
+		//
+		// Because this skip sits BEFORE the search, a flagged fact also skips
+		// hypothesis subsumption below: an observation that settles a
+		// hypothesis under a flagged topic leaves BOTH live. Accepted —
+		// coordination topics do not carry hypotheses — but it is a
+		// consequence, not an accident. Review is NOT affected: learn_dedup
+		// governs knomit_learn only, and review still seeds and dedups
+		// knowledge facts under a flagged topic
+		// (TestDirtyFacts_LearnDedupOffDoesNotAffectSeeds).
+		if ontology.LearnDedupOff(topicCategories[i]) {
+			continue
+		}
+		// SEARCH SCOPE IS A RAW PATH PREFIX, BY DESIGN (issue #260, closed
+		// won't-fix). Path: categoryDir becomes the store's `f.path LIKE
+		// dir%`, with no trailing slash, so learning into ops/task searches
+		// and can merge into:
+		//   - the directory itself (kb/ops/task/…),
+		//   - its descendants (kb/ops/task/child/…),
+		//   - prefix siblings (kb/ops/tasks/…),
+		//   - `_` wildcard matches (LIKE treats `_` as any one character),
+		//   - ASCII-case variants (LIKE is ASCII case-insensitive).
+		// That is intended: within that prefix the similarity threshold is the
+		// gate, not the exact directory (principles/philosophy/dedup-not-append).
+		// The reach is still bounded by the string prefix of the incoming
+		// fact's directory: another topic or an unrelated category is never
+		// searched. Do not narrow this to an exact directory without revisiting
+		// that decision.
+		//
+		// The directory is derived from the on-disk path so it carries the
+		// configured ontology root's real case.
+		categoryDir := categoryDirOf(paths[i])
+		sq := index.SearchOptions{
+			Text:          f.Title + " " + f.Body,
+			Path:          categoryDir,
+			MinSimilarity: dedupThreshold,
+			Limit:         1,
+		}
+		if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
+			sq.QueryVec = dedupVecs[i]
+		}
+		results, err := s.factQuery.Search(ctx, writeBranch, sq)
+		if err != nil || len(results) == 0 {
+			continue
+		}
+
+		match := results[0]
+		// CANDIDATE side of the flag. The prefix reach above is intended, but
+		// it means a search from ops/tasks can return a fact under a topic
+		// path with learn_dedup: off that is NOT the incoming one: a flagged
+		// child (ops/tasks/protocol/) or a flagged prefix sibling. Such a fact
+		// holds a message the flag exists to keep intact, so the match is
+		// declined and the incoming fact is written at its own path. The
+		// match's topic path is derived the way topicCategories is: the
+		// on-disk path minus the ontology root and the file name.
+		//
+		// A match that is merged is re-validated below against the INCOMING
+		// fact's topic path, not the match's. That is accepted: a category is
+		// required (validateAndBuildFacts), so the topic segment is always
+		// followed by "/" and the prefix can never cross into another topic;
+		// the root- and topic-level rules are therefore the same. Below the
+		// topic the paths can differ:
+		//   - rules declared on a deeper ontology node of the MATCH's own path
+		//     are not run;
+		//   - for a prefix SIBLING, rules on the INCOMING path's deeper nodes
+		//     (e.g. ops/task) ARE run against a fact that will live under
+		//     ops/tasks, a node whose rules it was never subject to. For a
+		//     descendant this is harmless: those nodes are its ancestors.
+		// See #260.
+		if ontology.LearnDedupOff(topicPathOf(ontologyRoot, match.Path)) {
+			continue
+		}
+		if consumed[match.Path] {
+			// Already absorbed an earlier fact in this call — see `consumed`.
+			continue
+		}
+		// F04: the call retracts the match. Folding the incoming fact into it
+		// would retarget the write onto a path the same commit deletes, and
+		// the new fact would vanish with it. Declined; the fact is written at
+		// its own freshly-minted path (and a hypothesis being retracted is
+		// not "subsumed" either: the caller already retracts it).
+		if retracting[strings.ToLower(match.Path)] {
+			if onDedupSkipRetracted != nil {
+				onDedupSkipRetracted(match.Path)
+			}
+			continue
+		}
+		// distinct_from: the caller has read this match and says it is a
+		// DIFFERENT subject (a counter-hypothesis, a competing claim). Folding
+		// the fact into it would discard one of the two claims, so the match
+		// is declined and the fact is written at its own freshly-minted path,
+		// like the consumed and retracting declines above. That includes
+		// hypothesis subsumption: a caller that names the hypothesis has said
+		// this fact does not settle it.
+		//
+		// The index stays UNtouched, so the same-subject stage still judges
+		// this fact, and validates every distinct_from path exists (a typo is
+		// refused there, before anything is written). distinct_from belongs to
+		// THIS call only and is never stored: review's dedup can still merge
+		// the two facts later. As with the other declines, the next-best match
+		// is not tried (Limit 1).
+		if i < len(distinctFrom) && namedIn(distinctFrom[i], match.Path) {
+			continue
+		}
+		// Read existing fact to get its full metadata (refs, etc.)
+		readResult, readErr := s.facts.ReadFact(ctx, writeBranch, match.Path, nil)
+		if readErr != nil {
+			continue
+		}
+		existingFact, parseErr := fact.ParseFact(match.Path, readResult.Content)
+		if parseErr != nil {
+			continue
+		}
+
+		// Type-aware dedup: if the existing fact is a hypothesis and the new
+		// fact is not, the observation subsumes the hypothesis. The
+		// observation is written at its OWN path — it is a new fact, not a
+		// revision of the prediction it settles.
+		if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
+			consumed[match.Path] = true
+			f, retract = subsumeHypothesis(f, retract, match.Path)
+			facts[i] = f
+			if err := reserialize(files, paths[i], f); err != nil {
+				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+			}
+			touched[i] = true
+			continue
+		}
+
+		merged := mergeFacts(f, existingFact, localRepoID)
+		if ok, why := mergeCorroborates(f, existingFact, localRepoID); !ok {
+			uncounted[i] = why
+		}
+		if f.Type == fact.Hypothesis && existingFact.Type == fact.Hypothesis {
+			hypMerged[i] = hypothesisMergeNote(i, match.Path, f, existingFact)
+		}
+		if newFactWins(f, existingFact) {
+			// dedup vector still describes the merged content (same title+body
+			// as the new fact); just retarget to the existing path it now lives at.
+			// match.Path, not merged.Path(): this keys the embedding donation,
+			// which upsert looks up by committed on-disk path.
+			donatePaths[i] = match.Path
+		} else {
+			// dedup vector was computed over f's title+body; existing wins so
+			// merged content differs. Drop the donation — upsert will fall
+			// through to a fresh embed.
+			donatePaths[i] = ""
+		}
+
+		// Re-validate the merged fact against ontology rules. The merge
+		// may union entities/domain or pull values from the existing
+		// fact, so the result is not guaranteed to satisfy rules just
+		// because the input did. Without this re-check, a violation
+		// would surface later as an opaque serialize error.
+		if ontology != nil {
+			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
+				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+			}
+		}
+		// F22: the merged fact lands at the MATCH's path, which the prefix
+		// search can place in a descendant topic whose context declarations
+		// differ from the incoming fact's (kb/gotchas/mcp/learn/
+		// dedup-search-scope-is-a-string-prefix). Its context is checked
+		// where it will live. With no ontology nothing declares a key, so a
+		// winner carrying context is refused rather than written unchecked.
+		if err := fact.ValidateContext(ontology, topicPathOf(ontologyRoot, match.Path), merged.Context); err != nil {
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
+		}
+
+		// Retarget the fact from its freshly-minted path to the existing
+		// fact's path. Both keys must be the real on-disk strings: deleting
+		// f.Path() here removed a key that was never inserted (the build stage
+		// keyed by the raw path), so the merge left the new-fact file in place
+		// and the commit wrote BOTH the original and the merged file.
+		consumed[match.Path] = true
+		delete(files, paths[i])
+		paths[i] = match.Path
+		priorRefs[match.Path] = existingFact.Refs
+		if err := reserialize(files, match.Path, merged); err != nil {
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+		}
+		facts[i] = merged
+		touched[i] = true
+	}
+
+	// Build the donation map keyed by final on-disk path. Empty/missing
+	// entries simply fall through to embedding at upsert time.
+	embByPath := make(map[string][]float32, len(facts))
+	for i := range donatePaths {
+		if donatePaths[i] == "" {
+			continue
+		}
+		if i >= len(dedupVecs) || len(dedupVecs[i]) == 0 {
+			continue
+		}
+		embByPath[donatePaths[i]] = dedupVecs[i]
+	}
+	return embByPath, retract, priorRefs, touched, uncounted, hypMerged, nil
+}
+
+// computeEvidenceWeights stamps an evidence weight on machine-origin derived
+// facts (distilled/discovered) that cite local facts, mirroring what the
+// synthesis and discovery pipelines do when they write directly. Scoped to
+// non-authored origins so ordinary learn calls are unaffected — only
+// previewed-then-saved pipeline output gets a weight. Mutates facts and files
+// in place.
+func computeEvidenceWeights(ctx context.Context, s mcpStore, writeBranch, localRepoID string, facts []fact.Fact, paths []string, files map[string]string) error {
+	for i := range facts {
+		f := facts[i]
+		if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
+			continue
+		}
+		localRefs := localEvidenceRefs(f, localRepoID)
+		if len(localRefs) == 0 {
+			continue
+		}
+		w := synthesize.ComputeEvidenceWeight(ctx, s.facts, writeBranch, localRepoID, localRefs)
+		if w <= 0 || w == f.EvidenceWeight {
+			continue
+		}
+		f.EvidenceWeight = w
+		facts[i] = f
+		if err := reserialize(files, paths[i], f); err != nil {
+			return fmt.Errorf("fact %d: serialize weighted: %v", i, err)
+		}
+	}
+	return nil
+}
+
+// LearnHandler returns the handler function for knomit_learn.
+// If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
+// instead of embedding one-at-a-time inside each Search call.
+func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var batchEmb model.BatchEmbedder
+	if len(embedders) > 0 {
+		batchEmb = embedders[0]
+	}
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if !b.WriteOK() {
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
+		}
+		ri := b.Write()
+		s, release, err := storeIndices(ri)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		defer release()
+		// WHERE this write lands, and therefore also what it reads while
+		// deciding: dedup, existence and ref resolution must all see the
+		// branch the fact will be committed to. Inside an experiment that is
+		// the experiment — an isolated world, not a diff against the agent
+		// branch — so every one of them asks the binding, not the repo.
+		writeBranch := b.WriteBranch()
+		ontologyRoot := ri.OntologyRoot()
+		ontology := ri.Ontology()
+
+		// The one authority over this call's refs: it decides what resolves and
+		// what the stored form is. Built once and threaded, because the repo id
+		// it carries is also what tells a kb://<own-id>/… ref (a local edge)
+		// from a foreign one everywhere below — evidence weight included.
+		gate := refs.New(fact.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch)).
+			WithFiles(refs.FromSystemFiles(s.files, writeBranch))
+
+		// 1. Parse arguments.
+		momentName := req.GetString("moment_name", "")
+		if momentName == "" {
+			return mcpgo.NewToolResultError("moment_name is required"), nil
+		}
+		if err := checkMomentName(momentName); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: the agent's trace entries, on every commit this call makes.
+		// Before anything is read for the write, so a bad entry writes nothing.
+		if ctx, err = applyTrace(ctx, req); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// Parse facts from the arguments.
+		// A key the fact schema does not declare is refused, not ignored:
+		// ignoring it wrote a fact without the field the caller meant to set
+		// and reported success. Checked before anything else, so the batch
+		// writes nothing. The strict decode backs it, and a test keeps
+		// learnFactInput and the schema equal.
+		if err := rejectUnknownItemKeys(req, "facts", learnToolSchemaProperties(), "fact"); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		var factInputs []learnFactInput
+		if err := unmarshalArgStrict(req, "facts", &factInputs); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// F04: the paths this call retracts in the same commit, normalised as
+		// knomit_retract normalises its one path.
+		retractPaths, err := learnRetractPaths(b, req, ontologyRoot)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if len(factInputs) == 0 && len(retractPaths) == 0 {
+			return mcpgo.NewToolResultError("facts must not be empty (unless retract names what to retract)"), nil
+		}
+		retracting := make(map[string]bool, len(retractPaths))
+		for _, p := range retractPaths {
+			retracting[strings.ToLower(p)] = true
+		}
+
+		// Validate batch type consistency: cannot mix observed and inferred types.
+		if err := validateBatchTypeConsistency(factInputs); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// 3. Validate inputs, build paths, and serialize facts.
+		parsed, topicCategories, paths, files, err := validateAndBuildFacts(ontology, ontologyRoot, factInputs)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// Each fact's context as built, before the dedup stage may replace a
+		// fact with the existing one it matched (contextNotAppliedNotes).
+		builtContext := make([]map[string]any, len(parsed))
+		for i := range parsed {
+			builtContext[i] = parsed[i].Context
+		}
+
+		// An explicit path is a NAMED SLOT: learn allocates it once, update
+		// writes every revision after. Allowing a second learn would start a
+		// second history for one slot, and a history walk over either half
+		// silently under-reports.
+		//
+		// The same slot named TWICE IN ONE CALL is the other half of that rule,
+		// and FactExists cannot see it — neither copy exists yet. The pending
+		// writes are keyed by path, so the later input would overwrite the
+		// earlier one while the response, built from len(facts), still reported
+		// both as written: one file, two commit entries, one body silently
+		// gone. Checked over every path, not just explicit ones: a collision is
+		// the same silent loss whatever minted it.
+		if err := refuseWriteAndRetract(paths, retracting); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		seen := make(map[string]int, len(paths))
+		for i, fi := range factInputs {
+			if first, dup := seen[paths[i]]; dup {
+				return mcpgo.NewToolResultError(fmt.Sprintf(
+					"fact %d: duplicate path %s, already written by fact %d in this call; one path is one fact per call",
+					i, paths[i], first)), nil
+			}
+			seen[paths[i]] = i
+
+			if fi.Path == "" {
+				continue
+			}
+			exists, eerr := s.facts.FactExists(ctx, writeBranch, paths[i])
+			if eerr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: exists check: %v", i, eerr)), nil
+			}
+			if exists {
+				return mcpgo.NewToolResultError(fmt.Sprintf(
+					"fact %d: %s already exists; use knomit_update to write a new revision", i, paths[i])), nil
+			}
+		}
+
+		// 3b. Dedup check: fold each incoming fact into the near-duplicate it
+		// matches under its category-directory PREFIX (see applyDedupMerge's
+		// scope comment; #260), if any. Mutates facts and
+		// files in place; hands back the embedding donations and the subsumed
+		// hypotheses to retract alongside the write.
+		//
+		// Embedding happens HERE, once, because two stages need the same
+		// vectors: the dedup merge below and the same-subject gate after it.
+		dedupVecs := dedupEmbed(ctx, batchEmb, parsed)
+		distinctFrom := make([][]string, len(factInputs))
+		for i, in := range factInputs {
+			distinctFrom[i] = in.DistinctFrom
+		}
+		embByPath, retract, priorRefs, touched, uncounted, hypMerged, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// Again after the merge: a dedup merge RETARGETS a fact onto an
+		// existing path, which is how a write could land on a path this call
+		// deletes by a second route. applyDedupMerge already declines such a
+		// match; this is the check that the rule held.
+		if err := refuseWriteAndRetract(paths, retracting); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// 3c. The read-before-write knomit_learn never had. Placed AFTER the
+		// dedup merge so a fact the auto-merge already folded is not also
+		// refused, and BEFORE any write — including before evidence weighting,
+		// since a refused call should pay for nothing. Refusing here costs the
+		// caller one round trip and the corpus nothing.
+		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, parsed, topicCategories, paths, touched, dedupVecs, batchEmb, retracting); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		if err := computeEvidenceWeights(ctx, s, writeBranch, gate.LocalRepoID(), parsed, paths, files); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// upsert reads the donation map from ctx and skips its own ONNX call
+		// when an entry is present for the path it is writing.
+		ctx = model.WithPrecomputedEmbeddings(ctx, embByPath)
+
+		// A local fact ref must resolve once this call lands, or nothing is
+		// written. Checked BEFORE BatchWriteFacts so the call stays
+		// all-or-nothing, and against the batch as well as the branch — one
+		// call is one commit, so these facts may cite each other in any order.
+		// An observation that subsumes a hypothesis cites what it retracts; that
+		// target is still live at the pre-write head and stays reachable by
+		// walk-back, so it satisfies the gate without a special case.
+		//
+		// priorRefs carries the refs a dedup-merged fact inherited from the fact
+		// it merged into: those resolved at their own commit and this write does
+		// not re-judge them.
+		refsByPath := make(map[string][]string, len(parsed))
+		for i, f := range parsed {
+			refsByPath[paths[i]] = f.Refs
+		}
+		if err := gate.CheckBatch(ctx, refsByPath, priorRefs); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// Qualify local refs AFTER the gate, so a rejection still echoes the ref
+		// exactly as the caller sent it. Bare paths are accepted on input and
+		// stored canonical, which is why an author never needs a repo id.
+		for i, f := range parsed {
+			canon, changed := gate.Canonicalize(f.Refs)
+			if !changed {
+				continue
+			}
+			parsed[i].Refs = canon
+			if err := reserialize(files, paths[i], parsed[i]); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+		}
+
+		// 4. BatchWrite all facts — and any subsumed hypotheses' retractions,
+		// and the caller's own `retract` paths — in one commit, so a learn
+		// call is all-or-nothing. The caller's paths are a PRECONDITION too
+		// (F04): each must still exist at the tip, checked under the branch
+		// lock, or nothing is written — that is what makes two takes of one
+		// task on this branch serialise. Subsumed hypotheses come from the
+		// index and are not preconditions.
+		operation := "learn"
+		switch {
+		case len(retractPaths) > 0 && len(parsed) > 0:
+			operation = "move"
+		case len(retractPaths) > 0:
+			operation = "retract"
+		}
+		commitMsg := fmt.Sprintf("%s: %s", operation, momentName)
+		deletes := retract
+		for _, p := range retractPaths {
+			deletes = fact.AppendUnique(deletes, p)
+		}
+		var hash string
+		if len(retractPaths) > 0 {
+			hash, _, err = s.facts.BatchWriteFactsMustExist(ctx, writeBranch, files, deletes, retractPaths, commitMsg, operation)
+		} else {
+			hash, _, err = s.facts.BatchWriteFacts(ctx, writeBranch, files, deletes, commitMsg, operation)
+		}
+		var missing *facts.RetractMissingError
+		if errors.As(err, &missing) {
+			return mcpgo.NewToolResultError(fmt.Sprintf("%v; nothing written", missing)), nil
+		}
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
+		}
+
+		// 5. Build response.
+		type commitEntry struct {
+			File string `json:"file"`
+			Hash string `json:"hash"`
+		}
+		commits := make([]commitEntry, len(parsed))
+		for i, f := range parsed {
+			commits[i] = commitEntry{File: f.Path(), Hash: hash}
+		}
+
+		dest := describeWriteDestination(b)
+		what := pluralFacts(len(parsed))
+		switch {
+		case len(retractPaths) > 0 && len(parsed) == 0:
+			what = pluralRetractions(len(retractPaths))
+		case len(retractPaths) > 0:
+			what = fmt.Sprintf("%s and %s", what, pluralRetractions(len(retractPaths)))
+		}
+		result := map[string]interface{}{
+			"commits":    commits,
+			"written_to": dest,
+			"summary":    dest.summary(what),
+			"operation":  operation,
+		}
+		if len(retractPaths) > 0 {
+			result["retracted"] = retractPaths
+			result["commit"] = hash
+		}
+		notes := expiresNotAppliedNotes(factInputs, parsed)
+		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
+		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
+		if len(notes) > 0 {
+			result["notes"] = notes
+			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
+		}
+		out, err := json.Marshal(result)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("marshal result: %v", err)), nil
+		}
+		return mcpgo.NewToolResultText(string(out)), nil
+	}
+}
+
+// uncountedMergeNotes names every dedup merge that did not add the incoming
+// sources (#361), so a caller re-reading one page is told its re-read was not
+// counted. Corroborating merges and plain learns add nothing.
+//
+// A hypothesis merged into a hypothesis gets its hypMerged note INSTEAD: it
+// says which prediction was dropped, which matters more than the count.
+func uncountedMergeNotes(uncounted, hypMerged map[int]string, facts []fact.Fact) []string {
+	idx := make([]int, 0, len(uncounted)+len(hypMerged))
+	for i := range uncounted {
+		idx = append(idx, i)
+	}
+	for i := range hypMerged {
+		if _, dup := uncounted[i]; !dup {
+			idx = append(idx, i)
+		}
+	}
+	sort.Ints(idx)
+	var notes []string
+	for _, i := range idx {
+		if i >= len(facts) {
+			continue
+		}
+		if n, ok := hypMerged[i]; ok {
+			notes = append(notes, n)
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
+			i, facts[i].Path(), uncounted[i]))
+	}
+	return notes
+}
+
+// expiresNotAppliedNotes names every incoming fact whose explicit expires did
+// not land because a dedup merge kept the EXISTING fact (mergeFacts takes the
+// winner's value). facts[i] is what was written for inputs[i], at its final
+// path.
+func expiresNotAppliedNotes(inputs []learnFactInput, facts []fact.Fact) []string {
+	var notes []string
+	for i, in := range inputs {
+		if i >= len(facts) || in.Expires == "" || facts[i].Expires == in.Expires {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: merged into existing fact %s; existing fact kept; expires not applied; set it with knomit_update on %s.",
+			i, facts[i].Path(), facts[i].Path()))
+	}
+	return notes
+}
+
+// contextNotAppliedNotes is expiresNotAppliedNotes for context (F22): it names
+// every incoming fact whose context did not land because a dedup merge kept
+// the EXISTING fact, whose whole map wins. built[i] is fact i's context as the
+// build stage produced it (time values already normalised), captured before
+// the dedup stage; facts[i] is what was written.
+func contextNotAppliedNotes(built []map[string]any, facts []fact.Fact) []string {
+	var notes []string
+	for i, b := range built {
+		if i >= len(facts) || len(b) == 0 || fact.EqualContext(facts[i].Context, b) {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: merged into existing fact %s; existing fact kept; context not applied; set it with knomit_update on %s.",
+			i, facts[i].Path(), facts[i].Path()))
+	}
+	return notes
+}
+
+// learnRetractPaths reads knomit_learn's `retract` argument (F04): each path
+// is normalised exactly as knomit_retract normalises its one path — resolved
+// against the write repo of a lens, NormalizePath, and refused when private
+// (F25: no exception) — and duplicates collapse. An absent argument is
+// an empty list.
+func learnRetractPaths(b *repos.Binding, req mcpgo.CallToolRequest, ontologyRoot string) ([]string, error) {
+	if _, ok := req.GetArguments()["retract"]; !ok {
+		return nil, nil
+	}
+	var raw []string
+	if err := unmarshalArgStrict(req, "retract", &raw); err != nil {
+		return nil, fmt.Errorf("retract must be a list of fact paths: %v", err)
+	}
+	var out []string
+	for i, p := range raw {
+		if strings.TrimSpace(p) == "" {
+			return nil, fmt.Errorf("retract %d: path is empty", i)
+		}
+		p, err := federate.WriteRepoPath(b, p)
+		if err != nil {
+			return nil, fmt.Errorf("retract %d: %v", i, err)
+		}
+		p = fact.NormalizePath(ontologyRoot, p)
+		if msg := closedToFactTools(p); msg != "" {
+			return nil, fmt.Errorf("retract %d: %s", i, msg)
+		}
+		out = fact.AppendUnique(out, p)
+	}
+	return out, nil
+}
+
+// refuseWriteAndRetract refuses a call that writes a path it also retracts.
+// The store applies deletes after writes, so the delete would win silently
+// and the written fact would be lost from a call that reported it written.
+func refuseWriteAndRetract(paths []string, retracting map[string]bool) error {
+	for i, p := range paths {
+		if retracting[strings.ToLower(p)] {
+			return fmt.Errorf("fact %d: %s is both written and retracted in this call; a path is one or the other", i, p)
+		}
+	}
+	return nil
+}
+
+func pluralRetractions(n int) string {
+	if n == 1 {
+		return "1 retraction"
+	}
+	return fmt.Sprintf("%d retractions", n)
+}

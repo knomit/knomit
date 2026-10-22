@@ -27,7 +27,7 @@ import (
 //     reload trigger's callback);
 //   - inside internal/app, Apply is called only by listeners_reload.go (Reload
 //     calls it) -- no handler-shaped code in app reaches it;
-//   - no file of internal/web imports internal/app at all, so no handler can
+//   - no file of internal/edge/web imports internal/app at all, so no handler can
 //     name Listeners.
 
 func prodGoFiles(t *testing.T, root string) []string {
@@ -76,7 +76,7 @@ func TestListenersApplyHasOnlyTheSignalLoopAsCaller(t *testing.T) {
 			}
 		}
 		inApp := strings.HasPrefix(rel, "internal/app/")
-		if strings.HasPrefix(rel, "internal/web/") {
+		if strings.HasPrefix(rel, "internal/edge/web/") {
 			webFiles = append(webFiles, rel)
 			if importsApp {
 				webImportsApp = append(webImportsApp, rel)
@@ -115,10 +115,10 @@ func TestListenersApplyHasOnlyTheSignalLoopAsCaller(t *testing.T) {
 		t.Fatalf("Apply is called inside internal/app from %v; only %v may", insideApplyCallers, want)
 	}
 	if len(webFiles) < 20 {
-		t.Fatalf("parsed only %d internal/web files; the import check would pass vacuously", len(webFiles))
+		t.Fatalf("parsed only %d internal/edge/web files; the import check would pass vacuously", len(webFiles))
 	}
 	if len(webImportsApp) != 0 {
-		t.Fatalf("internal/web files import internal/app: %v -- a handler that can name Listeners can reload it", webImportsApp)
+		t.Fatalf("internal/edge/web files import internal/app: %v -- a handler that can name Listeners can reload it", webImportsApp)
 	}
 }
 

@@ -61,7 +61,7 @@ func TestSetTestFastDurability_SyncOffWALKept(t *testing.T) {
 			require.Equal(t, "wal", journal, "session DB must stay in WAL")
 			require.Equal(t, 0, sync, "session DB synchronous")
 
-			// control.db is opened by internal/repos with the stock driver and
+			// control.db is opened by internal/corpus/repos with the stock driver and
 			// this DSN shape; SyncDSNParam is all that differs.
 			require.Equal(t, tc.wantDSN, SyncDSNParam())
 			ctl, err := sql.Open("sqlite3", filepath.Join(dir, "control.db")+"?_busy_timeout=5000&_journal_mode=WAL"+SyncDSNParam())

@@ -21,9 +21,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"knomit/internal/edge/oauth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/oauth"
 )
 
 // Consent path 2 on the operator's side (F19 phase 3b, Task 3). `knomit

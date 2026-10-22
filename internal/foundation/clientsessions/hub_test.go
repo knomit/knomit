@@ -7,7 +7,7 @@ import (
 )
 
 // newHubStore is newTestStore with a change hub attached, which is how the
-// server builds it (internal/repos/manager.go). The bare newTestStore stays
+// server builds it (internal/corpus/repos/manager.go). The bare newTestStore stays
 // hubless on purpose: every existing test in this package proves that writes
 // do not depend on a hub being there.
 func newHubStore(t *testing.T, ctx context.Context) *Store {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { api, KNOMIT_CLIENT_HEADER, KNOMIT_CLIENT_WEB } from './api';
 
 // The OAuth approval calls (F19 phase 3b). The server's approval gate admits
-// the browser only with the custom header (internal/web/oauth_pending_api.go
+// the browser only with the custom header (internal/edge/web/oauth_pending_api.go
 // spells it identically; its own test pins the Go side), a JSON body type on
 // mutations, and the Origin the browser adds by itself. Only these calls send
 // the header: on the desktop every other cross-origin call would otherwise

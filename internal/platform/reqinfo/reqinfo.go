@@ -9,8 +9,8 @@
 // the MCP tool that was slow, when the tool name is only known once the MCP
 // server has parsed the JSON-RPC body.
 //
-// It is a leaf package (stdlib only) so both internal/web and internal/mcp can
-// import it — internal/web imports internal/mcp, so nothing shared may live in
+// It is a leaf package (stdlib only) so both internal/edge/web and internal/edge/mcp can
+// import it — internal/edge/web imports internal/edge/mcp, so nothing shared may live in
 // either one.
 package reqinfo
 

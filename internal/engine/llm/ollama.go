@@ -48,7 +48,7 @@ const ollamaUncapped = -1
 
 // jsonOnlyInstruction carries the ForceJSON requirement in the prompt, for the
 // case where the grammar constraint cannot. It asks for bare JSON, but the
-// callers that need it also tolerate fences (internal/synthesize's extractJSON),
+// callers that need it also tolerate fences (internal/corpus/synthesize's extractJSON),
 // so a model that answers with one anyway still parses.
 const jsonOnlyInstruction = "Respond with a single valid JSON object and nothing else: no prose before or after it, and no markdown code fences."
 

@@ -80,12 +80,12 @@ describe('long URLs in refusal and outcome cards', () => {
 });
 
 // The browser's port of the server's comparison is held to the SAME table the
-// Go test reads (internal/repos/testdata/same_fleet_url.json), the typed side
+// Go test reads (internal/corpus/repos/testdata/same_fleet_url.json), the typed side
 // trimmed as the page trims it and the server's followFleetHost does.
 // SABOTAGE: replace the body of sameFleetURL with a === b -> the rows with
 // credentials, case, default ports and trailing slashes are red.
 describe('sameFleetURL mirrors the server comparison', () => {
-  const rows = JSON.parse(readFileSync('../internal/repos/testdata/same_fleet_url.json', 'utf8')) as Array<{ typed: string; stored: string; same: boolean }>;
+  const rows = JSON.parse(readFileSync('../internal/corpus/repos/testdata/same_fleet_url.json', 'utf8')) as Array<{ typed: string; stored: string; same: boolean }>;
   it('reads the shared table', () => {
     expect(rows.length).toBeGreaterThanOrEqual(30);
     expect(rows.some(r => r.same)).toBe(true);

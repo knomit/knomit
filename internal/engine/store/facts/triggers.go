@@ -7,7 +7,7 @@
 // sweep's `expires_at <= now`) is the dispatcher's, which reads its clock once
 // per run as UTC and passes the instant in. All times are UTC: Unix seconds in
 // the tables, RFC 3339 with an explicit Z wherever a row is rendered. The
-// dispatcher itself is internal/repos/triggers.go; this file is what it calls
+// dispatcher itself is internal/corpus/repos/triggers.go; this file is what it calls
 // under Acquire.
 package facts
 

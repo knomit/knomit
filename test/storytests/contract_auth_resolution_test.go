@@ -18,7 +18,7 @@ import (
 // fetch and is recorded. This cell covers a credential that cannot even be
 // RESOLVED locally (an SSH auth method with no readable key): the failure
 // happens inside makeRemoteAuthFn BEFORE Sync() is ever called, so the buggy
-// code (internal/repos/sync.go) logged "using anonymous" and returned nil,
+// code (internal/corpus/repos/sync.go) logged "using anonymous" and returned nil,
 // letting the reconcile proceed anonymously.
 //
 // Scenario:

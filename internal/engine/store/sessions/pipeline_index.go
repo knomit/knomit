@@ -57,7 +57,7 @@ func (pi *PipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 //
 // createdBy is recorded verbatim as the session's correlation handle. It is
 // caller-supplied and deliberately unvalidated here — composing and sanitizing
-// it is the request boundary's job (internal/mcp/actor.go), which is the only
+// it is the request boundary's job (internal/edge/mcp/actor.go), which is the only
 // layer that knows what the claim is made of. Empty is a legitimate value: an
 // in-process caller has no request to attribute to.
 func (pi *PipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*model.PipelineSession, error) {

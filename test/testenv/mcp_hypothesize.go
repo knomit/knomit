@@ -8,8 +8,8 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
-	"knomit/internal/mcp"
-	"knomit/internal/repos"
+	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/mcp"
 )
 
 // Hypothesize calls the MCP knomit_hypothesize handler against this

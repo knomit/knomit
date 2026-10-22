@@ -17,9 +17,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"knomit/internal/edge/oauth"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
-	"knomit/internal/oauth"
 )
 
 // oauthCmd is `knomit oauth`: the operator's side of consent path 1 (F19

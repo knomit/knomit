@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
-	"knomit/internal/repos"
 )
 
 // hubRound runs one round of the hub's local reconcile, as its loop does

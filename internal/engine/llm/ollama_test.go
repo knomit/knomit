@@ -133,7 +133,7 @@ func TestOllamaComplete_DoesNotCapGeneration(t *testing.T) {
 // done_reason "length", the scanner sees done and stops, and Complete used to
 // return whatever it had accumulated with a nil error. With a reasoning model
 // that accumulation is routinely the empty string, because the budget went to
-// thinking — so the caller (internal/synthesize, which checks only err) parses
+// thinking — so the caller (internal/corpus/synthesize, which checks only err) parses
 // an empty response as though the model had answered.
 func TestOllamaComplete_TruncationIsAnError(t *testing.T) {
 	ollamaTestServerWithCaps(t, []string{"completion", "thinking"}, func(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"knomit/internal/repos"
+	"knomit/internal/corpus/repos"
 	"knomit/tools/bridge/knomitapi"
 )
 

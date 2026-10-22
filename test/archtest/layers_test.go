@@ -44,18 +44,7 @@ var layerExempt = []string{"testsupport"}
 // internal/<layer>/... by directory first. When this map is empty the table has
 // become a path-prefix rule and a package that is in neither place is reported
 // as unmapped. Do not add entries for new packages: put them in a layer dir.
-var legacyLayers = map[string]int{
-	// corpus
-	"repos":       layerCorpus,
-	"refs":        layerCorpus,
-	"federate":    layerCorpus,
-	"resolutions": layerCorpus,
-	"synthesize":  layerCorpus,
-	// edge
-	"mcp":   layerEdge,
-	"web":   layerEdge, // includes web/hal
-	"oauth": layerEdge, // includes oauth/idp
-}
+var legacyLayers = map[string]int{}
 
 // sameLayerEdges lists the allowed imports between two distinct packages of
 // one layer, as "importer -> imported" with paths relative to knomit/internal/
@@ -209,14 +198,14 @@ var sameLayerEdges = map[string]bool{
 	"engine/store/merge -> engine/store/model":           true,
 	"engine/store/remotesync -> engine/store/model":      true,
 	// corpus
-	"federate -> repos":    true,
-	"resolutions -> refs":  true,
-	"resolutions -> repos": true,
-	"synthesize -> refs":   true,
-	"synthesize -> repos":  true,
+	"corpus/federate -> corpus/repos":    true,
+	"corpus/resolutions -> corpus/refs":  true,
+	"corpus/resolutions -> corpus/repos": true,
+	"corpus/synthesize -> corpus/refs":   true,
+	"corpus/synthesize -> corpus/repos":  true,
 	// edge
-	"web -> mcp":   true,
-	"web -> oauth": true,
+	"edge/web -> edge/mcp":   true,
+	"edge/web -> edge/oauth": true,
 }
 
 // layerOf returns the layer rank of a knomit/internal/... package. exempt is
@@ -341,24 +330,24 @@ func TestLayersDetectsViolations(t *testing.T) {
 		p + "domain/fact":            {p + "engine/store", "fmt"},                 // domain -> engine: upward
 		p + "engine/store":           {p + "domain/fact", p + "engine/store/git"}, // fine: downward, and own subpackage
 		p + "engine/store/git":       nil,
-		p + "refs":                   {p + "repos"},        // corpus -> corpus, unlisted
-		p + "repos":                  {p + "engine/store"}, // fine
+		p + "corpus/refs":            {p + "corpus/repos"}, // corpus -> corpus, unlisted
+		p + "corpus/repos":           {p + "engine/store"}, // fine
 		p + "mystery":                {p + "domain/fact"},  // maps to no layer
 		p + "testsupport/testsigner": {p + "engine/store"}, // exempt importer
 	}
 	got := layerViolations(graph, nil)
 	want := []string{
+		p + "corpus/refs imports " + p + "corpus/repos: unlisted same-layer edge in corpus (corpus/refs -> corpus/repos)",
 		p + "domain/fact (domain) imports " + p + "engine/store (engine): upward import",
 		p + "mystery: maps to no layer (put it inside a layer directory)",
-		p + "refs imports " + p + "repos: unlisted same-layer edge in corpus (refs -> repos)",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("violations =\n%q\nwant\n%q", got, want)
 	}
 	// Listing the edge makes it pass; the rest is unchanged.
-	got = layerViolations(graph, map[string]bool{"refs -> repos": true})
+	got = layerViolations(graph, map[string]bool{"corpus/refs -> corpus/repos": true})
 	if len(got) != 2 {
-		t.Fatalf("with refs -> repos allowed want 2 violations, got %q", got)
+		t.Fatalf("with corpus/refs -> corpus/repos allowed want 2 violations, got %q", got)
 	}
 	// Layer-directory rule beats the legacy table.
 	if r, _, ok := layerOf(p + "domain/anything"); !ok || r != layerDomain {
@@ -387,7 +376,7 @@ func TestLayers(t *testing.T) {
 	// Sentinels: one real package per layer, so a wrong pattern cannot pass vacuously.
 	sentinels := map[int]string{
 		layerPlatform: "platform/logging", layerDomain: "domain/fact", layerFoundation: "foundation/config",
-		layerEngine: "engine/store", layerCorpus: "repos", layerEdge: "web", layerApp: "app",
+		layerEngine: "engine/store", layerCorpus: "corpus/repos", layerEdge: "edge/web", layerApp: "app",
 	}
 	seen := map[string]bool{}
 	for _, c := range configs {

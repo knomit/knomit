@@ -158,7 +158,7 @@ type LogConfig struct {
 
 // ClusterCacheConfig governs scoped Louvain clustering granularity. The review
 // path runs Louvain over a bounded per-review subgraph in-process
-// (internal/synthesize), so there is no background warmer or persisted cache to
+// (internal/corpus/synthesize), so there is no background warmer or persisted cache to
 // configure — only the algorithm's resolution and minimum community size. The
 // section name stays [cluster_cache] for config back-compat.
 type ClusterCacheConfig struct {
@@ -269,7 +269,7 @@ type ExperimentsConfig struct {
 	//
 	// This is the ONLY experiment setting. How often the sweeper looks is not
 	// a policy question and is not exposed: it is a package default in
-	// internal/repos, passed as a parameter so the loop's error path stays
+	// internal/corpus/repos, passed as a parameter so the loop's error path stays
 	// testable. One control, one decision.
 	ExpiryDays int `toml:"expiry_days"`
 }

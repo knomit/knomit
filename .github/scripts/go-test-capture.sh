@@ -16,7 +16,7 @@
 # every test's output is in the stream, pass or fail. That is the whole
 # reason this script exists; go-test-fault-guard.sh reads the stream.
 #
-# WHY THE CONSOLE IS STILL TERSE. -v on a package like internal/web is
+# WHY THE CONSOLE IS STILL TERSE. -v on a package like internal/edge/web is
 # thousands of zerolog lines nobody reads on a green run. The jq filter keeps
 # the per-package lines, and the failure branch prints a failed package's
 # output the way plain go test would have — after the fact, in a log group.

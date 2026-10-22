@@ -190,7 +190,7 @@ func OpenListeners(ctx context.Context, o ListenerOptions) (*Listeners, error) {
 		BaseContext:       func(net.Listener) context.Context { return o.Base },
 		// ConnContext runs once per accepted connection, the only moment the
 		// net.Conn exists: it asks the kernel who is on the other end of a
-		// unix socket and puts the answer where internal/web's AuthMiddleware
+		// unix socket and puts the answer where internal/edge/web's AuthMiddleware
 		// can read it. TCP connections are left untouched.
 		ConnContext: auth.ConnContext,
 	}

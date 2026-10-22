@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/oauth/idp/idptest"
+	"knomit/internal/edge/oauth/idp/idptest"
 )
 
 // `knomit oauth idp resolve github <login>` turns a login into the stable

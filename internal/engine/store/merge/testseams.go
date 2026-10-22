@@ -60,7 +60,7 @@ func ExperimentRewoundRefNameForTest(name string) plumbing.ReferenceName {
 // SetExperimentActivityForTest backdates an experiment's last_activity_at.
 //
 // TEST SEAM, and exported only because the sweeper's tests live in
-// internal/repos and cannot reach this table any other way (they call it
+// internal/corpus/repos and cannot reach this table any other way (they call it
 // through storetest.SetExperimentActivity, which reaches the handle as Service.Merge). Expiry is
 // measured in days, so the alternative is a test that either sleeps for days
 // or asserts nothing; backdating the row makes the assertion about WHICH

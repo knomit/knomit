@@ -1,7 +1,7 @@
 package pki
 
 // The /git server here is a minimal upload-pack endpoint built from go-git's
-// own plumbing/transport/server, NOT web.GitRemoteHandler: internal/web
+// own plumbing/transport/server, NOT web.GitRemoteHandler: internal/edge/web
 // imports internal/foundation/pki (an import cycle), and internal/foundation/pki must stay pure Go
 // with no cgo for tests.yml's no-model unit step. These tests prove the
 // CLIENT transport; the real /git handler over knomit+https is proved in
@@ -336,7 +336,7 @@ func TestGitTransport_RevokedClientIsRefusedWithNamedError(t *testing.T) {
 	if errors.Is(err, ErrRevoked) {
 		t.Fatalf("a remote alert was named ErrRevoked; only our own verifier can say that: %v", err)
 	}
-	// The TEXT a fleet member records and classifies (internal/repos
+	// The TEXT a fleet member records and classifies (internal/corpus/repos
 	// classifyFleetRefusal reads the recorded error): our sentinel and the
 	// bad_certificate alert crypto/tls sends for a VerifyConnection refusal.
 	if s := err.Error(); !strings.Contains(s, ErrRefusedByPeer.Error()) || !strings.Contains(s, "tls: bad certificate") {
@@ -377,7 +377,7 @@ func TestGitTransport_OtherRootServerIsRefused(t *testing.T) {
 	if !errors.Is(err, ErrUntrustedRoot) {
 		t.Fatalf("err=%v, want ErrUntrustedRoot", err)
 	}
-	// The text a fleet member classifies as "moved" (internal/repos
+	// The text a fleet member classifies as "moved" (internal/corpus/repos
 	// classifyFleetRefusal), and it is not a refusal BY the peer.
 	if s := err.Error(); !strings.Contains(s, ErrUntrustedRoot.Error()) || strings.Contains(s, ErrRefusedByPeer.Error()) {
 		t.Fatalf("the other root's text %q", s)

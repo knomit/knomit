@@ -5,8 +5,8 @@
 //
 // The upstream branch itself is stored in control.db now, so the tests that
 // pinned the store's own writers (SetRemote / SetUpstreamBranch) live with
-// their new owners: internal/repos/origins_test.go for the record, and
-// internal/web/handlers_origin_hal_test.go for the refspec-first ordering.
+// their new owners: internal/corpus/repos/origins_test.go for the record, and
+// internal/edge/web/handlers_origin_hal_test.go for the refspec-first ordering.
 package store
 
 import (

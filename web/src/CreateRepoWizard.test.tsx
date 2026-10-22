@@ -747,7 +747,7 @@ describe('CreateRepoWizard', () => {
   // was unreachable AND denied the one control that fixes it. There was no way
   // to create the repo at all.
   //
-  // internal/repos/probe.go now reports it as {reachable:true,
+  // internal/corpus/repos/probe.go now reports it as {reachable:true,
   // auth_required:true} (TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable
   // pins the producer); this pins what the user gets for it.
   it('routes an unresolvable credential to the access step instead of dead-ending on source', async () => {

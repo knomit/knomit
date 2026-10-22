@@ -1,0 +1,393 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"testing"
+
+	"knomit/internal/engine/store/model"
+
+	"knomit/internal/engine/store/index"
+
+	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store/facts"
+)
+
+// stubSearchProvider implements searchProvider for tests.
+type stubSearchProvider struct {
+	results []index.SearchResult
+	err     error
+	// diag, when set, is what the stub reports through SearchOptions.Diag.
+	diag *index.SearchDiag
+	// lastQuery lets tests assert what query was built
+	lastQuery index.SearchOptions
+}
+
+func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+	s.lastQuery = q
+	if s.diag != nil && q.Diag != nil {
+		*q.Diag = *s.diag
+	}
+	return s.results, s.err
+}
+
+func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
+	provider := &stubSearchProvider{
+		results: []index.SearchResult{
+			{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
+						Path:       "know/ai/ml/abc123.md",
+						Title:      "Attention Is All You Need",
+						Type:       "observation",
+						Domain:     []string{"ai", "ml"},
+						Entities:   []string{"transformer"},
+						Confidence: 0.9,
+					},
+				},
+				Score: 87.5,
+			},
+			{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
+						Path:       "know/ai/nlp/def456.md",
+						Title:      "BERT Overview",
+						Type:       "claim",
+						Domain:     []string{"ai"},
+						Entities:   []string{"bert"},
+						Confidence: 0.8,
+					},
+				},
+				Score: 72.0,
+			},
+		},
+	}
+
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=attention&limit=10",
+		nil,
+	)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
+		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
+	}
+
+	var body struct {
+		Count    int         `json:"count"`
+		Links    hal.LinkMap `json:"_links"`
+		Embedded struct {
+			Results []struct {
+				Path       string      `json:"path"`
+				Title      string      `json:"title"`
+				Score      float64     `json:"score"`
+				Type       string      `json:"type"`
+				Domain     []string    `json:"domain"`
+				Entities   []string    `json:"entities"`
+				Confidence float64     `json:"confidence"`
+				Body       *string     `json:"body,omitempty"`
+				Links      hal.LinkMap `json:"_links"`
+			} `json:"results"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if body.Count != 2 {
+		t.Errorf("count: %d, want 2", body.Count)
+	}
+	if _, ok := body.Links["self"]; !ok {
+		t.Error("missing self link on collection")
+	}
+	if len(body.Embedded.Results) != 2 {
+		t.Fatalf("embedded results: %d, want 2", len(body.Embedded.Results))
+	}
+
+	item := body.Embedded.Results[0]
+	if item.Path != "know/ai/ml/abc123.md" {
+		t.Errorf("path: %q", item.Path)
+	}
+	if item.Title != "Attention Is All You Need" {
+		t.Errorf("title: %q", item.Title)
+	}
+	if item.Score != 87.5 {
+		t.Errorf("score: %v", item.Score)
+	}
+	if item.Type != "observation" {
+		t.Errorf("type: %q", item.Type)
+	}
+	if item.Body != nil {
+		t.Error("body must be omitted from collection items")
+	}
+
+	// Each item must have a _links.self pointing to the fact URL.
+	wantSelf := APIBase + "/repos/alpha/branches/agent:test/facts/know/ai/ml/abc123.md"
+	if got := item.Links["self"].Href; got != wantSelf {
+		t.Errorf("item self link: got %q, want %q", got, wantSelf)
+	}
+
+	// Assert the query was wired correctly.
+	if provider.lastQuery.Text != "attention" {
+		t.Errorf("query text: %q", provider.lastQuery.Text)
+	}
+	if provider.lastQuery.Limit != 10 {
+		t.Errorf("limit: %d, want 10", provider.lastQuery.Limit)
+	}
+}
+
+func TestHandleSearch_EmptyResults(t *testing.T) {
+	provider := &stubSearchProvider{results: nil}
+
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=nothing",
+		nil,
+	)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
+		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
+	}
+
+	var body struct {
+		Count    int `json:"count"`
+		Embedded struct {
+			Results []any `json:"results"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Count != 0 {
+		t.Errorf("count: %d, want 0", body.Count)
+	}
+	if len(body.Embedded.Results) != 0 {
+		t.Errorf("results: %d, want 0", len(body.Embedded.Results))
+	}
+}
+
+// TestHandleSearch_KindFilterReachesProvider locks in that ?kind= /
+// ?exclude_kind= query params on /search reach SearchOptions.IncludeKinds /
+// ExcludeKinds. Regression: the filter was silently dropped, so a UI chip
+// like "kind:pragmatic" was returning every fact instead of pragmatic ones.
+func TestHandleSearch_KindFilterReachesProvider(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x&kind=pragmatic&exclude_kind=epistemic", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := provider.lastQuery.IncludeKinds; len(got) != 1 || got[0] != "pragmatic" {
+		t.Errorf("IncludeKinds: got %v, want [pragmatic]", got)
+	}
+	if got := provider.lastQuery.ExcludeKinds; len(got) != 1 || got[0] != "epistemic" {
+		t.Errorf("ExcludeKinds: got %v, want [epistemic]", got)
+	}
+}
+
+func TestHandleSearch_UnknownRepo_Returns404(t *testing.T) {
+	s := &Server{
+		Manager: newTestManagerWithRepos(t),
+		providers: storeProviders{
+			search: &stubSearchProvider{},
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/missing/branches/main/search?q=x", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q, want application/problem+json", got)
+	}
+}
+
+// TestHandleSearch_MinSimilarityAndDomainExactReachProvider pins REST↔MCP parity:
+// the search handler must thread min_similarity and domain_exact into SearchOptions.
+func TestHandleSearch_MinSimilarityAndDomainExactReachProvider(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x&min_similarity=0.55&domain=ai&domain_exact=true", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := provider.lastQuery.MinSimilarity; got != 0.55 {
+		t.Errorf("MinSimilarity: got %v, want 0.55", got)
+	}
+	if !provider.lastQuery.DomainExact {
+		t.Errorf("DomainExact: got false, want true")
+	}
+}
+
+// TestHandleSearch_MotifFilterReachesSearchOptions locks in that ?motifs= /
+// ?motif_match= on /search reach SearchOptions.Motifs / MotifMatch — the motif
+// axis is only queryable if the params survive the handler.
+func TestHandleSearch_MotifFilterReachesSearchOptions(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x&motifs=zero-value-as-valid,silent-fallback&motif_match=stem", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	want := []string{"zero-value-as-valid", "silent-fallback"}
+	if !reflect.DeepEqual(provider.lastQuery.Motifs, want) {
+		t.Errorf("Motifs: got %v want %v", provider.lastQuery.Motifs, want)
+	}
+	if provider.lastQuery.MotifMatch != index.MotifMatchStem {
+		t.Errorf("MotifMatch: got %q want stem", provider.lastQuery.MotifMatch)
+	}
+}
+
+// TestHandleSearch_LooseMotifTierRejected: the tiers this surface refuses are
+// refused at the edge, before any store call (C3/MN6).
+func TestHandleSearch_LooseMotifTierRejected(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?motifs=a-b&motif_match=token-1", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.lastQuery.Motifs != nil {
+		t.Errorf("provider was called despite the rejection: %v", provider.lastQuery)
+	}
+}
+
+// TestHandleSearch_MotifsOnTheWire: rows carry their motifs, and a motif-free
+// row serializes with no motifs key at all (byte-compat for corpora that never
+// ran a motif pass).
+func TestHandleSearch_MotifsOnTheWire(t *testing.T) {
+	provider := &stubSearchProvider{
+		results: []index.SearchResult{
+			{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
+						Path:   "kb/a.md",
+						Title:  "Carries a motif",
+						Motifs: []string{"a-b"},
+					},
+				},
+			},
+			{
+				FactWithBody: facts.FactWithBody{
+					FactRecord: facts.FactRecord{
+						Path:  "kb/b.md",
+						Title: "Carries none",
+					},
+				},
+			},
+		},
+	}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var view struct {
+		Embedded struct {
+			Results []map[string]any `json:"results"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Embedded.Results) != 2 {
+		t.Fatalf("results: got %d want 2", len(view.Embedded.Results))
+	}
+	got, ok := view.Embedded.Results[0]["motifs"]
+	if !ok {
+		t.Fatalf("row 0: motifs key absent, body=%s", rec.Body.String())
+	}
+	if !reflect.DeepEqual(got, []any{"a-b"}) {
+		t.Errorf("row 0 motifs: got %v want [a-b]", got)
+	}
+	if _, present := view.Embedded.Results[1]["motifs"]; present {
+		t.Errorf("row 1: motif-free row must omit the key entirely, body=%s", rec.Body.String())
+	}
+}
