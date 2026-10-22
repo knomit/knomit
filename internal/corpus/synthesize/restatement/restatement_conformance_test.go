@@ -27,7 +27,7 @@ import (
 // to every corpus. A resource constant allocates OUR spend and is honest about
 // it. The first kind is forbidden; the second has to say what it budgets.
 var budgetLiterals = map[string]string{
-	"1.5":   "ItemPriority: ordering within prune's band, below every real cluster",
+	"1.5":   "restatementPriority: ordering within prune's band, below every real cluster",
 	"1e-12": "degenerate-norm guard in cosine; a numerical floor, not a similarity threshold",
 	"0.99":  "p99 of the standing pair distribution — a REPORTED quantile of this repo's own data",
 	"0.999": "p99.9 of the standing pair distribution — reported, read by no branch",
@@ -81,7 +81,7 @@ func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
 		{"titleBackfillBudget", "LATENCY BUDGET"},
 		{"titleBackfillBatch", "THROUGHPUT BUDGET"},
 		{"pairNeighbourK", "STRUCTURAL BUDGET"},
-		{"MaxShortlistItems", "JUDGE-SLOT BUDGET"},
+		{"maxShortlistItems", "JUDGE-SLOT BUDGET"},
 		{"shortlistPerMille", "JUDGE-SLOT BUDGET"},
 		{"throttleWindow", "PATIENCE BUDGET"},
 		{"shortlistOverfetch", "RESOURCE BUDGET"},
@@ -106,6 +106,14 @@ func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
 // Structurally enforced as well as asserted: *vocab.AbstractionIndex is
 // deliberately NOT part of the *index.Facade composite that mcp and web depend
 // on, and service.go is the only parent file that names it (Service.Abstraction).
+//
+// This is also the rule that edge/mcp and edge/web must NOT import
+// internal/corpus/synthesize/restatement: its API takes step.Deps and sessions
+// only the engine constructs, so edge reaches it through Pipeline/Reviewer.
+// Today that is enforced by the string match below (an import path is a string
+// literal containing "restatement"); the rule is intended, so do not narrow
+// codeMentions to skip import specs without replacing this with an explicit
+// forbidden-edge check.
 func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// Whole packages, not a list of filenames. The first version of this test
 	// named five files and skipped any that had been renamed, so it would have

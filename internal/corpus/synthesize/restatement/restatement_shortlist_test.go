@@ -12,8 +12,9 @@ import (
 // seedShortlist runs the backfill + refresh the way a review session does.
 //
 // It lives beside the code under test, not in synthtest: the title backfill and
-// the shortlist refresh are restatement.go, and synthtest imports only step and
-// the store.
+// the shortlist refresh are restatement code, and synthtest cannot import this
+// package (this package's own tests import synthtest, so that would be an
+// import cycle). The parent's restatement_standing_work_test.go carries a mirror.
 func seedShortlist(e *synthtest.RestatementEnv) {
 	e.T.Helper()
 	ctx := context.Background()

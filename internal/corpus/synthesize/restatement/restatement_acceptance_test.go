@@ -106,7 +106,7 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 	for _, line := range healthLines(health) {
 		t.Log(line)
 	}
-	require.LessOrEqual(t, len(pairs), MaxShortlistItems,
+	require.LessOrEqual(t, len(pairs), maxShortlistItems,
 		"whatever the corpus looks like, a session's spend is bounded")
 
 	for i, p := range pairs {

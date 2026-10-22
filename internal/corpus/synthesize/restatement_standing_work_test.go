@@ -3,12 +3,12 @@ package synthesize
 import (
 	"context"
 	"fmt"
-	"knomit/internal/corpus/synthesize/internal/synthtest"
-	"knomit/internal/corpus/synthesize/restatement"
 	"strings"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/vocab"
 
@@ -266,9 +266,16 @@ func TestStanding_QuietSessionDoesNotRunTheVocabularyPasses(t *testing.T) {
 }
 
 // seedShortlist runs the title backfill and the shortlist refresh the way a
-// review session does, with an hour of backfill budget so a slow runner cannot
-// leave the axis partly covered (knomit#298). It mirrors the restatement
-// package's own test fixture of the same name, which this package cannot import.
+// review session does. It mirrors the restatement package's own test fixture of
+// the same name, which this package cannot import (it is a _test.go file).
+//
+// The backfill budget is an hour, NOT production's 15 s latency budget: when
+// that expires EnsureTitleVectors returns partial coverage with no error, the
+// pair under test (highest fact ids, last batch) is the first thing a stalled
+// runner drops, and the test fails as a false claim about the gate under test
+// (knomit#298, CI job 108283236877). An hour cannot expire here; the loop exits
+// as soon as nothing is missing. The coverage assertion below is the other half:
+// a partial axis reads as "nothing to find", so the fixture fails loudly.
 func seedShortlist(e *synthtest.RestatementEnv) {
 	e.T.Helper()
 	ctx := context.Background()

@@ -23,7 +23,7 @@ import (
 //
 // The first two are display defects and the third is behavioural, so they are
 // pinned separately below. Assertions read the RENDERED health line wherever
-// the issue was filed on the rendered line — a Health field can be
+// the issue was filed on the rendered line — a restatementHealth field can be
 // right while the line an operator reads is wrong, which is the whole family
 // of bugs this file covers.
 

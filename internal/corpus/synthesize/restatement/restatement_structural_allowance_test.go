@@ -280,10 +280,10 @@ func TestStructural_ScopedSessionIsOfferedOutOfScopePairsAndToldSo(t *testing.T)
 // age-stable. A degenerated sweep order reads identically to a working one from
 // outside, which is why the regime is stated rather than implied.
 func TestStructural_HealthNamesTheSweepRegime(t *testing.T) {
-	full := Health{StandingStructural: 3, Coverage: 1, SweepOrderStable: true}
+	full := restatementHealth{StandingStructural: 3, Coverage: 1, SweepOrderStable: true}
 	require.Contains(t, structuralSignalLine(full), "oldest-first (axis complete)")
 
-	filling := Health{StandingStructural: 3, Coverage: 0.4, SweepOrderStable: false}
+	filling := restatementHealth{StandingStructural: 3, Coverage: 0.4, SweepOrderStable: false}
 	require.Contains(t, structuralSignalLine(filling), "NOT yet age-stable")
 	require.NotContains(t, structuralSignalLine(filling), "oldest-first (axis complete)",
 		"a filling axis must not be described as if its sweep order were age-stable")

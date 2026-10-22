@@ -318,11 +318,11 @@ func newRestatementPair(id int64, path string, n vocab.TitleNeighbour) vocab.Res
 // threshold here to configure, and no constant that claims a fact about any
 // corpus (MN13).
 
-// MaxShortlistItems is a JUDGE-SLOT BUDGET: the most restatement pairs one
+// maxShortlistItems is a JUDGE-SLOT BUDGET: the most restatement pairs one
 // review session will ever put in front of the judge, whatever the corpus
 // looks like. It bounds what a corpus where title similarity does not
 // discriminate can waste before its own verdicts defund it.
-const MaxShortlistItems = 8
+const maxShortlistItems = 8
 
 // shortlistPerMille scales that budget to corpus size — five slots per thousand
 // facts. Also a JUDGE-SLOT BUDGET: it allocates spend, it does not claim a
@@ -415,17 +415,17 @@ const (
 // mistaken for evidence that the shortlist is earning its slots.
 const ClusterKeyPrefix = "restate-"
 
-// ItemPriority places shortlist items inside prune's positive band but
+// restatementPriority places shortlist items inside prune's positive band but
 // below every real cluster (a prune cluster always has at least two facts, so
 // its priority is >= 2). Ordinary cluster consolidation — the bulk of the work
 // and the part that never needed this mechanism — therefore always runs first.
-const ItemPriority = 1.5
+const restatementPriority = 1.5
 
-// Health is what a session reports about the axis and the shortlist.
+// restatementHealth is what a session reports about the axis and the shortlist.
 // Every field is OBSERVABILITY: descriptors of this corpus, read by no branch.
 // A corpus descriptor that decided anything would be the corpus-property
 // constant this design exists without.
-type Health struct {
+type restatementHealth struct {
 	Coverage       float64 // fraction of live epistemic facts on the axis
 	StandingPairs  int
 	TailP99        float64
@@ -485,8 +485,8 @@ type Health struct {
 // shortlistBudget is how many judge slots this session may spend.
 func shortlistBudget(n int) int {
 	b := n * shortlistPerMille / 1000
-	if b > MaxShortlistItems {
-		return MaxShortlistItems
+	if b > maxShortlistItems {
+		return maxShortlistItems
 	}
 	return b
 }
@@ -535,8 +535,8 @@ func throttleState(verdicts []vocab.RestatementVerdict) (float64, string) {
 // membership check, never re-clustered: a pair already sitting in one cluster
 // is a pair prune sees anyway, so spending a shortlist slot on it is spending
 // twice for one judgement.
-func selectRestatementCandidates(ctx context.Context, d step.Deps, branch string, clusters [][]step.FactForLLM, n int) ([]vocab.RestatementPair, Health, error) {
-	var h Health
+func selectRestatementCandidates(ctx context.Context, d step.Deps, branch string, clusters [][]step.FactForLLM, n int) ([]vocab.RestatementPair, restatementHealth, error) {
+	var h restatementHealth
 
 	// Coverage is read here rather than passed in, so every caller that builds
 	// health gets a complete one. A health block that silently reports 0%
@@ -819,7 +819,7 @@ func selectStructuralSweep(ctx context.Context, d step.Deps, branch string, coGr
 // detection inert exactly where it mattered: the corpus with the least evidence
 // that consolidation is worth anything is the corpus most in need of being
 // shown a near-certain duplicate. The allowance is spent; the budget is not.
-func emitStructuralOnly(structural []vocab.RestatementPair, h *Health) []vocab.RestatementPair {
+func emitStructuralOnly(structural []vocab.RestatementPair, h *restatementHealth) []vocab.RestatementPair {
 	h.StructuralOffered = len(structural)
 	h.Emitted = len(structural)
 	return structural
@@ -934,7 +934,7 @@ func enqueueRestatementItems(ctx context.Context, d step.Deps, sess *model.Pipel
 			StepType:   "prune",
 			ClusterKey: fmt.Sprintf("%s%d", ClusterKeyPrefix, i),
 			FactsJSON:  string(factsJSON),
-			Priority:   ItemPriority,
+			Priority:   restatementPriority,
 		}); err != nil {
 			return served, dropped, step.Wrapf(step.ReviewTool, err, "shortlist: insert item %d", i)
 		}
@@ -952,7 +952,7 @@ func enqueueRestatementItems(ctx context.Context, d step.Deps, sess *model.Pipel
 // keeps reporting selection while the queue reflects service. That gap is the
 // whole bug, and a fix that only changed enqueue's return value would leave the
 // number an operator READS exactly as wrong as before.
-func applyEmissionOutcome(h *Health, served, dropped int) {
+func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
 	h.Emitted = served
 	h.Dropped = dropped
 	// The same correction applied to the probe (knomit#117b). Selection
@@ -976,8 +976,8 @@ func PlanShortlist(ctx context.Context, d step.Deps, sess *model.PipelineSession
 	// path is exactly where "the shortlist found nothing" has to stay
 	// distinguishable from "the shortlist could not run" — a silent skip on a
 	// corpus with 2,000 standing pairs reads as a clean bill of health.
-	var health Health
-	defer func() { RecordHealth(sess, health) }()
+	var health restatementHealth
+	defer func() { recordRestatementHealth(sess, health) }()
 
 	have, total, err := EnsureTitleVectors(ctx, d, branch, titleBackfillBudget)
 	if err != nil {
@@ -1024,7 +1024,7 @@ func PlanShortlist(ctx context.Context, d step.Deps, sess *model.PipelineSession
 	// Emitted was recorded by selection; only enqueue knows what survived to
 	// the queue. An enqueue that fails PART WAY through has already inserted
 	// some items, and returning without reconciling leaves the deferred
-	// RecordHealth reporting selection's count over a partial
+	// recordRestatementHealth reporting selection's count over a partial
 	// queue — this issue's own bug, re-opened on the error path.
 	//
 	// Unobservable today (StartSession discards the result on error), which is
@@ -1062,7 +1062,7 @@ func PlanShortlist(ctx context.Context, d step.Deps, sess *model.PipelineSession
 // prints two different cosines, which is what it means for the selection to be
 // a percentile of each repo's own distribution rather than a threshold someone
 // picked (MN13).
-func healthLines(h Health) []string {
+func healthLines(h restatementHealth) []string {
 	if h.Failure != "" {
 		return []string{
 			fmt.Sprintf("restatement shortlist unavailable this session: %s "+
@@ -1096,7 +1096,7 @@ func healthLines(h Health) []string {
 // The drop clause appears ONLY when something dropped. A block that mentions
 // drops every session trains a reader to skip the line, which is how the
 // original silence would come back wearing a number.
-func emittedLine(h Health) string {
+func emittedLine(h restatementHealth) string {
 	if h.Dropped == 0 {
 		return fmt.Sprintf("restatement candidates emitted: %d", h.Emitted)
 	}
@@ -1111,7 +1111,7 @@ func emittedLine(h Health) string {
 // between them are the interesting part: pairs detected but ineligible are
 // pairs prune already sees, while pairs eligible but not offered are the
 // budget saying no.
-func structuralSignalLine(h Health) string {
+func structuralSignalLine(h restatementHealth) string {
 	if h.StandingStructural == 0 {
 		return "structural duplicate detection: no path-identity or rare-token pairs stand in this corpus"
 	}
@@ -1141,7 +1141,7 @@ func structuralSignalLine(h Health) string {
 }
 
 // motifSignalLine reports what the §7 motif widener contributed this session.
-func motifSignalLine(h Health) string {
+func motifSignalLine(h restatementHealth) string {
 	switch {
 	case h.MotifWidened == 0:
 		return "motif signal: no pair admitted by shared motif this session"
@@ -1154,14 +1154,14 @@ func motifSignalLine(h Health) string {
 	}
 }
 
-func probeSuffix(h Health) string {
+func probeSuffix(h restatementHealth) string {
 	if h.Probing {
 		return " (probing)"
 	}
 	return ""
 }
 
-// RecordHealth hangs the session's health lines on the session
+// recordRestatementHealth hangs the session's health lines on the session
 // object StartSession is holding.
 //
 // In memory, not in the session row: planning and responding happen inside the
@@ -1184,7 +1184,7 @@ func probeSuffix(h Health) string {
 // Called once per session, so this is behaviourally identical for the
 // shortlist itself. TestMotifAliasHealth_CoexistsWithRestatementLines covers
 // the interaction.
-func RecordHealth(sess *model.PipelineSession, h Health) {
+func recordRestatementHealth(sess *model.PipelineSession, h restatementHealth) {
 	if sess == nil {
 		return
 	}

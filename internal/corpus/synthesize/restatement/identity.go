@@ -1,4 +1,4 @@
-// Package synthesize — structural duplicate detection (#127).
+// Structural duplicate detection (#127).
 //
 // The title-KNN shortlist finds pairs that are CLOSE IN THE VECTOR SPACE. The
 // duplicates that survive longest are the ones it cannot reach: two records of

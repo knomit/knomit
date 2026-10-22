@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,7 +260,7 @@ func TestShortlistBudget_ScalesWithCorpusAndCapsOut(t *testing.T) {
 	require.Equal(t, 0, shortlistBudget(150), "a tiny corpus spends nothing")
 	require.Equal(t, 1, shortlistBudget(300))
 	require.Equal(t, 4, shortlistBudget(800))
-	require.Equal(t, MaxShortlistItems, shortlistBudget(50_000), "capped however large the corpus")
+	require.Equal(t, maxShortlistItems, shortlistBudget(50_000), "capped however large the corpus")
 }
 
 // TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution is the
@@ -601,4 +602,49 @@ func TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone(t *testing.T) {
 	verdicts, err := env.Svc.Abstraction().RecentRestatementVerdicts(ctx, env.Branch, throttleWindow)
 	require.NoError(t, err)
 	require.Empty(t, verdicts, "no verdict is recorded for a pair that no longer exists")
+}
+
+// TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed — the design has no
+// density cut: a corpus where title similarity does not discriminate still gets
+// a cap-sized batch, and it is that corpus's OWN verdicts that defund it.
+//
+// Drives PlanShortlist with no clusters, the same call PlanStandingWork makes,
+// so it needs no Reviewer.
+func TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed(t *testing.T) {
+	ctx := context.Background()
+	env := synthtest.NewRestatementEnv(t, 0)
+	// Every title identical: on this corpus the axis says everything restates
+	// everything.
+	for i := range 600 {
+		env.WriteFact(fmt.Sprintf("kb/flood%d.md", i), "Same headline every time",
+			fmt.Sprintf("body %d, quite different in wording from the others", i))
+	}
+
+	sess, err := env.Svc.Pipeline().CreatePipelineSession(ctx, "review", env.Branch, "")
+	require.NoError(t, err)
+	require.NoError(t, PlanShortlist(ctx, env.Deps(), sess, env.Branch, nil))
+
+	emitted := 0
+	for _, it := range env.WorkItems(sess.ID) {
+		if strings.HasPrefix(it.ClusterKey, ClusterKeyPrefix) {
+			emitted++
+		}
+	}
+	require.LessOrEqual(t, emitted, maxShortlistItems,
+		"bounded by the judge-slot budget, never by a rate anyone hard-coded")
+	require.Contains(t, strings.Join(sess.Health, "\n"), "standing restatement pairs",
+		"and the flood is visible in the health output")
+}
+
+// TestHealthRecorders_NeverDestroyExistingLines (restatement subcase) — the
+// rule is per recorder: a health recorder APPENDS. The motif-alias recorder's
+// subcase is in the parent beside its recorder; this is the restatement one.
+func TestHealthRecorders_NeverDestroyExistingLines(t *testing.T) {
+	const seed = "seeded by another producer"
+	sess := &model.PipelineSession{Health: []string{seed}}
+	recordRestatementHealth(sess, restatementHealth{StandingPairs: 3})
+	require.Contains(t, sess.Health, seed,
+		"the restatement recorder destroyed a line it did not write — health recorders "+
+			"must append, or the last one to run silences every other subsystem's only report channel")
+	require.Greater(t, len(sess.Health), 1, "the restatement recorder recorded nothing at all")
 }

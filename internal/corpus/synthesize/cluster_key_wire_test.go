@@ -40,7 +40,7 @@ func TestNextItem_CarriesClusterKeyOnTheWire(t *testing.T) {
 		StepType:   "prune",
 		ClusterKey: restatement.ClusterKeyPrefix + "0",
 		FactsJSON:  `[{"file":"kb/technology/a.md"},{"file":"kb/technology/b.md"}]`,
-		Priority:   restatement.ItemPriority,
+		Priority:   1.0, // sorts ahead of the 0.1 cluster item below; the production value is pinned in the restatement package
 	}))
 	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(ctx, model.PipelineWorkItem{
 		SessionID:  sess.ID,
@@ -62,7 +62,7 @@ func TestNextItem_CarriesClusterKeyOnTheWire(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, engine.Item)
 
-	// The restatement item sorts first on restatement.ItemPriority, so this is the
+	// The restatement item sorts first (priority 1.0 against 0.1), so this is the
 	// one an agent meets — and it must be able to tell what it is holding.
 	require.Equal(t, restatement.ClusterKeyPrefix+"0", engine.Item.ClusterKey,
 		"engine layer: the PipelineItem must carry the stored item's key")

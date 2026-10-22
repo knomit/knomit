@@ -121,7 +121,7 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	// sessions that takes depends on the batch size, which is the corpus's
 	// business, not this test's — what matters is that it happens, bounded.
 	declined := map[string]bool{}
-	var health Health
+	var health restatementHealth
 	var pairs []vocab.RestatementPair
 	var err error
 	sessions := 0

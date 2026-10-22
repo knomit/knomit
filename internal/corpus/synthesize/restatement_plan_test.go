@@ -66,31 +66,3 @@ func TestPlan_HealthLinesReachTheCaller(t *testing.T) {
 	require.Contains(t, joined, "restatement candidates emitted")
 	require.Contains(t, joined, "shortlist throttle")
 }
-
-// TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed — the design has no
-// density cut: a corpus where title similarity does not discriminate still gets
-// a cap-sized batch, and it is that corpus's OWN verdicts that defund it.
-func TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed(t *testing.T) {
-	ctx := context.Background()
-	env := synthtest.NewRestatementEnv(t, 0)
-	// Every title identical: on this corpus the axis says everything restates
-	// everything.
-	for i := range 600 {
-		env.WriteFact(fmt.Sprintf("kb/flood%d.md", i), "Same headline every time",
-			fmt.Sprintf("body %d, quite different in wording from the others", i))
-	}
-
-	res, err := NewReviewerWithOptions(env.RI, nil, step.EffortNormal, step.ScopeFilter{}).StartSession(ctx)
-	require.NoError(t, err)
-
-	emitted := 0
-	for _, it := range env.WorkItems(res.SessionID) {
-		if strings.HasPrefix(it.ClusterKey, restatement.ClusterKeyPrefix) {
-			emitted++
-		}
-	}
-	require.LessOrEqual(t, emitted, restatement.MaxShortlistItems,
-		"bounded by the judge-slot budget, never by a rate anyone hard-coded")
-	require.Contains(t, strings.Join(res.Health, "\n"), "standing restatement pairs",
-		"and the flood is visible in the health output")
-}

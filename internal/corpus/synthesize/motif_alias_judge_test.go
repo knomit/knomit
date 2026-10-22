@@ -171,7 +171,7 @@ func TestMotifAliasDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
 //
 // TestHealthRecorders_NeverDestroyExistingLines below is the real guard. THIS
 // test only proves the two compose in the order Plan happens to call them, and
-// that is worth stating: when restatement.RecordHealth still assigned, this test
+// that is worth stating: when the restatement recorder still assigned, this test
 // passed anyway, because the test called it first — the safe order. A test that
 // guards an arrangement rather than a property survives its own subject
 // regressing.
@@ -180,7 +180,9 @@ func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 	sess, err := env.Svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.Branch, "")
 	require.NoError(t, err)
 
-	restatement.RecordHealth(sess, restatement.Health{StandingPairs: 7})
+	// The production recorder, reached the way Plan reaches it: PlanShortlist
+	// records health on every path through its deferred recorder.
+	require.NoError(t, restatement.PlanShortlist(context.Background(), env.Deps(), sess, env.Branch, nil))
 	before := len(sess.Health)
 	require.NotZero(t, before, "the restatement lines must be there to be clobbered")
 
@@ -259,21 +261,19 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 // TestHealthRecorders_NeverDestroyExistingLines is the property test the
 // co-existence test above is not.
 //
-// It seeds sess.Health with a line neither recorder produces, then calls each
-// one, and requires the seed to survive. That holds regardless of call order,
+// It seeds sess.Health with a line neither recorder produces, then calls the
+// motif-alias recorder (the restatement recorder's own subcase lives in the
+// restatement package, beside the unexported recorder it calls), and requires the seed to survive. That holds regardless of call order,
 // of how many producers exist, and of which one runs first — which is what
 // makes it a guard on the RULE ("a health recorder appends") rather than on
 // today's arrangement of callers.
 //
 // The distinction is not academic. This file's first version tested only the
-// arrangement, and it passed with restatement.RecordHealth still assigning.
+// arrangement, and it passed with the restatement recorder still assigning.
 func TestHealthRecorders_NeverDestroyExistingLines(t *testing.T) {
 	const seed = "seeded by another producer"
 
 	for name, record := range map[string]func(*model.PipelineSession){
-		"restatement": func(s *model.PipelineSession) {
-			restatement.RecordHealth(s, restatement.Health{StandingPairs: 3})
-		},
 		"motif-alias": func(s *model.PipelineSession) {
 			recordMotifAliasHealth(s, motifAliasHealth{Vocabulary: 20, Emitted: 2})
 		},

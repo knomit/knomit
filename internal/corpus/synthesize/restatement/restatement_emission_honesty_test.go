@@ -64,7 +64,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 // wearing a return value.
 func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 	t.Run("drops are stated", func(t *testing.T) {
-		lines := strings.Join(healthLines(Health{Emitted: 1, Dropped: 2}), "\n")
+		lines := strings.Join(healthLines(restatementHealth{Emitted: 1, Dropped: 2}), "\n")
 		require.Contains(t, lines, "restatement candidates emitted: 1",
 			"the emitted number is what reached the judge")
 		require.Contains(t, lines, "2",
@@ -76,7 +76,7 @@ func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 	// The common case must not gain a noise line. A health block that always
 	// mentions drops trains a reader to skip the line that matters.
 	t.Run("no drop line when nothing dropped", func(t *testing.T) {
-		lines := strings.Join(healthLines(Health{Emitted: 3, Dropped: 0}), "\n")
+		lines := strings.Join(healthLines(restatementHealth{Emitted: 3, Dropped: 0}), "\n")
 		require.Contains(t, lines, "restatement candidates emitted: 3")
 		require.NotContains(t, strings.ToLower(lines), "drop",
 			"no drop line when there were no drops")
@@ -100,7 +100,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	ctx := context.Background()
 
 	// CORPUS SIZE IS LOAD-BEARING, AND SO IS THE PAIR COUNT. Re-derived from
-	// shortlistPerMille (5 per 1000, capped at MaxShortlistItems):
+	// shortlistPerMille (5 per 1000, capped at maxShortlistItems):
 	//
 	//     200 facts → budget 1      400 facts → budget 2
 	//
