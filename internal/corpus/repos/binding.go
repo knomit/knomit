@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/model"
 )
 
@@ -239,7 +241,7 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 // registry row and therefore a valid uid, but no live instance, and fails
 // loudly here (RFC §9.1): a lens must never silently shrink its read set. Empty
 // read branches default to each member's own agent branch at resolve time.
-func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
+func NewBindingOfLens(m *Manager, l control.Lens) (*Binding, error) {
 	return newBindingOfLens(m, l, "")
 }
 
@@ -253,12 +255,12 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 // not applied here, it is simply absent, and the binding is the ordinary one.
 // That keeps the eligibility question in ONE place (WritableBranch) rather
 // than splitting it across the two constructors.
-func NewBindingOfLensOnExperiment(m *Manager, l Lens, experiment string) (*Binding, error) {
+func NewBindingOfLensOnExperiment(m *Manager, l control.Lens, experiment string) (*Binding, error) {
 	return newBindingOfLens(m, l, experiment)
 }
 
 // newBindingOfLens is the shared body. experiment is "" for the ordinary case.
-func newBindingOfLens(m *Manager, l Lens, experiment string) (*Binding, error) {
+func newBindingOfLens(m *Manager, l control.Lens, experiment string) (*Binding, error) {
 	write := m.GetByUID(l.WriteUID)
 	if write == nil {
 		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.RepoLabel(l.WriteUID))

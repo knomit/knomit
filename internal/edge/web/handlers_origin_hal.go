@@ -11,6 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
@@ -78,7 +80,7 @@ func acquireFailed(err error) error {
 // the panic into a 500, but through the crash-bundle path rather than as an
 // answer. persistSessionOrigin guards this same window, and
 // repos.controlHandles/ErrManagerStopped exist for it on the lifecycle side.
-func originsOf(m *repos.Manager) (*repos.Origins, error) {
+func originsOf(m *repos.Manager) (*control.Origins, error) {
 	o := m.Origins()
 	if o == nil {
 		return nil, repos.ErrManagerStopped

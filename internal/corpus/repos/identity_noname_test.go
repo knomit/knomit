@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -76,7 +78,7 @@ func TestManagerStore_AuthorsAsThePersistedAgentID(t *testing.T) {
 // host was stored reads back with an empty host — nothing recovers one by
 // parsing the branch.
 func TestResolveIdentity_PersistsTheHostLabel(t *testing.T) {
-	reg, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
 	db := reg.DB()
@@ -106,7 +108,7 @@ func TestResolveIdentity_PersistsTheHostLabel(t *testing.T) {
 // holding '+' (read back as the part before it) or '@' is refused and nothing
 // is written; a plain id is then minted normally.
 func TestResolveIdentity_RefusesToMintAnIDThatDoesNotReadBack(t *testing.T) {
-	reg, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
 	db := reg.DB()
@@ -133,7 +135,7 @@ func TestResolveIdentity_RefusesToMintAnIDThatDoesNotReadBack(t *testing.T) {
 // SABOTAGE: drop the ValidAgentID check on the read path → the stored id is
 // returned → red.
 func TestResolveIdentity_RefusesAStoredInvalidIDAtBoot(t *testing.T) {
-	reg, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
 	db := reg.DB()

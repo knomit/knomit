@@ -18,7 +18,7 @@
 //
 // The registry never calls time.Now(): callers stamp CreatedAt/UpdatedAt.
 // It has no dependency on Manager; Manager owns its lifecycle.
-package repos
+package control
 
 import (
 	"database/sql"
@@ -38,8 +38,8 @@ import (
 var (
 	// ErrLensExists is returned by Create when the lens name is taken.
 	ErrLensExists = errors.New("lens already exists")
-	// ErrLensNameEmpty is returned by Create when the lens name is empty.
-	ErrLensNameEmpty = errors.New("lens name required")
+	// errLensNameEmpty is returned by Create when the lens name is empty.
+	errLensNameEmpty = errors.New("lens name required")
 	// ErrLensWriteEmpty is returned by Create when the write repo is empty.
 	ErrLensWriteEmpty = errors.New("lens write repo required")
 	// ErrLensNotFound is returned by the paths that address an existing lens by
@@ -141,10 +141,10 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	// controlUp, not migrate.Control: the re-key has to come first, and the one
-	// place that knows so is controlUp. See its comment for what a caller that
+	// ControlUp, not migrate.Control: the re-key has to come first, and the one
+	// place that knows so is ControlUp. See its comment for what a caller that
 	// migrated without it does to the home.
-	if err := controlUp(db); err != nil {
+	if err := ControlUp(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func (r *LensRegistry) readsOf(lensUID string) ([]LensRead, error) {
 // The caller stamps CreatedAt/UpdatedAt (the registry never reads the clock).
 func (r *LensRegistry) Create(l Lens) (Lens, error) {
 	if l.Name == "" {
-		return Lens{}, ErrLensNameEmpty
+		return Lens{}, errLensNameEmpty
 	}
 	if l.WriteUID == "" {
 		return Lens{}, ErrLensWriteEmpty
@@ -259,7 +259,7 @@ func (r *LensRegistry) Create(l Lens) (Lens, error) {
 // inside the same tx, so a mid-update failure leaves the old mounts intact).
 func (r *LensRegistry) Update(l Lens) (Lens, error) {
 	if l.Name == "" {
-		return Lens{}, ErrLensNameEmpty
+		return Lens{}, errLensNameEmpty
 	}
 	if l.WriteUID == "" {
 		return Lens{}, ErrLensWriteEmpty

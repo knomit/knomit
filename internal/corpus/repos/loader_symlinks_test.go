@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
@@ -71,7 +73,7 @@ func TestLoadOntology_SymlinkedOntologyRefusesTheRepoNamingThePath(t *testing.T)
 			require.Len(t, archived, 1)
 			require.Equal(t, uid, archived[0].ID)
 			require.NotNil(t, archived[0].Reason)
-			require.Equal(t, ArchiveBySystem, archived[0].Reason.Source)
+			require.Equal(t, control.ArchiveBySystem, archived[0].Reason.Source)
 			require.Equal(t, "unopenable", archived[0].Reason.Condition)
 			require.Contains(t, archived[0].Reason.Reason, rung+" is a symlink, and knomit does not follow symlinks")
 		})

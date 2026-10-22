@@ -22,6 +22,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web"
 	"knomit/internal/engine/store"
@@ -398,7 +400,7 @@ func TestFleetMembership_KnomitHostedJoinRaceLeaveRevokeDecommission(t *testing.
 		t.Fatal(err)
 	}
 	fleetUID := bravo.fleet(t).UID()
-	if _, err := bravo.mgr.CreateLens(ctx, repos.Lens{Name: "with-fleet", WriteUID: kb.UID(), Reads: []repos.LensRead{{RepoUID: fleetUID}}}); err != nil {
+	if _, err := bravo.mgr.CreateLens(ctx, control.Lens{Name: "with-fleet", WriteUID: kb.UID(), Reads: []control.LensRead{{RepoUID: fleetUID}}}); err != nil {
 		t.Fatal(err)
 	}
 	before = alpha.receives.Load()

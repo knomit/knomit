@@ -1,4 +1,4 @@
-package repos
+package control
 
 import (
 	"path/filepath"
@@ -160,5 +160,5 @@ func TestRegistry_ProfileSurvivesIdentityChange(t *testing.T) {
 func TestRegistry_SetProfileRejectsUnknown(t *testing.T) {
 	r := openTestRepoRegistry(t)
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: ProfileCode, CreatedAt: 1}))
-	require.ErrorIs(t, r.SetProfile("u1", "nonsense"), ErrInvalidProfile)
+	require.ErrorIs(t, r.SetProfile("u1", "nonsense"), errInvalidProfile)
 }

@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/testsupport/testsigner"
@@ -488,13 +489,13 @@ func TestRepos_ForEachCallbackTouchesNoManager(t *testing.T) {
 // it would refuse this lens by design.
 func TestRepos_LensMemberWithoutInstanceUsesRegistryName(t *testing.T) {
 	m, _, _ := bindFixture(t)
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: "uid-ghost", Name: "ghost", State: repos.StateActive,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: "uid-ghost", Name: "ghost", State: control.StateActive,
 		Profile: "code", CreatedAt: 1,
 	}))
-	_, err := m.LensRegistry().Create(repos.Lens{
+	_, err := m.LensRegistry().Create(control.Lens{
 		Name: "haunted", WriteUID: "uid-alpha",
-		Reads:     []repos.LensRead{{RepoUID: "uid-ghost"}},
+		Reads:     []control.LensRead{{RepoUID: "uid-ghost"}},
 		CreatedAt: 1, UpdatedAt: 1,
 	})
 	require.NoError(t, err)
@@ -589,8 +590,8 @@ func TestRepos_ReportsUnresolvableBinding(t *testing.T) {
 	m, _, _ := bindFixture(t)
 	// A repo the registry still knows, but with no live instance: resolution
 	// fails, yet the name is real and worth showing.
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: "uid-departed", Name: "departed", State: repos.StateActive,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: "uid-departed", Name: "departed", State: control.StateActive,
 		Profile: "code", CreatedAt: 1,
 	}))
 	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-departed", "")

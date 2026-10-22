@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,17 +65,17 @@ func TestStart_ClassifiesUnavailableReasons(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "repos"), 0o755))
 
-	reg, err := OpenRegistry(filepath.Join(home, "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(home, "control.db"))
 	require.NoError(t, err)
 	const (
 		missingUID    = "missing-uid"
 		unopenableUID = "unopenable-uid"
 	)
-	require.NoError(t, reg.Insert(RepoRecord{
-		UID: missingUID, Name: "zeta", State: StateActive, Profile: ProfileCode, CreatedAt: 1,
+	require.NoError(t, reg.Insert(control.RepoRecord{
+		UID: missingUID, Name: "zeta", State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 1,
 	}))
-	require.NoError(t, reg.Insert(RepoRecord{
-		UID: unopenableUID, Name: "alpha", State: StateActive, Profile: ProfileCode, CreatedAt: 2,
+	require.NoError(t, reg.Insert(control.RepoRecord{
+		UID: unopenableUID, Name: "alpha", State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 2,
 	}))
 	require.NoError(t, reg.Close())
 

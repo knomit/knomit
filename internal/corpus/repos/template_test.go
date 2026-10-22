@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -172,7 +174,7 @@ func treeBlobs(t *testing.T, dir, rev string) map[string]string {
 func noTraceOf(t *testing.T, m *Manager, name string, dbsBefore []string) {
 	t.Helper()
 	require.Nil(t, m.Get(name))
-	for _, st := range []RepoState{StateActive, StateArchived} {
+	for _, st := range []control.RepoState{control.StateActive, control.StateArchived} {
 		recs, err := m.reg.List(st)
 		require.NoError(t, err)
 		for _, r := range recs {
@@ -370,7 +372,7 @@ func TestCreateFromTemplate_Refusals(t *testing.T) {
 	})
 	mount(t, m, "src", "clone", url)
 	createRepo(t, m, "plain")
-	_, err := m.CreateLens(context.Background(), Lens{Name: "a-lens", WriteUID: m.Get("plain").UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "a-lens", WriteUID: m.Get("plain").UID()})
 	require.NoError(t, err)
 	archived := mount(t, m, "gone", "clone", sourceRepo(t, root, "gone", sourceSpec{}))
 	_ = archived

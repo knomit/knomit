@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/require"
@@ -62,7 +64,7 @@ CREATE TABLE lens_reads (
 
 // requireReKeyed asserts the 'work' lens came back uid-keyed with its read
 // mount intact — the observable proof that the re-key ran and ran first.
-func requireReKeyed(t *testing.T, lenses []Lens, repoUID string) {
+func requireReKeyed(t *testing.T, lenses []control.Lens, repoUID string) {
 	t.Helper()
 	require.Len(t, lenses, 1)
 	require.Equal(t, "work", lenses[0].Name)
@@ -84,7 +86,7 @@ func TestLensRekey_RunsBeforeBaseline(t *testing.T) {
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	uid := writePreUIDControlDB(t, filepath.Join(home, "control.db"))
 
-	// The pre-uid home boots: Start's controlUp re-keys it. A repo row whose
+	// The pre-uid home boots: Start's ControlUp re-keys it. A repo row whose
 	// .db is missing is an ordinary unavailable repo, not a boot failure.
 	require.NoError(t, m.Start())
 
@@ -99,9 +101,9 @@ func TestLensRekey_RunsBeforeBaseline(t *testing.T) {
 }
 
 // A GENUINELY pre-registry control.db (lenses.write_repo) is the one shape
-// controlUp must NOT re-key: upgradeLensSchema copies write_uid, which that
+// ControlUp must NOT re-key: upgradeLensSchema copies write_uid, which that
 // shape has no column for, so trying would turn an open into a failure.
-// controlUp skips it (HasLegacyLensSchema), and the skip must leave the legacy
+// ControlUp skips it (HasLegacyLensSchema), and the skip must leave the legacy
 // table untouched rather than half-convert it.
 func TestOpenRegistry_LeavesAPreRegistryLensTableUntouched(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")
@@ -112,14 +114,14 @@ func TestOpenRegistry_LeavesAPreRegistryLensTableUntouched(t *testing.T) {
 	    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`)
 	require.NoError(t, err)
 
-	reg, err := OpenRegistry(path)
+	reg, err := control.OpenRegistry(path)
 	require.NoError(t, err, "a legacy home must still open, not fail on a re-key it cannot do")
 	defer reg.Close()
 	empty, err := reg.IsEmpty()
 	require.NoError(t, err)
 	require.True(t, empty)
 
-	legacy, err := HasLegacyLensSchema(db)
+	legacy, err := control.HasLegacyLensSchema(db)
 	require.NoError(t, err)
 	require.True(t, legacy, "the re-key must not have half-converted a pre-registry lens table")
 }
@@ -134,11 +136,11 @@ func TestOpenRegistry_ReKeysLensesForLaterOpeners(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")
 	uid := writePreUIDControlDB(t, path)
 
-	reg, err := OpenRegistry(path)
+	reg, err := control.OpenRegistry(path)
 	require.NoError(t, err)
 	require.NoError(t, reg.Close())
 
-	lensReg, err := OpenLensRegistry(path)
+	lensReg, err := control.OpenLensRegistry(path)
 	require.NoError(t, err, "OpenRegistry must not have left a home a lens open cannot survive")
 	defer lensReg.Close()
 	lenses, err := lensReg.List()

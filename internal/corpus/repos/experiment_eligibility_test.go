@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -182,10 +184,10 @@ func TestNewBindingOfLens_PinnedAtMainStaysWritable(t *testing.T) {
 	core := createRepo(t, m, "core")
 	work := createRepo(t, m, "work")
 
-	lens, err := m.LensRegistry().Create(Lens{
+	lens, err := m.LensRegistry().Create(control.Lens{
 		Name:     "pinned",
 		WriteUID: work.UID(),
-		Reads: []LensRead{
+		Reads: []control.LensRead{
 			{RepoUID: work.UID(), Branch: "main"},
 			{RepoUID: core.UID()},
 		},
@@ -213,10 +215,10 @@ func TestNewBindingOfLens_PinnedAtExperimentWritesThere(t *testing.T) {
 	work := createRepo(t, m, "work")
 	branch := openExperimentOn(t, work, "lens-exp", work.AgentBranch())
 
-	lens, err := m.LensRegistry().Create(Lens{
+	lens, err := m.LensRegistry().Create(control.Lens{
 		Name:     "experimenting",
 		WriteUID: work.UID(),
-		Reads: []LensRead{
+		Reads: []control.LensRead{
 			{RepoUID: work.UID(), Branch: branch},
 			{RepoUID: core.UID()},
 		},
@@ -249,10 +251,10 @@ func TestNewBindingOfLens_PinnedAtForeignExperimentFallsBack(t *testing.T) {
 	}))
 	foreign := openExperimentOn(t, work, "theirs", "agent/other")
 
-	lens, err := m.LensRegistry().Create(Lens{
+	lens, err := m.LensRegistry().Create(control.Lens{
 		Name:     "stale-pin",
 		WriteUID: work.UID(),
-		Reads:    []LensRead{{RepoUID: work.UID(), Branch: foreign}},
+		Reads:    []control.LensRead{{RepoUID: work.UID(), Branch: foreign}},
 	})
 	require.NoError(t, err)
 

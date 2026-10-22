@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
@@ -123,7 +125,7 @@ func TestFleetReserved_RestoreRefused(t *testing.T) {
 	mountFleetByDoor(t, m, "fleet", seedFleetRemote(t, filepath.Join(dir, "fleet.git")))
 	// The generic archive is refused (below); the unguarded one is how a
 	// fleet repository from an older build ends up archived.
-	info, err := m.archive("fleet", ArchiveReason{Source: ArchiveBySystem, Reason: "test"})
+	info, err := m.archive("fleet", control.ArchiveReason{Source: control.ArchiveBySystem, Reason: "test"})
 	require.NoError(t, err)
 	_, err = m.Restore(info.ID, "")
 	require.ErrorIs(t, err, ErrFleetOntologyReserved)
@@ -173,9 +175,9 @@ func TestFleetReserved_ReadOnlyForAuthoredWrites(t *testing.T) {
 	require.False(t, fl.WritableBranch(fl.AgentBranch()), "its agent branch is not writable")
 	require.True(t, kb.WritableBranch(kb.AgentBranch()), "control: an ordinary repo's is")
 
-	_, err := m.CreateLens(context.Background(), Lens{Name: "via-fleet", WriteUID: fl.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "via-fleet", WriteUID: fl.UID()})
 	require.ErrorIs(t, err, ErrLensWriteFleet)
-	_, err = m.CreateLens(context.Background(), Lens{Name: "reads-fleet", WriteUID: kb.UID(), Reads: []LensRead{{RepoUID: fl.UID()}}})
+	_, err = m.CreateLens(context.Background(), control.Lens{Name: "reads-fleet", WriteUID: kb.UID(), Reads: []control.LensRead{{RepoUID: fl.UID()}}})
 	require.NoError(t, err, "a lens may read the fleet repository")
 }
 
@@ -500,7 +502,7 @@ func TestFleetReserved_RefusedRestoreOnTheMasterWritesNothing(t *testing.T) {
 	o, err := m.originOf(ri)
 	require.NoError(t, err)
 	origin := o.URL
-	info, err := m.archive("fleet", ArchiveReason{Source: ArchiveBySystem, Reason: "test"})
+	info, err := m.archive("fleet", control.ArchiveReason{Source: control.ArchiveBySystem, Reason: "test"})
 	require.NoError(t, err)
 	installFleetRoot(t, m, rootA) // this instance is now the fleet's master
 

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -29,7 +31,7 @@ func TestManager_Registry_OpenAfterStartAndUsable(t *testing.T) {
 	require.NoError(t, err)
 
 	core := makeLensRepo(t, m, "core")
-	stored, err := reg.Create(Lens{Name: "eng", WriteUID: core.UID(), CreatedAt: 1, UpdatedAt: 1})
+	stored, err := reg.Create(control.Lens{Name: "eng", WriteUID: core.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 	got, ok, err := reg.Get("eng")
 	require.NoError(t, err)
@@ -71,8 +73,8 @@ func cloneLensRepo(t *testing.T, m *Manager, src, dst string) *RepoInstance {
 	data, err := os.ReadFile(m.RepoPath(srcRI.UID()))
 	require.NoError(t, err)
 	uid := "uid-" + dst
-	require.NoError(t, m.Repos().Insert(RepoRecord{
-		UID: uid, Name: dst, State: StateActive, Profile: ProfileCode, CreatedAt: 1,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: uid, Name: dst, State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 1,
 	}))
 	dstPath := m.RepoPath(uid)
 	require.NoError(t, os.WriteFile(dstPath, data, 0o644))
@@ -99,8 +101,8 @@ func TestManager_ValidateLens_OK(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_ok", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "lens_ok", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 }
@@ -109,15 +111,15 @@ func TestManager_ValidateLens_UnknownRepo(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_unknownrepo", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: "uid-ghost"}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "lens_unknownrepo", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: "uid-ghost"}},
 	})
 	require.ErrorIs(t, err, ErrRepoNotFound)
 	require.ErrorContains(t, err, "uid-ghost")
 
 	// A member's NAME is not a uid: passing one must fail the same way, not
 	// silently resolve. This is the trap the re-keying introduces.
-	err = m.ValidateLens(context.Background(), Lens{
+	err = m.ValidateLens(context.Background(), control.Lens{
 		Name: "lens_unknownrepo", WriteUID: "alpha",
 	})
 	require.ErrorIs(t, err, ErrRepoNotFound)
@@ -128,8 +130,8 @@ func TestManager_ValidateLens_ReplicaRejected(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	clone := cloneLensRepo(t, m, "alpha", "alpha_clone")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_replica", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: clone.UID()}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "lens_replica", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: clone.UID()}},
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
 	// The error names both colliding members by uid, in sorted order.
@@ -143,8 +145,8 @@ func TestManager_ValidateLens_UnknownBranch(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_unknownbranch", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: "nope"}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "lens_unknownbranch", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID(), Branch: "nope"}},
 	})
 	require.ErrorIs(t, err, ErrLensBranchUnknown)
 	require.ErrorContains(t, err, "nope")
@@ -166,8 +168,8 @@ func TestManager_ValidateLens_LookupFailureNotUnknownBranch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // fail the branch lookup for a non-missing reason
 
-	err := m.ValidateLens(ctx, Lens{
-		Name: "lens_lookupfail", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: "main"}},
+	err := m.ValidateLens(ctx, control.Lens{
+		Name: "lens_lookupfail", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID(), Branch: "main"}},
 	})
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrLensBranchUnknown)
@@ -180,8 +182,8 @@ func TestManager_ValidateLens_EmptyBranchOK(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "lens_emptybranch", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: ""}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "lens_emptybranch", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID(), Branch: ""}},
 	})
 	require.NoError(t, err)
 }
@@ -192,8 +194,8 @@ func TestManager_CreateLens_PersistsAfterValidation(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	stored, err := m.CreateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	stored, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "eng", stored.Name)
@@ -210,8 +212,8 @@ func TestManager_CreateLens_RejectsInvalid(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	clone := cloneLensRepo(t, m, "alpha", "alpha_clone")
 
-	_, err := m.CreateLens(context.Background(), Lens{
-		Name: "bad", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: clone.UID()}},
+	_, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "bad", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: clone.UID()}},
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
 
@@ -227,8 +229,8 @@ func TestManager_CreateLens_RejectsEmptyWrite(t *testing.T) {
 
 	// An empty write repo must surface ErrLensWriteEmpty (→ 400), not the
 	// ErrRepoNotFound it used to hit via m.Get("") (→ 422) (A1).
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: ""})
-	require.ErrorIs(t, err, ErrLensWriteEmpty)
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: ""})
+	require.ErrorIs(t, err, control.ErrLensWriteEmpty)
 
 	_, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
@@ -269,7 +271,7 @@ func TestManager_ValidateLens_RejectsInvalidName(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 
-	err := m.ValidateLens(context.Background(), Lens{
+	err := m.ValidateLens(context.Background(), control.Lens{
 		Name: "Bad Name", WriteUID: alpha.UID(),
 	})
 	require.ErrorIs(t, err, ErrInvalidLensName)
@@ -280,7 +282,7 @@ func TestManager_ValidateLens_RejectsEmptyName(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 
-	err := m.ValidateLens(context.Background(), Lens{
+	err := m.ValidateLens(context.Background(), control.Lens{
 		Name: "", WriteUID: alpha.UID(),
 	})
 	require.ErrorIs(t, err, ErrInvalidLensName)
@@ -292,8 +294,8 @@ func TestManager_ValidateLens_RejectsRepoNameCollision(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "beta", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "beta", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
 	require.ErrorContains(t, err, "beta")
@@ -305,8 +307,8 @@ func TestManager_ValidateLens_AcceptsDistinctName(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	err := m.ValidateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	err := m.ValidateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 }
@@ -317,8 +319,8 @@ func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	_, err := m.CreateLens(context.Background(), Lens{
-		Name: "beta", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	_, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "beta", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.ErrorIs(t, err, ErrLensNameConflictsRepo)
 
@@ -333,7 +335,7 @@ func TestManager_CreateLens_RejectsRepoNameCollision(t *testing.T) {
 func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	err = m.CreatePreflight(context.Background(), CreateSpec{Name: "eng", Mode: "preset", OntologyPreset: "default"})
@@ -344,7 +346,7 @@ func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 func TestCreate_RejectsLensNameCollision(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	_, err = m.Create(context.Background(), CreateSpec{
@@ -360,7 +362,7 @@ func TestCreate_AcceptsNameMatchingNoLens(t *testing.T) {
 	t.Parallel()
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// "sales" collides with no lens, so creation still succeeds.
@@ -382,7 +384,7 @@ func TestRestore_RejectsNameTakenByLens(t *testing.T) {
 	// check lets this through because no active repo "work" remains.
 	info, err := m.Archive("work")
 	require.NoError(t, err)
-	_, err = m.LensRegistry().Create(Lens{Name: "work", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(control.Lens{Name: "work", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// Restoring "work" back to active must refuse the now-taken name.
@@ -403,11 +405,11 @@ func TestArchive_BlockedWhileLensReferencesRepo(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	_, err = m.LensRegistry().Create(Lens{Name: "eng", WriteUID: work.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: work.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	_, err = m.Archive("work")
-	require.ErrorIs(t, err, ErrRepoInUseByLens)
+	require.ErrorIs(t, err, control.ErrRepoInUseByLens)
 	require.NotNil(t, m.Get("work"), "repo must stay registered when the guard blocks")
 
 	// Deleting the lens unblocks archiving.
@@ -429,11 +431,11 @@ func TestPurge_BlockedWhileLensReferencesArchivedRepo(t *testing.T) {
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 	require.Equal(t, work.UID(), info.ID)
-	_, err = m.LensRegistry().Create(Lens{Name: "eng", WriteUID: work.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err = m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: work.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	err = m.Purge(info.ID)
-	require.ErrorIs(t, err, ErrRepoInUseByLens)
+	require.ErrorIs(t, err, control.ErrRepoInUseByLens)
 
 	archived, err := m.ListArchived()
 	require.NoError(t, err)
@@ -456,7 +458,7 @@ func TestLens_SurvivesMemberRename(t *testing.T) {
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
 
-	_, err := m.CreateLens(context.Background(), Lens{
+	_, err := m.CreateLens(context.Background(), control.Lens{
 		Name: "wide", WriteUID: ri.UID(), CreatedAt: 1, UpdatedAt: 1,
 	})
 	require.NoError(t, err)
@@ -483,10 +485,10 @@ func TestManager_ValidateLens_SubscriptionCannotBeWriteRepo(t *testing.T) {
 	require.NoError(t, err)
 	local := makeLensRepo(t, m, "local")
 
-	err = m.ValidateLens(context.Background(), Lens{Name: "bad", WriteUID: sub.UID(), Reads: []LensRead{{RepoUID: local.UID()}}})
+	err = m.ValidateLens(context.Background(), control.Lens{Name: "bad", WriteUID: sub.UID(), Reads: []control.LensRead{{RepoUID: local.UID()}}})
 	require.ErrorIs(t, err, ErrLensWriteSubscribed)
 
 	// As a READ mount it is fine, pinned by default to its read branch.
-	err = m.ValidateLens(context.Background(), Lens{Name: "good", WriteUID: local.UID(), Reads: []LensRead{{RepoUID: sub.UID()}}})
+	err = m.ValidateLens(context.Background(), control.Lens{Name: "good", WriteUID: local.UID(), Reads: []control.LensRead{{RepoUID: sub.UID()}}})
 	require.NoError(t, err)
 }

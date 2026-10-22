@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
@@ -141,7 +143,7 @@ func requireRegisteredRepoID(t *testing.T, m *Manager, uid, want string) {
 	t.Helper()
 	reg := m.Repos()
 	require.NotNil(t, reg)
-	active, err := reg.List(StateActive)
+	active, err := reg.List(control.StateActive)
 	require.NoError(t, err)
 	for _, rec := range active {
 		if rec.UID == uid {
@@ -160,7 +162,7 @@ func requireNoRepoNamed(t *testing.T, m *Manager, name string, wantDBs int) {
 	require.Nil(t, m.Get(name), "a refused create must leave no live repo")
 	reg := m.Repos()
 	require.NotNil(t, reg)
-	for _, state := range []RepoState{StateActive, StateArchived} {
+	for _, state := range []control.RepoState{control.StateActive, control.StateArchived} {
 		rows, err := reg.List(state)
 		require.NoError(t, err)
 		for _, rec := range rows {

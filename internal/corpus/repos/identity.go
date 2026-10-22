@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 
@@ -68,7 +70,7 @@ func HeldByAnotherActiveRepo(m *Manager, selfUID, repoID string) (string, error)
 	if reg == nil {
 		return "", nil
 	}
-	active, err := reg.List(StateActive)
+	active, err := reg.List(control.StateActive)
 	if err != nil {
 		return "", fmt.Errorf("list registered repos: %w", err)
 	}

@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 )
 
@@ -278,9 +280,9 @@ func TestMountExperiment_LensMountEntersTheExperiment(t *testing.T) {
 	h, m := experimentServer(t)
 	write := m.Get("jobA-repo")
 	read := m.Get("jobB-repo")
-	_, err := m.LensRegistry().Create(repos.Lens{
+	_, err := m.LensRegistry().Create(control.Lens{
 		Name: "demo-lens", WriteUID: write.UID(),
-		Reads: []repos.LensRead{{RepoUID: write.UID()}, {RepoUID: read.UID()}},
+		Reads: []control.LensRead{{RepoUID: write.UID()}, {RepoUID: read.UID()}},
 	})
 	require.NoError(t, err)
 	mount := "/lenses/demo-lens/mcp"

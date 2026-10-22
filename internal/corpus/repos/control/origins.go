@@ -8,7 +8,7 @@
 //
 // Origins shares the Registry's *sql.DB handle rather than opening its own, so
 // the foreign key into repos(uid) is enforced on the same connection.
-package repos
+package control
 
 import (
 	"database/sql"
@@ -55,7 +55,7 @@ type Origins struct {
 // opened and someone else migrated, so there is nothing here that can fail. It
 // used to return one when it created repo_origins itself. A caller that sees no
 // error must NOT read that as "the table is there" — that guarantee comes from
-// controlUp having run on db, which is why Manager.Start calls this only after
+// ControlUp having run on db, which is why Manager.Start calls this only after
 // the registry is up.
 func OpenOrigins(db *sql.DB, crypt *model.Crypt) *Origins {
 	return &Origins{db: db, crypt: crypt}

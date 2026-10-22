@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store/storetest"
@@ -88,11 +90,11 @@ func TestArchive_UnopenableRepoArchivesAndUnblocksReAdd(t *testing.T) {
 	_, err = m2.Create(ctx, CreateSpec{Name: "kb2", Mode: "clone", Origin: &OriginSpec{URL: url}}, nil)
 	require.Error(t, err, "an unavailable registration still holds its origin")
 
-	info, err := m2.ArchiveWith("kb1", ArchiveReason{Source: ArchiveByUser, Note: "file is corrupt"})
+	info, err := m2.ArchiveWith("kb1", control.ArchiveReason{Source: control.ArchiveByUser, Note: "file is corrupt"})
 	require.NoError(t, err)
 	require.Equal(t, uid, info.ID)
 	require.NotNil(t, info.Reason)
-	require.Equal(t, ArchiveByUser, info.Reason.Source)
+	require.Equal(t, control.ArchiveByUser, info.Reason.Source)
 	require.Equal(t, "file is corrupt", info.Reason.Note)
 	require.Contains(t, info.Reason.Condition, "unopenable: ")
 	require.Empty(t, m2.Unavailable(), "archived: no longer listed as unavailable")
@@ -148,7 +150,7 @@ func TestArchive_ConflictRepoArchivesAndPurges(t *testing.T) {
 
 	info, err := m2.Archive("b")
 	require.NoError(t, err)
-	require.Equal(t, ArchiveByUser, info.Reason.Source)
+	require.Equal(t, control.ArchiveByUser, info.Reason.Source)
 	require.Empty(t, info.Reason.Note)
 	require.Contains(t, info.Reason.Condition, "conflict: ")
 	require.Empty(t, m2.Unavailable())
@@ -202,7 +204,7 @@ func TestStart_SymlinkedOntologyIsArchivedBySystem(t *testing.T) {
 		_, err := storetest.RawSymlink(ctx, testService(t, ri), "agent/test", OntologyPath, craftedLinkOntology, "symlink the ontology")
 		require.NoError(t, err)
 	}
-	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: member.UID(), CreatedAt: 1, UpdatedAt: 1})
+	_, err := m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: member.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 	uid := linked.UID()
 	home := m.deps.Cfg.Home
@@ -223,7 +225,7 @@ func TestStart_SymlinkedOntologyIsArchivedBySystem(t *testing.T) {
 
 	a := archivedByUID(t, m2, uid)
 	require.NotNil(t, a.Reason)
-	require.Equal(t, ArchiveBySystem, a.Reason.Source)
+	require.Equal(t, control.ArchiveBySystem, a.Reason.Source)
 	require.Contains(t, a.Reason.Reason, OntologyPath+" is a symlink, and knomit does not follow symlinks")
 	require.Equal(t, "unopenable", a.Reason.Condition)
 
@@ -249,9 +251,9 @@ func TestArchiveReason_UserRestoreAndLegacy(t *testing.T) {
 	uid := createRepo(t, m, "work").UID()
 	legacyUID := createRepo(t, m, "old").UID()
 
-	info, err := m.ArchiveWith("work", ArchiveReason{Source: ArchiveByUser, Note: "done with it"})
+	info, err := m.ArchiveWith("work", control.ArchiveReason{Source: control.ArchiveByUser, Note: "done with it"})
 	require.NoError(t, err)
-	require.Equal(t, ArchiveReason{Source: ArchiveByUser, Note: "done with it"}, *info.Reason,
+	require.Equal(t, control.ArchiveReason{Source: control.ArchiveByUser, Note: "done with it"}, *info.Reason,
 		"a live repo records no condition")
 
 	_, err = m.Restore(uid, "")
@@ -263,7 +265,7 @@ func TestArchiveReason_UserRestoreAndLegacy(t *testing.T) {
 	// Legacy: archived the way every build before reasons did — a bare state
 	// flip, no reason row.
 	m.Remove("old")
-	require.NoError(t, m.Repos().SetState(legacyUID, StateArchived, 1))
+	require.NoError(t, m.Repos().SetState(legacyUID, control.StateArchived, 1))
 	got, err := m.GetArchived(legacyUID)
 	require.NoError(t, err)
 	require.Nil(t, got.Reason, "no reason recorded")
@@ -279,12 +281,12 @@ func TestDeleteRepo_RecordsSystemReason(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	createRepo(t, m, "gone")
-	info, err := m.archive("gone", ArchiveReason{Source: ArchiveBySystem, Reason: "create cancelled after it completed"})
+	info, err := m.archive("gone", control.ArchiveReason{Source: control.ArchiveBySystem, Reason: "create cancelled after it completed"})
 	require.NoError(t, err)
 	why, ok, err := m.Repos().ArchiveReasonOf(info.ID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, ArchiveBySystem, why.Source)
+	require.Equal(t, control.ArchiveBySystem, why.Source)
 	require.NoError(t, m.Purge(info.ID))
 
 	// And the whole of DeleteRepo leaves nothing behind.
@@ -301,12 +303,12 @@ func TestDeleteRepo_RecordsSystemReason(t *testing.T) {
 // reader understands.
 func TestRegistryArchive_RejectsUnknownSource(t *testing.T) {
 	t.Parallel()
-	reg, err := OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(t.TempDir(), "control.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
-	require.NoError(t, reg.Insert(RepoRecord{UID: "u", Name: "n", State: StateActive, Profile: ProfileCode, CreatedAt: 1}))
-	require.Error(t, reg.Archive("u", 2, ArchiveReason{Source: "robot"}))
+	require.NoError(t, reg.Insert(control.RepoRecord{UID: "u", Name: "n", State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 1}))
+	require.Error(t, reg.Archive("u", 2, control.ArchiveReason{Source: "robot"}))
 	rec, _, err := reg.Get("u")
 	require.NoError(t, err)
-	require.Equal(t, StateActive, rec.State, "a refused archive changes nothing")
+	require.Equal(t, control.StateActive, rec.State, "a refused archive changes nothing")
 }

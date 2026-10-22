@@ -8,6 +8,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 )
 
@@ -36,7 +38,7 @@ func lensRenameErrStatus(err error, oldName, newName string) (status int, title,
 	case errors.Is(err, repos.ErrLensNameConflictsRepo):
 		return http.StatusConflict, "Name already in use",
 			"a repo is already called \"" + newName + "\""
-	case errors.Is(err, repos.ErrLensExists):
+	case errors.Is(err, control.ErrLensExists):
 		return http.StatusConflict, "Name already in use",
 			"another lens is already called \"" + newName + "\""
 	case errors.Is(err, repos.ErrCreateInFlight):
@@ -47,7 +49,7 @@ func lensRenameErrStatus(err error, oldName, newName string) (status int, title,
 		// what is true for them, that the name is being taken.
 		return http.StatusConflict, "Name already in use",
 			"another operation is currently claiming \"" + newName + "\"; try again"
-	case errors.Is(err, repos.ErrLensNotFound):
+	case errors.Is(err, control.ErrLensNotFound):
 		// On the repo side, ErrRepoNotFound reaching renameErrStatus means
 		// RepoMiddleware already resolved oldName before the handler ran, so
 		// the only way to still see it is a concurrent change — hence 409,

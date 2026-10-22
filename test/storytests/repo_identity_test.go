@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/foundation/config"
 	"knomit/test/testenv"
 )
@@ -55,7 +57,7 @@ import (
 // Because this test cannot reach the unexported Manager.reg field the
 // brief's original draft used, "the registry has exactly one active row" is
 // asserted by reopening the same control.db through the exported
-// repos.OpenRegistry/Registry.List — the identical on-disk state, read
+// control.OpenRegistry/Registry.List — the identical on-disk state, read
 // through the production accessor instead of a private field.
 func TestCreate_MirrorCloneRejected(t *testing.T) {
 	sb := testenv.NewStoryboard(t)
@@ -133,10 +135,10 @@ func TestCreate_MirrorCloneRejected(t *testing.T) {
 	// The rejected create leaves nothing: no live repo, no registry row.
 	require.Nil(t, m.Get("beta"))
 
-	reg, err := repos.OpenRegistry(filepath.Join(home, "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(home, "control.db"))
 	require.NoError(t, err)
 	defer reg.Close()
-	active, err := reg.List(repos.StateActive)
+	active, err := reg.List(control.StateActive)
 	require.NoError(t, err)
 	require.Len(t, active, 1)
 	require.Equal(t, "alpha", active[0].Name)

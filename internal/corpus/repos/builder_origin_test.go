@@ -3,6 +3,8 @@ package repos
 import (
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +23,7 @@ func TestOpenStage_InjectedOriginDrivesUpstream(t *testing.T) {
 	uid := ri.UID()
 	require.NotEmpty(t, uid)
 
-	require.NoError(t, m.origins.Set(uid, Origin{URL: "https://x.test/kb.git", Branch: "master"}))
+	require.NoError(t, m.origins.Set(uid, control.Origin{URL: "https://x.test/kb.git", Branch: "master"}))
 
 	m.Remove("core")
 	origin, err := m.origins.Get(uid)

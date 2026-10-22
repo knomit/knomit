@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +17,7 @@ import (
 func TestResolveLensBinding_SetsBinding(t *testing.T) {
 	m := newLifecycleManager(t)
 	core := createRepo(t, m, testRepoName)
-	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: core.UID()})
+	_, err := m.LensRegistry().Create(control.Lens{Name: "eng", WriteUID: core.UID()})
 	require.NoError(t, err)
 
 	ctx, err := ResolveLensBinding(context.Background(), m, "eng")
@@ -47,7 +49,7 @@ func TestResolveLensBinding_UnavailableMember(t *testing.T) {
 	m := newLifecycleManager(t)
 	// Registered but never opened: a real row, no live instance.
 	ghost := seedMember(t, m.Repos(), "ghost")
-	_, err := m.LensRegistry().Create(Lens{Name: "broken", WriteUID: ghost})
+	_, err := m.LensRegistry().Create(control.Lens{Name: "broken", WriteUID: ghost})
 	require.NoError(t, err)
 
 	_, err = ResolveLensBinding(context.Background(), m, "broken")

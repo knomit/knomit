@@ -12,6 +12,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/clientsessions"
 )
@@ -426,7 +428,7 @@ func newBindingNames(m *repos.Manager) bindingNames {
 		}
 	})
 	if reg := m.Repos(); reg != nil {
-		for _, state := range []repos.RepoState{repos.StateActive, repos.StateArchived} {
+		for _, state := range []control.RepoState{control.StateActive, control.StateArchived} {
 			recs, err := reg.List(state)
 			if err != nil {
 				continue // a name we cannot read renders as a uid, not as a failure

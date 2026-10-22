@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -23,8 +25,6 @@ import (
 )
 
 var (
-	// ErrRepoExists is returned when a Create targets a name that is already active.
-	ErrRepoExists = errors.New("repo already exists")
 	// ErrInvalidName is returned when a repo name fails validation.
 	ErrInvalidName = errors.New("invalid repo name")
 	// ErrCreateInFlight is returned when a Create or Restore is already bringing
@@ -74,7 +74,7 @@ var (
 //
 // Callers must not already hold m.mu — sync.RWMutex is not reentrant. Archive
 // takes its snapshot before locking for exactly that reason.
-func (m *Manager) controlHandles() (*Registry, *Origins, error) {
+func (m *Manager) controlHandles() (*control.Registry, *control.Origins, error) {
 	m.mu.RLock()
 	reg, origins := m.reg, m.origins
 	m.mu.RUnlock()
@@ -343,7 +343,7 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		}
 	}
 	if m.Get(spec.Name) != nil {
-		return ErrRepoExists
+		return control.ErrRepoExists
 	}
 	if err := m.lensNameConflict(spec.Name); err != nil {
 		return err
@@ -574,7 +574,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 
 	if m.Get(spec.Name) != nil {
-		return nil, ErrRepoExists
+		return nil, control.ErrRepoExists
 	}
 	if err := m.lensNameConflict(spec.Name); err != nil {
 		return nil, err
@@ -585,7 +585,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 	defer release()
 	if m.Get(spec.Name) != nil { // re-check after reserving
-		return nil, ErrRepoExists
+		return nil, control.ErrRepoExists
 	}
 	if err := m.lensNameConflict(spec.Name); err != nil { // re-check after reserving
 		return nil, err
@@ -597,11 +597,11 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	// the file path below is fresh BY CONSTRUCTION — the old "leftover .db file"
 	// guard is unreachable now that a name can no longer collide with a file.
 	uid := ksuid.New().String()
-	rec := RepoRecord{
+	rec := control.RepoRecord{
 		UID:       uid,
 		Name:      spec.Name,
-		State:     StateActive,
-		Profile:   ProfileCode,
+		State:     control.StateActive,
+		Profile:   control.ProfileCode,
 		CreatedAt: time.Now().UTC().Unix(),
 	}
 	if ierr := reg.Insert(rec); ierr != nil {
@@ -729,7 +729,7 @@ func (m *Manager) populate(ctx context.Context, r *RepoInstance, spec MountSpec)
 		}
 		// The upstream the init RESOLVED, never the one requested: the local
 		// branch and the fetch refspecs were built from it.
-		if oerr := origins.Set(r.uid, Origin{
+		if oerr := origins.Set(r.uid, control.Origin{
 			URL:        cs.Origin.URL,
 			Branch:     upstream,
 			AuthMethod: cs.Origin.AuthMethod,
@@ -767,7 +767,7 @@ func (m *Manager) DeleteRepo(name, reason string) error {
 // deleteRepo is DeleteRepo without the fleet guard: the fleet code uses it
 // (leave, decommission and a refused join set the fleet state themselves).
 func (m *Manager) deleteRepo(name, reason string) error {
-	info, err := m.archive(name, ArchiveReason{Source: ArchiveBySystem, Reason: reason})
+	info, err := m.archive(name, control.ArchiveReason{Source: control.ArchiveBySystem, Reason: reason})
 	if err != nil {
 		return err
 	}
@@ -1389,9 +1389,9 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 // originModeFor maps a create mode onto the persisted origin mode.
 func originModeFor(createMode string) string {
 	if createMode == "subscribe" {
-		return OriginModeSubscribe
+		return control.OriginModeSubscribe
 	}
-	return OriginModeSync
+	return control.OriginModeSync
 }
 
 // initSubscribe handles "subscribe" mode: FOLLOW a remote branch that already
@@ -1574,7 +1574,7 @@ type ArchiveInfo struct {
 	ArchivedAt string `json:"archivedAt"`
 	// Reason is why it was archived; nil for a repo archived before reasons
 	// were recorded (shown as "no reason recorded").
-	Reason *ArchiveReason `json:"reason"`
+	Reason *control.ArchiveReason `json:"reason"`
 	// SizeBytes is the archived database's on-disk size. Archived databases are
 	// no longer visible under an obvious filename (there is no repos/archive/
 	// directory to `ls`), so this is how reclaimable disk stays visible.
@@ -1595,7 +1595,7 @@ type ArchiveInfo struct {
 //
 // Archive is a USER archive with no note; ArchiveWith records any reason.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
-	return m.ArchiveWith(name, ArchiveReason{Source: ArchiveByUser})
+	return m.ArchiveWith(name, control.ArchiveReason{Source: control.ArchiveByUser})
 }
 
 // ArchiveWith is Archive recording why.
@@ -1614,7 +1614,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 // loaded. Archiving it is therefore not refused, and the fleet state is left
 // as it was — accepted, because a fleet repository that will not open serves
 // no fleet either.
-func (m *Manager) ArchiveWith(name string, why ArchiveReason) (ArchiveInfo, error) {
+func (m *Manager) ArchiveWith(name string, why control.ArchiveReason) (ArchiveInfo, error) {
 	if err := m.guardFleetRemoval(name); err != nil {
 		return ArchiveInfo{}, err
 	}
@@ -1622,9 +1622,9 @@ func (m *Manager) ArchiveWith(name string, why ArchiveReason) (ArchiveInfo, erro
 }
 
 // archive is ArchiveWith without the fleet guard (see deleteRepo).
-func (m *Manager) archive(name string, why ArchiveReason) (ArchiveInfo, error) {
+func (m *Manager) archive(name string, why control.ArchiveReason) (ArchiveInfo, error) {
 	if why.Source == "" {
-		why.Source = ArchiveByUser
+		why.Source = control.ArchiveByUser
 	}
 	// Truncated to the second because that is the resolution the registry
 	// stores (SetState takes a Unix second) and therefore the resolution
@@ -1687,7 +1687,7 @@ func (m *Manager) archive(name string, why ArchiveReason) (ArchiveInfo, error) {
 		}
 		if len(refs) > 0 {
 			m.mu.Unlock()
-			return ArchiveInfo{}, fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, name, strings.Join(refs, ", "))
+			return ArchiveInfo{}, fmt.Errorf("%w: %q (lenses: %s)", control.ErrRepoInUseByLens, name, strings.Join(refs, ", "))
 		}
 	}
 	if serr := reg.Archive(uid, now.Unix(), why); serr != nil {
@@ -1745,7 +1745,7 @@ func (m *Manager) archive(name string, why ArchiveReason) (ArchiveInfo, error) {
 
 // archiveInfoOf renders one archived registry row: origin, timestamp, reason
 // (nil when none was recorded) and on-disk size.
-func (m *Manager) archiveInfoOf(reg *Registry, origins *Origins, rec RepoRecord) (ArchiveInfo, error) {
+func (m *Manager) archiveInfoOf(reg *control.Registry, origins *control.Origins, rec control.RepoRecord) (ArchiveInfo, error) {
 	var origin string
 	if org, oerr := origins.Get(rec.UID); oerr == nil && org != nil {
 		origin = org.URL
@@ -1783,7 +1783,7 @@ func (m *Manager) GetArchived(uid string) (ArchiveInfo, error) {
 	if err != nil {
 		return ArchiveInfo{}, err
 	}
-	if !ok || rec.State != StateArchived {
+	if !ok || rec.State != control.StateArchived {
 		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
 	}
 	return m.archiveInfoOf(reg, origins, rec)
@@ -1810,7 +1810,7 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	recs, err := reg.List(StateArchived)
+	recs, err := reg.List(control.StateArchived)
 	if err != nil {
 		return nil, err
 	}
@@ -1848,7 +1848,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !ok || rec.State != StateArchived {
+	if !ok || rec.State != control.StateArchived {
 		return nil, fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
 	}
 	target := rec.Name
@@ -1879,7 +1879,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	defer release()
 
 	if m.Get(target) != nil {
-		return nil, fmt.Errorf("%w: %q", ErrRepoExists, target)
+		return nil, fmt.Errorf("%w: %q", control.ErrRepoExists, target)
 	}
 	// An archived repo's name can be claimed by a lens while it sits archived,
 	// so restoring must refuse a name a lens now holds.
@@ -1892,7 +1892,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 			return nil, rerr // ErrRepoExists when an active repo holds the name
 		}
 	}
-	if serr := reg.SetState(uid, StateActive, 0); serr != nil {
+	if serr := reg.SetState(uid, control.StateActive, 0); serr != nil {
 		if target != rec.Name {
 			_ = reg.Rename(uid, rec.Name)
 		}
@@ -1909,12 +1909,12 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	// starts during the walk, for an origin-backed repo and a local one alike.
 	ri, merr := m.mountExisting(target, uid, origin, false)
 	if merr != nil {
-		_ = reg.SetState(uid, StateArchived, rec.ArchivedAt)
+		_ = reg.SetState(uid, control.StateArchived, rec.ArchivedAt)
 		if target != rec.Name {
 			_ = reg.Rename(uid, rec.Name)
 		}
 		var se *StageError
-		if errors.As(merr, &se) && errors.Is(se.Err, ErrRepoAlreadyRegistered) {
+		if errors.As(merr, &se) && errors.Is(se.Err, control.ErrRepoAlreadyRegistered) {
 			return nil, se.Err
 		}
 		return nil, fmt.Errorf("restore register: %w", merr)
@@ -1948,7 +1948,7 @@ func (m *Manager) Purge(uid string) error {
 	if err != nil {
 		return err
 	}
-	if !ok || rec.State != StateArchived {
+	if !ok || rec.State != control.StateArchived {
 		return fmt.Errorf("%w: %q", ErrArchiveNotFound, uid)
 	}
 	// RefsRepo is keyed by registry UID (see the comment in Archive), so this
@@ -1960,7 +1960,7 @@ func (m *Manager) Purge(uid string) error {
 			return fmt.Errorf("lens registry: %w", rerr)
 		}
 		if len(refs) > 0 {
-			return fmt.Errorf("%w: %q (lenses: %s)", ErrRepoInUseByLens, rec.Name, strings.Join(refs, ", "))
+			return fmt.Errorf("%w: %q (lenses: %s)", control.ErrRepoInUseByLens, rec.Name, strings.Join(refs, ", "))
 		}
 	}
 	if derr := reg.Delete(uid); derr != nil {
@@ -2065,7 +2065,7 @@ func (m *Manager) RenameRepo(oldName, newName string) error {
 	defer release()
 
 	if m.Get(newName) != nil {
-		return fmt.Errorf("%w: %q", ErrRepoExists, newName)
+		return fmt.Errorf("%w: %q", control.ErrRepoExists, newName)
 	}
 	// A lens may hold the name even though no repo does; repos and lenses share
 	// one namespace. Same guard Create and Restore run.
@@ -2230,7 +2230,7 @@ func (m *Manager) RenameLens(oldName, newName string) error {
 		return fmt.Errorf("lens registry: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrLensNotFound, oldName)
+		return fmt.Errorf("%w: %q", control.ErrLensNotFound, oldName)
 	}
 	if oldName == newName {
 		return nil
@@ -2272,7 +2272,7 @@ func (m *Manager) RenameLens(oldName, newName string) error {
 		// reports it rather than silently doing nothing, so a future caller that
 		// reaches LensRegistry.Rename outside this lock is told honestly, not
 		// left believing a rename happened when it didn't.
-		return fmt.Errorf("%w: %q", ErrLensNotFound, oldName)
+		return fmt.Errorf("%w: %q", control.ErrLensNotFound, oldName)
 	}
 
 	log.Info().Str("uid", l.UID).Str("from", oldName).Str("to", newName).Msg("renamed lens")

@@ -1,4 +1,4 @@
-package repos
+package control
 
 import (
 	"path/filepath"
@@ -174,7 +174,7 @@ func TestLensRegistry_CreateValidation(t *testing.T) {
 	other := seedMember(t, repoReg, "other")
 
 	_, err := r.Create(Lens{Name: "", WriteUID: w})
-	require.ErrorIs(t, err, ErrLensNameEmpty)
+	require.ErrorIs(t, err, errLensNameEmpty)
 
 	_, err = r.Create(Lens{Name: "x", WriteUID: ""})
 	require.ErrorIs(t, err, ErrLensWriteEmpty)

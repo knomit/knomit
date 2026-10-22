@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -55,7 +57,7 @@ func TestRenameRepo_RejectsNameHeldByAnotherActiveRepo(t *testing.T) {
 	bootNamedRepo(t, m, "alpha")
 	createRepo(t, m, "beta")
 
-	require.ErrorIs(t, m.RenameRepo("alpha", "beta"), ErrRepoExists)
+	require.ErrorIs(t, m.RenameRepo("alpha", "beta"), control.ErrRepoExists)
 	require.NotNil(t, m.Get("alpha"))
 	require.NotNil(t, m.Get("beta"))
 }
@@ -86,7 +88,7 @@ func TestRenameRepo_RejectsNameHeldByLens(t *testing.T) {
 	bootNamedRepo(t, m, "alpha")
 	writer := createRepo(t, m, "writer")
 
-	_, err := m.CreateLens(context.Background(), Lens{Name: "beta", WriteUID: writer.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "beta", WriteUID: writer.UID()})
 	require.NoError(t, err)
 
 	require.ErrorIs(t, m.RenameRepo("alpha", "beta"), ErrRepoNameConflictsLens)

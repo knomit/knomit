@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/foundation/config"
@@ -23,8 +25,8 @@ func TestRenameLens_RekeysWithoutDeleteAndRecreate(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	beta := makeLensRepo(t, m, "beta")
 
-	stored, err := m.CreateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	stored, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 
@@ -48,7 +50,7 @@ func TestRenameLens_RekeysWithoutDeleteAndRecreate(t *testing.T) {
 func TestRenameLens_RejectsInvalidName(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
 	require.ErrorIs(t, m.RenameLens("eng", "Has Capitals"), ErrInvalidLensName)
@@ -63,12 +65,12 @@ func TestRenameLens_RejectsNameHeldByAnotherLens(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
-	_, err = m.CreateLens(context.Background(), Lens{Name: "sales", WriteUID: alpha.UID()})
+	_, err = m.CreateLens(context.Background(), control.Lens{Name: "sales", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
-	require.ErrorIs(t, m.RenameLens("eng", "sales"), ErrLensExists)
+	require.ErrorIs(t, m.RenameLens("eng", "sales"), control.ErrLensExists)
 
 	_, ok, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
@@ -87,7 +89,7 @@ func TestRenameLens_RejectsNameHeldByRepo(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 	makeLensRepo(t, m, "gamma") // an active repo named "gamma"
 
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
 	require.ErrorIs(t, m.RenameLens("eng", "gamma"), ErrLensNameConflictsRepo)
@@ -108,14 +110,14 @@ func TestRenameLens_RejectsNameHeldByUnavailableRepo(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
 
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
 	// Simulate the state openRegistered leaves behind for a boot-time
 	// failure: an active registry row named "acme" that never became a live
 	// instance, so it is flagged unavailable rather than added to m.repos.
-	m.markUnavailable(RepoRecord{
-		UID: "acme-uid", Name: "acme", State: StateActive, Profile: ProfileCode, CreatedAt: 1,
+	m.markUnavailable(control.RepoRecord{
+		UID: "acme-uid", Name: "acme", State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 1,
 	}, "missing", "database file not found")
 
 	require.ErrorIs(t, m.RenameLens("eng", "acme"), ErrLensNameConflictsRepo)
@@ -138,7 +140,7 @@ func TestRenameLens_RejectsNameHeldByUnavailableRepo(t *testing.T) {
 func TestRenameLens_RejectsWhenTargetNameInFlight(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
 	release, err := m.reserveNameAndOrigin("engineering", "")
@@ -163,7 +165,7 @@ func TestRenameLens_RejectsWhenTargetNameInFlight(t *testing.T) {
 func TestRenameLens_ReleasesTheReservation(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
 	require.NoError(t, m.RenameLens("eng", "engineering"))
@@ -177,10 +179,10 @@ func TestRenameLens_ReleasesTheReservation(t *testing.T) {
 func TestRenameLens_UnknownLens(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	_, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
-	require.ErrorIs(t, m.RenameLens("ghost", "engineering"), ErrLensNotFound)
+	require.ErrorIs(t, m.RenameLens("ghost", "engineering"), control.ErrLensNotFound)
 }
 
 // Renaming to the current name is a successful no-op, not a self-collision
@@ -188,7 +190,7 @@ func TestRenameLens_UnknownLens(t *testing.T) {
 func TestRenameLens_SameNameIsNoOp(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha := makeLensRepo(t, m, "alpha")
-	stored, err := m.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	stored, err := m.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 
 	require.NoError(t, m.RenameLens("eng", "eng"))
@@ -222,7 +224,7 @@ func TestRenameLens_PersistsAcrossRestart(t *testing.T) {
 
 	m1 := boot()
 	alpha := makeLensRepo(t, m1, "alpha")
-	_, err := m1.CreateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
+	_, err := m1.CreateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
 	require.NoError(t, err)
 	require.NoError(t, m1.RenameLens("eng", "engineering"))
 	require.NoError(t, m1.Close())

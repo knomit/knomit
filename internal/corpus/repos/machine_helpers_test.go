@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +66,7 @@ func restartServe(t *testing.T, ri *RepoInstance) {
 
 // mountAs mounts the registered repo uid under name — what a boot does for a
 // registry row, Populate a no-op — and registers it in m's maps.
-func mountAs(t *testing.T, m *Manager, name, uid string, origin *Origin) *RepoInstance {
+func mountAs(t *testing.T, m *Manager, name, uid string, origin *control.Origin) *RepoInstance {
 	t.Helper()
 	ri, err := m.mountExisting(name, uid, origin, false)
 	require.NoError(t, err)

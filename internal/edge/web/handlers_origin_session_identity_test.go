@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
@@ -197,7 +199,7 @@ func TestConnect_DivergentAdoptUpdatesIdentity(t *testing.T) {
 
 	ri := createLocalRepo(t, m, "core")
 	uid := ri.UID()
-	if err := m.Repos().SetProfile(uid, repos.ProfileChat); err != nil {
+	if err := m.Repos().SetProfile(uid, control.ProfileChat); err != nil {
 		t.Fatalf("set profile: %v", err)
 	}
 
@@ -247,9 +249,9 @@ func TestConnect_DivergentAdoptUpdatesIdentity(t *testing.T) {
 	if after.RepoID != remoteRoot {
 		t.Errorf("repo_id after adopt: got %q, want the remote's root %q", after.RepoID, remoteRoot)
 	}
-	if after.Profile != repos.ProfileChat {
+	if after.Profile != control.ProfileChat {
 		t.Errorf("profile after adopt: got %q, want %q — the profile is keyed by uid and must survive an identity change",
-			after.Profile, repos.ProfileChat)
+			after.Profile, control.ProfileChat)
 	}
 
 	// The connection the session negotiated lands in control.db, not in the

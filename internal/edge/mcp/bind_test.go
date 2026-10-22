@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/clientsessions"
@@ -38,10 +40,10 @@ func bindFixture(t *testing.T) (*repos.Manager, *clientsessions.Store, *mcpserve
 	newBindRepo(t, m, "beta", false)
 	newBindRepo(t, m, "followed", true)
 
-	_, err := m.CreateLens(context.Background(), repos.Lens{
+	_, err := m.CreateLens(context.Background(), control.Lens{
 		Name:     "eng",
 		WriteUID: "uid-alpha",
-		Reads:    []repos.LensRead{{RepoUID: "uid-beta"}},
+		Reads:    []control.LensRead{{RepoUID: "uid-beta"}},
 	})
 	require.NoError(t, err)
 
@@ -64,8 +66,8 @@ func newBindRepo(t *testing.T, m *repos.Manager, name string, subscribed bool) *
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, branch))
 
 	uid := "uid-" + name
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: uid, Name: name, State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: uid, Name: name, State: control.StateActive, Profile: "code", CreatedAt: 1,
 	}))
 	cfg := repos.TestInstanceConfig{
 		Name: name, UID: uid, Svc: svc,

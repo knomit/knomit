@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/foundation/clientsessions"
 )
 
@@ -272,8 +274,8 @@ func TestGate_ReposReportsUnresolvableWithKindAndName(t *testing.T) {
 	ctx := repos.WithSessionScoped(context.Background())
 
 	// A repo that is registered but has no live instance.
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: "uid-departed", Name: "departed", State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: "uid-departed", Name: "departed", State: control.StateActive, Profile: "code", CreatedAt: 1,
 	}))
 	handle, err := sessionsNewHandle()
 	require.NoError(t, err)
