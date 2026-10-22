@@ -5,7 +5,9 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -36,30 +38,37 @@ var webInterfaceAllowlist = map[string]string{
 }
 
 // declaredInterfaces parses files (name -> nil to read from disk, or the source
-// text) and returns the name of every interface type declared at any scope
-// (package level or inside a function), with the file it is in. A type
-// declaration whose type is an interface literal is what counts: a generic
-// constraint declared as `type C interface{ ~int }` is one too.
-func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any) map[string]string {
+// text) and returns (named) every type declaration whose type is an interface,
+// at any scope, keyed by type name with its file, and (inline) every other
+// interface literal with a non-empty method list ("file:line"): a struct
+// field, parameter, result, variable or alias target. An empty interface{} is
+// not a seam and is never reported inline.
+func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any) (named map[string]string, inline []string) {
 	t.Helper()
-	out := map[string]string{}
+	named = map[string]string{}
 	for name, src := range files {
 		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
+		declared := map[*ast.InterfaceType]bool{}
 		ast.Inspect(f, func(n ast.Node) bool {
-			ts, ok := n.(*ast.TypeSpec)
-			if !ok {
-				return true
-			}
-			if _, ok := ts.Type.(*ast.InterfaceType); ok {
-				out[ts.Name.Name] = name
+			switch x := n.(type) {
+			case *ast.TypeSpec:
+				if it, ok := x.Type.(*ast.InterfaceType); ok {
+					named[x.Name.Name] = name
+					declared[it] = true
+				}
+			case *ast.InterfaceType:
+				if !declared[x] && x.Methods != nil && len(x.Methods.List) > 0 {
+					inline = append(inline, name+":"+strconv.Itoa(fset.Position(x.Pos()).Line))
+				}
 			}
 			return true
 		})
 	}
-	return out
+	sort.Strings(inline)
+	return named, inline
 }
 
 // TestWeb_DeclaresNoInterfacesBeyondTheAllowlist (guard W): internal/edge/web
@@ -70,9 +79,12 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 // IgnoredGoFiles); test files are not (a test helper interface is not a seam
 // of the package).
 //
-// Known gap: an interface type that is not declared with its own type
-// declaration (an inline `interface{ M() }` in a signature or a type
-// assertion) is not matched.
+// An inline interface literal with methods anywhere else (struct field,
+// parameter, result, variable, alias target, type assertion) is flagged too;
+// the empty interface{} / any is allowed.
+//
+// Known gap: a function-typed seam (the former branchesListerFunc shape) is
+// not an interface and is not detected.
 //
 // Non-vacuity: the file list comes from go list, not from a count here; web
 // must be listed with files, and every one of them must have been parsed. The
@@ -93,7 +105,7 @@ func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 		files[filepath.Join(web.Dir, f)] = nil
 	}
 	fset := token.NewFileSet()
-	found := declaredInterfaces(t, fset, files)
+	found, inline := declaredInterfaces(t, fset, files)
 
 	var bad []string
 	for name, file := range found {
@@ -105,6 +117,9 @@ func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 		if _, ok := found[name]; !ok {
 			bad = append(bad, name+": stale webInterfaceAllowlist entry; the interface is gone, delete the entry")
 		}
+	}
+	for _, at := range inline {
+		bad = append(bad, at+": inline interface literal with methods (struct field, parameter, result, var or alias); take the concrete type")
 	}
 	sort.Strings(bad)
 	for _, b := range bad {
@@ -122,26 +137,30 @@ type Provider interface{ Get() string }
 type alias = interface{ M() }
 func f() { type local interface{ L() } }
 type Constraint interface{ ~int | ~string }
+type S struct{ I interface{ M() } }
+func g(p interface{ P() }) {}
+func h() (r interface{ R() }) { return }
+var v interface{ V() }
 `,
 		"clean.go": `package web
-type S struct{ I interface{ M() } }
 type F func() error
-type A = S
-var _ interface{ M() }
+type B = S
+type E struct{ X interface{}; Y any }
+func k(a interface{}) {}
 `,
 	}
-	got := declaredInterfaces(t, token.NewFileSet(), src)
+	named, inline := declaredInterfaces(t, token.NewFileSet(), src)
 	for _, want := range []string{"Provider", "alias", "local", "Constraint"} {
-		if got[want] != "flagged.go" {
-			t.Errorf("%s not flagged (got %v)", want, got)
+		if named[want] != "flagged.go" {
+			t.Errorf("%s not flagged as named (got %v)", want, named)
 		}
 	}
-	for _, name := range []string{"S", "F", "A"} {
-		if _, bad := got[name]; bad {
-			t.Errorf("%s flagged but is not an interface type declaration", name)
-		}
+	if len(named) != 4 {
+		t.Errorf("named %v, want exactly the four interface declarations", named)
 	}
-	if len(got) != 4 {
-		t.Errorf("flagged %v, want exactly the four interface declarations", got)
+	// struct field, parameter, result, var: the four inline literals.
+	want := []string{"flagged.go:6", "flagged.go:7", "flagged.go:8", "flagged.go:9"}
+	if !slices.Equal(inline, want) {
+		t.Errorf("inline %v, want %v", inline, want)
 	}
 }

@@ -1,8 +1,8 @@
 package web
 
 // storeProviders bundles every injectable data-access seam the API router
-// wires into handlers. Before this existed the Server carried fourteen
-// separate unexported fields and NewAPIRouter carried fourteen near-identical
+// wires into handlers. Before this existed the Server carried separate
+// unexported fields and NewAPIRouter carried near-identical
 // nil-check-then-default blocks interleaved with route registrations — the
 // wiring was scattered through 300 lines of routing and two of the locals
 // collided on name (sp/sp2).
@@ -14,7 +14,7 @@ package web
 // NewAPIRouter — deliberately NOT a runtime service locator. Handlers keep
 // their narrow constructor signatures so each one's true dependency set stays
 // visible at its registration site; passing the bundle around would make
-// every handler nominally depend on all fourteen seams.
+// every handler nominally depend on every seam.
 type storeProviders struct {
 	factReader      FactReader
 	factWriter      FactWriter
