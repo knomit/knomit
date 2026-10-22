@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"os"
 	"strings"
 	"sync"

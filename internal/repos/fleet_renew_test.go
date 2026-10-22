@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // mainLeaf is id's leaf on the forge's main.

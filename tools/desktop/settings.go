@@ -16,7 +16,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/rs/zerolog"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/tools/desktop/internal/autostart"
 	"knomit/tools/desktop/internal/tomledit"
 )
@@ -109,7 +109,7 @@ func scopeOf(http bool, host string) string {
 // dialog edits: where each one lives in the file, how to read it out of
 // Settings, and which environment variable overrides it.
 //
-// Config layers defaults → knomit.toml → env (internal/config/config.go
+// Config layers defaults → knomit.toml → env (internal/foundation/config/config.go
 // :263-306), so an exported variable wins over anything this dialog writes.
 //
 // ONE table, deliberately. envOverrides reports overrides from it and
@@ -170,7 +170,7 @@ func envOverrides(getenv func(string) string) []string {
 }
 
 // validateSettings rejects anything that would fail config.Validate on the next
-// launch (internal/config/config.go:382-391), plus the empty values config
+// launch (internal/foundation/config/config.go:382-391), plus the empty values config
 // tolerates but a form field must not produce. The dialog must never be able to
 // write a file that stops knomit from starting.
 func validateSettings(s Settings) error {

@@ -13,12 +13,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // The classes of a refused fleet sync, from the recorded error's text and
 // this instance's own standing. The texts are the ones the transport really
-// records (pinned in internal/pki's TestGitTransport_RevokedClient... and
+// records (pinned in internal/foundation/pki's TestGitTransport_RevokedClient... and
 // ...OtherRootServerIsRefused).
 // SABOTAGE: classify every ErrRefusedByPeer as revoked (drop the standing
 // check) -> the expired row is red; drop the bad_certificate condition -> the

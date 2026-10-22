@@ -8,7 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 )
 
@@ -37,7 +37,7 @@ import (
 // purged falls back to the URL's own branch and the request is MARKED, so the
 // result can say so. Failing instead would strand a session over someone
 // else's action.
-func MountExperimentMiddleware(m *repos.Manager, sessions *sessions.Store) func(http.Handler) http.Handler {
+func MountExperimentMiddleware(m *repos.Manager, sessions *clientsessions.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := applyMountExperiment(r.Context(), m, sessions, r.Header.Get("Mcp-Session-Id"))
@@ -48,7 +48,7 @@ func MountExperimentMiddleware(m *repos.Manager, sessions *sessions.Store) func(
 
 // applyMountExperiment is the middleware's body, factored out so tests can
 // drive it without an HTTP request.
-func applyMountExperiment(ctx context.Context, m *repos.Manager, store_ *sessions.Store, sessionID string) context.Context {
+func applyMountExperiment(ctx context.Context, m *repos.Manager, store_ *clientsessions.Store, sessionID string) context.Context {
 	if m == nil || store_ == nil {
 		return ctx
 	}

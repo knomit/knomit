@@ -32,8 +32,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 	"knomit/internal/web/hal"
 )
 

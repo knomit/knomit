@@ -127,7 +127,7 @@ func TestListenersApplyHasOnlyTheSignalLoopAsCaller(t *testing.T) {
 // running server, so it too has exactly two front ends: the operator's
 // `knomit reload` and the desktop Settings window's SaveSettings binding. No
 // route, no handler package, no other binding may ask for one. The match is on
-// the selector name in files importing internal/serveraddr (plus the package's
+// the selector name in files importing internal/foundation/serveraddr (plus the package's
 // own files), with the equality as the positive control: a rename or a third
 // caller changes the list.
 func TestReloadRequestHasOnlyTheCLIAndTheSettingsBindingAsCallers(t *testing.T) {
@@ -141,10 +141,10 @@ func TestReloadRequestHasOnlyTheCLIAndTheSettingsBindingAsCallers(t *testing.T) 
 		if err != nil {
 			t.Fatalf("parse %s: %v", f, err)
 		}
-		inPkg := strings.HasPrefix(rel, "internal/serveraddr/")
+		inPkg := strings.HasPrefix(rel, "internal/foundation/serveraddr/")
 		imports := false
 		for _, imp := range file.Imports {
-			if p, _ := strconv.Unquote(imp.Path.Value); p == "knomit/internal/serveraddr" {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == "knomit/internal/foundation/serveraddr" {
 				imports = true
 			}
 		}
@@ -175,7 +175,7 @@ func TestReloadRequestHasOnlyTheCLIAndTheSettingsBindingAsCallers(t *testing.T) 
 	}
 	slices.Sort(callers)
 	callers = slices.Compact(callers)
-	want := []string{"cmd/reload.go", "internal/serveraddr/reload.go", "tools/desktop/native.go"}
+	want := []string{"cmd/reload.go", "internal/foundation/serveraddr/reload.go", "tools/desktop/native.go"}
 	if !slices.Equal(callers, want) {
 		t.Fatalf("RequestReload/SignalReload are called from %v; only %v may: listener config reaches a running server through `knomit reload` and the Settings binding alone", callers, want)
 	}

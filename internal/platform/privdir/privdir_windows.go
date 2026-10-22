@@ -207,7 +207,7 @@ func verify(path string) error {
 
 // ownSID is the current process's user SID, as a string.
 //
-// It duplicates internal/auth's ownSID (local_windows.go) on purpose: this
+// It duplicates internal/foundation/auth's ownSID (local_windows.go) on purpose: this
 // package is in the platform tier, which may not import knomit packages
 // (test/archtest TestPlatformKnowsNothingAboutKnomit), and the twin is three
 // lines of OS call.

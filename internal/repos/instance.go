@@ -15,8 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 )
 

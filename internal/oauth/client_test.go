@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // --- redirect matching -----------------------------------------------------

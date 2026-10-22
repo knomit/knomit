@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/testsupport/testsigner"
 )

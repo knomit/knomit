@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // fleetCmd is `knomit fleet`: a THIN client of the running server's

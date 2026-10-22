@@ -16,9 +16,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"knomit/internal/config"
-	"knomit/internal/pki"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"

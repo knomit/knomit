@@ -19,8 +19,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 	"knomit/internal/oauth"
 	"knomit/internal/store/migrate"
 )

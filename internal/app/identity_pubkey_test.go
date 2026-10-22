@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // PublicKeyLine is the line an operator passes to the master's enroll

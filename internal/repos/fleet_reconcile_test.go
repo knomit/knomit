@@ -16,9 +16,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/version"
 	"knomit/internal/testsupport/testsigner"
 )

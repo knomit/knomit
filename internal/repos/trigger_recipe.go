@@ -61,8 +61,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/serveraddr"
-	"knomit/internal/serverkey"
+	"knomit/internal/foundation/serveraddr"
+	"knomit/internal/foundation/serverkey"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 )

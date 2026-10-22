@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // The 8 hex a first boot builds into the agent id and branch are the prefix of

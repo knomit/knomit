@@ -2,9 +2,9 @@
 
 package paths
 
-import "knomit/internal/config"
+import "knomit/internal/foundation/config"
 
-// stateDir is %LOCALAPPDATA%\knomit, resolved by internal/config.
+// stateDir is %LOCALAPPDATA%\knomit, resolved by internal/foundation/config.
 //
 // It is NOT spelled here. tools/bridge needs the same directory to find
 // server.json, and it cannot import this package — tools/desktop/internal/ is

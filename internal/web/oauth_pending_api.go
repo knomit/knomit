@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/oauth"
 	"knomit/internal/web/hal"
 )

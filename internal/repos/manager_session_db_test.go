@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // TestStart_skipsSessionSidecarDB is a regression test for the boot-time

@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"

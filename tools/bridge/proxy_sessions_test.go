@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/platform/version"
 )
 
@@ -24,7 +24,7 @@ func TestRunProxy_HeadersOnEveryRequestAndDeleteOnEOF(t *testing.T) {
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		reqs = append(reqs, seen{r.Method, r.Header.Get("Mcp-Session-Id"), r.Header.Get(sessions.ClientHeader), r.Header.Get("User-Agent")})
+		reqs = append(reqs, seen{r.Method, r.Header.Get("Mcp-Session-Id"), r.Header.Get(clientsessions.ClientHeader), r.Header.Get("User-Agent")})
 		mu.Unlock()
 		if r.Method == http.MethodDelete {
 			w.WriteHeader(http.StatusOK)
@@ -59,7 +59,7 @@ func TestRunProxy_HeadersOnEveryRequestAndDeleteOnEOF(t *testing.T) {
 		if r.ua != "knomit-bridge/"+version.String() || r.client == "" {
 			t.Fatalf("req %d missing identity headers: %+v", i, r)
 		}
-		if got, err := sessions.ParseClientHeader(r.client); err != nil || got.InstanceID != ident.InstanceID {
+		if got, err := clientsessions.ParseClientHeader(r.client); err != nil || got.InstanceID != ident.InstanceID {
 			t.Fatalf("req %d header: %+v err=%v", i, got, err)
 		}
 	}

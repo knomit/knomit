@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web"

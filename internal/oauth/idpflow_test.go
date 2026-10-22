@@ -22,8 +22,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 	"knomit/internal/oauth/idp"
 	"knomit/internal/oauth/idp/idptest"
 	"knomit/internal/store/migrate"

@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/web/hal"
 )
 

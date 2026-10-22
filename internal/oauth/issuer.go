@@ -18,7 +18,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 var (

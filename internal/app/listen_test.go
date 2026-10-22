@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // The PIN on serve's half of the silent-lockout guard (knomit#245 review).
 //
-// The guard itself is tested in internal/auth; what could not be reached from
+// The guard itself is tested in internal/foundation/auth; what could not be reached from
 // there is whether SERVE actually consults [auth].require. It did not used to
 // be reachable from anywhere: the value was one argument among several at the
 // call site, and mutating it to a constant left every test in the tree green.
@@ -20,7 +20,7 @@ import (
 // cfg.Socket == "" is the cheapest way to reach "no listener was bound":
 // ListenLocal answers (nil, noop, nil) for it on every platform, no fixture
 // required. What happens when one IS bound, or when the path is held by
-// another process, is covered against the real transport in internal/auth
+// another process, is covered against the real transport in internal/foundation/auth
 // (TestRequireLocalListener, TestListenLocal_ForeignOwnerIsNotStolenAndMapsToInUse)
 // and in tools/desktop (TestBootServer_PipeHeldWithRequireAuthFailsTheBoot).
 // A full RunE test is not the cheap option here: serve reaches this point only

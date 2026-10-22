@@ -7,8 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 )
 
@@ -17,7 +17,7 @@ import (
 // process never minted, which the default mcp-go manager accepts after a
 // restart — so it, and not the initialize hook, is the recording point.
 // Errors are logged and dropped; store == nil is a no-op.
-func recordClientSession(r *http.Request, store *sessions.Store) {
+func recordClientSession(r *http.Request, store *clientsessions.Store) {
 	if store == nil {
 		return
 	}
@@ -44,10 +44,10 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	// Reading it twice could disagree, because a task-augmented call may still
 	// be writing into the recorder while this runs.
 	resolved := repos.ResolvedBindingFromContext(r.Context())
-	obs := sessions.Observation{
+	obs := clientsessions.Observation{
 		SessionID: sid,
 		Binding:   resolved.Pin,
-		RemoteIP:  sessions.RemoteIP(r.RemoteAddr),
+		RemoteIP:  clientsessions.RemoteIP(r.RemoteAddr),
 		UserAgent: r.Header.Get("User-Agent"),
 		Now:       now,
 	}
@@ -57,14 +57,14 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	if p, ok := auth.FromContext(r.Context()); ok {
 		obs.Principal = p.String()
 	}
-	if pid, ok := sessions.VerifiedPIDFromContext(r.Context()); ok {
+	if pid, ok := clientsessions.VerifiedPIDFromContext(r.Context()); ok {
 		obs.VerifiedPID = pid
 	}
-	if raw := r.Header.Get(sessions.ClientHeader); raw != "" {
-		info, err := sessions.ParseClientHeader(raw)
+	if raw := r.Header.Get(clientsessions.ClientHeader); raw != "" {
+		info, err := clientsessions.ParseClientHeader(raw)
 		if err != nil {
 			log.Debug().Err(err).Str("mcp_session", sid).
-				Msg("client sessions: unparseable " + sessions.ClientHeader + "; recording as http")
+				Msg("client sessions: unparseable " + clientsessions.ClientHeader + "; recording as http")
 		} else {
 			obs.Client = &info
 		}

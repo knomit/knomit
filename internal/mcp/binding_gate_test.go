@@ -9,7 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 )
 
@@ -338,7 +338,7 @@ func TestToolRegistrations_GateAndSchemaAgree(t *testing.T) {
 
 // sessionsNewHandle mints a handle the way knomit_bind does, for the tests that
 // need to plant one pointing somewhere knomit_bind would never have bound.
-func sessionsNewHandle() (string, error) { return sessions.NewBindingHandle() }
+func sessionsNewHandle() (string, error) { return clientsessions.NewBindingHandle() }
 
 // A handle of the wrong TYPE is named as such rather than folded into "you
 // forgot it" — a caller that sent a number would read that advice as already

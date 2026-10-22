@@ -43,7 +43,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/mcp"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"

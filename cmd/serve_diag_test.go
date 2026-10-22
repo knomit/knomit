@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // Off unless [runtime].addr is set: no listener, no error.

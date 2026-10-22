@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/testsupport/testsigner"

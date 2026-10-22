@@ -45,13 +45,6 @@ var layerExempt = []string{"testsupport"}
 // become a path-prefix rule and a package that is in neither place is reported
 // as unmapped. Do not add entries for new packages: put them in a layer dir.
 var legacyLayers = map[string]int{
-	// foundation
-	"config":          layerFoundation,
-	"auth":            layerFoundation,
-	"pki":             layerFoundation, // includes pki/pkitest
-	"serverkey":       layerFoundation,
-	"serveraddr":      layerFoundation,
-	"client/sessions": layerFoundation,
 	// engine
 	"store":      layerEngine, // includes store/git, store/migrate, store/nosignertest
 	"embeddings": layerEngine,
@@ -80,9 +73,9 @@ var sameLayerEdges = map[string]bool{
 	"domain/okf -> domain/fact":        true,
 	"domain/okf/source -> domain/fact": true,
 	// foundation
-	"config -> auth":       true,
-	"serveraddr -> auth":   true,
-	"serveraddr -> config": true,
+	"foundation/config -> foundation/auth":       true,
+	"foundation/serveraddr -> foundation/auth":   true,
+	"foundation/serveraddr -> foundation/config": true,
 	// engine
 	"store/git -> store/migrate": true,
 	// The ctx-carried transaction (ctxKeyTx, Conn, BeginTxIfNeeded) is defined
@@ -397,7 +390,7 @@ func TestLayers(t *testing.T) {
 	}
 	// Sentinels: one real package per layer, so a wrong pattern cannot pass vacuously.
 	sentinels := map[int]string{
-		layerPlatform: "platform/logging", layerDomain: "domain/fact", layerFoundation: "config",
+		layerPlatform: "platform/logging", layerDomain: "domain/fact", layerFoundation: "foundation/config",
 		layerEngine: "store", layerCorpus: "repos", layerEdge: "web", layerApp: "app",
 	}
 	seen := map[string]bool{}

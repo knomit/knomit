@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/pki"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 )
 

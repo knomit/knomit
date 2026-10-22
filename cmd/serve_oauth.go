@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"knomit/internal/app"
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // openOAuthServer opens the OAuth listener (F19 phase 3a, R1) when [oauth]

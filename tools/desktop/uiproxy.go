@@ -16,7 +16,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // The webview reaches the knomit API through Wails' asset handler, never

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // isolateServerEnv empties every input ResolveServer reads — KNOMIT_SERVER and

@@ -21,9 +21,9 @@ import (
 	"github.com/ysmood/goob"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 )
 
@@ -87,7 +87,7 @@ type Manager struct {
 	sessionCfg sessionReaperConfig
 
 	// serverAddr is this server's OWN address in KNOMIT_SERVER's spelling
-	// (internal/serveraddr), set by whoever bound the listeners
+	// (internal/foundation/serveraddr), set by whoever bound the listeners
 	// (SetServerAddress). A recipe's `exec` child gets it as KNOMIT_SERVER, so
 	// the `kb` it starts reaches THIS server. Nil until set.
 	serverAddr atomic.Pointer[string]
@@ -128,7 +128,7 @@ type Manager struct {
 	// clientSessions records every MCP client session (fourth control.db
 	// tenant, borrowing reg's handle). Opened by Start, nil before; nil-safe
 	// callers skip recording.
-	clientSessions *sessions.Store
+	clientSessions *clientsessions.Store
 
 	// byUID indexes the same instances as repos, keyed by registry uid. Lens
 	// membership resolves through it: lenses reference uids, not names, so a
@@ -667,7 +667,7 @@ func (m *Manager) ServerAddress() string {
 }
 
 // ClientSessions returns the client-session store, or nil before Start.
-func (m *Manager) ClientSessions() *sessions.Store {
+func (m *Manager) ClientSessions() *clientsessions.Store {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.clientSessions
@@ -675,7 +675,7 @@ func (m *Manager) ClientSessions() *sessions.Store {
 
 // SetClientSessions installs the store. Start calls it; tests call it to
 // inject a store without a control.db home.
-func (m *Manager) SetClientSessions(s *sessions.Store) {
+func (m *Manager) SetClientSessions(s *clientsessions.Store) {
 	m.mu.Lock()
 	m.clientSessions = s
 	m.mu.Unlock()
@@ -1022,7 +1022,7 @@ func (m *Manager) Start() error {
 	// Client-session registry: fourth tenant of control.db, borrowing the same
 	// handle. A malformed [session] client_* block surfaces at boot, like the
 	// reaper's.
-	policy, err := sessions.ParsePolicy(m.deps.Cfg.Session.ClientDeadAfter,
+	policy, err := clientsessions.ParsePolicy(m.deps.Cfg.Session.ClientDeadAfter,
 		m.deps.Cfg.Session.ClientHiddenAfter, m.deps.Cfg.Session.ClientRetention)
 	if err != nil {
 		return fmt.Errorf("client session policy: %w", err)
@@ -1034,7 +1034,7 @@ func (m *Manager) Start() error {
 	// subscribed to GET /api/v1/sessions/events, and its lifetime is the
 	// server's. A Store built without it still writes — that is what every
 	// test in the sessions package relies on.
-	m.SetClientSessions(sessions.New(repoReg.DB(), policy).WithHub(m.ctx))
+	m.SetClientSessions(clientsessions.New(repoReg.DB(), policy).WithHub(m.ctx))
 
 	records, err := repoReg.List(StateActive)
 	if err != nil {

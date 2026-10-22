@@ -2,7 +2,7 @@
 
 package paths
 
-import "knomit/internal/config"
+import "knomit/internal/foundation/config"
 
 // stateDir has no answer off the three desktop platforms; config says so.
 func stateDir() (string, error) { return config.StateDir() }

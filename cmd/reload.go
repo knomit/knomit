@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // reloadCmd is the CLI trigger for a running server's reload: the same thing

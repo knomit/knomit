@@ -14,10 +14,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/pki"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
 )

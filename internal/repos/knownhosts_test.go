@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gossh "golang.org/x/crypto/ssh"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // testHostKey returns a fresh ed25519 ssh.PublicKey.

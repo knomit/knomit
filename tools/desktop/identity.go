@@ -12,8 +12,8 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"knomit/internal/config"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 )
 
 // The Settings window's "Fleet identity" section (knomit#256): it shows this

@@ -18,7 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // testFleetPKI is a fleet root that issues leaves and signs CRLs in memory,

@@ -5,7 +5,7 @@
 // model's calibrated cutoffs and the shipped default model id — but it does NOT
 // import its parent, and must never start. The parent carries cgo (ONNX via
 // import "C"), so an import edge from here upward would silently link the ONNX
-// runtime into internal/store, internal/config and every one of their
+// runtime into internal/store, internal/foundation/config and every one of their
 // consumers. Being importable by the store, the config loader and the synthesis
 // pipelines without dragging in cgo is the entire reason this package exists.
 //

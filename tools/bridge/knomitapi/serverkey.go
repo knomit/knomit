@@ -1,11 +1,11 @@
 package knomitapi
 
-import "knomit/internal/serverkey"
+import "knomit/internal/foundation/serverkey"
 
-// The MCP-config server key lives in internal/serverkey since F07 PR 5: the
+// The MCP-config server key lives in internal/foundation/serverkey since F07 PR 5: the
 // trigger dispatcher (internal/repos) builds the same MCP configuration for a
 // recipe as `kb claude init` writes, and internal/ must not import tools/.
-// These names keep the bridge's API unchanged; see internal/serverkey for the
+// These names keep the bridge's API unchanged; see internal/foundation/serverkey for the
 // rules.
 
 // ServerKey is serverkey.ServerKey.

@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/pki/pkitest"
 )
 
 // StartTLSWhenInstalled: a server that booted with [tls].addr set and no

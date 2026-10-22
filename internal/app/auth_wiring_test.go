@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/test/testenv"
 )
 

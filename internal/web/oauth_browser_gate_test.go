@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/oauth"
-	"knomit/internal/pki/pkitest"
 )
 
 // The browser branch of the approval gate (F19 phase 3b, Task 1, rulings

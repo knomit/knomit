@@ -21,8 +21,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // The supervisor is tested against a FAKE `knomit`: this test binary itself,

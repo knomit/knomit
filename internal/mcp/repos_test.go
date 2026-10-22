@@ -19,7 +19,7 @@ import (
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 func TestReposHandler_ListsMounts(t *testing.T) {

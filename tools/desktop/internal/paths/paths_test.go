@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/tools/desktop/internal/paths"
 )
 
@@ -44,7 +44,7 @@ func TestLogsDir_ReturnsKnomitSubdir(t *testing.T) {
 
 // The desktop WRITES server.json; the bridge READS it. They are separate
 // binaries and the bridge cannot import this package — tools/desktop/internal/
-// is importable only from under tools/desktop/ — so before internal/config
+// is importable only from under tools/desktop/ — so before internal/foundation/config
 // each carried its own copy of the per-OS switch, and they drifted: the
 // bridge's had no Windows case at all and fell back to a default port while
 // the desktop's lockfile sat unread in %LOCALAPPDATA%\knomit.

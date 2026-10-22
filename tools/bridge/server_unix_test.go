@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/serveraddr"
 )
 
 func localArg(path string) string  { return "unix://" + path }

@@ -14,8 +14,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // v2Lock is a server.json as a v2 `knomit serve` writes it, listening on a

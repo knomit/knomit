@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"

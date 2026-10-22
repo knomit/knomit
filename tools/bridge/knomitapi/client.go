@@ -6,7 +6,7 @@ package knomitapi
 import (
 	"encoding/json"
 	"fmt"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/serveraddr"
 	"net/http"
 	"net/url"
 	"strings"

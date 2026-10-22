@@ -33,6 +33,6 @@ func Lookup(id string) (Model, error) { return modelparams.Lookup(id) }
 func IDs() []string { return modelparams.IDs() }
 
 // DefaultModelID is re-exported from internal/domain/modelparams, where it lives
-// so that internal/config can reference it without importing this cgo-carrying
+// so that internal/foundation/config can reference it without importing this cgo-carrying
 // package. Prefer params.DefaultModelID in new code.
 const DefaultModelID = modelparams.DefaultModelID

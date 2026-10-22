@@ -22,9 +22,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
-	"knomit/internal/serverkey"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serverkey"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/playbooks"

@@ -15,8 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/merge"

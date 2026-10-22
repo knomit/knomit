@@ -9,7 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 )
 
@@ -103,7 +103,7 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 			}
 			b = resumed
 		}
-		handle, err := sessions.NewBindingHandle()
+		handle, err := clientsessions.NewBindingHandle()
 		if err != nil {
 			log.Error().Err(err).Msg("knomit_bind: minting a handle failed")
 			return mcpgo.NewToolResultError(

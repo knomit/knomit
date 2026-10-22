@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // A running `knomit serve` re-reads its configuration on SIGHUP and `knomit

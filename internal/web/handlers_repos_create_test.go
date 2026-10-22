@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/testsupport/testsigner"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 )

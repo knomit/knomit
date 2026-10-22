@@ -21,11 +21,11 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/app"
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki/pkitest"
+	"knomit/internal/foundation/serveraddr"
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/serveraddr"
 	"knomit/test/testenv"
 )
 

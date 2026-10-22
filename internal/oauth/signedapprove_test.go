@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // Fleet-root-key approval (F19 phase 3b, Task 3; consent path 2). The operator

@@ -16,8 +16,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/merge"

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/storetest"

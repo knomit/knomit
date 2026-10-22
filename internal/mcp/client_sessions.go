@@ -8,7 +8,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 )
 
@@ -36,7 +36,7 @@ func recordClientInfo(ctx context.Context, mgr *repos.Manager, req *mcpgo.Initia
 	// What the server observed about THIS request. For a direct HTTP client
 	// this is the only chance to derive its identity correctly: no Touch has
 	// run yet, so the row carries no ip or User-Agent to read back.
-	obs := sessions.HTTPInfoFromContext(ctx)
+	obs := clientsessions.HTTPInfoFromContext(ctx)
 	if err := store.SetClientInfo(ctx, sess.SessionID(), repos.BindingPinFromContext(ctx),
 		ci.Name, ci.Version, obs.RemoteIP, obs.UserAgent, time.Now()); err != nil {
 		log.Warn().Err(err).Str("mcp_session", sess.SessionID()).Msg("client sessions: record client info failed")

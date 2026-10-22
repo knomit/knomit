@@ -7,7 +7,7 @@ import (
 )
 
 // DefaultOntologyRoot mirrors config.Defaults().OntologyRoot. The store cannot
-// import internal/config (config is the outer layer), so the default lives here
+// import internal/foundation/config (config is the outer layer), so the default lives here
 // and SetOntologyRoot carries the configured value in from the repos builder.
 const DefaultOntologyRoot = "kb"
 

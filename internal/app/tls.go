@@ -12,9 +12,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 )
 
 // OpenTLSServer opens the mTLS listener for enrolled instances (F19 phase 2)

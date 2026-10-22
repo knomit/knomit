@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // TestFleetCLI_ThinClientOverTheLocalListener: `knomit fleet status` only

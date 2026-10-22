@@ -17,10 +17,10 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"knomit/internal/config"
-	"knomit/internal/pki"
-	"knomit/internal/pki/pkitest"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
+	"knomit/internal/foundation/pki/pkitest"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // stubWindow stands in for the Wails window a binding call carries in its

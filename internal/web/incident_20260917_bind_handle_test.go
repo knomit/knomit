@@ -36,8 +36,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -47,7 +47,7 @@ import (
 // or one read-only repo would make a misrouted write fail for the wrong reason,
 // and two different ontologies would reproduce the near miss instead of the
 // incident.
-func incidentServer(t *testing.T) (http.Handler, *sessions.Store) {
+func incidentServer(t *testing.T) (http.Handler, *clientsessions.Store) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
@@ -337,7 +337,7 @@ func TestIncident20260917_TwoCoworkJobsOneMCPSession(t *testing.T) {
 
 	// And the filter finds this session through EITHER job's binding, once.
 	for _, pin := range []string{"repo:uid-jobA-repo", "repo:uid-jobB-repo"} {
-		rows, _, ferr := store.List(context.Background(), sessions.Filter{Binding: pin, Now: time.Now()})
+		rows, _, ferr := store.List(context.Background(), clientsessions.Filter{Binding: pin, Now: time.Now()})
 		require.NoError(t, ferr)
 		require.Len(t, rows, 1, "filter on %s must find the session exactly once", pin)
 		require.Equal(t, sid, rows[0].ID)

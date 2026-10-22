@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"

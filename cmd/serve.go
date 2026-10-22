@@ -19,8 +19,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/app"
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/platform/diag"
 	"knomit/internal/platform/logging"

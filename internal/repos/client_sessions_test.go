@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 )
 
 // Start opens the client-session store over the same control.db handle the
@@ -26,12 +26,12 @@ func TestManagerStart_OpensClientSessionsStore(t *testing.T) {
 
 	ctx := context.Background()
 	now := time.Now()
-	require.NoError(t, s.Touch(ctx, sessions.Observation{SessionID: "old", Now: now.Add(-2 * time.Hour)}))
-	require.NoError(t, s.Touch(ctx, sessions.Observation{SessionID: "new", Now: now}))
+	require.NoError(t, s.Touch(ctx, clientsessions.Observation{SessionID: "old", Now: now.Add(-2 * time.Hour)}))
+	require.NoError(t, s.Touch(ctx, clientsessions.Observation{SessionID: "new", Now: now}))
 
 	m.tickSessionReaper(ctx, sessionReaperConfig{})
 
-	rows, _, err := s.List(ctx, sessions.Filter{Now: now, IncludeHidden: true})
+	rows, _, err := s.List(ctx, clientsessions.Filter{Now: now, IncludeHidden: true})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "new", rows[0].ID)

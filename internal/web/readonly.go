@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )

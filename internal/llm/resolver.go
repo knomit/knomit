@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"strings"
 )
 

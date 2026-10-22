@@ -7,7 +7,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // permissionFilter hides tools the caller may not invoke from tools/list. It

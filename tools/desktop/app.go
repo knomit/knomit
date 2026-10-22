@@ -21,8 +21,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/platform/version"
 	webui "knomit/web"

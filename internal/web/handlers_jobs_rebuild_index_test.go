@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
 )

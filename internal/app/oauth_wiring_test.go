@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/oauth"
-	"knomit/internal/pki"
-	"knomit/internal/pki/pkitest"
 	"knomit/test/testenv"
 )
 

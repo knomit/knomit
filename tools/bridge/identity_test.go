@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 )
 
 func TestBuildIdentity_DistinctPerProcessStableWithin(t *testing.T) {
@@ -24,7 +24,7 @@ func TestBuildIdentity_DistinctPerProcessStableWithin(t *testing.T) {
 	if c := buildIdentity("agent/x", now.Add(time.Second)); c.InstanceID == a.InstanceID {
 		t.Fatal("start time must be part of the hash")
 	}
-	if _, err := sessions.ParseClientHeader(a.Encode()); err != nil {
+	if _, err := clientsessions.ParseClientHeader(a.Encode()); err != nil {
 		t.Fatalf("identity must encode to a parseable header: %v", err)
 	}
 }

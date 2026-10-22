@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/config"
 	"knomit/internal/embeddings"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/privdir"
 )
 

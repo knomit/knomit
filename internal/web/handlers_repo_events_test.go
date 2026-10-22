@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"
 )

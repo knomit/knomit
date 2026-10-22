@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 )
 
 // issuerFixture is the whole issuer in-process: a real control.db, the real

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/repos"
 )
 

@@ -8,7 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/store"
 )
 

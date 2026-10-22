@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // knomit#265: a local listener owned by ANOTHER account is a failure, not a

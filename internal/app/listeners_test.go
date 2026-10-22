@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/pki/pkitest"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki/pkitest"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // The listener set's contract: the order it binds in, that every failure

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // knomit#265: `knomit oauth` shows a consent screen and sends approvals over

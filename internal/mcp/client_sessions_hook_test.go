@@ -13,12 +13,12 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 	storemigrate "knomit/internal/store/migrate"
 )
 
-func newSessionsStore(t *testing.T) *sessions.Store {
+func newSessionsStore(t *testing.T) *clientsessions.Store {
 	t.Helper()
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -29,7 +29,7 @@ func newSessionsStore(t *testing.T) *sessions.Store {
 	if err := storemigrate.Control(db); err != nil {
 		t.Fatal(err)
 	}
-	return sessions.New(db, sessions.Policy{DeadAfter: time.Hour, HiddenAfter: 3 * time.Hour})
+	return clientsessions.New(db, clientsessions.Policy{DeadAfter: time.Hour, HiddenAfter: 3 * time.Hour})
 }
 
 const initializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.0"}}}`
@@ -67,7 +67,7 @@ func TestAfterInitialize_RecordsClientInfo(t *testing.T) {
 		t.Fatal("no session id minted")
 	}
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestAfterInitialize_RecordsBindingOnTheRepoRoute(t *testing.T) {
 	resp := postInitialize(t, srv.URL)
 	resp.Body.Close()
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 
 	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false, nil),
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			return sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
+			return clientsessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
 		}),
 	)
 	srv := httptest.NewServer(h)
@@ -161,7 +161,7 @@ func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 	if rows[0].RemoteAddr == "" || rows[0].UserAgent != "mcp-inspector/0.9" {
 		t.Fatalf("observed connection details not recorded: %+v", rows[0])
 	}
-	if rows[0].InstanceID != sessions.DeriveInstanceID(rows[0].RemoteAddr, "mcp-inspector/0.9", "claude-code", "2.1.0") {
+	if rows[0].InstanceID != clientsessions.DeriveInstanceID(rows[0].RemoteAddr, "mcp-inspector/0.9", "claude-code", "2.1.0") {
 		t.Fatalf("instance id not derived from the request: %+v", rows[0])
 	}
 	if rows[0].RequestCount != 0 {

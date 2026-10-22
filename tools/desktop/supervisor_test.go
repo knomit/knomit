@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
 	"knomit/internal/domain/modelparams"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // externalServer stands in for a `knomit serve` the user started: it answers

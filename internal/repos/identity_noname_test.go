@@ -8,9 +8,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 )
 
 // D18/P1b: the instance's {agent} and {host}, its member-record id and the

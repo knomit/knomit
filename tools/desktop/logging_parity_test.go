@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	knomitapp "knomit/internal/app"
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // desktopLoggingOptions is a second spelling of app.LoggingOptions (the

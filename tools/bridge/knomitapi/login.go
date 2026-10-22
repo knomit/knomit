@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // LoginOptions tunes `kb login`. The zero value prints the authorization URL

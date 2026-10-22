@@ -32,7 +32,7 @@ import (
 // Only the root itself is ever chmodded, never recursively. The info line
 // names the old mode, so a root that was shared on purpose can be restored.
 //
-// Until this existed, the "0700 data root" that internal/config relies on
+// Until this existed, the "0700 data root" that internal/foundation/config relies on
 // was not enforced anywhere: ensureKeyPair's MkdirAll(dir, 0700)
 // (internal/app/identity.go) only appeared to set it, since by then the
 // root already existed at 0755.

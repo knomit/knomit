@@ -21,7 +21,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // The unix half of the local-transport fixtures. Its Windows twin is

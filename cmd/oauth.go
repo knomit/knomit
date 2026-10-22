@@ -17,8 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 	"knomit/internal/oauth"
 )
 

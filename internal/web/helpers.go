@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/repos"
 )
 

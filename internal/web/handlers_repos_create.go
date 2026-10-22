@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )

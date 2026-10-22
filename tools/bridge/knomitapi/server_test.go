@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // countingTCP is a TCP server that answers body and counts what it served, so

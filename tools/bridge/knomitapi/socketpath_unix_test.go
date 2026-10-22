@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 )
 
 // knomit#253, from the bridge's side: for a data root too long for sun_path,

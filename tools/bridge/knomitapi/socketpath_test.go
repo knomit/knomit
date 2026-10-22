@@ -3,12 +3,12 @@ package knomitapi
 import (
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // knomit#271 pins the delegation: the bridge's SocketPath is
 // config.SocketPath, so an operator override the server honours reaches the
-// bridge too. The layering itself is tested in internal/config, against
+// bridge too. The layering itself is tested in internal/foundation/config, against
 // config.Load; this only proves the bridge does not resolve anything itself.
 func TestSocketPath_DelegatesToConfig_KnomitSocketEnv(t *testing.T) {
 	t.Setenv("KNOMIT_HOME", t.TempDir())

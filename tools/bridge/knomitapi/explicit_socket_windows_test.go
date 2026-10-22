@@ -5,7 +5,7 @@ package knomitapi
 import (
 	"testing"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // explicitSocket is an explicit local listener value this platform accepts:

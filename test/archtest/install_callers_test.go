@@ -76,7 +76,7 @@ var installLeafCallers = []string{
 // TestInstallBundleHasOnlyTheListedCallers parses every non-test Go file of
 // every package in the module — the desktop's included, which needs its
 // build tag to be listed — and fails on a call to pki.InstallBundle (through
-// whatever name the file imports internal/pki as) outside installCallers.
+// whatever name the file imports internal/foundation/pki as) outside installCallers.
 func TestInstallBundleHasOnlyTheListedCallers(t *testing.T) {
 	root := moduleRoot(t)
 	var files []string
@@ -120,7 +120,7 @@ func TestInstallBundleHasOnlyTheListedCallers(t *testing.T) {
 		}
 		name := ""
 		for _, imp := range file.Imports {
-			if p, _ := strconv.Unquote(imp.Path.Value); p == "knomit/internal/pki" {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == "knomit/internal/foundation/pki" {
 				name = "pki"
 				if imp.Name != nil {
 					name = imp.Name.Name
@@ -129,7 +129,7 @@ func TestInstallBundleHasOnlyTheListedCallers(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, f)
 		rel = filepath.ToSlash(rel)
-		inPKI := strings.HasPrefix(rel, "internal/pki/")
+		inPKI := strings.HasPrefix(rel, "internal/foundation/pki/")
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
