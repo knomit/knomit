@@ -11,15 +11,9 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// completionsProvider is the narrow interface the completions handler depends on.
-type completionsProvider interface {
-	Completions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error)
-}
-
-// defaultCompletionsProvider implements completionsProvider using the store.
-type defaultCompletionsProvider struct{}
-
-func (defaultCompletionsProvider) Completions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error) {
+// readCompletions reads the completion values for one repo and branch; an
+// unopened store yields nil, nil.
+func readCompletions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error) {
 	var (
 		out []string
 		err error
@@ -40,7 +34,7 @@ type completionsView struct {
 }
 
 // handleHALCompletions serves GET /repos/{repo}/branches/{branch}/completions.
-func handleHALCompletions(b hal.URLBuilder, provider completionsProvider) http.HandlerFunc {
+func handleHALCompletions(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -51,7 +45,7 @@ func handleHALCompletions(b hal.URLBuilder, provider completionsProvider) http.H
 		category := r.URL.Query().Get("category")
 		prefix := r.URL.Query().Get("prefix")
 
-		values, err := provider.Completions(r.Context(), ri, branch, category, prefix, 20)
+		values, err := readCompletions(r.Context(), ri, branch, category, prefix, 20)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load completions", branch)
 			return

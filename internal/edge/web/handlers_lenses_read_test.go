@@ -9,11 +9,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -765,31 +771,19 @@ func TestLensSearch_UnknownLens404(t *testing.T) {
 
 // ── lens union completions (GET /lenses/{lens}/completions) ───────────────────
 
-// knownCompletionCategories mirrors the store's real category set (internal/
-// store/index.go Completions): a known category returns values (possibly empty),
-// and any other category is an error — exactly as the repo handler surfaces it.
-var knownCompletionCategories = map[string]bool{
-	"domain": true, "entity": true, "type": true,
-	"kind": true, "origin": true, "ep": true, "path": true,
-}
-
-// lensCompletionsStub is a per-repo completionsProvider: each mount's
-// Completions call is answered from byRepo keyed by repo name then category, so
-// a single stub drives the whole fan-out. An unrecognised category returns the
-// same error string the store raises, so the lens handler's error path matches
-// the repo handler byte-for-byte.
-type lensCompletionsStub struct {
-	byRepo map[string]map[string][]string
-}
-
-func (s *lensCompletionsStub) Completions(
-	_ context.Context,
-	ri *repos.RepoInstance, _, category, _ string, _ int,
-) ([]string, error) {
-	if !knownCompletionCategories[category] {
-		return nil, fmt.Errorf("unknown completion category: %s", category)
-	}
-	return s.byRepo[ri.Name()][category], nil
+// seedDomains writes one fact per path into ri's agent branch, each carrying
+// the given domains, so the repo's real store answers completions from them.
+func seedDomains(t *testing.T, ri *repos.RepoInstance, path string, domains ...string) {
+	t.Helper()
+	dom, err := json.Marshal(domains)
+	require.NoError(t, err)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.NotNil(t, svc, "the test repo must have a live store")
+		_, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), path,
+			"---\ntype: observation\nconfidence: 0.9\ndomain: "+string(dom)+"\n---\n# "+path+"\n\nbody\n",
+			"add "+path, "")
+		require.NoError(t, err)
+	}))
 }
 
 // lensCompletionsBody mirrors the union completions wire shape.
@@ -815,7 +809,7 @@ func decodeLensCompletions(t *testing.T, rec *httptest.ResponseRecorder) lensCom
 // write=zulu sorts LAST among the mounts, yet it leads because it is the write.
 func TestLensCompletions_RepoCategoryListsMountsInOrder(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"},{"repo":"beta"}]}`)
 
@@ -835,7 +829,7 @@ func TestLensCompletions_RepoCategoryListsMountsInOrder(t *testing.T) {
 // matches a lower-cased mount name), matching the store's LIKE behaviour.
 func TestLensCompletions_RepoCategoryPrefixNarrows(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"},{"repo":"beta"}]}`)
 
@@ -846,27 +840,29 @@ func TestLensCompletions_RepoCategoryPrefixNarrows(t *testing.T) {
 	}
 }
 
-// category=domain unions each mount's values, de-duplicated across mounts,
-// preserving per-mount first-seen order (mounts fan out in Reads() order).
+// category=domain unions each mount's REAL completions, de-duplicated across
+// mounts. Mounts fan out in Reads() order, so a value only beta holds comes
+// after what alpha holds; the order inside one mount is the store's, which
+// does not sort, so it is not asserted.
 func TestLensCompletions_DomainMergesWithoutDuplicates(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensCompletionsStub{byRepo: map[string]map[string][]string{
-		"alpha": {"domain": {"ai", "alignment"}},
-		"beta":  {"domain": {"ai", "robotics"}}, // "ai" collides with alpha's
-	}}
-	s := &Server{Manager: m, providers: storeProviders{completions: stub}}
+	seedDomains(t, m.Get("alpha"), "kb/technology/ai/one.md", "ai", "alignment")
+	seedDomains(t, m.Get("beta"), "kb/technology/ai/two.md", "ai", "robotics") // "ai" collides with alpha's
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	body := decodeLensCompletions(t, getLensFacts(t, r, "/lenses/eng/completions?category=domain"))
-	want := []string{"ai", "alignment", "robotics"}
-	if len(body.Values) != len(want) {
-		t.Fatalf("values: got %v, want %v (union, deduped)", body.Values, want)
+	if len(body.Values) != 3 {
+		t.Fatalf("values: got %v, want ai, alignment, robotics once each (union, deduped)", body.Values)
 	}
-	for i := range want {
-		if body.Values[i] != want[i] {
-			t.Fatalf("order: got %v, want %v", body.Values, want)
-		}
+	if body.Values[2] != "robotics" {
+		t.Errorf("order: got %v, want beta's own value last (mounts fan out in binding order)", body.Values)
+	}
+	got := append([]string(nil), body.Values...)
+	sort.Strings(got)
+	if want := []string{"ai", "alignment", "robotics"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("values: got %v, want %v", got, want)
 	}
 }
 
@@ -874,13 +870,16 @@ func TestLensCompletions_DomainMergesWithoutDuplicates(t *testing.T) {
 // error flows through writeStoreError → 500 problem+json.
 func TestLensCompletions_UnknownCategory500(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/completions?category=bogus")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unknown completion category: bogus") {
+		t.Errorf("body should carry the store's own error, got %s", rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("content-type: got %q, want application/problem+json", got)
@@ -891,7 +890,7 @@ func TestLensCompletions_UnknownCategory500(t *testing.T) {
 // values:[], never null.
 func TestLensCompletions_EmptyUnion(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -905,13 +904,36 @@ func TestLensCompletions_EmptyUnion(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensCompletions_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, providers: storeProviders{completions: &lensCompletionsStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/completions?category=repo")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+// One mount's Completions read fails: the whole union request is a 500 that
+// carries THAT mount's injected error. The hook is installed on beta's store
+// only, matches the Completions read by name, and is hit exactly once (alpha's
+// store is a different Service and is unaffected).
+func TestLensCompletions_MountErrorFailsTheWholeRequest(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	seedDomains(t, m.Get("alpha"), "kb/technology/ai/one.md", "ai")
+	injected := errors.New("injected beta completions read failure")
+	var hits atomic.Int64
+	require.NoError(t, m.Get("beta").WithRead(func(svc *store.Service) {
+		t.Cleanup(svc.Search().SetReadFaultForTest(failIndexRead(index.ReadCompletions, injected, &hits)))
+	}))
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/completions?category=domain")
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), injected.Error())
+	require.EqualValues(t, 1, hits.Load(), "beta's Completions read must have reached the hook exactly once")
 }
 
 // ---- Single fact read through a lens (GET /lenses/{lens}/facts/{path...}) ----

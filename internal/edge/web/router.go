@@ -307,7 +307,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 		r.Group(func(r chi.Router) {
 			r.Use(RepoMiddleware(s.Manager))
 
-			r.Get("/", handleHALRepo(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
+			r.Get("/", handleHALRepo(b, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 			r.Patch("/", handleHALRepoPatch(b))
 
 			// Inside the middleware group, unlike Archive: {repo} must exist
@@ -344,11 +344,11 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 
 			// Branch list carries no {branch} segment, so it stays outside
 			// the BranchMiddleware subtree.
-			r.Get("/branches", handleHALBranches(b, p.branchesLister))
+			r.Get("/branches", handleHALBranches(b))
 
 			// Branches a peer pushed to this host (F11), and what merging each
 			// would bring. The merge itself is per branch, below.
-			r.Get("/pushed-branches", handleHALPushedBranches(b, p.branchesLister))
+			r.Get("/pushed-branches", handleHALPushedBranches(b))
 
 			// Experiments hang off the REPO, not off a branch: an experiment
 			// IS a branch, so nesting it under /branches/{branch} would make
@@ -372,7 +372,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			r.Route("/branches/{branch}", func(r chi.Router) {
 				r.Use(BranchMiddleware)
 
-				r.Get("/", handleHALBranch(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
+				r.Get("/", handleHALBranch(b, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 
 				// Merge THIS pushed branch into the repo's agent branch (F11 UI
 				// merge). The first route that enforces `operator`: the host's
@@ -398,9 +398,9 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 
 				r.Get("/search", handleSearch(b, p.search, s.Embedder))
 				r.Get("/activity", handleHALActivity(b, p.activity))
-				r.Get("/completions", handleHALCompletions(b, p.completions))
-				r.Get("/domains", handleHALDomains(b, p.domains))
-				r.Get("/domains/{name}", handleHALDomainFacts(b, p.domains))
+				r.Get("/completions", handleHALCompletions(b))
+				r.Get("/domains", handleHALDomains(b))
+				r.Get("/domains/{name}", handleHALDomainFacts(b))
 				r.Get("/motifs", handleHALMotifs(b, p.motifs))
 				r.Get("/motifs/{key}", handleHALMotifCluster(b, p.motifs, p.factsCollection))
 				r.Get("/stats", handleHALStats(b, p.stats))
@@ -448,7 +448,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 		// The lens CRUD quartet — including rename — resolves through the
 		// registry directly and reports its own errors, so it stays outside
 		// the binding group below.
-		r.Get("/", handleHALLens(b, s.Manager, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
+		r.Get("/", handleHALLens(b, s.Manager, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 		r.Patch("/", handleHALLensPatch(b, s.Manager))
 		r.Delete("/", handleHALLensDelete(s.Manager))
 		r.Post("/rename", handleHALLensRename(b, s.Manager))
@@ -458,7 +458,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			r.Get("/facts", handleHALLensFacts(p.factsCollection, p.motifs, s.Embedder))
 			r.Get("/facts/*", handleHALLensFact(b, p.factReader, p.factSub))
 			r.Get("/search", handleHALLensSearch(p.search, s.Embedder, p.motifs))
-			r.Get("/completions", handleHALLensCompletions(p.completions))
+			r.Get("/completions", handleHALLensCompletions())
 			r.Get("/motifs", handleHALLensMotifs(b, p.motifs))
 			r.Get("/motifs/{key}", handleHALLensMotifCluster(b, p.motifs, p.factsCollection))
 			r.Get("/stats", handleHALLensStats(p.stats, p.activity))

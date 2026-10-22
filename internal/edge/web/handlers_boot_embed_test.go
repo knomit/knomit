@@ -3,32 +3,26 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store"
 )
 
-// bootEmbedServer wires a server whose branch-root reader is a stub, so the
-// embed tests do not depend on a live store.
-func bootEmbedServer(t *testing.T, m *repos.Manager, readErr error) *Server {
-	t.Helper()
+// bootEmbedServer wires a server over m, whose repos hold real stores, so the
+// embed tests read the branch roots a store really has.
+func bootEmbedServer(m *repos.Manager) *Server {
 	return &Server{
 		Manager:           m,
 		AgentBranch:       "agent/test",
 		EmbeddingsEnabled: true,
-		providers: storeProviders{
-			branchRootReader: func(_ context.Context, _ *repos.RepoInstance, name string) (branchRootInfo, error) {
-				if readErr != nil {
-					return branchRootInfo{}, readErr
-				}
-				return branchRootInfo{Head: "7f3a8b2c", IndexCommit: "7f3a8b2c"}, nil
-			},
-		},
 	}
 }
 
@@ -73,8 +67,8 @@ func embeddedBranchOf(t *testing.T, body map[string]any, key string) (map[string
 // builder to avoid, so the assertion is a deep equality against the real
 // branch handler for the same fixture.
 func TestRepoGET_EmbedsTheReadBranchRootByteForByte(t *testing.T) {
-	s := bootEmbedServer(t, newTestManagerWithRepos(t, "alpha"), nil)
-	r := s.NewAPIRouter()
+	m, _ := newRealStoreManager(t, "alpha")
+	r := bootEmbedServer(m).NewAPIRouter()
 
 	code, repoBody := getJSON(t, r, "/repos/alpha")
 	if code != http.StatusOK {
@@ -102,8 +96,8 @@ func TestRepoGET_EmbedsTheReadBranchRootByteForByte(t *testing.T) {
 // Test 4c. Proves the embedded hrefs came from hal.URLBuilder rather than
 // being hand-built: a hand-built href is the way this silently diverges.
 func TestRepoGET_EmbeddedLinksComeFromTheURLBuilder(t *testing.T) {
-	s := bootEmbedServer(t, newTestManagerWithRepos(t, "alpha"), nil)
-	r := s.NewAPIRouter()
+	m, _ := newRealStoreManager(t, "alpha")
+	r := bootEmbedServer(m).NewAPIRouter()
 
 	_, repoBody := getJSON(t, r, "/repos/alpha")
 	embedded, ok := embeddedBranchOf(t, repoBody, "branch")
@@ -132,12 +126,16 @@ func TestRepoGET_EmbeddedLinksComeFromTheURLBuilder(t *testing.T) {
 // from the followed upstream, so that is the root the repo GET must embed.
 // See kb/conventions/repos/subscription/read-branch-for-content.
 func TestRepoGET_SubscriptionEmbedsTheFollowedUpstreamRoot(t *testing.T) {
+	// A subscription over a real store: the followed upstream is "main".
+	svc, err := store.Open(filepath.Join(t.TempDir(), "sub.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/unused"))
 	m := repos.New(context.Background(), repos.Deps{})
 	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name: "sub", Subscribed: true, ReadBranch: "main",
+		Name: "sub", Subscribed: true, ReadBranch: "main", Svc: svc,
 	}))
-	s := bootEmbedServer(t, m, nil)
-	r := s.NewAPIRouter()
+	r := bootEmbedServer(m).NewAPIRouter()
 
 	code, repoBody := getJSON(t, r, "/repos/sub")
 	if code != http.StatusOK {
@@ -163,8 +161,19 @@ func TestRepoGET_SubscriptionEmbedsTheFollowedUpstreamRoot(t *testing.T) {
 // opening. The embed is an optimisation; losing it must cost the client a
 // round trip, never the response.
 func TestRepoGET_OmitsEmbedWhenTheBranchRootIsUnreadable(t *testing.T) {
-	s := bootEmbedServer(t, newTestManagerWithRepos(t, "alpha"), errors.New("store not open"))
-	r := s.NewAPIRouter()
+	// A live store that has no "agent/test" branch: reading its head fails
+	// with the store's own error.
+	svc, err := store.Open(filepath.Join(t.TempDir(), "alpha.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/other"))
+	_, herr := svc.HeadCommit(context.Background(), "agent/test")
+	require.Error(t, herr, "fixture: the branch root must be unreadable")
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha", AgentBranch: "agent/test", Svc: svc,
+	}))
+	r := bootEmbedServer(m).NewAPIRouter()
 
 	code, repoBody := getJSON(t, r, "/repos/alpha")
 	if code != http.StatusOK {
@@ -184,20 +193,17 @@ func TestRepoGET_OmitsEmbedWhenTheBranchRootIsUnreadable(t *testing.T) {
 	}
 }
 
-// An unopened store is not an ERROR from defaultBranchRootReader — WithRead
+// An unopened store is not an ERROR from readBranchRoot — WithRead
 // never runs its callback and a zero branchRootInfo comes back with a nil
 // error. Embedding that would advertise a branch root with head "" as though
 // it were known, which is worse than omitting it: the client would trust it
 // and never ask.
 func TestRepoGET_OmitsEmbedWhenNoHeadResolves(t *testing.T) {
+	// newTestManagerWithRepos' instances have no store: what an unopened
+	// store produces.
 	s := &Server{
 		Manager:     newTestManagerWithRepos(t, "alpha"),
 		AgentBranch: "agent/test",
-		providers: storeProviders{
-			branchRootReader: func(_ context.Context, _ *repos.RepoInstance, _ string) (branchRootInfo, error) {
-				return branchRootInfo{}, nil // what an unopened store produces
-			},
-		},
 	}
 	code, repoBody := getJSON(t, s.NewAPIRouter(), "/repos/alpha")
 

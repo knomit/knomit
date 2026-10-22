@@ -1,22 +1,5 @@
 package web
 
-import (
-	"context"
-
-	"knomit/internal/engine/store/model"
-
-	"knomit/internal/corpus/repos"
-)
-
-// branchesListerFunc enumerates a repo's branches. It is a named type rather
-// than an inline func literal so the signature has exactly one definition to
-// change when the shape evolves (as it did when ctx threading landed).
-type branchesListerFunc func(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error)
-
-// branchRootReaderFunc reads the head + index watermark for one branch. Named
-// for the same reason as branchesListerFunc.
-type branchRootReaderFunc func(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error)
-
 // storeProviders bundles every injectable data-access seam the API router
 // wires into handlers. Before this existed the Server carried fourteen
 // separate unexported fields and NewAPIRouter carried fourteen near-identical
@@ -33,21 +16,17 @@ type branchRootReaderFunc func(ctx context.Context, ri *repos.RepoInstance, bran
 // visible at its registration site; passing the bundle around would make
 // every handler nominally depend on all fourteen seams.
 type storeProviders struct {
-	branchesLister   branchesListerFunc
-	branchRootReader branchRootReaderFunc
-	factReader       FactReader
-	factWriter       FactWriter
-	topicLister      TopicLister
-	search           searchProvider
-	commits          commitsProvider
-	factSub          factSubProvider
-	stats            statsProvider
-	domains          domainsProvider
-	motifs           motifsProvider
-	completions      completionsProvider
-	factsCollection  factsCollectionProvider
-	activity         activityProvider
-	origin           originProvider
+	factReader      FactReader
+	factWriter      FactWriter
+	topicLister     TopicLister
+	search          searchProvider
+	commits         commitsProvider
+	factSub         factSubProvider
+	stats           statsProvider
+	motifs          motifsProvider
+	factsCollection factsCollectionProvider
+	activity        activityProvider
+	origin          originProvider
 }
 
 // withDefaults returns a copy with every nil member replaced by its
@@ -57,12 +36,6 @@ type storeProviders struct {
 // mutated, so a test's sparse overrides stay sparse and NewAPIRouter can be
 // called twice on the same Server with identical results.
 func (p storeProviders) withDefaults() storeProviders {
-	if p.branchesLister == nil {
-		p.branchesLister = defaultBranchesLister
-	}
-	if p.branchRootReader == nil {
-		p.branchRootReader = defaultBranchRootReader
-	}
 	if p.factReader == nil {
 		p.factReader = defaultFactReader{}
 	}
@@ -86,12 +59,6 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.stats == nil {
 		p.stats = defaultStatsProvider{}
-	}
-	if p.domains == nil {
-		p.domains = defaultDomainsProvider{}
-	}
-	if p.completions == nil {
-		p.completions = defaultCompletionsProvider{}
 	}
 	if p.factsCollection == nil {
 		p.factsCollection = defaultFactsCollectionProvider{}

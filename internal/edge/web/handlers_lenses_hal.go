@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -334,7 +333,6 @@ func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 func handleHALLens(
 	b hal.URLBuilder,
 	m *repos.Manager,
-	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	agentBranch string,
 	embeddingsEnabled bool,
 	experimentExpiryDays int,
@@ -370,7 +368,7 @@ func handleHALLens(
 		// which is the same shape as the subscription case below.
 		if lb, berr := repos.NewBindingOfLens(m, l); berr == nil {
 			if wri, wb := lb.Write(), lb.WriteBranch(); wri != nil && wb != "" {
-				if root := embedBranchRoot(r.Context(), b, reader, wri.Name(), wb, wri, agentBranch, embeddingsEnabled, experimentExpiryDays); root != nil {
+				if root := embedBranchRoot(r.Context(), b, wri.Name(), wb, wri, agentBranch, embeddingsEnabled, experimentExpiryDays); root != nil {
 					v.Embedded = map[string]any{"write_branch": root}
 				}
 			}

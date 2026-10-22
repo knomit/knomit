@@ -13,12 +13,6 @@ import (
 	"knomit/internal/foundation/auth"
 )
 
-// gitHTTPProvider is the narrow interface GitRemoteHandler needs — just the
-// per-store HTTP handler for the git smart HTTP protocol.
-type gitHTTPProvider interface {
-	Handler() http.Handler
-}
-
 // splitGitRoute reads the repo name and the git-protocol suffix out of a
 // mount-relative path, tolerating the two forms every git host accepts and
 // users therefore type by habit: a ".git" suffix on the repo, and a trailing
@@ -94,11 +88,6 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 			return
 		}
 		defer release()
-		provider, ok := (interface{})(svc).(gitHTTPProvider)
-		if !ok {
-			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
-			return
-		}
 
 		// Rewrite the request URL to just the git-protocol suffix so the inner
 		// mux can match /info/refs and /git-upload-pack directly.
@@ -111,7 +100,7 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 		}
 		r2 := r.WithContext(ctx)
 		r2.URL = &u2
-		provider.Handler().ServeHTTP(w, r2)
+		svc.Handler().ServeHTTP(w, r2)
 	})
 }
 

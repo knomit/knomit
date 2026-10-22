@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"net/http"
 	"path"
 	"strings"
@@ -12,12 +11,6 @@ import (
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
-
-// BearerVerifier judges a bearer token for a request path on the OAuth
-// listener (oauth.Verifier in production).
-type BearerVerifier interface {
-	Verify(ctx context.Context, token, path string) (auth.Principal, auth.Set, error)
-}
 
 // BearerMiddleware is the OAuth listener's ONLY way to a principal (R1): a
 // verified bearer token becomes Principal{host, <subject>, token} plus the
@@ -34,7 +27,7 @@ type BearerVerifier interface {
 // everywhere else. The request path must be canonical first: the audience is
 // judged on it, and a path the router would read differently ("..", "//", an
 // encoded "/") is a 400 before any token is looked at.
-func BearerMiddleware(v BearerVerifier, issuer string) func(http.Handler) http.Handler {
+func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := canonicalRequestPath(r)

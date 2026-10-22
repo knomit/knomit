@@ -25,12 +25,11 @@ type branchSummary struct {
 // handleHALBranches serves GET /api/v1/repos/{repo}/branches.
 func handleHALBranches(
 	b hal.URLBuilder,
-	lister func(context.Context, *repos.RepoInstance) ([]model.Branch, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		branches, err := lister(r.Context(), ri)
+		branches, err := listRepoBranches(r.Context(), ri)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError,
 				"Failed to list branches", err.Error(), r.URL.Path)
@@ -87,7 +86,6 @@ func indexPercent(state string, done, total int) int {
 // navigates every sub-collection via _links.
 func handleHALBranch(
 	b hal.URLBuilder,
-	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	agentBranch string,
 	embeddingsEnabled bool,
 	experimentExpiryDays int,
@@ -96,7 +94,7 @@ func handleHALBranch(
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		branch := BranchFromContext(r.Context())
-		info, err := reader(r.Context(), ri, branch)
+		info, err := readBranchRoot(r.Context(), ri, branch)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to read branch", branch)
 			return
@@ -191,7 +189,6 @@ func branchRootBody(
 func embedBranchRoot(
 	ctx context.Context,
 	b hal.URLBuilder,
-	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	repoName, branch string,
 	ri *repos.RepoInstance,
 	agentBranch string,
@@ -201,14 +198,14 @@ func embedBranchRoot(
 	// An empty branch is "this repo has none" (a subscription has no agent
 	// branch), not "unknown" — building a root for branch "" would invent a
 	// resource. See kb/invariants/repos/subscription/flag-and-branch-paired.
-	if ri == nil || reader == nil || branch == "" {
+	if ri == nil || branch == "" {
 		return nil
 	}
-	info, err := reader(ctx, ri, branch)
+	info, err := readBranchRoot(ctx, ri, branch)
 	if err != nil {
 		return nil
 	}
-	// An unopened store is NOT an error from defaultBranchRootReader: WithRead
+	// An unopened store is NOT an error from readBranchRoot: WithRead
 	// simply never runs its callback and the zero branchRootInfo comes back
 	// with a nil error. Embedding that would advertise a branch root whose
 	// head is "" as though it were known. The embed exists to save a round

@@ -65,7 +65,7 @@ type Server struct {
 	// OAuth listener's own router — and the operator's approval endpoints on
 	// this router. Handler() never judges a bearer token.
 	OAuthIssuer    *oauth.Issuer
-	BearerVerifier BearerVerifier
+	BearerVerifier *oauth.Verifier
 
 	// authDisabled makes AuthMiddleware attach the anonymous principal
 	// whatever the remote address is, and writeGate a no-op. It is FORM B of
@@ -284,10 +284,10 @@ func (s *Server) Handler() http.Handler {
 	return r
 }
 
-// defaultBranchesLister reads the branch list from a repo's store via
+// listRepoBranches reads the branch list from a repo's store via
 // WithRead. Returns nil, nil if the store is unavailable (e.g. the repo is
 // still opening) so handlers can distinguish "no data yet" from "error".
-func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error) {
+func listRepoBranches(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error) {
 	var (
 		out []model.Branch
 		err error
@@ -301,10 +301,10 @@ func defaultBranchesLister(ctx context.Context, ri *repos.RepoInstance) ([]model
 	return out, err
 }
 
-// defaultBranchRootReader reads head + index watermark via the store. Plan
+// readBranchRoot reads head + index watermark via the store. Plan
 // 02 may expand this to include more fields (branch metadata, last commit
 // time) as those handlers come online.
-func defaultBranchRootReader(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
+func readBranchRoot(ctx context.Context, ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
 	var (
 		info branchRootInfo
 		err  error

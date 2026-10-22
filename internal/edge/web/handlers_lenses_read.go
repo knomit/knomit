@@ -1023,7 +1023,7 @@ type lensCompletionsResponse struct {
 // per-mount completion values across a lens's write repo + N read mounts, plus a
 // lens-only category=repo that lists the lens's mount NAMES in binding order. It
 // is the lens twin of handleHALCompletions (handlers_completions.go): the SAME
-// category set, the SAME completionsProvider seam, the SAME case-insensitive
+// category set, the SAME readCompletions read, the SAME case-insensitive
 // prefix matching, the SAME per-category value ordering, and — critically — the
 // SAME unknown-category error, since a bad category is forwarded to the store
 // per mount and its error flows through writeStoreError exactly as the repo
@@ -1034,7 +1034,7 @@ type lensCompletionsResponse struct {
 // preserved (so the repo handler's per-category ordering survives for the first
 // mount that supplies a given value). The lens-only category=repo is served
 // entirely from the Binding without touching the store.
-func handleHALLensCompletions(provider completionsProvider) http.HandlerFunc {
+func handleHALLensCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -1066,7 +1066,7 @@ func handleHALLensCompletions(provider completionsProvider) http.HandlerFunc {
 		for _, t := range targets {
 			// Each mount fetches its own top-20 (mirroring the repo handler's store
 			// limit); the union below dedupes across mounts.
-			vals, err := provider.Completions(r.Context(), t.RT.RI, t.RT.Branch, category, prefix, 20)
+			vals, err := readCompletions(r.Context(), t.RT.RI, t.RT.Branch, category, prefix, 20)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load completions", t.RT.Branch)
 				return
