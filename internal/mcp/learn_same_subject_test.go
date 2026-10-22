@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeSearcher is a one-method stand-in for store.FactQuery. It records the
+// fakeSearcher is a one-method stand-in for index.FactQuery. It records the
 // options it was handed so a test can assert the SHAPE of the query (whole
 // branch, band floor, donated vector), not only what the function does with
 // the rows that come back.

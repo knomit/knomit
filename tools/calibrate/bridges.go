@@ -273,15 +273,15 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	// OverDedup is measured against a cosine, and the default is nomic's while
 	// every corpus in this campaign is embeddinggemma (0.82 vs 0.92). An
 	// unknown model yields "not computed", never a default.
-	idx := motifThresholdIndex{SearchQuery: svc.Search()}
-	idx.dedup, idx.known = corpusDedupThreshold(dbPath)
+	dedup, dedupKnown := corpusDedupThreshold(dbPath)
+	cfg.OverDedupAt, cfg.OverDedupKnown = dedup, dedupKnown
 
 	localRepoID, err := localRepoIDFor(cmd.Context(), svc, branch)
 	if err != nil {
 		return err
 	}
 
-	rep, err := synthesize.MotifComponentReport(cmd.Context(), idx, svc.Motifs(),
+	rep, err := synthesize.MotifComponentReport(cmd.Context(), svc.Search(), svc.Motifs(),
 		svc.Abstraction(), branch, localRepoID, eff, resolution, minCommunity, neighborKinds, cfg)
 	if err != nil {
 		return fmt.Errorf("motif component report: %w", err)
@@ -297,8 +297,8 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	}
 	fmt.Fprintf(out, "activation population: %d recurring motif(s), %d bridgeable pair(s)\n",
 		rep.SeedDF2Clusters, rep.SeedBridgeablePairs)
-	if idx.known {
-		fmt.Fprintf(out, "dedup threshold: %.3f (this corpus's own embedding model)\n\n", idx.dedup)
+	if dedupKnown {
+		fmt.Fprintf(out, "dedup threshold: %.3f (this corpus's own embedding model)\n\n", dedup)
 	} else {
 		fmt.Fprintf(out, "dedup threshold: UNKNOWN — OverDedup not computed. "+
 			"The corpus does not record a recognised embedding model, and the shipped "+
@@ -346,20 +346,6 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	}
 	return nil
 }
-
-// motifThresholdIndex carries the corpus's own dedup threshold to the scorer,
-// which otherwise has no embedder to ask.
-//
-// Structural rather than a new parameter: synthesize looks for the method, so
-// nothing had to thread a threshold through four call layers, and "the caller
-// knows it" cannot be confused with "there is an embedder".
-type motifThresholdIndex struct {
-	synthesize.SearchQuery
-	dedup float64
-	known bool
-}
-
-func (m motifThresholdIndex) MotifDedupThreshold() (float64, bool) { return m.dedup, m.known }
 
 // corpusDedupThreshold reads meta.embed_model_id from the corpus and resolves
 // that model's Dedup.

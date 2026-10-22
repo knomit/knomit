@@ -54,17 +54,17 @@ import (
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
 )
 
 // ResolveFunc reports whether a ref target resolves at the commit this write
 // lands on, walking back through retractions the way every reader does.
 //
-// This MUST be the reader's predicate (store.FactQuery.FactExistsAt with an
+// This MUST be the reader's predicate (index.FactQuery.FactExistsAt with an
 // empty commit), not a live-only existence check — see consequence 2 above.
 //
-// Injected rather than taking a store.FactQuery directly because the callers
+// Injected rather than taking an *index.FactQuery directly because the callers
 // reach the store differently: internal/mcp and internal/synthesize hold a
 // FactQuery, while internal/web reaches it through RepoInstance.WithRead per
 // request. A function is the only shape all of them satisfy without one growing
@@ -74,7 +74,7 @@ type ResolveFunc func(ctx context.Context, path string) (bool, error)
 // FromFactQuery is the ResolveFunc for a caller that already holds a FactQuery.
 // The empty commit means "at the branch head", which is the commit the write is
 // about to become the parent of — the referrer's own commit.
-func FromFactQuery(fq store.FactQuery, branch string) ResolveFunc {
+func FromFactQuery(fq *index.FactQuery, branch string) ResolveFunc {
 	return func(ctx context.Context, path string) (bool, error) {
 		return fq.FactExistsAt(ctx, branch, path, "")
 	}

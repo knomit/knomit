@@ -7,7 +7,6 @@ import (
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 )
@@ -50,18 +49,18 @@ func setHasMember(s BridgeSeedSet, path string) bool {
 // facts share an entity but live in the same community → NOT a bridge.
 // Retargeted to enumerateBridgeCandidates (Task 16: grouping logic is unchanged).
 func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
-	a := makeFact("a.md", "authored", nil, []string{"auth"})
-	b := makeFact("b.md", "authored", nil, []string{"auth"})
-	c := makeFact("c.md", "authored", nil, []string{"auth"})
-	d := makeFact("d.md", "authored", nil, []string{"misc"})
+	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
+	b := makeFact("kb/b.md", "authored", nil, []string{"auth"})
+	c := makeFact("kb/c.md", "authored", nil, []string{"auth"})
+	d := makeFact("kb/d.md", "authored", nil, []string{"misc"})
 	seeds := []factForLLM{a, b, c, d}
 
 	// a in community 0, b in community 1, c in community 0 (same as a).
 	// d in community 1 (same as b) but carries a different entity.
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md", "c.md"},
-			1: {"b.md", "d.md"},
+			0: {"kb/a.md", "kb/c.md"},
+			1: {"kb/b.md", "kb/d.md"},
 		},
 	}
 
@@ -71,7 +70,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 	if !found {
 		t.Fatalf("expected a bridge on token 'auth', got %v", got)
 	}
-	if !setHasMember(set, "a.md") || !setHasMember(set, "b.md") {
+	if !setHasMember(set, "kb/a.md") || !setHasMember(set, "kb/b.md") {
 		t.Errorf("'auth' bridge should include a.md and b.md across clusters: %+v", set)
 	}
 	// 'misc' appears on only one fact → never a bridge.
@@ -83,16 +82,17 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 // TestBridgeSeeds_NormalEffortEmpty asserts that EffortNormal returns (nil, nil) —
 // the discovery engine never engages. Retargeted to buildScoredBridges (Task 16).
 func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-	// No expectations: any idx call would fail the test.
-	a := makeFact("a.md", "authored", nil, []string{"auth"})
-	b := makeFact("b.md", "authored", nil, []string{"auth"})
+	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
+	b := makeFact("kb/b.md", "authored", nil, []string{"auth"})
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
+	// Any read of the index fails the test.
+	idx := newGraphEnv(t, "main").seedAll([]factForLLM{a, b}).idx()
+	reads := guardReads(t, idx, readPolicy{})
 	got, err := buildScoredBridges(context.Background(), idx, "main", []factForLLM{a, b}, clusters, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
 	require.NoError(t, err)
+	require.Zero(t, reads.Count())
 	if got != nil {
 		t.Errorf("EffortNormal must return nil, got %v", got)
 	}
@@ -103,10 +103,10 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 // it would otherwise complete a bridge.
 // Retargeted to enumerateBridgeCandidates (Task 16: exclusion logic is unchanged).
 func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
-	a := makeFact("a.md", "authored", nil, []string{"auth"})
-	b := makeFact("b.md", string(fact.Discovered), nil, []string{"auth"})
+	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
+	b := makeFact("kb/b.md", string(fact.Discovered), nil, []string{"auth"})
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 	got := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeBoth, ScopeFilter{})
 	if len(got) != 0 {
@@ -122,8 +122,8 @@ func manyCrossClusterSeeds(n int) ([]factForLLM, ClusterResult) {
 	cluster1 := []string{}
 	for i := 0; i < n; i++ {
 		tok := tokenName(i)
-		p0 := "c0-" + tok + ".md"
-		p1 := "c1-" + tok + ".md"
+		p0 := "kb/c0-" + tok + ".md"
+		p1 := "kb/c1-" + tok + ".md"
 		seeds = append(seeds,
 			makeFact(p0, "authored", nil, []string{tok}),
 			makeFact(p1, "authored", nil, []string{tok}),
@@ -134,30 +134,25 @@ func manyCrossClusterSeeds(n int) ([]factForLLM, ClusterResult) {
 	return seeds, ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
 }
 
-// cohesiveMockIdx returns a MockSearchIndex where every SimilarityAdjacency
-// call returns a fully-connected graph (all pairs connected), every
-// ReverseDependentPaths returns an empty set, and every TokenDF returns 1.
-// This ensures buildScoredBridges keeps all candidates (cohesion == 1 ≥ CohFloor,
-// gap == 1, spec == 1), so budget truncation tests aren't confounded by gate drops.
-func cohesiveMockIdx(t *testing.T) *MockSearchIndex {
+// cohesiveIdx returns the search handle of a real store seeded so that
+// buildScoredBridges keeps every candidate: each seed is a real fact, and
+// every group of seeds sharing a token is fully connected by real SIMILAR_TO
+// edges, so cohesion is 1 (>= CohFloor); nothing cites anything, so the
+// derivation gap is 1; the document frequency is the real number of carriers.
+// Budget truncation tests are then not confounded by gate drops.
+func cohesiveIdx(t *testing.T, seeds []factForLLM) *index.Facade {
 	t.Helper()
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-			pairs := make([][2]string, 0, len(paths)*(len(paths)-1)/2)
-			for i := 0; i < len(paths); i++ {
-				for j := i + 1; j < len(paths); j++ {
-					pairs = append(pairs, [2]string{paths[i], paths[j]})
-				}
-			}
-			return index.NewSimilarityGraph(pairs), nil
-		}).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(1, nil).AnyTimes()
-	return idx
+	env := newGraphEnv(t, "main").seedAll(seeds)
+	groups := map[string][]string{}
+	for _, f := range seeds {
+		for _, tok := range append(append([]string(nil), f.Entities...), f.Domain...) {
+			groups[tok] = append(groups[tok], f.File)
+		}
+	}
+	for _, members := range groups {
+		env.similarAll(members)
+	}
+	return env.allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 }
 
 // TestBridgeSeeds_EffortBudget asserts the per-effort budget truncates the pool
@@ -170,9 +165,9 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(60)
 	ctx := context.Background()
 
-	med, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortMedium, testCfg, ScopeFilter{})
+	med, err := buildScoredBridges(ctx, cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, EffortMedium, testCfg, ScopeFilter{})
 	require.NoError(t, err)
-	hi, err := buildScoredBridges(ctx, cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	hi, err := buildScoredBridges(ctx, cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 
 	if len(med) != effortBudget(EffortMedium) {
@@ -196,7 +191,7 @@ func TestBridgeSeeds_EffortBudget(t *testing.T) {
 func TestBridgeSeeds_PriorityBandHoldsUnderLargePool(t *testing.T) {
 	seeds, clusters := manyCrossClusterSeeds(maxBridgeSeeds + 25) // far over every cap
 
-	hi, err := buildScoredBridges(context.Background(), cohesiveMockIdx(t), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
+	hi, err := buildScoredBridges(context.Background(), cohesiveIdx(t, seeds), "main", seeds, clusters, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if len(hi) != effortBudget(EffortHigh) {
 		t.Fatalf("high pool must cap at the effort budget: got %d, want %d", len(hi), effortBudget(EffortHigh))
@@ -222,10 +217,10 @@ func tokenName(i int) string {
 // TestBridgeSeeds_DomainOnly_NotEntity respects the bridge kind.
 // Retargeted to enumerateBridgeCandidates (Task 16: kind filtering is unchanged).
 func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
-	a := makeFact("a.md", "authored", []string{"auth"}, []string{"X"})
-	b := makeFact("b.md", "authored", []string{"auth"}, []string{"Y"})
+	a := makeFact("kb/a.md", "authored", []string{"auth"}, []string{"X"})
+	b := makeFact("kb/b.md", "authored", []string{"auth"}, []string{"Y"})
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
 	dom := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, ScopeFilter{})
@@ -246,11 +241,11 @@ func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 // surface. Before the fix orphan.md → 0 == a.md → 0, and the bridge vanished.
 // Retargeted to enumerateBridgeCandidates (Task 16: community-id logic is unchanged).
 func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
-	a := makeFact("a.md", "authored", nil, []string{"auth"})
-	orphan := makeFact("orphan.md", "authored", nil, []string{"auth"})
+	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
+	orphan := makeFact("kb/orphan.md", "authored", nil, []string{"auth"})
 	// a.md is in real community 0; orphan.md is in no cluster and no noise list.
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}},
 	}
 
 	got := enumerateBridgeCandidates([]factForLLM{a, orphan}, clusters, BridgeEntity, ScopeFilter{})
@@ -258,7 +253,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 	if !found {
 		t.Fatalf("orphan seed (absent from clusters) must not collide with community 0; expected an 'auth' bridge, got %+v", got)
 	}
-	if !setHasMember(set, "a.md") || !setHasMember(set, "orphan.md") {
+	if !setHasMember(set, "kb/a.md") || !setHasMember(set, "kb/orphan.md") {
 		t.Errorf("'auth' bridge must span a.md and orphan.md across communities: %+v", set)
 	}
 }
@@ -298,24 +293,11 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 	synthFacts := []fact.Fact{mk("kb/a.md"), mk("kb/b.md")}
 
-	m := NewMockSearchIndex(gomock.NewController(t))
 	// a,b cluster apart → their shared tokens form cross-community bridges.
-	expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
-	// Scoring expectations: cohesive graph (a↔b connected), no reverse deps, df=1.
-	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-			pairs := make([][2]string, 0)
-			for i := 0; i < len(paths); i++ {
-				for j := i + 1; j < len(paths); j++ {
-					pairs = append(pairs, [2]string{paths[i], paths[j]})
-				}
-			}
-			return index.NewSimilarityGraph(pairs), nil
-		}).AnyTimes()
-	m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(1, nil).AnyTimes()
+	// Scoring: a↔b similar (a real edge), nothing cites anything.
+	m := newGraphEnv(t, "agent/test").seedFacts(synthFacts...).
+		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
+		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	// Entity kind: only the shared ENTITY token bridges.
 	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeEntity, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})
@@ -348,12 +330,12 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 	// a.md: entity="auth" (no domain)
 	// b.md: domain=["auth"] (no entity)
 	// They share token "auth" across different communities.
-	a := makeFact("a.md", "authored", nil, []string{"auth"})
-	b := makeFact("b.md", "authored", []string{"auth"}, nil)
+	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
+	b := makeFact("kb/b.md", "authored", []string{"auth"}, nil)
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md"},
-			1: {"b.md"},
+			0: {"kb/a.md"},
+			1: {"kb/b.md"},
 		},
 	}
 
@@ -398,12 +380,12 @@ func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 	// a.md has "auth" in both Entities and Domain.
 	// b.md has "auth" only in Entities — ensures a cross-cluster bridge forms.
-	a := makeFact("a.md", "authored", []string{"auth"}, []string{"auth"})
-	b := makeFact("b.md", "authored", nil, []string{"auth"})
+	a := makeFact("kb/a.md", "authored", []string{"auth"}, []string{"auth"})
+	b := makeFact("kb/b.md", "authored", nil, []string{"auth"})
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md"},
-			1: {"b.md"},
+			0: {"kb/a.md"},
+			1: {"kb/b.md"},
 		},
 	}
 
@@ -414,7 +396,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 	// Count occurrences of a.md in Members.
 	count := 0
 	for _, m := range set.Members {
-		if m.File == "a.md" {
+		if m.File == "kb/a.md" {
 			count++
 		}
 	}
@@ -447,16 +429,10 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	const wantResolution = 2.0
 	const wantMinCommunity = 2
 
-	m := NewMockSearchIndex(gomock.NewController(t))
 	// a,b cluster apart so "shared" bridges across communities.
-	expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
-	// Scoring expectations for the cross-community candidate.
-	m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		Return(index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}}), nil).AnyTimes()
-	m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(1, nil).AnyTimes()
+	m := newGraphEnv(t, "agent/test").seedFacts(synthFacts...).
+		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
+		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testNeighborKinds, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -495,44 +471,38 @@ var testCfg = QualityConfig{
 // EffortNormal gate: buildScoredBridges must return (nil, nil) without calling
 // any idx method.
 func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-	// No expectations — any call to idx would fail the test.
-
 	seeds := []factForLLM{
-		makeFact("a.md", "authored", nil, []string{"tok"}),
-		makeFact("b.md", "authored", nil, []string{"tok"}),
+		makeFact("kb/a.md", "authored", nil, []string{"tok"}),
+		makeFact("kb/b.md", "authored", nil, []string{"tok"}),
 	}
+	idx := newGraphEnv(t, "main").seedAll(seeds).idx()
+	reads := guardReads(t, idx, readPolicy{}) // any read of the index fails the test
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
 	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Nil(t, got, "EffortNormal must return nil, no idx calls")
+	require.Zero(t, reads.Count())
 }
 
 // TestBuildScoredBridges_SmallCohesiveCrossCommToken emits a bridge for a
 // small (<= MaxMembers) cross-community token with high cohesion.
 func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
 	ctx := context.Background()
 	branch := "main"
 
 	seeds := []factForLLM{
-		makeFact("a.md", "authored", nil, []string{"alpha"}),
-		makeFact("b.md", "authored", nil, []string{"alpha"}),
+		makeFact("kb/a.md", "authored", nil, []string{"alpha"}),
+		makeFact("kb/b.md", "authored", nil, []string{"alpha"}),
 	}
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
 	// a↔b connected → cohesion = 1.0 (≥ CohFloor=0.5) — passes the gate.
-	g := index.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -541,32 +511,27 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 	require.Greater(t, got[0].Q, 0.0)
 	// Members must be path-sorted and contain exactly a.md and b.md.
 	require.Len(t, got[0].Members, 2)
-	require.Equal(t, "a.md", got[0].Members[0].File)
-	require.Equal(t, "b.md", got[0].Members[1].File)
+	require.Equal(t, "kb/a.md", got[0].Members[0].File)
+	require.Equal(t, "kb/b.md", got[0].Members[1].File)
 }
 
 // TestBuildScoredBridges_LowCohesion_DroppedByGate verifies that a
 // cross-community token with cohesion < CohFloor is dropped (not included in
 // the output at all, since buildScoredBridges only emits kept bridges).
 func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
 	ctx := context.Background()
 	branch := "main"
 
 	seeds := []factForLLM{
-		makeFact("x.md", "authored", nil, []string{"gappy"}),
-		makeFact("y.md", "authored", nil, []string{"gappy"}),
+		makeFact("kb/x.md", "authored", nil, []string{"gappy"}),
+		makeFact("kb/y.md", "authored", nil, []string{"gappy"}),
 	}
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"x.md"}, 1: {"y.md"}},
+		Clusters: map[int][]string{0: {"kb/x.md"}, 1: {"kb/y.md"}},
 	}
 
 	// No edges → cohesion = 0 < CohFloor=0.5 → gate fires → not kept.
-	g := index.NewSimilarityGraph(nil)
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	idx := newGraphEnv(t, branch).seedAll(seeds).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -577,39 +542,33 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 // with > MaxMembers members is reshaped: the cohesive cross-community subset is
 // kept and the incoherent remainder is discarded.
 func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
 	ctx := context.Background()
 	branch := "main"
 
 	// 7 members > MaxMembers=5. Paths p0..p4 form a tight cohesive subset
 	// spanning communities 0 (p0,p1,p2) and 1 (p3,p4). p5 and p6 are also in
 	// communities but have no edges to the tight subset.
-	paths := []string{"p0.md", "p1.md", "p2.md", "p3.md", "p4.md", "p5.md", "p6.md"}
+	paths := []string{"kb/p0.md", "kb/p1.md", "kb/p2.md", "kb/p3.md", "kb/p4.md", "kb/p5.md", "kb/p6.md"}
 	seeds := make([]factForLLM, len(paths))
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad"})
 	}
 	cr := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"p0.md", "p1.md", "p2.md", "p5.md"},
-			1: {"p3.md", "p4.md", "p6.md"},
+			0: {"kb/p0.md", "kb/p1.md", "kb/p2.md", "kb/p5.md"},
+			1: {"kb/p3.md", "kb/p4.md", "kb/p6.md"},
 		},
 	}
 
 	// Dense subgraph: p0-p4 all connected to each other (cross-community subset).
 	// p5 and p6 have no edges to anyone.
 	cohesivePairs := [][2]string{
-		{"p0.md", "p1.md"}, {"p0.md", "p2.md"}, {"p0.md", "p3.md"}, {"p0.md", "p4.md"},
-		{"p1.md", "p2.md"}, {"p1.md", "p3.md"}, {"p1.md", "p4.md"},
-		{"p2.md", "p3.md"}, {"p2.md", "p4.md"},
-		{"p3.md", "p4.md"},
+		{"kb/p0.md", "kb/p1.md"}, {"kb/p0.md", "kb/p2.md"}, {"kb/p0.md", "kb/p3.md"}, {"kb/p0.md", "kb/p4.md"},
+		{"kb/p1.md", "kb/p2.md"}, {"kb/p1.md", "kb/p3.md"}, {"kb/p1.md", "kb/p4.md"},
+		{"kb/p2.md", "kb/p3.md"}, {"kb/p2.md", "kb/p4.md"},
+		{"kb/p3.md", "kb/p4.md"},
 	}
-	g := index.NewSimilarityGraph(cohesivePairs)
-
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	idx := newGraphEnv(t, branch).seedAll(seeds).similar(cohesivePairs...).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -624,8 +583,8 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 	for _, m := range bridge.Members {
 		memberPaths[m.File] = true
 	}
-	require.False(t, memberPaths["p5.md"], "p5.md has no edges; must be excluded by reshape")
-	require.False(t, memberPaths["p6.md"], "p6.md has no edges; must be excluded by reshape")
+	require.False(t, memberPaths["kb/p5.md"], "p5.md has no edges; must be excluded by reshape")
+	require.False(t, memberPaths["kb/p6.md"], "p6.md has no edges; must be excluded by reshape")
 	require.Greater(t, bridge.Q, 0.0)
 }
 
@@ -633,27 +592,25 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 // oversized group where reshape finds no cross-community connected pair yields
 // no bridge (candidate dropped).
 func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
 	ctx := context.Background()
 	branch := "main"
 
 	// 6 members > MaxMembers=5. No edges at all → reshapeCohesiveSubset returns nil.
-	paths := []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"}
+	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md", "kb/e.md", "kb/f.md"}
 	seeds := make([]factForLLM, len(paths))
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad2"})
 	}
 	cr := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md", "b.md", "c.md"},
-			1: {"d.md", "e.md", "f.md"},
+			0: {"kb/a.md", "kb/b.md", "kb/c.md"},
+			1: {"kb/d.md", "kb/e.md", "kb/f.md"},
 		},
 	}
 
 	// No edges → reshape can find no cross-community connected pair → drops candidate.
-	g := index.NewSimilarityGraph(nil)
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
+	idx := newGraphEnv(t, branch).seedAll(seeds).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency"}}) // no scoring read after the drop
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -663,45 +620,30 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 // TestBuildScoredBridges_QDescOrder verifies that multiple bridges are ranked
 // by Q descending, then Token ascending on ties.
 func TestBuildScoredBridges_QDescOrder(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
 	ctx := context.Background()
 	branch := "main"
 
-	// Two tokens: "alpha" (cohesion 1.0) and "beta" (cohesion 1.0).
-	// Both cross-community; alpha has df=1 (spec=1.0), beta has df=2 (spec=0.5).
-	// With WCoh=WGap=WSpec=1 and gap=1.0 for both:
-	// alpha Q = 1*1.0 + 1*1.0 + 1*1.0 = 3.0
-	// beta  Q = 1*1.0 + 1*1.0 + 1*0.5 = 2.5
+	// Two tokens: "alpha" and "beta", both cross-community with cohesion 1.0.
+	// alpha is carried by 2 live facts (df=2, spec=0.5); beta by 3 (df=3,
+	// spec=1/3: a third carrier is seeded in community 0). With
+	// WCoh=WGap=WSpec=1 and gap=1.0 for both, alpha's Q exceeds beta's.
 	// Expected order: alpha first.
 	seeds := []factForLLM{
-		makeFact("a1.md", "authored", nil, []string{"alpha"}),
-		makeFact("a2.md", "authored", nil, []string{"alpha"}),
-		makeFact("b1.md", "authored", nil, []string{"beta"}),
-		makeFact("b2.md", "authored", nil, []string{"beta"}),
+		makeFact("kb/a1.md", "authored", nil, []string{"alpha"}),
+		makeFact("kb/a2.md", "authored", nil, []string{"alpha"}),
+		makeFact("kb/b1.md", "authored", nil, []string{"beta"}),
+		makeFact("kb/b2.md", "authored", nil, []string{"beta"}),
+		makeFact("kb/b3.md", "authored", nil, []string{"beta"}),
 	}
 	cr := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a1.md", "b1.md"},
-			1: {"a2.md", "b2.md"},
+			0: {"kb/a1.md", "kb/b1.md", "kb/b3.md"},
+			1: {"kb/a2.md", "kb/b2.md"},
 		},
 	}
 
-	// All pairs connected → cohesion = 1.0 for any pair-sized group.
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-			pairs := make([][2]string, 0)
-			for i := 0; i < len(paths); i++ {
-				for j := i + 1; j < len(paths); j++ {
-					pairs = append(pairs, [2]string{paths[i], paths[j]})
-				}
-			}
-			return index.NewSimilarityGraph(pairs), nil
-		}).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	// alpha: df=1, beta: df=2
-	idx.EXPECT().TokenDF(ctx, branch, "alpha", string(BridgeEntity)).Return(1, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, "beta", string(BridgeEntity)).Return(2, nil).AnyTimes()
+	// Every token group is fully connected → cohesion = 1.0.
+	idx := cohesiveIdx(t, seeds)
 
 	got, err := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	require.NoError(t, err)
@@ -718,21 +660,20 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 // Written BEFORE the production wiring is changed (TDD: proves the invariant
 // survives the switch). The test fails if the effort gate is bypassed.
 func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-	// No expectations: any idx call fails the test.
-
 	seeds := []factForLLM{
-		makeFact("a.md", "authored", nil, []string{"tok"}),
-		makeFact("b.md", "authored", nil, []string{"tok"}),
+		makeFact("kb/a.md", "authored", nil, []string{"tok"}),
+		makeFact("kb/b.md", "authored", nil, []string{"tok"}),
 	}
+	idx := newGraphEnv(t, "main").seedAll(seeds).idx()
+	reads := guardReads(t, idx, readPolicy{}) // any read of the index fails the test
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
 	got, err := buildScoredBridges(context.Background(), idx, "main", seeds, cr, BridgeBoth, EffortNormal, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	require.Nil(t, got, "forward path at EffortNormal must return (nil, nil) — byte-identical contract")
+	require.Zero(t, reads.Count())
 }
 
 // ─── scope-exclusion tests (Task 19) ─────────────────────────────────────────
@@ -749,13 +690,13 @@ func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
 func TestEnumerate_ScopedDomainExcludesMatchingToken(t *testing.T) {
 	// "auth" domain token crosses communities — matches scope.Domain → excluded.
 	// "billing" domain token crosses communities — does NOT match scope → included.
-	a := makeFact("a.md", "authored", []string{"auth", "billing"}, nil)
-	b := makeFact("b.md", "authored", []string{"auth", "billing"}, nil)
-	c := makeFact("c.md", "authored", []string{"billing"}, nil)
+	a := makeFact("kb/a.md", "authored", []string{"auth", "billing"}, nil)
+	b := makeFact("kb/b.md", "authored", []string{"auth", "billing"}, nil)
+	c := makeFact("kb/c.md", "authored", []string{"billing"}, nil)
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md"},
-			1: {"b.md", "c.md"},
+			0: {"kb/a.md"},
+			1: {"kb/b.md", "kb/c.md"},
 		},
 	}
 	scope := ScopeFilter{Domain: []string{"Auth"}} // canonical match for "auth"
@@ -776,12 +717,12 @@ func TestEnumerate_ScopedDomainExcludesMatchingToken(t *testing.T) {
 func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 	// "Alice" entity token crosses communities — matches scope.Entities → excluded.
 	// "Bob" entity token crosses communities — does NOT match → included.
-	a := makeFact("a.md", "authored", nil, []string{"Alice", "Bob"})
-	b := makeFact("b.md", "authored", nil, []string{"Alice", "Bob"})
+	a := makeFact("kb/a.md", "authored", nil, []string{"Alice", "Bob"})
+	b := makeFact("kb/b.md", "authored", nil, []string{"Alice", "Bob"})
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md"},
-			1: {"b.md"},
+			0: {"kb/a.md"},
+			1: {"kb/b.md"},
 		},
 	}
 	scope := ScopeFilter{Entities: []string{"alice"}} // canonical match for "Alice"
@@ -799,10 +740,10 @@ func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 // TestEnumerate_EmptyScopeUnchanged verifies byte-identical behavior when scope
 // is empty: ALL cross-community tokens are emitted, same as pre-scope behavior.
 func TestEnumerate_EmptyScopeUnchanged(t *testing.T) {
-	a := makeFact("a.md", "authored", []string{"auth"}, nil)
-	b := makeFact("b.md", "authored", []string{"auth"}, nil)
+	a := makeFact("kb/a.md", "authored", []string{"auth"}, nil)
+	b := makeFact("kb/b.md", "authored", []string{"auth"}, nil)
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
 	withScope := enumerateBridgeCandidates([]factForLLM{a, b}, clusters, BridgeDomain, ScopeFilter{})
@@ -819,10 +760,10 @@ func TestEnumerate_EmptyScopeUnchanged(t *testing.T) {
 func TestEnumerate_CrossKindNoExclusion(t *testing.T) {
 	// "auth" appears as a DOMAIN token on both facts.
 	// scope has "auth" as an ENTITY (not a domain) — the domain token must NOT be excluded.
-	a := makeFact("a.md", "authored", []string{"auth"}, nil)
-	b := makeFact("b.md", "authored", []string{"auth"}, nil)
+	a := makeFact("kb/a.md", "authored", []string{"auth"}, nil)
+	b := makeFact("kb/b.md", "authored", []string{"auth"}, nil)
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}},
+		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 	scope := ScopeFilter{Entities: []string{"auth"}} // only entity scope, not domain
 
@@ -838,15 +779,15 @@ func TestEnumerate_CrossKindNoExclusion(t *testing.T) {
 // before scoring, so it never appears in the output.
 func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 	ctx := context.Background()
-	idx := cohesiveMockIdx(t)
 
 	// "scoped" entity is the scope token; "other" is not.
 	seeds := []factForLLM{
-		makeFact("s1.md", "authored", nil, []string{"scoped", "other"}),
-		makeFact("s2.md", "authored", nil, []string{"scoped", "other"}),
+		makeFact("kb/s1.md", "authored", nil, []string{"scoped", "other"}),
+		makeFact("kb/s2.md", "authored", nil, []string{"scoped", "other"}),
 	}
+	idx := cohesiveIdx(t, seeds)
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"s1.md"}, 1: {"s2.md"}},
+		Clusters: map[int][]string{0: {"kb/s1.md"}, 1: {"kb/s2.md"}},
 	}
 	scope := ScopeFilter{Entities: []string{"scoped"}}
 
@@ -868,14 +809,14 @@ func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 // leaves buildScoredBridges output byte-identical to the pre-scope behavior.
 func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 	ctx := context.Background()
-	idx := cohesiveMockIdx(t)
 
 	seeds := []factForLLM{
-		makeFact("u.md", "authored", nil, []string{"tok"}),
-		makeFact("v.md", "authored", nil, []string{"tok"}),
+		makeFact("kb/u.md", "authored", nil, []string{"tok"}),
+		makeFact("kb/v.md", "authored", nil, []string{"tok"}),
 	}
+	idx := cohesiveIdx(t, seeds)
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"u.md"}, 1: {"v.md"}},
+		Clusters: map[int][]string{0: {"kb/u.md"}, 1: {"kb/v.md"}},
 	}
 
 	got, err := buildScoredBridges(ctx, idx, "main", seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
@@ -887,23 +828,18 @@ func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 // TestBuildScoredBridges_Determinism verifies that two identical calls produce
 // identical ordering and member sets.
 func TestBuildScoredBridges_Determinism(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
 	ctx := context.Background()
 	branch := "main"
 
 	seeds := []factForLLM{
-		makeFact("p.md", "authored", nil, []string{"det"}),
-		makeFact("q.md", "authored", nil, []string{"det"}),
+		makeFact("kb/p.md", "authored", nil, []string{"det"}),
+		makeFact("kb/q.md", "authored", nil, []string{"det"}),
 	}
 	cr := ClusterResult{
-		Clusters: map[int][]string{0: {"p.md"}, 1: {"q.md"}},
+		Clusters: map[int][]string{0: {"kb/p.md"}, 1: {"kb/q.md"}},
 	}
 
-	g := index.NewSimilarityGraph([][2]string{{"p.md", "q.md"}})
-	idx.EXPECT().SimilarityAdjacency(ctx, gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(ctx, gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(ctx, branch, gomock.Any(), gomock.Any()).Return(1, nil).AnyTimes()
+	idx := newGraphEnv(t, branch).seedAll(seeds).similar([2]string{"kb/p.md", "kb/q.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF").idx()
 
 	run1, err1 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})
 	run2, err2 := buildScoredBridges(ctx, idx, branch, seeds, cr, BridgeEntity, EffortHigh, testCfg, ScopeFilter{})

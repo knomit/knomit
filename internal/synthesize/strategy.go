@@ -24,6 +24,7 @@ import (
 	"knomit/internal/store/model"
 
 	"knomit/internal/store/index"
+	"knomit/internal/store/vocab"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -32,18 +33,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
-
-// SearchQuery is the store query surface synthesize depends on: fact search
-// (FactQuery), graph queries (GraphStore), and methodology matching
-// (MethodologyMatcher). It deliberately excludes HistoryQuery — synthesize
-// never reads commit-log/revision history — so a strategy cannot reach a
-// history method through this handle. store.SearchIndex (the composite)
-// satisfies it, as does the transitional *MockSearchIndex.
-type SearchQuery interface {
-	store.FactQuery
-	store.GraphStore
-	store.MethodologyMatcher
-}
 
 // Deps is the per-call bundle of everything a Strategy method may reach for:
 // the resolved store indices, the repo instance (config + embedder), and the
@@ -65,16 +54,16 @@ type Deps struct {
 	// Files reads the system files (.knomit/) the ref gate resolves a new
 	// ref against, from the same Service as Facts.
 	Files    *facts.Repo
-	Search   SearchQuery
+	Search   *index.Facade
 	Pipeline store.PipelineIndex
 	Branches store.BranchIndex
 	// Abstraction is the title-embedding axis and the restatement shortlist
 	// built on it (the consolidation-scope fix). Review-pipeline only.
-	Abstraction store.AbstractionIndex
+	Abstraction *vocab.AbstractionIndex
 	// Motifs is alias resolution over the motif vocabulary. Review-pipeline
 	// only, like Abstraction: it is derived state rebuilt under review's own
 	// budget, and no runtime path may pay for it.
-	Motifs     store.MotifIndex
+	Motifs     *vocab.MotifIndex
 	Effort     Effort
 	Scope      ScopeFilter
 	OnProgress func(ProgressEvent)

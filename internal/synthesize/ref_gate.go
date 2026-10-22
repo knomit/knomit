@@ -2,8 +2,8 @@ package synthesize
 
 import (
 	"knomit/internal/refs"
-	"knomit/internal/store"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
 )
 
 // writeGate is the ONE constructor of the ref gate every synthesize write goes
@@ -23,7 +23,7 @@ import (
 // or carry refs as prior; they use this constructor anyway so that no gate in
 // this package is built without the file resolver.
 // TestSynthesize_OneRefGateConstructor keeps it that way.
-func writeGate(localRepoID string, idx store.FactQuery, files *facts.Repo, branch string) refs.Gate {
+func writeGate(localRepoID string, idx *index.FactQuery, files *facts.Repo, branch string) refs.Gate {
 	g := refs.New(localRepoID, refs.FromFactQuery(idx, branch))
 	if files != nil {
 		g = g.WithFiles(refs.FromSystemFiles(files, branch))

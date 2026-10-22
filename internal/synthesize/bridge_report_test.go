@@ -8,7 +8,6 @@ import (
 	"knomit/internal/store/index"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"knomit/internal/store/facts"
 )
@@ -36,10 +35,6 @@ func makeSearchResult(path, title, body, typ, origin string, domains, entities [
 // across ≥2 communities with cohesive members is kept (Kept=true, Q>0).
 func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
 	// Two synthesis facts in different clusters sharing entity "bridgeTok".
@@ -52,38 +47,12 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 	}
 
 	// a,c,d cluster together; b stands alone → bridgeTok ({a,b}) forms a
-	// cross-community bridge, singleClusterTok ({c,d}) does not.
-	expectScopedClusterPartition(idx, searchResults, [][]string{
-		{"kb/a.md", "kb/c.md", "kb/d.md"},
-		{"kb/b.md"},
-	})
-
-	// a↔b are connected → cohesion = 1.0 (one pair, one edge)
-	graphAB := index.NewSimilarityGraph([][2]string{{"kb/a.md", "kb/b.md"}})
-
-	// c↔d: no edges → cohesion = 0
-	graphEmpty := index.NewSimilarityGraph(nil)
-
-	// SimilarityAdjacency: for bridgeTok members (a,b) → return graph with a↔b edge.
-	// For singleClusterTok: enumerateBridgeCandidates won't produce a candidate (same community),
-	// but allow AnyTimes to not over-constrain.
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-			for _, p := range paths {
-				if p == "kb/a.md" {
-					return graphAB, nil
-				}
-			}
-			return graphEmpty, nil
-		}).AnyTimes()
-
-	// ReverseDependentPaths: no links → gap = 1.0
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-
-	// TokenDF: bridgeTok appears in 2 docs
-	idx.EXPECT().TokenDF(gomock.Any(), branch, gomock.Any(), gomock.Any()).
-		Return(2, nil).AnyTimes()
+	// cross-community bridge, singleClusterTok ({c,d}) does not. a↔b are
+	// similar (a real SIMILAR_TO edge) → cohesion = 1.0 (one pair, one edge);
+	// nothing cites anything → gap = 1.0; bridgeTok is carried by 2 live facts.
+	idx := newGraphEnv(t, branch).seedResults(searchResults).
+		partition([][]string{{"kb/a.md", "kb/c.md", "kb/d.md"}, {"kb/b.md"}}).
+		similar([2]string{"kb/a.md", "kb/b.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -119,10 +88,6 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 // members are all in one community is gated out (Kept=false, Q=0) or not emitted.
 func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
 	// Two facts sharing entity "shared" but both in community 0 → no bridge.
@@ -132,14 +97,12 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 	}
 
 	// Both in same cluster → enumerateBridgeCandidates will NOT produce a bridge candidate.
-	// x,y in one community → their shared token is not a cross-community bridge.
-	expectScopedClusterPartition(idx, searchResults, [][]string{
-		{"kb/x.md", "kb/y.md"},
-	})
-
-	// enumerateBridgeCandidates returns nothing for same-community → scoring functions
-	// MUST NEVER be called. No expectations are set for SimilarityAdjacency/
-	// ReverseDependentPaths/TokenDF, so any such call would fail the test.
+	// x,y in one community → their shared token is not a cross-community bridge,
+	// so the scoring reads (SimilarityAdjacency, ReverseDependentPaths, TokenDF)
+	// MUST NEVER happen: the strict policy allows only the clustering reads.
+	idx := newGraphEnv(t, branch).seedResults(searchResults).
+		partition([][]string{{"kb/x.md", "kb/y.md"}}).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"Search", "SubgraphEdges"}})
 
 	cfg := QualityConfig{
 		CohFloor:     0.5,
@@ -162,10 +125,6 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 // Q=0 (the gate path of bridgeQ returns (0, false)).
 func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
 	// Two facts sharing entity "gappy" in DIFFERENT communities → a real
@@ -176,18 +135,8 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 	}
 	// p,q in distinct communities → their shared token bridges, but with no
 	// SIMILAR_TO edge between them cohesion is 0 and the candidate is gated out.
-	expectScopedClusterPartition(idx, searchResults, [][]string{
-		{"kb/p.md"},
-		{"kb/q.md"},
-	})
-
-	// No SIMILAR_TO edges between members → cohesion 0 < CohFloor (0.5).
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		Return(index.NewSimilarityGraph(nil), nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(2, nil).AnyTimes()
+	idx := newGraphEnv(t, branch).seedResults(searchResults).
+		partition([][]string{{"kb/p.md"}, {"kb/q.md"}}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5, // cohesion 0 fails this gate
@@ -219,10 +168,6 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 // Q descending, then Token ascending for ties.
 func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
 	// Two tokens across different clusters: "alpha" (cohesive) and "beta" (not cohesive)
@@ -233,26 +178,10 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 		makeSearchResult("kb/b2.md", "B2", "b", "synthesis", "authored", nil, []string{"beta"}, 0.9, 1),
 	}
 
-	expectScopedClusterPartition(idx, searchResults, [][]string{
-		{"kb/a1.md", "kb/b1.md"},
-		{"kb/a2.md", "kb/b2.md"},
-	})
-
-	// alpha has edges → cohesion 1.0; beta has no edges → cohesion 0 (gated out by CohFloor=0.5)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-			for _, p := range paths {
-				if p == "kb/a1.md" {
-					return index.NewSimilarityGraph([][2]string{{"kb/a1.md", "kb/a2.md"}}), nil
-				}
-			}
-			return index.NewSimilarityGraph(nil), nil
-		}).AnyTimes()
-
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-		Return(map[string]struct{}{}, nil).AnyTimes()
-	idx.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(2, nil).AnyTimes()
+	// alpha has an edge → cohesion 1.0; beta has none → cohesion 0 (gated out by CohFloor=0.5)
+	idx := newGraphEnv(t, branch).seedResults(searchResults).
+		partition([][]string{{"kb/a1.md", "kb/b1.md"}, {"kb/a2.md", "kb/b2.md"}}).
+		similar([2]string{"kb/a1.md", "kb/a2.md"}).allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 	cfg := QualityConfig{
 		CohFloor:     0.5, // beta (cohesion=0) gated out
@@ -283,10 +212,6 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 // an error from SimilarityAdjacency surfaces from BridgeComponentReport.
 func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
 	searchResults := []index.SearchResult{
@@ -295,12 +220,9 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 	}
 	boom := errors.New("adjacency unavailable")
 
-	expectScopedClusterPartition(idx, searchResults, [][]string{
-		{"kb/a.md"},
-		{"kb/b.md"},
-	})
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-		Return(index.SimilarityGraph{}, boom).AnyTimes()
+	idx := newGraphEnv(t, branch).seedResults(searchResults).
+		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).idx()
+	guardReads(t, idx, readPolicy{AllowAll: true, Fail: map[string]error{"SimilarityAdjacency": boom}})
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 
@@ -313,22 +235,17 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 // produces no scored bridges (BridgeComponentReport returns early at normal effort).
 func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	ctx := context.Background()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
 	branch := "agent/test"
 
 	searchResults := []index.SearchResult{
 		makeSearchResult("kb/a.md", "A", "b", "synthesis", "authored", nil, []string{"tok"}, 0.9, 1),
 		makeSearchResult("kb/b.md", "B", "b", "synthesis", "authored", nil, []string{"tok"}, 0.8, 1),
 	}
-	// ScopedCluster runs before the effort gate, so wire it; scoring methods
-	// must NOT be called at normal effort (no expectations set for them).
-	expectScopedClusterPartition(idx, searchResults, [][]string{
-		{"kb/a.md"},
-		{"kb/b.md"},
-	})
+	// ScopedCluster runs before the effort gate, so its reads happen; the scoring
+	// reads must NOT happen at normal effort (the strict policy fails on them).
+	idx := newGraphEnv(t, branch).seedResults(searchResults).
+		partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"Search", "SubgraphEdges"}})
 
 	cfg := QualityConfig{CohFloor: 0.5, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortNormal, 1.0, 1, testNeighborKinds, cfg)

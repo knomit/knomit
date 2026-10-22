@@ -531,6 +531,7 @@ func (si *Index) delete(ctx context.Context, branch, path string) error {
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
 func (fq *FactQuery) GetByPath(ctx context.Context, branch, path string) (*facts.FactWithBody, error) {
+	fq.probe("GetByPath")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)

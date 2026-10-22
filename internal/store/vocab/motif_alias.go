@@ -31,7 +31,7 @@ const (
 	aliasMethodJudge = "judge"
 )
 
-// MotifIndex implements store.MotifIndex.
+// MotifIndex is alias resolution over the corpus motif vocabulary.
 type MotifIndex struct{ rh *vcs.Repo }
 
 // NewMotifIndex returns motif alias resolution over rh, the SAME *vcs.Repo the

@@ -4,10 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/index"
-
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 )
@@ -266,22 +263,17 @@ func TestBridgeLineage_MotifSignalExcludesParentAndOwnSource(t *testing.T) {
 func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 	run := func(t *testing.T, childRefs []string) []BridgeSeedSet {
 		t.Helper()
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
 		seeds := []factForLLM{
-			{File: "a.md", Domain: []string{"billing"}, Entities: []string{"Invoice"}},
-			{File: "b.md", Domain: []string{"billing"}, Entities: []string{"Payment"},
+			{File: "kb/a.md", Domain: []string{"billing"}, Entities: []string{"Invoice"}},
+			{File: "kb/b.md", Domain: []string{"billing"}, Entities: []string{"Payment"},
 				LineageRefs: localFactRefPaths(childRefs, testLocalRepoID)},
 		}
-		g := index.NewSimilarityGraph([][2]string{{"a.md", "b.md"}})
-		clusters := ClusterResult{Clusters: map[int][]string{0: {"a.md"}, 1: {"b.md"}}}
+		clusters := ClusterResult{Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}}}
 
-		idx := NewMockSearchIndex(ctrl)
-		idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"a.md", "b.md"})).
-			Return(g, nil).AnyTimes()
-		idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-			Return(map[string]struct{}{}, nil).AnyTimes()
+		// The lineage is the seeds' own; the stored facts cite nothing, so the
+		// reverse dependents are the empty set the scoring path expects.
+		idx := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/a.md", "kb/b.md"}).idx()
+		guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 		out, err := buildFilteredBridges(context.Background(), idx, "main", seeds, clusters,
 			ScopeFilter{Domain: []string{"auth"}}, EffortHigh, filteredCfg)
@@ -291,7 +283,7 @@ func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 
 	require.Len(t, run(t, nil), 1,
 		"control: the scoped extractor DOES produce a bridge for this pair when nothing cites")
-	require.Empty(t, run(t, []string{storedRef("a.md")}),
+	require.Empty(t, run(t, []string{storedRef("kb/a.md")}),
 		"the same pair, with b citing a, must not reach an agent")
 }
 
@@ -389,22 +381,15 @@ func TestBridgeLineage_BackwardProjectionExcludesLineagePair(t *testing.T) {
 
 	run := func(t *testing.T, facts []fact.Fact) []BridgeSeedSet {
 		t.Helper()
-		m := NewMockSearchIndex(gomock.NewController(t))
-		expectScopedClusterPartition(m, nil, [][]string{{"kb/a.md"}, {"kb/b.md"}})
-		m.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_ context.Context, paths []string) (index.SimilarityGraph, error) {
-				pairs := make([][2]string, 0)
-				for i := 0; i < len(paths); i++ {
-					for j := i + 1; j < len(paths); j++ {
-						pairs = append(pairs, [2]string{paths[i], paths[j]})
-					}
-				}
-				return index.NewSimilarityGraph(pairs), nil
-			}).AnyTimes()
-		m.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).
-			Return(map[string]struct{}{}, nil).AnyTimes()
-		m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(1, nil).AnyTimes()
+		stored := make([]fact.Fact, len(facts))
+		for i, f := range facts {
+			f.Refs = nil // the lineage is the passed facts' own; stored, they cite nothing
+			stored[i] = f
+		}
+		env := newGraphEnv(t, "agent/test").seedFacts(stored...).
+			partition([][]string{{"kb/a.md"}, {"kb/b.md"}}).
+			similar([2]string{"kb/a.md", "kb/b.md"})
+		m := env.allow("ReverseDependentPaths", "SimilarityAdjacency", "TokenDF", "Search", "SubgraphEdges").idx()
 
 		out, err := BuildBackwardBridges(ctx, m, facts, "agent/test", testLocalRepoID,
 			EffortHigh, BridgeDomain, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})

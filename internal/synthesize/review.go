@@ -23,6 +23,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
 
 	"knomit/internal/llm"
 	"knomit/internal/repos"
@@ -56,7 +57,7 @@ type Reviewer struct {
 // level are not constrained by it.
 //
 // ScopedCluster clusters the review subgraph in-process via
-// SearchQuery.SubgraphEdges on the per-repo Service; no cluster cache is
+// Facade.SubgraphEdges on the per-repo Service; no cluster cache is
 // threaded through the synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	return NewReviewerWithEffort(ri, onProgress, DefaultEffort)
@@ -297,7 +298,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 // testing behaviour rather than being rewritten around the new seam.
 
 // storeIndices returns the store indices under the repo read lock.
-func (r *Reviewer) storeIndices() (*facts.Index, SearchQuery, store.PipelineIndex, store.BranchIndex) {
+func (r *Reviewer) storeIndices() (*facts.Index, *index.Facade, store.PipelineIndex, store.BranchIndex) {
 	gs, _, idx, pipelineIdx, branches, _, _ := r.p.storeIndices()
 	return gs, idx, pipelineIdx, branches
 }
@@ -305,7 +306,7 @@ func (r *Reviewer) storeIndices() (*facts.Index, SearchQuery, store.PipelineInde
 // dirtyFacts returns the review seed facts (changed since watermark, or the
 // whole epistemic corpus on a full scan), projected onto the prompt-facing
 // shape the review path works in.
-func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs *facts.Index, idx *index.Facade, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
 	seeds, _, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, err

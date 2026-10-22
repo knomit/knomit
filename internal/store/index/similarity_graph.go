@@ -71,6 +71,9 @@ func NewSimilarityGraph(pairs [][2]string) SimilarityGraph {
 // Liveness is enforced via NOT n.deleted = true on the neighbor side.
 // An empty or single-element paths slice returns an empty graph.
 func (gs *GraphStore) SimilarityAdjacency(ctx context.Context, paths []string) (SimilarityGraph, error) {
+	if err := gs.probe("SimilarityAdjacency"); err != nil {
+		return SimilarityGraph{}, err
+	}
 	g := SimilarityGraph{adj: make(map[string]map[string]struct{})}
 	if len(paths) < 2 {
 		return g, nil

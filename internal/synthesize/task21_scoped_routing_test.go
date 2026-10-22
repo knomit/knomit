@@ -9,10 +9,7 @@ import (
 
 	"knomit/internal/store/model"
 
-	"knomit/internal/store/index"
-
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -69,9 +66,7 @@ func TestScopeLabel_Deterministic(t *testing.T) {
 // StartSession, every DiscoverWorkPayload has ScopeLabel set.
 //
 // Seed facts: two facts in "auth" domain across different simulated communities.
-// The idx mock must handle SimilarityAdjacency calls (buildFilteredBridges uses it).
 func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
-	ctrl := gomock.NewController(t)
 
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
@@ -97,11 +92,6 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 		require.NoErrorf(t, werr, "seed %d", i)
 	}
 
-	// Build a mock idx with expectations for buildFilteredBridges.
-	// buildFilteredBridges calls SimilarityAdjacency and derivationGap
-	// (via ReverseDependentPaths). It does NOT call TokenDF (that's buildScoredBridges).
-	idx := NewMockSearchIndex(ctrl)
-
 	// Clustering (Search + SubgraphEdges) is driven by ScopedCluster (the cluster
 	// step, not by buildFilteredBridges itself).  The real svc.Search() is used for clustering;
 	// we inject idx via a test-specific dependency path via cohesive mocking.
@@ -119,8 +109,6 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 	// so no idx calls occur (EffortNormal returns early), but confirm that
 	// the dispatch path selects buildFilteredBridges (empty result) vs buildScoredBridges.
 	// For the ScopeLabel assertion, we inject a discover item directly.
-	_ = ctrl
-	_ = idx
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
@@ -205,9 +193,6 @@ func TestForwardDispatch_Scoped_ScopeLabelOnPayload(t *testing.T) {
 // Direct unit: call buildFilteredBridges and verify BridgeSeedSet, then
 // simulate the payload-construction path to confirm ScopeLabel assignment.
 func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-
 	seeds := []factForLLM{
 		makeFact("kb/auth/a.md", "authored", []string{"auth"}, []string{"permissions"}),
 		makeFact("kb/auth/b.md", "authored", []string{"auth"}, []string{"acl"}),
@@ -217,11 +202,12 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 	}
 	scope := ScopeFilter{Domain: []string{"auth"}}
 
-	// buildFilteredBridges calls SimilarityAdjacency (no TokenDF — filtered path).
-	g := index.NewSimilarityGraph([][2]string{{"kb/auth/a.md", "kb/auth/b.md"}})
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(map[string]struct{}{}, nil).AnyTimes()
-	// buildFilteredBridges must NOT call TokenDF — no expectation set.
+	// buildFilteredBridges reads SimilarityAdjacency and the reverse dependents
+	// (derivationGap), and must NOT read TokenDF (that is buildScoredBridges):
+	// the strict policy fails the test on any other read.
+	env := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/auth/a.md", "kb/auth/b.md"})
+	idx := env.idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	filteredCfg := QualityConfig{
 		CohFloor:     0.0, // accept all cohesion for this test

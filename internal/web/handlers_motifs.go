@@ -19,7 +19,7 @@ import (
 )
 
 // motifsProvider is the narrow interface the motif vocabulary handlers depend
-// on. Every method is a straight pass-through to store.MotifIndex — the seam
+// on. Every method is a straight pass-through to vocab.MotifIndex — the seam
 // exists for test injection, mirroring domainsProvider.
 type motifsProvider interface {
 	Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error)

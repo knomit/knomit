@@ -30,7 +30,7 @@ func NewHistoryQuery(rh *vcs.Repo) *HistoryQuery { return &HistoryQuery{rh: rh} 
 // NewMethodologyMatcher returns the methodology-fact matching service.
 func NewMethodologyMatcher(rh *vcs.Repo) *MethodologyMatcher { return &MethodologyMatcher{rh: rh} }
 
-// NewFacade composes the four query services into the SearchIndex composite.
+// NewFacade composes the four query services into the search composite returned by Service.Search().
 func NewFacade(fq *FactQuery, gq *GraphStore, hq *HistoryQuery, mq *MethodologyMatcher) *Facade {
 	return &Facade{FactQuery: fq, GraphStore: gq, HistoryQuery: hq, MethodologyMatcher: mq}
 }

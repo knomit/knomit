@@ -40,13 +40,13 @@ func idPlaceholders(ids []int64) (string, []any) {
 	return strings.TrimSuffix(strings.Repeat("?,", len(ids)), ","), args
 }
 
-// AbstractionIndex implements store.AbstractionIndex: the title-embedding axis
+// AbstractionIndex is the title-embedding axis
 // and the restatement shortlist built on it.
 //
 // Both are derived state consumed EXCLUSIVELY by the review pipeline. Nothing
 // on the runtime paths (query / explain / learn) may reach them, which is why
 // this sub-service is exposed on its own accessor rather than folded into the
-// SearchIndex composite that mcp and web depend on.
+// index.Facade composite that mcp and web depend on.
 //
 // Like its siblings it holds only the *vcs.Repo and never reaches sideways to
 // another sub-service (invariants/store/sub-index-up-not-sideways).

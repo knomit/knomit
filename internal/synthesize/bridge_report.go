@@ -47,7 +47,7 @@ type ScoredBridge struct {
 // file's POPULATION-first convention exists to prevent.
 func BridgeComponentReport(
 	ctx context.Context,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	localRepoID string,
 	kind BridgeKind,

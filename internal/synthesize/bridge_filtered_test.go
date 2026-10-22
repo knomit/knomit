@@ -5,9 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"knomit/internal/store/index"
-
-	"go.uber.org/mock/gomock"
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
 )
@@ -18,9 +16,9 @@ import (
 // exactly 1 fact out of N yields spec = 1.0 (df=1, 1/1 = 1.0).
 func TestSpecificityWithinScope_TokenOnOneFact(t *testing.T) {
 	pool := []factForLLM{
-		{File: "a.md", Domain: []string{"store"}, Entities: []string{}},
-		{File: "b.md", Domain: []string{"query"}, Entities: []string{}},
-		{File: "c.md", Domain: []string{"index"}, Entities: []string{}},
+		{File: "kb/a.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/b.md", Domain: []string{"query"}, Entities: []string{}},
+		{File: "kb/c.md", Domain: []string{"index"}, Entities: []string{}},
 	}
 	got := specificityWithinScope("store", BridgeDomain, pool)
 	if got != 1.0 {
@@ -32,11 +30,11 @@ func TestSpecificityWithinScope_TokenOnOneFact(t *testing.T) {
 // 4 pool facts yields spec = 0.25 (df=4, 1/4 = 0.25).
 func TestSpecificityWithinScope_TokenOnFourFacts(t *testing.T) {
 	pool := []factForLLM{
-		{File: "a.md", Entities: []string{"Go"}},
-		{File: "b.md", Entities: []string{"Go"}},
-		{File: "c.md", Entities: []string{"Go"}},
-		{File: "d.md", Entities: []string{"Go"}},
-		{File: "e.md", Entities: []string{"Rust"}},
+		{File: "kb/a.md", Entities: []string{"Go"}},
+		{File: "kb/b.md", Entities: []string{"Go"}},
+		{File: "kb/c.md", Entities: []string{"Go"}},
+		{File: "kb/d.md", Entities: []string{"Go"}},
+		{File: "kb/e.md", Entities: []string{"Rust"}},
 	}
 	got := specificityWithinScope("Go", BridgeEntity, pool)
 	want := 0.25
@@ -49,7 +47,7 @@ func TestSpecificityWithinScope_TokenOnFourFacts(t *testing.T) {
 // the pool yields 1.0 (max(df,1) = 1, 1/1 = 1.0).
 func TestSpecificityWithinScope_TokenAbsent(t *testing.T) {
 	pool := []factForLLM{
-		{File: "a.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/a.md", Domain: []string{"store"}, Entities: []string{}},
 	}
 	got := specificityWithinScope("nosuchtoken", BridgeDomain, pool)
 	if got != 1.0 {
@@ -61,9 +59,9 @@ func TestSpecificityWithinScope_TokenAbsent(t *testing.T) {
 // "store" matches a fact domain "store/sqlite" via DomainTagMatches hierarchy.
 func TestSpecificityWithinScope_DomainHierarchyMatch(t *testing.T) {
 	pool := []factForLLM{
-		{File: "a.md", Domain: []string{"store/sqlite"}},
-		{File: "b.md", Domain: []string{"store/postgres"}},
-		{File: "c.md", Domain: []string{"query"}},
+		{File: "kb/a.md", Domain: []string{"store/sqlite"}},
+		{File: "kb/b.md", Domain: []string{"store/postgres"}},
+		{File: "kb/c.md", Domain: []string{"query"}},
 	}
 	// "store" is parent of "store/sqlite" and "store/postgres" — df should be 2.
 	got := specificityWithinScope("store", BridgeDomain, pool)
@@ -77,9 +75,9 @@ func TestSpecificityWithinScope_DomainHierarchyMatch(t *testing.T) {
 // matching is case-insensitive (EntityTagMatches uses case-fold equality).
 func TestSpecificityWithinScope_EntityCaseInsensitive(t *testing.T) {
 	pool := []factForLLM{
-		{File: "a.md", Entities: []string{"Anthropic"}},
-		{File: "b.md", Entities: []string{"anthropic"}},
-		{File: "c.md", Entities: []string{"OpenAI"}},
+		{File: "kb/a.md", Entities: []string{"Anthropic"}},
+		{File: "kb/b.md", Entities: []string{"anthropic"}},
+		{File: "kb/c.md", Entities: []string{"OpenAI"}},
 	}
 	// "Anthropic" matches both "Anthropic" and "anthropic" via case-fold — df=2.
 	got := specificityWithinScope("Anthropic", BridgeEntity, pool)
@@ -93,9 +91,9 @@ func TestSpecificityWithinScope_EntityCaseInsensitive(t *testing.T) {
 // BridgeBoth (or "") matches on either domain or entity axis.
 func TestSpecificityWithinScope_BridgeBothMatchesBothAxes(t *testing.T) {
 	pool := []factForLLM{
-		{File: "a.md", Domain: []string{"llm"}, Entities: []string{}},
-		{File: "b.md", Domain: []string{}, Entities: []string{"llm"}},
-		{File: "c.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/a.md", Domain: []string{"llm"}, Entities: []string{}},
+		{File: "kb/b.md", Domain: []string{}, Entities: []string{"llm"}},
+		{File: "kb/c.md", Domain: []string{"store"}, Entities: []string{}},
 	}
 	// "llm" appears once in domain (a.md) and once in entity (b.md) — df=2 for BridgeBoth.
 	got := specificityWithinScope("llm", BridgeBoth, pool)
@@ -113,17 +111,17 @@ func TestSpecificityWithinScope_BridgeBothMatchesBothAxes(t *testing.T) {
 func TestSharedSubToken_RarestSharedWins(t *testing.T) {
 	// Build a pool where "x" appears in 2 facts and "y" in 10.
 	pool := make([]factForLLM, 0, 12)
-	pool = append(pool, factForLLM{File: "x1.md", Domain: []string{"x"}})
-	pool = append(pool, factForLLM{File: "x2.md", Domain: []string{"x"}})
+	pool = append(pool, factForLLM{File: "kb/x1.md", Domain: []string{"x"}})
+	pool = append(pool, factForLLM{File: "kb/x2.md", Domain: []string{"x"}})
 	for i := 0; i < 10; i++ {
 		pool = append(pool, factForLLM{File: "y" + string(rune('0'+i)) + ".md", Domain: []string{"y"}})
 	}
 
 	// Members all carry both "x" and "y".
 	members := []factForLLM{
-		{File: "m1.md", Domain: []string{"x", "y"}},
-		{File: "m2.md", Domain: []string{"x", "y"}},
-		{File: "m3.md", Domain: []string{"x", "y"}},
+		{File: "kb/m1.md", Domain: []string{"x", "y"}},
+		{File: "kb/m2.md", Domain: []string{"x", "y"}},
+		{File: "kb/m3.md", Domain: []string{"x", "y"}},
 	}
 
 	tok, kind, spec := sharedSubToken(members, BridgeDomain, pool)
@@ -143,12 +141,12 @@ func TestSharedSubToken_RarestSharedWins(t *testing.T) {
 // the function returns ("", BridgeBoth, neutralSpec).
 func TestSharedSubToken_NoSharedToken(t *testing.T) {
 	pool := []factForLLM{
-		{File: "p1.md", Domain: []string{"alpha"}},
-		{File: "p2.md", Domain: []string{"beta"}},
+		{File: "kb/p1.md", Domain: []string{"alpha"}},
+		{File: "kb/p2.md", Domain: []string{"beta"}},
 	}
 	members := []factForLLM{
-		{File: "m1.md", Domain: []string{"alpha"}},
-		{File: "m2.md", Domain: []string{"beta"}},
+		{File: "kb/m1.md", Domain: []string{"alpha"}},
+		{File: "kb/m2.md", Domain: []string{"beta"}},
 	}
 
 	tok, _, spec := sharedSubToken(members, BridgeDomain, pool)
@@ -164,12 +162,12 @@ func TestSharedSubToken_NoSharedToken(t *testing.T) {
 // are treated as the same token (canonical unification via CanonicalizeTag).
 func TestSharedSubToken_CanonicalUnification(t *testing.T) {
 	pool := []factForLLM{
-		{File: "p1.md", Domain: []string{"store"}},
+		{File: "kb/p1.md", Domain: []string{"store"}},
 	}
 	// m1 carries "Store", m2 carries "store" — canonical form is the same.
 	members := []factForLLM{
-		{File: "m1.md", Domain: []string{"Store"}},
-		{File: "m2.md", Domain: []string{"store"}},
+		{File: "kb/m1.md", Domain: []string{"Store"}},
+		{File: "kb/m2.md", Domain: []string{"store"}},
 	}
 
 	tok, kind, spec := sharedSubToken(members, BridgeDomain, pool)
@@ -189,13 +187,13 @@ func TestSharedSubToken_CanonicalUnification(t *testing.T) {
 // have equal df in pool, the one with the smallest canonical string is returned.
 func TestSharedSubToken_DeterministicTieBreak(t *testing.T) {
 	pool := []factForLLM{
-		{File: "p1.md", Domain: []string{"aaa", "zzz"}},
+		{File: "kb/p1.md", Domain: []string{"aaa", "zzz"}},
 	}
 	// Both "aaa" and "zzz" appear in 1 fact each — equal df.
 	// Members carry both. Tie-break: smallest canonical string = "aaa".
 	members := []factForLLM{
-		{File: "m1.md", Domain: []string{"aaa", "zzz"}},
-		{File: "m2.md", Domain: []string{"aaa", "zzz"}},
+		{File: "kb/m1.md", Domain: []string{"aaa", "zzz"}},
+		{File: "kb/m2.md", Domain: []string{"aaa", "zzz"}},
 	}
 
 	tok, _, _ := sharedSubToken(members, BridgeDomain, pool)
@@ -209,11 +207,11 @@ func TestSharedSubToken_DeterministicTieBreak(t *testing.T) {
 // kind is BridgeEntity (entity beats domain, mirroring enumerateBridgeCandidates).
 func TestSharedSubToken_EntityBeatesDomainOnBridgeBoth(t *testing.T) {
 	pool := []factForLLM{
-		{File: "p1.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
+		{File: "kb/p1.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
 	}
 	members := []factForLLM{
-		{File: "m1.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
-		{File: "m2.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
+		{File: "kb/m1.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
+		{File: "kb/m2.md", Entities: []string{"llm"}, Domain: []string{"llm"}},
 	}
 
 	_, kind, _ := sharedSubToken(members, BridgeBoth, pool)
@@ -226,10 +224,10 @@ func TestSharedSubToken_EntityBeatesDomainOnBridgeBoth(t *testing.T) {
 // yields neutral (no meaningful "shared" set for size-1 slices).
 func TestSharedSubToken_SingleMember(t *testing.T) {
 	pool := []factForLLM{
-		{File: "p1.md", Domain: []string{"store"}},
+		{File: "kb/p1.md", Domain: []string{"store"}},
 	}
 	members := []factForLLM{
-		{File: "m1.md", Domain: []string{"store"}},
+		{File: "kb/m1.md", Domain: []string{"store"}},
 	}
 
 	tok, _, spec := sharedSubToken(members, BridgeDomain, pool)
@@ -246,7 +244,7 @@ func TestSharedSubToken_SingleMember(t *testing.T) {
 
 // TestSharedSubToken_EmptyMembers verifies that empty members returns neutral.
 func TestSharedSubToken_EmptyMembers(t *testing.T) {
-	pool := []factForLLM{{File: "p1.md", Domain: []string{"store"}}}
+	pool := []factForLLM{{File: "kb/p1.md", Domain: []string{"store"}}}
 	tok, _, spec := sharedSubToken(nil, BridgeDomain, pool)
 	if tok != "" {
 		t.Fatalf("want empty token for empty members, got %q", tok)
@@ -276,24 +274,24 @@ var filteredCfg = QualityConfig{
 // buildTwoClusterSeeds returns four seeds in two disjoint communities.
 // {a,b} are in community 0 and 1 respectively; {c,d} in communities 2 and 3.
 // No edges connect the {a,b} group to the {c,d} group — they are disjoint.
-func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, g index.SimilarityGraph) {
+func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, pairs [][2]string) {
 	seeds = []factForLLM{
-		{File: "a.md", Domain: []string{"auth"}, Entities: []string{"UserService"}},
-		{File: "b.md", Domain: []string{"auth"}, Entities: []string{"TokenStore"}},
-		{File: "c.md", Domain: []string{"billing"}, Entities: []string{"Invoice"}},
-		{File: "d.md", Domain: []string{"billing"}, Entities: []string{"Payment"}},
+		{File: "kb/a.md", Domain: []string{"auth"}, Entities: []string{"UserService"}},
+		{File: "kb/b.md", Domain: []string{"auth"}, Entities: []string{"TokenStore"}},
+		{File: "kb/c.md", Domain: []string{"billing"}, Entities: []string{"Invoice"}},
+		{File: "kb/d.md", Domain: []string{"billing"}, Entities: []string{"Payment"}},
 	}
 	// a↔b connected; c↔d connected; no cross-group edges.
-	g = index.NewSimilarityGraph([][2]string{
-		{"a.md", "b.md"},
-		{"c.md", "d.md"},
-	})
+	pairs = [][2]string{
+		{"kb/a.md", "kb/b.md"},
+		{"kb/c.md", "kb/d.md"},
+	}
 	clusters = ClusterResult{
 		Clusters: map[int][]string{
-			0: {"a.md"},
-			1: {"b.md"},
-			2: {"c.md"},
-			3: {"d.md"},
+			0: {"kb/a.md"},
+			1: {"kb/b.md"},
+			2: {"kb/c.md"},
+			3: {"kb/d.md"},
 		},
 	}
 	return
@@ -302,13 +300,9 @@ func buildTwoClusterSeeds() (seeds []factForLLM, clusters ClusterResult, g index
 // TestBuildFilteredBridges_EffortNormal_NilNoIdx verifies the §1 gate:
 // EffortNormal returns (nil, nil) immediately without calling idx at all.
 func TestBuildFilteredBridges_EffortNormal_NilNoIdx(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
-	// NO expectations set — any idx call would cause the mock to fail.
-
-	seeds, clusters, _ := buildTwoClusterSeeds()
+	seeds, clusters, pairs := buildTwoClusterSeeds()
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar(pairs...).idx()
+	reads := guardReads(t, idx, readPolicy{}) // no read of any kind is allowed
 	scope := ScopeFilter{Domain: []string{"auth"}}
 
 	got, err := buildFilteredBridges(
@@ -320,6 +314,7 @@ func TestBuildFilteredBridges_EffortNormal_NilNoIdx(t *testing.T) {
 	if got != nil {
 		t.Fatalf("want nil result for EffortNormal, got %v", got)
 	}
+	require.Zero(t, reads.Count(), "EffortNormal must not read the index at all")
 }
 
 // TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges verifies the core
@@ -327,21 +322,12 @@ func TestBuildFilteredBridges_EffortNormal_NilNoIdx(t *testing.T) {
 // cohesive pairs yields two BridgeSeedSets — one per pair — with the correct
 // Members.
 func TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	seeds, clusters, pairs := buildTwoClusterSeeds()
 
-	seeds, clusters, g := buildTwoClusterSeeds()
-
-	idx := NewMockSearchIndex(ctrl)
-	// SimilarityAdjacency is called once with all 4 paths (sorted).
-	// ReverseDependentPaths is called for each unique path (derivationGap).
-	allPaths := []string{"a.md", "b.md", "c.md", "d.md"}
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil)
-	emptyRevdeps := map[string]struct{}{}
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "a.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "b.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "c.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "d.md").Return(emptyRevdeps, nil).AnyTimes()
+	// SimilarityAdjacency is read once with all 4 paths; the reverse dependents
+	// are read for each unique path (derivationGap) and are the empty set.
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar(pairs...).idx()
+	reads := guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	scope := ScopeFilter{Domain: []string{"auth"}} // scope is "auth"
 
@@ -354,6 +340,7 @@ func TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 bridges, got %d: %+v", len(got), got)
 	}
+	require.Equal(t, 1, reads.CountOf("SimilarityAdjacency"), "one adjacency read for the whole pool")
 
 	// Collect member-path sets across the two bridges.
 	memberPaths := func(b BridgeSeedSet) []string {
@@ -367,7 +354,7 @@ func TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges(t *testing.T) {
 	set1 := memberPaths(got[1])
 
 	// The two bridges must together cover {a,b} and {c,d} (order may vary by Q).
-	wantSets := [][]string{{"a.md", "b.md"}, {"c.md", "d.md"}}
+	wantSets := [][]string{{"kb/a.md", "kb/b.md"}, {"kb/c.md", "kb/d.md"}}
 	matched := 0
 	for _, want := range wantSets {
 		for _, got := range [][]string{set0, set1} {
@@ -393,35 +380,27 @@ func TestBuildFilteredBridges_TwoDisjointClusters_TwoBridges(t *testing.T) {
 // "billing" would have been scope-excluded anyway, but "Stripe" wins on rarity
 // first, so the bridge emits with Token="Stripe".
 func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
 	// e.md and f.md: carry "Stripe" (entity) + "billing" (domain, scope token).
 	// g2.md and h2.md: carry ONLY "billing" — inflate billing df to 4.
 	// g2 and h2 are in communities 2 and 3 but not connected, so reshape finds
 	// {e,f} as the first (and only) cross-community cohesive seam.
 	seeds := []factForLLM{
-		{File: "e.md", Domain: []string{"billing"}, Entities: []string{"Stripe"}},
-		{File: "f.md", Domain: []string{"billing"}, Entities: []string{"Stripe"}},
-		{File: "g2.md", Domain: []string{"billing"}, Entities: []string{}},
-		{File: "h2.md", Domain: []string{"billing"}, Entities: []string{}},
+		{File: "kb/e.md", Domain: []string{"billing"}, Entities: []string{"Stripe"}},
+		{File: "kb/f.md", Domain: []string{"billing"}, Entities: []string{"Stripe"}},
+		{File: "kb/g2.md", Domain: []string{"billing"}, Entities: []string{}},
+		{File: "kb/h2.md", Domain: []string{"billing"}, Entities: []string{}},
 	}
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"e.md"},
-			1: {"f.md"},
-			2: {"g2.md"},
-			3: {"h2.md"},
+			0: {"kb/e.md"},
+			1: {"kb/f.md"},
+			2: {"kb/g2.md"},
+			3: {"kb/h2.md"},
 		},
 	}
 	// Only e↔f are connected; g2, h2 have no edges → reshape finds {e,f} first.
-	g := index.NewSimilarityGraph([][2]string{{"e.md", "f.md"}})
-
-	idx := NewMockSearchIndex(ctrl)
-	allPaths := []string{"e.md", "f.md", "g2.md", "h2.md"}
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil)
-	emptyRevdeps := map[string]struct{}{}
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(emptyRevdeps, nil).AnyTimes()
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/e.md", "kb/f.md"}).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	// Scope is "billing" (domain) — so "billing" shared token is scope-excluded.
 	// "Stripe" is entity (df=2 in pool of 4, rarer than billing df=4) and not in
@@ -440,7 +419,7 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 	// First bridge should be {e,f} with Token="Stripe".
 	var stripeBridge *BridgeSeedSet
 	for i := range got {
-		if pathSetsEqual([]string{"e.md", "f.md"}, func() []string {
+		if pathSetsEqual([]string{"kb/e.md", "kb/f.md"}, func() []string {
 			ps := make([]string, len(got[i].Members))
 			for j, m := range got[i].Members {
 				ps[j] = m.File
@@ -464,27 +443,19 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 // to "" (excluded as label) but the bridge is still emitted (cohesive
 // cross-community pair passes the gate).
 func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
 	// Two facts; both carry ONLY "auth" as domain (= the scope token). No entities.
 	seeds := []factForLLM{
-		{File: "g.md", Domain: []string{"auth"}, Entities: []string{}},
-		{File: "h.md", Domain: []string{"auth"}, Entities: []string{}},
+		{File: "kb/g.md", Domain: []string{"auth"}, Entities: []string{}},
+		{File: "kb/h.md", Domain: []string{"auth"}, Entities: []string{}},
 	}
 	clusters := ClusterResult{
 		Clusters: map[int][]string{
-			0: {"g.md"},
-			1: {"h.md"},
+			0: {"kb/g.md"},
+			1: {"kb/h.md"},
 		},
 	}
-	g := index.NewSimilarityGraph([][2]string{{"g.md", "h.md"}})
-
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder([]string{"g.md", "h.md"})).Return(g, nil)
-	emptyRevdeps := map[string]struct{}{}
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "g.md").Return(emptyRevdeps, nil).AnyTimes()
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), "h.md").Return(emptyRevdeps, nil).AnyTimes()
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/g.md", "kb/h.md"}).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	scope := ScopeFilter{Domain: []string{"auth"}} // "auth" is the scope
 
@@ -505,17 +476,11 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 // TestBuildFilteredBridges_Determinism verifies that two calls with the same
 // inputs produce identical results.
 func TestBuildFilteredBridges_Determinism(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	seeds, clusters, pairs := buildTwoClusterSeeds()
 
-	seeds, clusters, g := buildTwoClusterSeeds()
-	allPaths := []string{"a.md", "b.md", "c.md", "d.md"}
-	emptyRevdeps := map[string]struct{}{}
-
-	idx := NewMockSearchIndex(ctrl)
-	// Two calls to buildFilteredBridges → each calls SimilarityAdjacency once.
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.InAnyOrder(allPaths)).Return(g, nil).Times(2)
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(emptyRevdeps, nil).AnyTimes()
+	// Two calls to buildFilteredBridges → each reads SimilarityAdjacency once.
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar(pairs...).idx()
+	reads := guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"}})
 
 	scope := ScopeFilter{}
 
@@ -530,6 +495,7 @@ func TestBuildFilteredBridges_Determinism(t *testing.T) {
 	}
 
 	r1, r2 := run(), run()
+	require.Equal(t, 2, reads.CountOf("SimilarityAdjacency"), "one adjacency read per call")
 	if len(r1) != len(r2) {
 		t.Fatalf("non-deterministic length: %d vs %d", len(r1), len(r2))
 	}
@@ -551,14 +517,12 @@ func TestBuildFilteredBridges_Determinism(t *testing.T) {
 // TestBuildFilteredBridges_SimilarityAdjacencyError verifies that an error
 // from SimilarityAdjacency is propagated to the caller.
 func TestBuildFilteredBridges_SimilarityAdjacencyError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
 	seeds, clusters, _ := buildTwoClusterSeeds()
 	wantErr := errors.New("adjacency failed")
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(index.SimilarityGraph{}, wantErr)
+	idx := newGraphEnv(t, "main").seedAll(seeds).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency"},
+		Fail: map[string]error{"SimilarityAdjacency": wantErr}})
 
 	_, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,
@@ -571,22 +535,18 @@ func TestBuildFilteredBridges_SimilarityAdjacencyError(t *testing.T) {
 // TestBuildFilteredBridges_DerivationGapError verifies that an error from
 // ReverseDependentPaths (used by derivationGap) is propagated.
 func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
 	seeds := []factForLLM{
-		{File: "x.md", Domain: []string{"llm"}, Entities: []string{}},
-		{File: "y.md", Domain: []string{"llm"}, Entities: []string{}},
+		{File: "kb/x.md", Domain: []string{"llm"}, Entities: []string{}},
+		{File: "kb/y.md", Domain: []string{"llm"}, Entities: []string{}},
 	}
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"x.md"}, 1: {"y.md"}},
+		Clusters: map[int][]string{0: {"kb/x.md"}, 1: {"kb/y.md"}},
 	}
-	g := index.NewSimilarityGraph([][2]string{{"x.md", "y.md"}})
 	wantErr := errors.New("revdeps failed")
 
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil)
-	idx.EXPECT().ReverseDependentPaths(gomock.Any(), gomock.Any()).Return(nil, wantErr).AnyTimes()
+	idx := newGraphEnv(t, "main").seedAll(seeds).similar([2]string{"kb/x.md", "kb/y.md"}).idx()
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency", "ReverseDependentPaths"},
+		Fail: map[string]error{"ReverseDependentPaths": wantErr}})
 
 	_, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,
@@ -600,28 +560,20 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 // pool where all paths are in the same community (no cross-community seam) →
 // no bridges emitted, nil result.
 func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
 	// All four facts in community 0 — same cluster, no cross-community seam.
 	seeds := []factForLLM{
-		{File: "p.md", Domain: []string{"store"}, Entities: []string{}},
-		{File: "q.md", Domain: []string{"store"}, Entities: []string{}},
-		{File: "r.md", Domain: []string{"store"}, Entities: []string{}},
-		{File: "s.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/p.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/q.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/r.md", Domain: []string{"store"}, Entities: []string{}},
+		{File: "kb/s.md", Domain: []string{"store"}, Entities: []string{}},
 	}
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"p.md", "q.md", "r.md", "s.md"}},
+		Clusters: map[int][]string{0: {"kb/p.md", "kb/q.md", "kb/r.md", "kb/s.md"}},
 	}
 	// Connect everything — but all same-community so no bridge seam.
-	g := index.NewSimilarityGraph([][2]string{
-		{"p.md", "q.md"}, {"p.md", "r.md"}, {"p.md", "s.md"},
-		{"q.md", "r.md"}, {"q.md", "s.md"}, {"r.md", "s.md"},
-	})
-
-	idx := NewMockSearchIndex(ctrl)
-	idx.EXPECT().SimilarityAdjacency(gomock.Any(), gomock.Any()).Return(g, nil)
-	// No ReverseDependentPaths expected since no subset passes reshape.
+	idx := newGraphEnv(t, "main").seedAll(seeds).similarAll([]string{"kb/p.md", "kb/q.md", "kb/r.md", "kb/s.md"}).idx()
+	// No ReverseDependentPaths read is allowed: no subset passes reshape.
+	guardReads(t, idx, readPolicy{Allow: []string{"SimilarityAdjacency"}})
 
 	got, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,
@@ -638,20 +590,17 @@ func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
 // Origin==fact.Discovered are excluded from the pool (§7 idempotency), and
 // if fewer than 2 non-discovered paths remain the function returns nil.
 func TestBuildFilteredBridges_DiscoveredOriginExcluded(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	idx := NewMockSearchIndex(ctrl)
-	// No idx calls expected because the pool has < 2 non-discovered facts.
-
 	seeds := []factForLLM{
-		{File: "disc1.md", Origin: string(fact.Discovered), Domain: []string{"auth"}},
-		{File: "disc2.md", Origin: string(fact.Discovered), Domain: []string{"auth"}},
-		{File: "real.md", Domain: []string{"auth"}},
+		{File: "kb/disc1.md", Origin: string(fact.Discovered), Domain: []string{"auth"}},
+		{File: "kb/disc2.md", Origin: string(fact.Discovered), Domain: []string{"auth"}},
+		{File: "kb/real.md", Domain: []string{"auth"}},
 	}
 	clusters := ClusterResult{
-		Clusters: map[int][]string{0: {"disc1.md"}, 1: {"disc2.md"}, 2: {"real.md"}},
+		Clusters: map[int][]string{0: {"kb/disc1.md"}, 1: {"kb/disc2.md"}, 2: {"kb/real.md"}},
 	}
+	// No read is allowed: the pool has < 2 non-discovered facts.
+	idx := newGraphEnv(t, "main").seedAll(seeds).idx()
+	guardReads(t, idx, readPolicy{})
 
 	got, err := buildFilteredBridges(
 		context.Background(), idx, "main", seeds, clusters, ScopeFilter{}, EffortHigh, filteredCfg,

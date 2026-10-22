@@ -67,6 +67,12 @@ type QualityConfig struct {
 	WGap         float64 // weight for the derivation-gap term
 	WSpec        float64 // weight for the specificity term
 	MaxMembers   int     // maximum number of members; larger sets are gated out
+
+	// OverDedupAt is the corpus's own dedup cosine, read by the motif scorer's
+	// OverDedup novelty signal. It is meaningful only when OverDedupKnown is
+	// true; the zero value is UNKNOWN, never a default (review finding M-5).
+	OverDedupAt    float64
+	OverDedupKnown bool
 }
 
 // cohesion returns the intra-cluster cohesion of members in g — the fraction
@@ -103,7 +109,7 @@ func separation(members []string, clusterOf map[string]int) int {
 // idx.ReverseDependentPaths. Reverse-dependency sets are memoized: each
 // distinct member path is queried at most once. Returns 0 for fewer than 2
 // members. Propagates the first error from ReverseDependentPaths.
-func derivationGap(ctx context.Context, members []string, idx SearchQuery) (float64, error) {
+func derivationGap(ctx context.Context, members []string, idx *index.Facade) (float64, error) {
 	if len(members) < 2 {
 		return 0, nil
 	}
@@ -154,7 +160,7 @@ func derivationGap(ctx context.Context, members []string, idx SearchQuery) (floa
 // Cross-bridge normalization is the calibrate tool's job. In Phase 3 a token
 // is always supplied; the token-optional case (Phase 5) is handled by the
 // caller before reaching this function.
-func specificity(ctx context.Context, branch, token, kind string, idx SearchQuery) (float64, error) {
+func specificity(ctx context.Context, branch, token, kind string, idx *index.Facade) (float64, error) {
 	df, err := idx.TokenDF(ctx, branch, token, kind)
 	if err != nil {
 		return 0, err
@@ -173,7 +179,7 @@ func scoreBridgeCandidate(
 	kind BridgeKind,
 	token string,
 	g index.SimilarityGraph,
-	idx SearchQuery,
+	idx *index.Facade,
 	branch string,
 	clusterOf map[string]int,
 	cfg QualityConfig,

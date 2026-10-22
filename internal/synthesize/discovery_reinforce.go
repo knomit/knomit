@@ -26,6 +26,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store/facts"
+	"knomit/internal/store/index"
 )
 
 // permittedRewriteLines are the frontmatter keys a reinforcement may change.
@@ -48,7 +49,7 @@ func applyReinforcements(
 	ctx context.Context,
 	gs *facts.Index,
 	sysFiles *facts.Repo,
-	idx SearchQuery,
+	idx *index.Facade,
 	payload DiscoverWorkPayload,
 	rs []FactReinforcement,
 	branch string,
@@ -62,7 +63,7 @@ func applyReinforcements(
 	for _, m := range payload.Bridge.Members {
 		seedPaths[m.File] = struct{}{}
 	}
-	gate := writeGate(localRepoID, idx, sysFiles, branch)
+	gate := writeGate(localRepoID, idx.FactQuery, sysFiles, branch)
 
 	var written []string
 	for _, r := range rs {
