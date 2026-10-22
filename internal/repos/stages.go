@@ -819,7 +819,8 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	// stops the create from narrating the index and every queued event from
 	// being handled (kb/invariants/repos/create-job/index-before-sync). It
 	// still runs before the loop's first round, which is the ordering
-	// TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin pins.
+	// TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin (Synchronous, inline)
+	// and its _Background variant (the life's goroutine) pin.
 	work := func(ctx context.Context) {
 		r.ensureLocalUpstream(ctx, svc)
 		run(ctx)

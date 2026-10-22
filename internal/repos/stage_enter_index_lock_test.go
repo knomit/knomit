@@ -36,36 +36,44 @@ func (e *heldEmbedder) EmbedDocuments(ctx context.Context, titles, bodies []stri
 	return nil, ctx.Err()
 }
 
-// TestCreate_SyncEnterDoesNotParkBehindTheIndexRebuild pins that no stage
-// Enter waits on the branch lock the Index job holds
-// (kb/invariants/repos/create-job/index-before-sync).
+// TestCreate_StageEnterDoesNotParkBehindTheIndexRebuild pins that neither
+// Serve.Enter nor Sync.Enter — the two stages the driver enters after Index
+// has launched its job — waits on the branch lock that job holds
+// (kb/invariants/repos/create-job/index-before-sync). It does not cover the
+// stages entered before Index (Populate, Open, Identify): no index job
+// exists yet while they run.
 //
 // The losing interleaving is forced, not hoped for. The Index job's Rebuild
 // takes lockBranch(upstream) first and is then held INSIDE it, in its
-// embeddings phase, by an embedder that only a cancel releases; Sync.Enter is
-// held until that has happened. A Sync.Enter that takes lockBranch(upstream)
-// on the driver — as ensureLocalUpstream did from #411 until this fix — now
-// parks for good, and both halves below fail:
+// embeddings phase, by an embedder that only a cancel releases. The hook
+// holds the driver at Serve's Enter until that has happened, so both Serve
+// and Sync are entered while the lock is held. A Serve.Enter or Sync.Enter
+// that takes lockBranch(upstream) on the driver — as Sync.Enter's
+// ensureLocalUpstream did from #411 until this fix — then parks for good, and
+// both halves below fail:
 //
 //   - the create never reaches step "index": Mount cannot reply Ready, so
 //     watchIndex never starts and the job sits on "register";
 //   - CancelIndex, which only the driver handles, never returns.
 //
-// TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex caught this only
-// when the scheduler happened to let the index job win the lock (about one
-// run in seven under -race, never with GOMAXPROCS=1).
-func TestCreate_SyncEnterDoesNotParkBehindTheIndexRebuild(t *testing.T) {
+// TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex caught the
+// Sync.Enter case only when the scheduler happened to let the index job win
+// the lock (about one run in seven under -race, never with GOMAXPROCS=1).
+func TestCreate_StageEnterDoesNotParkBehindTheIndexRebuild(t *testing.T) {
 	url := servedKnomitOrigin(t, 20)
 
 	emb := &heldEmbedder{started: make(chan struct{})}
 	var mgr atomic.Pointer[Manager]
-	var heldPhase atomic.Value // the index phase when Sync.Enter was let go
+	var heldPhase atomic.Value // the index phase when the driver was let go
 	hook := func(stage StageID, point string, ctx context.Context) {
 		switch {
 		case stage == StageIndex && point == "index-job":
 			// Arm only for the index job: nothing before it may block.
 			emb.armed.Store(true)
-		case stage == StageSync && point == "enter":
+		case stage == StageServe && point == "enter":
+			// Serve is the first stage entered after Index, so holding the
+			// driver here puts Serve.Enter and Sync.Enter both behind the
+			// held lock.
 			select {
 			case <-emb.started:
 			case <-ctx.Done():
@@ -109,11 +117,11 @@ func TestCreate_SyncEnterDoesNotParkBehindTheIndexRebuild(t *testing.T) {
 	}, 30*time.Second, 5*time.Millisecond,
 		"the create never reported an in-flight index while still running: the mount walk is parked behind the index's branch lock")
 
-	// ANTI-VACUITY: Sync.Enter was let go while Rebuild was inside its
-	// embeddings phase, i.e. holding lockBranch. Read after the Eventually,
-	// which cannot pass before Sync.Enter has returned.
+	// ANTI-VACUITY: the driver was let go into Serve.Enter while Rebuild was
+	// inside its embeddings phase, i.e. holding lockBranch. Read after the
+	// Eventually, which cannot pass before Sync.Enter has returned.
 	require.Equal(t, "embeddings", heldPhase.Load(),
-		"Sync.Enter must be released while Rebuild holds the branch lock, or the test proves nothing")
+		"Serve.Enter must be released while Rebuild holds the branch lock, or the test proves nothing")
 
 	// The driver answers while the index still holds the lock. The index can
 	// only end by cancellation (the embedder is never released), so a reply

@@ -14,12 +14,13 @@ import (
 // A sync that WE cancelled established nothing about the remote, so it must not
 // overwrite what the last completed sync established.
 //
-// The reported case: creating a repo against a remote runs ActivateSync, which
-// cancels the reconcile loop to restart it. A tick whose fetch was in flight
-// died with `context canceled`, and that message was written to the remotes
-// table and broadcast — so a create that fully succeeded (agent branch pushed,
-// repo open) showed a red "sync failed — Sync: fetch: Get ...: context
-// canceled" on the repo screen underneath a green last-push line.
+// The reported case: an event that restarts or exits the Sync stage (an origin
+// attach or detach, a store swap, an unmount) cancels the reconcile loop's
+// life, and the loop starts with an immediate tick, so a fetch is routinely in
+// flight when that lands. Such a tick died with `context canceled`, and that
+// message was written to the remotes table and broadcast — so an operation
+// that fully succeeded showed a red "sync failed — Sync: fetch: Get ...:
+// context canceled" on the repo screen underneath a green last-push line.
 //
 // The distinction is the CALLER's context, not the error's text: a per-fetch
 // netTimeout firing is a real failure of a real attempt and still gets
@@ -51,7 +52,8 @@ func TestSync_CallerCancellationLeavesStatusAlone(t *testing.T) {
 }
 
 // Push writes its own status on the same rule, and is cancelled by the same
-// restart: ActivateSync cancels the loop between the Sync and the Push.
+// restart: exiting the Sync stage can cancel the loop between the Sync and the
+// Push.
 func TestPush_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -77,13 +79,13 @@ func TestPush_CallerCancellationLeavesStatusAlone(t *testing.T) {
 	require.Nil(t, rem.LastPushError)
 }
 
-// A caller DEADLINE is not a cancellation: recoverFromOrigin gives the startup
-// reconcile a 15s budget (repos/builder.go), and a remote that does not answer
-// inside it has really failed. That failure must be persisted — it is the only
-// record a user gets that their remote was unreachable at boot.
+// A caller DEADLINE is not a cancellation: a remote that does not answer
+// inside the time its caller gave it has really failed. That failure must be
+// persisted — it may be the only record a user gets that their remote was
+// unreachable.
 //
 // This is the line abandonedByCaller has to hold: "we stopped this ourselves"
-// (ActivateSync cancelling the loop) versus "the attempt ran out of time".
+// (the Sync stage's life cancelled) versus "the attempt ran out of time".
 // Testing ctx.Err() != nil alone conflates them and loses the second.
 func TestSync_CallerDeadlineIsRecorded(t *testing.T) {
 	dir := t.TempDir()

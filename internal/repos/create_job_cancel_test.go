@@ -395,11 +395,14 @@ func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 // half: the user's actual complaint, which was that a late cancel appeared to
 // do nothing at all.
 //
-// It asserts on the STEP, not on the clock. Under the old bug the job parked
-// on a "sync" step behind the index heal's branch lock for the whole remaining
-// index. The lifecycle machine has no such step — the sync loop starts during
-// the mount walk, and the create only observes the index — and the cancel
-// unmounts a repo whose index job lands after its in-flight batch.
+// It asserts on STATE, not on the clock: the cancel must reach the terminal
+// CreateCancelled state while the job's IndexState still reads "indexing", i.e.
+// before the index finished. The cancel unmounts the repo, and Unmount cancels
+// the index job first, which lands after its in-flight batch. (The create has
+// no "sync" step since #411: the sync loop starts during the mount walk and
+// the create only observes the index. That a running create narrates the
+// index at all is pinned deterministically by
+// TestCreate_StageEnterDoesNotParkBehindTheIndexRebuild.)
 //
 // There is deliberately no timing assertion. An earlier version compared the
 // cancel's latency with a baseline create taken at a different moment. That
@@ -437,23 +440,12 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	start := time.Now()
 	require.NoError(t, m.CancelCreate(job.ID()))
 
-	// Poll to terminal, WATCHING THE STEP.
-	//
-	// The step is what discriminates, not the clock. Under the old bug the job
-	// parked on step "sync" behind the heal's branch lock for the whole
-	// remaining index (observed live: state=cancelling, step=sync, pct=99, for
-	// minutes). A cancelled job that ever reports "sync" has waited on the
-	// lock, whatever the wall clock happened to say on this machine.
-	//
-	// The elapsed time is only logged, and the 120s bound is a hang detector:
-	// a timing assertion is a machine-speed assertion (see the doc comment).
-	var sawSync bool
+	// Poll to terminal. The elapsed time is only logged, and the 120s bound is
+	// a hang detector: a timing assertion is a machine-speed assertion (see the
+	// doc comment).
 	var final CreateStatus
 	for {
 		st := job.Status()
-		if st.Step == "sync" {
-			sawSync = true
-		}
 		if st.State != CreateRunning && st.State != CreateCancelling {
 			require.Equal(t, CreateCancelled, st.State)
 			final = st
@@ -465,15 +457,12 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	elapsed := time.Since(start)
 	t.Logf("cancel during the index landed in %s", elapsed)
 
-	// ANTI-VACUITY, again. The index guard above ran BEFORE CancelCreate, so
-	// an index that finished in the gap would let the job reach the cancel
-	// with nothing left to wait on and this test would pass vacuously. IndexState
-	// is sticky and only leaves "indexing" if the mirror saw the heal finish.
+	// The cancel landed BEFORE the index finished. The index guard above ran
+	// before CancelCreate, so an index that finished in the gap would let the
+	// job reach the cancel with nothing left to wait on. IndexState is sticky
+	// and only leaves "indexing" if the mirror saw the heal finish.
 	require.Equal(t, IndexStateIndexing, final.IndexState,
 		"the index finished before the cancel landed; the fixture no longer discriminates")
-	require.False(t, sawSync,
-		"the cancelled job activated sync, so it waited on the branch lock the "+
-			"index heal holds — the whole reason a late cancel appeared to do nothing")
 
 	require.Nil(t, m.Get("sub"))
 	archived, aerr := m.ListArchived()

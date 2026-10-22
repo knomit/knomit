@@ -117,22 +117,23 @@ func FetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 // CANCELLED, rather than because the remote said something.
 //
 // Such an attempt established NOTHING about the remote, so it must not
-// overwrite what the last completed one established. The reported case: a
-// create against a remote finishes by calling ActivateSync, which cancels the
-// reconcile loop to restart it (repos/builder.go). A tick whose fetch was in
-// flight died with "context canceled", and that was written here as the
-// remote's status — so a create that fully succeeded, agent branch pushed and
-// all, showed "sync failed — Sync: fetch: ...: context canceled" on the repo
-// screen. The repository was fine; the message was about knomit stopping its
-// own request.
+// overwrite what the last completed one established. The reported case: an
+// event that restarts or exits the Sync stage (an origin attach or detach, a
+// store swap, an unmount; internal/repos/stages.go) cancels the reconcile
+// loop's life, and the loop starts with an immediate tick, so a fetch is
+// routinely in flight when that lands. Such a tick died with "context
+// canceled", and that was written here as the remote's status — so an
+// operation that fully succeeded showed "sync failed — Sync: fetch: ...:
+// context canceled" on the repo screen. The repository was fine; the message
+// was about knomit stopping its own request.
 //
 // CANCELLATION ONLY — a DEADLINE is a real failure and is still recorded.
-// The two are not interchangeable just because both land in ctx.Err():
-// recoverFromOrigin gives the startup reconcile a 15s budget (builder.go), and
-// a remote that does not answer inside it has genuinely failed. Treating every
-// non-nil ctx.Err() as ours would leave a stale "ok" on a remote that was
-// unreachable at boot, which is worse than the message this function exists to
-// suppress: a false failure is noise, a false success is a lie.
+// The two are not interchangeable just because both land in ctx.Err(): a
+// remote that does not answer inside the time its caller gave it has
+// genuinely failed. Treating every non-nil ctx.Err() as ours would leave a
+// stale "ok" on a remote that was unreachable, which is worse than the message
+// this function exists to suppress: a false failure is noise, a false success
+// is a lie.
 //
 // Both halves are required. `ctx.Err()` being Cancelled says we stopped; the
 // error ITSELF wrapping context.Canceled says that is why this attempt ended.
