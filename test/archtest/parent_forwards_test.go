@@ -60,9 +60,10 @@ func childPackages(parent string) func(string) bool {
 // (see methodForwards, the A2 detector this generalises).
 //
 // What is NOT a forward: a package-qualified call fed anything but the
-// function's own parameters. `func (s *S) Integrity() *fsck.Checker { return
-// fsck.NewChecker(s.repo) }` builds a child value from private state; it is a
-// constructor, not a pass-through.
+// function's own parameters and receiver state, and any call of a New*/Open*
+// child function that is fed anything but the parameters. `func (s *S)
+// Integrity() *fsck.Checker { return fsck.NewChecker(s.repo) }` builds a child
+// value from private state; it is a constructor, not a pass-through.
 func parentForwards(t *testing.T, fset *token.FileSet, parent string, files map[string]any) []parentFwd {
 	t.Helper()
 	isChild := childPackages(parent)
@@ -229,13 +230,13 @@ func parentForwards(t *testing.T, fset *token.FileSet, parent string, files map[
 // goListPackage is one `go list` row of the module.
 type goListPackage struct {
 	Path, Dir string
-	Files     []string // non-test Go files (GoFiles + CgoFiles)
+	Files     []string // non-test Go files (GoFiles + CgoFiles + IgnoredGoFiles, so build-constrained files count)
 }
 
 // listModulePackages returns every package under knomit/internal/ via go list.
 func listModulePackages(t *testing.T) []goListPackage {
 	t.Helper()
-	cmd := exec.Command("go", "list", "-f", `{{.ImportPath}}|{{.Dir}}|{{join .GoFiles ","}}|{{join .CgoFiles ","}}`, "knomit/internal/...")
+	cmd := exec.Command("go", "list", "-f", `{{.ImportPath}}|{{.Dir}}|{{join .GoFiles ","}}|{{join .CgoFiles ","}}|{{join .IgnoredGoFiles ","}}`, "knomit/internal/...")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list knomit/internal/...: %v\n%s", err, out)
@@ -243,13 +244,13 @@ func listModulePackages(t *testing.T) []goListPackage {
 	var pkgs []goListPackage
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		parts := strings.Split(line, "|")
-		if len(parts) != 4 {
+		if len(parts) != 5 {
 			t.Fatalf("unexpected go list row %q", line)
 		}
 		p := goListPackage{Path: parts[0], Dir: parts[1]}
 		for _, grp := range parts[2:] {
 			for _, f := range strings.Split(grp, ",") {
-				if f != "" {
+				if f != "" && !strings.HasSuffix(f, "_test.go") {
 					p.Files = append(p.Files, f)
 				}
 			}
@@ -271,27 +272,37 @@ func listModulePackages(t *testing.T) []goListPackage {
 // Callers import the owning package (convention: no re-export or forwarding
 // layers). This is the generic form of the store's A1 and A2, which stay: A2 is
 // stricter inside package store (a package-qualified call counts whatever its
-// arguments; the injectsStoreState entries are the ones that inject store
-// state) and A1 carries the non-importable-with-outside-caller exemption that
-// parentForwardAllowlist records for SyncDSNParam. The detectors share
+// arguments) and A1 carries the non-importable-with-outside-caller exemption
+// that parentForwardAllowlist records for SyncDSNParam. The detectors share
 // methodForwards, so the shapes A2 matches are matched here: field handles,
 // helper-method handles, local copies, `var x = ...`, parentheses, call on a
-// call, bind-then-return. Packages and constructors that BUILD a child value
-// from the receiver's state (fsck.NewChecker(s.repo)) are not forwards.
+// call, bind-then-return.
+//
+// A package-qualified child call is a forward when its arguments are the
+// function's own parameters in order, interleaved with receiver-state
+// expressions (the receiver, a field chain rooted at it, a no-argument method
+// call on one): `control.ControlUp(m.ControlDB())` is a forward. A child
+// function named New* or Open* is a constructor and keeps the strict
+// parameters-only test, so `control.NewLensRegistry(m.ControlDB())` and
+// `fsck.NewChecker(s.repo)` (a child value built from private state) are not
+// forwards. The store's state-injecting Service methods are the
+// injectsStoreState entries (reused here by key, not copied).
 //
 // Known gaps, deliberately not closed (each needs data-flow the shape check
 // does not do): method values (f := child.F; return f()), named results
 // assigned from the call, helpers returning a struct that holds the child,
 // closures, forwards through a package-level var holding a child value, calls
-// whose arguments are wrapped (child.F(a, 1) is a wrapper that does something),
+// whose arguments are wrapped or computed (child.F(a, 1), child.F(len(x))),
+// a non-constructor child function whose name starts with New/Open,
 // unexported forwards (only declarations and exported functions are matched),
-// files excluded by build constraints in the default configuration, and
-// children outside internal/ (only the internal tree is scanned).
+// and children outside internal/ (only the internal tree is scanned).
+// Build-constrained files are scanned too (go list IgnoredGoFiles).
 //
-// Non-vacuity: the parents come from go list; every layer (platform, domain,
-// ...) that has a package with a child must have at least one parent parsed
-// (at least one file), and at least one layer must; the self-test runs the
-// detector on inline source with a flagged and a clean case per shape.
+// Non-vacuity: the parents come from go list; every parent with children must
+// have at least one file parsed, every layer (platform, domain, ...) that has
+// a package with a child must have at least one parent parsed, and at least
+// one layer must; the self-test runs the detector on inline source with a
+// flagged and a clean case per shape.
 func TestParents_NoForwardsIntoChildren(t *testing.T) {
 	pkgs := listModulePackages(t)
 	paths := make([]string, len(pkgs))
@@ -319,7 +330,9 @@ func TestParents_NoForwardsIntoChildren(t *testing.T) {
 		for _, f := range p.Files {
 			files[filepath.Join(p.Dir, f)] = nil
 		}
-		if len(files) > 0 {
+		if len(files) == 0 {
+			t.Errorf("%s has children but no file to parse: the scan is blind there", p.Path)
+		} else {
 			examined[rank]++
 		}
 		for _, h := range parentForwards(t, fset, p.Path, files) {
@@ -327,6 +340,14 @@ func TestParents_NoForwardsIntoChildren(t *testing.T) {
 			found[key] = true
 			if _, ok := parentForwardAllowlist[key]; ok {
 				continue
+			}
+			// The store's state-injecting Service methods are the ones
+			// injectsStoreState already lists with a reason (A2 fails when
+			// one goes stale): one source of truth, not a copy here.
+			if m, ok := strings.CutPrefix(h.Name, "Service."); ok && p.Path == storeImport {
+				if _, ok := injectsStoreState[m]; ok {
+					continue
+				}
 			}
 			where := fmt.Sprintf("%s: %s %s", p.Path, h.Kind, h.Name)
 			if h.Line > 0 {
@@ -386,6 +407,10 @@ func TestParents_ForwardGuardDiscriminates(t *testing.T) {
 		"func wrapper, variadic": {imp + "func Run(a int, rest ...int) error { return step.Run(a, rest...) }\n", "Run"},
 		"method, field":          {imp + "func (s *Service) Run(a int) error { return s.stp.Run(a) }\n", "Service.Run"},
 		"method, field, stmt":    {imp + "func (s Service) Poke() { s.stp.Poke() }\n", "Service.Poke"},
+		"state forward":          {imp + "func (s *Service) Run(a int) error { return step.Run(s.n, a) }\n", "Service.Run"},
+		"state forward, only":    {imp + "func (s *Service) Run() error { return step.Run(s.n) }\n", "Service.Run"},
+		"state forward, mixed":   {imp + "func (s *Service) Run(a, b int) error { return step.Run(a, s.n, b, s) }\n", "Service.Run"},
+		"state forward, method":  {imp + "func (s *Service) Run(a int) error { return step.Run(s.stp.Conn(), a) }\n", "Service.Run"},
 		"method, pkg call":       {imp + "func (s *Service) Run(a int) error { return step.Run(a) }\n", "Service.Run"},
 		"method, call on call":   {imp + "func (s *Service) Run(a int) error { return s.helper().Run(a) }\nfunc (s *Service) helper() *step.Runner { return s.stp }\n", "Service.Run"},
 		"method, local copy":     {imp + "func (s *Service) Run() error { r := s.stp; return r.Run() }\n", "Service.Run"},
@@ -400,27 +425,34 @@ func TestParents_ForwardGuardDiscriminates(t *testing.T) {
 		}
 	}
 	clean := map[string]string{
-		"constructor from state":   imp + "func (s *Service) Checker() *step.Checker { return step.NewChecker(s.n) }\n",
-		"constructor, receiver":    imp + "func (s *Service) Checker() *step.Checker { return step.NewChecker(s) }\n",
-		"handle accessor":          imp + "func (s *Service) Runner() *step.Runner { return s.stp }\n",
-		"wrapper adds an argument": imp + "func Run(a int) error { return step.Run(a, 1) }\n",
-		"wrapper reorders":         imp + "func Run(a, b int) error { return step.Run(b, a) }\n",
-		"wrapper does work":        imp + "func Run(a int) error { if a < 0 { return nil }; return step.Run(a) }\n",
-		"two statements":           imp + "func Run(a int) error { _ = a; return step.Run(a) }\n",
-		"unexported func":          imp + "func run(a int) error { return step.Run(a) }\n",
-		"unexported method":        imp + "func (s *Service) run() error { return s.stp.Run() }\n",
-		"method of non-child":      imp + "func (s *Service) Run() int { return s.o.Run() }\n",
-		"method, local, then work": imp + "func (s *Service) Run() error { r := s.stp; _ = s.n; return r.Run() }\n",
-		"non-child package":        imp + "func Run(a int) error { return other.Run(a) }\n",
-		"stdlib call":              imp + "func Now() time.Time { return time.Now() }\n",
-		"stdlib alias":             imp + "type D = time.Duration\n",
-		"non-child alias":          imp + "type T = other.T\n",
-		"local alias":              imp + "type A int\ntype B = A\n",
-		"var from a call":          imp + "var X = step.New()\n",
-		"var, stdlib":              imp + "var X = time.Second\n",
-		"method with params":       imp + "func (s *Service) Run(a int) error { return s.o.Run(a) }\n",
-		"field not child typed":    imp + "func (s *Service) Run() int { return s.n.Abs() }\n",
-		"plain function on field":  imp + "func Run(s *Service) error { return s.stp.Run() }\n",
+		"constructor from state":     imp + "func (s *Service) Checker() *step.Checker { return step.NewChecker(s.n) }\n",
+		"constructor, receiver":      imp + "func (s *Service) Checker() *step.Checker { return step.NewChecker(s) }\n",
+		"handle accessor":            imp + "func (s *Service) Runner() *step.Runner { return s.stp }\n",
+		"New with state and param":   imp + "func (s *Service) Build(a int) *step.R { return step.NewR(s.n, a) }\n",
+		"Open with state":            imp + "func (s *Service) Open() (*step.R, error) { return step.OpenR(s.n) }\n",
+		"state and a literal":        imp + "func (s *Service) Run() error { return step.Run(s.n, 1) }\n",
+		"state with args call":       imp + "func (s *Service) Run() error { return step.Run(s.stp.Conn(3)) }\n",
+		"state, params out of order": imp + "func (s *Service) Run(a, b int) error { return step.Run(b, s.n, a) }\n",
+		"state, missing param":       imp + "func (s *Service) Run(a int) error { return step.Run(s.n) }\n",
+		"func with no receiver":      imp + "func Run(a int) error { return step.Run(s.n, a) }\n",
+		"wrapper adds an argument":   imp + "func Run(a int) error { return step.Run(a, 1) }\n",
+		"wrapper reorders":           imp + "func Run(a, b int) error { return step.Run(b, a) }\n",
+		"wrapper does work":          imp + "func Run(a int) error { if a < 0 { return nil }; return step.Run(a) }\n",
+		"two statements":             imp + "func Run(a int) error { _ = a; return step.Run(a) }\n",
+		"unexported func":            imp + "func run(a int) error { return step.Run(a) }\n",
+		"unexported method":          imp + "func (s *Service) run() error { return s.stp.Run() }\n",
+		"method of non-child":        imp + "func (s *Service) Run() int { return s.o.Run() }\n",
+		"method, local, then work":   imp + "func (s *Service) Run() error { r := s.stp; _ = s.n; return r.Run() }\n",
+		"non-child package":          imp + "func Run(a int) error { return other.Run(a) }\n",
+		"stdlib call":                imp + "func Now() time.Time { return time.Now() }\n",
+		"stdlib alias":               imp + "type D = time.Duration\n",
+		"non-child alias":            imp + "type T = other.T\n",
+		"local alias":                imp + "type A int\ntype B = A\n",
+		"var from a call":            imp + "var X = step.New()\n",
+		"var, stdlib":                imp + "var X = time.Second\n",
+		"method with params":         imp + "func (s *Service) Run(a int) error { return s.o.Run(a) }\n",
+		"field not child typed":      imp + "func (s *Service) Run() int { return s.n.Abs() }\n",
+		"plain function on field":    imp + "func Run(s *Service) error { return s.stp.Run() }\n",
 	}
 	for name, src := range clean {
 		if got := run(src); len(got) != 0 {

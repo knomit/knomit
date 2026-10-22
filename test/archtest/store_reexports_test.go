@@ -463,7 +463,7 @@ type fwdCfg struct {
 	imps       map[string]string // local import name -> path, child packages only
 	fields     map[string]string // receiver field -> child path (field typed by a child's type)
 	helpers    map[string]string // receiver method -> child path (returns a child's type)
-	anyPkgArgs bool              // a package-qualified call is a forward whatever its arguments (A2); false: only when its arguments are the function's parameters, in order (a call fed receiver state builds something and is not a forward)
+	anyPkgArgs bool              // a package-qualified call is a forward whatever its arguments (A2); false: only when its arguments are the function's parameters in order, interleaved with receiver state, and the callee is not a New*/Open* constructor (forwardsWithState)
 }
 
 // methodForwards is the shape detector behind A2 and the generic parent guard
@@ -513,14 +513,14 @@ func methodForwards(f *ast.File, cfg fwdCfg) (hits []string, methods int) {
 			case *ast.SelectorExpr: // s.<field>
 				if id, ok := x.X.(*ast.Ident); ok && id.Name == recv {
 					if p, ok := fields[x.Sel.Name]; ok {
-						return target{"s." + x.Sel.Name, p}, true
+						return target{recv + "." + x.Sel.Name, p}, true
 					}
 				}
 			case *ast.CallExpr: // s.<helper>()
 				if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 					if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
 						if p, ok := helpers[sel.Sel.Name]; ok {
-							return target{"s." + sel.Sel.Name + "()", p}, true
+							return target{recv + "." + sel.Sel.Name + "()", p}, true
 						}
 					}
 				}
@@ -604,13 +604,63 @@ func methodForwards(f *ast.File, cfg fwdCfg) (hits []string, methods int) {
 		}
 		if id, ok := fun.X.(*ast.Ident); ok {
 			if _, local := locals[id.Name]; !local {
-				if p, ok := imps[id.Name]; ok && (cfg.anyPkgArgs || passesParams(fd, call)) {
+				if p, ok := imps[id.Name]; ok && (cfg.anyPkgArgs || forwardsWithState(fd, call, recv, fun.Sel.Name)) {
 					hits = append(hits, fd.Name.Name+" -> "+id.Name+"."+fun.Sel.Name+" ("+p+")")
 				}
 			}
 		}
 	}
 	return hits, methods
+}
+
+// forwardsWithState reports whether a package-qualified child call is a
+// forward: its arguments are fd's parameters in order, interleaved with
+// receiver-state expressions (the receiver, a field chain rooted at it, or a
+// no-argument method call on such a chain). A child function named New* or
+// Open* is a constructor and keeps the strict test (the parameters and nothing
+// else): fsck.NewChecker(s.repo) builds a child value from private state.
+func forwardsWithState(fd *ast.FuncDecl, call *ast.CallExpr, recv, fn string) bool {
+	if strings.HasPrefix(fn, "New") || strings.HasPrefix(fn, "Open") {
+		return passesParams(fd, call)
+	}
+	var params []string
+	for _, fl := range fd.Type.Params.List {
+		if len(fl.Names) == 0 {
+			return false
+		}
+		for _, nm := range fl.Names {
+			params = append(params, nm.Name)
+		}
+	}
+	var state func(e ast.Expr) bool
+	state = func(e ast.Expr) bool {
+		if recv == "" {
+			return false
+		}
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			return state(x.X)
+		case *ast.Ident:
+			return x.Name == recv
+		case *ast.SelectorExpr:
+			return state(x.X)
+		case *ast.CallExpr:
+			sel, ok := x.Fun.(*ast.SelectorExpr)
+			return ok && len(x.Args) == 0 && state(sel.X)
+		}
+		return false
+	}
+	next := 0
+	for _, a := range call.Args {
+		if id, ok := a.(*ast.Ident); ok && next < len(params) && id.Name == params[next] {
+			next++
+			continue
+		}
+		if !state(a) {
+			return false
+		}
+	}
+	return next == len(params)
 }
 
 // passesParams reports whether call's arguments are exactly fd's parameters,
