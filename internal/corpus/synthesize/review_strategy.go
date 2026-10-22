@@ -37,10 +37,6 @@ import (
 // pipeline: dedup/prune, distill, optional discovery, and reflect.
 type reviewStrategy struct{}
 
-// reviewTool is the pipeline_sessions.tool value and watermark key. It is also
-// the recipe name threaded into decision application, so the two cannot drift.
-const reviewTool = "review"
-
 func (reviewStrategy) Tool() string { return reviewTool }
 
 // SeedQuery scans the whole corpus, epistemic facts only.
@@ -670,41 +666,6 @@ func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
 	return groups
 }
 
-// factsForLLM projects the engine's canonical seed type onto the prompt-facing
-// shape the review path clusters, chunks, and marshals.
-//
-// The projection is total: factForLLM's fields are a strict subset of
-// fact.Fact's. Origin in particular is carried through — bridge seeding
-// excludes origin=discovered facts, and dropping it here would let a
-// discovered fact seed its own discovery.
-//
-// localRepoID is this repo's 12-hex id and is threaded rather than defaulted:
-// it is what reduces the stored refs to LineageRefs, and refs are stored
-// canonical (kb://<own-id>/<path>), so classifying them with an empty id reads
-// every local citation as foreign and hands the lineage exclusion an empty set
-// to work from.
-func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
-	out := make([]factForLLM, 0, len(seeds))
-	for _, f := range seeds {
-		out = append(out, factForLLM{
-			File:        f.Path(),
-			Title:       f.Title,
-			Body:        f.Body,
-			Type:        string(f.Type),
-			Kind:        string(f.Kind),
-			Domain:      f.Domain,
-			Entities:    f.Entities,
-			Motifs:      f.Motifs,
-			Confidence:  f.Confidence,
-			Sources:     f.Sources,
-			Origin:      string(f.Origin),
-			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
-			Context:     f.Context,
-		})
-	}
-	return out
-}
-
 // OnPhaseAdvance hooks the work→reflect transition to enqueue the session's
 // single reflect item. reflect→done needs nothing.
 func (reviewStrategy) OnPhaseAdvance(ctx context.Context, d Deps, sess *model.PipelineSession, from, to string) error {
@@ -742,26 +703,6 @@ func maybeEnqueueReflectItem(ctx context.Context, d Deps, sess *model.PipelineSe
 }
 
 // ── work-item priority bands ──────────────────────────────────────────────
-
-// reflectPriority is the fixed priority of the single "reflect" work item. It
-// is the floor of a REVIEW session's negative-priority band: forward "discover"
-// items must stay strictly above it so they run before reflect. maxBridgeSeeds
-// (bridge.go) caps the discover queue so the rank-derived priority can never
-// reach it.
-//
-// "Floor" is scoped to review deliberately. Hypothesize sessions share this
-// package and rank their backward discover items from
-// backwardDiscoverPriorityBase — numerically also -100, counting down — so
-// package-wide there are items at and below this value. That is not a
-// collision: hypothesize never enqueues a reflect item, so the two bands never
-// coexist in one session's queue.
-const reflectPriority = -100
-
-// forwardDiscoverPriorityBase places forward "discover" work items just below
-// the standard prune (priority = cluster size) and distill (priority 0) band,
-// but above reflect (reflectPriority), so discovery stays low-priority
-// enrichment that runs after the grounded maintenance work.
-const forwardDiscoverPriorityBase = -10
 
 // forwardDiscoverPriority ranks the i-th forward discover item. `bridges` is
 // already sorted by Q descending, so rank == i preserves quality order
@@ -903,22 +844,6 @@ func (reviewStrategy) Decode(item *model.PipelineWorkItem, response string) (any
 	default:
 		return nil, "", errf(reviewTool, "unknown step type %q", item.StepType)
 	}
-}
-
-// itemInputPaths unmarshals a prune/distill item's fact payload and returns
-// the paths the response is allowed to reference. Validating against these —
-// not against the whole corpus — is what stops a response from acting on
-// facts its item never showed the agent.
-func itemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
-	var facts []factForLLM
-	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-		return nil, wrapf(reviewTool, err, "unmarshal facts")
-	}
-	paths := make([]string, len(facts))
-	for i, f := range facts {
-		paths[i] = f.File
-	}
-	return paths, nil
 }
 
 // ── apply ─────────────────────────────────────────────────────────────────

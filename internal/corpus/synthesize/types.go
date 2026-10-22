@@ -5,6 +5,9 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/model"
 	"sort"
 	"strings"
 )
@@ -545,4 +548,171 @@ func parseReflectResponse(text string) (ReflectResult, error) {
 		return ReflectResult{}, fmt.Errorf("parseReflectResponse: %w (raw: %.200s)", err, raw)
 	}
 	return result, nil
+}
+
+// ReviewStats tracks what actions were taken during a review.
+type ReviewStats struct {
+	Pruned      int
+	Merged      int
+	Updated     int
+	Synthesized int
+	// Retired is every path this apply actually removed from the corpus —
+	// retracted facts and merge sources alike, and only those whose delete
+	// SUCCEEDED. It is the input to the mid-session refresh of already-queued
+	// work items (see inflight.go), which is why it reports what happened
+	// rather than what was asked for: an item stripped of a fact that is still
+	// live would be a second bug wearing the first one's fix.
+	//
+	// Not serialised. ReviewStats is embedded in ReviewResult as `summary`,
+	// and a path list there would be a wire-shape change for an internal
+	// hand-off.
+	Retired []string `json:"-"`
+	// Rewritten is every path this apply CHANGED IN PLACE — a confidence
+	// update, today. Same contract as Retired: only writes that succeeded, and
+	// for the same consumer. A queued item carries a SNAPSHOT of each fact's
+	// fields, so an in-place rewrite leaves later items showing the old
+	// confidence; measured live, facts set to 0.5/0.7/0.8 still read
+	// 0.9/0.9/0.95 at items queued before the update.
+	Rewritten []string `json:"-"`
+}
+
+// WorkItemContent is what gets returned to the hosting model in the MCP response.
+type WorkItemContent struct {
+	Prompt         string `json:"prompt"`
+	ResponseSchema string `json:"response_schema"`
+	// Facts is the item's payload as a structured JSON array, carried beside
+	// the prompt rather than serialized into it. Empty for step types that
+	// still interpolate their payload into the template.
+	Facts string `json:"facts,omitempty"`
+}
+
+// wrapf and errf give every engine error a consistent `<tool>: <what>` prefix.
+// The tool name is a runtime value now that one engine serves several tools,
+// so the prefix cannot be a string literal the way it was in review.go.
+func wrapf(tool string, err error, format string, args ...any) error {
+	return fmt.Errorf("%s: %s: %w", tool, fmt.Sprintf(format, args...), err)
+}
+
+func errf(tool string, format string, args ...any) error {
+	return fmt.Errorf("%s: %s", tool, fmt.Sprintf(format, args...))
+}
+
+// reviewTool is the pipeline_sessions.tool value and watermark key. It is also
+// the recipe name threaded into decision application, so the two cannot drift.
+const reviewTool = "review"
+
+// reflectPriority is the fixed priority of the single "reflect" work item. It
+// is the floor of a REVIEW session's negative-priority band: forward "discover"
+// items must stay strictly above it so they run before reflect. maxBridgeSeeds
+// (bridge.go) caps the discover queue so the rank-derived priority can never
+// reach it.
+//
+// "Floor" is scoped to review deliberately. Hypothesize sessions share this
+// package and rank their backward discover items from
+// backwardDiscoverPriorityBase — numerically also -100, counting down — so
+// package-wide there are items at and below this value. That is not a
+// collision: hypothesize never enqueues a reflect item, so the two bands never
+// coexist in one session's queue.
+const reflectPriority = -100
+
+// forwardDiscoverPriorityBase places forward "discover" work items just below
+// the standard prune (priority = cluster size) and distill (priority 0) band,
+// but above reflect (reflectPriority), so discovery stays low-priority
+// enrichment that runs after the grounded maintenance work.
+const forwardDiscoverPriorityBase = -10
+
+// itemInputPaths unmarshals a prune/distill item's fact payload and returns
+// the paths the response is allowed to reference. Validating against these —
+// not against the whole corpus — is what stops a response from acting on
+// facts its item never showed the agent.
+func itemInputPaths(item *model.PipelineWorkItem) ([]string, error) {
+	var facts []factForLLM
+	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+		return nil, wrapf(reviewTool, err, "unmarshal facts")
+	}
+	paths := make([]string, len(facts))
+	for i, f := range facts {
+		paths[i] = f.File
+	}
+	return paths, nil
+}
+
+// factsForLLM projects the engine's canonical seed type onto the prompt-facing
+// shape the review path clusters, chunks, and marshals.
+//
+// The projection is total: factForLLM's fields are a strict subset of
+// fact.Fact's. Origin in particular is carried through — bridge seeding
+// excludes origin=discovered facts, and dropping it here would let a
+// discovered fact seed its own discovery.
+//
+// localRepoID is this repo's 12-hex id and is threaded rather than defaulted:
+// it is what reduces the stored refs to LineageRefs, and refs are stored
+// canonical (kb://<own-id>/<path>), so classifying them with an empty id reads
+// every local citation as foreign and hands the lineage exclusion an empty set
+// to work from.
+func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
+	out := make([]factForLLM, 0, len(seeds))
+	for _, f := range seeds {
+		out = append(out, factForLLM{
+			File:        f.Path(),
+			Title:       f.Title,
+			Body:        f.Body,
+			Type:        string(f.Type),
+			Kind:        string(f.Kind),
+			Domain:      f.Domain,
+			Entities:    f.Entities,
+			Motifs:      f.Motifs,
+			Confidence:  f.Confidence,
+			Sources:     f.Sources,
+			Origin:      string(f.Origin),
+			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
+			Context:     f.Context,
+		})
+	}
+	return out
+}
+
+// factFromSearchResult projects a search hit into a fact.Fact so the full-scan
+// seed path yields the same type as the incremental (fact.ParseFact) path.
+//
+// Kind is normalized the way fact.ParseFact normalizes it — an absent kind
+// means the default, epistemic. Without that, a strategy whose AcceptSeed
+// tests Kind would reject the entire full-scan pool while accepting the
+// incremental one, making the seed pool depend on watermark state.
+//
+// Origin must be copied: see dirtyFacts.
+func factFromSearchResult(sr index.SearchResult) fact.Fact {
+	f := fact.NewFact(sr.Path)
+	f.Title = sr.Title
+	f.Body = sr.Body
+	f.Kind = fact.Kind(sr.Kind)
+	if f.Kind == "" {
+		f.Kind = fact.DefaultKind
+	}
+	f.Type = fact.Type(sr.Type)
+	f.Domain = sr.Domain
+	f.Entities = sr.Entities
+	// Motifs travel with the fact, like every other authored field above.
+	// They were missing here until Phase 3 (designer ruling 2026-08-23,
+	// .claude/plans/motif/2026-08-23-phase3-rulings-3.md), which meant the
+	// full-scan path and the incremental path disagreed about what a seed IS —
+	// and a full scan is what every FIRST session on a corpus runs.
+	f.Motifs = sr.Motifs
+	f.Confidence = sr.Confidence
+	f.Sources = sr.Sources
+	f.Refs = sr.Refs
+	// EvidenceWeight is authored data like every field above it. It was missing
+	// here until the Phase-3 fresh-eyes review (finding M1a) — the identical
+	// omission the same commit had just repaired for Motifs, in the same
+	// function, found because the parity test was rebuilt to compare fields it
+	// was not told about.
+	f.EvidenceWeight = sr.EvidenceWeight
+	// Expires (F03): authored data, so the full-scan seed must carry the same
+	// value the incremental ParseFact path does (TestSeedScanPaths_ProduceTheSameFact).
+	f.Expires = sr.Expires
+	// Context (F22), for the same parity: the result carries the map read
+	// from the blob, exactly what ParseFact gives the incremental path.
+	f.Context = sr.Context
+	f.Origin = fact.Origin(sr.Origin)
+	return f
 }

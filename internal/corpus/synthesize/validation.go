@@ -2,8 +2,12 @@ package synthesize
 
 import (
 	"fmt"
+	"path"
+	"strings"
 
 	"knomit/internal/domain/fact"
+
+	"github.com/google/uuid"
 )
 
 // validPruneActions is the set of allowed decision actions.
@@ -126,5 +130,64 @@ func validateReflectResponse(r ReflectResult, transitionPaths []string, proposeC
 		}
 	}
 
+	return nil
+}
+
+// normalizeFactPath replaces the filename component of a path with an 8-char
+// UUID, matching the convention used by learn. This prevents LLM-generated
+// filenames (e.g. "chrome-extension-threat-surface-2026.md") from clashing
+// with each other or with learn-generated facts. Directory case is normalised
+// by fact.NewFact, which lowercases the full path unconditionally.
+//
+// path.Dir, NOT filepath.Dir. A fact path is a git-style repo path: always
+// forward-slashed, on every OS, because it names a blob in a tree rather than
+// a file on this machine. filepath.Dir answers in the host separator, so on
+// Windows "kb/synthesis/x.md" came back as "kb\synthesis" and this returned
+// the mongrel "kb\synthesis/<uuid>.md". validateOutputPath then looked for the
+// "kb/" prefix, did not find it, and every merge, distill, propose and
+// emergent-fact write was rejected — silently, as a warning on the progress
+// channel rather than an error, so synthesis simply produced nothing.
+func normalizeFactPath(p string) string {
+	id := uuid.New().String()[:8]
+	return path.Dir(p) + "/" + id + ".md"
+}
+
+// validateOutputPath rejects LLM-emitted fact paths that don't live under
+// the configured ontology root. Returns nil on success or a descriptive
+// error suitable for the onProgress warn channel. Paths are compared
+// case-insensitively because fact.NewFact lowercases all paths
+// unconditionally before persisting.
+func validateOutputPath(path, ontologyRoot string) error {
+	root := strings.TrimRight(ontologyRoot, "/")
+	if root == "" {
+		return fmt.Errorf("ontology root not configured")
+	}
+	prefix := strings.ToLower(root) + "/"
+	if !strings.HasPrefix(strings.ToLower(path), prefix) {
+		return fmt.Errorf("path %q is outside ontology root %q", path, ontologyRoot)
+	}
+	// A dot-prefixed segment is private: it would be written and then skipped
+	// by the indexer, Verify and the exporter alike, so it is refused here
+	// rather than silently discarded. All four of this function's callers
+	// (merge, distill, propose, and discovery's emergent-fact write) land on
+	// this one rule.
+	if fact.IsPrivatePath(path) {
+		return fmt.Errorf("%s is private: a path segment beginning with '.' cannot hold a fact", path)
+	}
+	return nil
+}
+
+// validateOutputType rejects LLM-emitted facts with empty or invalid
+// epistemic type. Returns nil on success. Empty type is the most common
+// failure (LLM omits the field) and historically slipped through to disk
+// as `type:` blanks; the API silently masked these by defaulting to
+// "observation" on read, hiding the bug.
+func validateOutputType(t string) error {
+	if t == "" {
+		return fmt.Errorf("epistemic type is empty")
+	}
+	if !fact.Epistemic.AllowsType(fact.Type(t)) {
+		return fmt.Errorf("invalid epistemic type %q", t)
+	}
 	return nil
 }
