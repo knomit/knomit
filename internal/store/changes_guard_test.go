@@ -19,7 +19,7 @@ import (
 // "<receiver>.<method>" ("?.<method>" when the receiver is itself an
 // expression, the bare name for a plain function). It is an ALLOWLIST on
 // purpose: a denylist of known writers passes any writer nobody thought to
-// list (rh.CreateBranch and svc.Branches().CreateBranch both slipped through
+// list (rh.CreateBranch and svc.CreateBranch both slipped through
 // the first version). A call that is not here fails the test — add it only
 // after checking it neither writes (refs, objects, SQLite rows) nor reads a
 // clock or the commit log.

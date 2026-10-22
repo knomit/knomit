@@ -104,3 +104,11 @@ func TestCreatePaths_AuthorAsThePersistedAgentID(t *testing.T) {
 		})
 	}
 }
+
+// TestManagerAgentID_NoneGivenReportsNone: a Manager built without
+// Deps.AgentID has no agent id, in a test binary as in production. It must not
+// derive one from the agent branch's name or from the fixture signer.
+func TestManagerAgentID_NoneGivenReportsNone(t *testing.T) {
+	m := New(context.Background(), Deps{AgentBranch: tmplAgent})
+	require.Equal(t, "", m.AgentID())
+}

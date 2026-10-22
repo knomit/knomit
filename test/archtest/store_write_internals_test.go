@@ -562,7 +562,8 @@ const sessionsImport = "knomit/internal/store/sessions"
 // expression `<local>.<name>` where <local> is the local name this file
 // imports internal/store/sessions under and <name> is plumbing. A file that
 // does not import the package yields nothing, so store.Open, os.Open and a
-// method called Open are never flagged.
+// method called Open are never flagged. A dot-import of the package is itself
+// reported, because it hides the selector.
 func sessionsPlumbingUses(t *testing.T, fset *token.FileSet, name string, src any) []string {
 	t.Helper()
 	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
@@ -570,6 +571,7 @@ func sessionsPlumbingUses(t *testing.T, fset *token.FileSet, name string, src an
 		t.Fatalf("parse %s: %v", name, err)
 	}
 	local := ""
+	var uses []string
 	for _, imp := range f.Imports {
 		p, _ := strconv.Unquote(imp.Path.Value)
 		if p != sessionsImport {
@@ -579,11 +581,15 @@ func sessionsPlumbingUses(t *testing.T, fset *token.FileSet, name string, src an
 		if imp.Name != nil {
 			local = imp.Name.Name
 		}
+		// A dot-import would let a bare NewToolIndex(...) or Open(...) slip
+		// past the selector match, so the import itself is the offence.
+		if local == "." {
+			uses = append(uses, "line "+strconv.Itoa(fset.Position(imp.Pos()).Line)+": sessions dot-import")
+		}
 	}
 	if local == "" {
 		return nil
 	}
-	var uses []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok || !sessionsPlumbing[sel.Sel.Name] {
@@ -693,6 +699,7 @@ func TestStoreSessionsPlumbing_GuardDiscriminates(t *testing.T) {
 		{"constructor", imp + "func f() { _ = sessions.NewPipelineIndex(a, b) }", 1},
 		{"method value", imp + "func f() { g := sessions.ReapIdle; _ = g }", 1},
 		{"aliased import", "package p\nimport ss \"" + sessionsImport + "\"\nfunc f() { ss.NewToolIndex(db) }", 1},
+		{"dot import", "package p\nimport . \"" + sessionsImport + "\"\nfunc f() { _ = NewToolIndex(db) }", 1},
 		{"handle method", imp + "func f(pi *sessions.PipelineIndex) { pi.Open() }", 0},
 		{"other package", imp + "func f() { os.Open(\"x\") }", 0},
 		{"not imported", "package p\nfunc f() { sessions.Open(\"x\") }", 0},
@@ -701,6 +708,276 @@ func TestStoreSessionsPlumbing_GuardDiscriminates(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := sessionsPlumbingUses(t, token.NewFileSet(), c.name+".go", c.src)
+		if len(got) != c.want {
+			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
+		}
+	}
+}
+
+// indexInternals are the *index.Index methods that Service.IndexManager()
+// exposes beyond its lifecycle surface (Sync, SyncLocked, Rebuild,
+// SyncWatermark, NeedsRebuild). Each is exported only because package store or
+// its fsck child calls it: SetSyncSuspended turns every Sync into a silent
+// no-op (Replay does it around a bulk replay into a transient store), GC
+// deletes index rows for facts the index believes are orphaned,
+// EnsureFactsVecDefault creates the vector table before an embedder exists
+// (store.Open calls it once), and the Persisted* readers feed the integrity
+// report.
+var indexInternals = map[string]bool{
+	"SetSyncSuspended": true, "GC": true, "EnsureFactsVecDefault": true,
+	"PersistedEmbedModelID": true, "PersistedEmbedDim": true,
+}
+
+const indexImport = "knomit/internal/store/index"
+
+// indexInternalsUses returns one "line N: <name>" string per selector `x.<name>`
+// for a name in indexInternals (runtime.GC, the standard library's, is not
+// one), and, when lockFree is set, per `x.Sync` whose receiver is a
+// *index.Index: a call chain ending in IndexManager(), or an identifier or
+// field that the same file declares as *index.Index or assigns from
+// IndexManager(). Sync is the lock-FREE in-lock primitive
+// (kb/invariants/store/index/branch-locking/f4911495.md); out-of-band callers
+// use SyncLocked. Other types' Sync (os.File, remotesync's Sync) do not match.
+func indexInternalsUses(t *testing.T, fset *token.FileSet, name string, src any, lockFree bool) []string {
+	t.Helper()
+	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	local := ""
+	for _, imp := range f.Imports {
+		if p, _ := strconv.Unquote(imp.Path.Value); p == indexImport {
+			local = "index"
+			if imp.Name != nil {
+				local = imp.Name.Name
+			}
+		}
+	}
+	isIndexPtr := func(e ast.Expr) bool {
+		st, ok := e.(*ast.StarExpr)
+		if !ok || local == "" {
+			return false
+		}
+		sel, ok := st.X.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Index" {
+			return false
+		}
+		id, ok := sel.X.(*ast.Ident)
+		return ok && id.Name == local
+	}
+	isManagerCall := func(e ast.Expr) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		return ok && sel.Sel.Name == "IndexManager"
+	}
+	bound := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Field:
+			if isIndexPtr(x.Type) {
+				for _, nm := range x.Names {
+					bound[nm.Name] = true
+				}
+			}
+		case *ast.ValueSpec:
+			if x.Type != nil && isIndexPtr(x.Type) {
+				for _, nm := range x.Names {
+					bound[nm.Name] = true
+				}
+			}
+		case *ast.AssignStmt:
+			for i, rhs := range x.Rhs {
+				if isManagerCall(rhs) && i < len(x.Lhs) {
+					switch l := x.Lhs[i].(type) {
+					case *ast.Ident:
+						bound[l.Name] = true
+					case *ast.SelectorExpr:
+						bound[l.Sel.Name] = true
+					}
+				}
+			}
+		case *ast.KeyValueExpr:
+			if isManagerCall(x.Value) {
+				if k, ok := x.Key.(*ast.Ident); ok {
+					bound[k.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	var uses []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		line := "line " + strconv.Itoa(fset.Position(sel.Sel.Pos()).Line) + ": " + sel.Sel.Name
+		if indexInternals[sel.Sel.Name] {
+			if id, ok := sel.X.(*ast.Ident); !(ok && id.Name == "runtime") {
+				uses = append(uses, line)
+			}
+			return true
+		}
+		if lockFree && sel.Sel.Name == "Sync" {
+			recv := false
+			switch x := sel.X.(type) {
+			case *ast.CallExpr:
+				recv = isManagerCall(x)
+			case *ast.Ident:
+				recv = bound[x.Name]
+			case *ast.SelectorExpr:
+				recv = bound[x.Sel.Name]
+			}
+			if recv {
+				uses = append(uses, line)
+			}
+		}
+		return true
+	})
+	return uses
+}
+
+// TestStoreIndexInternals_OnlyInsideStore (PR E7a): Service.IndexManager()
+// returns the concrete *index.Index, so every exported method of it is
+// reachable from every package that holds a Service. This parses every .go
+// file outside internal/store/** and fails on (a) any selector of
+// SetSyncSuspended, GC, EnsureFactsVecDefault, PersistedEmbedModelID or
+// PersistedEmbedDim, test files included (none outside the store needs them
+// today), and (b) in non-test files, any lock-free Sync on an *index.Index.
+// Tests outside the store may call the lock-free Sync to build fixtures; today
+// none does, and no production file outside the store does.
+//
+// Non-vacuity: at least 500 files are walked; each name is still declared in
+// internal/store/index and still selected by a non-test file elsewhere in the
+// store (replay.go, service.go, fsck), and Sync is still declared.
+func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
+	const minFiles = 500
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	var offenders []string
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+				return filepath.SkipDir
+			}
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") {
+			return nil
+		}
+		scanned++
+		for _, u := range indexInternalsUses(t, fset, path, nil, !strings.HasSuffix(rel, "_test.go")) {
+			offenders = append(offenders, rel+" "+u)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < minFiles {
+		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+	}
+
+	declared := map[string]bool{}
+	inside := map[string]bool{}
+	storeRoot := filepath.Join(root, "internal", "store")
+	err = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if perr != nil {
+			return perr
+		}
+		inIndex := filepath.ToSlash(filepath.Dir(path)) == filepath.ToSlash(filepath.Join(storeRoot, "index"))
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				if inIndex && x.Recv != nil && (indexInternals[x.Name.Name] || x.Name.Name == "Sync") {
+					declared[x.Name.Name] = true
+				}
+			case *ast.SelectorExpr:
+				if !inIndex && indexInternals[x.Sel.Name] {
+					inside[x.Sel.Name] = true
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range indexInternals {
+		if !declared[name] {
+			t.Errorf("internal/store/index no longer declares a method %s: it was renamed or moved, so this guard checks nothing", name)
+		}
+		if !inside[name] {
+			t.Errorf("no non-test file of internal/store outside the index package selects %s: the caller moved or was renamed, so this guard's expectations are stale", name)
+		}
+	}
+	if !declared["Sync"] {
+		t.Error("internal/store/index no longer declares a method Sync: it was renamed or moved, so the lock-free half of this guard checks nothing")
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("Service.IndexManager() hands out *index.Index, whose lifecycle surface is Sync(Locked)/Rebuild/SyncWatermark/NeedsRebuild; "+
+			"SetSyncSuspended, GC, EnsureFactsVecDefault and the Persisted* readers are the store's own, and the lock-free Sync "+
+			"assumes the branch lock (kb/invariants/store/index/branch-locking/f4911495.md):\n  %s", strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestStoreIndexInternals_GuardDiscriminates: each guarded name is flagged
+// whatever the receiver; runtime.GC, a declaration, a comment and a string are
+// not; the lock-free Sync is flagged only on an *index.Index (a call chain
+// ending in IndexManager(), a parameter or field of that type, or a variable
+// assigned from IndexManager()) and only when lockFree is set; SyncLocked and
+// another type's Sync are not.
+func TestStoreIndexInternals_GuardDiscriminates(t *testing.T) {
+	imp := "package p\nimport \"" + indexImport + "\"\n"
+	cases := []struct {
+		name     string
+		src      string
+		lockFree bool
+		want     int
+	}{
+		{"suspend", "package p\nfunc f() { svc.IndexManager().SetSyncSuspended(true) }", false, 1},
+		{"gc", "package p\nfunc f() { svc.IndexManager().GC(nil) }", false, 1},
+		{"ensure", "package p\nfunc f() { im.EnsureFactsVecDefault(ctx) }", false, 1},
+		{"model id", "package p\nfunc f() { im.PersistedEmbedModelID(ctx) }", false, 1},
+		{"dim", "package p\nfunc f() { im.PersistedEmbedDim(ctx) }", false, 1},
+		{"method value", "package p\nfunc f() { g := im.GC; _ = g }", false, 1},
+		{"runtime gc", "package p\nfunc f() { runtime.GC() }", false, 0},
+		{"declaration", "package p\ntype I struct{}\nfunc (i *I) GC() {}", false, 0},
+		{"comment", "package p\n// SetSyncSuspended is a flag\nfunc f() {}", false, 0},
+		{"string", "package p\nvar s = \"im.GC()\"", false, 0},
+		{"sync chain", "package p\nfunc f() { svc.IndexManager().Sync(ctx, b) }", true, 1},
+		{"sync param", imp + "func f(im *index.Index) { im.Sync(ctx, b) }", true, 1},
+		{"sync field", imp + "type h struct{ im *index.Index }\nfunc (x h) f() { x.im.Sync(ctx, b) }", true, 1},
+		{"sync assigned", "package p\nfunc f() { im := svc.IndexManager(); im.Sync(ctx, b) }", true, 1},
+		{"sync struct literal", "package p\nfunc f() { h := heal{im: svc.IndexManager()}; h.im.Sync(ctx, b) }", true, 1},
+		{"sync in test", "package p\nfunc f() { svc.IndexManager().Sync(ctx, b) }", false, 0},
+		{"sync locked", "package p\nfunc f() { svc.IndexManager().SyncLocked(ctx, b) }", true, 0},
+		{"file sync", "package p\nfunc f() { tmp.Sync() }", true, 0},
+		{"remote sync", "package p\nfunc f() { svc.Remote().Sync(ctx, b, nil) }", true, 0},
+	}
+	for _, c := range cases {
+		got := indexInternalsUses(t, token.NewFileSet(), c.name+".go", c.src, c.lockFree)
 		if len(got) != c.want {
 			t.Errorf("%s: %d uses, want %d (%v)", c.name, len(got), c.want, got)
 		}
