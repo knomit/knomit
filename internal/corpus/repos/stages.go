@@ -189,7 +189,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 		svc.SetReplaySkipPaths(fact.FleetMasterPath)
 	}
 	if m := env.m; m != nil {
-		svc.SetAcceptList(m.AcceptListFor(r.uid))
+		svc.SetAcceptList(m.VerifyAccepts().For(r.uid))
 		svc.SetOwnKeys(m.ownFleetKeys)
 	}
 	if err := svc.OpenRepo(); err != nil {

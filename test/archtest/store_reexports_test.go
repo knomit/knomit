@@ -34,10 +34,16 @@ func storeChildImportable(p string) bool {
 // storeImports maps the local name of every import of a store child in f to
 // its import path.
 func storeImports(f *ast.File) map[string]string {
+	return childImports(f, func(p string) bool { return storeChildPath(p) != "" })
+}
+
+// childImports maps the local name of every import of f whose path satisfies
+// isChild to its import path.
+func childImports(f *ast.File, isChild func(string) bool) map[string]string {
 	m := map[string]string{}
 	for _, imp := range f.Imports {
 		p, _ := strconv.Unquote(imp.Path.Value)
-		if storeChildPath(p) == "" {
+		if !isChild(p) {
 			continue
 		}
 		name := p[strings.LastIndex(p, "/")+1:]
@@ -338,11 +344,28 @@ func TestStoreParent_ReexportGuardDiscriminates(t *testing.T) {
 // field name -> import path of every field whose declared type is a (pointer
 // to a) type of an IMPORTABLE store child.
 func serviceChildFields(f *ast.File) map[string]string {
-	imps := storeImports(f)
+	return childFields(f, "Service", importableStoreImports(f))
+}
+
+// importableStoreImports is storeImports restricted to importable children.
+func importableStoreImports(f *ast.File) map[string]string {
+	imps := map[string]string{}
+	for k, p := range storeImports(f) {
+		if storeChildImportable(p) {
+			imps[k] = p
+		}
+	}
+	return imps
+}
+
+// childFields returns, for the struct type typeName declared in f, the field
+// name -> import path of every field whose declared type is a (pointer to a)
+// type of a package in imps (local import name -> path).
+func childFields(f *ast.File, typeName string, imps map[string]string) map[string]string {
 	out := map[string]string{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name.Name != "Service" {
+		if !ok || ts.Name.Name != typeName {
 			return true
 		}
 		st, ok := ts.Type.(*ast.StructType)
@@ -362,7 +385,7 @@ func serviceChildFields(f *ast.File) map[string]string {
 			if !ok {
 				continue
 			}
-			if p, ok := imps[id.Name]; ok && storeChildImportable(p) {
+			if p, ok := imps[id.Name]; ok {
 				for _, nm := range fl.Names {
 					out[nm.Name] = p
 				}
@@ -379,7 +402,12 @@ func serviceChildFields(f *ast.File) map[string]string {
 // Integrity() *fsck.Checker, ...): a call of one is a handle to that child
 // exactly as a field of that type is.
 func serviceChildHelpers(f *ast.File) map[string]string {
-	imps := storeImports(f)
+	return childHelpers(f, "Service", importableStoreImports(f))
+}
+
+// childHelpers is serviceChildHelpers for the methods of typeName and the
+// child packages in imps.
+func childHelpers(f *ast.File, typeName string, imps map[string]string) map[string]string {
 	out := map[string]string{}
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
@@ -390,7 +418,7 @@ func serviceChildHelpers(f *ast.File) map[string]string {
 		if s, ok := rt.(*ast.StarExpr); ok {
 			rt = s.X
 		}
-		if id, ok := rt.(*ast.Ident); !ok || id.Name != "Service" {
+		if id, ok := rt.(*ast.Ident); !ok || id.Name != typeName {
 			continue
 		}
 		typ := fd.Type.Results.List[0].Type
@@ -402,7 +430,7 @@ func serviceChildHelpers(f *ast.File) map[string]string {
 			continue
 		}
 		if id, ok := sel.X.(*ast.Ident); ok {
-			if p, ok := imps[id.Name]; ok && storeChildImportable(p) {
+			if p, ok := imps[id.Name]; ok {
 				out[fd.Name.Name] = p
 			}
 		}
@@ -426,24 +454,50 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 	if err != nil {
 		t.Fatalf("parse %s: %v", name, err)
 	}
-	imps := storeImports(f)
+	return methodForwards(f, fwdCfg{recvType: "Service", imps: importableStoreImports(f), fields: fields, helpers: helpers, anyPkgArgs: true})
+}
+
+// fwdCfg configures methodForwards.
+type fwdCfg struct {
+	recvType   string            // receiver type to inspect; "" inspects package-level functions
+	imps       map[string]string // local import name -> path, child packages only
+	fields     map[string]string // receiver field -> child path (field typed by a child's type)
+	helpers    map[string]string // receiver method -> child path (returns a child's type)
+	anyPkgArgs bool              // a package-qualified call is a forward whatever its arguments (A2); false: only when its arguments are the function's parameters in order, interleaved with receiver state, and the callee is not a New*/Open* constructor (forwardsWithState)
+}
+
+// methodForwards is the shape detector behind A2 and the generic parent guard
+// (see serviceForwards for the shapes). It returns the exported functions
+// (cfg.recvType == "") or methods of cfg.recvType in f that only hand a call
+// to a child, and how many exported ones it inspected.
+func methodForwards(f *ast.File, cfg fwdCfg) (hits []string, methods int) {
+	imps, fields, helpers := cfg.imps, cfg.fields, cfg.helpers
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Recv == nil || len(fd.Recv.List) != 1 || !fd.Name.IsExported() || fd.Body == nil {
+		if !ok || !fd.Name.IsExported() || fd.Body == nil {
 			continue
 		}
-		rt := fd.Recv.List[0].Type
-		if s, ok := rt.(*ast.StarExpr); ok {
-			rt = s.X
-		}
-		if id, ok := rt.(*ast.Ident); !ok || id.Name != "Service" {
-			continue
+		recv := ""
+		if cfg.recvType == "" {
+			if fd.Recv != nil {
+				continue
+			}
+		} else {
+			if fd.Recv == nil || len(fd.Recv.List) != 1 {
+				continue
+			}
+			rt := fd.Recv.List[0].Type
+			if s, ok := rt.(*ast.StarExpr); ok {
+				rt = s.X
+			}
+			if id, ok := rt.(*ast.Ident); !ok || id.Name != cfg.recvType {
+				continue
+			}
+			if len(fd.Recv.List[0].Names) == 1 {
+				recv = fd.Recv.List[0].Names[0].Name
+			}
 		}
 		methods++
-		recv := ""
-		if len(fd.Recv.List[0].Names) == 1 {
-			recv = fd.Recv.List[0].Names[0].Name
-		}
 		// handle describes an expression that is a handle to an importable
 		// child, or "" when it is not one.
 		type target struct{ label, pkg string }
@@ -459,14 +513,14 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 			case *ast.SelectorExpr: // s.<field>
 				if id, ok := x.X.(*ast.Ident); ok && id.Name == recv {
 					if p, ok := fields[x.Sel.Name]; ok {
-						return target{"s." + x.Sel.Name, p}, true
+						return target{recv + "." + x.Sel.Name, p}, true
 					}
 				}
 			case *ast.CallExpr: // s.<helper>()
 				if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 					if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
 						if p, ok := helpers[sel.Sel.Name]; ok {
-							return target{"s." + sel.Sel.Name + "()", p}, true
+							return target{recv + "." + sel.Sel.Name + "()", p}, true
 						}
 					}
 				}
@@ -550,13 +604,86 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 		}
 		if id, ok := fun.X.(*ast.Ident); ok {
 			if _, local := locals[id.Name]; !local {
-				if p, ok := imps[id.Name]; ok && storeChildImportable(p) {
+				if p, ok := imps[id.Name]; ok && (cfg.anyPkgArgs || forwardsWithState(fd, call, recv, fun.Sel.Name)) {
 					hits = append(hits, fd.Name.Name+" -> "+id.Name+"."+fun.Sel.Name+" ("+p+")")
 				}
 			}
 		}
 	}
 	return hits, methods
+}
+
+// forwardsWithState reports whether a package-qualified child call is a
+// forward: its arguments are fd's parameters in order, interleaved with
+// receiver-state expressions (the receiver, a field chain rooted at it, or a
+// no-argument method call on such a chain). A child function named New* or
+// Open* is a constructor and keeps the strict test (the parameters and nothing
+// else): fsck.NewChecker(s.repo) builds a child value from private state.
+func forwardsWithState(fd *ast.FuncDecl, call *ast.CallExpr, recv, fn string) bool {
+	if strings.HasPrefix(fn, "New") || strings.HasPrefix(fn, "Open") {
+		return passesParams(fd, call)
+	}
+	var params []string
+	for _, fl := range fd.Type.Params.List {
+		if len(fl.Names) == 0 {
+			return false
+		}
+		for _, nm := range fl.Names {
+			params = append(params, nm.Name)
+		}
+	}
+	var state func(e ast.Expr) bool
+	state = func(e ast.Expr) bool {
+		if recv == "" {
+			return false
+		}
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			return state(x.X)
+		case *ast.Ident:
+			return x.Name == recv
+		case *ast.SelectorExpr:
+			return state(x.X)
+		case *ast.CallExpr:
+			sel, ok := x.Fun.(*ast.SelectorExpr)
+			return ok && len(x.Args) == 0 && state(sel.X)
+		}
+		return false
+	}
+	next := 0
+	for _, a := range call.Args {
+		if id, ok := a.(*ast.Ident); ok && next < len(params) && id.Name == params[next] {
+			next++
+			continue
+		}
+		if !state(a) {
+			return false
+		}
+	}
+	return next == len(params)
+}
+
+// passesParams reports whether call's arguments are exactly fd's parameters,
+// in order (a variadic parameter passed as p... counts).
+func passesParams(fd *ast.FuncDecl, call *ast.CallExpr) bool {
+	var params []string
+	for _, fl := range fd.Type.Params.List {
+		if len(fl.Names) == 0 {
+			return false
+		}
+		for _, nm := range fl.Names {
+			params = append(params, nm.Name)
+		}
+	}
+	if len(call.Args) != len(params) {
+		return false
+	}
+	for i, a := range call.Args {
+		if id, ok := a.(*ast.Ident); !ok || id.Name != params[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // injectsStoreState is every exported Service method that is one call into an
