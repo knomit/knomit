@@ -292,6 +292,9 @@ func checkLayers(graph map[string][]string, allowed map[string]bool) ([]string, 
 	return out, edges
 }
 
+// Deliberate: go list .Imports covers non-test files only, so _test.go imports
+// are never checked. Tests are out of scope by decision; only shipped code is
+// held to the layers.
 // listImports returns the direct-import graph of every package of the knomit
 // module for one build configuration (internal and not, so an internal package
 // cannot reach a higher layer through a package outside internal/).
