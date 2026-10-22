@@ -273,6 +273,42 @@ type Overrides struct {
 	SubgraphEdges func(ctx context.Context, paths []string) ([][2]string, error)
 }
 
+// ReadFault is the hook of SetReadFaultForTest: it is called with the method
+// name of a faultable read and returns the error that read must return, or nil
+// to let it run.
+type ReadFault func(method string) error
+
+// SetReadFaultForTest makes a read return fault(method) instead of running,
+// when fault returns an error; a nil result lets the read through, and a nil
+// fault removes the hook. It is FAIL-ONLY: it cannot fake an answer, and it is
+// separate from Overrides, which stays an observer (Overrides.Reads errors on
+// four reads only). The fault runs right after the Overrides probe, so an
+// Overrides.Reads observer on the same Facade still sees the read, and may
+// sleep there to model per-mount latency.
+//
+// Faultable reads: Stats, Activity, Completions, RecentFacts, Search,
+// ExplainFact and FactLiveAtCommit. Nested calls fire it too, as the probes
+// do: a Search fault also fails RecentFacts with Text set, which reaches
+// Search. The hook is installed on this Facade's query services, that is on one
+// store.Service; another Service is unaffected. It panics outside a test
+// binary; the returned func restores the previous hook.
+func (f *Facade) SetReadFaultForTest(fault ReadFault) (restore func()) {
+	mustBeTest("SetReadFaultForTest")
+	var p *ReadFault
+	if fault != nil {
+		p = &fault
+	}
+	prevF, prevG, prevH := f.FactQuery.fault.Load(), f.GraphStore.fault.Load(), f.HistoryQuery.fault.Load()
+	f.FactQuery.fault.Store(p)
+	f.GraphStore.fault.Store(p)
+	f.HistoryQuery.fault.Store(p)
+	return func() {
+		f.FactQuery.fault.Store(prevF)
+		f.GraphStore.fault.Store(prevG)
+		f.HistoryQuery.fault.Store(prevH)
+	}
+}
+
 // SetOverridesForTest installs o on all four query services of this Facade and
 // returns a func that restores the previous set (see Overrides for the scope).
 // It panics outside a test binary.

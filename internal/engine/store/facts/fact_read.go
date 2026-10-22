@@ -87,6 +87,11 @@ func (fi *Index) ReadFact(ctx context.Context, branch, path string, opts *ReadFa
 	if opts == nil {
 		opts = &ReadFactOpts{}
 	}
+	if h := fi.readFactFault.Load(); h != nil {
+		if err := (*h)(path, opts); err != nil {
+			return ReadFactResult{}, err
+		}
+	}
 	switch {
 	case opts.BeforeCommit != "":
 		content, fromCommit, err := fi.readFileLastCommit(ctx, branch, path, opts.BeforeCommit)
@@ -123,6 +128,11 @@ func (fi *Index) FactExists(ctx context.Context, branch, path string) (bool, err
 // ListDir returns entries under path at the tip of branch.
 // Subdirectories have IsDir=true, .md files have IsDir=false.
 func (fi *Index) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
+	if h := fi.listDirFault.Load(); h != nil {
+		if err := (*h)(path); err != nil {
+			return nil, err
+		}
+	}
 	path = strings.ToLower(path)
 	headHash, err := fi.rh.vr.ResolveRef(ctx, branch)
 	if err != nil {

@@ -205,6 +205,69 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 	}
 }
 
+// faultHookSetters are the per-owner fail-only read hooks the web tests use to
+// make a read fail on one store.Service. Each is a *ForTest door declared in
+// its owner's testseams.go, so B2 (the walk above) already keeps production
+// source from naming it; the list makes that explicit and fails if one is
+// renamed or moved out of a testseams.go, where the guard would stop covering it.
+var faultHookSetters = []string{
+	"SetReadFaultForTest",     // index.Facade, vocab.MotifIndex
+	"SetReadFactFaultForTest", // facts.Index
+	"SetListDirFaultForTest",  // facts.Index
+	"SetWriteFaultForTest",    // facts.Index
+}
+
+// TestFaultHookSettersDeclaredInTestseams: every setter in faultHookSetters is
+// declared in a testseams.go under internal/engine/store (the only files B2
+// lets name a seam), calls mustBeTest, and matches the seam pattern.
+func TestFaultHookSettersDeclaredInTestseams(t *testing.T) {
+	root := moduleRoot(t)
+	declared := map[string][]string{} // setter -> files declaring it
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(filepath.Join(root, "internal", "engine", "store"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(path) != "testseams.go" {
+			return err
+		}
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		f, perr := parser.ParseFile(fset, path, src, 0)
+		if perr != nil {
+			return perr
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			for _, want := range faultHookSetters {
+				if fn.Name.Name != want {
+					continue
+				}
+				body := string(src[fset.Position(fn.Body.Pos()).Offset:fset.Position(fn.Body.End()).Offset])
+				if !strings.Contains(body, `mustBeTest("`+want+`")`) {
+					t.Errorf("%s: %s does not call mustBeTest(%q)", path, want, want)
+				}
+				rel, _ := filepath.Rel(root, path)
+				declared[want] = append(declared[want], filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range faultHookSetters {
+		if !testSeamName.MatchString(want) {
+			t.Errorf("%s does not match the seam pattern, so B2 would not flag a production use", want)
+		}
+		if len(declared[want]) == 0 {
+			t.Errorf("%s is declared in no internal/engine/store/**/testseams.go: it moved, or was renamed", want)
+		}
+	}
+}
+
 // TestTestSeamsGuard_Discriminates runs the guard's detector on inline source:
 // every shape it must flag is flagged, and every shape it must leave alone is
 // left alone. Without it a pattern that matched nothing would pass the walk
@@ -223,6 +286,11 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		"bare function value":       src("func f() { g := SetRefForTest; _ = g }\n"),
 		"bare as argument":          src("func f() { run(SetRefForTest) }\n"),
 		"bare dot-import use":       src("import . \"knomit/internal/engine/store/x\"\nvar h = TestingCommitFiles\n"),
+	}
+	// The per-owner fail-only read hooks: production naming one is a path to a
+	// read that fails on demand.
+	for _, name := range faultHookSetters {
+		flagged["fault hook "+name] = src("func f(s S) { _ = s.X()." + name + "(nil) }\n")
 	}
 	for name, s := range flagged {
 		if got := seamUses(t, token.NewFileSet(), name+".go", s); len(got) == 0 {

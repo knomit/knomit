@@ -28,6 +28,9 @@ func extractBody(raw []byte) string {
 // Supported categories: "domain", "entity", "type", "ep", "path".
 func (fq *FactQuery) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
 	fq.probe("Completions")
+	if err := fq.failRead("Completions"); err != nil {
+		return nil, err
+	}
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
@@ -202,6 +205,9 @@ func (fq *FactQuery) Highlights(ctx context.Context, branch, pathPrefix, axis st
 // DefaultAxis, which is the server's own recommendation.
 func (fq *FactQuery) Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error) {
 	fq.probe("Stats")
+	if err := fq.failRead("Stats"); err != nil {
+		return StatsResult{}, err
+	}
 	res := StatsResult{
 		Domains:    make(map[string]int),
 		Entities:   make(map[string]int),

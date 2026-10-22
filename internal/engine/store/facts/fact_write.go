@@ -513,6 +513,11 @@ func (fi *Index) batchWriteLocked(ctx context.Context, branch string, files map[
 // Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
 // via rh.NotifyCommit — no redundant fi.im.Sync call here.
 func (fi *Index) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
+	if h := fi.writeFault.Load(); h != nil {
+		if err := (*h)(path); err != nil {
+			return WriteFactResult{}, err
+		}
+	}
 	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
 	if err != nil {
 		return WriteFactResult{}, err
