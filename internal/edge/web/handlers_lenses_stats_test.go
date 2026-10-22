@@ -472,7 +472,7 @@ func TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool(t *test
 	require.Len(t, body.Highlights, index.MaxHighlights)
 }
 
-// Three mounts of ten highlights each must yield MaxHighlights, and the cap
+// Two mounts of ten highlights each must yield MaxHighlights, and the cap
 // keeps the best-ranked ones.
 func TestLensStats_HighlightsCapAtTen(t *testing.T) {
 	m, r := newLensStatsRouter(t, "alpha", "beta")
@@ -815,4 +815,28 @@ func TestLensStats_ConcurrentFailuresReportTheLowestIndexedMount(t *testing.T) {
 	}
 	require.EqualValues(t, runs, betaHits.Load(), "beta's Stats read must run once per request")
 	require.EqualValues(t, runs, gammaHits.Load(), "gamma's Stats read must run once per request")
+}
+
+// With path=, a mount that has no commit touching the path answers
+// last_commit "" (the production subtree view of a lens dashboard), and "" must
+// lose to any real stamp in the union. The only fact under the path is on the
+// FIRST mount, so a last-wins reduction would return "".
+func TestLensStats_LastCommitUnderAPathIgnoresMountsWithNoCommitThere(t *testing.T) {
+	m, r := newLensStatsRouter(t, "alpha", "beta", "gamma")
+	obs(t, m.Get("alpha"), "kb/only/a.md", "only", 0.5)
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?path=kb/only"))
+
+	require.Len(t, body.Repos, 3)
+	alpha, beta, gamma := body.Repos[0], body.Repos[1], body.Repos[2]
+	require.Equal(t, "alpha", alpha.Name)
+	require.NotEmpty(t, alpha.LastCommit)
+	require.Empty(t, beta.LastCommit, "beta has no commit under the path")
+	require.Empty(t, gamma.LastCommit, "gamma has no commit under the path")
+	require.Equal(t, alpha.LastCommit, body.LastCommit, "the union is the first mount's stamp")
+
+	// Narrowed to a mount with nothing under the path, the union is "".
+	empty := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?repo=beta&path=kb/only"))
+	require.Len(t, empty.Repos, 1)
+	require.Empty(t, empty.LastCommit)
 }
