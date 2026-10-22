@@ -187,11 +187,19 @@ func TestSyncEnter_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 // between machines, or one written before local init bootstrapped it. A live
 // instance was found that way, and the served advertisement takes HEAD from
 // the LOCAL ref, so until this is repaired a peer cloning that repo gets an
-// advertisement with no HEAD. The repair runs in Sync.Enter, before the loop's
-// first round, so an unreachable origin does not leave the endpoint headless
-// for the length of the outage.
-func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
-	dir := t.TempDir()
+// advertisement with no HEAD. The repair runs on the Sync life, before the
+// loop's first round, so an unreachable origin does not leave the endpoint
+// headless for the length of the outage.
+//
+// homeWithoutLocalUpstream builds that home: a clone whose local main was
+// dropped while origin/main stayed, with the origin then deleted. Without the
+// deletion the startup reconcile would fetch and reconcileMain would recreate
+// main by itself, and a test would pass whether or not the open-time repair
+// exists. An unreachable origin is also the case the repair is FOR. It returns
+// the home and the origin tip main must be bootstrapped to.
+func homeWithoutLocalUpstream(t *testing.T) (dir, originTip string) {
+	t.Helper()
+	dir = t.TempDir()
 	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
 
 	m := newRemoteModeManager(t, dir)
@@ -201,7 +209,6 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	var originTip string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		tip, herr := svc.HeadCommit(ctx, "main")
 		require.NoError(t, herr)
@@ -213,12 +220,14 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 	}))
 	m.Close()
 
-	// Take the origin away. Without this the startup reconcile would fetch and
-	// reconcileMain would recreate main by itself, and the test would pass
-	// whether or not the open-time repair exists. An unreachable origin is
-	// also the case the repair is FOR: it is what leaves the endpoint headless
-	// for the length of the outage.
 	require.NoError(t, os.RemoveAll(filepath.Join(dir, "remote.git")))
+	return dir, originTip
+}
+
+// Under Options.Synchronous the repair runs inline in Sync.Enter, so main is
+// there by the time the mount returns.
+func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
+	dir, originTip := homeWithoutLocalUpstream(t)
 
 	// Reopen the same home: the registry mounts "kb" through the same walk a
 	// server restart uses.
@@ -226,10 +235,44 @@ func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
 	ri2 := m2.Get("kb")
 	require.NotNil(t, ri2)
 	require.NoError(t, ri2.WithRead(func(svc *store.Service) {
-		got, herr := svc.HeadCommit(ctx, "main")
+		got, herr := svc.HeadCommit(context.Background(), "main")
 		require.NoError(t, herr, "local main was not bootstrapped from origin/main")
 		require.Equal(t, originTip, got)
 	}))
+}
+
+// The production path: without Synchronous the repair runs on the Sync life's
+// goroutine, off the driver (it takes lockBranch(upstream), which the Index
+// job may hold; kb/invariants/repos/create-job/index-before-sync), so main
+// appears shortly AFTER the mount returns. The origin is gone, so no reconcile
+// round can recreate main: the repair is the only thing that can.
+func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin_Background(t *testing.T) {
+	dir, originTip := homeWithoutLocalUpstream(t)
+
+	m2 := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch: "agent/test-abc",
+		Machine:     Options{CrashBackoff: testCrashBackoff},
+	})
+	require.NoError(t, m2.Start())
+	t.Cleanup(func() { m2.Close() })
+	ri2 := m2.Get("kb")
+	require.NotNil(t, ri2)
+
+	var got atomic.Value
+	require.Eventually(t, func() bool {
+		var tip string
+		var herr error
+		if werr := ri2.WithRead(func(svc *store.Service) {
+			tip, herr = svc.HeadCommit(context.Background(), "main")
+		}); werr != nil || herr != nil {
+			return false
+		}
+		got.Store(tip)
+		return true
+	}, 30*time.Second, 10*time.Millisecond,
+		"local main was never bootstrapped from origin/main on the background Sync life")
+	require.Equal(t, originTip, got.Load())
 }
 
 // A transient failure of the origin read must cost ONE tick, not the loop.

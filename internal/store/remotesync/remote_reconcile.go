@@ -10,7 +10,7 @@
 // every successful reconcileAgent regardless of which path ran.
 //
 // The reconcile primitives are the single source of truth for "what does
-// sync do" — Sync/Push/InitFromRemote/ActivateSync all call into them.
+// sync do" — Sync, Push and InitFromRemote all call into them.
 package remotesync
 
 import (

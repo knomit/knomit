@@ -785,7 +785,6 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	if err != nil {
 		return nil
 	}
-	r.ensureLocalUpstream(ctx, svc)
 	env := r.env
 	cfg := env.cfg
 	mode := func() *syncMode {
@@ -814,14 +813,26 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 				env.onPush, r.triggerKick, r.syncWake, r.breakers, mode(), r.peers, once)
 		}
 	}
+	// The local-upstream repair runs on the life's goroutine, never on the
+	// driver: EnsureLocalUpstream takes lockBranch(upstream), which the Index
+	// job holds for a whole Rebuild of that branch, and a driver parked there
+	// stops the create from narrating the index and every queued event from
+	// being handled (kb/invariants/repos/create-job/index-before-sync). It
+	// still runs before the loop's first round, which is the ordering
+	// TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin (Synchronous, inline)
+	// and its _Background variant (the life's goroutine) pin.
+	work := func(ctx context.Context) {
+		r.ensureLocalUpstream(ctx, svc)
+		run(ctx)
+	}
 	if once {
 		defer release()
-		run(ctx)
+		work(ctx)
 		return nil
 	}
 	life.Go(name, func(ctx context.Context) {
 		defer release()
-		run(ctx)
+		work(ctx)
 	})
 	return nil
 }
