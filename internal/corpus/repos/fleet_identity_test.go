@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"knomit/internal/corpus/repos/control"
 )
 
 // StoredAgentID's "never creates control.db" must not rest on its os.Stat
@@ -18,7 +20,7 @@ func TestOpenControlReadOnly_NeverCreatesTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	ok, qerr := tableExists(db, "instance_identity")
+	ok, qerr := control.TableExists(db, "instance_identity")
 	db.Close()
 	if qerr == nil {
 		t.Fatalf("query on a missing control.db succeeded (ok=%v); a read-only open must fail", ok)
@@ -71,7 +73,7 @@ func TestOpenControlReadOnly_RelativePathStaysReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	ok, qerr := tableExists(db, "instance_identity")
+	ok, qerr := control.TableExists(db, "instance_identity")
 	db.Close()
 	if qerr == nil {
 		t.Fatalf("query on a missing relative control.db succeeded (ok=%v); a read-only open must fail", ok)

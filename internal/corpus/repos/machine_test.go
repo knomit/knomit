@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -265,7 +267,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 
 	t.Run("unavailable refuses all but Mount, which retries", func(t *testing.T) {
 		m, url, _, upstream := subscriptionStore(t, "uid-u")
-		require.NoError(t, m.Origins().Set("uid-u", Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe}))
+		require.NoError(t, m.Origins().Set("uid-u", control.Origin{URL: url, Branch: upstream, Mode: control.OriginModeSubscribe}))
 		_, err := m.Repos().DB().Exec(`UPDATE repo_origins SET branch = '' WHERE repo_uid = ?`, "uid-u")
 		require.NoError(t, err)
 		ri := m.newInstance("u", "uid-u", true)
@@ -281,7 +283,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 		_, err = send(m, ri, Rebuild(upstream))
 		require.ErrorIs(t, err, ErrUnavailable)
 
-		require.NoError(t, m.Origins().Set("uid-u", Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe}))
+		require.NoError(t, m.Origins().Set("uid-u", control.Origin{URL: url, Branch: upstream, Mode: control.OriginModeSubscribe}))
 		_, err = send(m, ri, Mount(MountSpec{}))
 		require.NoError(t, err, "Mount retries an unavailable repo")
 		require.Equal(t, "ready", ri.Status().Stage)

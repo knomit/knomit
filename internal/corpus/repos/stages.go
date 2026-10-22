@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/model"
 
@@ -285,7 +287,7 @@ func rehydrateUpstreamMain(svc *store.Service, repo string) string {
 
 // storedOrigin reads this repo's origin from control.db (nil when it has none,
 // or when the Manager has no control.db yet).
-func (r *RepoInstance) storedOrigin() (*Origin, error) {
+func (r *RepoInstance) storedOrigin() (*control.Origin, error) {
 	if r.env.m == nil {
 		return nil, nil
 	}
@@ -348,7 +350,7 @@ func (identifyStage) Enter(ctx context.Context, _ *Life, r *RepoInstance) error 
 	if err := reg.RecordRepoID(r.uid, id); err != nil {
 		// Another ACTIVE repo already holds this knowledge base: two local
 		// copies would both write agent/<host> and clobber each other on push.
-		if errors.Is(err, ErrRepoAlreadyRegistered) {
+		if errors.Is(err, control.ErrRepoAlreadyRegistered) {
 			return identityConflict{short: r.ShortID(), err: err}
 		}
 		// A transient failure leaves repo_id unset; the next Identify retries.

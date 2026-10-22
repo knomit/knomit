@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -112,18 +114,18 @@ type Manager struct {
 
 	// registry is the lens registry (first tenant of <home>/control.db).
 	// Opened by Start, closed by Close; nil before Start.
-	registry *LensRegistry
+	registry *control.LensRegistry
 
 	// reg is the repo registry (second tenant of <home>/control.db) — the
 	// authoritative record of which repos exist, including each one's serving
 	// profile. Opened by Start, closed by Close; nil before Start.
-	reg *Registry
+	reg *control.Registry
 
 	// origins holds each repo's remote connection (third tenant, sharing reg's
 	// handle). Opened by Start, closed with reg — Origins has no Close of its
 	// own, it borrows reg's *sql.DB; nil before Start.
-	origins *Origins
-	accepts *VerifyAccepts
+	origins *control.Origins
+	accepts *control.VerifyAccepts
 
 	// clientSessions records every MCP client session (fourth control.db
 	// tenant, borrowing reg's handle). Opened by Start, nil before; nil-safe
@@ -287,7 +289,7 @@ var ErrLensNameConflictsRepo = errors.New("lens name conflicts with an existing 
 // every explicitly pinned branch exists in its member repo. It does not touch
 // the registry. It takes m.mu.RLock for the membership snapshot; CreateLens
 // uses validateLensLocked directly under its write lock instead.
-func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
+func (m *Manager) ValidateLens(ctx context.Context, l control.Lens) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.validateLensLocked(ctx, l)
@@ -306,7 +308,7 @@ func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
 // even if they share a name, so this check is no longer what keeps cursor
 // namespaces disjoint; it survives as a UX nicety (one name must never serve
 // two endpoints).
-func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
+func (m *Manager) validateLensLocked(ctx context.Context, l control.Lens) error {
 	// Name checks fail fast, before any member resolution: a lens name must be a
 	// valid repo-grammar name and must not collide with an existing repo name
 	// (namespace legibility — one name must never serve two endpoints; gotcha M-1).
@@ -319,7 +321,7 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// REST layer maps to 400 (A1); the registry's own guard is now unreachable
 	// through CreateLens, but stays as defence in depth.
 	if l.WriteUID == "" {
-		return ErrLensWriteEmpty
+		return control.ErrLensWriteEmpty
 	}
 	if m.repos[l.Name] != nil {
 		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
@@ -456,24 +458,24 @@ func checkMemberIDCollision(ids map[string]string) error {
 //     a lens with the same name can never both persist. (A lock-free m.repos or
 //     registry check alone would not: the repo side's registry re-check can slip
 //     in just before this reg.Create, and m.Add does not re-check the registry.)
-func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
+func (m *Manager) CreateLens(ctx context.Context, l control.Lens) (control.Lens, error) {
 	// Grammar and write-empty are pure input checks; do them before reserving so
 	// a malformed request never occupies a name slot.
 	if !isValidRepoName(l.Name) {
-		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+		return control.Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
 	if l.WriteUID == "" {
-		return Lens{}, ErrLensWriteEmpty
+		return control.Lens{}, control.ErrLensWriteEmpty
 	}
-	if len(l.Description) > MaxLensDescriptionBytes {
-		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	if len(l.Description) > control.MaxLensDescriptionBytes {
+		return control.Lens{}, fmt.Errorf("%w: %d bytes (max %d)", control.ErrLensDescriptionTooLong, len(l.Description), control.MaxLensDescriptionBytes)
 	}
 
 	// Reserve the name in repo Create's in-flight set (origin empty → name only),
 	// giving P2 its repo/lens mutual exclusion. release runs after m.mu.Unlock.
 	release, err := m.reserveNameAndOrigin(l.Name, "")
 	if err != nil {
-		return Lens{}, err // ErrCreateInFlight when a create already holds this name
+		return control.Lens{}, err // ErrCreateInFlight when a create already holds this name
 	}
 	defer release()
 
@@ -481,10 +483,10 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.validateLensLocked(ctx, l); err != nil {
-		return Lens{}, err
+		return control.Lens{}, err
 	}
 	if m.registry == nil {
-		return Lens{}, fmt.Errorf("lens registry not open")
+		return control.Lens{}, fmt.Errorf("lens registry not open")
 	}
 	return m.registry.Create(l)
 }
@@ -511,30 +513,30 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 //
 // The write repo and description are pure input, checked up front. The name is
 // re-validated (grammar) but never changed — the caller passes the existing name.
-func (m *Manager) UpdateLens(ctx context.Context, l Lens) (Lens, error) {
+func (m *Manager) UpdateLens(ctx context.Context, l control.Lens) (control.Lens, error) {
 	if !isValidRepoName(l.Name) {
-		return Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
+		return control.Lens{}, fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
 	if l.WriteUID == "" {
-		return Lens{}, ErrLensWriteEmpty
+		return control.Lens{}, control.ErrLensWriteEmpty
 	}
-	if len(l.Description) > MaxLensDescriptionBytes {
-		return Lens{}, fmt.Errorf("%w: %d bytes (max %d)", ErrLensDescriptionTooLong, len(l.Description), MaxLensDescriptionBytes)
+	if len(l.Description) > control.MaxLensDescriptionBytes {
+		return control.Lens{}, fmt.Errorf("%w: %d bytes (max %d)", control.ErrLensDescriptionTooLong, len(l.Description), control.MaxLensDescriptionBytes)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.validateLensLocked(ctx, l); err != nil {
-		return Lens{}, err
+		return control.Lens{}, err
 	}
 	if m.registry == nil {
-		return Lens{}, fmt.Errorf("lens registry not open")
+		return control.Lens{}, fmt.Errorf("lens registry not open")
 	}
 	return m.registry.Update(l)
 }
 
 // LensRegistry returns the lens registry, or nil before Start.
-func (m *Manager) LensRegistry() *LensRegistry {
+func (m *Manager) LensRegistry() *control.LensRegistry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.registry
@@ -554,7 +556,7 @@ func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
 func (m *Manager) AgentID() string { return m.deps.AgentID }
 
 // VerifyAccepts returns this instance's F09 accept list, or nil before Start.
-func (m *Manager) VerifyAccepts() *VerifyAccepts {
+func (m *Manager) VerifyAccepts() *control.VerifyAccepts {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.accepts
@@ -568,14 +570,14 @@ func (m *Manager) AcceptListFor(uid string) func(commit plumbing.Hash) (model.Ac
 }
 
 // Origins returns the per-repo origin store, or nil before Start.
-func (m *Manager) Origins() *Origins {
+func (m *Manager) Origins() *control.Origins {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.origins
 }
 
 // Repos returns the repo registry, or nil before Start.
-func (m *Manager) Repos() *Registry {
+func (m *Manager) Repos() *control.Registry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.reg
@@ -959,9 +961,9 @@ func (m *Manager) Start() error {
 	}
 
 	// Open the repo registry WITHOUT creating its schema, and store the handle
-	// before anything can fail, so a controlUp error below cannot leak it:
+	// before anything can fail, so a control.ControlUp error below cannot leak it:
 	// Close releases whatever m.reg holds.
-	repoReg, err := OpenRegistryNoSchema(filepath.Join(m.deps.Cfg.Home, "control.db"))
+	repoReg, err := control.OpenRegistryNoSchema(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	if err != nil {
 		return fmt.Errorf("open repo registry: %w", err)
 	}
@@ -969,10 +971,10 @@ func (m *Manager) Start() error {
 	m.reg = repoReg
 	m.mu.Unlock()
 
-	// controlUp holds the load-bearing ordering — the lens re-key before the
+	// control.ControlUp holds the load-bearing ordering — the lens re-key before the
 	// versioned baseline — and is shared with OpenRegistry and OpenLensRegistry
 	// so no entry point can migrate this file without it.
-	if err := controlUp(repoReg.DB()); err != nil {
+	if err := control.ControlUp(repoReg.DB()); err != nil {
 		return err
 	}
 	// The instance identity row (F09): app.New writes it before the Manager
@@ -988,7 +990,7 @@ func (m *Manager) Start() error {
 	// One handle for all three tenants: Registry owns it, the lens registry and
 	// Origins borrow it. Sharing is what lets the lens foreign keys into
 	// repos(uid) be enforced on the same connection.
-	reg := NewLensRegistry(repoReg.DB())
+	reg := control.NewLensRegistry(repoReg.DB())
 	m.mu.Lock()
 	m.registry = reg
 	m.mu.Unlock()
@@ -1008,11 +1010,11 @@ func (m *Manager) Start() error {
 	// repo_origins declares a foreign key into repos(uid), so this must follow
 	// the migration that creates both — OpenOrigins itself cannot check, and
 	// cannot fail.
-	origins := OpenOrigins(repoReg.DB(), crypt)
+	origins := control.OpenOrigins(repoReg.DB(), crypt)
 	m.mu.Lock()
 	m.origins = origins
 	// F09's accept list, another control.db tenant (control migration 000013).
-	m.accepts = OpenVerifyAccepts(repoReg.DB())
+	m.accepts = control.OpenVerifyAccepts(repoReg.DB())
 	m.mu.Unlock()
 
 	// Client-session registry: fourth tenant of control.db, borrowing the same
@@ -1032,7 +1034,7 @@ func (m *Manager) Start() error {
 	// test in the sessions package relies on.
 	m.SetClientSessions(clientsessions.New(repoReg.DB(), policy).WithHub(m.ctx))
 
-	records, err := repoReg.List(StateActive)
+	records, err := repoReg.List(control.StateActive)
 	if err != nil {
 		return fmt.Errorf("list registered repos: %w", err)
 	}
@@ -1058,7 +1060,7 @@ func (m *Manager) Start() error {
 	for _, rec := range records {
 		registered[rec.UID] = struct{}{}
 		boot.Add(1)
-		go func(rec RepoRecord) {
+		go func(rec control.RepoRecord) {
 			defer boot.Done()
 			m.openRegistered(rec, (fleetUID != "" && rec.UID == fleetUID) || (creating != nil && rec.Name == creating.RepoName))
 		}(rec)
@@ -1069,7 +1071,7 @@ func (m *Manager) Start() error {
 	// RepoPath(uid) and Restore reopens it in place. Counting only the active
 	// ones would report every archived repo's file as an orphan, inviting an
 	// operator to delete exactly the file a restore needs.
-	archived, err := repoReg.List(StateArchived)
+	archived, err := repoReg.List(control.StateArchived)
 	if err != nil {
 		return fmt.Errorf("list archived repos: %w", err)
 	}
@@ -1106,8 +1108,8 @@ func (m *Manager) Start() error {
 // fleetDoor admits a fleet repository at Identify (fleet_chokepoint.go): boot
 // passes true only for this instance's recorded fleet repository, Restore
 // false.
-func (m *Manager) mountExisting(name, uid string, origin *Origin, fleetDoor bool) (*RepoInstance, error) {
-	subscribed := origin != nil && origin.Mode == OriginModeSubscribe
+func (m *Manager) mountExisting(name, uid string, origin *control.Origin, fleetDoor bool) (*RepoInstance, error) {
+	subscribed := origin != nil && origin.Mode == control.OriginModeSubscribe
 	ri := m.newInstance(name, uid, subscribed)
 	ri.fleetDoor = fleetDoor
 	if _, err := m.Send(context.Background(), ri, Mount(MountSpec{Mode: MountExisting})); err != nil {
@@ -1153,7 +1155,7 @@ func (m *Manager) RepoPath(uid string) string {
 // These are OBSERVED at open time and never stored, so they cannot drift out
 // of sync with reality.
 type Unavailable struct {
-	Record RepoRecord
+	Record control.RepoRecord
 	Reason string
 	Detail string
 	// Cause is the typed refusal behind Reason, when there is one the code acts
@@ -1195,12 +1197,12 @@ func (m *Manager) Unavailable() []Unavailable {
 // RepoSummary.detail in GET /repos and as the repo middleware's 409 body. Redact
 // the home prefix here, at the single place both read from, and keep the
 // unredacted text for the log line, which is where an operator debugs from.
-func (m *Manager) markUnavailable(rec RepoRecord, reason string, detail string) {
+func (m *Manager) markUnavailable(rec control.RepoRecord, reason string, detail string) {
 	m.markUnavailableCause(rec, reason, "", detail)
 }
 
 // markUnavailableCause is markUnavailable with a typed cause.
-func (m *Manager) markUnavailableCause(rec RepoRecord, reason string, cause UnavailableCause, detail string) {
+func (m *Manager) markUnavailableCause(rec control.RepoRecord, reason string, cause UnavailableCause, detail string) {
 	public := m.redactHome(detail)
 	m.mu.Lock()
 	m.unavailable[rec.UID] = Unavailable{Record: rec, Reason: reason, Detail: public, Cause: cause}
@@ -1234,8 +1236,8 @@ func (m *Manager) autoArchiveRefused() {
 		if u.Cause != CauseOntologySymlink {
 			continue
 		}
-		_, err := m.archive(u.Record.Name, ArchiveReason{
-			Source: ArchiveBySystem,
+		_, err := m.archive(u.Record.Name, control.ArchiveReason{
+			Source: control.ArchiveBySystem,
 			Reason: u.Detail,
 			// The state alone: the detail IS the reason, said once.
 			Condition: u.Reason,
@@ -1274,7 +1276,7 @@ func (m *Manager) clearUnavailable(uid string) {
 // VISIBLE as unavailable, with the reason. fleetRepo says rec is this
 // instance's recorded fleet repository, the only row whose fleet-id ontology
 // Identify admits.
-func (m *Manager) openRegistered(rec RepoRecord, fleetRepo bool) {
+func (m *Manager) openRegistered(rec control.RepoRecord, fleetRepo bool) {
 	_, origins, herr := m.controlHandles()
 	if herr != nil {
 		m.markUnavailable(rec, "unopenable", herr.Error())
@@ -1305,7 +1307,7 @@ func (m *Manager) openRegistered(rec RepoRecord, fleetRepo bool) {
 func unavailableReason(err error) (reason string, cause UnavailableCause, detail string) {
 	var se *StageError
 	if errors.As(err, &se) {
-		if errors.Is(se.Err, ErrRepoAlreadyRegistered) {
+		if errors.Is(se.Err, control.ErrRepoAlreadyRegistered) {
 			return "conflict", CauseIdentityConflict, se.Err.Error()
 		}
 		if errors.Is(se.Err, fact.ErrSymlinkNotFollowed) {

@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
@@ -94,7 +96,7 @@ func TestTemplates_ListingRoutes(t *testing.T) {
 	code, _ = getTemplates(t, r, "/repos/nope/templates")
 	require.Equal(t, http.StatusNotFound, code)
 
-	_, err := m.CreateLens(context.Background(), repos.Lens{Name: "a-lens", WriteUID: m.Get("playbooks").UID()})
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "a-lens", WriteUID: m.Get("playbooks").UID()})
 	require.NoError(t, err)
 	code, _ = getTemplates(t, r, "/repos/a-lens/templates")
 	require.Equal(t, http.StatusNotFound, code)

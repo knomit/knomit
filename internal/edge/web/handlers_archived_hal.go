@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 )
@@ -35,7 +37,7 @@ type archivedView struct {
 	Links      hal.LinkMap        `json:"_links"`
 }
 
-// archiveReasonView is repos.ArchiveReason on the wire, plus its summary.
+// archiveReasonView is control.ArchiveReason on the wire, plus its summary.
 type archiveReasonView struct {
 	Source    string `json:"source"`
 	Reason    string `json:"reason"`
@@ -48,11 +50,11 @@ type archiveReasonView struct {
 const maxArchiveNoteBytes = 500
 
 // archiveSummary is the one-line wording of an archive reason.
-func archiveSummary(why *repos.ArchiveReason) string {
+func archiveSummary(why *control.ArchiveReason) string {
 	if why == nil {
 		return "No reason recorded"
 	}
-	if why.Source == repos.ArchiveBySystem {
+	if why.Source == control.ArchiveBySystem {
 		if why.Reason == "" {
 			return "Archived automatically"
 		}
@@ -64,7 +66,7 @@ func archiveSummary(why *repos.ArchiveReason) string {
 	return "Archived by the user"
 }
 
-func archiveReasonViewOf(why *repos.ArchiveReason) *archiveReasonView {
+func archiveReasonViewOf(why *control.ArchiveReason) *archiveReasonView {
 	if why == nil {
 		return nil
 	}
@@ -107,7 +109,7 @@ func handleHALRepoArchive(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 				fmt.Sprintf("the archive note is %d bytes; at most %d are kept", len(note), maxArchiveNoteBytes), r.URL.Path)
 			return
 		}
-		info, err := m.ArchiveWith(name, repos.ArchiveReason{Source: repos.ArchiveByUser, Note: note})
+		info, err := m.ArchiveWith(name, control.ArchiveReason{Source: control.ArchiveByUser, Note: note})
 		var fe *repos.FleetError
 		if errors.As(err, &fe) {
 			writeFleetError(w, r, err) // fleet_repository: 409 with the hint
@@ -204,13 +206,13 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusNotFound, "Not found"
 	case errors.Is(err, repos.ErrRepoNotFound):
 		return http.StatusNotFound, "Not found"
-	case errors.Is(err, repos.ErrRepoExists):
+	case errors.Is(err, control.ErrRepoExists):
 		return http.StatusConflict, "Name in use"
 	case errors.Is(err, repos.ErrRepoNameConflictsLens):
 		return http.StatusConflict, "Repo name conflicts with a lens"
 	case errors.Is(err, repos.ErrOriginInUse):
 		return http.StatusConflict, "Origin in use"
-	case errors.Is(err, repos.ErrRepoAlreadyRegistered):
+	case errors.Is(err, control.ErrRepoAlreadyRegistered):
 		// Restoring into a knowledge base another ACTIVE repo already holds.
 		// User-correctable (archive the holder, then restore), so a conflict —
 		// not the 500 "Operation failed" the default arm used to produce.

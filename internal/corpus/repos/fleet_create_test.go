@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/verify"
 
 	"github.com/stretchr/testify/require"
@@ -163,7 +165,7 @@ func failAt(step string, err error, reached *bool) func(string) error {
 func requireNoFleetCreated(t *testing.T, m *Manager) {
 	t.Helper()
 	require.Nil(t, m.fleetRepo())
-	recs, err := m.Repos().List(StateActive)
+	recs, err := m.Repos().List(control.StateActive)
 	require.NoError(t, err)
 	for _, r := range recs {
 		require.NotEqual(t, "fleet", r.Name, "the fleet repository is not registered")

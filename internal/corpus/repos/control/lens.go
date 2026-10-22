@@ -18,7 +18,7 @@
 //
 // The registry never calls time.Now(): callers stamp CreatedAt/UpdatedAt.
 // It has no dependency on Manager; Manager owns its lifecycle.
-package repos
+package control
 
 import (
 	"database/sql"
@@ -141,10 +141,10 @@ func OpenLensRegistry(path string) (*LensRegistry, error) {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	// controlUp, not migrate.Control: the re-key has to come first, and the one
-	// place that knows so is controlUp. See its comment for what a caller that
+	// ControlUp, not migrate.Control: the re-key has to come first, and the one
+	// place that knows so is ControlUp. See its comment for what a caller that
 	// migrated without it does to the home.
-	if err := controlUp(db); err != nil {
+	if err := ControlUp(db); err != nil {
 		db.Close()
 		return nil, err
 	}

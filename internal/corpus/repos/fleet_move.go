@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 
+	"knomit/internal/corpus/repos/control"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -161,7 +163,7 @@ func (m *Manager) localFleetRoot(ri *RepoInstance) (path string, pem []byte, ups
 // credential change, changeFleetCredential). The caller holds fleetOpMu and
 // ran F1. On the master it is a MOVE (moveFleetToForge); on a member it
 // follows the forge the fleet moved to.
-func (m *Manager) followForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *Origin) (string, error) {
+func (m *Manager) followForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *control.Origin) (string, error) {
 	master := false
 	if err := ri.WithRead(func(svc *store.Service) { master = ri.isFleetMaster(svc) }); err != nil {
 		return "", err
@@ -249,7 +251,7 @@ func (e *forgeProbeError) Is(target error) bool { return target == ErrOriginUnre
 // forge, which nothing reads until an origin points there). A failure in 3
 // restores the previous origin (none for the hub), so this copy is exactly
 // as it was, and is returned.
-func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *Origin) error {
+func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *control.Origin) error {
 	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(&decided), decided.URL)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOriginUnreachable, err)
@@ -295,7 +297,7 @@ func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decide
 // restoreFleetOrigin puts back the origin a failed move replaced: none (the
 // hub) is a detach; a stored one is attached again as it was (a cert origin
 // is classified again, since cert is never an input).
-func (m *Manager) restoreFleetOrigin(ctx context.Context, ri *RepoInstance, prev *Origin) error {
+func (m *Manager) restoreFleetOrigin(ctx context.Context, ri *RepoInstance, prev *control.Origin) error {
 	ctx = context.WithoutCancel(ctx)
 	if prev == nil {
 		_, err := m.Send(ctx, ri, DetachOrigin())

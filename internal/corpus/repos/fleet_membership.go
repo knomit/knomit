@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -886,7 +888,7 @@ func (m *Manager) dropFromLenses(uid string) error {
 		if !ok || l.WriteUID == uid {
 			continue
 		}
-		reads := make([]LensRead, 0, len(l.Reads))
+		reads := make([]control.LensRead, 0, len(l.Reads))
 		for _, r := range l.Reads {
 			if r.RepoUID != uid {
 				reads = append(reads, r)
@@ -1335,7 +1337,7 @@ func (m *Manager) StandDown(ctx context.Context) error {
 // no master (the old master stood down) or this instance. A marker naming
 // another instance means that master did not stand down, or this copy has not
 // synced since it did.
-func (m *Manager) refuseOldMasterActive(ri *RepoInstance, o *Origin) error {
+func (m *Manager) refuseOldMasterActive(ri *RepoInstance, o *control.Origin) error {
 	named, err := m.fleetMasterAtMain(ri)
 	if err != nil {
 		return err
@@ -1572,7 +1574,7 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 // anonymous. The new credential must reach the forge (the probe the attach's
 // guard asks for) before it is stored. Then it is stored, and that is all: on
 // the master no seed, no host record, no publish (#529 S3, N-a).
-func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o OriginSpec, prev *Origin) (string, error) {
+func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o OriginSpec, prev *control.Origin) (string, error) {
 	o.URL = prev.URL
 	if o.AuthToken == "" && (o.AuthMethod == "" || o.AuthMethod == prev.AuthMethod) {
 		o.AuthMethod, o.AuthToken = prev.AuthMethod, prev.AuthToken

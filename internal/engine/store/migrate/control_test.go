@@ -212,14 +212,14 @@ CREATE TABLE lens_reads (
 // legacyControlDDL is the shape every control.db that predates this migration
 // already carries on disk: the verbatim text of the three ad-hoc
 // `CREATE TABLE IF NOT EXISTS` constants internal/corpus/repos ran on every open
-// before control.db was versioned — registrySchema (internal/corpus/repos/registry.go),
-// originsSchema (internal/corpus/repos/origins.go) and lensSchema
-// (internal/corpus/repos/lens.go), in dependency order. The constants themselves were
+// before control.db was versioned — registrySchema (internal/corpus/repos/control/registry.go),
+// originsSchema (internal/corpus/repos/control/origins.go) and lensSchema
+// (internal/corpus/repos/control/lens.go), in dependency order. The constants themselves were
 // deleted when the baseline migration replaced them; recover the originals with
 // `git show 050def4b:internal/corpus/repos/registry.go` and friends.
 //
 // Pasted literally rather than derived from control/000001_control_baseline.up.sql,
-// for exactly the reason legacyLensDDL in internal/corpus/repos/lens_migrate_test.go is:
+// for exactly the reason legacyLensDDL in internal/corpus/repos/control/lens_migrate_test.go is:
 // an INDEPENDENT copy is the whole point. Generate it from the baseline and the
 // two agree by construction, and TestControl_BaselineMatchesLiveShape below
 // asserts nothing at all. Keeping the two in step is meant to be a deliberate

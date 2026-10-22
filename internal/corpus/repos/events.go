@@ -21,6 +21,8 @@ import (
 	"os"
 	"strings"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
@@ -403,11 +405,11 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 		restoreRemote(svc, r, existing)
 		return err
 	}
-	mode := OriginModeSync
+	mode := control.OriginModeSync
 	if stored != nil {
 		mode = stored.Mode
 	}
-	if err := origins.Set(r.uid, Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
+	if err := origins.Set(r.uid, control.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
 		restoreRemote(svc, r, existing)
 		return err
 	}
@@ -475,7 +477,7 @@ func restoreRemote(svc *store.Service, r *RepoInstance, prev *remotesync.Remote)
 func applySwap(m *Machine, s SwapSpec) error {
 	r := m.r
 	origins := r.env.m.Origins()
-	var stored *Origin
+	var stored *control.Origin
 	if s.Origin.URL != "" {
 		if origins == nil {
 			return fmt.Errorf("swap failed: save remote config: %w; nothing changed", ErrManagerStopped)
@@ -491,12 +493,12 @@ func applySwap(m *Machine, s SwapSpec) error {
 	}
 	m.pendingBak = backup
 	if s.Origin.URL != "" {
-		mode := OriginModeSync
+		mode := control.OriginModeSync
 		if stored != nil {
 			mode = stored.Mode
 		}
 		o := s.Origin
-		if err := origins.Set(r.uid, Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
+		if err := origins.Set(r.uid, control.Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
 			return fmt.Errorf("swap failed: save remote config: %w; nothing changed", err)
 		}
 	}
@@ -524,7 +526,7 @@ var swapCopy = copyFile
 
 // restoreOrigin puts uid's origin row back to stored: Set it again, or Delete
 // the row when there was none.
-func restoreOrigin(origins *Origins, uid string, stored *Origin) error {
+func restoreOrigin(origins *control.Origins, uid string, stored *control.Origin) error {
 	if stored == nil {
 		return origins.Delete(uid)
 	}

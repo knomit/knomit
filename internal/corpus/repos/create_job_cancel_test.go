@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/foundation/config"
@@ -269,7 +271,7 @@ func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
 	org, err := m.Origins().Get(uid)
 	require.NoError(t, err)
 	require.NotNil(t, org, "a subscribe create must persist an origin row to begin with")
-	require.Equal(t, OriginModeSubscribe, org.Mode)
+	require.Equal(t, control.OriginModeSubscribe, org.Mode)
 	require.Equal(t, url, org.URL)
 	require.Equal(t, 1, countSubscriptions(t, m, uid),
 		"a subscribe create must persist a subscription row to begin with")

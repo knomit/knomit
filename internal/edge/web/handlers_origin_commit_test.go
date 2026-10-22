@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
@@ -109,9 +111,9 @@ func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manage
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
 	}
-	if err := m.Repos().Insert(repos.RepoRecord{
-		UID: uid, Name: name, State: repos.StateActive,
-		Profile: repos.ProfileCode, CreatedAt: 1,
+	if err := m.Repos().Insert(control.RepoRecord{
+		UID: uid, Name: name, State: control.StateActive,
+		Profile: control.ProfileCode, CreatedAt: 1,
 	}); err != nil {
 		t.Fatalf("register %q: %v", name, err)
 	}

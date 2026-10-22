@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
@@ -1080,7 +1082,7 @@ func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
 	if err != nil || before == nil {
 		t.Fatalf("origin before: %v %+v", err, before)
 	}
-	require.Equal(t, repos.OriginModeSubscribe, before.Mode, "precondition: created as a subscription")
+	require.Equal(t, control.OriginModeSubscribe, before.Mode, "precondition: created as a subscription")
 
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/sub/origin",
@@ -1094,7 +1096,7 @@ func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
 	after, err := m.Origins().Get(sub.UID())
 	require.NoError(t, err)
 	require.NotNil(t, after)
-	require.Equal(t, repos.OriginModeSubscribe, after.Mode,
+	require.Equal(t, control.OriginModeSubscribe, after.Mode,
 		"a credential update must not demote the subscription to sync")
 	require.Equal(t, "s3cret", after.AuthToken, "the write actually landed")
 }

@@ -11,6 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/platform/reqinfo"
 )
@@ -136,7 +138,7 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 // Profile is keyed by the registry uid, not by the root commit: a repo that
 // adopts a remote's divergent history keeps its serving profile.
 func profileFor(mgr *repos.Manager, ri *repos.RepoInstance) string {
-	p := repos.ProfileCode
+	p := control.ProfileCode
 	if mgr == nil || ri == nil {
 		return p
 	}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,9 +110,9 @@ func TestResolveSessionBinding_Lens(t *testing.T) {
 	write := createRepo(t, m, "writer")
 	read := createRepo(t, m, "reader")
 
-	l, err := m.LensRegistry().Create(Lens{
+	l, err := m.LensRegistry().Create(control.Lens{
 		Name: "eng", WriteUID: write.UID(),
-		Reads:     []LensRead{{RepoUID: read.UID()}},
+		Reads:     []control.LensRead{{RepoUID: read.UID()}},
 		CreatedAt: 1, UpdatedAt: 1,
 	})
 	require.NoError(t, err)
@@ -178,9 +180,9 @@ func TestResolveSessionBinding_LensBranchRefused(t *testing.T) {
 	m := newTestManager(t)
 	write := bootNamedRepo(t, m, "writer")
 
-	l, err := m.LensRegistry().Create(Lens{
+	l, err := m.LensRegistry().Create(control.Lens{
 		Name: "eng", WriteUID: write.UID(),
-		Reads:     []LensRead{{RepoUID: write.UID()}},
+		Reads:     []control.LensRead{{RepoUID: write.UID()}},
 		CreatedAt: 1, UpdatedAt: 1,
 	})
 	require.NoError(t, err)

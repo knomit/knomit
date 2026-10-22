@@ -13,6 +13,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 )
 
@@ -47,7 +49,7 @@ func (lm *lensMember) UnmarshalJSON(data []byte) error {
 }
 
 // lensReadDTO is the wire shape for one read mount of a lens: the member pair
-// plus the mount's own settings. The domain model (repos.LensRead) stays
+// plus the mount's own settings. The domain model (control.LensRead) stays
 // wire-agnostic; this DTO carries the json tags.
 //
 // uid/name are spelled out rather than embedding lensMember: embedding promotes
@@ -118,11 +120,11 @@ type lensNames map[string]string
 //
 // A nil registry (Manager not started) yields an empty index for the same
 // reason: a view is not the place to discover the control plane is down.
-func newLensNames(reg *repos.Registry) (lensNames, error) {
+func newLensNames(reg *control.Registry) (lensNames, error) {
 	if reg == nil {
 		return lensNames{}, nil
 	}
-	recs, err := reg.List(repos.StateActive)
+	recs, err := reg.List(control.StateActive)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +152,7 @@ func (n lensNames) member(uid string) lensMember {
 // list is what the UI shows a human. It is also exactly the mount order
 // NewBindingOfLens produces for the federation tie-break, so the lens editor
 // and the lens's own results agree.
-func lensViewOf(b hal.URLBuilder, names lensNames, l repos.Lens) lensView {
+func lensViewOf(b hal.URLBuilder, names lensNames, l control.Lens) lensView {
 	reads := make([]lensReadDTO, len(l.Reads))
 	for i, r := range l.Reads {
 		mem := names.member(r.RepoUID)
@@ -171,7 +173,7 @@ func lensViewOf(b hal.URLBuilder, names lensNames, l repos.Lens) lensView {
 
 // lensViewsOf resolves the names for a whole response with one registry read,
 // then renders every lens in it.
-func lensViewsOf(b hal.URLBuilder, reg *repos.Registry, ls []repos.Lens) ([]lensView, error) {
+func lensViewsOf(b hal.URLBuilder, reg *control.Registry, ls []control.Lens) ([]lensView, error) {
 	names, err := newLensNames(reg)
 	if err != nil {
 		return nil, err
@@ -190,8 +192,8 @@ func lensViewsOf(b hal.URLBuilder, reg *repos.Registry, ls []repos.Lens) ([]lens
 // so this 500 says "the write succeeded, the response did not" — the caller's
 // retry finds the lens there. The alternative, serving uids as names, would look
 // like success and be wrong.
-func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg *repos.Registry, status int, l repos.Lens) {
-	views, err := lensViewsOf(b, reg, []repos.Lens{l})
+func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg *control.Registry, status int, l control.Lens) {
+	views, err := lensViewsOf(b, reg, []control.Lens{l})
 	if err != nil {
 		log.Error().Err(err).Str("path", r.URL.Path).Str("lens", l.Name).Msg("resolve lens member names failed")
 		hal.WriteProblem(w, http.StatusInternalServerError, "Lookup failed", "resolve lens member names failed", r.URL.Path)
@@ -228,7 +230,7 @@ func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg
 // silently — a lens quietly missing a member is worse than a 400.
 //
 // A nil registry cannot answer, so the check defers to the manager's validation.
-func checkLensMembers(reg *repos.Registry, write string, reads []lensReadDTO) (title, detail string, err error) {
+func checkLensMembers(reg *control.Registry, write string, reads []lensReadDTO) (title, detail string, err error) {
 	if reg == nil {
 		return "", "", nil
 	}
@@ -242,7 +244,7 @@ func checkLensMembers(reg *repos.Registry, write string, reads []lensReadDTO) (t
 				"no registered repo has uid %q; identify lens members by the uid from GET %s/repos",
 				uid, APIBase), nil
 		}
-		if rec.State != repos.StateActive {
+		if rec.State != control.StateActive {
 			return "Archived repo", fmt.Sprintf(
 				"repo %q (uid %s) is archived and cannot be a lens member; restore it first",
 				rec.Name, uid), nil
@@ -269,7 +271,7 @@ func checkLensMembers(reg *repos.Registry, write string, reads []lensReadDTO) (t
 
 // rejectUnknownMembers writes the 400 (or 500) and reports whether the request
 // should stop. Shared by create and patch so the two cannot drift.
-func rejectUnknownMembers(w http.ResponseWriter, r *http.Request, reg *repos.Registry, write string, reads []lensReadDTO) bool {
+func rejectUnknownMembers(w http.ResponseWriter, r *http.Request, reg *control.Registry, write string, reads []lensReadDTO) bool {
 	title, detail, err := checkLensMembers(reg, write, reads)
 	if err != nil {
 		log.Error().Err(err).Str("path", r.URL.Path).Msg("resolve lens member uids failed")
@@ -356,7 +358,7 @@ func handleHALLens(
 				`no lens named "`+name+`"`, r.URL.Path)
 			return
 		}
-		views, err := lensViewsOf(b, m.Repos(), []repos.Lens{l})
+		views, err := lensViewsOf(b, m.Repos(), []control.Lens{l})
 		if err != nil {
 			log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("resolve lens member names failed")
 			hal.WriteProblem(w, http.StatusInternalServerError, "Lookup failed", "resolve lens member names failed", r.URL.Path)
@@ -394,12 +396,12 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 		if rejectUnknownMembers(w, r, m.Repos(), req.Write.UID, req.Reads) {
 			return
 		}
-		reads := make([]repos.LensRead, len(req.Reads))
+		reads := make([]control.LensRead, len(req.Reads))
 		for i, rd := range req.Reads {
-			reads[i] = repos.LensRead{RepoUID: rd.UID, Branch: rd.Branch, Source: rd.Source}
+			reads[i] = control.LensRead{RepoUID: rd.UID, Branch: rd.Branch, Source: rd.Source}
 		}
 		now := time.Now().Unix() // the caller stamps timestamps; the registry never reads the clock
-		lens := repos.Lens{
+		lens := control.Lens{
 			Name: req.Name, WriteUID: req.Write.UID, Description: req.Description, Reads: reads,
 			CreatedAt: now, UpdatedAt: now,
 		}
@@ -472,9 +474,9 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		if req.Reads != nil {
 			providedReads = *req.Reads
-			reads := make([]repos.LensRead, len(*req.Reads))
+			reads := make([]control.LensRead, len(*req.Reads))
 			for i, rd := range *req.Reads {
-				reads[i] = repos.LensRead{RepoUID: rd.UID, Branch: rd.Branch, Source: rd.Source}
+				reads[i] = control.LensRead{RepoUID: rd.UID, Branch: rd.Branch, Source: rd.Source}
 			}
 			lens.Reads = reads
 		}
@@ -538,7 +540,7 @@ func lensCreateErrStatus(err error) (int, string) {
 		return http.StatusBadRequest, "Invalid lens name"
 	case errors.Is(err, repos.ErrLensNameConflictsRepo):
 		return http.StatusConflict, "Lens name conflicts with a repo"
-	case errors.Is(err, repos.ErrLensExists):
+	case errors.Is(err, control.ErrLensExists):
 		return http.StatusConflict, "Lens already exists"
 	case errors.Is(err, repos.ErrCreateInFlight):
 		return http.StatusConflict, "Create in flight"
@@ -552,11 +554,11 @@ func lensCreateErrStatus(err error) (int, string) {
 		return http.StatusUnprocessableEntity, "Lens write repo is a subscription"
 	case errors.Is(err, repos.ErrLensWriteFleet):
 		return http.StatusUnprocessableEntity, "Lens write repo is the fleet repository"
-	case errors.Is(err, repos.ErrLensWriteEmpty):
+	case errors.Is(err, control.ErrLensWriteEmpty):
 		return http.StatusBadRequest, "Lens write repo required"
-	case errors.Is(err, repos.ErrLensDescriptionTooLong):
+	case errors.Is(err, control.ErrLensDescriptionTooLong):
 		return http.StatusUnprocessableEntity, "Lens description too long"
-	case errors.Is(err, repos.ErrLensNotFound):
+	case errors.Is(err, control.ErrLensNotFound):
 		// Reached only via PATCH, when the lens is deleted between the handler's
 		// Get and UpdateLens's persist. Create never produces it.
 		return http.StatusNotFound, "Lens not found"

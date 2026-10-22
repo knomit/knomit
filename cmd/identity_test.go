@@ -18,6 +18,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 )
 
 // run executes the real root command with args and returns stdout+stderr.
@@ -86,7 +88,7 @@ func TestGrants_AddListRevokeAndTheRefusals(t *testing.T) {
 	if _, err := run(t, "", "grants", "list"); err == nil || !strings.Contains(err.Error(), "knomit serve") {
 		t.Fatalf("grants on an unserved home: %v", err)
 	}
-	reg, err := repos.OpenRegistry(filepath.Join(home, "control.db")) // what the first `knomit serve` does
+	reg, err := control.OpenRegistry(filepath.Join(home, "control.db")) // what the first `knomit serve` does
 	if err != nil {
 		t.Fatal(err)
 	}

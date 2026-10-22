@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -57,14 +59,14 @@ func TestProbeResolveUpstream(t *testing.T) {
 // (SetBranch) → the write succeeds with main → red.
 func TestOrigins_RefuseAnEmptyBranch(t *testing.T) {
 	r, o := openTestOrigins(t, testCrypt(t))
-	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	require.NoError(t, r.Insert(control.RepoRecord{UID: "u1", Name: "alpha", State: control.StateActive, Profile: "code", CreatedAt: 1}))
 
-	require.ErrorIs(t, o.Set("u1", Origin{URL: "https://example.test/kb.git"}), model.ErrNoConsensusBranch)
+	require.ErrorIs(t, o.Set("u1", control.Origin{URL: "https://example.test/kb.git"}), model.ErrNoConsensusBranch)
 	got, err := o.Get("u1")
 	require.NoError(t, err)
 	require.Nil(t, got, "nothing is stored for a refused write")
 
-	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "trunk"}))
+	require.NoError(t, o.Set("u1", control.Origin{URL: "https://example.test/kb.git", Branch: "trunk"}))
 	require.ErrorIs(t, o.SetBranch("u1", ""), model.ErrNoConsensusBranch)
 	got, err = o.Get("u1")
 	require.NoError(t, err)

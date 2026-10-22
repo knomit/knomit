@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/fleetrec"
@@ -622,7 +624,7 @@ func (m *Manager) fleetAtMain(ri *RepoInstance) (fleetrec.Fleet, error) {
 	return out, lerr
 }
 
-func (m *Manager) originOf(ri *RepoInstance) (*Origin, error) {
+func (m *Manager) originOf(ri *RepoInstance) (*control.Origin, error) {
 	o := m.Origins()
 	if o == nil {
 		return nil, errors.New("origins unavailable")

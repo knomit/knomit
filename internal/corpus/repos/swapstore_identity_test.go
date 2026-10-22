@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -62,7 +64,7 @@ func TestSwapStore_FailedSwapKeepsTheInjectedOrigin(t *testing.T) {
 	require.NoError(t, err)
 
 	const originURL = "https://origin.test/kb.git"
-	require.NoError(t, m.Origins().Set(ri.UID(), Origin{URL: originURL, Branch: "main"}))
+	require.NoError(t, m.Origins().Set(ri.UID(), control.Origin{URL: originURL, Branch: "main"}))
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		svc.Remote().SetOrigin(&remotesync.Origin{URL: originURL, Branch: "main"})
 	}))

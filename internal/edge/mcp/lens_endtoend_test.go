@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
@@ -67,10 +68,10 @@ func newLensE2E(t *testing.T) (m *repos.Manager, repoA, repoB *repos.RepoInstanc
 	m.Set("alpha", repoA)
 	m.Set("beta", repoB)
 
-	stored, err := m.CreateLens(context.Background(), repos.Lens{
+	stored, err := m.CreateLens(context.Background(), control.Lens{
 		Name:     "eng",
 		WriteUID: repoA.UID(),
-		Reads:    []repos.LensRead{{RepoUID: repoB.UID()}},
+		Reads:    []control.LensRead{{RepoUID: repoB.UID()}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "eng", stored.Name)
@@ -90,8 +91,8 @@ func newE2ERepo(t *testing.T, m *repos.Manager, name string) *repos.RepoInstance
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	uid := "uid-" + name
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: uid, Name: name, State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: uid, Name: name, State: control.StateActive, Profile: "code", CreatedAt: 1,
 	}))
 	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         name,
@@ -471,7 +472,7 @@ func TestLensE2E_UpdateReadsInvalidatesCursor(t *testing.T) {
 	// Edit the lens's reads via the manager path (PATCH's persistence layer):
 	// drop the foreign mount beta. The write repo (alpha) is preserved; the read
 	// set shrinks, so only the read-set fingerprint diverges.
-	_, err = m.UpdateLens(context.Background(), repos.Lens{
+	_, err = m.UpdateLens(context.Background(), control.Lens{
 		Name: lens, WriteUID: repoA.UID(), Reads: nil, UpdatedAt: 2,
 	})
 	require.NoError(t, err)

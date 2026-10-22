@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"knomit/internal/corpus/repos/control"
 )
 
 // SessionBindingKind classifies why a STORED session binding could not be
@@ -60,7 +62,7 @@ func ParsePin(pin string) (kind, uid string, err error) {
 func PinForRepo(ri *RepoInstance) string { return pinOf("repo:", ri.UID()) }
 
 // PinForLens is PinForRepo's counterpart for a lens.
-func PinForLens(l Lens) string { return pinOf("lens:", l.UID) }
+func PinForLens(l control.Lens) string { return pinOf("lens:", l.UID) }
 
 // ResolveSessionBinding turns a stored pin into a context carrying the Binding
 // and the write repo as the context RepoInstance — the same two values
@@ -148,7 +150,7 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin, branch string) 
 // or a genuinely deleted lens leaves no row to read, and in the deleted case
 // the uid IS all that is left. The scan only runs on a path that is already
 // failing, and a registry holds tens of lenses, not thousands.
-func lensLabel(reg *LensRegistry, uid string) string {
+func lensLabel(reg *control.LensRegistry, uid string) string {
 	if reg == nil || uid == "" {
 		return uid
 	}

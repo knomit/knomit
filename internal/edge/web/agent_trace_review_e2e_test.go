@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
 	"knomit/internal/engine/store"
@@ -91,8 +93,8 @@ func newTraceReviewE2E(t *testing.T) *reviewE2E {
 	svc.SetEmbedder(emb)
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 	seedTraceCorpus(t, svc, "first")
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: "uid-alpha", Name: "alpha", State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: "uid-alpha", Name: "alpha", State: control.StateActive, Profile: "code", CreatedAt: 1,
 	}))
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", UID: "uid-alpha", Svc: svc, AgentBranch: "agent/test",

@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
@@ -48,8 +50,8 @@ func newSkillFixture(t *testing.T) *skillFixture {
 	f := &skillFixture{m: m}
 	f.alpha = newSkillRepo(t, m, "alpha", "develop")
 	f.beta = newSkillRepo(t, m, "beta", "main")
-	_, err := m.CreateLens(context.Background(), repos.Lens{
-		Name: "eng", WriteUID: f.alpha.UID(), Reads: []repos.LensRead{{RepoUID: f.beta.UID()}},
+	_, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: f.alpha.UID(), Reads: []control.LensRead{{RepoUID: f.beta.UID()}},
 	})
 	require.NoError(t, err)
 	return f
@@ -66,8 +68,8 @@ func newSkillRepo(t *testing.T, m *repos.Manager, name, upstream string) *repos.
 	}
 	require.Equal(t, upstream, svc.Remote().UpstreamBranch())
 	uid := "uid-" + name
-	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
-		UID: uid, Name: name, State: repos.StateActive, Profile: "code", CreatedAt: 1,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: uid, Name: name, State: control.StateActive, Profile: "code", CreatedAt: 1,
 	}))
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: name, UID: uid, AgentBranch: "agent/test", Svc: svc,

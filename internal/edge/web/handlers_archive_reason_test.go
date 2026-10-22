@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/control"
 )
 
 type wireReason struct {
@@ -148,7 +148,7 @@ func TestArchive_UnavailableRepoAndLegacyOnTheWire(t *testing.T) {
 
 	// Legacy: a bare state flip, as every build before reasons archived.
 	m2.Remove("old")
-	if err := m2.Repos().SetState(oldUID, repos.StateArchived, 1); err != nil {
+	if err := m2.Repos().SetState(oldUID, control.StateArchived, 1); err != nil {
 		t.Fatal(err)
 	}
 	item := httptest.NewRecorder()

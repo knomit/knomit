@@ -479,7 +479,7 @@ func TestLensStats_HighlightsDedupeAcrossMounts(t *testing.T) {
 }
 
 // TestLensStats_HighlightsDedupeWriteWinsEvenWhenWriteSortsAfterRead:
-// repos.Lens.normalize sorts Reads alphabetically by repo name, so the write
+// control.Lens.normalize sorts Reads alphabetically by repo name, so the write
 // mount is NOT necessarily first in fan-out order — a "first occurrence in
 // iteration order wins" dedup would pick the read mount's copy here, which
 // is wrong. Write must win regardless of where it sorts.

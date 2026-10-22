@@ -13,6 +13,8 @@ import (
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
@@ -260,7 +262,7 @@ func TestFleetOrigin_StoredCertOriginFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.mgr.Origins().Set(ri.UID(), repos.Origin{URL: internal, Branch: "main", AuthMethod: "cert", Mode: repos.OriginModeSubscribe}); err != nil {
+	if err := a.mgr.Origins().Set(ri.UID(), control.Origin{URL: internal, Branch: "main", AuthMethod: "cert", Mode: control.OriginModeSubscribe}); err != nil {
 		t.Fatal(err)
 	}
 	before = b.hdrs.tlsRequests()

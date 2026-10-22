@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/foundation/config"
@@ -64,7 +66,7 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	uid := ri.UID()
 	// The origin lives in control.db now, which is what the next boot rehydrates
 	// upstreamMain from. "master" is a branch this repo does not have.
-	require.NoError(t, m.Origins().Set(uid, Origin{
+	require.NoError(t, m.Origins().Set(uid, control.Origin{
 		URL:    fileuri.New(filepath.Join(dir, "nowhere.git")),
 		Branch: "master",
 	}))

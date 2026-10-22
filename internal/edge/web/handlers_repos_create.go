@@ -8,6 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/pki"
 )
@@ -328,7 +330,7 @@ func createErrStatus(err error) (int, string) {
 	switch {
 	case errors.Is(err, repos.ErrInvalidName):
 		return http.StatusBadRequest, "Invalid name"
-	case errors.Is(err, repos.ErrRepoExists):
+	case errors.Is(err, control.ErrRepoExists):
 		return http.StatusConflict, "Repo exists"
 	case errors.Is(err, repos.ErrRepoNameConflictsLens):
 		return http.StatusConflict, "Repo name conflicts with a lens"

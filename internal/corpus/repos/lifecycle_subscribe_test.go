@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
@@ -56,7 +58,7 @@ func TestCreate_SubscribeMode_FollowsUpstreamReadOnly(t *testing.T) {
 	o, err := m.Origins().Get(ri.UID())
 	require.NoError(t, err)
 	require.NotNil(t, o)
-	require.Equal(t, OriginModeSubscribe, o.Mode)
+	require.Equal(t, control.OriginModeSubscribe, o.Mode)
 	require.Equal(t, "main", o.Branch)
 	require.Equal(t, "sub", m.ActiveRepoWithOrigin(url))
 }

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 )
 
@@ -134,10 +136,10 @@ func TestLensGET_EmbedsTheExperimentWhenTheWriteMemberIsPinnedThere(t *testing.T
 		t.Fatalf("with read: %v", err)
 	}
 
-	lens, err := m.LensRegistry().Create(repos.Lens{
+	lens, err := m.LensRegistry().Create(control.Lens{
 		Name:     "eng",
 		WriteUID: write.UID(),
-		Reads: []repos.LensRead{
+		Reads: []control.LensRead{
 			{RepoUID: write.UID(), Branch: branch},
 			{RepoUID: m.Get("beta").UID()},
 		},

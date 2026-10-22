@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
 // ---------- LensRegistry.Update (registry-layer mechanics) ----------
 
 // uidsOf returns the read-mount repo uids of a lens, in stored (sorted) order.
-func uidsOf(reads []LensRead) []string {
+func uidsOf(reads []control.LensRead) []string {
 	out := make([]string, len(reads))
 	for i, r := range reads {
 		out[i] = r.RepoUID
@@ -40,12 +42,12 @@ func TestLensRegistry_Update_ReplaceReads(t *testing.T) {
 	beta := seedMember(t, m.Repos(), "beta")
 	gamma := seedMember(t, m.Repos(), "gamma")
 
-	_, err := reg.Create(Lens{Name: "eng", WriteUID: alpha, Reads: []LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 1})
+	_, err := reg.Create(control.Lens{Name: "eng", WriteUID: alpha, Reads: []control.LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// Wholesale replace: beta drops out, gamma comes in. normalize folds the
 	// write repo (alpha) back in and sorts.
-	updated, err := reg.Update(Lens{Name: "eng", WriteUID: alpha, Reads: []LensRead{{RepoUID: gamma}}, CreatedAt: 1, UpdatedAt: 2})
+	updated, err := reg.Update(control.Lens{Name: "eng", WriteUID: alpha, Reads: []control.LensRead{{RepoUID: gamma}}, CreatedAt: 1, UpdatedAt: 2})
 	require.NoError(t, err)
 	require.Equal(t, []string{alpha, gamma}, uidsOf(updated.Reads))
 
@@ -62,10 +64,10 @@ func TestLensRegistry_Update_ChangeWrite(t *testing.T) {
 	beta := seedMember(t, m.Repos(), "beta")
 	gamma := seedMember(t, m.Repos(), "gamma")
 
-	_, err := reg.Create(Lens{Name: "eng", WriteUID: alpha, Reads: []LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 1})
+	_, err := reg.Create(control.Lens{Name: "eng", WriteUID: alpha, Reads: []control.LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
-	updated, err := reg.Update(Lens{Name: "eng", WriteUID: gamma, Reads: []LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 2})
+	updated, err := reg.Update(control.Lens{Name: "eng", WriteUID: gamma, Reads: []control.LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 2})
 	require.NoError(t, err)
 	require.Equal(t, gamma, updated.WriteUID)
 	require.Equal(t, []string{beta, gamma}, uidsOf(updated.Reads), "new write repo folds into reads")
@@ -81,11 +83,11 @@ func TestLensRegistry_Update_DescriptionAndReadsRoundTrip(t *testing.T) {
 	alpha := seedMember(t, m.Repos(), "alpha")
 	beta := seedMember(t, m.Repos(), "beta")
 
-	_, err := reg.Create(Lens{Name: "eng", WriteUID: alpha, Reads: []LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 1})
+	_, err := reg.Create(control.Lens{Name: "eng", WriteUID: alpha, Reads: []control.LensRead{{RepoUID: beta}}, CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
 	// Same read set, new description: mounts survive verbatim, description updates.
-	updated, err := reg.Update(Lens{Name: "eng", WriteUID: alpha, Reads: []LensRead{{RepoUID: beta}}, Description: "team kb", CreatedAt: 1, UpdatedAt: 2})
+	updated, err := reg.Update(control.Lens{Name: "eng", WriteUID: alpha, Reads: []control.LensRead{{RepoUID: beta}}, Description: "team kb", CreatedAt: 1, UpdatedAt: 2})
 	require.NoError(t, err)
 	require.Equal(t, "team kb", updated.Description)
 	require.Equal(t, []string{alpha, beta}, uidsOf(updated.Reads))
@@ -101,10 +103,10 @@ func TestLensRegistry_Update_PreservesCreatedAt(t *testing.T) {
 	reg := m.LensRegistry()
 	alpha := seedMember(t, m.Repos(), "alpha")
 
-	_, err := reg.Create(Lens{Name: "eng", WriteUID: alpha, CreatedAt: 100, UpdatedAt: 100})
+	_, err := reg.Create(control.Lens{Name: "eng", WriteUID: alpha, CreatedAt: 100, UpdatedAt: 100})
 	require.NoError(t, err)
 
-	_, err = reg.Update(Lens{Name: "eng", WriteUID: alpha, CreatedAt: 100, UpdatedAt: 200})
+	_, err = reg.Update(control.Lens{Name: "eng", WriteUID: alpha, CreatedAt: 100, UpdatedAt: 200})
 	require.NoError(t, err)
 
 	got, _, err := reg.Get("eng")
@@ -118,8 +120,8 @@ func TestLensRegistry_Update_UnknownLens(t *testing.T) {
 	reg := m.LensRegistry()
 	alpha := seedMember(t, m.Repos(), "alpha")
 
-	_, err := reg.Update(Lens{Name: "ghost", WriteUID: alpha, UpdatedAt: 1})
-	require.ErrorIs(t, err, ErrLensNotFound)
+	_, err := reg.Update(control.Lens{Name: "ghost", WriteUID: alpha, UpdatedAt: 1})
+	require.ErrorIs(t, err, control.ErrLensNotFound)
 	require.ErrorContains(t, err, "ghost")
 }
 
@@ -127,8 +129,8 @@ func TestLensRegistry_Update_EmptyWrite(t *testing.T) {
 	m := newLifecycleManager(t)
 	reg := m.LensRegistry()
 
-	_, err := reg.Update(Lens{Name: "eng", WriteUID: "", UpdatedAt: 1})
-	require.ErrorIs(t, err, ErrLensWriteEmpty)
+	_, err := reg.Update(control.Lens{Name: "eng", WriteUID: "", UpdatedAt: 1})
+	require.ErrorIs(t, err, control.ErrLensWriteEmpty)
 }
 
 // ---------- Manager.UpdateLens (validation parity with CreateLens) ----------
@@ -139,8 +141,8 @@ func seedLens(t *testing.T, m *Manager) (alpha, beta *RepoInstance) {
 	t.Helper()
 	alpha = makeLensRepo(t, m, "alpha")
 	beta = makeLensRepo(t, m, "beta")
-	_, err := m.CreateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
+	_, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
 	})
 	require.NoError(t, err)
 	return alpha, beta
@@ -152,8 +154,8 @@ func TestManager_UpdateLens_PersistsAfterValidation(t *testing.T) {
 	alpha, _ := seedLens(t, m)
 	gamma := makeLensRepo(t, m, "gamma")
 
-	stored, err := m.UpdateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: gamma.UID()}}, Description: "d",
+	stored, err := m.UpdateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: gamma.UID()}}, Description: "d",
 	})
 	require.NoError(t, err)
 	require.Equal(t, wantMounts(alpha, gamma), uidsOf(stored.Reads))
@@ -170,8 +172,8 @@ func TestManager_UpdateLens_UnknownMember(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 
-	_, err := m.UpdateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: "uid-ghost"}},
+	_, err := m.UpdateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: "uid-ghost"}},
 	})
 	require.ErrorIs(t, err, ErrRepoNotFound)
 
@@ -187,8 +189,8 @@ func TestManager_UpdateLens_Replica(t *testing.T) {
 	alpha, beta := seedLens(t, m)
 	clone := cloneLensRepo(t, m, "alpha", "alpha_clone")
 
-	_, err := m.UpdateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: clone.UID()}},
+	_, err := m.UpdateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: clone.UID()}},
 	})
 	require.ErrorIs(t, err, ErrReplicaInLens)
 
@@ -202,8 +204,8 @@ func TestManager_UpdateLens_BranchUnknown(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 
-	_, err := m.UpdateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID(), Branch: "nope"}},
+	_, err := m.UpdateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID(), Branch: "nope"}},
 	})
 	require.ErrorIs(t, err, ErrLensBranchUnknown)
 }
@@ -213,8 +215,8 @@ func TestManager_UpdateLens_EmptyWrite(t *testing.T) {
 	m := newLifecycleManager(t)
 	seedLens(t, m)
 
-	_, err := m.UpdateLens(context.Background(), Lens{Name: "eng", WriteUID: ""})
-	require.ErrorIs(t, err, ErrLensWriteEmpty)
+	_, err := m.UpdateLens(context.Background(), control.Lens{Name: "eng", WriteUID: ""})
+	require.ErrorIs(t, err, control.ErrLensWriteEmpty)
 }
 
 func TestManager_UpdateLens_DescriptionCap(t *testing.T) {
@@ -222,16 +224,16 @@ func TestManager_UpdateLens_DescriptionCap(t *testing.T) {
 	m := newLifecycleManager(t)
 	alpha, beta := seedLens(t, m)
 
-	_, err := m.UpdateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
-		Description: strings.Repeat("x", MaxLensDescriptionBytes+1),
+	_, err := m.UpdateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
+		Description: strings.Repeat("x", control.MaxLensDescriptionBytes+1),
 	})
-	require.ErrorIs(t, err, ErrLensDescriptionTooLong)
+	require.ErrorIs(t, err, control.ErrLensDescriptionTooLong)
 
 	// Exactly at the cap is accepted.
-	_, err = m.UpdateLens(context.Background(), Lens{
-		Name: "eng", WriteUID: alpha.UID(), Reads: []LensRead{{RepoUID: beta.UID()}},
-		Description: strings.Repeat("x", MaxLensDescriptionBytes),
+	_, err = m.UpdateLens(context.Background(), control.Lens{
+		Name: "eng", WriteUID: alpha.UID(), Reads: []control.LensRead{{RepoUID: beta.UID()}},
+		Description: strings.Repeat("x", control.MaxLensDescriptionBytes),
 	})
 	require.NoError(t, err)
 }
@@ -241,6 +243,6 @@ func TestManager_UpdateLens_UnknownLens(t *testing.T) {
 	alpha := makeLensRepo(t, m, "alpha")
 
 	// Validation passes (alpha exists), but no lens row named "eng" exists yet.
-	_, err := m.UpdateLens(context.Background(), Lens{Name: "eng", WriteUID: alpha.UID()})
-	require.ErrorIs(t, err, ErrLensNotFound)
+	_, err := m.UpdateLens(context.Background(), control.Lens{Name: "eng", WriteUID: alpha.UID()})
+	require.ErrorIs(t, err, control.ErrLensNotFound)
 }

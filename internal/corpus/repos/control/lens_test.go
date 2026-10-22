@@ -1,4 +1,4 @@
-package repos
+package control
 
 import (
 	"path/filepath"

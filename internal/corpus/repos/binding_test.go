@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,10 +77,10 @@ func TestBinding_FromLens_IsProvenanceNotBreadth(t *testing.T) {
 	core := createRepo(t, m, testRepoName)
 
 	// A single-member lens: write repo is also its only read mount.
-	lens, err := m.LensRegistry().Create(Lens{
+	lens, err := m.LensRegistry().Create(control.Lens{
 		Name:     "solo-lens",
 		WriteUID: core.UID(),
-		Reads:    []LensRead{{RepoUID: core.UID()}},
+		Reads:    []control.LensRead{{RepoUID: core.UID()}},
 	})
 	require.NoError(t, err)
 	b, err := NewBindingOfLens(m, lens)
@@ -115,10 +117,10 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	lens, err := m.LensRegistry().Create(Lens{
+	lens, err := m.LensRegistry().Create(control.Lens{
 		Name:     "eng",
 		WriteUID: work.UID(),
-		Reads:    []LensRead{{RepoUID: core.UID(), Branch: "", Source: "core-src"}},
+		Reads:    []control.LensRead{{RepoUID: core.UID(), Branch: "", Source: "core-src"}},
 	})
 	require.NoError(t, err)
 
@@ -159,7 +161,7 @@ func TestNewBindingOfLens_ResolvesMembersAndDefaultsBranches(t *testing.T) {
 func TestNewBindingOfLens_UnavailableMemberFailsLoudly(t *testing.T) {
 	m := newLifecycleManager(t)
 	ghost := seedMember(t, m.Repos(), "ghost") // registry row only; never opened
-	lens, err := m.LensRegistry().Create(Lens{Name: "broken", WriteUID: ghost})
+	lens, err := m.LensRegistry().Create(control.Lens{Name: "broken", WriteUID: ghost})
 	require.NoError(t, err)
 	require.Nil(t, m.GetByUID(ghost), "the member must have no live instance")
 

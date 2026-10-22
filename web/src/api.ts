@@ -261,7 +261,7 @@ function withEmbeddedBranch<T>(data: EmbeddedBranchEnvelope, key: 'branch' | 'wr
  * both must say which one it is holding, or the difference only surfaces as a
  * 422.
  *   repos.MaxRepoDescriptionBytes — internal/corpus/repos/manifest.go
- *   repos.MaxLensDescriptionBytes — internal/corpus/repos/lens.go */
+ *   control.MaxLensDescriptionBytes — internal/corpus/repos/control/lens.go */
 export const MAX_REPO_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_LENS_DESCRIPTION_BYTES = 4096;
 

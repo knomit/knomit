@@ -1,4 +1,4 @@
-package repos
+package control
 
 import (
 	"database/sql"
@@ -26,7 +26,7 @@ import (
 //     but `lenses` is still keyed by name with no `uid` column of its own. It
 //     is re-keyed in place, here, on the open path.
 //   - A genuinely pre-registry control.db (`lenses.write_repo`, member
-//     references by NAME) never reaches here: controlUp skips this call for
+//     references by NAME) never reaches here: ControlUp skips this call for
 //     it (HasLegacyLensSchema), because this function copies write_uid and
 //     that shape has none. No home in use has that shape any more; its
 //     one-shot converter was removed in knomit#326.

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -33,7 +35,7 @@ func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstr
 	t.Cleanup(func() { _ = m.Close() })
 	url = seedBareRemote(t, filepath.Join(root, "remote.git"))
 
-	require.NoError(t, m.Repos().Insert(RepoRecord{UID: uid, Name: uid, State: StateActive, Profile: ProfileCode, CreatedAt: 1}))
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{UID: uid, Name: uid, State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 1}))
 	dbPath = m.RepoPath(uid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	svc, err := store.Open(dbPath)
@@ -47,7 +49,7 @@ func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstr
 
 // mountSubscription records origin as uid's origin row and mounts the repo
 // the way a boot does.
-func mountSubscription(m *Manager, uid string, origin Origin) (*RepoInstance, error) {
+func mountSubscription(m *Manager, uid string, origin control.Origin) (*RepoInstance, error) {
 	if err := m.Origins().Set(uid, origin); err != nil {
 		return nil, err
 	}
@@ -59,7 +61,7 @@ func mountSubscription(m *Manager, uid string, origin Origin) (*RepoInstance, er
 func buildSubscription(t *testing.T) (*Manager, *RepoInstance, string) {
 	t.Helper()
 	m, url, _, upstream := subscriptionStore(t, "uid-sub")
-	ri, err := mountSubscription(m, "uid-sub", Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe})
+	ri, err := mountSubscription(m, "uid-sub", control.Origin{URL: url, Branch: upstream, Mode: control.OriginModeSubscribe})
 	require.NoError(t, err)
 	m.Set("uid-sub", ri)
 	return m, ri, upstream
@@ -126,10 +128,10 @@ func TestMount_SubscriptionWithoutUpstreamIsRefused(t *testing.T) {
 
 	// Origins.Set refuses an empty branch, so the corruption is written
 	// underneath it, the way a hand edit would.
-	require.NoError(t, m.Origins().Set("uid-sub2", Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe}))
+	require.NoError(t, m.Origins().Set("uid-sub2", control.Origin{URL: url, Branch: upstream, Mode: control.OriginModeSubscribe}))
 	_, err := m.Repos().DB().Exec(`UPDATE repo_origins SET branch = '' WHERE repo_uid = ?`, "uid-sub2")
 	require.NoError(t, err)
-	ri, err := m.mountExisting("uid-sub2", "uid-sub2", &Origin{URL: url, Mode: OriginModeSubscribe}, false)
+	ri, err := m.mountExisting("uid-sub2", "uid-sub2", &control.Origin{URL: url, Mode: control.OriginModeSubscribe}, false)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnavailable)
 	require.ErrorContains(t, err, "no upstream branch recorded")
@@ -137,7 +139,7 @@ func TestMount_SubscriptionWithoutUpstreamIsRefused(t *testing.T) {
 
 	// The recovery an operator performs: fix the origin row, mount the SAME
 	// database again, get a working subscription.
-	fixed, err := mountSubscription(m, "uid-sub2", Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe})
+	fixed, err := mountSubscription(m, "uid-sub2", control.Origin{URL: url, Branch: upstream, Mode: control.OriginModeSubscribe})
 	require.NoError(t, err, "mounting after the refusal must work")
 	m.Set("uid-sub2", fixed)
 	require.Equal(t, upstream, fixed.ReadBranch())

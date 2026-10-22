@@ -5,6 +5,8 @@ import (
 	"context"
 	"testing"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
@@ -508,9 +510,9 @@ func TestBindingOfLens_RefusesWritesToARepoWithNoOntology(t *testing.T) {
 	ri := m.Get(testRepoName)
 	require.NotNil(t, ri)
 
-	b, err := NewBindingOfLens(m, Lens{
+	b, err := NewBindingOfLens(m, control.Lens{
 		Name: "l", UID: "lens-uid", WriteUID: ri.UID(),
-		Reads: []LensRead{{RepoUID: ri.UID()}},
+		Reads: []control.LensRead{{RepoUID: ri.UID()}},
 	})
 	require.NoError(t, err, "the lens still RESOLVES — it is writing that is refused, not looking")
 	require.False(t, b.WriteOK(),

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
@@ -238,7 +240,7 @@ func TestFleet_LeavePushesOnceThenRemovesEverything(t *testing.T) {
 	fl := m.fleetRepo()
 	agent, flUID := fl.AgentBranch(), fl.UID()
 	kb := createRepo(t, m, "kb")
-	_, err = m.CreateLens(ctx, Lens{Name: "reads-fleet", WriteUID: kb.UID(), Reads: []LensRead{{RepoUID: flUID}}})
+	_, err = m.CreateLens(ctx, control.Lens{Name: "reads-fleet", WriteUID: kb.UID(), Reads: []control.LensRead{{RepoUID: flUID}}})
 	require.NoError(t, err)
 	before := pushCount(t, bare, agent)
 

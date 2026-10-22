@@ -8,6 +8,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
 )
 
@@ -38,7 +40,7 @@ func renameErrStatus(err error, oldName, newName string) (status int, title, det
 		// description). A bad-characters name is not that.
 		return http.StatusBadRequest, "Invalid repo name",
 			"a repo name may contain only lowercase letters, digits, hyphens and underscores"
-	case errors.Is(err, repos.ErrRepoExists):
+	case errors.Is(err, control.ErrRepoExists):
 		return http.StatusConflict, "Name already in use",
 			"another repository is already called \"" + newName + "\""
 	case errors.Is(err, repos.ErrRepoNameConflictsLens):

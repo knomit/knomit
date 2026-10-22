@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/repos"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 )
@@ -140,7 +142,7 @@ func TestAttachOrigin_PreservesSubscriptionMode(t *testing.T) {
 		t.Fatalf("create subscription: %v", err)
 	}
 	before, err := m.Origins().Get(sub.UID())
-	if err != nil || before == nil || before.Mode != repos.OriginModeSubscribe {
+	if err != nil || before == nil || before.Mode != control.OriginModeSubscribe {
 		t.Fatalf("precondition: want a subscribe-mode origin, got %+v (err %v)", before, err)
 	}
 
@@ -154,9 +156,9 @@ func TestAttachOrigin_PreservesSubscriptionMode(t *testing.T) {
 	if err != nil || after == nil {
 		t.Fatalf("origin after: %v %+v", err, after)
 	}
-	if after.Mode != repos.OriginModeSubscribe {
+	if after.Mode != control.OriginModeSubscribe {
 		t.Errorf("Mode: got %q, want %q — the attach demoted the subscription",
-			after.Mode, repos.OriginModeSubscribe)
+			after.Mode, control.OriginModeSubscribe)
 	}
 	if after.AuthToken != "s3cret" {
 		t.Errorf("AuthToken: got %q, want the value just written — the write did not land", after.AuthToken)

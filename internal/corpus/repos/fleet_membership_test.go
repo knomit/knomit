@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/stretchr/testify/require"
@@ -135,7 +137,7 @@ func TestFleetMembership_ForgeEnrollJoinAdmitLeaveRevokeDecommission(t *testing.
 
 	kb := createRepo(t, alpha, "kb")
 	fleetUID := alpha.fleetRepo().UID()
-	_, err = alpha.CreateLens(ctx, Lens{Name: "reads-fleet", WriteUID: kb.UID(), Reads: []LensRead{{RepoUID: fleetUID}}})
+	_, err = alpha.CreateLens(ctx, control.Lens{Name: "reads-fleet", WriteUID: kb.UID(), Reads: []control.LensRead{{RepoUID: fleetUID}}})
 	require.NoError(t, err)
 	before := pushCount(t, f.bare, "agent/alpha")
 	left, err := alpha.LeaveFleet(ctx)

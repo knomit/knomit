@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
 )
@@ -39,7 +41,7 @@ type Identity struct {
 // control.db is opened through OpenRegistry, the one path allowed to migrate
 // it, and closed again: the Manager opens its own handle at Start.
 func ResolveIdentity(home string, fresh Identity) (Identity, error) {
-	reg, err := OpenRegistry(filepath.Join(home, "control.db"))
+	reg, err := control.OpenRegistry(filepath.Join(home, "control.db"))
 	if err != nil {
 		return Identity{}, fmt.Errorf("instance identity: %w", err)
 	}
@@ -64,7 +66,7 @@ var ErrStoredAgentIDInvalid = errors.New("instance identity: the stored agent id
 // yet. The id is returned as stored; it is opaque and nothing may parse it
 // (D18).
 //
-// It deliberately does NOT go through controlUp: a display command run by a
+// It deliberately does NOT go through ControlUp: a display command run by a
 // newer CLI must not migrate the control.db of an instance that last booted,
 // or is still running, on an older binary.
 func StoredAgentID(home string) (id string, found bool, err error) {
@@ -82,7 +84,7 @@ func StoredAgentID(home string) (id string, found bool, err error) {
 		return "", false, fmt.Errorf("instance identity: %w", err)
 	}
 	defer db.Close()
-	if ok, err := tableExists(db, "instance_identity"); err != nil || !ok {
+	if ok, err := control.TableExists(db, "instance_identity"); err != nil || !ok {
 		return "", false, err
 	}
 	err = db.QueryRow(`SELECT agent_id FROM instance_identity WHERE id = 1`).Scan(&id)

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/control"
+
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
@@ -65,7 +67,7 @@ func TestCreate_WritesRegistryRowAndUIDFile(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "core", rec.Name)
-	require.Equal(t, StateActive, rec.State)
+	require.Equal(t, control.StateActive, rec.State)
 	require.NotEmpty(t, rec.RepoID, "identity recorded at create")
 
 	require.FileExists(t, m.RepoPath(uid))
@@ -82,7 +84,7 @@ func TestCreate_RollsBackRowOnFailure(t *testing.T) {
 	}, nil)
 	require.Error(t, err)
 
-	active, lerr := m.reg.List(StateActive)
+	active, lerr := m.reg.List(control.StateActive)
 	require.NoError(t, lerr)
 	require.Empty(t, active)
 
@@ -103,7 +105,7 @@ func TestCreate_DuplicateNameRejected(t *testing.T) {
 	m.Remove("core")
 
 	_, err := m.Create(context.Background(), CreateSpec{Name: "core", Mode: "preset"}, nil)
-	require.ErrorIs(t, err, ErrRepoExists)
+	require.ErrorIs(t, err, control.ErrRepoExists)
 }
 
 func TestCreate_RejectsExistingActiveName(t *testing.T) {
@@ -112,7 +114,7 @@ func TestCreate_RejectsExistingActiveName(t *testing.T) {
 	_, err := m.Create(context.Background(), CreateSpec{
 		Name: testRepoName, Mode: "preset", OntologyPreset: "default",
 	}, nil)
-	require.ErrorIs(t, err, ErrRepoExists)
+	require.ErrorIs(t, err, control.ErrRepoExists)
 }
 
 func TestCreate_RejectsInvalidName(t *testing.T) {
@@ -297,7 +299,7 @@ func TestCreate_CloneMode_CancelledContext(t *testing.T) {
 	// No registry row and no .db file survive a cancelled create — the uid is
 	// minted fresh per attempt, so there is nothing to name-match against; check
 	// the registry directly and that repos/ holds no stray .db at all.
-	active, lerr := m.reg.List(StateActive)
+	active, lerr := m.reg.List(control.StateActive)
 	require.NoError(t, lerr)
 	require.Empty(t, active, "cancelled create must leave no registry row")
 	dbFiles, gerr := filepath.Glob(filepath.Join(m.deps.Cfg.Home, "repos", "*.db"))
@@ -325,7 +327,7 @@ func TestArchive_IsAStateFlip(t *testing.T) {
 	rec, ok, gerr := m.reg.Get(uid)
 	require.NoError(t, gerr)
 	require.True(t, ok)
-	require.Equal(t, StateArchived, rec.State)
+	require.Equal(t, control.StateArchived, rec.State)
 	require.NotZero(t, rec.ArchivedAt)
 }
 
@@ -387,7 +389,7 @@ func TestRestore_RenameOnCollision(t *testing.T) {
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 
 	_, err := m.Restore(info.ID, "")
-	require.ErrorIs(t, err, ErrRepoExists)
+	require.ErrorIs(t, err, control.ErrRepoExists)
 
 	ri, err := m.Restore(info.ID, "work2")
 	require.NoError(t, err)
@@ -438,11 +440,11 @@ func TestRestore_NameCollisionRejected(t *testing.T) {
 	createRepo(t, m, "core")
 
 	_, err = m.Restore(uid, "core")
-	require.ErrorIs(t, err, ErrRepoExists)
+	require.ErrorIs(t, err, control.ErrRepoExists)
 
 	rec, _, gerr := m.reg.Get(uid)
 	require.NoError(t, gerr)
-	require.Equal(t, StateArchived, rec.State, "a failed restore leaves it archived")
+	require.Equal(t, control.StateArchived, rec.State, "a failed restore leaves it archived")
 }
 
 // Purge destroys the row, the file, and the stored credential with them.
@@ -452,7 +454,7 @@ func TestPurge_RemovesRowFileAndCredential(t *testing.T) {
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
 	uid := ri.UID()
-	require.NoError(t, m.origins.Set(uid, Origin{URL: "https://x.test/kb.git", Branch: "main"}))
+	require.NoError(t, m.origins.Set(uid, control.Origin{URL: "https://x.test/kb.git", Branch: "main"}))
 	_, err := m.Archive("core")
 	require.NoError(t, err)
 
@@ -520,15 +522,15 @@ func TestListArchived_TotalOrderWithinOneSecond(t *testing.T) {
 		{"uid-a", "gamma"},
 	}
 	for i, s := range seed {
-		require.NoError(t, m.Repos().Insert(RepoRecord{
-			UID: s.uid, Name: s.name, State: StateArchived, Profile: ProfileCode,
+		require.NoError(t, m.Repos().Insert(control.RepoRecord{
+			UID: s.uid, Name: s.name, State: control.StateArchived, Profile: control.ProfileCode,
 			CreatedAt: int64(i + 1), ArchivedAt: sameSecond,
 		}))
 	}
 	// One row a second later, to pin that the tiebreak did not displace the
 	// primary "newest first" key.
-	require.NoError(t, m.Repos().Insert(RepoRecord{
-		UID: "uid-z", Name: "delta", State: StateArchived, Profile: ProfileCode,
+	require.NoError(t, m.Repos().Insert(control.RepoRecord{
+		UID: "uid-z", Name: "delta", State: control.StateArchived, Profile: control.ProfileCode,
 		CreatedAt: 4, ArchivedAt: sameSecond + 1,
 	}))
 
@@ -592,7 +594,7 @@ func TestArchiveRestoreArchive_RepeatsClean(t *testing.T) {
 	rec, ok, gerr := m.reg.Get(uid)
 	require.NoError(t, gerr)
 	require.True(t, ok)
-	require.Equal(t, StateArchived, rec.State)
+	require.Equal(t, control.StateArchived, rec.State)
 	require.NotZero(t, rec.ArchivedAt)
 }
 
@@ -651,7 +653,7 @@ func TestArchive_PersistsOrigin(t *testing.T) {
 	require.NoError(t, err)
 
 	const originURL = "https://example.com/origin.git"
-	require.NoError(t, m.origins.Set(ri.UID(), Origin{URL: originURL, Branch: "main"}))
+	require.NoError(t, m.origins.Set(ri.UID(), control.Origin{URL: originURL, Branch: "main"}))
 
 	// ActiveRepoWithOrigin should now find "work" by its origin URL.
 	require.Equal(t, "work", m.ActiveRepoWithOrigin(originURL))
@@ -675,14 +677,14 @@ func TestRestore_OriginInUse(t *testing.T) {
 	// must be recorded via Origins.Set to be visible to it.
 	keeper, err := m.Create(context.Background(), CreateSpec{Name: "keeper", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	require.NoError(t, m.origins.Set(keeper.UID(), Origin{URL: originURL, Branch: "main"}))
+	require.NoError(t, m.origins.Set(keeper.UID(), control.Origin{URL: originURL, Branch: "main"}))
 
 	// Second repo "work" also carries the same origin, then gets archived.
 	// Archive's ArchiveInfo.Origin now comes from Origins.Get(uid) (Task 8), so
 	// this also needs Origins.Set, not just the store-side remote row.
 	work, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 	require.NoError(t, err)
-	require.NoError(t, m.origins.Set(work.UID(), Origin{URL: originURL, Branch: "main"}))
+	require.NoError(t, m.origins.Set(work.UID(), control.Origin{URL: originURL, Branch: "main"}))
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 	require.Equal(t, originURL, info.Origin)
@@ -766,7 +768,7 @@ func TestCreateRestore_ConcurrentSameName_NoDoubleRegister(t *testing.T) {
 // isNameCollision reports whether err is one of the expected "name already
 // being taken" outcomes from a concurrent Create/Restore on the same name.
 func isNameCollision(err error) bool {
-	return errors.Is(err, ErrCreateInFlight) || errors.Is(err, ErrRepoExists)
+	return errors.Is(err, ErrCreateInFlight) || errors.Is(err, control.ErrRepoExists)
 }
 
 // TestCreateLens_VsRepoCreate_SameName_NeverBoth is the P2 stress test: a repo
@@ -796,7 +798,7 @@ func TestCreateLens_VsRepoCreate_SameName_NeverBoth(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errLens = m.CreateLens(context.Background(), Lens{Name: name, WriteUID: writer.UID()})
+			_, errLens = m.CreateLens(context.Background(), control.Lens{Name: name, WriteUID: writer.UID()})
 		}()
 		close(start)
 		wg.Wait()
@@ -829,7 +831,7 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errLens = m.CreateLens(context.Background(), Lens{Name: "view", WriteUID: member.UID()})
+			_, errLens = m.CreateLens(context.Background(), control.Lens{Name: "view", WriteUID: member.UID()})
 		}()
 		go func() {
 			defer wg.Done()
@@ -846,7 +848,7 @@ func TestCreateLens_VsArchive_MembersAlwaysRegistered(t *testing.T) {
 				"round %d: lens persisted but member was archived (errLens=%v errArchive=%v)",
 				round, errLens, errArchive)
 			require.Error(t, errArchive, "round %d: Archive must have been blocked by the lens ref", round)
-			require.ErrorIs(t, errArchive, ErrRepoInUseByLens)
+			require.ErrorIs(t, errArchive, control.ErrRepoInUseByLens)
 		} else {
 			// Lens did not persist: Archive won (member gone, CreateLens failed) or
 			// the lens was rejected. Either way there must be no dangling lens.

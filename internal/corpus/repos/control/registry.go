@@ -9,7 +9,7 @@
 // and a repo that fails to open stays visible instead of vanishing.
 //
 // The registry never calls time.Now(): callers stamp CreatedAt/ArchivedAt.
-package repos
+package control
 
 import (
 	"database/sql"
@@ -39,6 +39,8 @@ var (
 	// other on push to the shared origin, so one local copy per root commit is
 	// enforced structurally rather than by convention.
 	ErrRepoAlreadyRegistered = errors.New("this knowledge base is already registered")
+	// ErrRepoExists is returned when a Create targets a name that is already active.
+	ErrRepoExists = errors.New("repo already exists")
 	// ErrRegistryNotFound is returned when a uid has no row.
 	ErrRegistryNotFound = errors.New("repo not in registry")
 )
@@ -75,7 +77,7 @@ type Registry struct {
 	schemaExisted bool
 }
 
-// controlUp brings an open control.db handle fully up to date: the lens re-key
+// ControlUp brings an open control.db handle fully up to date: the lens re-key
 // first, then the versioned baseline. The order is load-bearing — ALTER TABLE
 // ... RENAME TO does not rename attached indexes, so a baseline that created
 // lenses_name first would make the re-key's own CREATE UNIQUE INDEX lenses_name
@@ -99,7 +101,7 @@ type Registry struct {
 // in use has that shape any more (knomit#326 removed both its converter and
 // the boot check that refused it), so the skip only keeps the re-key from
 // failing on a column it cannot find; it converts nothing.
-func controlUp(db *sql.DB) error {
+func ControlUp(db *sql.DB) error {
 	legacy, err := HasLegacyLensSchema(db)
 	if err != nil {
 		return fmt.Errorf("check control.db lens schema: %w", err)
@@ -117,14 +119,14 @@ func controlUp(db *sql.DB) error {
 
 // OpenRegistry opens control.db at path and brings it fully up to date.
 //
-// Manager.Start opens with OpenRegistryNoSchema and calls controlUp itself, so
+// Manager.Start opens with OpenRegistryNoSchema and calls ControlUp itself, so
 // that it holds the handle before the migration can fail.
 func OpenRegistry(path string) (*Registry, error) {
 	r, err := OpenRegistryNoSchema(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := controlUp(r.db); err != nil {
+	if err := ControlUp(r.db); err != nil {
 		r.Close()
 		return nil, err
 	}
@@ -133,7 +135,7 @@ func OpenRegistry(path string) (*Registry, error) {
 
 // OpenRegistryNoSchema opens the repos tenant at path WITHOUT creating its
 // schema. Callers that intend to read or write rows must follow with
-// controlUp; the split lets a caller observe whether the repos table was
+// ControlUp; the split lets a caller observe whether the repos table was
 // already there (SchemaExisted) before anything creates it.
 func OpenRegistryNoSchema(path string) (*Registry, error) {
 	// store.SyncDSNParam is "" outside a test binary that asked for fast
@@ -144,7 +146,7 @@ func OpenRegistryNoSchema(path string) (*Registry, error) {
 		return nil, fmt.Errorf("open repo registry: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	existed, err := tableExists(db, "repos")
+	existed, err := TableExists(db, "repos")
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("repo registry schema check: %w", err)
@@ -156,9 +158,9 @@ func OpenRegistryNoSchema(path string) (*Registry, error) {
 // lens tables: a `lenses` table with the name-keyed `write_repo` column, which
 // the uid-keyed schema replaced with `write_uid`.
 //
-// controlUp uses it to skip upgradeLensSchema, which cannot convert that shape.
+// ControlUp uses it to skip upgradeLensSchema, which cannot convert that shape.
 func HasLegacyLensSchema(db *sql.DB) (bool, error) {
-	ok, err := tableExists(db, "lenses")
+	ok, err := TableExists(db, "lenses")
 	if err != nil || !ok {
 		return false, err
 	}
@@ -170,8 +172,8 @@ func HasLegacyLensSchema(db *sql.DB) (bool, error) {
 	return n > 0, nil
 }
 
-// tableExists reports whether name is a table in db's sqlite_master.
-func tableExists(db *sql.DB, name string) (bool, error) {
+// TableExists reports whether name is a table in db's sqlite_master.
+func TableExists(db *sql.DB, name string) (bool, error) {
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n); err != nil {
 		return false, err
@@ -182,7 +184,7 @@ func tableExists(db *sql.DB, name string) (bool, error) {
 // SchemaExisted reports whether the repos table was already present when this
 // handle was opened by OpenRegistryNoSchema (true, whether or not it has rows)
 // or absent (false: nothing had created the registry yet). OpenRegistry's
-// handle always reports what it saw BEFORE controlUp created the table.
+// handle always reports what it saw BEFORE ControlUp created the table.
 func (r *Registry) SchemaExisted() bool {
 	return r.schemaExisted
 }
