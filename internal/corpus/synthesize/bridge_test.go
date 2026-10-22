@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
@@ -59,7 +60,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 
 	// a in community 0, b in community 1, c in community 0 (same as a).
 	// d in community 1 (same as b) but carries a different entity.
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md", "kb/c.md"},
 			1: {"kb/b.md", "kb/d.md"},
@@ -86,7 +87,7 @@ func TestBridgeSeeds_CrossClusterEntity(t *testing.T) {
 func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
 	b := makeFact("kb/b.md", "authored", nil, []string{"auth"})
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 	// Any read of the index fails the test.
@@ -107,7 +108,7 @@ func TestBridgeSeeds_NormalEffortEmpty(t *testing.T) {
 func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
 	b := makeFact("kb/b.md", string(fact.Discovered), nil, []string{"auth"})
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 	got := enumerateBridgeCandidates([]step.FactForLLM{a, b}, clusters, BridgeBoth, step.ScopeFilter{})
@@ -118,7 +119,7 @@ func TestBridgeSeeds_ExcludesDiscoveredOrigin(t *testing.T) {
 
 // manyCrossClusterSeeds builds n distinct cross-cluster bridges: n unique
 // tokens, each on one fact in community 0 and one in community 1.
-func manyCrossClusterSeeds(n int) ([]step.FactForLLM, ClusterResult) {
+func manyCrossClusterSeeds(n int) ([]step.FactForLLM, graph.ClusterResult) {
 	var seeds []step.FactForLLM
 	cluster0 := []string{}
 	cluster1 := []string{}
@@ -133,7 +134,7 @@ func manyCrossClusterSeeds(n int) ([]step.FactForLLM, ClusterResult) {
 		cluster0 = append(cluster0, p0)
 		cluster1 = append(cluster1, p1)
 	}
-	return seeds, ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
+	return seeds, graph.ClusterResult{Clusters: map[int][]string{0: cluster0, 1: cluster1}}
 }
 
 // cohesiveIdx returns the search handle of a real store seeded so that
@@ -221,7 +222,7 @@ func tokenName(i int) string {
 func TestBridgeSeeds_DomainOnly_NotEntity(t *testing.T) {
 	a := makeFact("kb/a.md", "authored", []string{"auth"}, []string{"X"})
 	b := makeFact("kb/b.md", "authored", []string{"auth"}, []string{"Y"})
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
@@ -246,7 +247,7 @@ func TestBridgeSeeds_OrphanSeedNotCommunityZero(t *testing.T) {
 	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
 	orphan := makeFact("kb/orphan.md", "authored", nil, []string{"auth"})
 	// a.md is in real community 0; orphan.md is in no cluster and no noise list.
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}},
 	}
 
@@ -334,7 +335,7 @@ func TestBridgeSeeds_CrossAxisTokenKind(t *testing.T) {
 	// They share token "auth" across different communities.
 	a := makeFact("kb/a.md", "authored", nil, []string{"auth"})
 	b := makeFact("kb/b.md", "authored", []string{"auth"}, nil)
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md"},
 			1: {"kb/b.md"},
@@ -360,7 +361,7 @@ func TestBridgeSeedsCanonicalTokenUnifiesVariants(t *testing.T) {
 		{File: "kb/a.md", Domain: []string{"Store"}},
 		{File: "kb/b.md", Domain: []string{"store"}},
 	}
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a.md"}, 1: {"kb/b.md"},
 	}}
 	got := enumerateBridgeCandidates(seeds, clusters, BridgeDomain, step.ScopeFilter{})
@@ -384,7 +385,7 @@ func TestBridgeSeeds_SameTokenEntityAndDomain_NoDuplicateMembers(t *testing.T) {
 	// b.md has "auth" only in Entities — ensures a cross-cluster bridge forms.
 	a := makeFact("kb/a.md", "authored", []string{"auth"}, []string{"auth"})
 	b := makeFact("kb/b.md", "authored", nil, []string{"auth"})
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md"},
 			1: {"kb/b.md"},
@@ -479,7 +480,7 @@ func TestBuildScoredBridges_EffortNormal_Nil(t *testing.T) {
 	}
 	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Idx()
 	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{}) // any read of the index fails the test
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
@@ -499,7 +500,7 @@ func TestBuildScoredBridges_SmallCohesiveCrossCommToken(t *testing.T) {
 		makeFact("kb/a.md", "authored", nil, []string{"alpha"}),
 		makeFact("kb/b.md", "authored", nil, []string{"alpha"}),
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
@@ -528,7 +529,7 @@ func TestBuildScoredBridges_LowCohesion_DroppedByGate(t *testing.T) {
 		makeFact("kb/x.md", "authored", nil, []string{"gappy"}),
 		makeFact("kb/y.md", "authored", nil, []string{"gappy"}),
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/x.md"}, 1: {"kb/y.md"}},
 	}
 
@@ -555,7 +556,7 @@ func TestBuildScoredBridges_OversizedGroup_CohesiveSubset(t *testing.T) {
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad"})
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/p0.md", "kb/p1.md", "kb/p2.md", "kb/p5.md"},
 			1: {"kb/p3.md", "kb/p4.md", "kb/p6.md"},
@@ -603,7 +604,7 @@ func TestBuildScoredBridges_OversizedGroup_NoCohesiveSeam(t *testing.T) {
 	for i, p := range paths {
 		seeds[i] = makeFact(p, "authored", nil, []string{"broad2"})
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md", "kb/b.md", "kb/c.md"},
 			1: {"kb/d.md", "kb/e.md", "kb/f.md"},
@@ -637,7 +638,7 @@ func TestBuildScoredBridges_QDescOrder(t *testing.T) {
 		makeFact("kb/b2.md", "authored", nil, []string{"beta"}),
 		makeFact("kb/b3.md", "authored", nil, []string{"beta"}),
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a1.md", "kb/b1.md", "kb/b3.md"},
 			1: {"kb/a2.md", "kb/b2.md"},
@@ -668,7 +669,7 @@ func TestTask16_ForwardEffortNormal_ZeroDiscovers(t *testing.T) {
 	}
 	idx := synthtest.NewGraphEnv(t, "main").SeedAll(seeds).Idx()
 	reads := synthtest.GuardReads(t, idx, synthtest.ReadPolicy{}) // any read of the index fails the test
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
@@ -695,7 +696,7 @@ func TestEnumerate_ScopedDomainExcludesMatchingToken(t *testing.T) {
 	a := makeFact("kb/a.md", "authored", []string{"auth", "billing"}, nil)
 	b := makeFact("kb/b.md", "authored", []string{"auth", "billing"}, nil)
 	c := makeFact("kb/c.md", "authored", []string{"billing"}, nil)
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md"},
 			1: {"kb/b.md", "kb/c.md"},
@@ -721,7 +722,7 @@ func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 	// "Bob" entity token crosses communities — does NOT match → included.
 	a := makeFact("kb/a.md", "authored", nil, []string{"Alice", "Bob"})
 	b := makeFact("kb/b.md", "authored", nil, []string{"Alice", "Bob"})
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md"},
 			1: {"kb/b.md"},
@@ -744,7 +745,7 @@ func TestEnumerate_ScopedEntityExcludesMatchingToken(t *testing.T) {
 func TestEnumerate_EmptyScopeUnchanged(t *testing.T) {
 	a := makeFact("kb/a.md", "authored", []string{"auth"}, nil)
 	b := makeFact("kb/b.md", "authored", []string{"auth"}, nil)
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 
@@ -764,7 +765,7 @@ func TestEnumerate_CrossKindNoExclusion(t *testing.T) {
 	// scope has "auth" as an ENTITY (not a domain) — the domain token must NOT be excluded.
 	a := makeFact("kb/a.md", "authored", []string{"auth"}, nil)
 	b := makeFact("kb/b.md", "authored", []string{"auth"}, nil)
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}},
 	}
 	scope := step.ScopeFilter{Entities: []string{"auth"}} // only entity scope, not domain
@@ -788,7 +789,7 @@ func TestBuildScoredBridges_ScopeExcludesToken(t *testing.T) {
 		makeFact("kb/s2.md", "authored", nil, []string{"scoped", "other"}),
 	}
 	idx := cohesiveIdx(t, seeds)
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/s1.md"}, 1: {"kb/s2.md"}},
 	}
 	scope := step.ScopeFilter{Entities: []string{"scoped"}}
@@ -817,7 +818,7 @@ func TestBuildScoredBridges_EmptyScope_Unchanged(t *testing.T) {
 		makeFact("kb/v.md", "authored", nil, []string{"tok"}),
 	}
 	idx := cohesiveIdx(t, seeds)
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/u.md"}, 1: {"kb/v.md"}},
 	}
 
@@ -837,7 +838,7 @@ func TestBuildScoredBridges_Determinism(t *testing.T) {
 		makeFact("kb/p.md", "authored", nil, []string{"det"}),
 		makeFact("kb/q.md", "authored", nil, []string{"det"}),
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/p.md"}, 1: {"kb/q.md"}},
 	}
 

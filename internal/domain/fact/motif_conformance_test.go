@@ -325,8 +325,8 @@ var mechanicsPaths = map[string][]string{
 	// names motifs only in describing what it gates. Listed with no permitted
 	// function so that a motif-reading function added here must be declared.
 	"internal/corpus/synthesize/motif_disjoint.go": {},
-	"internal/corpus/synthesize/cluster.go":        {"ScopedCluster"},
-	"internal/corpus/synthesize/louvain.go":        nil,
+	"internal/corpus/synthesize/graph/cluster.go":  {"ScopedCluster"},
+	"internal/corpus/synthesize/graph/louvain.go":  nil,
 
 	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
 	// these names a SELECT column list and hands the row to a scanner; carrying

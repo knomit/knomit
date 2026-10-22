@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"path/filepath"
 	"strings"
@@ -199,7 +200,7 @@ func TestForwardDispatch_Scoped_HighEffort_ScopeLabelSet(t *testing.T) {
 		makeFact("kb/auth/a.md", "authored", []string{"auth"}, []string{"permissions"}),
 		makeFact("kb/auth/b.md", "authored", []string{"auth"}, []string{"acl"}),
 	}
-	cr := ClusterResult{
+	cr := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/auth/a.md"}, 1: {"kb/auth/b.md"}},
 	}
 	scope := step.ScopeFilter{Domain: []string{"auth"}}

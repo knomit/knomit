@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
@@ -82,7 +83,7 @@ func TestReviewQualifyGate_EntityBridgesAreNotEnqueued(t *testing.T) {
 
 	// (1) FIXTURE CHECK — these seeds really do form an entity/domain bridge.
 	llm := step.FactsForLLM(seeds, testLocalRepoID)
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {paths[0], paths[1]}, 1: {paths[2], paths[3]},
 	}}
 	cands := enumerateBridgeCandidates(llm, clusters, BridgeBoth, step.ScopeFilter{})
@@ -256,7 +257,7 @@ func TestMotifRankLess_EntityOverlapIsPopulatedByTheBuilder(t *testing.T) {
 		{File: "kb/eps/5.md", Motifs: []string{"c-filler-shape"}, Entities: []string{"Hapax3"}},
 		{File: "kb/zeta/6.md", Motifs: []string{"c-filler-shape"}, Entities: []string{"Hapax4"}},
 	}
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/alpha/1.md"}, 1: {"kb/beta/2.md"},
 		2: {"kb/gamma/3.md"}, 3: {"kb/delta/4.md"},
 		4: {"kb/eps/5.md", "kb/zeta/6.md"},
@@ -338,7 +339,7 @@ func TestHypothesizeQualifyGate_BackwardBridgesAreNotEnqueued(t *testing.T) {
 	for _, p := range paths {
 		llm = append(llm, step.FactForLLM{File: p, Domain: []string{"auth"}, Origin: "authored"})
 	}
-	cands := enumerateBridgeCandidates(llm, ClusterResult{Clusters: map[int][]string{
+	cands := enumerateBridgeCandidates(llm, graph.ClusterResult{Clusters: map[int][]string{
 		0: {paths[0], paths[1]}, 1: {paths[2], paths[3]},
 	}}, BridgeBoth, step.ScopeFilter{})
 	_, wouldBridge := containsToken(cands, "auth")

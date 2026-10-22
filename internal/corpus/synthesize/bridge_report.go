@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 )
@@ -85,12 +86,12 @@ func BridgeComponentReport(
 
 	// 2. Cluster the pool to get community assignments. Same in-process scoped
 	// clustering the production pipeline uses (ScopedCluster → Louvain over
-	// idx.SubgraphEdges), adapted to ClusterResult for the bridge engine.
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
+	// idx.SubgraphEdges), adapted to graph.ClusterResult for the bridge engine.
+	groups, err := graph.ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}
-	cr := clusterResultFromGroups(groups)
+	cr := graph.ClusterResultFromGroups(groups)
 	clusterOf := cr.ClusterOf()
 
 	// 3. Enumerate bridge candidates (same engine the production pipeline uses).

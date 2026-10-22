@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
@@ -250,7 +251,7 @@ func buildFilteredBridges(
 	idx *index.Facade,
 	branch string,
 	seeds []step.FactForLLM,
-	clusters ClusterResult,
+	clusters graph.ClusterResult,
 	scope step.ScopeFilter,
 	eff step.Effort,
 	cfg QualityConfig,

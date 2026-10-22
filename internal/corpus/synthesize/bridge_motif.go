@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/vocab"
@@ -226,7 +227,7 @@ func (k BridgeKind) Qualifies() bool { return k == BridgeMotif }
 // reach a work item.
 func enumerateMotifCandidates(
 	seeds []step.FactForLLM,
-	clusters ClusterResult,
+	clusters graph.ClusterResult,
 	resolve motifResolver,
 	df motifDFFn,
 	labels index.SubjectLabelDF,
@@ -842,7 +843,7 @@ func buildMotifBridges(
 	idx *index.Facade,
 	branch string,
 	seeds []step.FactForLLM,
-	clusters ClusterResult,
+	clusters graph.ClusterResult,
 	eff step.Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
@@ -868,7 +869,7 @@ func buildMotifBridgesWithRows(
 	idx *index.Facade,
 	branch string,
 	seeds []step.FactForLLM,
-	clusters ClusterResult,
+	clusters graph.ClusterResult,
 	eff step.Effort,
 	cfg QualityConfig,
 	resolve motifResolver,
@@ -1007,7 +1008,7 @@ func scoreMotifCandidates(
 	idx *index.Facade,
 	branch string,
 	seeds []step.FactForLLM,
-	clusters ClusterResult,
+	clusters graph.ClusterResult,
 	eff step.Effort,
 	cfg QualityConfig,
 	resolve motifResolver,

@@ -26,6 +26,7 @@ import (
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/restatement"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
@@ -166,7 +167,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 
 	// Build scoped clusters.
 	t := time.Now()
-	clusters, err := ScopedCluster(ctx, llmSeeds, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, branch)
+	clusters, err := graph.ScopedCluster(ctx, llmSeeds, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, branch)
 	if err != nil {
 		return step.Wrapf(step.ReviewTool, err, "cluster")
 	}
@@ -207,7 +208,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	//     than the one ruled, and one that spends the judge's authority without
 	//     asking it.
 	//  2. On `pruneClusters`, NOT on `clusters`. The latter is read by
-	//     distillGroups and clusterResultFromGroups (both bridge axes and
+	//     distillGroups and ClusterResultFromGroups (both bridge axes and
 	//     discover) further down this function; the ruling scopes the fix to
 	//     prune, so those four consumers must see exactly what they saw before.
 	pruneClusters, cousins := joinCousinsForPrune(ctx, d, branch, pruneClusters, dedupThreshold)
@@ -412,7 +413,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// zero-discovery-spend contract of
 	// invariants/synthesize/effort-normal-byte-identical.
 	cfg := QualityConfigFromRepo(d.RI)
-	cr := clusterResultFromGroups(clusters)
+	cr := graph.ClusterResultFromGroups(clusters)
 	// Dispatch: scoped sessions use the token-optional filtered generator;
 	// unscoped sessions use the token-anchored scored generator. The scope is
 	// empty in the unscoped case, so passing it to buildScoredBridges is a no-op.
@@ -996,7 +997,7 @@ func enqueueRaptorFollowups(
 	}
 
 	// Cluster the new facts to find groups worth distilling further.
-	raptorClusters, clErr := ScopedCluster(ctx, newFacts, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, sess.Branch, "hypothesis")
+	raptorClusters, clErr := graph.ScopedCluster(ctx, newFacts, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, sess.Branch, "hypothesis")
 	if clErr != nil {
 		log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 		return

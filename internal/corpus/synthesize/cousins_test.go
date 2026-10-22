@@ -3,7 +3,9 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
+	"path"
 	"strings"
 	"testing"
 
@@ -100,7 +102,7 @@ func cousinFixtureIsSound(t *testing.T, env *synthtest.RestatementEnv) {
 	// (2) They really are COUSINS — neither path is a prefix of the other, so
 	// the fence genuinely separates them. A fixture where one path happened to
 	// contain the other would be testing siblings, which already meet.
-	a, b := categoryDir(cousinAPath), categoryDir(cousinBPath)
+	a, b := path.Dir(cousinAPath), path.Dir(cousinBPath)
 	require.False(t, strings.HasPrefix(a, b), "fixture paths must not nest")
 	require.False(t, strings.HasPrefix(b, a), "fixture paths must not nest")
 }
@@ -135,7 +137,7 @@ func TestCousins_FenceKeepsANonSeedCousinOutOfTheSubgraph(t *testing.T) {
 	}
 	require.NotEmpty(t, seeds)
 
-	clusters, err := ScopedCluster(ctx, seeds, env.Svc.Search(),
+	clusters, err := graph.ScopedCluster(ctx, seeds, env.Svc.Search(),
 		env.RI.ClusterResolution(), env.RI.ClusterMinCommunitySize(), env.RI.ClusterNeighborKinds(), func(step.ProgressEvent) {}, env.Branch)
 	require.NoError(t, err)
 	for _, c := range clusters {
@@ -220,7 +222,7 @@ func TestCousins_JoinUnionsTwoPruneClusters(t *testing.T) {
 // the load-bearing half of "augment, not replace".
 //
 // `clusters` is read by FOUR other consumers after this pass runs —
-// dedupCluster (already done), distillGroups, clusterResultFromGroups (both
+// dedupCluster (already done), distillGroups, ClusterResultFromGroups (both
 // bridge axes and discover), and planRestatementShortlist's co-membership. The
 // ruling scopes #149 to prune, so a cousin must never reach any of them.
 func TestCousins_ClustersAreNotMutated(t *testing.T) {

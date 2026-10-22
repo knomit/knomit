@@ -1,4 +1,4 @@
-package synthesize
+package graph
 
 import (
 	"sort"

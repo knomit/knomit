@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
@@ -18,7 +19,7 @@ import (
 //     noise facts bridging via a shared token still span communities).
 //   - Seeds absent from both clusters and noise also get unique synthetic
 //     negative ids (prevents collision with real community 0).
-func bridgePathCommunities(seeds []step.FactForLLM, clusters ClusterResult) map[string]int {
+func bridgePathCommunities(seeds []step.FactForLLM, clusters graph.ClusterResult) map[string]int {
 	pathCom := make(map[string]int)
 	for cid, paths := range clusters.Clusters {
 		for _, p := range paths {
@@ -189,7 +190,7 @@ type BridgeSeedSet struct {
 //
 // This is the enumeration engine used by buildScoredBridges (quality/Q path)
 // and BridgeComponentReport (calibrate/diagnostic tool).
-func enumerateBridgeCandidates(seeds []step.FactForLLM, clusters ClusterResult, kind BridgeKind, scope step.ScopeFilter) []BridgeSeedSet {
+func enumerateBridgeCandidates(seeds []step.FactForLLM, clusters graph.ClusterResult, kind BridgeKind, scope step.ScopeFilter) []BridgeSeedSet {
 	if kind == "" {
 		kind = DefaultBridgeKind
 	}
@@ -341,7 +342,7 @@ func buildScoredBridges(
 	idx *index.Facade,
 	branch string,
 	seeds []step.FactForLLM,
-	clusters ClusterResult,
+	clusters graph.ClusterResult,
 	kind BridgeKind,
 	eff step.Effort,
 	cfg QualityConfig,
@@ -485,11 +486,11 @@ func BuildBackwardBridges(
 			LineageRefs: step.LocalFactRefPaths(f.Refs, localRepoID),
 		})
 	}
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
+	groups, err := graph.ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}
-	cr := clusterResultFromGroups(groups)
+	cr := graph.ClusterResultFromGroups(groups)
 	// Dispatch: scoped sessions use the token-optional filtered generator;
 	// unscoped sessions use the token-anchored scored generator. Mirrors the
 	// forward (review) dispatch in review.go StartSession.
