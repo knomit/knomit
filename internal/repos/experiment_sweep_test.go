@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 )
 
 // TestExperimentSweep_ErrorDoesNotStopTheLoop is the invariant the local

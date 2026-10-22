@@ -14,8 +14,8 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 

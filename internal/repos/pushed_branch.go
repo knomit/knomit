@@ -3,7 +3,7 @@ package repos
 import (
 	"strings"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // IsPushedBranch reports whether branch is one a PEER pushed to this host

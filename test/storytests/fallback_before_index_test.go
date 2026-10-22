@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/test/testenv"
 )
 

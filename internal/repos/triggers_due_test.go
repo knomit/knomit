@@ -17,12 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/remotesync"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/remotesync"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/modroot"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -534,8 +534,8 @@ func TestDue_ClockReadOncePerRun(t *testing.T) {
 // DueCandidates from fact_write.go, or from a file in internal/web.
 func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 	allowed := map[string]bool{
-		"internal/store/facts/triggers.go": true,
-		"internal/repos/triggers.go":       true,
+		"internal/engine/store/facts/triggers.go": true,
+		"internal/repos/triggers.go":              true,
 	}
 	root := modroot.Dir(t)
 	var offenders []string

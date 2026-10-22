@@ -12,12 +12,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/rs/zerolog"

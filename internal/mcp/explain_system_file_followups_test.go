@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
 )
 
 // #428 follow-ups. N2: a fact's ref to a .knomit/ file that is not in the

@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
 )
 
 const opsSlot = "artifacts/jobs/x/y.md"

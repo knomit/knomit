@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/web/hal"
 )

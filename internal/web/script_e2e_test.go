@@ -6,17 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/foundation/config"
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 )
 
 // TestScript_RealToolsEndToEnd [T4, the real wiring]: a Manager built the way

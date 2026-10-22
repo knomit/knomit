@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 

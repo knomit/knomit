@@ -7,16 +7,16 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/storetest"
 )
 
 type expHistoryPage struct {

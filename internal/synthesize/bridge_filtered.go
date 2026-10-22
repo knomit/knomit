@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
 )

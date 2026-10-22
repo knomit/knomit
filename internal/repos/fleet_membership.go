@@ -17,17 +17,17 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/fleetrec"
+	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/privdir"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // Fleet membership (POST /api/v1/fleet/enroll | join | leave | revoke |

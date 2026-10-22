@@ -14,7 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"knomit/internal/domain/fact"
-	"knomit/internal/embeddings"
+	"knomit/internal/engine/embeddings"
 	"knomit/internal/platform/memlimit"
 )
 

@@ -57,16 +57,16 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/dop251/goja"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/store/facts"
 )
 
 // ScriptTools is the injected in-process tool set a script's host calls:

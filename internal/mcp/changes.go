@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"

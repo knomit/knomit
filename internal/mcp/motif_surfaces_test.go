@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/testsupport/modroot"
 
 	"github.com/stretchr/testify/require"
@@ -112,7 +112,7 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	// exactly what this scan exists to catch — web validation is an allowlist
 	// and must stay silent about the tiers beyond it.
 	// Every root is WALKED recursively, not listed or read flat: the store's
-	// children (internal/store/internal/..., internal/store/fleetrec, ...) and
+	// children (internal/engine/store/internal/..., internal/engine/store/fleetrec, ...) and
 	// the children of synthesize, web and this package are the same code moved
 	// into subpackages, and a flat os.ReadDir or a hand-written directory list
 	// silently lets every new child (and any file moved into it) leave the
@@ -135,7 +135,7 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 		{modroot.Path(t, "internal", "mcp"), 1},
 		{modroot.Path(t, "internal", "synthesize"), 1},
 		{modroot.Path(t, "internal", "web"), 1},
-		{modroot.Path(t, "internal", "store"), 5},
+		{modroot.Path(t, "internal", "engine", "store"), 5},
 		{modroot.Path(t, "internal", "repos"), 1},
 	}
 	for _, root := range roots {

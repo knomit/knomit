@@ -11,11 +11,11 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 

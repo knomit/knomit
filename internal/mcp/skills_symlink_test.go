@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/repos"
-	"knomit/internal/store/storetest"
 )
 
 // A symlink under .knomit/skills/ is never followed (user ruling 2026-10-08:

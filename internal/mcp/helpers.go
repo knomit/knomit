@@ -5,15 +5,15 @@ import (
 	"errors"
 	"fmt"
 
-	"knomit/internal/store/model"
-	"knomit/internal/store/sessions"
+	"knomit/internal/engine/store/model"
+	"knomit/internal/engine/store/sessions"
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
 )
 
 // errStoreUnavailable is the caller-facing error for a mount whose store
@@ -74,7 +74,7 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 // same string.
 //
 // Without it the cost is real and it is the whole request: store.Search embeds
-// whenever SearchOptions.QueryVec is empty (internal/store/search_query.go), so
+// whenever SearchOptions.QueryVec is empty (internal/engine/store/search_query.go), so
 // an N-mount fan-out ran the identical ~81 ms ONNX inference N times. It is a
 // fixed per-mount cost, independent of corpus size — the same query against an
 // EMPTY mount also cost 81 ms, while that mount answered a text-less filter in

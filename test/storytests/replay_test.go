@@ -20,11 +20,11 @@ package storytests
 import (
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store/merge"
 	"knomit/test/testenv"
 )
 

@@ -11,7 +11,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	storemigrate "knomit/internal/store/migrate"
+	storemigrate "knomit/internal/engine/store/migrate"
 )
 
 func newTestStore(t *testing.T) *Store {

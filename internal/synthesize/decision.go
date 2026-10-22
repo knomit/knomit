@@ -9,12 +9,12 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"

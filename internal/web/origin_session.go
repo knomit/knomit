@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // AuthConfig holds authentication credentials for a remote connection attempt.

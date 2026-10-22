@@ -11,8 +11,8 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // countingFedEmbedder answers every query with the same fixed vector and counts
@@ -90,7 +90,7 @@ func countingFedRepo(t *testing.T, emb countingFedEmbedder) (*repos.RepoInstance
 //
 // sort=recent is covered because it is NOT a filter-only path: RecentFacts
 // delegates to recentFactsSearch whenever there is a text query
-// (internal/store/search_query.go), so the recency browse embeds exactly like
+// (internal/engine/store/search_query.go), so the recency browse embeds exactly like
 // the relevance one. It hoists in queryRecent, a second call site that a
 // regression could revert on its own — and one nothing else here would notice,
 // since re-embedding is invisible to every assertion except this count.

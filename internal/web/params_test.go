@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 func TestLimitParam(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store/remotesync"
 
 	"github.com/stretchr/testify/require"
 )

@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
 
 	"knomit/internal/app"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 )
 
 // verifyAcceptCmd builds `knomit verify accept`: record a waiver on THIS

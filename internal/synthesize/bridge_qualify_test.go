@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestBridgeKind_OnlyMechanismQualifies is the ruling in one assertion: a shared

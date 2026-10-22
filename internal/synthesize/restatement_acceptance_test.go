@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings"
+	"knomit/internal/engine/embeddings"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestAcceptance_RealCorpusShortlist runs the consolidation-scope fix against a

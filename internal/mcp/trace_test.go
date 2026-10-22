@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"

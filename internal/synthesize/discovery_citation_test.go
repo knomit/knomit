@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // citationRepoID is a well-formed 12-hex repo id. Most of this package's

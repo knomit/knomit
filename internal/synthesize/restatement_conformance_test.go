@@ -42,7 +42,7 @@ var budgetLiterals = map[string]string{
 // changes both the depth and the sibling names of every cross-package path.
 var phase0Files = []string{
 	"internal/synthesize/restatement.go",
-	"internal/store/vocab/abstraction.go",
+	"internal/engine/store/vocab/abstraction.go",
 }
 
 // TestConformance_NoCorpusPropertyConstants fails if a float literal appears in
@@ -76,7 +76,7 @@ func TestConformance_NoCorpusPropertyConstants(t *testing.T) {
 // spend has to say so where it is defined, or the next reader cannot tell it
 // from a threshold somebody measured.
 func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
-	src := readSourceFile(t, "restatement.go") + readModuleFile(t, "internal/store/vocab/abstraction.go")
+	src := readSourceFile(t, "restatement.go") + readModuleFile(t, "internal/engine/store/vocab/abstraction.go")
 	for _, want := range []struct{ name, classification string }{
 		{"titleBackfillBudget", "LATENCY BUDGET"},
 		{"titleBackfillBatch", "THROUGHPUT BUDGET"},
@@ -112,7 +112,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// gone quietly green on the very refactor most likely to break it.
 	scanned := 0
 	scannedDirs := map[string]bool{}
-	storeRoot := modroot.Path(t, "internal", "store")
+	storeRoot := modroot.Path(t, "internal", "engine", "store")
 	for _, pkg := range []string{modroot.Path(t, "internal", "mcp"), modroot.Path(t, "internal", "web"), storeRoot} {
 		// Recursive, not a flat glob: since the store was split into child
 		// packages (store/internal/sqlite, store/sessions, ...) a flat
@@ -239,7 +239,7 @@ func TestConformance_NoConfigSurface(t *testing.T) {
 // A CRLF checkout WOULD change this hash, and that is the correct outcome
 // rather than a bug to paper over: the protected file would genuinely not be
 // the bytes this pin names.
-const effortNormalTestSHA256 = "ccd9c4e275215548cac975e8a33a2c4911ec20e3034e901360817462b0cd3014"
+const effortNormalTestSHA256 = "a18b7ebd331702052701ca6a7b6d63c0bb555e8653ac093a2149278c9e570371"
 
 // effortNormalTestFile is the one file MN5 protects.
 const effortNormalTestFile = "review_effort_normal_test.go"

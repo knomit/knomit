@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 )
 
 // TestCorruptObject_ProducesReachabilityError asserts that

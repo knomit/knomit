@@ -26,7 +26,7 @@ var forbidden = []string{
 	// a test binary; this keeps the package itself out of every shipped binary
 	// too, and TestTestSeamsNotReachedFromProduction keeps production source
 	// from importing it.
-	"knomit/internal/store/storetest",
+	"knomit/internal/engine/store/storetest",
 }
 
 // shippedGroups are the module's real binaries (main packages), grouped by the

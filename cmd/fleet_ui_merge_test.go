@@ -9,19 +9,19 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 	"knomit/internal/testsupport/testsigner"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable is the F11 UI merge end

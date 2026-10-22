@@ -12,8 +12,8 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestRenderDiscoverPrompt_DefaultToNo asserts the strict default-skip

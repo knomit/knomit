@@ -7,10 +7,10 @@ import (
 	"unicode/utf8"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 

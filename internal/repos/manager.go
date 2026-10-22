@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -22,9 +22,9 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 )
 
 // Deps holds all shared resources needed to open and manage repos.

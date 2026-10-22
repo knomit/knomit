@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 
-	"knomit/internal/store/fleetrec"
+	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
 )
 
 // Leave means revoke (user ruling 2026-10-16: "the cert is valid per fleet,

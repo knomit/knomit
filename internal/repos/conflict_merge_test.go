@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
 )
 
 const sharedPath = "kb/tasks/shared.md"

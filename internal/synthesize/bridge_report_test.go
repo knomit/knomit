@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store/facts"
 )
 
 // makeSearchResult builds a store.SearchResult for test fixtures.

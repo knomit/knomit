@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // Incoming returns the incoming-edge view at this fact handle's commit pin.

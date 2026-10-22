@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // TestReshapeCohesiveSubset_BroadSetWithEmbeddedClique verifies that when

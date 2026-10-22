@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"

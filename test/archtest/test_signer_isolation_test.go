@@ -16,15 +16,15 @@ import (
 // production SOURCE from even naming it or its installer package.
 //
 // Allowed non-test files: the hook's own definition (the store's vcs child,
-// internal/store/internal/vcs/sign.go), its one door for tests outside the
-// store (storetest.SetFallbackSigner, internal/store/storetest/storetest.go,
+// internal/engine/store/internal/vcs/sign.go), its one door for tests outside the
+// store (storetest.SetFallbackSigner, internal/engine/store/storetest/storetest.go,
 // which is itself kept out of every shipped binary and out of production
 // imports by TestHarnessNotLinkedIntoShippedBinaries and
 // TestTestSeamsNotReachedFromProduction), and the installer package
 // (internal/testsupport/testsigner).
 func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
-	def := filepath.Join("internal", "store", "internal", "vcs", "sign.go")
-	fwd := filepath.Join("internal", "store", "storetest", "storetest.go")
+	def := filepath.Join("internal", "engine", "store", "internal", "vcs", "sign.go")
+	fwd := filepath.Join("internal", "engine", "store", "storetest", "storetest.go")
 	requireNaming(t, def, "SetTestFallbackSigner")
 	requireNaming(t, fwd, "SetTestFallbackSigner")
 	offenders := productionSourceNaming(t,
@@ -48,8 +48,8 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 func TestFallbackAgentIDOnlyInstalledFromTests(t *testing.T) {
 	// The setter lives in the store's vcs child; tests outside the store reach
 	// it through storetest.SetFallbackAgentID (storetest.go).
-	def := filepath.Join("internal", "store", "internal", "vcs", "agent_id.go")
-	fwd := filepath.Join("internal", "store", "storetest", "storetest.go")
+	def := filepath.Join("internal", "engine", "store", "internal", "vcs", "agent_id.go")
+	fwd := filepath.Join("internal", "engine", "store", "storetest", "storetest.go")
 	requireNaming(t, def, "SetTestFallbackAgentID")
 	requireNaming(t, fwd, "SetTestFallbackAgentID")
 	offenders := productionSourceNaming(t,
@@ -84,8 +84,8 @@ func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
 	// forwards the setter under its public name for the test packages that call
 	// storetest.SetFastDurability. Both files may name it; every needle must
 	// appear in the definition, and the forwarder must still name the setter.
-	def := filepath.Join("internal", "store", "internal", "sqlite", "test_durability.go")
-	fwd := filepath.Join("internal", "store", "storetest", "storetest.go")
+	def := filepath.Join("internal", "engine", "store", "internal", "sqlite", "test_durability.go")
+	fwd := filepath.Join("internal", "engine", "store", "storetest", "storetest.go")
 	src, err := os.ReadFile(filepath.Join("..", "..", def))
 	if err != nil {
 		t.Fatalf("read the switch's definition file: %v", err)

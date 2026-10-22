@@ -14,10 +14,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // fleetRepoMutatingRoutes is every mutating route under /repos/{repo} in the

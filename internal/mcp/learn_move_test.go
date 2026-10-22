@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 )
 
 // ---- F08 PR A, M1: the F04 atomic move (`retract` on knomit_learn).

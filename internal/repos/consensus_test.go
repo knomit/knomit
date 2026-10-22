@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/gitserve"
+	"knomit/internal/engine/store/gitserve"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -33,10 +33,10 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/remotesync"
 	"knomit/internal/testsupport/testsigner"
 )
 

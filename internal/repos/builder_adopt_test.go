@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store/storetest"
 )
 
 // The restored-home tests below all follow the same shape: boot a home under

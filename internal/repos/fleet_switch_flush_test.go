@@ -10,9 +10,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
 )
 
 // PR #537 re-review R1 (the reviewer's probe, kept as a regression test): a master switch while a revoke is

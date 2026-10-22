@@ -11,18 +11,18 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/fleetrec"
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/fleetrec"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // FleetError is a refusal of a fleet operation, with the HTTP status and the

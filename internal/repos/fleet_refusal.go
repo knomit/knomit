@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/rs/zerolog/log"
 

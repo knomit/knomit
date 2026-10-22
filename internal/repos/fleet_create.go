@@ -15,16 +15,16 @@ import (
 	"sync"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // Fleet create (POST /api/v1/fleet/create, local listener only): this

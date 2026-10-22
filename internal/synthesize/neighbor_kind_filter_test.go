@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store"
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
 
 	"github.com/stretchr/testify/require"
 

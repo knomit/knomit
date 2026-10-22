@@ -55,16 +55,16 @@ import (
 	"sync"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/dop251/goja"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/foundation/serveraddr"
 	"knomit/internal/foundation/serverkey"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 )
 
 // outcomeUnbound is a `do: run` evaluation that found no recipe anywhere: a

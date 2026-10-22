@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // F25 — three roots, the REST doors, against a real store.

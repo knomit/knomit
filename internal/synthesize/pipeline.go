@@ -30,18 +30,18 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
-	"knomit/internal/store/sessions"
+	"knomit/internal/engine/store/model"
+	"knomit/internal/engine/store/sessions"
 
-	"knomit/internal/store/index"
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/fact/textnorm"
-	"knomit/internal/llm"
+	"knomit/internal/engine/llm"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"
 )

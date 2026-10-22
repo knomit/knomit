@@ -11,10 +11,10 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // resolveAuth returns a go-git transport.AuthMethod based on the remote config.

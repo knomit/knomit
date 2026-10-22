@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	storemigrate "knomit/internal/store/migrate"
+	storemigrate "knomit/internal/engine/store/migrate"
 )
 
 // legacyLensDDL is the registry-era lens shape from before the lens uid
@@ -240,7 +240,7 @@ func TestOpenLensRegistry_UpgradeIsIdempotent(t *testing.T) {
 // lens DDL (lens_migrate.go), because SQLite cannot re-key a PRIMARY KEY in
 // place. That copy is a THIRD statement of a schema whose other two statements
 // are the baseline migration and the legacy DDL pinned by
-// TestControl_BaselineMatchesLiveShape in internal/store/migrate.
+// TestControl_BaselineMatchesLiveShape in internal/engine/store/migrate.
 //
 // It has to produce exactly what the baseline produces, and nothing else checks
 // that. The baseline runs straight after the re-key with IF NOT EXISTS on every
@@ -266,7 +266,7 @@ func TestUpgradeLensSchema_ProducesTheBaselineShape(t *testing.T) {
 	for _, table := range []string{"lenses", "lens_reads"} {
 		require.Equal(t, lensTableShape(t, fresh, table), lensTableShape(t, r.db, table),
 			"upgradeLensSchema's hand-copy of the %q DDL has drifted from the baseline\n"+
-				"migration it is supposed to reproduce (internal/store/migrate/control/\n"+
+				"migration it is supposed to reproduce (internal/engine/store/migrate/control/\n"+
 				"000001_control_baseline.up.sql). The baseline's IF NOT EXISTS cannot correct\n"+
 				"it: every re-keyed home would carry this shape permanently, and every fresh\n"+
 				"home the baseline's, with nothing at runtime to say so. Bring lens_migrate.go\n"+
@@ -278,8 +278,8 @@ func TestUpgradeLensSchema_ProducesTheBaselineShape(t *testing.T) {
 // and indexes, including the CREATE text of each explicit index.
 //
 // A deliberate near-duplicate of requireSameTableShape's helpers in
-// internal/store/migrate/control_test.go — cross-package test helpers cannot be
-// shared, and internal/store/migrate cannot import internal/repos anyway (that
+// internal/engine/store/migrate/control_test.go — cross-package test helpers cannot be
+// shared, and internal/engine/store/migrate cannot import internal/repos anyway (that
 // is the direction of the dependency). Comments in both places point at the
 // other; the two must stay comparable in strictness.
 func lensTableShape(t *testing.T, db *sql.DB, table string) []string {

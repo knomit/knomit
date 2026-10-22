@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
 )
 

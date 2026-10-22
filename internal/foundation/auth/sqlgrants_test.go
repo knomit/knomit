@@ -17,7 +17,7 @@ func openGrantsDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	// The same DDL as 000009_grants.up.sql; that the MIGRATION carries it is
-	// asserted separately by internal/store/migrate/control_test.go.
+	// asserted separately by internal/engine/store/migrate/control_test.go.
 	if _, err := db.Exec(`CREATE TABLE grants (
 		principal TEXT NOT NULL, permission TEXT NOT NULL, granted_by TEXT NOT NULL DEFAULT '',
 		granted_at INTEGER NOT NULL, revoked_at INTEGER, PRIMARY KEY (principal, permission))`); err != nil {

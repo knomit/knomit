@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 )
 
 // #428 follow-up (review §6): the synthesize gates resolve refs to .knomit/

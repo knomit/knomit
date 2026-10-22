@@ -111,7 +111,7 @@ CODESIGN_IDENTITY ?=
 # satisfy notarization, and neither means anything without a real identity.
 #
 # --options runtime also turns on LIBRARY VALIDATION, which is why every dylib
-# we dlopen must carry this same identity. internal/embeddings/embedder.go
+# we dlopen must carry this same identity. internal/engine/embeddings/embedder.go
 # resolves libonnxruntime from <exe>/lib first and we sign that copy, so the
 # shipped artifacts are fine; the /opt/homebrew fallback and the ORT_LIB_PATH
 # override in that file will NOT load against a Developer ID build unless the
@@ -221,7 +221,7 @@ endif
 # copies on Windows. It is a no-op everywhere else, and it is not optional.
 #
 # knomit finds ONNX Runtime at <dir of this executable>/lib (see
-# internal/embeddings.libCandidates). A SYMLINK keeps that working for free:
+# internal/engine/embeddings.libCandidates). A SYMLINK keeps that working for free:
 # os.Executable is resolved through filepath.EvalSymlinks, so dist/knomit
 # resolves to dist/<platform>/knomit and lib/ is right there. A COPY does not
 # — dist/knomit.exe genuinely lives in dist/, where there is no lib/.
@@ -304,7 +304,7 @@ desktop-ui:
 # see .github/workflows/tests.yml):
 #
 #   internal/synthesize  1776s / 1533s  (macOS/Linux: minutes)
-#   internal/store        816s /  212s  — grew past the default with #208-#211;
+#   internal/engine/store        816s /  212s  — grew past the default with #208-#211;
 #                         it used to sit under it, so an older reading of this
 #                         list is not wrong so much as out of date
 #   internal/repos    441-639s /  307s  — straddles the 600s default on the
@@ -752,7 +752,7 @@ print-semver:
 
 # Server tarball. The per-platform dist dir already IS the runtime layout —
 # knomit + kb resolve their ONNX libs from <exe>/lib
-# (internal/embeddings/embedder.go, internal/store/internal/sqlite/vec.go) — so we just stage
+# (internal/engine/embeddings/embedder.go, internal/engine/store/internal/sqlite/vec.go) — so we just stage
 # those things under a versioned top-level dir and tar it. libtokenizers.a
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
 # knomit-okf ships too: it is the only OKF export path, and a tool nobody can

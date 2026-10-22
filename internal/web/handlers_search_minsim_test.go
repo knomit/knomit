@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // min_similarity is a raw cosine in [0, 1]. A value outside it (typically the

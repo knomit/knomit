@@ -1,0 +1,173 @@
+package store
+
+import (
+	"context"
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/engine/store/index"
+)
+
+// mergeFactNode creates a bare Fact node with the given path/blob_hash.
+func mergeFactNode(t *testing.T, si *index.Index, path, bh string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	id, err := graphMergeNode(ctx, si.RepoForTest().DB(), index.NodeFact,
+		map[string]string{"path": path, "blob_hash": bh})
+	require.NoError(t, err)
+	require.NotZero(t, id)
+	// graphSyncFact always sets deleted=false on live nodes; mirror that so the
+	// "deleted != 'true'" filter sees these fixtures as live, exactly like
+	// production-indexed facts.
+	require.NoError(t, graphSetNodeProps(ctx, si.RepoForTest().DB(), id,
+		map[string]string{"deleted": "false"}))
+	return id
+}
+
+// normalizePairs renders undirected edges as a stable set of "x|y" keys with
+// each pair sorted, so assertions don't depend on direction or ordering.
+func normalizePairs(pairs [][2]string) []string {
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		a, b := p[0], p[1]
+		if a > b {
+			a, b = b, a
+		}
+		out = append(out, a+"|"+b)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestSubgraphEdges_ReturnsSimilarToAmongPaths verifies SubgraphEdges returns
+// exactly the SIMILAR_TO edges whose BOTH endpoints are in the requested path
+// set, as undirected pairs — excluding edges that leave the set and isolated
+// nodes.
+func TestSubgraphEdges_ReturnsSimilarToAmongPaths(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+
+	si := svc.si
+	ctx := context.Background()
+
+	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
+	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
+	c := mergeFactNode(t, si, "kb/c.md", "cccc")
+	mergeFactNode(t, si, "kb/lonely.md", "dddd") // in set but no edges
+	outside := mergeFactNode(t, si, "kb/outside.md", "eeee")
+
+	// SIMILAR_TO: a-b and b-c inside the set; c-outside leaves the set.
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, outside, index.EdgeSimilarTo))
+
+	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/lonely.md"}
+	edges, err := svc.gq.SubgraphEdges(ctx, paths)
+	require.NoError(t, err)
+
+	got := normalizePairs(edges)
+	want := []string{"kb/a.md|kb/b.md", "kb/b.md|kb/c.md"}
+	require.Equal(t, want, got, "should return only SIMILAR_TO edges fully inside the path set")
+}
+
+// TestSubgraphEdges_ChunksLargePathSets verifies that a path set larger than
+// the per-query chunk size still returns every intra-set edge, with cross-chunk
+// edges found and deduped. This regresses the "Expression tree is too large"
+// failure: a single OR-chain over hundreds of paths blew SQLite's expression
+// depth limit, so the query must be split into bounded chunks.
+func TestSubgraphEdges_ChunksLargePathSets(t *testing.T) {
+	orig := index.SetSubgraphEdgeChunkSizeForTest(2)
+	defer index.SetSubgraphEdgeChunkSizeForTest(orig)
+
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+
+	si := svc.si
+	ctx := context.Background()
+
+	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
+	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
+	c := mergeFactNode(t, si, "kb/c.md", "cccc")
+	d := mergeFactNode(t, si, "kb/d.md", "dddd")
+
+	// A chain a–b–c–d; with chunk size 2 the path set [a,b,c,d] spans two
+	// chunks, and b–c is the cross-chunk edge.
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, b, c, index.EdgeSimilarTo))
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, c, d, index.EdgeSimilarTo))
+
+	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"})
+	require.NoError(t, err)
+
+	got := normalizePairs(edges)
+	want := []string{"kb/a.md|kb/b.md", "kb/b.md|kb/c.md", "kb/c.md|kb/d.md"}
+	require.Equal(t, want, got, "every intra-set edge must survive chunking, including the cross-chunk one")
+}
+
+// TestSubgraphEdges_QuoteInPathDoesNotInject regresses a SQL/Cypher injection:
+// path predicates were JSON-encoded, which escapes the double-quote (the Cypher
+// "..." layer) but NOT the single quote that would terminate the outer SQL
+// cypher('...') string literal. A path carrying injection-shaped quotes must be
+// neutralised (escapeCypherKey strips ' and escapes ") so the query stays
+// well-formed and matches only literal paths — never widening or erroring.
+func TestSubgraphEdges_QuoteInPathDoesNotInject(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+
+	si := svc.si
+	ctx := context.Background()
+
+	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
+	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
+
+	// Injection-shaped paths: a single-quote attempt to break the SQL literal and
+	// force a tautology, and a double-quote attempt to break the Cypher literal.
+	// If escaping failed, the OR-chain would either error or match every node.
+	sqlInject := `kb/a.md') RETURN a.path AS a, a.path AS b --`
+	cypherInject := `kb/a.md" OR true OR a.path = "x`
+
+	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md", sqlInject, cypherInject})
+	require.NoError(t, err, "injection-shaped paths must keep the query well-formed, not error")
+
+	got := normalizePairs(edges)
+	require.Equal(t, []string{"kb/a.md|kb/b.md"}, got,
+		"only the real a–b edge may match; injection paths must not widen the result")
+}
+
+// TestSubgraphEdges_ExcludesDeletedNodes verifies a soft-deleted endpoint drops
+// its edges so clustering never groups facts no longer present.
+func TestSubgraphEdges_ExcludesDeletedNodes(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+
+	si := svc.si
+	ctx := context.Background()
+
+	a := mergeFactNode(t, si, "kb/a.md", "aaaa")
+	b := mergeFactNode(t, si, "kb/b.md", "bbbb")
+	require.NoError(t, si.GraphInsertEdgeForTest(ctx, a, b, index.EdgeSimilarTo))
+
+	// Soft-delete b.
+	require.NoError(t, graphSetNodeProps(ctx, si.RepoForTest().DB(), b,
+		map[string]string{"deleted": "true"}))
+
+	edges, err := svc.gq.SubgraphEdges(ctx, []string{"kb/a.md", "kb/b.md"})
+	require.NoError(t, err)
+	require.Empty(t, normalizePairs(edges), "edges touching a deleted node must be excluded")
+}

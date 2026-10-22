@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 	"knomit/internal/web/hal"
 )
 

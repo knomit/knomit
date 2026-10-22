@@ -13,7 +13,7 @@ import (
 )
 
 // storetestImport is the package of test doors into a *store.Service.
-const storetestImport = "knomit/internal/store/storetest"
+const storetestImport = "knomit/internal/engine/store/storetest"
 
 // testSeamName matches the two spellings a test-only door takes: a *ForTest
 // method or function (vcs.Repo.SetRefForTest, facts.Index.WriteFileExactForTest)
@@ -27,11 +27,11 @@ var testSeamName = regexp.MustCompile(`^(?:[A-Z]\w*ForTest|Testing[A-Z]\w*)$`)
 // package, which is where a child defines its seams and its registration hook.
 func seamAllowed(rel string) bool {
 	switch {
-	case strings.HasPrefix(rel, "internal/store/storetest/"),
+	case strings.HasPrefix(rel, "internal/engine/store/storetest/"),
 		strings.HasPrefix(rel, "test/"),
 		strings.HasPrefix(rel, "internal/testsupport/"):
 		return true
-	case strings.HasPrefix(rel, "internal/store/") && filepath.Base(rel) == "testseams.go":
+	case strings.HasPrefix(rel, "internal/engine/store/") && filepath.Base(rel) == "testseams.go":
 		return true
 	}
 	return false
@@ -95,7 +95,7 @@ func seamUses(t *testing.T, fset *token.FileSet, name string, src any) []string 
 		case *ast.Ident:
 			// A bare identifier: a call from inside the declaring package, a
 			// function value (`f := SetRefForTest`), or a use through a dot
-			// import (`import . "knomit/internal/store/..."`). A bare CALL was
+			// import (`import . "knomit/internal/engine/store/..."`). A bare CALL was
 			// the only shape caught before.
 			if !skip[x] && testSeamName.MatchString(x.Name) {
 				uses = append(uses, "line "+strconv.Itoa(at(x.Pos()))+": uses bare "+x.Name)
@@ -117,7 +117,7 @@ func seamUses(t *testing.T, fset *token.FileSet, name string, src any) []string 
 // It parses every non-_test.go file in the module (AST, so a comment or string
 // that mentions a seam does not count and an aliased import cannot hide one)
 // and fails on a use outside the allowed files: storetest, test/,
-// internal/testsupport/ and the testseams.go files under internal/store/.
+// internal/testsupport/ and the testseams.go files under internal/engine/store/.
 //
 // Non-vacuity: the walk must visit at least minProductionFiles files, find at
 // least minAllowedUses seam uses in the allowed files (storetest alone makes
@@ -160,7 +160,7 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 		uses := seamUses(t, fset, path, nil)
 		if seamAllowed(rel) {
 			allowedUses += len(uses)
-			if strings.HasPrefix(rel, "internal/store/storetest/") {
+			if strings.HasPrefix(rel, "internal/engine/store/storetest/") {
 				storetestFiles++
 				for _, u := range uses {
 					if _, name, ok := strings.Cut(u, "uses "); ok {
@@ -183,7 +183,7 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 		t.Fatalf("scanned only %d non-test .go files, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minProductionFiles)
 	}
 	if storetestFiles == 0 {
-		t.Fatal("internal/store/storetest has no non-test file: the package moved, so this guard's allowlist is stale")
+		t.Fatal("internal/engine/store/storetest has no non-test file: the package moved, so this guard's allowlist is stale")
 	}
 	if allowedUses < minAllowedUses {
 		t.Fatalf("found %d test-seam uses in the allowed files, want at least %d: the seam names changed shape, so the pattern matches nothing", allowedUses, minAllowedUses)
@@ -199,7 +199,7 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("production source must not import storetest or use a *ForTest / Testing* door "+
-			"(allowed: internal/store/storetest, test/, internal/testsupport/, internal/store/**/testseams.go):\n  %s",
+			"(allowed: internal/engine/store/storetest, test/, internal/testsupport/, internal/engine/store/**/testseams.go):\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
 }
@@ -211,9 +211,9 @@ func TestTestSeamsNotReachedFromProduction(t *testing.T) {
 func TestTestSeamsGuard_Discriminates(t *testing.T) {
 	src := func(body string) string { return "package p\n" + body }
 	flagged := map[string]string{
-		"storetest import":          src(`import "knomit/internal/store/storetest"` + "\n"),
-		"aliased storetest import":  src(`import st "knomit/internal/store/storetest"` + "\n"),
-		"blank storetest import":    src(`import _ "knomit/internal/store/storetest"` + "\n"),
+		"storetest import":          src(`import "knomit/internal/engine/store/storetest"` + "\n"),
+		"aliased storetest import":  src(`import st "knomit/internal/engine/store/storetest"` + "\n"),
+		"blank storetest import":    src(`import _ "knomit/internal/engine/store/storetest"` + "\n"),
 		"ForTest call":              src("func f(r R) { r.SetRefForTest(\"a\", \"b\") }\n"),
 		"ForTest method value":      src("func f(r R) { _ = r.SetExperimentActivityForTest }\n"),
 		"package-qualified ForTest": src("func f() { vcs.SetBatchWriteUnlockedHookForTest(nil) }\n"),
@@ -221,7 +221,7 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		"bare in-package call":      src("func f() { MetaGetForTest(nil, nil, \"k\") }\n"),
 		"bare function value":       src("func f() { g := SetRefForTest; _ = g }\n"),
 		"bare as argument":          src("func f() { run(SetRefForTest) }\n"),
-		"bare dot-import use":       src("import . \"knomit/internal/store/x\"\nvar h = TestingCommitFiles\n"),
+		"bare dot-import use":       src("import . \"knomit/internal/engine/store/x\"\nvar h = TestingCommitFiles\n"),
 	}
 	for name, s := range flagged {
 		if got := seamUses(t, token.NewFileSet(), name+".go", s); len(got) == 0 {
@@ -237,7 +237,7 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		"struct field decl":        src("type T struct{ SetRefForTest int }\n"),
 		"param named like a seam":  src("func f(SetRefForTest int) {}\n"),
 		"Register hook":            src("func f(r R) { r.RegisterServiceRepo(nil) }\n"),
-		"other storetest-ish path": src(`import "knomit/internal/store/storetest2"` + "\n"),
+		"other storetest-ish path": src(`import "knomit/internal/engine/store/storetest2"` + "\n"),
 	}
 	for name, s := range clean {
 		if got := seamUses(t, token.NewFileSet(), name+".go", s); len(got) != 0 {
@@ -245,15 +245,15 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 		}
 	}
 	for rel, want := range map[string]bool{
-		"internal/store/storetest/storetest.go":     true,
-		"internal/store/internal/vcs/testseams.go":  true,
-		"internal/store/merge/testseams.go":         true,
-		"test/testenv/corrupt.go":                   true,
-		"internal/testsupport/testsigner/signer.go": true,
-		"internal/repos/experiment_sweep.go":        false,
-		"internal/store/service.go":                 false,
-		"internal/testseams.go":                     false,
-		"internal/store/vcs_seam.go":                false,
+		"internal/engine/store/storetest/storetest.go":    true,
+		"internal/engine/store/internal/vcs/testseams.go": true,
+		"internal/engine/store/merge/testseams.go":        true,
+		"test/testenv/corrupt.go":                         true,
+		"internal/testsupport/testsigner/signer.go":       true,
+		"internal/repos/experiment_sweep.go":              false,
+		"internal/engine/store/service.go":                false,
+		"internal/testseams.go":                           false,
+		"internal/engine/store/vcs_seam.go":               false,
 	} {
 		if seamAllowed(rel) != want {
 			t.Errorf("seamAllowed(%q) = %v, want %v", rel, !want, want)

@@ -12,10 +12,10 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"knomit/internal/engine/store"
+	storemigrate "knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	storemigrate "knomit/internal/store/migrate"
 )
 
 func newClientSessionsStore(t *testing.T) *clientsessions.Store {

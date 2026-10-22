@@ -77,7 +77,7 @@ tools/desktop/ui/node_modules/
 tools/desktop/ui/dist/
 
 # Large test assets
-internal/embeddings/testdata/*.onnx
+internal/engine/embeddings/testdata/*.onnx
 
 # E2E test artifacts
 e2e/node_modules/

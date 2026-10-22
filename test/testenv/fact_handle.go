@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 )
 
 // FactState classifies the result of resolving a fact at (branch, commit).

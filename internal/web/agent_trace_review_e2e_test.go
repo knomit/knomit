@@ -10,16 +10,16 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/testsupport/testsigner"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // traceEmbedder is a deterministic stand-in for the ONNX embedder: a stable

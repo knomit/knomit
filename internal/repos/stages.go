@@ -29,15 +29,15 @@ import (
 	"sync"
 	"time"
 
-	"knomit/internal/store/index"
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
 )
 
 // StageID indexes the stage list. StageReady is the cursor past the last

@@ -3,7 +3,7 @@ package testenv
 import (
 	"context"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // BatchWriter collects file writes for a single batched commit. Used inside

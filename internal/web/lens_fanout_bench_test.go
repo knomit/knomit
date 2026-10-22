@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // benchSink keeps benchMountWork's result live. Without an escaping store the

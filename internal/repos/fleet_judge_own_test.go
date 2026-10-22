@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/remotesync"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/testsupport/testsigner"
 )
 

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/web/hal"

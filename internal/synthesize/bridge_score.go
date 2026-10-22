@@ -3,7 +3,7 @@ package synthesize
 import (
 	"context"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // BridgeComponents holds the raw signal values computed for a bridge seed set.

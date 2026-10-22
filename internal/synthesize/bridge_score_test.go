@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // --- separation tests ---

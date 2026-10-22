@@ -58,18 +58,18 @@ import (
 	"sync"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/verify"
+	"knomit/internal/engine/store/verify"
 
 	"github.com/dop251/goja"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
 )
 
 // maxTriggerLogField caps repo content (trigger names, paths) in the slow

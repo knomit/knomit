@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
 )
 
 type changesPage struct {

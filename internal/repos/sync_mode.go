@@ -7,13 +7,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
-	"knomit/internal/store"
 )
 
 // syncMode is how a sync loop follows the `sync` root attribute (F21 S2,

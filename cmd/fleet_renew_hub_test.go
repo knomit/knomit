@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // PR #537 re-review (the reviewer's probe of B2 on the hub, kept as a regression test): bravo's `left` record

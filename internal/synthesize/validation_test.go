@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // RuleValidation on the review pipeline's writes (user ruling 2026-10-16):

@@ -23,7 +23,7 @@ const systemTreeDoor = "WriteSystemTree"
 // systemTreeDoorAllowed reports whether a NON-test file, given as a
 // module-root-relative slash path, may name the door: internal/repos, which
 // creates a repo from a template. Tests may name it anywhere (they set up
-// fixtures), and everything under internal/store is the store's own code.
+// fixtures), and everything under internal/engine/store is the store's own code.
 func systemTreeDoorAllowed(rel string) bool {
 	return strings.HasPrefix(rel, "internal/repos/") && !strings.Contains(strings.TrimPrefix(rel, "internal/repos/"), "/")
 }
@@ -57,12 +57,12 @@ func selectorUses(t *testing.T, fset *token.FileSet, name string, src any, names
 // makes WriteSystemTree reachable from every package that holds a Service, so
 // the rule that used to be "callers of Service.WriteSystemTree" is now a rule
 // about who may name the method. This parses every .go file outside
-// internal/store/** and fails on a non-test file other than the top-level
+// internal/engine/store/** and fails on a non-test file other than the top-level
 // files of internal/repos that selects WriteSystemTree.
 //
 // Non-vacuity: the walk must visit at least minFiles files, find at least one
 // allowed use (internal/repos/lifecycle.go, today), and see the door still
-// declared in internal/store/facts/system_files.go, so a rename cannot leave
+// declared in internal/engine/store/facts/system_files.go, so a rename cannot leave
 // the scan matching nothing.
 func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
 	const minFiles = 500
@@ -81,7 +81,7 @@ func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
 			case ".git", "web", "dist", ".claude", "third_party":
 				return filepath.SkipDir
 			}
-			if d.Name() == "node_modules" || rel == "internal/store" {
+			if d.Name() == "node_modules" || rel == "internal/engine/store" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -112,7 +112,7 @@ func TestStoreSystemTreeDoor_OnlyFromRepos(t *testing.T) {
 	if allowedUses < 1 {
 		t.Fatal("found no allowed use of WriteSystemTree in internal/repos: the caller moved or was renamed, so this guard's allowlist is stale")
 	}
-	decl := filepath.Join(root, "internal", "store", "facts", "system_files.go")
+	decl := filepath.Join(root, "internal", "engine", "store", "facts", "system_files.go")
 	f, err := parser.ParseFile(token.NewFileSet(), decl, nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ var triggerTableWrites = map[string]bool{
 // makes the four trigger-table writes callable from every package that holds a
 // Service. They were already reachable through Service.Triggers(), so E3 did
 // not widen the method set; this guard pins the reach. It parses every .go
-// file outside internal/store/** and fails on a non-test file other than
+// file outside internal/engine/store/** and fails on a non-test file other than
 // internal/repos/triggers.go that selects one of them.
 //
 // Non-vacuity: at least 500 files walked; triggers.go must use
@@ -201,7 +201,7 @@ func TestFactsRepoTriggerWrites_OnlyFromDispatcher(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			switch rel {
-			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+			case ".git", "web", "dist", ".claude", "third_party", "internal/engine/store":
 				return filepath.SkipDir
 			}
 			if d.Name() == "node_modules" {
@@ -236,7 +236,7 @@ func TestFactsRepoTriggerWrites_OnlyFromDispatcher(t *testing.T) {
 			t.Errorf("%s no longer calls %s: the dispatcher moved or was renamed, so this guard's allowlist is stale", dispatcher, want)
 		}
 	}
-	decl := filepath.Join(root, "internal", "store", "facts", "triggers.go")
+	decl := filepath.Join(root, "internal", "engine", "store", "facts", "triggers.go")
 	f, err := parser.ParseFile(token.NewFileSet(), decl, nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
@@ -297,13 +297,13 @@ var mergeCores = map[string]bool{
 // TestStoreMergeCores_OnlyInsideStore (guard C proper, PR E4): handing out
 // *merge.Repo makes the five lock-assuming merge cores callable from every
 // package that holds a Service. This parses every .go file outside
-// internal/store/** (tests included) and fails on any selector of one of them;
+// internal/engine/store/** (tests included) and fails on any selector of one of them;
 // the host's merges from outside the store go through Service.MergePushed and
 // Service.MergeConsensus, which take the lock.
 //
 // Non-vacuity: at least 500 files outside the store are walked; every one of
-// the five names is still declared on a method in internal/store/merge and
-// still selected by a non-test file elsewhere inside internal/store (the
+// the five names is still declared on a method in internal/engine/store/merge and
+// still selected by a non-test file elsewhere inside internal/engine/store (the
 // parent's service_merge.go and the remotesync child), so a rename or a move
 // cannot leave the scan matching nothing.
 func TestStoreMergeCores_OnlyInsideStore(t *testing.T) {
@@ -320,7 +320,7 @@ func TestStoreMergeCores_OnlyInsideStore(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			switch rel {
-			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+			case ".git", "web", "dist", ".claude", "third_party", "internal/engine/store":
 				return filepath.SkipDir
 			}
 			if d.Name() == "node_modules" {
@@ -341,14 +341,14 @@ func TestStoreMergeCores_OnlyInsideStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if scanned < minFiles {
-		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+		t.Fatalf("scanned only %d .go files outside internal/engine/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
 	}
 
 	// The expected uses INSIDE the store: every core is still declared in the
 	// merge child and still called from a non-test file elsewhere in the store.
 	declared := map[string]bool{}
 	inside := map[string]bool{}
-	storeRoot := filepath.Join(root, "internal", "store")
+	storeRoot := filepath.Join(root, "internal", "engine", "store")
 	err = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -381,15 +381,15 @@ func TestStoreMergeCores_OnlyInsideStore(t *testing.T) {
 	}
 	for name := range mergeCores {
 		if !declared[name] {
-			t.Errorf("internal/store/merge no longer declares a method %s: it was renamed or moved, so this guard checks nothing", name)
+			t.Errorf("internal/engine/store/merge no longer declares a method %s: it was renamed or moved, so this guard checks nothing", name)
 		}
 		if !inside[name] {
-			t.Errorf("no non-test file of internal/store outside the merge package selects %s: the caller moved or was renamed, so this guard's expectations are stale", name)
+			t.Errorf("no non-test file of internal/engine/store outside the merge package selects %s: the caller moved or was renamed, so this guard's expectations are stale", name)
 		}
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("the merge cores assume the caller holds the destination branch's lock (kb/architecture/store/merge-child/4102d898.md); "+
-			"only internal/store/** may name them, and a merge from outside goes through Service.MergePushed, Service.MergeConsensus or merge.Repo.MergeBranch:\n  %s",
+			"only internal/engine/store/** may name them, and a merge from outside goes through Service.MergePushed, Service.MergeConsensus or merge.Repo.MergeBranch:\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
 }
@@ -431,13 +431,13 @@ var consensusRecordDoor = map[string]bool{"RecordConsensusBranch": true}
 // package store's InitRepoWithUpstream calls it. It writes the repo's recorded
 // consensus branch, which UpstreamBranch answers (and with it the fleet
 // admission trust root), so a call from any other package would redirect it.
-// This parses every .go file outside internal/store/** (tests included) and
+// This parses every .go file outside internal/engine/store/** (tests included) and
 // fails on any selector of the name; the record is written by SetOrigin and the
 // bootstraps inside the child.
 //
 // Non-vacuity: at least 500 files are walked outside the store; the method is
-// still declared in internal/store/remotesync and still selected by
-// internal/store/repo.go.
+// still declared in internal/engine/store/remotesync and still selected by
+// internal/engine/store/repo.go.
 func TestStoreConsensusRecord_OnlyInsideStore(t *testing.T) {
 	const minFiles = 500
 	root := filepath.Join("..", "..")
@@ -452,7 +452,7 @@ func TestStoreConsensusRecord_OnlyInsideStore(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			switch rel {
-			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+			case ".git", "web", "dist", ".claude", "third_party", "internal/engine/store":
 				return filepath.SkipDir
 			}
 			if d.Name() == "node_modules" {
@@ -473,10 +473,10 @@ func TestStoreConsensusRecord_OnlyInsideStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if scanned < minFiles {
-		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+		t.Fatalf("scanned only %d .go files outside internal/engine/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
 	}
 
-	storeRoot := filepath.Join(root, "internal", "store")
+	storeRoot := filepath.Join(root, "internal", "engine", "store")
 	declared, calledFromRepo := false, false
 	err = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -509,14 +509,14 @@ func TestStoreConsensusRecord_OnlyInsideStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !declared {
-		t.Error("internal/store/remotesync no longer declares a method RecordConsensusBranch: it was renamed or moved, so this guard checks nothing")
+		t.Error("internal/engine/store/remotesync no longer declares a method RecordConsensusBranch: it was renamed or moved, so this guard checks nothing")
 	}
 	if !calledFromRepo {
-		t.Error("internal/store/repo.go no longer selects RecordConsensusBranch: the caller moved or was renamed, so this guard's expectations are stale")
+		t.Error("internal/engine/store/repo.go no longer selects RecordConsensusBranch: the caller moved or was renamed, so this guard's expectations are stale")
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("RecordConsensusBranch rewrites the recorded consensus branch (kb/invariants/store/consensus-branch-recorded/bcde3d66.md), "+
-			"which UpstreamBranch and the fleet admission trust root follow; only internal/store/** may call it:\n  %s",
+			"which UpstreamBranch and the fleet admission trust root follow; only internal/engine/store/** may call it:\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
 }
@@ -546,7 +546,7 @@ func TestStoreConsensusRecord_GuardDiscriminates(t *testing.T) {
 	}
 }
 
-// sessionsPlumbing is the part of internal/store/sessions that takes or opens
+// sessionsPlumbing is the part of internal/engine/store/sessions that takes or opens
 // raw database handles. The package is importable (PipelineIndex and ToolIndex
 // are handed out by Service.Pipeline and Service.ToolSession), but a caller
 // that could open a session database or build an index over a *sql.DB of its
@@ -557,11 +557,11 @@ var sessionsPlumbing = map[string]bool{
 	"Open": true, "NewPipelineIndex": true, "NewToolIndex": true, "ReapIdle": true,
 }
 
-const sessionsImport = "knomit/internal/store/sessions"
+const sessionsImport = "knomit/internal/engine/store/sessions"
 
 // sessionsPlumbingUses returns one "line N: sessions.<name>" per selector
 // expression `<local>.<name>` where <local> is the local name this file
-// imports internal/store/sessions under and <name> is plumbing. A file that
+// imports internal/engine/store/sessions under and <name> is plumbing. A file that
 // does not import the package yields nothing, so store.Open, os.Open and a
 // method called Open are never flagged. A dot-import of the package is itself
 // reported, because it hides the selector.
@@ -608,10 +608,10 @@ func sessionsPlumbingUses(t *testing.T, fset *token.FileSet, name string, src an
 // NewToolIndex and ReapIdle are exported only because package store (the
 // parent of the sessions child) must call them. This parses every .go file in
 // the module, tests included, and fails on a use from anywhere but the
-// top-level files of internal/store and the sessions package itself.
+// top-level files of internal/engine/store and the sessions package itself.
 //
 // Non-vacuity: the walk must visit at least minFiles files, each of the four
-// must still be declared in internal/store/sessions, and internal/store/
+// must still be declared in internal/engine/store/sessions, and internal/engine/store/
 // service.go must still use each, so a rename cannot leave the scan matching
 // nothing.
 func TestStoreSessionsPlumbing_OnlyInsideStore(t *testing.T) {
@@ -643,7 +643,7 @@ func TestStoreSessionsPlumbing_OnlyInsideStore(t *testing.T) {
 		}
 		scanned++
 		dir := filepath.ToSlash(filepath.Dir(rel))
-		inSessions := dir == "internal/store/sessions"
+		inSessions := dir == "internal/engine/store/sessions"
 		if inSessions && !strings.HasSuffix(rel, "_test.go") {
 			f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 			if perr != nil {
@@ -656,10 +656,10 @@ func TestStoreSessionsPlumbing_OnlyInsideStore(t *testing.T) {
 			}
 		}
 		for _, u := range sessionsPlumbingUses(t, fset, path, nil) {
-			if rel == "internal/store/service.go" {
+			if rel == "internal/engine/store/service.go" {
 				usedByService[u[strings.Index(u, "sessions.")+len("sessions."):]] = true
 			}
-			if dir != "internal/store" && !inSessions {
+			if dir != "internal/engine/store" && !inSessions {
 				offenders = append(offenders, rel+" "+u)
 			}
 		}
@@ -673,10 +673,10 @@ func TestStoreSessionsPlumbing_OnlyInsideStore(t *testing.T) {
 	}
 	for name := range sessionsPlumbing {
 		if !declared[name] {
-			t.Errorf("internal/store/sessions no longer declares a function %s: it was renamed or moved, so this guard checks nothing", name)
+			t.Errorf("internal/engine/store/sessions no longer declares a function %s: it was renamed or moved, so this guard checks nothing", name)
 		}
 		if !usedByService[name] {
-			t.Errorf("internal/store/service.go no longer uses sessions.%s: the caller moved or was renamed, so this guard's expectations are stale", name)
+			t.Errorf("internal/engine/store/service.go no longer uses sessions.%s: the caller moved or was renamed, so this guard's expectations are stale", name)
 		}
 	}
 	if len(offenders) > 0 {
@@ -729,7 +729,7 @@ var indexInternals = map[string]bool{
 	"PersistedEmbedModelID": true, "PersistedEmbedDim": true,
 }
 
-const indexImport = "knomit/internal/store/index"
+const indexImport = "knomit/internal/engine/store/index"
 
 // indexScope is what the lock-free Sync half knows about ONE Go package (all
 // of its files, test files included) plus what is exported module-wide: the
@@ -1026,7 +1026,7 @@ func indexInternalsUses(t *testing.T, fset *token.FileSet, name string, src any,
 // TestStoreIndexInternals_OnlyInsideStore (PR E7a): Service.IndexManager()
 // returns the concrete *index.Index, so every exported method of it is
 // reachable from every package that holds a Service. This parses every .go
-// file outside internal/store/** and fails on (a) any selector of
+// file outside internal/engine/store/** and fails on (a) any selector of
 // SetSyncSuspended, GC, EnsureFactsVecDefault, PersistedEmbedModelID or
 // PersistedEmbedDim, test files included (none outside the store needs them
 // today), and (b) in non-test files, any lock-free Sync on an *index.Index.
@@ -1034,7 +1034,7 @@ func indexInternalsUses(t *testing.T, fset *token.FileSet, name string, src any,
 // none does, and no production file outside the store does.
 //
 // Non-vacuity: at least 500 files are walked; each name is still declared in
-// internal/store/index and still selected by a non-test file elsewhere in the
+// internal/engine/store/index and still selected by a non-test file elsewhere in the
 // store (replay.go, service.go, fsck), and Sync is still declared.
 func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
 	const minFiles = 500
@@ -1056,7 +1056,7 @@ func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			switch rel {
-			case ".git", "web", "dist", ".claude", "third_party", "internal/store":
+			case ".git", "web", "dist", ".claude", "third_party", "internal/engine/store":
 				return filepath.SkipDir
 			}
 			if d.Name() == "node_modules" {
@@ -1106,12 +1106,12 @@ func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
 		}
 	}
 	if scanned < minFiles {
-		t.Fatalf("scanned only %d .go files outside internal/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
+		t.Fatalf("scanned only %d .go files outside internal/engine/store, want at least %d: the walk no longer reaches the module, so this guard checks nothing", scanned, minFiles)
 	}
 
 	declared := map[string]bool{}
 	inside := map[string]bool{}
-	storeRoot := filepath.Join(root, "internal", "store")
+	storeRoot := filepath.Join(root, "internal", "engine", "store")
 	err = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -1144,14 +1144,14 @@ func TestStoreIndexInternals_OnlyInsideStore(t *testing.T) {
 	}
 	for name := range indexInternals {
 		if !declared[name] {
-			t.Errorf("internal/store/index no longer declares a method %s: it was renamed or moved, so this guard checks nothing", name)
+			t.Errorf("internal/engine/store/index no longer declares a method %s: it was renamed or moved, so this guard checks nothing", name)
 		}
 		if !inside[name] {
-			t.Errorf("no non-test file of internal/store outside the index package selects %s: the caller moved or was renamed, so this guard's expectations are stale", name)
+			t.Errorf("no non-test file of internal/engine/store outside the index package selects %s: the caller moved or was renamed, so this guard's expectations are stale", name)
 		}
 	}
 	if !declared["Sync"] {
-		t.Error("internal/store/index no longer declares a method Sync: it was renamed or moved, so the lock-free half of this guard checks nothing")
+		t.Error("internal/engine/store/index no longer declares a method Sync: it was renamed or moved, so the lock-free half of this guard checks nothing")
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("Service.IndexManager() hands out *index.Index, whose lifecycle surface is Sync(Locked)/Rebuild/SyncWatermark/NeedsRebuild; "+

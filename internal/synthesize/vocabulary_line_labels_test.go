@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/vocab"
 
 	"github.com/stretchr/testify/require"
 )

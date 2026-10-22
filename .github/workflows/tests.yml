@@ -82,7 +82,7 @@ name: Tests
 #     key has no restore-keys and why extending it cost the Windows entry once.
 #   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
 #     take 10m from the same matrix. On a Windows laptop internal/synthesize
-#     (1776s) and internal/store (816s) exceed go test's 10-minute per-package
+#     (1776s) and internal/engine/store (816s) exceed go test's 10-minute per-package
 #     default outright and internal/repos (441-639s) straddles it; on THIS
 #     runner only synthesize still does, at 1166-1641s across four runs.
 #     Nothing hangs; it is filesystem cost, and the Makefile scopes the same
@@ -207,7 +207,7 @@ jobs:
           # of this job, and it is per-platform for the same reason slow-tests
           # is: those cells drive clone/sync/push over a git server, which is
           # filesystem cost, and Windows runs that class 5-10x slower here
-          # (internal/store 816s against seconds elsewhere). A unix-tuned 300s
+          # (internal/engine/store 816s against seconds elsewhere). A unix-tuned 300s
           # applied to Windows would be a red build reporting a ceiling, not a
           # fault. unix KEEPS 300s deliberately — it is a hang guard there and
         # the cells take a fraction of it.
@@ -319,12 +319,12 @@ jobs:
       # A new package is not tested until it is named here.
       #
       # internal/oauth (F19 phase 3a) needs sqlite (control.db via
-      # internal/store/migrate) but no native runtime libs, and its CIMD tests
+      # internal/engine/store/migrate) but no native runtime libs, and its CIMD tests
       # run their own in-process HTTPS server with a generated CA. The `...`
       # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
       # in-process fake provider in internal/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/foundation/config/ ./internal/domain/fact/ ./internal/foundation/auth/ ./internal/foundation/serveraddr/ ./internal/foundation/pki/... ./internal/oauth/...
+        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/engine/embeddings/ ./internal/foundation/config/ ./internal/domain/fact/ ./internal/foundation/auth/ ./internal/foundation/serveraddr/ ./internal/foundation/pki/... ./internal/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no
@@ -338,7 +338,7 @@ jobs:
       # here too so the build-test job actually exercises them. The desktop
       # `//go:build desktop` packages are covered by the `desktop` job below.
       #
-      # internal/store itself moved to the slow-tests job — 816s on Windows,
+      # internal/engine/store itself moved to the slow-tests job — 816s on Windows,
       # past go test's per-package default. It is the only package that moved.
       #
       # The two exports are INERT ON WINDOWS and are left unguarded on purpose:
@@ -433,7 +433,7 @@ jobs:
   #
   #                     laptop      runner
   #   internal/synthesize  1776s      1166-1641s (four runs, 41% spread)
-  #   internal/store        816s       212s
+  #   internal/engine/store        816s       212s
   #   internal/repos    441-639s       307s
   #
   # Note which way that cuts. store and repos are ~2.5x faster on the runner,
@@ -494,8 +494,8 @@ jobs:
         # runs once per leg that already ran its parent.
         include: >-
           ${{ fromJSON(inputs.full
-          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/store/...","timeout":"40m"},{"leg":"windows-2025 repos mission","os":"windows-2025","packages":"./internal/repos/...","args":"-run=^TestMission","timeout":"40m"},{"leg":"windows-2025 repos rest","os":"windows-2025","packages":"./internal/repos/...","args":"-skip=^TestMission","timeout":"40m"}]'
-          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/store/... ./internal/repos/...","timeout":"10m"}]') }}
+          && '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/engine/store/... ./internal/repos/...","timeout":"10m"},{"leg":"macos-latest","os":"macos-latest","packages":"./internal/synthesize/... ./internal/engine/store/... ./internal/repos/...","timeout":"10m"},{"leg":"windows-2025 synthesize","os":"windows-2025","packages":"./internal/synthesize/...","timeout":"40m"},{"leg":"windows-2025 store","os":"windows-2025","packages":"./internal/engine/store/...","timeout":"40m"},{"leg":"windows-2025 repos mission","os":"windows-2025","packages":"./internal/repos/...","args":"-run=^TestMission","timeout":"40m"},{"leg":"windows-2025 repos rest","os":"windows-2025","packages":"./internal/repos/...","args":"-skip=^TestMission","timeout":"40m"}]'
+          || '[{"leg":"ubuntu-latest","os":"ubuntu-latest","packages":"./internal/synthesize/... ./internal/engine/store/... ./internal/repos/...","timeout":"10m"}]') }}
     runs-on: ${{ matrix.os }}
     # Deliberately looser than the -timeout below, for the reason race.yml
     # spells out: the go test timeout prints a goroutine dump naming the stuck
@@ -732,4 +732,4 @@ jobs:
           else
             export ORT_LIB_PATH="$LIBDIR/libonnxruntime.so"
           fi
-          CGO_ENABLED=1 go test ./internal/embeddings/ -v
+          CGO_ENABLED=1 go test ./internal/engine/embeddings/ -v

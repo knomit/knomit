@@ -5,10 +5,10 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 
 	"github.com/stretchr/testify/require"
 )

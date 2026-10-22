@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -18,7 +18,7 @@ import (
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/storage/memory"
 
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // ProbeResult is what a pre-create look at a remote can establish.
@@ -150,7 +150,7 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 
 	// Bound the ref listing by the configured network timeout, exactly as every
 	// other remote git call in this package does (see the netCtx wrappers in
-	// internal/store: remote_sync.go's push, repo.go's fetch). Without it a
+	// internal/engine/store: remote_sync.go's push, repo.go's fetch). Without it a
 	// black-holed host leaves the wizard's first step spinning for as long as
 	// the TCP stack takes to give up — which is the one thing design §6 said
 	// must not happen. A zero timeout keeps the parent unchanged, matching
@@ -374,7 +374,7 @@ func classifyWriteProbeError(err error) (access, detail string) {
 }
 
 // probeCtx bounds a single probe's network call by timeout, mirroring
-// internal/store's netCtxWith (branch.go): timeout <= 0 returns the parent
+// internal/engine/store's netCtxWith (branch.go): timeout <= 0 returns the parent
 // unchanged with a no-op cancel, so a config that disables the bound keeps the
 // legacy wait-forever behaviour rather than failing instantly.
 func probeCtx(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

@@ -3,7 +3,7 @@ package synthesize
 import (
 	"fmt"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 )
 
 // Effort dials how hard a pipeline digs for emergent facts nobody wrote down.

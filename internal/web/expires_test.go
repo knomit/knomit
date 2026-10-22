@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 var webExpNow = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

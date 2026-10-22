@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store/merge"
 )
 
 // The commit summary says, per path, how the repo's `conflicts` setting (or

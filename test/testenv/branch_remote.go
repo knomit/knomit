@@ -3,9 +3,9 @@ package testenv
 import (
 	"context"
 
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/remotesync"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // Push pushes this branch to the repo's configured origin remote. Returns

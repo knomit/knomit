@@ -3,7 +3,7 @@ package testenv
 import (
 	"context"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // Head returns a Snapshot for the current HEAD of the branch. If the

@@ -45,10 +45,6 @@ var layerExempt = []string{"testsupport"}
 // become a path-prefix rule and a package that is in neither place is reported
 // as unmapped. Do not add entries for new packages: put them in a layer dir.
 var legacyLayers = map[string]int{
-	// engine
-	"store":      layerEngine, // includes store/git, store/migrate, store/nosignertest
-	"embeddings": layerEngine,
-	"llm":        layerEngine,
 	// corpus
 	"repos":       layerCorpus,
 	"refs":        layerCorpus,
@@ -64,7 +60,7 @@ var legacyLayers = map[string]int{
 // sameLayerEdges lists the allowed imports between two distinct packages of
 // one layer, as "importer -> imported" with paths relative to knomit/internal/
 // (the path as it is at the time of writing). An import between a package and
-// its own subpackage (store -> store/git) is always allowed and is not listed.
+// its own subpackage (engine/store -> engine/store/git) is always allowed and is not listed.
 var sameLayerEdges = map[string]bool{
 	// platform
 	"platform/diag -> platform/hostguard": true,
@@ -77,37 +73,37 @@ var sameLayerEdges = map[string]bool{
 	"foundation/serveraddr -> foundation/auth":   true,
 	"foundation/serveraddr -> foundation/config": true,
 	// engine
-	"store/git -> store/migrate": true,
+	"engine/store/git -> engine/store/migrate": true,
 	// The ctx-carried transaction (ctxKeyTx, Conn, BeginTxIfNeeded) is defined
 	// by the git storer; the sqlite child re-exposes those helpers to the
 	// store's sub-indices rather than redefining them.
-	"store/internal/sqlite -> store/git": true,
+	"engine/store/internal/sqlite -> engine/store/git": true,
 	// The sessions child (ephemeral session DB, pipeline and tool indexes)
 	// sits above sqlite in the store's child order (proposal 4.3: sessions ->
 	// sqlite): the pipeline watermarks live in the MAIN db and are read
 	// through the ctx-carried tx helper (sqlite.Conn).
-	"store/sessions -> store/internal/sqlite": true,
+	"engine/store/sessions -> engine/store/internal/sqlite": true,
 	// The vcs child (the git layer: branches, commits, locks, signing, commit
 	// log, path history) sits on the git storer and directly above sqlite in
 	// the store's child order (proposal 4.3); every higher cluster reaches up
 	// to it, never the reverse. It reads and writes its tables through the
 	// ctx-carried tx helpers (sqlite.Conn, sqlite.BeginTxIfNeeded).
-	"store/internal/vcs -> store/git":             true,
-	"store/internal/vcs -> store/internal/sqlite": true,
+	"engine/store/internal/vcs -> engine/store/git":             true,
+	"engine/store/internal/vcs -> engine/store/internal/sqlite": true,
 	// The fleetrec child (a fleet repository's member records, certificate
 	// artifacts and main-history log, read from one commit) sits directly above
 	// vcs in the store's child order (proposal 4.3: fleetrec -> vcs): it reads
 	// the ontology at a commit and checks the tree shape through the vcs
 	// primitives. verify and the facade reach up to it, never the reverse.
-	"store/fleetrec -> store/internal/vcs": true,
+	"engine/store/fleetrec -> engine/store/internal/vcs": true,
 	// The verify child (the judge: signatures, tree shape, the acceptance
 	// range, M3/E4, validations, artifact rules, the incoming-push judge and
 	// the audit) sits above vcs and fleetrec in the store's child order
 	// (proposal 4.3: verify -> vcs, fleetrec). It reads a store only through
 	// *vcs.Repo and the fleet's records through fleetrec; the sync, gitserve
 	// and fsck clusters reach up to it, never the reverse.
-	"store/verify -> store/fleetrec":     true,
-	"store/verify -> store/internal/vcs": true,
+	"engine/store/verify -> engine/store/fleetrec":     true,
+	"engine/store/verify -> engine/store/internal/vcs": true,
 	// The facts child (fact files read and written through the git layer, the
 	// system-file / template / skill readers, the trigger dispatcher's store
 	// half) sits above vcs and verify in the store's child order (proposal
@@ -115,9 +111,9 @@ var sameLayerEdges = map[string]bool{
 	// for the ctx-carried transaction its trigger tables use (sqlite is below
 	// vcs in the order, so the direction is still downward); the merge, index,
 	// sync and fsck clusters reach up to facts, never the reverse.
-	"store/facts -> store/internal/sqlite": true,
-	"store/facts -> store/internal/vcs":    true,
-	"store/facts -> store/verify":          true,
+	"engine/store/facts -> engine/store/internal/sqlite": true,
+	"engine/store/facts -> engine/store/internal/vcs":    true,
+	"engine/store/facts -> engine/store/verify":          true,
 	// The merge child (branch merges and the conflict strategies, the
 	// pushed-branch and consensus merge cores, the experiment lifecycle) sits
 	// above vcs and verify in the store's child order (proposal 4.3: merge ->
@@ -127,9 +123,9 @@ var sameLayerEdges = map[string]bool{
 	// is below vcs, so the direction is still downward). It does NOT import
 	// facts: nothing in the moved files needs it. sync, gitserve and fsck reach
 	// up to merge, never the reverse.
-	"store/merge -> store/internal/sqlite": true,
-	"store/merge -> store/internal/vcs":    true,
-	"store/merge -> store/verify":          true,
+	"engine/store/merge -> engine/store/internal/sqlite": true,
+	"engine/store/merge -> engine/store/internal/vcs":    true,
+	"engine/store/merge -> engine/store/verify":          true,
 	// The index child (the search index: the IndexManager lifecycle, the
 	// write/rebuild/graph-write path and the vec tables, plus the read-side
 	// query services FactQuery, GraphStore, HistoryQuery, MethodologyMatcher)
@@ -139,18 +135,18 @@ var sameLayerEdges = map[string]bool{
 	// FactWithBody types and ParseFactRecord, and the git storer for the
 	// CtxExecer type the graph SQL takes and WithoutTx (the same edge vcs
 	// has). vocab and the facade reach up to index, never the reverse.
-	"store/index -> store/facts":           true,
-	"store/index -> store/git":             true,
-	"store/index -> store/internal/sqlite": true,
-	"store/index -> store/internal/vcs":    true,
+	"engine/store/index -> engine/store/facts":           true,
+	"engine/store/index -> engine/store/git":             true,
+	"engine/store/index -> engine/store/internal/sqlite": true,
+	"engine/store/index -> engine/store/internal/vcs":    true,
 	// The vocab child (motif alias resolution and definitions, the
 	// title-embedding axis and its shortlist: review-time derived state) sits
 	// above sqlite and vcs in the store's child order. The proposal's arrow
 	// also lists index; nothing in the moved files needs it, so it is not
 	// imported. It reads a store only through *vcs.Repo and the ctx-carried
 	// tx helpers; the facade reaches up to it, never the reverse.
-	"store/vocab -> store/internal/sqlite": true,
-	"store/vocab -> store/internal/vcs":    true,
+	"engine/store/vocab -> engine/store/internal/sqlite": true,
+	"engine/store/vocab -> engine/store/internal/vcs":    true,
 	// The remotesync child (the origin remote and its status row, the fetch, the
 	// reconcile of the consensus branch and of the agent branch with the
 	// rewind replay and its watermark, push and publish, the origin identity,
@@ -162,11 +158,11 @@ var sameLayerEdges = map[string]bool{
 	// own-range judge) and uses the git storer directly for the empty tree
 	// the rewind replay builds on. gitserve and fsck reach up to remotesync, never
 	// the reverse.
-	"store/remotesync -> store/fleetrec":     true,
-	"store/remotesync -> store/git":          true,
-	"store/remotesync -> store/internal/vcs": true,
-	"store/remotesync -> store/merge":        true,
-	"store/remotesync -> store/verify":       true,
+	"engine/store/remotesync -> engine/store/fleetrec":     true,
+	"engine/store/remotesync -> engine/store/git":          true,
+	"engine/store/remotesync -> engine/store/internal/vcs": true,
+	"engine/store/remotesync -> engine/store/merge":        true,
+	"engine/store/remotesync -> engine/store/verify":       true,
 	// The gitserve child (the smart-HTTP handler: the advertisement, the pack
 	// negotiation and upload-pack, and receive-pack with its quarantine, the
 	// incoming-push judge, the all-or-nothing promote and the registration) sits
@@ -178,20 +174,20 @@ var sameLayerEdges = map[string]bool{
 	// signature already names it), and merge, for the Mode constants a branch
 	// move reports (ModeRewound, ModeNoop). The facade reaches up to gitserve,
 	// never the reverse.
-	"store/gitserve -> store/fleetrec":     true,
-	"store/gitserve -> store/internal/vcs": true,
-	"store/gitserve -> store/merge":        true,
-	"store/gitserve -> store/remotesync":   true,
-	"store/gitserve -> store/verify":       true,
+	"engine/store/gitserve -> engine/store/fleetrec":     true,
+	"engine/store/gitserve -> engine/store/internal/vcs": true,
+	"engine/store/gitserve -> engine/store/merge":        true,
+	"engine/store/gitserve -> engine/store/remotesync":   true,
+	"engine/store/gitserve -> engine/store/verify":       true,
 	// The fsck child (the integrity checker behind Service.Verify and
 	// PruneGeneratedRefs) sits at the top of the store's child order (proposal
 	// 4.3: fsck -> everything above): it reads the one *vcs.Repo and the two
 	// sub-indices its checks need, the fact index for the fact-format check and
 	// the search index for the parity and embedding checks. Nothing in the
 	// store imports it but the facade.
-	"store/fsck -> store/facts":        true,
-	"store/fsck -> store/index":        true,
-	"store/fsck -> store/internal/vcs": true,
+	"engine/store/fsck -> engine/store/facts":        true,
+	"engine/store/fsck -> engine/store/index":        true,
+	"engine/store/fsck -> engine/store/internal/vcs": true,
 	// The storetest package (test doors for tests outside the store) reaches
 	// the vcs repo through vcs's registration hook and the sqlite durability
 	// switch; it reaches the facts index and the merge repo through
@@ -199,19 +195,19 @@ var sameLayerEdges = map[string]bool{
 	// test package; TestHarnessNotLinkedIntoShippedBinaries keeps it out of
 	// every binary and TestTestSeamsNotReachedFromProduction out of production
 	// imports.
-	"store/storetest -> store/internal/sqlite": true,
-	"store/storetest -> store/internal/vcs":    true,
+	"engine/store/storetest -> engine/store/internal/sqlite": true,
+	"engine/store/storetest -> engine/store/internal/vcs":    true,
 	// store/model is the leaf every store child may import: plain data types,
 	// sentinels and pure helpers. It imports nothing from the store
 	// (TestStoreModel_IsALeaf), so these edges can never close a cycle.
-	"store/facts -> store/model":           true,
-	"store/fsck -> store/model":            true,
-	"store/index -> store/model":           true,
-	"store/sessions -> store/model":        true,
-	"store/internal/sqlite -> store/model": true,
-	"store/internal/vcs -> store/model":    true,
-	"store/merge -> store/model":           true,
-	"store/remotesync -> store/model":      true,
+	"engine/store/facts -> engine/store/model":           true,
+	"engine/store/fsck -> engine/store/model":            true,
+	"engine/store/index -> engine/store/model":           true,
+	"engine/store/sessions -> engine/store/model":        true,
+	"engine/store/internal/sqlite -> engine/store/model": true,
+	"engine/store/internal/vcs -> engine/store/model":    true,
+	"engine/store/merge -> engine/store/model":           true,
+	"engine/store/remotesync -> engine/store/model":      true,
 	// corpus
 	"federate -> repos":    true,
 	"resolutions -> refs":  true,
@@ -342,17 +338,17 @@ func listImports(t *testing.T, env []string, tags string) map[string][]string {
 func TestLayersDetectsViolations(t *testing.T) {
 	const p = internalPrefix
 	graph := map[string][]string{
-		p + "domain/fact":            {p + "store", "fmt"},                 // domain -> engine: upward
-		p + "store":                  {p + "domain/fact", p + "store/git"}, // fine: downward, and own subpackage
-		p + "store/git":              nil,
-		p + "refs":                   {p + "repos"},       // corpus -> corpus, unlisted
-		p + "repos":                  {p + "store"},       // fine
-		p + "mystery":                {p + "domain/fact"}, // maps to no layer
-		p + "testsupport/testsigner": {p + "store"},       // exempt importer
+		p + "domain/fact":            {p + "engine/store", "fmt"},                 // domain -> engine: upward
+		p + "engine/store":           {p + "domain/fact", p + "engine/store/git"}, // fine: downward, and own subpackage
+		p + "engine/store/git":       nil,
+		p + "refs":                   {p + "repos"},        // corpus -> corpus, unlisted
+		p + "repos":                  {p + "engine/store"}, // fine
+		p + "mystery":                {p + "domain/fact"},  // maps to no layer
+		p + "testsupport/testsigner": {p + "engine/store"}, // exempt importer
 	}
 	got := layerViolations(graph, nil)
 	want := []string{
-		p + "domain/fact (domain) imports " + p + "store (engine): upward import",
+		p + "domain/fact (domain) imports " + p + "engine/store (engine): upward import",
 		p + "mystery: maps to no layer (put it inside a layer directory)",
 		p + "refs imports " + p + "repos: unlisted same-layer edge in corpus (refs -> repos)",
 	}
@@ -391,7 +387,7 @@ func TestLayers(t *testing.T) {
 	// Sentinels: one real package per layer, so a wrong pattern cannot pass vacuously.
 	sentinels := map[int]string{
 		layerPlatform: "platform/logging", layerDomain: "domain/fact", layerFoundation: "foundation/config",
-		layerEngine: "store", layerCorpus: "repos", layerEdge: "web", layerApp: "app",
+		layerEngine: "engine/store", layerCorpus: "repos", layerEdge: "web", layerApp: "app",
 	}
 	seen := map[string]bool{}
 	for _, c := range configs {

@@ -547,7 +547,7 @@ func okfOperationLabel(email string) string {
 }
 
 // parseOperation extracts the "+op" suffix knomit encodes in a commit author's
-// local part ("<agent>+<op>@agents.knomit.io"). Copied from internal/store
+// local part ("<agent>+<op>@agents.knomit.io"). Copied from internal/engine/store
 // rather than imported: store is being stripped of OKF concerns, and this
 // package must not depend on it.
 func parseOperation(email string) string {

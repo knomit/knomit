@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
 )
 
 // The prune→distill progression (knomit#135).

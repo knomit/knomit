@@ -13,8 +13,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 )
 
 // ConsensusGuidance is the repository's guidance (F23) as its consensus branch

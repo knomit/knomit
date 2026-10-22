@@ -7,7 +7,7 @@
 // which kind it is — lives in internal/domain/fact (fact.ClassifyRef) and must stay
 // there, because internal/domain/fact is the pure leaf that store, web, mcp and the
 // front-end schema all depend on. This package holds only the half that needs
-// corpus access and repo identity, which is why it can import internal/store
+// corpus access and repo identity, which is why it can import internal/engine/store
 // and internal/domain/fact cannot. Moving a classifier in here would drag the whole
 // store closure into every caller that only wanted to parse a string.
 //
@@ -54,8 +54,8 @@ import (
 	"strings"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 )
 
 // ResolveFunc reports whether a ref target resolves at the commit this write

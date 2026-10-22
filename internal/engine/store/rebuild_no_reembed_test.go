@@ -1,0 +1,238 @@
+package store
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"knomit/internal/engine/store/index"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/domain/fact"
+)
+
+// TestRebuild_PreservesRowidsAndDoesNotReEmbed regresses the bug where Rebuild
+// used INSERT OR REPLACE INTO facts (DELETE+INSERT → new rowid → the
+// facts_after_delete trigger wiped facts_vec), so rebuildEmbeddings re-embedded
+// the ENTIRE corpus on every rebuild. The upsert is now ON CONFLICT DO UPDATE,
+// which preserves the rowid for unchanged blobs, keeping facts_vec alive.
+//
+// Asserts: after the first rebuild embeds every fact, a SECOND rebuild over the
+// same content (a) preserves each fact's rowid and (b) issues zero further embed
+// calls — while still regenerating the derived junction/token tables.
+func TestRebuild_PreservesRowidsAndDoesNotReEmbed(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+
+	emb := &countingEmbedder{}
+	svc.SetEmbedder(emb)
+
+	ctx := context.Background()
+	branch := "main"
+
+	mk := func(path, title string, domains []string) {
+		f := fact.NewFact("placeholder.md")
+		f.Title = title
+		f.Confidence = 0.9
+		f.Sources = 1
+		f.Domain = domains
+		f.Entities = []string{"x"}
+		f.Type = fact.Observation
+		out, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, branch, path, out, "init", "")
+		require.NoError(t, err)
+	}
+	mk("kb/a.md", "Alpha", []string{"ai-governance"})
+	mk("kb/b.md", "Beta", []string{"store/resolver"})
+
+	si := svc.si
+	rowids := func() map[string]int64 {
+		m := map[string]int64{}
+		rows, err := si.RepoForTest().DB().QueryContext(ctx, `SELECT path, id FROM facts`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var p string
+			var id int64
+			require.NoError(t, rows.Scan(&p, &id))
+			m[p] = id
+		}
+		return m
+	}
+	vecCount := func() int {
+		var n int
+		require.NoError(t, si.RepoForTest().DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM facts_vec`).Scan(&n))
+		return n
+	}
+
+	// WriteFact already embedded each fact inline (via Embed), so facts_vec is
+	// populated before the first rebuild.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+	before := rowids()
+	require.Len(t, before, 2)
+	require.Equal(t, 2, vecCount(), "both facts must have embeddings after setup")
+
+	// Second rebuild over identical content must not re-embed.
+	emb.batchCalls.Store(0)
+	emb.embedCalls.Store(0)
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+	after := rowids()
+
+	require.Equal(t, before, after, "rebuild must preserve facts rowids for unchanged blobs")
+	require.Equal(t, 2, vecCount(), "embeddings must survive the rebuild (facts_vec not wiped)")
+	require.Zero(t, emb.batchCalls.Load(), "rebuild must NOT re-embed unchanged facts (facts_vec preserved)")
+	require.Zero(t, emb.embedCalls.Load(), "rebuild must NOT re-embed unchanged facts (facts_vec preserved)")
+
+	// Derived state is still correct: canonical domains + tokens regenerated.
+	res, err := svc.Search().Search(ctx, branch, index.SearchOptions{Domain: []string{"governance"}})
+	require.NoError(t, err)
+	found := false
+	for _, r := range res {
+		if r.Path == "kb/a.md" {
+			found = true
+		}
+	}
+	require.True(t, found, "domain token search must still work after the no-re-embed rebuild")
+}
+
+// TestNeedsRebuild_TrueWhenVersionStale regresses the silent-upgrade bug: an
+// existing DB whose persisted graph_schema_version predates the canonical-domain
+// change must report NeedsRebuild=true (so startup heals it), and a freshly
+// rebuilt DB must report false.
+func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+	ctx := context.Background()
+	si := svc.si
+
+	// Simulate an older deployment: stamp a prior schema version.
+	_, err = si.RepoForTest().DB().ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, '2')`, schemaVersionKey("main"))
+	require.NoError(t, err)
+
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, "main")
+	require.NoError(t, err)
+	require.True(t, stale, "a pre-canonical-domain version must be reported stale")
+
+	// A successful rebuild bumps the version to current → no longer stale.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, stale, "after Rebuild the persisted version is current")
+}
+
+// TestRebuild_BumpsOnlyItsOwnBranch is the store half of PR #73 review finding
+// #1, and it supersedes PR #70's MarkRebuildNeeded regression.
+//
+// The version used to be one global row, so ANY branch's successful Rebuild
+// marked every other branch current — masking a branch that failed. PR #70
+// patched that by deleting the row on a partial heal, which turned a permanent
+// single-branch failure (a stored upstream naming a ref that does not exist
+// locally) into a full re-index of every branch on every boot, forever, with the
+// repo still reporting a healthy index.
+//
+// Keying the version per branch removes both failure modes at once: rebuilding
+// one branch says nothing about another, so the branch that failed reports stale
+// again on its own, and the branch that succeeded stays done.
+func TestRebuild_BumpsOnlyItsOwnBranch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+	ctx := context.Background()
+	require.NoError(t, svc.CreateBranch(ctx, "agent/x", "main"))
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, stale, "the rebuilt branch is current")
+
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "agent/x")
+	require.NoError(t, err)
+	require.True(t, stale, "a branch that was NOT rebuilt must still report stale")
+
+	// And rebuilding it clears only its own flag — no re-arming, no global switch.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/x", nil))
+	for _, branch := range []string{"main", "agent/x"} {
+		stale, err = svc.IndexManager().NeedsRebuild(ctx, branch)
+		require.NoError(t, err)
+		require.False(t, stale, "%s must stay current once rebuilt", branch)
+	}
+}
+
+// TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity pins the hole
+// that per-branch keying alone left open, and that clearSchemaVersion closes.
+//
+// NeedsRebuild has two gates. The version gate is per-branch; the embedding
+// gate is global, and correctly so — facts_vec is corpus-wide, so one branch's
+// re-embed covers every branch. But that means a branch can be stale for the
+// EMBEDDING reason while its own version row is perfectly current, and then the
+// sibling branch that rebuilt successfully persists the new identity and answers
+// the global gate on the failed branch's behalf. Both gates pass. The branch
+// reports healthy forever, while its commit_log and similarity layer stay as the
+// failed rebuild left them — Sync's no-watermark path re-indexes facts but runs
+// neither phase 0 nor phase 3.
+//
+// Rebuild dropping the version row on failure is what makes the per-branch gate
+// speak first and speak truthfully for the failed branch.
+func TestRebuild_FailureClearsVersion_NotMaskedByGlobalEmbedIdentity(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "main"))
+	ctx := context.Background()
+
+	// "phantom" is the real-world failure the builder comments describe: a stored
+	// upstream naming a ref this repo does not have. Rebuild fails at HeadCommit.
+	const phantom = "upstream/gone"
+
+	// Both branches were last rebuilt by THIS binary — the schema is not what
+	// makes them stale.
+	for _, branch := range []string{"main", phantom} {
+		_, err = svc.si.RepoForTest().DB().ExecContext(ctx,
+			`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, schemaVersionKey(branch), index.GraphSchemaVersion)
+		require.NoError(t, err)
+	}
+
+	// The operator swaps the embedding model: old identity on disk, new one live.
+	seedEmbedIdentity(t, svc.si, "old-model", 768)
+	svc.SetEmbedder(&configurableEmbedder{id: "new-model", dim: 768})
+
+	for _, branch := range []string{"main", phantom} {
+		stale, err := svc.IndexManager().NeedsRebuild(ctx, branch)
+		require.NoError(t, err)
+		require.True(t, stale, "%s must be stale via the embedding gate", branch)
+	}
+
+	// The heal: the agent branch succeeds and persists the new global identity,
+	// the upstream fails and is non-fatal.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Error(t, svc.IndexManager().Rebuild(ctx, phantom, nil),
+		"a branch whose ref does not resolve must fail its rebuild")
+
+	// The global gate is now satisfied for everyone, so only the version row can
+	// still speak for the branch that failed. It must have been cleared.
+	var count int
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRow(
+		`SELECT count(*) FROM meta WHERE key = ?`, schemaVersionKey(phantom)).Scan(&count))
+	require.Zero(t, count, "a failed rebuild must drop the branch's version row")
+
+	stale, err := svc.IndexManager().NeedsRebuild(ctx, phantom)
+	require.NoError(t, err)
+	require.True(t, stale, "the failed branch must still be retried on the next startup")
+
+	stale, err = svc.IndexManager().NeedsRebuild(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, stale, "the branch that succeeded must stay done — the retry stays proportional")
+}

@@ -3,11 +3,11 @@ package testenv
 import (
 	"context"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/storetest"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/storetest"
 )
 
 // WithRead delegates to the underlying RepoInstance.WithRead, exposing the

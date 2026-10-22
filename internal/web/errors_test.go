@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 )
 
 func TestWriteStoreError_BranchNotFound_Returns404(t *testing.T) {

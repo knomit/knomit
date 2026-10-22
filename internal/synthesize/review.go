@@ -17,16 +17,16 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"knomit/internal/store/model"
-	"knomit/internal/store/sessions"
+	"knomit/internal/engine/store/model"
+	"knomit/internal/engine/store/sessions"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 
-	"knomit/internal/llm"
+	"knomit/internal/engine/llm"
 	"knomit/internal/repos"
 )
 

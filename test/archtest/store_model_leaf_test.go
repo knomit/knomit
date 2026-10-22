@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	storeModelPkg    = "knomit/internal/store/model"
-	storeImportsRoot = "knomit/internal/store"
+	storeModelPkg    = "knomit/internal/engine/store/model"
+	storeImportsRoot = "knomit/internal/engine/store"
 )
 
 // storeImportsIn returns the members of a transitive import closure that live
@@ -28,7 +28,7 @@ func storeImportsIn(closure []string) []string {
 	return bad
 }
 
-// TestStoreModel_IsALeaf pins internal/store/model as a leaf: nothing in its
+// TestStoreModel_IsALeaf pins internal/engine/store/model as a leaf: nothing in its
 // transitive import closure, production or test, is the store or one of its
 // children.
 //
@@ -70,10 +70,10 @@ func TestStoreModel_IsALeaf(t *testing.T) {
 func TestStoreModelLeafDetectorSees(t *testing.T) {
 	closure := []string{
 		storeModelPkg, storeModelPkg + " [" + storeModelPkg + ".test]", storeModelPkg + ".test", "fmt", "knomit/internal/domain/fact",
-		"knomit/internal/store", "knomit/internal/store/internal/vcs", "knomit/internal/storefront",
+		"knomit/internal/engine/store", "knomit/internal/engine/store/internal/vcs", "knomit/internal/storefront",
 	}
 	got := storeImportsIn(closure)
-	want := []string{"knomit/internal/store", "knomit/internal/store/internal/vcs"}
+	want := []string{"knomit/internal/engine/store", "knomit/internal/engine/store/internal/vcs"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("storeImportsIn = %v, want %v", got, want)
 	}

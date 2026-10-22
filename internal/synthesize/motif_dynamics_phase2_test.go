@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
-	"knomit/internal/store/vocab"
+	"knomit/internal/engine/store/vocab"
 
 	"github.com/stretchr/testify/require"
 )

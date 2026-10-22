@@ -5,22 +5,22 @@ import (
 	"io/fs"
 	"net/http"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/llm"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/foundation/config"
-	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/oauth"
 	"knomit/internal/platform/logging"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 

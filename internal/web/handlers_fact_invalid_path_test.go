@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // #384 through REST. The store refuses a path go-git cannot read back before

@@ -3,8 +3,8 @@ package testenv
 import (
 	"context"
 
-	"knomit/internal/store"
-	"knomit/internal/store/merge"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/merge"
 )
 
 // MergeFrom merges the source branch into this branch using the given

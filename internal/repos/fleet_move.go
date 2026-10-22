@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 )
 
 // POST /fleet/follow with a FORGE URL (user rulings 2026-10-16: every

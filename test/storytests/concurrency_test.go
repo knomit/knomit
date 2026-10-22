@@ -35,11 +35,11 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/store/fsck"
+	"knomit/internal/engine/store/fsck"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 	"knomit/test/testenv"
 )
 

@@ -9,9 +9,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
 
+	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/crashdump"
-	"knomit/internal/store/merge"
-	"knomit/internal/store/remotesync"
 )
 
 // TaskEvent is the event payload broadcast to SSE clients via TaskHub.

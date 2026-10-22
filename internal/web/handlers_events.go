@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // handleHALEvents handles GET /api/v1/repos/{repo}/branches/{branch}/events.

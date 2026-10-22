@@ -15,10 +15,10 @@ import (
 
 	"knomit/internal/domain/fact"
 	factpkg "knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )

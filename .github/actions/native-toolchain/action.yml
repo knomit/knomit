@@ -175,7 +175,7 @@ runs:
     # Informational, and deliberately NOT a failure. onnxruntime >= 1.21 needs
     # the VC++ 2015-2022 runtime >= 14.40, or its DLL refuses to initialise
     # with nothing but "a dynamic link library (DLL) initialization routine
-    # failed" (internal/embeddings/ortinit_windows.go turns that into an
+    # failed" (internal/engine/embeddings/ortinit_windows.go turns that into an
     # actionable message). The image ships 14.51.36247, comfortably above the
     # floor, and no step in tests.yml LOADS onnxruntime.dll on Windows today
     # anyway — embed-smoke, the job that runs real inference, is ubuntu and

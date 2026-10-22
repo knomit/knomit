@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/store"
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/refs"
-	"knomit/internal/store/facts"
 
 	"github.com/stretchr/testify/require"
 )

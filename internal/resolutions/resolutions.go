@@ -38,14 +38,14 @@ import (
 	"slices"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
 )
 
 // Normalize validates every {body} resolution and rewrites it to the bytes

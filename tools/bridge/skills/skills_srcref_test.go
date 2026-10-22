@@ -14,7 +14,7 @@ import (
 var fullSrcRef = regexp.MustCompile(`src://([0-9a-f]{12})/([^@\s` + "`" + `'"]+)@([0-9a-f]{40}):([0-9a-f]{40})`)
 
 // knomit#249 review. The example ref in knomit-remember and knomit-decided
-// cited internal/store/service.go with the blob of internal/store/git/storer.go,
+// cited internal/engine/store/service.go with the blob of internal/engine/store/git/storer.go,
 // shipped in the very skills that tell agents to compute refs with git rather
 // than copy them. An example is copied more than any other ref in the corpus,
 // so every full-form src ref in a template must name the blob that

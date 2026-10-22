@@ -5,14 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"knomit/internal/domain/modelparams"
-	"knomit/internal/embeddings"
+	"knomit/internal/engine/embeddings"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"knomit/internal/store"
+	"knomit/internal/engine/store"
 	"knomit/internal/synthesize"
 )
 

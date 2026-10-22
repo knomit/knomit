@@ -19,12 +19,12 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/merge"
 	"knomit/internal/foundation/config"
 	"knomit/internal/mcp"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
-	"knomit/internal/store/facts"
-	"knomit/internal/store/merge"
 )
 
 // ---- T-D0: the shipped template's settings, and that it loads as-is

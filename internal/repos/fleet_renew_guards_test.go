@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
-	"knomit/internal/store"
 )
 
 // PR #537 review B1 (the reviewer's repro, kept as a regression test): a revoke whose publish failed sits on the

@@ -19,10 +19,10 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 const pushTestFP = "abcd1234" + "00000000000000000000000000000000000000000000000000000000"

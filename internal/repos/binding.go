@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 )
 
 // ReadTarget is one read mount of a binding: a repo at a pinned branch, with

@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 )
 
 // lapsedExperimentKey is the private context key for an experiment that was

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
 )

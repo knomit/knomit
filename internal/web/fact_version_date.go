@@ -6,8 +6,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // factVersionDate returns the RFC3339 commit date of the version of `path`

@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"testing"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
 )
 
 // TestQueryResume_RejectsReadSetRebind pins M-2 (backlog B.5): a cursor is a

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/store/index"
+	"knomit/internal/engine/store/index"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"

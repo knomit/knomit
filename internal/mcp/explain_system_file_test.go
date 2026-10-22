@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/storetest"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/store/storetest"
 )
 
 // Reads of .knomit/ by exact path (user ruling 2026-10-06: "reopen reads by

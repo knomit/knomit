@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"knomit/internal/store/model"
+	"knomit/internal/engine/store/model"
 
 	"github.com/rs/zerolog/log"
 )
