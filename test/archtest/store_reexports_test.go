@@ -376,7 +376,7 @@ func serviceChildFields(f *ast.File) map[string]string {
 // serviceChildHelpers returns, for the *Service methods f declares, the
 // method name -> import path of every one whose first result is a (pointer
 // to a) type of an IMPORTABLE store child (Facts() *facts.Index,
-// integrity() *fsck.Checker, ...): a call of one is a handle to that child
+// Integrity() *fsck.Checker, ...): a call of one is a handle to that child
 // exactly as a field of that type is.
 func serviceChildHelpers(f *ast.File) map[string]string {
 	imps := storeImports(f)
@@ -448,8 +448,11 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 		// child, or "" when it is not one.
 		type target struct{ label, pkg string }
 		locals := map[string]target{}
-		handle := func(e ast.Expr) (target, bool) {
+		var handle func(e ast.Expr) (target, bool)
+		handle = func(e ast.Expr) (target, bool) {
 			switch x := e.(type) {
+			case *ast.ParenExpr:
+				return handle(x.X)
 			case *ast.Ident:
 				tg, ok := locals[x.Name]
 				return tg, ok
@@ -474,19 +477,48 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 		if len(stmts) == 0 {
 			continue
 		}
+		// `a, b := <call>; return a, b` returns exactly what the call
+		// returned: it is the call as a return statement.
+		if n := len(stmts); n >= 2 {
+			if ret, ok := stmts[n-1].(*ast.ReturnStmt); ok {
+				if as, ok := stmts[n-2].(*ast.AssignStmt); ok && as.Tok == token.DEFINE && len(as.Rhs) == 1 && len(as.Lhs) == len(ret.Results) {
+					if c, ok := as.Rhs[0].(*ast.CallExpr); ok {
+						same := true
+						for i := range as.Lhs {
+							l, lok := as.Lhs[i].(*ast.Ident)
+							r, rok := ret.Results[i].(*ast.Ident)
+							if !lok || !rok || l.Name != r.Name {
+								same = false
+							}
+						}
+						if same {
+							stmts = append(append([]ast.Stmt{}, stmts[:n-2]...), &ast.ReturnStmt{Results: []ast.Expr{c}})
+						}
+					}
+				}
+			}
+		}
 		bound := true
 		for _, st := range stmts[:len(stmts)-1] {
-			as, ok := st.(*ast.AssignStmt)
-			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
-				bound = false
-				break
+			var lhs, rhs ast.Expr
+			switch d := st.(type) {
+			case *ast.AssignStmt: // x := <handle>
+				if d.Tok == token.DEFINE && len(d.Lhs) == 1 && len(d.Rhs) == 1 {
+					lhs, rhs = d.Lhs[0], d.Rhs[0]
+				}
+			case *ast.DeclStmt: // var x = <handle>
+				if gd, ok := d.Decl.(*ast.GenDecl); ok && gd.Tok == token.VAR && len(gd.Specs) == 1 {
+					if vs, ok := gd.Specs[0].(*ast.ValueSpec); ok && len(vs.Names) == 1 && len(vs.Values) == 1 {
+						lhs, rhs = vs.Names[0], vs.Values[0]
+					}
+				}
 			}
-			id, ok := as.Lhs[0].(*ast.Ident)
+			id, ok := lhs.(*ast.Ident)
 			if !ok {
 				bound = false
 				break
 			}
-			h, ok := handle(as.Rhs[0])
+			h, ok := handle(rhs)
 			if !ok {
 				bound = false
 				break
@@ -552,7 +584,14 @@ var injectsStoreState = map[string]string{
 // non-importable child and are the ruled exception; they are not matched
 // here. A match must be in injectsStoreState with a reason. A method that does
 // work between binding the handle and calling it (Handler caches a gitserve
-// handler behind a sync.Once) is not a forward and needs no entry.
+// handler behind a sync.Once) is not a forward and needs no entry. Also
+// matched: `var m = s.mr`, a parenthesised handle `(s.mr).M()`, and
+// `a, b := s.mr.M(); return a, b`.
+//
+// Known gaps, deliberately not closed: method values (f := s.mr.M; return
+// f()), named results assigned from the call, helpers returning a struct that
+// holds the child, package-level helper functions (func g(s *Service) ...) and
+// closures. Each needs data-flow the shape check does not do.
 //
 // Non-vacuity: at least minMethods exported Service methods are inspected,
 // every injectsStoreState name is still found as a flagged forward, and the
@@ -633,6 +672,9 @@ func TestStoreService_ForwardGuardDiscriminates(t *testing.T) {
 		"local copy":           imp + "func (s *Service) F() error { m := s.fr; return m.F() }\n",
 		"local copy of call":   imp + "func (s *Service) F() error { c := s.checker(); return c.F() }\n",
 		"local copy, chained":  imp + "func (s *Service) F() error { m := s.fr; n := m; return n.F() }\n",
+		"var decl copy":        imp + "func (s *Service) F() error { var m = s.fr; return m.F() }\n",
+		"parenthesised":        imp + "func (s *Service) F() error { return (s.fr).F() }\n",
+		"bind, return same":    imp + "func (s *Service) F() (int, error) { n, err := s.fr.F(); return n, err }\n",
 		"local copy, stmt":     imp + "func (s *Service) F() { m := s.fr; m.F() }\n",
 	}
 	for name, src := range flagged {
@@ -645,6 +687,8 @@ func TestStoreService_ForwardGuardDiscriminates(t *testing.T) {
 		"vcs-backed forward":      imp + "func (s *Service) OntologyAt(a string) error { return s.rh.OntologyAt(a) }\n",
 		"handle accessor":         imp + "func (s *Service) FactsRepo() *facts.Repo { return s.fr }\n",
 		"two statements":          imp + "func (s *Service) F() error { _ = s.n; return s.fr.F() }\n",
+		"bind, return other":      imp + "func (s *Service) F() (int, error) { n, err := s.fr.F(); return n + 1, err }\n",
+		"bind, reorder":           imp + "func (s *Service) F() (int, error) { n, err := s.fr.F(); return err, n }\n",
 		"unexported method":       imp + "func (s *Service) f() error { return s.fr.F() }\n",
 		"non-Service method":      imp + "type Other struct{ fr *facts.Repo }\nfunc (o *Other) F() error { return o.fr.F() }\n",
 		"non-child field":         imp + "func (s *Service) F() int { return s.n.Abs() }\n",

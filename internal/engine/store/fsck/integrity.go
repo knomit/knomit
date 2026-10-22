@@ -1657,8 +1657,7 @@ func (s *Checker) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	return issues
 }
 
-// integrity is the integrity checker behind Checker.Verify and
-// Checker.PruneGeneratedRefs. It holds only what the checks read: the
+// Checker is the integrity checker: Verify and PruneGeneratedRefs. It holds only what the checks read: the
 // repository handler and the two sub-indices. Service.Integrity builds one per
 // call.
 type Checker struct {
