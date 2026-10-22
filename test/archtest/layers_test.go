@@ -260,7 +260,7 @@ func checkLayers(graph map[string][]string, allowed map[string]bool) ([]string, 
 		}
 		for _, dep := range imports {
 			if !strings.HasPrefix(dep, internalPrefix) {
-				if isKnomit(dep) && !iex {
+				if isKnomit(dep) {
 					if sub, listed := graph[dep]; !listed {
 						out = append(out, fmt.Sprintf("%s imports %s: outside package is not in the listing", importer, dep))
 					} else if i := slices.IndexFunc(sub, isKnomit); i >= 0 {
