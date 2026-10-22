@@ -1,170 +1,116 @@
 package web
 
 import (
-	"context"
+	"errors"
 	"net/http"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/engine/store/index"
-
-	"knomit/internal/domain/modelparams"
 )
-
-// countingEmbedder answers every query with the same fixed vector and counts
-// the inferences. The vector's VALUE is irrelevant to these tests; the COUNT is
-// the whole point, and a fixed vector is what makes "hoisted" and "per-mount"
-// results comparable at all.
-type countingEmbedder struct {
-	queries atomic.Int64
-	vec     []float32
-}
-
-func (e *countingEmbedder) EmbedQuery(_ context.Context, _ string) ([]float32, error) {
-	e.queries.Add(1)
-	return e.vec, nil
-}
-
-func (e *countingEmbedder) EmbedDocument(context.Context, string, string) ([]float32, error) {
-	return e.vec, nil
-}
-
-func (e *countingEmbedder) EmbedDocuments(_ context.Context, titles, _ []string) ([][]float32, error) {
-	out := make([][]float32, len(titles))
-	for i := range out {
-		out[i] = e.vec
-	}
-	return out, nil
-}
-
-func (e *countingEmbedder) EmbedShortStrings(_ context.Context, texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i := range out {
-		out[i] = e.vec
-	}
-	return out, nil
-}
-
-func (e *countingEmbedder) Dim() int                           { return len(e.vec) }
-func (e *countingEmbedder) ID() string                         { return "counting-stub" }
-func (e *countingEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
-
-func newCountingEmbedder() *countingEmbedder {
-	return &countingEmbedder{vec: []float32{0.25, -0.5, 0.75}}
-}
 
 // A lens text search embeds the query ONCE no matter how many mounts it fans
 // out to. This is the regression that made /lenses/{lens}/search 88% embedding
-// on a 5-mount lens: the per-mount searchProvider embeds whenever QueryVec is
-// empty, so the handler paid the same ~81 ms inference once per mount.
+// on a 5-mount lens: searchRepo embeds whenever QueryVec is empty, so the
+// handler paid the same ~81 ms inference once per mount.
 //
 // The count is asserted against the MOUNT COUNT, not a literal 1, so the test
 // still fails the day someone re-introduces a per-mount embed on a lens of a
 // different size.
 func TestLensSearch_EmbedsQueryOncePerRequest_NotPerMount(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		"alpha": {sr("kb/a/1.md", "Write fact", 9)},
-		"beta":  {sr("kb/b/2.md", "Read fact", 8)},
-		"gamma": {sr("kb/g/3.md", "Other fact", 7)},
-	}}
-	emb := newCountingEmbedder()
-	s := &Server{Manager: m, Embedder: emb, providers: storeProviders{search: stub}}
+	emb := &cosEmbedder{}
+	mounts := []string{"alpha", "beta", "gamma"}
+	m, _ := newTestLensManagerWith(t, emb, mounts...)
+	writeCosFact(t, m.Get("alpha"), "kb/a/1.md", "Write fact", 0.9, nil)
+	writeCosFact(t, m.Get("beta"), "kb/b/2.md", "Read fact", 0.8, nil)
+	writeCosFact(t, m.Get("gamma"), "kb/g/3.md", "Other fact", 0.7, nil)
+	reads := countMountReads(t, m, mounts, "Search")
+	s := &Server{Manager: m, Embedder: emb}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+	before := emb.queries.Load()
 
 	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
 
-	const mounts = 3
-	if len(stub.lastOpts) != mounts {
-		t.Fatalf("fan-out reached %d mounts, want %d — the count below is only "+
-			"meaningful against the full fan-out", len(stub.lastOpts), mounts)
+	// The count below is only meaningful against the full fan-out.
+	for _, n := range mounts {
+		require.EqualValues(t, 1, reads[n]["Search"].Load(), "mount %s must be searched exactly once", n)
 	}
-	if got := emb.queries.Load(); got != 1 {
-		t.Errorf("EmbedQuery called %d times across %d mounts, want 1", got, mounts)
-	}
-	if len(body.Results) != mounts {
-		t.Errorf("results: got %d, want %d", len(body.Results), mounts)
-	}
+	require.EqualValues(t, 1, emb.queries.Load()-before,
+		"EmbedQuery called more than once across %d mounts", len(mounts))
+	require.Len(t, body.Results, len(mounts))
 }
 
-// Every mount is handed the SAME vector — the one the handler embedded. This is
+// Every mount is handed the SAME vector, the one the handler embedded. This is
 // what makes the hoist result-preserving rather than merely faster: if a future
 // change made the vector mount-dependent (per-mount embedder, per-mount query
 // rewriting), the mounts would no longer be ranking against a common query and
 // RRF would be fusing incomparable lists.
 func TestLensSearch_EveryMountGetsTheSameQueryVector(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-	stub := &lensSearchStub{}
-	emb := newCountingEmbedder()
-	s := &Server{Manager: m, Embedder: emb, providers: storeProviders{search: stub}}
+	emb := &cosEmbedder{}
+	// Every inference answers a different vector, so equal vectors on the
+	// mounts can only mean ONE inference was shared.
+	emb.distinctQueries.Store(true)
+	mounts := []string{"alpha", "beta", "gamma"}
+	m, _ := newTestLensManagerWith(t, emb, mounts...)
+	seen := observeMountSearch(t, m, mounts...)
+	s := &Server{Manager: m, Embedder: emb}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
 
-	getLensFacts(t, r, "/lenses/eng/search?q=x")
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
-	for _, repo := range []string{"alpha", "beta", "gamma"} {
-		opts, ok := stub.lastOpts[repo]
-		if !ok {
-			t.Fatalf("mount %q never reached", repo)
-		}
-		if !float32SliceEqual(opts.QueryVec, emb.vec) {
-			t.Errorf("mount %q got QueryVec %v, want the hoisted %v", repo, opts.QueryVec, emb.vec)
-		}
+	first := seen.of("alpha")
+	require.Len(t, first, 1, "mount alpha was not searched exactly once")
+	require.NotEmpty(t, first[0].QueryVec)
+	for _, n := range mounts {
+		got := seen.of(n)
+		require.Len(t, got, 1, "mount %s was not searched exactly once", n)
+		require.Equal(t, first[0].QueryVec, got[0].QueryVec, "mount %s got a different QueryVec than the hoisted one", n)
 	}
 }
 
 // Hoisting the embed does not perturb the fusion, the dedupe or the totals.
 //
-// Be precise about what this can and cannot show. lensSearchStub answers from
-// canned rows and ignores the embedder entirely, so both arms retrieve the same
-// rows by construction — this is NOT evidence that a hoisted vector retrieves
-// what N per-mount vectors would have. It pins the surrounding machinery: that
-// setting base.QueryVec, and the extra code path that comes with it, leaves the
-// RRF order, the write-mount dedupe and `total` exactly as they were.
-//
-// The other half of the claim lives elsewhere, deliberately:
-//   - that every mount receives the SAME vector — the test below.
-//   - that the same embedder and string produce it, so the N vectors were
-//     already identical — repos.Manager installs one Embedder on every repo
-//     instance (internal/corpus/repos/swapstore.go, builder.go).
-//   - that real retrieval is unchanged end to end — 14 lens reads captured from
-//     the pre- and post-change binaries against the same corpus, byte-for-byte
-//     identical (see the branch's measurement writeup).
+// Both arms run over the same REAL mounts, so this is evidence that a hoisted
+// vector retrieves what N per-mount vectors would have: without a server
+// embedder the handler cannot hoist and every mount embeds for itself (the
+// pre-hoist shape); with one, the vector is computed once, up front. The wire
+// body must not be able to tell the difference, while the inference count can.
 func TestLensSearch_HoistedEmbedMatchesPerMountEmbed(t *testing.T) {
-	rows := map[string][]index.SearchResult{
-		"alpha": {sr("kb/a/1.md", "A one", 3), sr("kb/shared.md", "Shadowed", 99)},
-		"beta":  {sr("kb/shared.md", "Winner-shadowed copy", 50), sr("kb/b/2.md", "B two", 1)},
-	}
-
+	emb := &cosEmbedder{}
 	// ONE manager for both runs. Two managers would mint two sets of repos with
 	// different root commits, and the id12 in every qualified path and source
 	// would differ for reasons that have nothing to do with embedding.
-	m, _ := newTestLensManager(t, "alpha", "beta")
+	m, _ := newTestLensManagerWith(t, emb, "alpha", "beta")
+	writeCosFact(t, m.Get("alpha"), "kb/a/1.md", "A one", 0.6, nil)
+	writeCosFact(t, m.Get("alpha"), "kb/shared.md", "Shadowed", 0.9, nil)
+	writeCosFact(t, m.Get("beta"), "kb/shared.md", "Winner-shadowed copy", 0.95, nil)
+	writeCosFact(t, m.Get("beta"), "kb/b/2.md", "B two", 0.7, nil)
 
-	// Without a server embedder the handler cannot hoist and every mount is left
-	// to embed for itself — the pre-hoist shape. With one, the vector is computed
-	// once, up front. The wire body must not be able to tell the difference.
-	perMount := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{byRepo: rows}}}
+	perMount := &Server{Manager: m}
 	r := perMount.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	before := emb.queries.Load()
 	withoutHoist := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+	perMountQueries := emb.queries.Load() - before
 
-	hoisted := &Server{Manager: m, Embedder: newCountingEmbedder(),
-		providers: storeProviders{search: &lensSearchStub{byRepo: rows}}}
-	withHoist := decodeLensSearch(t,
-		getLensFacts(t, hoisted.NewAPIRouter(), "/lenses/eng/search?q=x"))
+	hoisted := &Server{Manager: m, Embedder: emb}
+	before = emb.queries.Load()
+	withHoist := decodeLensSearch(t, getLensFacts(t, hoisted.NewAPIRouter(), "/lenses/eng/search?q=x"))
+	hoistedQueries := emb.queries.Load() - before
 
-	if withHoist.Total != withoutHoist.Total {
-		t.Errorf("total: hoisted %d, per-mount %d", withHoist.Total, withoutHoist.Total)
-	}
-	if !reflect.DeepEqual(withHoist.Results, withoutHoist.Results) {
-		t.Errorf("result rows differ:\n hoisted   %+v\n per-mount %+v",
-			withHoist.Results, withoutHoist.Results)
-	}
+	// The arms really differ in how they embed, and the corpus really answers.
+	require.EqualValues(t, 2, perMountQueries, "without a server embedder each of the 2 mounts embeds")
+	require.EqualValues(t, 1, hoistedQueries)
+	require.Len(t, withoutHoist.Results, 3, "one shared path is deduped to the write mount's copy")
+	require.Equal(t, withoutHoist.Total, withHoist.Total)
+	require.Equal(t, withoutHoist.Results, withHoist.Results)
 }
 
 // /lenses/{lens}/facts?q= is the SAME fan-out with the same defect — the
@@ -182,7 +128,7 @@ func TestLensFacts_EmbedsQueryOncePerRequest_AndNotAtAllWithoutText(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
 			stub := &lensFactsStub{}
-			emb := newCountingEmbedder()
+			emb := &cosEmbedder{}
 			s := &Server{Manager: m, Embedder: emb, providers: storeProviders{factsCollection: stub}}
 			r := s.NewAPIRouter()
 			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
@@ -194,18 +140,6 @@ func TestLensFacts_EmbedsQueryOncePerRequest_AndNotAtAllWithoutText(t *testing.T
 			}
 		})
 	}
-}
-
-func float32SliceEqual(a, b []float32) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // ── concurrent search fan-out: fusion order and §9.1 ────────────────────────
@@ -221,16 +155,15 @@ func float32SliceEqual(a, b []float32) bool {
 // with a read mount that finishes first. Correct behaviour: the write mount
 // still wins that path, and the fused order is unchanged.
 func TestLensSearch_FusionIsBindingOrderNotCompletionOrder(t *testing.T) {
-	stub := &lensSearchStub{
-		byRepo: map[string][]index.SearchResult{
-			"alpha": {sr("kb/shared.md", "write copy", 1), sr("kb/a.md", "alpha only", 2)},
-			"beta":  {sr("kb/shared.md", "read copy", 99), sr("kb/b.md", "beta only", 98)},
-		},
-		// alpha (the write mount, index 0) finishes last.
-		delayByRepo: map[string]time.Duration{"alpha": 50 * time.Millisecond},
-	}
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	emb := &cosEmbedder{}
+	m, _ := newTestLensManagerWith(t, emb, "alpha", "beta")
+	writeCosFact(t, m.Get("alpha"), "kb/shared.md", "write copy", 0.9, nil)
+	writeCosFact(t, m.Get("alpha"), "kb/a.md", "alpha only", 0.8, nil)
+	writeCosFact(t, m.Get("beta"), "kb/shared.md", "read copy", 0.95, nil)
+	writeCosFact(t, m.Get("beta"), "kb/b.md", "beta only", 0.85, nil)
+	// alpha (the write mount, index 0) finishes last.
+	slowMountRead(t, m, "alpha", "Search", 50*time.Millisecond)
+	s := &Server{Manager: m, Embedder: emb}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -252,24 +185,37 @@ func TestLensSearch_FusionIsBindingOrderNotCompletionOrder(t *testing.T) {
 			t.Errorf("shadowed copy survived as %q — both copies were emitted", row.Path)
 		}
 	}
+	// RRF over per-mount ranks (alpha: shared, a; beta: shared, b): the two
+	// rank-0 rows lead (shared resolved to the write copy), then the rank-1 rows
+	// in mount order.
+	var titles []string
+	for _, row := range body.Results {
+		titles = append(titles, row.Title)
+	}
+	require.Equal(t, []string{"write copy", "alpha only", "beta only"}, titles)
 }
 
 // §9.1 under concurrency on the search fan-out: one failing mount fails the
 // whole request, even when the healthy mounts are still in flight.
 func TestLensSearch_MountErrorFailsWholeRequestUnderConcurrency(t *testing.T) {
-	stub := &lensSearchStub{
-		byRepo:      map[string][]index.SearchResult{"alpha": {sr("kb/a.md", "alpha", 1)}},
-		errRepo:     "beta",
-		delayByRepo: map[string]time.Duration{"alpha": 40 * time.Millisecond},
-	}
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	emb := &cosEmbedder{}
+	m, _ := newTestLensManagerWith(t, emb, "alpha", "beta")
+	writeCosFact(t, m.Get("alpha"), "kb/a.md", "alpha", 0.9, nil)
+	var hits atomic.Int64
+	sentinel := errors.New("db on fire: beta")
+	failMountRead(t, m, "beta", index.ReadSearch, sentinel, &hits)
+	// The healthy mount is still in flight when beta fails.
+	slowMountRead(t, m, "alpha", "Search", 40*time.Millisecond)
+	s := &Server{Manager: m, Embedder: emb}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
 	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want 500 — a lens must never silently shrink its read "+
 			"set (RFC §9.1); body=%s", rec.Code, rec.Body.String())
 	}
+	require.Contains(t, rec.Body.String(), sentinel.Error())
+	require.EqualValues(t, 1, hits.Load())
 }

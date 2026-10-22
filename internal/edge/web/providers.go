@@ -19,7 +19,6 @@ type storeProviders struct {
 	factReader      FactReader
 	factWriter      FactWriter
 	topicLister     TopicLister
-	search          searchProvider
 	commits         commitsProvider
 	factSub         factSubProvider
 	motifs          motifsProvider
@@ -42,9 +41,6 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.topicLister == nil {
 		p.topicLister = defaultTopicLister{}
-	}
-	if p.search == nil {
-		p.search = defaultSearchProvider{}
 	}
 	if p.motifs == nil {
 		p.motifs = defaultMotifsProvider{}

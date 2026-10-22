@@ -17,6 +17,7 @@ import (
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/model"
 )
 
 // newRealStoreManager is a Manager whose repos each hold a REAL store (agent
@@ -25,16 +26,27 @@ import (
 // hook rather than a stub. It returns the manager and the stores by repo name.
 func newRealStoreManager(t *testing.T, names ...string) (*repos.Manager, map[string]*store.Service) {
 	t.Helper()
+	return newRealStoreManagerWith(t, nil, names...)
+}
+
+// newRealStoreManagerWith is newRealStoreManager whose stores and repo
+// instances embed with emb (nil: no embedder, as before), so a text search over
+// them runs the real vector step.
+func newRealStoreManagerWith(t *testing.T, emb model.BatchEmbedder, names ...string) (*repos.Manager, map[string]*store.Service) {
+	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{})
 	svcs := map[string]*store.Service{}
 	for _, name := range names {
 		svc, err := store.Open(filepath.Join(t.TempDir(), name+".db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
+		cfg := repos.TestInstanceConfig{Name: name, AgentBranch: "agent/test", Svc: svc}
+		if emb != nil {
+			svc.SetEmbedder(emb)
+			cfg.Embedder = emb
+		}
 		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
-		m.Set(name, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-			Name: name, AgentBranch: "agent/test", Svc: svc,
-		}))
+		m.Set(name, repos.NewTestInstanceWithDeps(cfg))
 		svcs[name] = svc
 	}
 	return m, svcs

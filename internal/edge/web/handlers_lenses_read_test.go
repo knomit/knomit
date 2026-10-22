@@ -15,12 +15,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
-	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/vocab"
@@ -29,7 +27,6 @@ import (
 	"knomit/internal/corpus/repos"
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
-	"knomit/internal/engine/store/facts"
 )
 
 // lensFactsStub is a per-repo factsCollectionProvider: each mount's RecentFacts
@@ -490,63 +487,6 @@ func TestLensFacts_EmptyMounts(t *testing.T) {
 
 // ── lens union search (GET /lenses/{lens}/search) ────────────────────────────
 
-// lensSearchStub is a per-repo searchProvider: each mount's Search call is
-// answered from byRepo keyed by the repo's name, so a single stub drives the
-// whole fan-out. It records the last SearchOptions and whether a non-nil
-// embedder was forwarded, per repo.
-type lensSearchStub struct {
-	byRepo map[string][]index.SearchResult
-	// delayByRepo staggers per-mount latency. Under a concurrent fan-out this
-	// decides completion order — which the fused response must NOT depend on,
-	// because a mount's INDEX is its identity to FuseRRF and WriteFirstWinners.
-	delayByRepo map[string]time.Duration
-	// errRepo makes that one mount fail.
-	errRepo string
-	// mu guards the recording maps. The lens fan-out calls this provider ONCE
-	// PER MOUNT CONCURRENTLY, so a stub that records what it saw is shared
-	// mutable state across goroutines — the production provider is stateless and
-	// needs no such thing. Without the lock the recording, not the code under
-	// test, is the race.
-	mu       sync.Mutex
-	lastOpts map[string]index.SearchOptions
-	embSeen  map[string]bool
-}
-
-func (s *lensSearchStub) Search(
-	_ context.Context,
-	ri *repos.RepoInstance, emb model.Embedder, _ string, opts index.SearchOptions,
-) ([]index.SearchResult, error) {
-	s.mu.Lock()
-	if s.lastOpts == nil {
-		s.lastOpts = map[string]index.SearchOptions{}
-	}
-	if s.embSeen == nil {
-		s.embSeen = map[string]bool{}
-	}
-	s.lastOpts[ri.Name()] = opts
-	s.embSeen[ri.Name()] = emb != nil
-	s.mu.Unlock()
-	if d := s.delayByRepo[ri.Name()]; d > 0 {
-		time.Sleep(d)
-	}
-	if s.errRepo != "" && ri.Name() == s.errRepo {
-		return nil, errors.New("db on fire: " + ri.Name())
-	}
-	return s.byRepo[ri.Name()], nil
-}
-
-// sr builds a minimal search result: a repo-relative path, title, and native
-// relevance score. The score magnitude is what a naive interleave would sort
-// by; RRF ignores it and orders by per-mount rank instead.
-func sr(path, title string, score float64) index.SearchResult {
-	return index.SearchResult{
-		FactWithBody: facts.FactWithBody{
-			FactRecord: facts.FactRecord{Path: path, Title: title, Type: "observation"},
-		},
-		Score: score,
-	}
-}
-
 // lensSearchBody mirrors the lens union search wire shape.
 type lensSearchBody struct {
 	Results []struct {
@@ -584,16 +524,11 @@ func decodeLensSearch(t *testing.T, rec *httptest.ResponseRecorder) lensSearchBo
 // the read mount's copy scores HIGHER (so it ranks first under fusion). The
 // shadowed higher-ranked copy must not appear at all.
 func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
-	m, _ := newTestLensManager(t, "zulu", "alpha") // write=zulu sorts after read=alpha
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		"zulu":  {sr("kb/x/1.md", "Write copy", 10)},
-		"alpha": {sr("kb/x/1.md", "Read copy", 99)}, // higher score, would rank first
-	}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+	env := searchLens(t, storeProviders{}, "zulu", "alpha") // write=zulu sorts after read=alpha
+	writeCosFact(t, env.m.Get("zulu"), "kb/x/1.md", "Write copy", 0.5, nil)
+	writeCosFact(t, env.m.Get("alpha"), "kb/x/1.md", "Read copy", 0.99, nil) // higher score, would rank first
 
-	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+	body := decodeLensSearch(t, env.get(t, "/lenses/eng/search?q=x"))
 	if len(body.Results) != 1 {
 		t.Fatalf("results: got %d, want 1 (deduped); body=%+v", len(body.Results), body)
 	}
@@ -615,26 +550,19 @@ func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
 // The fused order is reciprocal-rank fusion, NOT a naive interleave by native
 // score. Constructed so the two orderings disagree. Mounts fan out in Reads()
 // order — sorted by repo name — so alpha is mount 0, beta is mount 1. alpha's
-// only fact ranks #0 in its mount with a LOW native score (5); beta has a
-// high-score #0 (100) and a mid-score #1 (50). RRF interleaves by rank —
+// only fact ranks #0 in its mount with a LOW native score (50); beta has a
+// high-score #0 (99) and a mid-score #1 (80). RRF interleaves by rank —
 // alpha#0, beta#0, beta#1 — so alpha's low-score fact LEADS. A naive score sort
-// would order beta-top(100), beta-second(50), alpha-top(5), putting alpha LAST.
+// would order beta-top(99), beta-second(80), alpha-top(50), putting alpha LAST.
 // This test fails under naive interleaving.
 func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		// Reads() is sorted by repo name → alpha is mount 0, beta is mount 1.
-		"alpha": {sr("kb/a/0.md", "alpha-top", 5)}, // rank 0, LOW score
-		"beta": {
-			sr("kb/b/0.md", "beta-top", 100),
-			sr("kb/b/1.md", "beta-second", 50),
-		},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	// Reads() is sorted by repo name → alpha is mount 0, beta is mount 1.
+	writeCosFact(t, env.m.Get("alpha"), "kb/a/0.md", "alpha-top", 0.5, nil) // rank 0, LOW score
+	writeCosFact(t, env.m.Get("beta"), "kb/b/0.md", "beta-top", 0.99, nil)
+	writeCosFact(t, env.m.Get("beta"), "kb/b/1.md", "beta-second", 0.8, nil)
 
-	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+	body := decodeLensSearch(t, env.get(t, "/lenses/eng/search?q=x"))
 	got := make([]string, len(body.Results))
 	for i, res := range body.Results {
 		got[i] = res.Title
@@ -653,19 +581,14 @@ func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
 // A fact that lives only on a read mount is qualified with kb://<id12>/… and
 // carries that mount's source identity.
 func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		"beta": {sr("kb/y/2.md", "Read only", 42)},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	writeCosFact(t, env.m.Get("beta"), "kb/y/2.md", "Read only", 0.9, nil)
 
-	beta := m.Get("beta")
+	beta := env.m.Get("beta")
 	wantID := federate.ID12(beta.ID())
 	wantPath := "kb://" + wantID + "/kb/y/2.md"
 
-	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+	body := decodeLensSearch(t, env.get(t, "/lenses/eng/search?q=x"))
 	if len(body.Results) != 1 {
 		t.Fatalf("results: got %d, want 1; body=%+v", len(body.Results), body)
 	}
@@ -681,16 +604,11 @@ func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
 // repo=<name> narrows the fan-out to the named mount(s); other mounts' results
 // do not appear.
 func TestLensSearch_RepoFilterNarrows(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		"alpha": {sr("kb/a/1.md", "Write fact", 100)},
-		"beta":  {sr("kb/b/2.md", "Read fact", 10)},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	writeCosFact(t, env.m.Get("alpha"), "kb/a/1.md", "Write fact", 0.99, nil)
+	writeCosFact(t, env.m.Get("beta"), "kb/b/2.md", "Read fact", 0.8, nil)
 
-	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x&repo=beta"))
+	body := decodeLensSearch(t, env.get(t, "/lenses/eng/search?q=x&repo=beta"))
 	if len(body.Results) != 1 {
 		t.Fatalf("results: got %d, want 1; body=%+v", len(body.Results), body)
 	}
@@ -701,12 +619,9 @@ func TestLensSearch_RepoFilterNarrows(t *testing.T) {
 
 // An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
 func TestLensSearch_UnknownRepoFilter422(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
 
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&repo=ghost")
+	rec := env.get(t, "/lenses/eng/search?q=x&repo=ghost")
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -716,38 +631,50 @@ func TestLensSearch_UnknownRepoFilter422(t *testing.T) {
 }
 
 // With no embedder handed to the handler (Server.Embedder nil) the handler does
-// not hoist a query vector: it forwards the nil embedder to the provider exactly
-// as the repo /search handler does, and each mount's own path applies. Text
-// search is vector-only — there is no keyword fallback — so what this pins is
-// that the handler itself neither fails nor embeds when it has no embedder, and
-// that the (stub) mount's rows are served. Whether a store with no embedder can
-// answer a text query is the store's concern, not this handler's.
+// not hoist a query vector: each mount's own embedder answers for itself, and
+// the mount rows are served. A store with no embedder at all has no vectors to
+// search, so a text query answers an empty 200 (the store's documented
+// exception), never an error from this handler.
 func TestLensSearch_EmbedderOffFallback(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		"beta": {sr("kb/b/2.md", "Read fact", 10)},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}} // Embedder left nil
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	t.Run("server without an embedder, mounts with one", func(t *testing.T) {
+		emb := &cosEmbedder{}
+		m, _ := newTestLensManagerWith(t, emb, "alpha", "beta")
+		writeCosFact(t, m.Get("beta"), "kb/b/2.md", "Read fact", 0.9, nil)
+		seen := observeMountSearch(t, m, "alpha", "beta")
+		r := (&Server{Manager: m}).NewAPIRouter() // Embedder left nil
+		createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+		before := emb.queries.Load()
 
-	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
-	if len(body.Results) != 1 {
-		t.Fatalf("results: got %d, want 1; body=%+v", len(body.Results), body)
-	}
-	if stub.embSeen["beta"] {
-		t.Error("expected nil embedder forwarded to provider (embeddings disabled), but a non-nil one was seen")
-	}
+		body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+
+		if len(body.Results) != 1 {
+			t.Fatalf("results: got %d, want 1; body=%+v", len(body.Results), body)
+		}
+		for _, n := range []string{"alpha", "beta"} {
+			got := seen.of(n)
+			require.Len(t, got, 1)
+			require.Empty(t, got[0].QueryVec, "mount %s was handed a hoisted vector although the server has no embedder", n)
+		}
+		require.EqualValues(t, 2, emb.queries.Load()-before, "each mount embeds for itself")
+	})
+	t.Run("no embedder anywhere", func(t *testing.T) {
+		m, _ := newTestLensManager(t, "alpha", "beta")
+		writeCosFact(t, m.Get("beta"), "kb/b/2.md", "Read fact", 0.9, nil)
+		r := (&Server{Manager: m}).NewAPIRouter()
+		createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+		body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+
+		require.NotNil(t, body.Results)
+		require.Empty(t, body.Results)
+	})
 }
 
 // An empty union (no mount returns results) yields results:[] and total:0, never null.
 func TestLensSearch_EmptyMounts(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
 
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+	rec := env.get(t, "/lenses/eng/search?q=x")
 	body := decodeLensSearch(t, rec)
 	if body.Total != 0 {
 		t.Errorf("total: got %d, want 0", body.Total)
@@ -760,7 +687,7 @@ func TestLensSearch_EmptyMounts(t *testing.T) {
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensSearch_UnknownLens404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, providers: storeProviders{search: &lensSearchStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 
 	rec := getLensFacts(t, r, "/lenses/missing/search?q=x")
@@ -1571,45 +1498,54 @@ func TestLensFacts_LooseMotifTierRejected(t *testing.T) {
 	}
 }
 
-// Same two properties on the relevance twin.
+// Same two properties on the relevance twin: both mounts are narrowed by the
+// motif tier. The corpus separates the exact tier from the token-2 tier on each
+// mount (a fact sharing two stemmed tokens with the query but not its spelling),
+// so a mount that was not handed the tier answers differently from one that was.
 func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-2")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	spell := func(m string) func(*knomitfact.Fact) { return func(f *knomitfact.Fact) { f.Motifs = []string{m} } }
+	writeCosFact(t, env.m.Get("alpha"), "kb/a1.md", "alpha exact", 0.9, spell("silent-fallback-path"))
+	writeCosFact(t, env.m.Get("alpha"), "kb/a2.md", "alpha near", 0.9, spell("silent-fallback-retry"))
+	writeCosFact(t, env.m.Get("beta"), "kb/b1.md", "beta near", 0.9, spell("silent-fallback-timeout"))
+	writeCosFact(t, env.m.Get("beta"), "kb/b2.md", "beta unrelated", 0.9, spell("scope-creep"))
+	reads := countMountReads(t, env.m, []string{"alpha", "beta"}, "Search")
+	title := func(url string) []string {
+		rec := env.get(t, url)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var got []string
+		for _, r := range decodeLensSearch(t, rec).Results {
+			got = append(got, r.Title)
+		}
+		sort.Strings(got)
+		return got
 	}
-	for _, repo := range []string{"alpha", "beta"} {
-		opts, ok := stub.lastOpts[repo]
-		if !ok {
-			t.Fatalf("mount %q was never queried", repo)
-		}
-		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
-			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
-		}
-		if opts.MotifMatch != index.MotifMatchToken2 {
-			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
-		}
+
+	require.Equal(t, []string{"alpha exact"}, title("/lenses/eng/search?q=x&motifs=silent-fallback-path&motif_match=exact"))
+	require.Equal(t, []string{"alpha exact", "alpha near", "beta near"},
+		title("/lenses/eng/search?q=x&motifs=silent-fallback-path&motif_match=token-2"))
+	for _, n := range []string{"alpha", "beta"} {
+		require.EqualValues(t, 2, reads[n]["Search"].Load(), "mount %s must be searched by both requests", n)
 	}
 }
 
 func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	reads := countMountReads(t, env.m, []string{"alpha", "beta"}, "Search")
 
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-1")
+	rec := env.get(t, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-1")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
-	if len(stub.lastOpts) != 0 {
-		t.Errorf("mounts were queried despite the rejection: %v", stub.lastOpts)
+	for _, n := range []string{"alpha", "beta"} {
+		require.EqualValues(t, 0, reads[n]["Search"].Load(), "mount %s was queried despite the rejection", n)
+	}
+
+	// A permitted tier reaches every mount once, so the counter can move.
+	rec = env.get(t, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-2")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	for _, n := range []string{"alpha", "beta"} {
+		require.EqualValues(t, 1, reads[n]["Search"].Load(), "mount %s", n)
 	}
 }
 
@@ -1648,17 +1584,11 @@ func TestLensFacts_MotifsOnTheWire(t *testing.T) {
 }
 
 func TestLensSearch_MotifsOnTheWire(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha")
-	withMotif := sr("kb/a.md", "Carries a motif", 10)
-	withMotif.Motifs = []string{"a-b"}
-	stub := &lensSearchStub{byRepo: map[string][]index.SearchResult{
-		"alpha": {withMotif, sr("kb/b.md", "Carries none", 5)},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha"}`)
+	env := searchLens(t, storeProviders{}, "alpha")
+	writeCosFact(t, env.m.Get("alpha"), "kb/a.md", "Carries a motif", 0.9, func(f *knomitfact.Fact) { f.Motifs = []string{"a-b"} })
+	writeCosFact(t, env.m.Get("alpha"), "kb/b.md", "Carries none", 0.8, nil)
 
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+	rec := env.get(t, "/lenses/eng/search?q=x")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -1715,7 +1645,7 @@ func (s *motifResolvingLensStub) resolve(repo string, terms []string) map[string
 
 func (s *motifResolvingLensStub) carriers(repo string, opts index.SearchOptions) []index.RecentFactEntry {
 	// Recorded under the lock: the lens search fan-out calls this stub once per
-	// mount concurrently (see lensSearchStub's note).
+	// mount concurrently (the facts fan-out may call it concurrently).
 	s.mu.Lock()
 	if s.lastOpts == nil {
 		s.lastOpts = map[string]index.SearchOptions{}
@@ -1745,22 +1675,6 @@ func (s *motifResolvingLensStub) RecentFacts(
 ) ([]index.RecentFactEntry, int, error) {
 	e := s.carriers(ri.Name(), opts)
 	return e, len(e), nil
-}
-
-func (s *motifResolvingLensStub) Search(
-	_ context.Context,
-	ri *repos.RepoInstance, _ model.Embedder, _ string, opts index.SearchOptions,
-) ([]index.SearchResult, error) {
-	var out []index.SearchResult
-	for _, e := range s.carriers(ri.Name(), opts) {
-		out = append(out, index.SearchResult{
-			FactWithBody: facts.FactWithBody{
-				FactRecord: facts.FactRecord{Path: e.Path, Title: e.Title, Type: "observation", Motifs: e.Motifs},
-			},
-			Score: float64(e.CommittedAt),
-		})
-	}
-	return out, nil
 }
 
 // divergentVocabularies builds the asymmetry the semantics turn on: mount alpha
@@ -1877,15 +1791,19 @@ func TestLensFacts_TheMergeBindsReadsAndRewritesNothing(t *testing.T) {
 }
 
 // The /search twin of the inversion above — the same rule, the other envelope.
+// The mounts are real stores holding the same facts as divergentVocabularies;
+// only the lens-wide vocabulary (the motifs provider) is still supplied. Each
+// store matches the spellings it is handed, so what the lens widens the query
+// to decides who answers.
 func TestLensSearch_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	stub := divergentVocabularies()
-	s := &Server{Manager: m, providers: storeProviders{
-		search: stub, motifs: divergentVocabulariesUnion()}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	env := searchLens(t, storeProviders{motifs: divergentVocabulariesUnion()}, "alpha", "beta")
+	motifs := func(m ...string) func(*knomitfact.Fact) { return func(f *knomitfact.Fact) { f.Motifs = m } }
+	writeCosFact(t, env.m.Get("alpha"), "kb/alpha-aliased.md", "Alpha aliased", 0.9, motifs("configuration-drifts"))
+	writeCosFact(t, env.m.Get("beta"), "kb/beta-exact.md", "Beta exact", 0.8, motifs("config-drift"))
+	writeCosFact(t, env.m.Get("beta"), "kb/beta-aliased.md", "Beta aliased", 0.7, motifs("configuration-drifts"))
+	writeCosFact(t, env.m.Get("beta"), "kb/beta-other.md", "Beta other", 0.7, motifs("something-else"))
 
-	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=config-drift")
+	rec := env.get(t, "/lenses/eng/search?q=x&motifs=config-drift")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -1909,6 +1827,9 @@ func TestLensSearch_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
 	}
 	if !titles["Beta exact"] {
 		t.Errorf("the non-merging mount contributed nothing at all: %v", titles)
+	}
+	if titles["Beta other"] {
+		t.Errorf("a fact outside the shape answered: %v", titles)
 	}
 }
 

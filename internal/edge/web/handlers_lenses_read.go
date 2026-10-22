@@ -110,7 +110,7 @@ type lensFactsResponse struct {
 // string.
 //
 // Without it the cost is real and it is the whole request: the per-mount
-// searchProvider embeds whenever SearchOptions.QueryVec is empty
+// searchRepo embeds whenever SearchOptions.QueryVec is empty
 // (handlers_search_hal.go), so a 5-mount lens ran the identical ~81 ms ONNX
 // inference five times — 88% of a 464 ms /lenses/{lens}/search, and the same
 // again on /lenses/{lens}/facts?q=. The repo-scoped twins never showed it
@@ -813,7 +813,7 @@ func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float6
 // the facts collection dedupes. A shadowed copy is dropped even when it ranks
 // higher in the fused order than the winner. Read-mount paths are qualified
 // (kb://<id12>/…); each row carries its source {repo,id,branch}.
-func handleHALLensSearch(provider searchProvider, emb model.Embedder, motifsP motifsProvider) http.HandlerFunc {
+func handleHALLensSearch(emb model.Embedder, motifsP motifsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -936,7 +936,7 @@ func handleHALLensSearch(provider searchProvider, emb model.Embedder, motifsP mo
 			q := base
 			q.Path = t.Path
 			q.Diag = &diags[i]
-			res, err := provider.Search(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
+			res, err := searchRepo(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
 			if err != nil {
 				return "Search failed", err
 			}

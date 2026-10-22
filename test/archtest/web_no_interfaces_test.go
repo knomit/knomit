@@ -26,7 +26,6 @@ var webInterfaceAllowlist = map[string]string{
 	"FactReader":              "provider seam, deleted with the fact-read handler's rewrite",
 	"FactWriter":              "provider seam, deleted with the fact-write handler's rewrite",
 	"TopicLister":             "provider seam, deleted with the topics handler's rewrite",
-	"searchProvider":          "provider seam, deleted with the search handler's rewrite",
 	"commitsProvider":         "provider seam, deleted with the commits handler's rewrite",
 	"factSubProvider":         "provider seam, deleted with the fact sub-resource handler's rewrite",
 	"motifsProvider":          "provider seam, deleted with the motifs handler's rewrite",

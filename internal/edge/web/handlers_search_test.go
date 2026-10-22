@@ -1,241 +1,162 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
+	"sort"
 	"testing"
 
-	"knomit/internal/engine/store/model"
+	"github.com/stretchr/testify/require"
 
-	"knomit/internal/engine/store/index"
-
-	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
-	"knomit/internal/engine/store/facts"
 )
 
-// stubSearchProvider implements searchProvider for tests.
-type stubSearchProvider struct {
-	results []index.SearchResult
-	err     error
-	// diag, when set, is what the stub reports through SearchOptions.Diag.
-	diag *index.SearchDiag
-	// lastQuery lets tests assert what query was built
-	lastQuery index.SearchOptions
+// searchWire mirrors the repo /search wire shape.
+type searchWire struct {
+	Count    int         `json:"count"`
+	Notice   string      `json:"notice"`
+	Links    hal.LinkMap `json:"_links"`
+	Embedded struct {
+		Results []struct {
+			Path       string      `json:"path"`
+			Title      string      `json:"title"`
+			Score      float64     `json:"score"`
+			Kind       string      `json:"kind"`
+			Type       string      `json:"type"`
+			Domain     []string    `json:"domain"`
+			Entities   []string    `json:"entities"`
+			Motifs     []string    `json:"motifs"`
+			Confidence float64     `json:"confidence"`
+			Body       *string     `json:"body,omitempty"`
+			Links      hal.LinkMap `json:"_links"`
+		} `json:"results"`
+	} `json:"_embedded"`
 }
 
-func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ model.Embedder, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
-	s.lastQuery = q
-	if s.diag != nil && q.Diag != nil {
-		*q.Diag = *s.diag
+// paths is the result paths, in served order.
+func (w searchWire) paths() []string {
+	out := make([]string, 0, len(w.Embedded.Results))
+	for _, r := range w.Embedded.Results {
+		out = append(out, r.Path)
 	}
-	return s.results, s.err
+	return out
 }
+
+// searchRepoServer is a Server over one real repo, "alpha", whose store embeds
+// with a fresh cosEmbedder (also the Server's embedder, as in production).
+func searchRepoServer(t *testing.T) (*Server, *cosEmbedder) {
+	t.Helper()
+	emb := &cosEmbedder{}
+	m, _ := newRealStoreManagerWith(t, emb, "alpha")
+	return &Server{Manager: m, Embedder: emb}, emb
+}
+
+func decodeSearch(t *testing.T, rec *httptest.ResponseRecorder) searchWire {
+	t.Helper()
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body searchWire
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), rec.Body.String())
+	return body
+}
+
+const alphaSearch = "/repos/alpha/branches/agent:test/search"
 
 func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
-	provider := &stubSearchProvider{
-		results: []index.SearchResult{
-			{
-				FactWithBody: facts.FactWithBody{
-					FactRecord: facts.FactRecord{
-						Path:       "know/ai/ml/abc123.md",
-						Title:      "Attention Is All You Need",
-						Type:       "observation",
-						Domain:     []string{"ai", "ml"},
-						Entities:   []string{"transformer"},
-						Confidence: 0.9,
-					},
-				},
-				Score: 87.5,
-			},
-			{
-				FactWithBody: facts.FactWithBody{
-					FactRecord: facts.FactRecord{
-						Path:       "know/ai/nlp/def456.md",
-						Title:      "BERT Overview",
-						Type:       "claim",
-						Domain:     []string{"ai"},
-						Entities:   []string{"bert"},
-						Confidence: 0.8,
-					},
-				},
-				Score: 72.0,
-			},
-		},
-	}
+	s, emb := searchRepoServer(t)
+	ri := s.Manager.Get("alpha")
+	writeCosFact(t, ri, "kb/ai/ml/abc123.md", "Attention Is All You Need", 0.9, func(f *fact.Fact) {
+		f.Domain = []string{"ai", "ml"}
+		f.Entities = []string{"transformer"}
+	})
+	writeCosFact(t, ri, "kb/ai/nlp/def456.md", "BERT Overview", 0.8, func(f *fact.Fact) {
+		f.Domain = []string{"ai"}
+		f.Entities = []string{"bert"}
+		f.Confidence = 0.8
+	})
+	// Below the model's recall floor (0.40): a search must not serve it.
+	writeCosFact(t, ri, "kb/ai/other/zzz999.md", "Unrelated", 0.2, nil)
 
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=attention&limit=10",
-		nil,
-	)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
+	rec := getAPI(t, s, alphaSearch+"?q=attention&limit=10")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
 		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
 	}
+	var body searchWire
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 
-	var body struct {
-		Count    int         `json:"count"`
-		Links    hal.LinkMap `json:"_links"`
-		Embedded struct {
-			Results []struct {
-				Path       string      `json:"path"`
-				Title      string      `json:"title"`
-				Score      float64     `json:"score"`
-				Type       string      `json:"type"`
-				Domain     []string    `json:"domain"`
-				Entities   []string    `json:"entities"`
-				Confidence float64     `json:"confidence"`
-				Body       *string     `json:"body,omitempty"`
-				Links      hal.LinkMap `json:"_links"`
-			} `json:"results"`
-		} `json:"_embedded"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if body.Count != 2 {
-		t.Errorf("count: %d, want 2", body.Count)
-	}
-	if _, ok := body.Links["self"]; !ok {
-		t.Error("missing self link on collection")
-	}
-	if len(body.Embedded.Results) != 2 {
-		t.Fatalf("embedded results: %d, want 2", len(body.Embedded.Results))
-	}
+	require.Equal(t, 2, body.Count)
+	require.Contains(t, body.Links, "self")
+	require.Equal(t, []string{"kb/ai/ml/abc123.md", "kb/ai/nlp/def456.md"}, body.paths())
 
 	item := body.Embedded.Results[0]
-	if item.Path != "know/ai/ml/abc123.md" {
-		t.Errorf("path: %q", item.Path)
-	}
-	if item.Title != "Attention Is All You Need" {
-		t.Errorf("title: %q", item.Title)
-	}
-	if item.Score != 87.5 {
-		t.Errorf("score: %v", item.Score)
-	}
-	if item.Type != "observation" {
-		t.Errorf("type: %q", item.Type)
-	}
-	if item.Body != nil {
-		t.Error("body must be omitted from collection items")
-	}
+	require.Equal(t, "Attention Is All You Need", item.Title)
+	require.InDelta(t, 90, item.Score, 0.01)
+	require.InDelta(t, 80, body.Embedded.Results[1].Score, 0.01)
+	require.Equal(t, "observation", item.Type)
+	require.Equal(t, []string{"ai", "ml"}, item.Domain)
+	require.Equal(t, []string{"transformer"}, item.Entities)
+	require.Nil(t, item.Body, "body must be omitted from collection items")
+	wantSelf := APIBase + "/repos/alpha/branches/agent:test/facts/kb/ai/ml/abc123.md"
+	require.Equal(t, wantSelf, item.Links["self"].Href)
 
-	// Each item must have a _links.self pointing to the fact URL.
-	wantSelf := APIBase + "/repos/alpha/branches/agent:test/facts/know/ai/ml/abc123.md"
-	if got := item.Links["self"].Href; got != wantSelf {
-		t.Errorf("item self link: got %q, want %q", got, wantSelf)
-	}
-
-	// Assert the query was wired correctly.
-	if provider.lastQuery.Text != "attention" {
-		t.Errorf("query text: %q", provider.lastQuery.Text)
-	}
-	if provider.lastQuery.Limit != 10 {
-		t.Errorf("limit: %d, want 10", provider.lastQuery.Limit)
-	}
+	// The query text reached the embedder, and limit reached the store.
+	require.Equal(t, "attention", emb.lastQueryText())
+	one := decodeSearch(t, getAPI(t, s, alphaSearch+"?q=attention&limit=1"))
+	require.Equal(t, []string{"kb/ai/ml/abc123.md"}, one.paths())
 }
 
 func TestHandleSearch_EmptyResults(t *testing.T) {
-	provider := &stubSearchProvider{results: nil}
+	s, _ := searchRepoServer(t)
+	// One fact, but below the recall floor: nothing matches.
+	writeCosFact(t, s.Manager.Get("alpha"), "kb/a/one.md", "Nothing like the query", 0.1, nil)
 
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=nothing",
-		nil,
-	)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
+	rec := getAPI(t, s, alphaSearch+"?q=nothing")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
 		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
 	}
-
 	var body struct {
 		Count    int `json:"count"`
 		Embedded struct {
 			Results []any `json:"results"`
 		} `json:"_embedded"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body.Count != 0 {
-		t.Errorf("count: %d, want 0", body.Count)
-	}
-	if len(body.Embedded.Results) != 0 {
-		t.Errorf("results: %d, want 0", len(body.Embedded.Results))
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 0, body.Count)
+	require.NotNil(t, body.Embedded.Results, "results must be [] not null")
+	require.Empty(t, body.Embedded.Results)
 }
 
-// TestHandleSearch_KindFilterReachesProvider locks in that ?kind= /
-// ?exclude_kind= query params on /search reach SearchOptions.IncludeKinds /
-// ExcludeKinds. Regression: the filter was silently dropped, so a UI chip
-// like "kind:pragmatic" was returning every fact instead of pragmatic ones.
-func TestHandleSearch_KindFilterReachesProvider(t *testing.T) {
-	provider := &stubSearchProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
+// ?kind= / ?exclude_kind= on /search narrow the real result set. Regression:
+// the filter was silently dropped, so a UI chip like "kind:pragmatic" returned
+// every fact instead of pragmatic ones. Each param is driven on its own, so
+// neither can pass on the other's strength.
+func TestHandleSearch_KindFilterNarrowsTheResults(t *testing.T) {
+	s, _ := searchRepoServer(t)
+	ri := s.Manager.Get("alpha")
+	writeCosFact(t, ri, "kb/e.md", "An observation", 0.9, nil)
+	writeCosFact(t, ri, "kb/p.md", "A policy", 0.9, func(f *fact.Fact) {
+		f.Kind = fact.Pragmatic
+		f.Type = fact.Policy
+	})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=x&kind=pragmatic&exclude_kind=epistemic", nil)
-	r.ServeHTTP(rec, req)
+	all := decodeSearch(t, getAPI(t, s, alphaSearch+"?q=x"))
+	got := all.paths()
+	sort.Strings(got)
+	require.Equal(t, []string{"kb/e.md", "kb/p.md"}, got, "unfiltered, both kinds answer")
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := provider.lastQuery.IncludeKinds; len(got) != 1 || got[0] != "pragmatic" {
-		t.Errorf("IncludeKinds: got %v, want [pragmatic]", got)
-	}
-	if got := provider.lastQuery.ExcludeKinds; len(got) != 1 || got[0] != "epistemic" {
-		t.Errorf("ExcludeKinds: got %v, want [epistemic]", got)
-	}
+	require.Equal(t, []string{"kb/p.md"}, decodeSearch(t, getAPI(t, s, alphaSearch+"?q=x&kind=pragmatic")).paths())
+	require.Equal(t, []string{"kb/p.md"}, decodeSearch(t, getAPI(t, s, alphaSearch+"?q=x&exclude_kind=epistemic")).paths())
+	require.Equal(t, []string{"kb/e.md"}, decodeSearch(t, getAPI(t, s, alphaSearch+"?q=x&exclude_kind=pragmatic")).paths())
+	require.Empty(t, decodeSearch(t, getAPI(t, s, alphaSearch+"?q=x&kind=pragmatic&exclude_kind=pragmatic")).paths())
 }
 
 func TestHandleSearch_UnknownRepo_Returns404(t *testing.T) {
-	s := &Server{
-		Manager: newTestManagerWithRepos(t),
-		providers: storeProviders{
-			search: &stubSearchProvider{},
-		},
-	}
-	r := s.NewAPIRouter()
+	s := &Server{Manager: newTestManagerWithRepos(t)}
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/missing/branches/main/search?q=x", nil)
-	r.ServeHTTP(rec, req)
+	rec := getAPI(t, s, "/repos/missing/branches/main/search?q=x")
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: %d, want 404", rec.Code)
@@ -245,149 +166,88 @@ func TestHandleSearch_UnknownRepo_Returns404(t *testing.T) {
 	}
 }
 
-// TestHandleSearch_MinSimilarityAndDomainExactReachProvider pins REST↔MCP parity:
-// the search handler must thread min_similarity and domain_exact into SearchOptions.
-func TestHandleSearch_MinSimilarityAndDomainExactReachProvider(t *testing.T) {
-	provider := &stubSearchProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
+// min_similarity and domain_exact on /search narrow the real result set: REST
+// and MCP parity.
+func TestHandleSearch_MinSimilarityAndDomainExactNarrowTheResults(t *testing.T) {
+	s, _ := searchRepoServer(t)
+	ri := s.Manager.Get("alpha")
+	writeCosFact(t, ri, "kb/a.md", "Exactly ai, close", 0.9, func(f *fact.Fact) { f.Domain = []string{"ai"} })
+	writeCosFact(t, ri, "kb/b.md", "Exactly ai, far", 0.5, func(f *fact.Fact) { f.Domain = []string{"ai"} })
+	writeCosFact(t, ri, "kb/c.md", "ai safety, close", 0.9, func(f *fact.Fact) { f.Domain = []string{"ai safety"} })
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=x&min_similarity=0.55&domain=ai&domain_exact=true", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	sorted := func(url string) []string {
+		p := decodeSearch(t, getAPI(t, s, url)).paths()
+		sort.Strings(p)
+		return p
 	}
-	if got := provider.lastQuery.MinSimilarity; got != 0.55 {
-		t.Errorf("MinSimilarity: got %v, want 0.55", got)
-	}
-	if !provider.lastQuery.DomainExact {
-		t.Errorf("DomainExact: got false, want true")
-	}
+	// The model's own floor (0.40) lets all three in.
+	require.Equal(t, []string{"kb/a.md", "kb/b.md", "kb/c.md"}, sorted(alphaSearch+"?q=x"))
+	// The caller's cutoff (0.55) removes the 0.5 one.
+	require.Equal(t, []string{"kb/a.md", "kb/c.md"}, sorted(alphaSearch+"?q=x&min_similarity=0.55"))
+	// domain=ai alone also matches "ai safety"; domain_exact=true does not.
+	require.Equal(t, []string{"kb/a.md", "kb/b.md", "kb/c.md"}, sorted(alphaSearch+"?q=x&domain=ai"))
+	require.Equal(t, []string{"kb/a.md", "kb/b.md"}, sorted(alphaSearch+"?q=x&domain=ai&domain_exact=true"))
+	// Both together.
+	require.Equal(t, []string{"kb/a.md"}, sorted(alphaSearch+"?q=x&min_similarity=0.55&domain=ai&domain_exact=true"))
 }
 
-// TestHandleSearch_MotifFilterReachesSearchOptions locks in that ?motifs= /
-// ?motif_match= on /search reach SearchOptions.Motifs / MotifMatch — the motif
+// ?motifs= / ?motif_match= on /search narrow the real result set: the motif
 // axis is only queryable if the params survive the handler.
-func TestHandleSearch_MotifFilterReachesSearchOptions(t *testing.T) {
-	provider := &stubSearchProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
+func TestHandleSearch_MotifFilterNarrowsTheResults(t *testing.T) {
+	s, _ := searchRepoServer(t)
+	ri := s.Manager.Get("alpha")
+	motifs := func(m ...string) func(*fact.Fact) { return func(f *fact.Fact) { f.Motifs = m } }
+	writeCosFact(t, ri, "kb/a.md", "zero value", 0.9, motifs("zero-value-as-valid"))
+	writeCosFact(t, ri, "kb/b.md", "fallback", 0.9, motifs("silent-fallback"))
+	writeCosFact(t, ri, "kb/c.md", "plural fallback", 0.9, motifs("silent-fallbacks"))
+	writeCosFact(t, ri, "kb/d.md", "unrelated", 0.9, motifs("something-else"))
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=x&motifs=zero-value-as-valid,silent-fallback&motif_match=stem", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	sorted := func(url string) []string {
+		p := decodeSearch(t, getAPI(t, s, url)).paths()
+		sort.Strings(p)
+		return p
 	}
-	want := []string{"zero-value-as-valid", "silent-fallback"}
-	if !reflect.DeepEqual(provider.lastQuery.Motifs, want) {
-		t.Errorf("Motifs: got %v want %v", provider.lastQuery.Motifs, want)
-	}
-	if provider.lastQuery.MotifMatch != index.MotifMatchStem {
-		t.Errorf("MotifMatch: got %q want stem", provider.lastQuery.MotifMatch)
-	}
+	q := alphaSearch + "?q=x&motifs=zero-value-as-valid,silent-fallback"
+	require.Equal(t, []string{"kb/a.md", "kb/b.md"}, sorted(q+"&motif_match=exact"))
+	// The stem tier also reaches the plural spelling, so the param is read.
+	require.Equal(t, []string{"kb/a.md", "kb/b.md", "kb/c.md"}, sorted(q+"&motif_match=stem"))
 }
 
-// TestHandleSearch_LooseMotifTierRejected: the tiers this surface refuses are
-// refused at the edge, before any store call (C3/MN6).
+// The tiers this surface refuses are refused at the edge, before any store
+// call (C3/MN6). The Search read counter proves no store call happened, and a
+// permitted tier on the same corpus proves the counter would have moved.
 func TestHandleSearch_LooseMotifTierRejected(t *testing.T) {
-	provider := &stubSearchProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
+	s, _ := searchRepoServer(t)
+	counts := countMountReads(t, s.Manager, []string{"alpha"}, "Search")["alpha"]
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?motifs=a-b&motif_match=token-1", nil)
-	r.ServeHTTP(rec, req)
+	rec := getAPI(t, s, alphaSearch+"?motifs=a-b&motif_match=token-1")
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.EqualValues(t, 0, counts["Search"].Load(), "the store was searched despite the rejection")
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
-	}
-	if provider.lastQuery.Motifs != nil {
-		t.Errorf("provider was called despite the rejection: %v", provider.lastQuery)
-	}
+	rec = getAPI(t, s, alphaSearch+"?motifs=a-b&motif_match=stem")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.EqualValues(t, 1, counts["Search"].Load(), "a permitted tier reaches the store exactly once")
 }
 
-// TestHandleSearch_MotifsOnTheWire: rows carry their motifs, and a motif-free
-// row serializes with no motifs key at all (byte-compat for corpora that never
-// ran a motif pass).
+// Rows carry their motifs, and a motif-free row serializes with no motifs key
+// at all (byte-compat for corpora that never ran a motif pass).
 func TestHandleSearch_MotifsOnTheWire(t *testing.T) {
-	provider := &stubSearchProvider{
-		results: []index.SearchResult{
-			{
-				FactWithBody: facts.FactWithBody{
-					FactRecord: facts.FactRecord{
-						Path:   "kb/a.md",
-						Title:  "Carries a motif",
-						Motifs: []string{"a-b"},
-					},
-				},
-			},
-			{
-				FactWithBody: facts.FactWithBody{
-					FactRecord: facts.FactRecord{
-						Path:  "kb/b.md",
-						Title: "Carries none",
-					},
-				},
-			},
-		},
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			search: provider,
-		},
-	}
-	r := s.NewAPIRouter()
+	s, _ := searchRepoServer(t)
+	ri := s.Manager.Get("alpha")
+	writeCosFact(t, ri, "kb/a.md", "Carries a motif", 0.9, func(f *fact.Fact) { f.Motifs = []string{"a-b"} })
+	writeCosFact(t, ri, "kb/b.md", "Carries none", 0.8, nil)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=x", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
+	rec := getAPI(t, s, alphaSearch+"?q=x")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var view struct {
 		Embedded struct {
 			Results []map[string]any `json:"results"`
 		} `json:"_embedded"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(view.Embedded.Results) != 2 {
-		t.Fatalf("results: got %d want 2", len(view.Embedded.Results))
-	}
-	got, ok := view.Embedded.Results[0]["motifs"]
-	if !ok {
-		t.Fatalf("row 0: motifs key absent, body=%s", rec.Body.String())
-	}
-	if !reflect.DeepEqual(got, []any{"a-b"}) {
-		t.Errorf("row 0 motifs: got %v want [a-b]", got)
-	}
-	if _, present := view.Embedded.Results[1]["motifs"]; present {
-		t.Errorf("row 1: motif-free row must omit the key entirely, body=%s", rec.Body.String())
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+	require.Len(t, view.Embedded.Results, 2)
+	require.Equal(t, "kb/a.md", view.Embedded.Results[0]["path"])
+	require.Equal(t, []any{"a-b"}, view.Embedded.Results[0]["motifs"])
+	_, present := view.Embedded.Results[1]["motifs"]
+	require.False(t, present, "motif-free row must omit the key entirely, body=%s", rec.Body.String())
 }

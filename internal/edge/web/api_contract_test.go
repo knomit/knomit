@@ -125,12 +125,7 @@ func TestAnchor_FactsCollection_LimitStrict(t *testing.T) {
 func TestAnchor_Search_LimitStrict(t *testing.T) {
 	for _, q := range []string{"q=x&limit=-5", "q=x&limit=501"} {
 		t.Run(q, func(t *testing.T) {
-			s := &Server{
-				Manager: newTestManagerWithRepos(t, "alpha"),
-				providers: storeProviders{
-					search: &stubSearchProvider{},
-				},
-			}
+			s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 			r := s.NewAPIRouter()
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,

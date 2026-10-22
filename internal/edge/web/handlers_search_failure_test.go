@@ -5,175 +5,150 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"knomit/internal/engine/store/model"
-
-	"knomit/internal/engine/store/index"
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
-	"knomit/internal/domain/fact"
-	"knomit/internal/domain/modelparams"
-	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
 )
 
-// failEmb is a 768-dim embedder whose EmbedQuery can be switched to fail or to
-// return an empty vector with a nil error, and which counts query inferences.
-type failEmb struct {
-	mode  *atomic.Int32 // 0 ok, 1 error, 2 empty vector with nil error
-	calls *atomic.Int64
-}
-
-func newFailEmb(mode int32) failEmb {
-	var m atomic.Int32
-	m.Store(mode)
-	return failEmb{mode: &m, calls: &atomic.Int64{}}
-}
-
-func (e failEmb) vec() []float32 {
-	out := make([]float32, 768)
-	out[0] = 1
-	return out
-}
-
-func (e failEmb) EmbedQuery(context.Context, string) ([]float32, error) {
-	e.calls.Add(1)
-	switch e.mode.Load() {
-	case 1:
-		return nil, errors.New("inference down")
-	case 2:
-		return []float32{}, nil
-	}
-	return e.vec(), nil
-}
-
-func (e failEmb) EmbedDocument(context.Context, string, string) ([]float32, error) {
-	return e.vec(), nil
-}
-
-func (e failEmb) EmbedDocuments(_ context.Context, titles, _ []string) ([][]float32, error) {
-	out := make([][]float32, len(titles))
-	for i := range out {
-		out[i] = e.vec()
-	}
-	return out, nil
-}
-
-func (e failEmb) EmbedShortStrings(_ context.Context, texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i := range out {
-		out[i] = e.vec()
-	}
-	return out, nil
-}
-
-func (failEmb) Dim() int                           { return 768 }
-func (failEmb) ID() string                         { return "fail-emb" }
-func (failEmb) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
-
-// realRepo is a repo instance over a REAL store wired to emb.
-func realRepo(t *testing.T, emb failEmb) (*repos.RepoInstance, *store.Service) {
-	t.Helper()
-	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = svc.Close() })
-	svc.SetEmbedder(emb)
-	if err := svc.InitRepo(context.Background(), map[string]string{}, "agent/test"); err != nil {
-		t.Fatal(err)
-	}
-	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name: "alpha", UID: "alpha-uid", AgentBranch: "agent/test", Svc: svc,
-		Ontology: fact.CodeOntology(), OntologyRoot: "kb", Embedder: emb,
-	})
-	return ri, svc
-}
-
-// storeBackedProvider answers /search from a real store, so the handler's
-// behaviour on a store failure is what is under test (not a stub's).
-type storeBackedProvider struct{ svc *store.Service }
-
-func (p storeBackedProvider) Search(ctx context.Context, _ *repos.RepoInstance, _ model.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
-	return p.svc.FactQuery().Search(ctx, "agent/test", q)
-}
-
 // A text search whose query cannot be embedded is a 500, never a 200 with an
-// empty list. Driven through a real store: the failure happens inside
-// store.Search, which used to turn it into nil, nil.
+// empty list. Driven through a real store whose embedder fails: once with the
+// server embedder set (the handler embeds, as in production) and once without
+// it, where the failure happens inside store.Search, which used to turn it into
+// nil, nil.
 func TestHandleSearch_EmbedderFailureIsServerError(t *testing.T) {
-	for name, mode := range map[string]int32{"error": 1, "empty vector": 2} {
-		t.Run(name, func(t *testing.T) {
-			_, svc := realRepo(t, newFailEmb(mode))
-			s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), providers: storeProviders{search: storeBackedProvider{svc}}}
-			rec := httptest.NewRecorder()
-			s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-				"/repos/alpha/branches/agent:test/search?q=x", nil))
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status: %d, want 500; body=%s", rec.Code, rec.Body.String())
+	for name, set := range map[string]func(*cosEmbedder){
+		"error":        func(e *cosEmbedder) { e.failQuery.Store(true) },
+		"empty vector": func(e *cosEmbedder) { e.emptyQuery.Store(true) },
+	} {
+		for _, serverEmbeds := range []bool{true, false} {
+			label := name + " store-side embed"
+			if serverEmbeds {
+				label = name + " handler embed"
 			}
-		})
-	}
-}
-
-// The production provider hands the embedder's failure back as an error. Before,
-// it logged and let the store re-embed (and the store then swallowed it).
-func TestDefaultSearchProvider_EmbedErrorPropagates(t *testing.T) {
-	emb := newFailEmb(1)
-	ri, _ := realRepo(t, emb)
-	res, err := defaultSearchProvider{}.Search(context.Background(), ri, emb, "agent/test", index.SearchOptions{Text: "x"})
-	if err == nil {
-		t.Fatalf("want the embedder's error, got results=%v err=nil", res)
-	}
-	if !strings.Contains(err.Error(), "inference down") {
-		t.Errorf("error should carry the cause, got %v", err)
-	}
-	if got := emb.calls.Load(); got != 1 {
-		t.Errorf("EmbedQuery called %d times, want 1 (no store-side retry of a failed embed)", got)
-	}
-}
-
-// The lens fan-outs fail ONCE, up front, when the shared query vector cannot be
-// computed: one inference (not one per mount), a 500, and no empty 200.
-func TestLensSearchAndFacts_EmbedFailureFailsOnceUpFront(t *testing.T) {
-	for name, mode := range map[string]int32{"error": 1, "empty vector": 2} {
-		for _, path := range []string{"/lenses/eng/search?q=x", "/lenses/eng/facts?q=x"} {
-			t.Run(name+" "+path, func(t *testing.T) {
-				m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-				emb := newFailEmb(mode)
-				s := &Server{Manager: m, Embedder: emb, providers: storeProviders{
-					search: &lensSearchStub{}, factsCollection: &lensFactsStub{}}}
-				r := s.NewAPIRouter()
-				createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
-
-				rec := getLensFacts(t, r, path)
-				if rec.Code != http.StatusInternalServerError {
-					t.Fatalf("status: %d, want 500; body=%s", rec.Code, rec.Body.String())
+			t.Run(label, func(t *testing.T) {
+				s, emb := searchRepoServer(t)
+				writeCosFact(t, s.Manager.Get("alpha"), "kb/a.md", "A fact", 0.9, nil)
+				set(emb)
+				if !serverEmbeds {
+					s.Embedder = nil
 				}
-				if got := emb.calls.Load(); got != 1 {
-					t.Errorf("EmbedQuery called %d times across 3 mounts, want 1", got)
+				rec := getAPI(t, s, alphaSearch+"?q=x")
+				require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+				if name == "error" {
+					// A failed embed is not retried on the other side. (An EMPTY
+					// vector is not an error to searchRepo, so the store embeds
+					// again and fails on its own: that case only pins the 500.)
+					require.EqualValues(t, 1, emb.queries.Load(), "no retry of a failed embed")
 				}
 			})
 		}
 	}
 }
 
-// diagSearchProvider / diagFactsProvider report a fixed vector-step result
-// through SearchOptions.Diag and return no rows — a mount whose text query came
-// back empty.
-type diagSearchProvider struct{ d index.SearchDiag }
+// searchRepo hands the embedder's failure back as an error. Before, it logged
+// and let the store re-embed (and the store then swallowed it).
+func TestSearchRepo_EmbedErrorPropagates(t *testing.T) {
+	emb := &cosEmbedder{}
+	emb.failQuery.Store(true)
+	m, _ := newRealStoreManagerWith(t, emb, "alpha")
 
-func (p diagSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ model.Embedder, _ string, q index.SearchOptions) ([]index.SearchResult, error) {
-	if q.Diag != nil {
-		*q.Diag = p.d
-	}
-	return nil, nil
+	res, err := searchRepo(context.Background(), m.Get("alpha"), emb, "agent/test", index.SearchOptions{Text: "x"})
+
+	require.Error(t, err, "want the embedder's error, got results=%v", res)
+	require.ErrorIs(t, err, errInferenceDown)
+	require.EqualValues(t, 1, emb.queries.Load(), "no store-side retry of a failed embed")
 }
 
+// A failing store read is a 500 that carries the cause. The injected error is
+// distinct and only the Search read is failed, so the 500 cannot come from
+// another read, and the hit counter proves the read was reached once.
+func TestHandleSearch_StoreError_Returns500(t *testing.T) {
+	s, _ := searchRepoServer(t)
+	writeCosFact(t, s.Manager.Get("alpha"), "kb/a.md", "A fact", 0.9, nil)
+	var hits atomic.Int64
+	sentinel := errors.New("search read exploded: alpha")
+	failMountRead(t, s.Manager, "alpha", index.ReadSearch, sentinel, &hits)
+
+	rec := getAPI(t, s, alphaSearch+"?q=x")
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), sentinel.Error())
+	require.EqualValues(t, 1, hits.Load())
+}
+
+// The lens search fails ONCE, up front, when the shared query vector cannot be
+// computed: one inference (not one per mount), a 500, and no mount is searched.
+func TestLensSearch_EmbedFailureFailsOnceUpFront(t *testing.T) {
+	for name, set := range map[string]func(*cosEmbedder){
+		"error":        func(e *cosEmbedder) { e.failQuery.Store(true) },
+		"empty vector": func(e *cosEmbedder) { e.emptyQuery.Store(true) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			emb := &cosEmbedder{}
+			set(emb)
+			m, _ := newTestLensManagerWith(t, emb, "alpha", "beta", "gamma")
+			mounts := []string{"alpha", "beta", "gamma"}
+			reads := countMountReads(t, m, mounts, "Search")
+			s := &Server{Manager: m, Embedder: emb}
+			r := s.NewAPIRouter()
+			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+
+			rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+			require.EqualValues(t, 1, emb.queries.Load(), "EmbedQuery across 3 mounts")
+			for _, n := range mounts {
+				require.EqualValues(t, 0, reads[n]["Search"].Load(), "mount %s was searched despite the failed embed", n)
+			}
+
+			// Control: once the embedder works, the same request searches every
+			// mount, so the counters above could have moved.
+			emb.failQuery.Store(false)
+			emb.emptyQuery.Store(false)
+			rec = getLensFacts(t, r, "/lenses/eng/search?q=x")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			for _, n := range mounts {
+				require.EqualValues(t, 1, reads[n]["Search"].Load(), "mount %s", n)
+			}
+		})
+	}
+}
+
+// The facts twin of the test above; its mounts are still answered by the facts
+// collection stub, so it keeps that wiring until the facts provider goes.
+func TestLensFacts_EmbedFailureFailsOnceUpFront(t *testing.T) {
+	for name, mode := range map[string]int32{"error": 1, "empty vector": 2} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
+			emb := &cosEmbedder{}
+			if mode == 1 {
+				emb.failQuery.Store(true)
+			} else {
+				emb.emptyQuery.Store(true)
+			}
+			s := &Server{Manager: m, Embedder: emb, providers: storeProviders{factsCollection: &lensFactsStub{}}}
+			r := s.NewAPIRouter()
+			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+
+			rec := getLensFacts(t, r, "/lenses/eng/facts?q=x")
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("status: %d, want 500; body=%s", rec.Code, rec.Body.String())
+			}
+			if got := emb.queries.Load(); got != 1 {
+				t.Errorf("EmbedQuery called %d times across 3 mounts, want 1", got)
+			}
+		})
+	}
+}
+
+// diagFactsProvider reports a fixed vector-step result through
+// SearchOptions.Diag and returns no rows: a mount whose text query came back
+// empty. It stands in for the facts collection only; search runs on real stores.
 type diagFactsProvider struct{ d index.SearchDiag }
 
 func (p diagFactsProvider) RecentFacts(_ context.Context, _ *repos.RepoInstance, _ string, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
@@ -183,40 +158,77 @@ func (p diagFactsProvider) RecentFacts(_ context.Context, _ *repos.RepoInstance,
 	return nil, 0, nil
 }
 
-// On both lens text reads, an empty result caused by the caller's cutoff carries
-// the notice (cutoff, best cosine); an empty result with another cause, or no
-// caller cutoff, does not.
-func TestLensSearchAndFacts_CutoffNotice(t *testing.T) {
+// On the lens facts text read, an empty result caused by the caller's cutoff
+// carries the notice (cutoff, best cosine); an empty result with another cause,
+// or no caller cutoff, does not.
+func TestLensFacts_CutoffNotice(t *testing.T) {
 	emptied := index.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.7}
 	keptThenFiltered := index.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.3, Candidates: 4}
 
-	for _, ep := range []string{"search", "facts"} {
-		get := func(d index.SearchDiag, query string) map[string]any {
-			m, _ := newTestLensManager(t, "alpha", "beta")
-			s := &Server{Manager: m, providers: storeProviders{
-				search: diagSearchProvider{d}, factsCollection: diagFactsProvider{d}}}
-			r := s.NewAPIRouter()
-			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-			rec := getLensFacts(t, r, "/lenses/eng/"+ep+"?q=x"+query)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("%s: status %d body=%s", ep, rec.Code, rec.Body.String())
-			}
-			var out map[string]any
-			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-				t.Fatal(err)
-			}
-			return out
+	get := func(d index.SearchDiag, query string) map[string]any {
+		m, _ := newTestLensManager(t, "alpha", "beta")
+		s := &Server{Manager: m, providers: storeProviders{factsCollection: diagFactsProvider{d}}}
+		r := s.NewAPIRouter()
+		createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+		rec := getLensFacts(t, r, "/lenses/eng/facts?q=x"+query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body=%s", rec.Code, rec.Body.String())
 		}
-
-		notice, _ := get(emptied, "&min_similarity=0.7")["notice"].(string)
-		if !strings.Contains(notice, "0.70") || !strings.Contains(notice, "0.54") {
-			t.Errorf("%s: notice should carry cutoff and best cosine, got %q", ep, notice)
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
 		}
-		if _, ok := get(emptied, "")["notice"]; ok {
-			t.Errorf("%s: no caller cutoff, so no notice", ep)
-		}
-		if _, ok := get(keptThenFiltered, "&min_similarity=0.3")["notice"]; ok {
-			t.Errorf("%s: the cutoff kept candidates (a later filter emptied it), so no notice", ep)
-		}
+		return out
 	}
+
+	notice, _ := get(emptied, "&min_similarity=0.7")["notice"].(string)
+	if !strings.Contains(notice, "0.70") || !strings.Contains(notice, "0.54") {
+		t.Errorf("notice should carry cutoff and best cosine, got %q", notice)
+	}
+	if _, ok := get(emptied, "")["notice"]; ok {
+		t.Errorf("no caller cutoff, so no notice")
+	}
+	if _, ok := get(keptThenFiltered, "&min_similarity=0.3")["notice"]; ok {
+		t.Errorf("the cutoff kept candidates (a later filter emptied it), so no notice")
+	}
+}
+
+// On the lens search, an empty result caused by the caller's cutoff carries the
+// notice (cutoff, best cosine); an empty result with another cause, or no
+// caller cutoff, does not. The diagnosis is the real stores' own.
+func TestLensSearch_CutoffNotice(t *testing.T) {
+	get := func(cos float64, query string) map[string]any {
+		emb := &cosEmbedder{}
+		m, _ := newTestLensManagerWith(t, emb, "alpha", "beta")
+		for _, n := range []string{"alpha", "beta"} {
+			writeCosFact(t, m.Get(n), "kb/"+n+"/one.md", "A fact on "+n, cos, nil)
+		}
+		s := &Server{Manager: m, Embedder: emb}
+		r := s.NewAPIRouter()
+		createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+		rec := getLensFacts(t, r, "/lenses/eng/search?q=x"+query)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out
+	}
+
+	// The caller's 0.7 removed every candidate (best cosine 0.54).
+	out := get(0.54, "&min_similarity=0.7")
+	require.Empty(t, out["results"])
+	notice, _ := out["notice"].(string)
+	require.Contains(t, notice, "0.70")
+	require.Contains(t, notice, "0.54")
+
+	// No caller cutoff: the model's own floor (0.40) emptied it, which is not
+	// the caller's doing.
+	out = get(0.3, "")
+	require.Empty(t, out["results"])
+	require.NotContains(t, out, "notice")
+
+	// The cutoff kept both candidates; a later filter (an entity no fact has)
+	// emptied the result, so the cutoff is not to blame.
+	out = get(0.54, "&min_similarity=0.3&entities=ghost")
+	require.Empty(t, out["results"])
+	require.NotContains(t, out, "notice")
 }
