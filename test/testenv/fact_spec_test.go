@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // TestFactSpec_BuildRoundTrips asserts that Build produces YAML+Markdown

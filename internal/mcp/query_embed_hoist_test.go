@@ -9,8 +9,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -52,9 +52,9 @@ func (e countingFedEmbedder) EmbedShortStrings(_ context.Context, texts []string
 	return out, nil
 }
 
-func (countingFedEmbedder) Dim() int                      { return 768 }
-func (countingFedEmbedder) ID() string                    { return "counting-fed" }
-func (countingFedEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (countingFedEmbedder) Dim() int                           { return 768 }
+func (countingFedEmbedder) ID() string                         { return "counting-fed" }
+func (countingFedEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // countingFedRepo builds a repo wired to the SHARED counting embedder, so a
 // per-mount embed inside the store is counted by the same meter as the

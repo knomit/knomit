@@ -36,8 +36,8 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
-	"knomit/internal/fact"
-	"knomit/internal/fact/textnorm"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/fact/textnorm"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"

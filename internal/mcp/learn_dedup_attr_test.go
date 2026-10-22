@@ -13,8 +13,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -208,9 +208,9 @@ func TestLearnHandler_SameSubjectSkipsLearnDedupOffTopic(t *testing.T) {
 		{"gotchas", true},
 	} {
 		t.Run(tc.topic, func(t *testing.T) {
-			th, ok := params.ForModel(params.NomicModelID)
+			th, ok := modelparams.ForModel(modelparams.NomicModelID)
 			require.True(t, ok)
-			angle := newAngleEmbedder(t, params.NomicModelID, th, map[string]float64{
+			angle := newAngleEmbedder(t, modelparams.NomicModelID, th, map[string]float64{
 				seedMarker:  0,
 				probeMarker: angleFor(inBand(th)),
 			})

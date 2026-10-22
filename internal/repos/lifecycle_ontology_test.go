@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // Finding 2 regression: resolveOntology's extraction (sharing initLocal's

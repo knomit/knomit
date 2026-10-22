@@ -14,7 +14,7 @@ import (
 // (factpath.go:48) that index_scope_test.go already covers for a generic
 // dot-directory, but anchored on the concrete case this whole design exists
 // to protect: job state a job writes through the fact tools at
-// .knomit/<area>/… (see internal/fact.PrivateRoot).
+// .knomit/<area>/… (see internal/domain/fact.PrivateRoot).
 //
 // The fixture parses perfectly as a fact — the point being made is that
 // location, not content, decides fact-index and Verify membership. If this

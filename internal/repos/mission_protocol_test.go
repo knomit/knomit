@@ -19,7 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/mcp"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"knomit/internal/testsupport/modroot"
 )
 
 // TestFS_ContainsAllTenSkills pins the shipped skill set. Both hosts scaffold
@@ -86,7 +88,7 @@ func TestFS_NoClaudeCodeSpecificText(t *testing.T) {
 // starts from: the next editor gets the same coin-flip, and a stale deployed
 // skill is invisible until someone reads both files side by side.
 func TestTemplates_MatchTheRepoDeployedCopies(t *testing.T) {
-	const deployed = "../../../.claude/skills"
+	deployed := modroot.Path(t, ".claude", "skills")
 
 	entries, err := fs.ReadDir(FS, Root)
 	require.NoError(t, err)

@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/serverkey"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/storetest"
@@ -693,7 +693,7 @@ func promptTrace(t *testing.T, prompt string) map[string]string {
 
 // RecipeNameValidated [H7]: knomit.run("../x") throws (the fire is a
 // script-error) and starts nothing, even with a file that name would reach.
-// (The ontology half — `recipe: ../x` is invalid — is in internal/fact.)
+// (The ontology half — `recipe: ../x` is invalid — is in internal/domain/fact.)
 // Sabotage: remove the check (red: the fire is `ran`).
 func TestRun_RecipeNameValidatedAtCall(t *testing.T) {
 	t.Parallel()

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // defaultClusterResolution / defaultClusterMinCommunitySize are the canonical

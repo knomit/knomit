@@ -11,8 +11,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/synthesize"
 )
 
@@ -104,7 +104,7 @@ func findSameSubjectCandidates(
 	f fact.Fact,
 	categoryDir string,
 	vec []float32,
-	th params.Thresholds,
+	th modelparams.Thresholds,
 	entityDF map[string]int,
 	dfCeiling int,
 	limit int,
@@ -393,7 +393,7 @@ func checkSameSubjectCollisions(
 	// "harmonise" this by moving applyDedupMerge onto ForModel: dedup must keep
 	// working for embedders params does not know, so it would need a fallback —
 	// reintroducing the silent nomic default this gate exists to avoid.
-	th, ok := params.ForModel(modelID)
+	th, ok := modelparams.ForModel(modelID)
 	if !ok {
 		log.Warn().Str("model", modelID).
 			Msg("learn: same-subject gate off, no calibrated thresholds for this embedding model")
@@ -493,7 +493,7 @@ func checkSameSubjectCollisions(
 	return &sameSubjectRefusal{refused: refusals}
 }
 
-func logBypass(i int, c sameSubjectCandidate, th params.Thresholds, modelID, msg string) {
+func logBypass(i int, c sameSubjectCandidate, th modelparams.Thresholds, modelID, msg string) {
 	log.Info().
 		Int("fact", i).
 		Str("candidate", c.Path).

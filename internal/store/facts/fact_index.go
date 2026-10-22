@@ -6,7 +6,7 @@ import (
 
 	"knomit/internal/store/model"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // ParseFactRecord parses a fact file into the stored record (no blob hash).

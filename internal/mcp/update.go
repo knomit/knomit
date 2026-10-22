@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"knomit/internal/fact"
-	factpkg "knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	factpkg "knomit/internal/domain/fact"
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"

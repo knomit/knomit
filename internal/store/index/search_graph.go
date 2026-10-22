@@ -313,7 +313,7 @@ func (si *Index) graphDeleteFactTx(ctx context.Context, tx storegit.CtxExecer, p
 
 // knnK caps how many nearest neighbours are considered per fact. The cosine
 // floor for actually drawing a SIMILAR_TO edge is model-dependent and comes from
-// the active embedder's Thresholds().SimilarTo (see internal/embeddings/params).
+// the active embedder's Thresholds().SimilarTo (see internal/domain/modelparams).
 const knnK = 10 // top-K nearest neighbors per fact
 
 // graphBuildSimilarityEdges creates SIMILAR_TO edges from a fact version to its

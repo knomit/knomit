@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store/merge"
 )

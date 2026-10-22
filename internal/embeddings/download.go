@@ -16,7 +16,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 )
 
 const (
@@ -56,7 +56,7 @@ var downloadClient = &http.Client{
 // "model_fp16.onnx_data"); renaming would break that resolution.
 // Returns (modelPath, tokenizerPath, error).
 func EnsureModel(ctx context.Context, m Model, cacheDir string) (string, string, error) {
-	modelPath, dataPath, tokPath := params.ModelPaths(m, cacheDir)
+	modelPath, dataPath, tokPath := modelparams.ModelPaths(m, cacheDir)
 	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
 		return "", "", fmt.Errorf("create cache dir: %w", err)
 	}

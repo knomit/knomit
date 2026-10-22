@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 func TestFuseRRF(t *testing.T) {
@@ -94,7 +94,7 @@ func TestTopicOfPathFilter(t *testing.T) {
 	require.Equal(t, "", topicOfPathFilter("other/x"))
 }
 
-// federate must not carry a second copy of the kb:// rule — internal/fact is
+// federate must not carry a second copy of the kb:// rule — internal/domain/fact is
 // the single ref-classification authority, and federate delegates DOWN to it
 // (federate → repos → store → fact makes the reverse import a cycle). These
 // assert the two agree, so editing one without the other fails here.

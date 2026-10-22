@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // The fleet ontology's per-operation record directories (fleet/issued/*.pem,

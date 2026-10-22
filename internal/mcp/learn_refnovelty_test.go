@@ -8,7 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // #361: a dedup merge counts the incoming sources only for a novel ref.

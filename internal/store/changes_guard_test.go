@@ -5,11 +5,13 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"knomit/internal/store/model"
+	"knomit/internal/testsupport/modroot"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -23,8 +25,12 @@ import (
 // the first version). A call that is not here fails the test — add it only
 // after checking it neither writes (refs, objects, SQLite rows) nor reads a
 // clock or the commit log.
+//
+// The map's keys are slash paths from the module root, resolved with modroot,
+// so moving a package (or the store itself) changes a key, never the depth of
+// a "../" chain; a key whose file is gone fails the parse below.
 var changesAllowedCalls = map[string][]string{
-	"internal/vcs/changes.go": {
+	"internal/store/internal/vcs/changes.go": {
 		// git reads
 		"?.CommitObject", "c.IsAncestor", "sinceCommit.IsAncestor", "c.Tree", "root.Tree", "object.DiffTree",
 		"rh.ResolveRef", "rh.OntologyRoot", "?.String",
@@ -36,11 +42,11 @@ var changesAllowedCalls = map[string][]string{
 	},
 	// the pure cursor and bookmark codecs moved out of vcs into the model leaf;
 	// they stay under the same allowlist.
-	"model/changes.go": {
+	"internal/store/model/changes.go": {
 		"plumbing.NewHash", "strings.Cut", "strings.ToLower", "errors.New", "fmt.Errorf", "ParseFullHash", "isHex",
 		"json.Marshal", "json.Unmarshal", "?.EncodeToString", "?.DecodeString", "len",
 	},
-	"../mcp/changes.go": {
+	"internal/mcp/changes.go": {
 		"repos.RequireBinding", "b.Write", "?.Acquire", "release", "svc.Remote", "remote.UpstreamBranch", "svc.Facts", "?.ChangesUnder",
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"req.GetInt", "req.GetString", "req.GetBool", "context.WithTimeout", "cancel",
@@ -56,7 +62,7 @@ var changesAllowedCalls = map[string][]string{
 		"model.ParseChangesSince", "model.ChangesBookmark",
 		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
 	},
-	"../web/handlers_changes.go": {
+	"internal/web/handlers_changes.go": {
 		"repos.RepoFromContext", "BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
@@ -81,7 +87,7 @@ func TestChanges_CallsAreAllowlisted(t *testing.T) {
 		for _, c := range list {
 			allowed[c] = true
 		}
-		file, err := parser.ParseFile(fset, f, nil, 0)
+		file, err := parser.ParseFile(fset, modroot.Path(t, filepath.FromSlash(f)), nil, 0)
 		require.NoError(t, err, f)
 		seen := map[string]bool{}
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -112,7 +118,7 @@ func TestChanges_CallsAreAllowlisted(t *testing.T) {
 		sort.Strings(unused)
 		require.Empty(t, unused, "%s: allowlist entries no longer called — remove them", f)
 		minSeen := 15
-		if strings.HasPrefix(f, "model/") {
+		if strings.HasPrefix(f, "internal/store/model/") {
 			minSeen = 8 // the codecs are a small file; 12 distinct calls today
 		}
 		require.Greater(t, len(seen), minSeen, "%s: the guard must actually have walked the file", f)

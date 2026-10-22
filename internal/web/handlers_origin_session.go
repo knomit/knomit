@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/config"
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/merge"

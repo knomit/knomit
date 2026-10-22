@@ -17,8 +17,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -80,9 +80,9 @@ func (e *restatementEmbedder) EmbedShortStrings(_ context.Context, texts []strin
 	return out, nil
 }
 
-func (e *restatementEmbedder) Dim() int                      { return testVecDim }
-func (e *restatementEmbedder) ID() string                    { return "restatement-stub" }
-func (e *restatementEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (e *restatementEmbedder) Dim() int                           { return testVecDim }
+func (e *restatementEmbedder) ID() string                         { return "restatement-stub" }
+func (e *restatementEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // hashVector maps text onto a stable unit vector. Distinct texts land far
 // apart; identical texts land on top of each other.

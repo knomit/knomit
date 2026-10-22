@@ -1,6 +1,6 @@
 package testenv
 
-import "knomit/internal/fact"
+import "knomit/internal/domain/fact"
 
 // FollowRef reads `refPath` at THE SAME COMMIT this FactHandle was
 // resolved at. This is the critical temporal-graph invariant from

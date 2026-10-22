@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 func writeContextFact(t *testing.T, svc *Service, branch, path string, ctx map[string]any) {

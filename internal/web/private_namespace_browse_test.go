@@ -13,7 +13,7 @@ import (
 // TestHandleTopics_HidesPrivateDirectory / TestHandleTopicFacts_HidesPrivateTopic
 // / TestLensTopics_HidesPrivateDirectory already cover for a generic
 // dot-directory, anchored on the concrete case this whole design exists to
-// protect: job state living at .knomit/jobs/x.md (see internal/fact.PrivateRoot).
+// protect: job state living at .knomit/jobs/x.md (see internal/domain/fact.PrivateRoot).
 //
 // All three sub-tests drive the real handler chain (router → handler →
 // TopicLister stub) rather than asserting on fact.IsPrivatePath directly, so

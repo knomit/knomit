@@ -6,7 +6,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 
 	"github.com/stretchr/testify/require"
 )

@@ -11,7 +11,7 @@ import (
 
 	"knomit/internal/store/model"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
 	"knomit/internal/store/internal/vcs"

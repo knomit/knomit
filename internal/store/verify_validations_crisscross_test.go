@@ -9,7 +9,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // #533 re-review B1, probe made a test: a criss-cross candidate. PR 1 adds

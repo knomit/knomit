@@ -19,7 +19,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
 	"knomit/internal/platform/fileuri"

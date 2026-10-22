@@ -11,7 +11,7 @@ package mcp
 
 import (
 	context "context"
-	params "knomit/internal/embeddings/params"
+	modelparams "knomit/internal/domain/modelparams"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -130,10 +130,10 @@ func (mr *MockBatchEmbedderMockRecorder) ID() *gomock.Call {
 }
 
 // Thresholds mocks base method.
-func (m *MockBatchEmbedder) Thresholds() params.Thresholds {
+func (m *MockBatchEmbedder) Thresholds() modelparams.Thresholds {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Thresholds")
-	ret0, _ := ret[0].(params.Thresholds)
+	ret0, _ := ret[0].(modelparams.Thresholds)
 	return ret0
 }
 

@@ -13,7 +13,7 @@ import (
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	kmcp "knomit/internal/mcp"
 	"knomit/internal/repos"
 	"knomit/internal/store"

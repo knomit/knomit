@@ -9,7 +9,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/facts"
 
 	"github.com/rs/zerolog/log"

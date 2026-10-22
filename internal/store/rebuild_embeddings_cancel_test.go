@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 
 	"github.com/stretchr/testify/require"
 )
@@ -30,9 +30,9 @@ func (e *cancellingEmbedder) EmbedDocument(ctx context.Context, _, _ string) ([]
 	return nil, context.Canceled
 }
 
-func (e *cancellingEmbedder) Dim() int                      { return 8 }
-func (e *cancellingEmbedder) ID() string                    { return "cancelling-test-embedder" }
-func (e *cancellingEmbedder) Thresholds() params.Thresholds { return params.Thresholds{} }
+func (e *cancellingEmbedder) Dim() int                           { return 8 }
+func (e *cancellingEmbedder) ID() string                         { return "cancelling-test-embedder" }
+func (e *cancellingEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Thresholds{} }
 
 // TestRebuildEmbeddings_CancelledMidChunk_StopsImmediately: once the rebuild's
 // context is cancelled, the per-document embed loop must stop rather than

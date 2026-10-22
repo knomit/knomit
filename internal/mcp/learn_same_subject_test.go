@@ -7,8 +7,8 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/store/facts"
 
 	"github.com/stretchr/testify/require"
@@ -60,19 +60,19 @@ func hit(path, title string, cosine float64, entities ...string) index.SearchRes
 func thresholdSets(t *testing.T) []struct {
 	name  string
 	model string
-	th    params.Thresholds
+	th    modelparams.Thresholds
 } {
 	t.Helper()
 	out := []struct {
 		name  string
 		model string
-		th    params.Thresholds
+		th    modelparams.Thresholds
 	}{
-		{"nomic-fallback", params.NomicModelID, params.Thresholds{}},
-		{params.DefaultModelID + "-shipped", params.DefaultModelID, params.Thresholds{}},
+		{"nomic-fallback", modelparams.NomicModelID, modelparams.Thresholds{}},
+		{modelparams.DefaultModelID + "-shipped", modelparams.DefaultModelID, modelparams.Thresholds{}},
 	}
 	for i := range out {
-		th, ok := params.ForModel(out[i].model)
+		th, ok := modelparams.ForModel(out[i].model)
 		require.Truef(t, ok, "model %q must carry calibrated thresholds", out[i].model)
 		out[i].th = th
 	}
@@ -81,7 +81,7 @@ func thresholdSets(t *testing.T) []struct {
 
 // inBand returns a cosine strictly inside (ReflectNovelty, Dedup) for the given
 // model, derived from the band itself so the case holds under any calibration.
-func inBand(th params.Thresholds) float64 { return (th.ReflectNovelty + th.Dedup) / 2 }
+func inBand(th modelparams.Thresholds) float64 { return (th.ReflectNovelty + th.Dedup) / 2 }
 
 const (
 	// testDFCeiling is the generic-entity cutoff the cases run against. The
@@ -237,7 +237,7 @@ func TestFindSameSubjectCandidates_SearchesWholeBranchAtTheBandFloor(t *testing.
 // (no embedder, no calibrated band for the model) live in
 // checkSameSubjectCollisions and are pinned by the handler tests.
 func TestFindSameSubjectCandidates_AllGenericNeverRefuses(t *testing.T) {
-	th := params.Defaults()
+	th := modelparams.Defaults()
 	q := &fakeSearcher{results: []index.SearchResult{
 		hit("kb/a.md", "A", inBand(th), "MCP"),
 	}}
@@ -255,7 +255,7 @@ func TestFindSameSubjectCandidates_AllGenericNeverRefuses(t *testing.T) {
 // same commit as the observation. Refusing would block the write that resolves
 // it, and the advice would be unactionable: knomit_update cannot change type.
 func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
-	th := params.Defaults()
+	th := modelparams.Defaults()
 	h := hit("kb/a.md", "A", inBand(th), "Ramp")
 	h.Type = string(fact.Hypothesis)
 	q := &fakeSearcher{results: []index.SearchResult{h}}
@@ -279,7 +279,7 @@ func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
 // entity is a task id rather than a subject, and the refusal's advice ("update
 // the existing fact") is nonsense for a message someone sent you.
 func TestFindSameSubjectCandidates_SignalIsNotASameSubjectCollision(t *testing.T) {
-	th := params.Defaults()
+	th := modelparams.Defaults()
 
 	incoming := fact.Fact{Title: "T", Body: "B", Entities: []string{"task-7f3a9c"}}
 	df := map[string]int{"task-7f3a9c": specificDF}

@@ -3,7 +3,7 @@ package mcp
 import (
 	"fmt"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // closedSuffix is the one sentence every fact tool gives when it refuses a dot

@@ -32,7 +32,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 

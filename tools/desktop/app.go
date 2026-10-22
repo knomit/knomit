@@ -22,7 +22,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"knomit/internal/config"
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/platform/version"
 	webui "knomit/web"
@@ -434,11 +434,11 @@ func installDesktopTools(home string) {
 // cached, since the caption is not worth an error and the server reports the
 // real one.
 func modelsCached(cfg config.Config) bool {
-	m, err := params.Lookup(cfg.Embeddings.Model)
+	m, err := modelparams.Lookup(cfg.Embeddings.Model)
 	if err != nil {
 		return true
 	}
-	return params.ModelCached(m, filepath.Join(cfg.Home, "models"))
+	return modelparams.ModelCached(m, filepath.Join(cfg.Home, "models"))
 }
 
 // appStartGate defers work that must not reach Wails until the application has

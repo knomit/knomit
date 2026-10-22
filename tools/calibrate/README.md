@@ -20,7 +20,7 @@ and fails with `unknown shorthand flag: 'c' in -cache`.
 knomit uses six absolute cosine-similarity cutoffs across retrieval and dedup.
 All six are fields of `params.Thresholds`, and each model's set is an entry in
 the per-model map in
-[`internal/embeddings/params/thresholds.go`](../../internal/embeddings/params/thresholds.go):
+[`internal/domain/modelparams/thresholds.go`](../../internal/domain/modelparams/thresholds.go):
 
 | threshold | role |
 |---|---|
@@ -125,7 +125,7 @@ dedup safety gap (embeddinggemma): distinct same-cat p99=0.766  true near-dup p0
 ### Applying the results
 
 Copy the ported values into the model's entry in the `modelThresholds` map in
-[`internal/embeddings/params/thresholds.go`](../../internal/embeddings/params/thresholds.go).
+[`internal/domain/modelparams/thresholds.go`](../../internal/domain/modelparams/thresholds.go).
 A model with no entry there fails at init, so a new model needs its entry added
 before its descriptor can load. A pure port of `SearchFloor` can come out near
 zero (or negative). Clamp it to a small positive floor (e.g. `0.05`) so it still

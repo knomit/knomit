@@ -23,7 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/platform/privdir"
 	"knomit/internal/store"

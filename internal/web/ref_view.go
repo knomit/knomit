@@ -1,7 +1,7 @@
 package web
 
 import (
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/web/hal"
 )
 

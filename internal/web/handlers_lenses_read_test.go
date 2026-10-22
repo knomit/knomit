@@ -19,7 +19,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store/facts"

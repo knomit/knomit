@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 )
 
 // TestModelThresholdsPopulated asserts every registered model carries a full,
@@ -30,8 +30,8 @@ func TestModelThresholdsPopulated(t *testing.T) {
 // models' values were ported FROM.
 func TestNomicKeepsDefaults(t *testing.T) {
 	m, _ := Lookup("nomic-v1.5")
-	if m.Thresholds != params.Defaults() {
-		t.Errorf("nomic thresholds = %+v, want params.Defaults() %+v", m.Thresholds, params.Defaults())
+	if m.Thresholds != modelparams.Defaults() {
+		t.Errorf("nomic thresholds = %+v, want params.Defaults() %+v", m.Thresholds, modelparams.Defaults())
 	}
 }
 
@@ -41,7 +41,7 @@ func TestNomicKeepsDefaults(t *testing.T) {
 // dedup under gemma would (almost) never fire — silent duplicate accumulation.
 func TestEmbeddingGemmaThresholdsAreCooler(t *testing.T) {
 	g, _ := Lookup("embeddinggemma")
-	n := params.Defaults()
+	n := modelparams.Defaults()
 	pairs := []struct {
 		name       string
 		gemma, nom float64

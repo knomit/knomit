@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"

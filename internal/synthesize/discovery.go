@@ -17,7 +17,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store/facts"
 )

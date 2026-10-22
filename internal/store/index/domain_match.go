@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/fact/textnorm"
+	"knomit/internal/domain/fact/textnorm"
 )
 
 // Domain-tag matching: a domain tag is canonicalised deterministically at the

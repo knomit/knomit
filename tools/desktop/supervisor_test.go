@@ -19,7 +19,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/serveraddr"
 )
 
@@ -543,15 +543,15 @@ func (o *orderedInstaller) Restart(context.Context) error {
 func TestModelsCachedPicksTheCaption(t *testing.T) {
 	home := t.TempDir()
 	cfg := config.Config{Home: home}
-	cfg.Embeddings.Model = params.DefaultModelID
+	cfg.Embeddings.Model = modelparams.DefaultModelID
 	if modelsCached(cfg) {
 		t.Fatal("a cold home reported the model cached: a first launch would not say it is downloading")
 	}
-	m, err := params.Lookup(params.DefaultModelID)
+	m, err := modelparams.Lookup(modelparams.DefaultModelID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mp, dp, tp := params.ModelPaths(m, filepath.Join(home, "models"))
+	mp, dp, tp := modelparams.ModelPaths(m, filepath.Join(home, "models"))
 	if err := os.MkdirAll(filepath.Dir(mp), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
 	"knomit/internal/store/index"
+	"knomit/internal/testsupport/modroot"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // Phase-2 acceptance: the pack-2 fixture replayed through the SHIPPED alias
@@ -43,7 +43,7 @@ type packGroup struct {
 
 func loadPack2(t *testing.T) []packGroup {
 	t.Helper()
-	path := filepath.Join("..", "..", ".claude", "plans", "motif", "memora-harness",
+	path := modroot.Path(t, ".claude", "plans", "motif", "memora-harness",
 		"motif_eval2_outputs.json")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err, "pack-2 fixture must be readable")

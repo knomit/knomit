@@ -60,7 +60,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/serveraddr"
 	"knomit/internal/serverkey"
 	"knomit/internal/store"

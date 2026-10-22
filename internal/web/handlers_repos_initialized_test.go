@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 )

@@ -18,6 +18,9 @@ var forbidden = []string{
 	// it calls refuses to work outside a test binary anyway; this keeps the
 	// package itself out of every shipped binary too.
 	"knomit/internal/testsupport/testsigner",
+	// Module-root lookup for tests that scan source across packages; imports
+	// "testing", so it stays out of every shipped binary.
+	"knomit/internal/testsupport/modroot",
 	// The test doors into a *store.Service (corrupt an object, plant a ref,
 	// commit without the index, backdate an experiment). Its init panics outside
 	// a test binary; this keeps the package itself out of every shipped binary

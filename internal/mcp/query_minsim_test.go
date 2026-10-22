@@ -14,8 +14,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -78,9 +78,9 @@ func (e cosEmbedder) EmbedShortStrings(_ context.Context, texts []string) ([][]f
 	return out, nil
 }
 
-func (cosEmbedder) Dim() int                      { return 768 }
-func (cosEmbedder) ID() string                    { return "cos-fixed" }
-func (cosEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (cosEmbedder) Dim() int                           { return 768 }
+func (cosEmbedder) ID() string                         { return "cos-fixed" }
+func (cosEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // minSimMounts builds n repos wired to emb, each seeded with one fact, and a
 // binding that reads all of them (the first is the write repo). The returned

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"knomit/internal/testsupport/modroot"
 )
 
 // restRoute is a REST route as a refusal text might name one.
@@ -124,7 +126,12 @@ func TestFleetTexts_PKIAndOAuthErrorsNameNoRESTRoutes(t *testing.T) {
 	for _, pkg := range []struct {
 		dir  string
 		must string
-	}{{"../pki", "ErrNotEnrolled"}, {"../oauth", "ErrNoFleetRoot"}} {
+	}{
+		// From the module root: a layer move changes the depth and the sibling
+		// names, so "../pki" would break with it. goFiles fails on no match.
+		{modroot.Path(t, "internal", "pki"), "ErrNotEnrolled"},
+		{modroot.Path(t, "internal", "oauth"), "ErrNoFleetRoot"},
+	} {
 		fset := token.NewFileSet()
 		files := goFiles(t, fset, filepath.Join(pkg.dir, "*.go"))
 		// consts and vars whose value holds literals, by name

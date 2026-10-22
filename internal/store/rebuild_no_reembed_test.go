@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // TestRebuild_PreservesRowidsAndDoesNotReEmbed regresses the bug where Rebuild

@@ -17,7 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	storegit "knomit/internal/store/git"
 	"knomit/internal/store/internal/vcs"
 	"knomit/internal/store/merge"

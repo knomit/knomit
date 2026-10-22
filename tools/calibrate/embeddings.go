@@ -13,8 +13,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/spf13/cobra"
+	"knomit/internal/domain/fact"
 	"knomit/internal/embeddings"
-	"knomit/internal/fact"
 	"knomit/internal/platform/memlimit"
 )
 

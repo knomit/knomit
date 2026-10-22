@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"

@@ -20,7 +20,7 @@ var desktopForbidden = []string{"knomit/internal/app", "knomit/internal/web"}
 // exactly: the cgo inference stack (the ONNX runtime binding, the tokenizers
 // library, and internal/embeddings, which links both). The desktop only needs
 // to KNOW about the model for its boot caption, and that lives in the cgo-free
-// internal/embeddings/params, which a prefix match would wrongly catch.
+// internal/domain/modelparams, which a prefix match would wrongly catch.
 var desktopForbiddenExact = []string{
 	"knomit/internal/embeddings",
 	"github.com/yalue/onnxruntime_go",
@@ -50,7 +50,7 @@ func TestDesktopLinksNoServer(t *testing.T) {
 		}
 		for _, f := range desktopForbiddenExact {
 			if contains(deps, f) {
-				t.Errorf("%s: knomit-desktop links %s; the desktop must not link the inference stack (the boot caption uses internal/embeddings/params)", goos, f)
+				t.Errorf("%s: knomit-desktop links %s; the desktop must not link the inference stack (the boot caption uses internal/domain/modelparams)", goos, f)
 			}
 		}
 		for _, dep := range deps {

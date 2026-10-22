@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/web/hal"
 
 	"github.com/stretchr/testify/require"

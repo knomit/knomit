@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 )
 
 // hasFactsVecRow reports whether the fact at (branch, path) has a row in
@@ -45,7 +45,7 @@ func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("embed batch boom")).AnyTimes()
 	m.EXPECT().Dim().Return(768).AnyTimes()
 	m.EXPECT().ID().Return("failing").AnyTimes()
-	m.EXPECT().Thresholds().Return(params.Defaults()).AnyTimes()
+	m.EXPECT().Thresholds().Return(modelparams.Defaults()).AnyTimes()
 	return m
 }
 
@@ -65,7 +65,7 @@ func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	}).AnyTimes()
 	m.EXPECT().Dim().Return(768).AnyTimes()
 	m.EXPECT().ID().Return("empty-vec").AnyTimes()
-	m.EXPECT().Thresholds().Return(params.Defaults()).AnyTimes()
+	m.EXPECT().Thresholds().Return(modelparams.Defaults()).AnyTimes()
 	return m
 }
 
@@ -85,7 +85,7 @@ func wrongDimEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	}).AnyTimes()
 	m.EXPECT().Dim().Return(768).AnyTimes()
 	m.EXPECT().ID().Return("wrong-dim").AnyTimes()
-	m.EXPECT().Thresholds().Return(params.Defaults()).AnyTimes()
+	m.EXPECT().Thresholds().Return(modelparams.Defaults()).AnyTimes()
 	return m
 }
 

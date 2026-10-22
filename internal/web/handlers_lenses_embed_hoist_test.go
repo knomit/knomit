@@ -11,7 +11,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 )
 
 // countingEmbedder answers every query with the same fixed vector and counts
@@ -48,9 +48,9 @@ func (e *countingEmbedder) EmbedShortStrings(_ context.Context, texts []string) 
 	return out, nil
 }
 
-func (e *countingEmbedder) Dim() int                      { return len(e.vec) }
-func (e *countingEmbedder) ID() string                    { return "counting-stub" }
-func (e *countingEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (e *countingEmbedder) Dim() int                           { return len(e.vec) }
+func (e *countingEmbedder) ID() string                         { return "counting-stub" }
+func (e *countingEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 func newCountingEmbedder() *countingEmbedder {
 	return &countingEmbedder{vec: []float32{0.25, -0.5, 0.75}}

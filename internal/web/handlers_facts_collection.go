@@ -12,14 +12,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
 // factsTopicPrefix is the ontology root under which `?topic=X` translates to
-// `path=kb/X/`. Kept in sync with internal/fact.NewFact's lowercased root.
+// `path=kb/X/`. Kept in sync with internal/domain/fact.NewFact's lowercased root.
 const factsTopicPrefix = "kb/"
 
 // factsCollectionProvider is the narrow interface the facts collection handler depends on.

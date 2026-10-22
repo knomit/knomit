@@ -8,7 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 )
 
@@ -19,7 +19,7 @@ import (
 // working file under artifacts/<area>/ is.
 //
 // `validations:` at the top level is an authorable ontology field
-// (internal/fact/ontology.go). No shipped preset uses one today, which is the
+// (internal/domain/fact/ontology.go). No shipped preset uses one today, which is the
 // only reason the update path's missing guard was invisible.
 const rootValidationOntologyYAML = `id: t
 name: T

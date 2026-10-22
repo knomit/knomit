@@ -141,7 +141,7 @@ name: Tests
 # THE RUNNER CHECKS OUT WITH core.autocrlf=true, which is Git for Windows'
 # installed default and the opposite of the machine knomit's Windows support
 # was developed on. The first run of this job that got as far as running tests
-# failed internal/fact's TestCorpus_RoundTripIdentical on nothing but line
+# failed internal/domain/fact's TestCorpus_RoundTripIdentical on nothing but line
 # endings. The fix is the repo's new .gitattributes (`* text=auto eol=lf`), not
 # a git config in this workflow: setting autocrlf=false here would have made
 # the job green while leaving the failure in place for every Windows developer
@@ -324,7 +324,7 @@ jobs:
       # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
       # in-process fake provider in internal/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/serveraddr/ ./internal/pki/... ./internal/oauth/...
+        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/config/ ./internal/domain/fact/ ./internal/auth/ ./internal/serveraddr/ ./internal/pki/... ./internal/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

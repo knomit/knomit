@@ -11,8 +11,8 @@ import (
 
 	"knomit/internal/store/model"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 
@@ -41,7 +41,7 @@ const (
 // pins params.Defaults() unconditionally, which would silently run every band
 // case at the NOMIC geometry — the exact blind spot that let the original
 // (SimilarTo, Dedup) band look correct.
-func newAngleEmbedder(t *testing.T, modelID string, th params.Thresholds, angleByMarker map[string]float64) *MockBatchEmbedder {
+func newAngleEmbedder(t *testing.T, modelID string, th modelparams.Thresholds, angleByMarker map[string]float64) *MockBatchEmbedder {
 	t.Helper()
 	emb := NewMockBatchEmbedder(gomock.NewController(t))
 
@@ -99,7 +99,7 @@ func angleFor(cosine float64) float64 { return math.Acos(cosine) }
 
 // newSameSubjectRepo wires a repo whose embedder reports th and places the seed
 // at cosine 1.0 with itself and `probeCosine` with the probe fact.
-func newSameSubjectRepo(t *testing.T, modelID string, th params.Thresholds, probeCosine float64) (*store.Service, context.Context, model.BatchEmbedder) {
+func newSameSubjectRepo(t *testing.T, modelID string, th modelparams.Thresholds, probeCosine float64) (*store.Service, context.Context, model.BatchEmbedder) {
 	t.Helper()
 	emb := newAngleEmbedder(t, modelID, th, map[string]float64{
 		seedMarker:  0,
@@ -187,7 +187,7 @@ func liveFactCount(t *testing.T, svc *store.Service) int {
 func handlerThresholdSets(t *testing.T) []struct {
 	name  string
 	model string
-	th    params.Thresholds
+	th    modelparams.Thresholds
 } {
 	return thresholdSets(t)
 }
@@ -248,8 +248,8 @@ func TestLearnHandler_DistinctFromBypassesRefusal(t *testing.T) {
 // not exist means they checked nothing, so it is a validation error rather than
 // a silently accepted bypass.
 func TestLearnHandler_DistinctFromUnknownPathRejected(t *testing.T) {
-	th := params.Defaults()
-	svc, ctx, emb := newSameSubjectRepo(t, params.NomicModelID, th, inBand(th))
+	th := modelparams.Defaults()
+	svc, ctx, emb := newSameSubjectRepo(t, modelparams.NomicModelID, th, inBand(th))
 	seedRampFact(t, ctx, emb)
 	before := liveFactCount(t, svc)
 
@@ -413,8 +413,8 @@ func TestLearnHandler_RefusalIsWholeCallNotPerFact(t *testing.T) {
 // FactExists lowercases, so a mixed-case path validates. If the bypass compared
 // exactly, the caller would be refused again and told to do what they just did.
 func TestLearnHandler_DistinctFromIsCaseInsensitive(t *testing.T) {
-	th := params.Defaults()
-	svc, ctx, emb := newSameSubjectRepo(t, params.NomicModelID, th, inBand(th))
+	th := modelparams.Defaults()
+	svc, ctx, emb := newSameSubjectRepo(t, modelparams.NomicModelID, th, inBand(th))
 	seeded := seedRampFact(t, ctx, emb)
 	before := liveFactCount(t, svc)
 
@@ -457,7 +457,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // behaviour, keep this test green, and silently destroy the only signal that
 // the gate is off. Pinning the log pins the mechanism.
 func TestLearnHandler_UnknownModelTurnsTheGateOff(t *testing.T) {
-	th := params.Defaults()
+	th := modelparams.Defaults()
 	// A working embedder reporting an id params has no calibration for.
 	const unknownModel = "no-such-model-v9"
 	emb := newAngleEmbedder(t, unknownModel, th, map[string]float64{

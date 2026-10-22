@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/store/fleetrec"
 	"knomit/internal/store/internal/vcs"

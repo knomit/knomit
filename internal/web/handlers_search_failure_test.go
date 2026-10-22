@@ -15,8 +15,8 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -71,9 +71,9 @@ func (e failEmb) EmbedShortStrings(_ context.Context, texts []string) ([][]float
 	return out, nil
 }
 
-func (failEmb) Dim() int                      { return 768 }
-func (failEmb) ID() string                    { return "fail-emb" }
-func (failEmb) Thresholds() params.Thresholds { return params.Defaults() }
+func (failEmb) Dim() int                           { return 768 }
+func (failEmb) ID() string                         { return "fail-emb" }
+func (failEmb) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // realRepo is a repo instance over a REAL store wired to emb.
 func realRepo(t *testing.T, emb failEmb) (*repos.RepoInstance, *store.Service) {

@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )

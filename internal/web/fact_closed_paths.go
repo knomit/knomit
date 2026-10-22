@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/web/hal"
 )
 

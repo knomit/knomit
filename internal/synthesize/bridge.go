@@ -6,7 +6,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // bridgePathCommunities builds the path→communityID map used by both

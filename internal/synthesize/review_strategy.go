@@ -25,7 +25,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
@@ -175,7 +175,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *model.PipelineSess
 	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
-	// The near-duplicate floor is model-dependent (see internal/embeddings/params).
+	// The near-duplicate floor is model-dependent (see internal/domain/modelparams).
 	t = time.Now()
 	dedupThreshold := model.EmbedderThresholds(d.RI.Embedder()).Dedup
 	for i := range clusters {

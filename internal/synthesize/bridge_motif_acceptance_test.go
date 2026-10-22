@@ -15,7 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/testsupport/modroot"
 )
 
 // Phase-3 acceptance: the 13 bridge-yield pairs replayed through the SHIPPED
@@ -51,7 +52,7 @@ var (
 // projects it into the shape enumeration consumes.
 func loadCanonCorpus(t *testing.T, corpus string) []factForLLM {
 	t.Helper()
-	f, err := os.Open("../../" + trainCanonPath)
+	f, err := os.Open(modroot.Path(t, filepath.FromSlash(trainCanonPath)))
 	require.NoError(t, err, "harness fixture missing — this acceptance cannot run")
 	defer f.Close()
 

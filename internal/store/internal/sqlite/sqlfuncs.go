@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/fact"
-	"knomit/internal/fact/textnorm"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/fact/textnorm"
 	"knomit/internal/store/model"
 
 	sqlite3 "github.com/mattn/go-sqlite3"

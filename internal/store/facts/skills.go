@@ -11,7 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // Skills are read out of ONE commit's own tree (fact.SkillsDir). The caller

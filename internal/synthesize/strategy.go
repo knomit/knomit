@@ -27,7 +27,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store/facts"
 

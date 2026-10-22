@@ -12,8 +12,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -604,9 +604,9 @@ func (e rankedFedEmbedder) EmbedDocuments(_ context.Context, titles, bodies []st
 	}
 	return out, nil
 }
-func (rankedFedEmbedder) Dim() int                      { return 768 }
-func (rankedFedEmbedder) ID() string                    { return "ranked-fed" }
-func (rankedFedEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (rankedFedEmbedder) Dim() int                           { return 768 }
+func (rankedFedEmbedder) ID() string                         { return "ranked-fed" }
+func (rankedFedEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // rankedFedRepo builds a code-ontology repo wired with rankedFedEmbedder (so
 // text search yields a deterministic relevance ranking) and a seeding context.

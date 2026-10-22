@@ -23,7 +23,7 @@ import (
 
 	"knomit/internal/client/sessions"
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store"
 )
 

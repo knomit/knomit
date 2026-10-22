@@ -17,12 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/merge"
 	"knomit/internal/store/remotesync"
 	"knomit/internal/store/storetest"
+	"knomit/internal/testsupport/modroot"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -536,8 +537,10 @@ func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 		"internal/store/facts/triggers.go": true,
 		"internal/repos/triggers.go":       true,
 	}
-	root := filepath.Join("..", "..")
+	root := modroot.Dir(t)
 	var offenders []string
+	walked := 0
+	seenAllowed := map[string]bool{}
 	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -561,7 +564,9 @@ func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
+		walked++
 		if allowed[rel] {
+			seenAllowed[rel] = true
 			return nil
 		}
 		b, err := os.ReadFile(p)
@@ -577,6 +582,13 @@ func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
+	// Non-vacuity: the walk reached the tree, and both allowed files were seen
+	// (a moved file would otherwise leave a stale key and become an offender
+	// only if it still mentions a due identifier).
+	require.Greater(t, walked, 200, "the walk read too few .go files — the guard is not watching the tree")
+	for k := range allowed {
+		require.Truef(t, seenAllowed[k], "allowed file %s was not found under the module root — stale key", k)
+	}
 	require.Empty(t, offenders, "the due sweep leaked outside the dispatcher and its store surface")
 }
 

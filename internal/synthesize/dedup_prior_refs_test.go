@@ -12,7 +12,7 @@ import (
 	"knomit/internal/store"
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/refs"
 	"knomit/internal/store/facts"
 

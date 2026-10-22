@@ -4,11 +4,11 @@
 //
 // The name is broad but this package is not the home for "everything about
 // refs". Ref CLASSIFICATION — what shape a ref has, whether it is well-formed,
-// which kind it is — lives in internal/fact (fact.ClassifyRef) and must stay
-// there, because internal/fact is the pure leaf that store, web, mcp and the
+// which kind it is — lives in internal/domain/fact (fact.ClassifyRef) and must stay
+// there, because internal/domain/fact is the pure leaf that store, web, mcp and the
 // front-end schema all depend on. This package holds only the half that needs
 // corpus access and repo identity, which is why it can import internal/store
-// and internal/fact cannot. Moving a classifier in here would drag the whole
+// and internal/domain/fact cannot. Moving a classifier in here would drag the whole
 // store closure into every caller that only wanted to parse a string.
 //
 // It exists so the rule "a stored local fact ref resolves" is a property of
@@ -42,7 +42,7 @@
 //     system resolves perfectly well — the gate would be enforcing a stricter
 //     reality than the one the graph actually implements.
 //
-// Kind classification stays in internal/fact, which is pure. This package adds
+// Kind classification stays in internal/domain/fact, which is pure. This package adds
 // the two things that need corpus access and repo identity: resolution and
 // canonicalization.
 package refs
@@ -53,7 +53,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
 )
@@ -197,7 +197,7 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 
 			// SOURCE REF FORM (#249). A src ref this write ADDS must be the
 			// full <12-hex>/<path>@<40-hex>:<40-hex> form. Anything shorter
-			// classifies as Legacy, which internal/fact's shape rule accepts
+			// classifies as Legacy, which internal/domain/fact's shape rule accepts
 			// unconditionally — so a placeholder in the repo id, or a dropped
 			// :blob, used to land silently.
 			//

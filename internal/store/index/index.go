@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
