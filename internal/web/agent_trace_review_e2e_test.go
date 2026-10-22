@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -68,9 +68,9 @@ func (traceEmbedder) EmbedShortStrings(_ context.Context, texts []string) ([][]f
 	}
 	return out, nil
 }
-func (traceEmbedder) Dim() int                      { return traceVecDim }
-func (traceEmbedder) ID() string                    { return "trace-stub" }
-func (traceEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (traceEmbedder) Dim() int                           { return traceVecDim }
+func (traceEmbedder) ID() string                         { return "trace-stub" }
+func (traceEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // newTraceReviewE2E is newReviewE2E with an embedder, over the first round of
 // seedTraceCorpus.

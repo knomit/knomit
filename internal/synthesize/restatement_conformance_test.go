@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/testsupport/modroot"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,9 +37,12 @@ var budgetLiterals = map[string]string{
 // all of them: an absolute cosine is no less a corpus-property constant for
 // being in the store layer, and the first version of this test only looked at
 // one file.
+//
+// Slash paths from the module root (modroot), not "../store/...": a layer move
+// changes both the depth and the sibling names of every cross-package path.
 var phase0Files = []string{
-	"restatement.go",
-	"../store/vocab/abstraction.go",
+	"internal/synthesize/restatement.go",
+	"internal/store/vocab/abstraction.go",
 }
 
 // TestConformance_NoCorpusPropertyConstants fails if a float literal appears in
@@ -49,7 +54,7 @@ var phase0Files = []string{
 func TestConformance_NoCorpusPropertyConstants(t *testing.T) {
 	for _, rel := range phase0Files {
 		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, rel, nil, 0)
+		file, err := parser.ParseFile(fset, modroot.Path(t, filepath.FromSlash(rel)), nil, 0)
 		require.NoError(t, err, "parse %s", rel)
 
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -71,7 +76,7 @@ func TestConformance_NoCorpusPropertyConstants(t *testing.T) {
 // spend has to say so where it is defined, or the next reader cannot tell it
 // from a threshold somebody measured.
 func TestConformance_BudgetConstantsSayWhatTheyBudget(t *testing.T) {
-	src := readSourceFile(t, "restatement.go") + readSourceFile(t, "../store/vocab/abstraction.go")
+	src := readSourceFile(t, "restatement.go") + readModuleFile(t, "internal/store/vocab/abstraction.go")
 	for _, want := range []struct{ name, classification string }{
 		{"titleBackfillBudget", "LATENCY BUDGET"},
 		{"titleBackfillBatch", "THROUGHPUT BUDGET"},
@@ -107,7 +112,8 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// gone quietly green on the very refactor most likely to break it.
 	scanned := 0
 	scannedDirs := map[string]bool{}
-	for _, pkg := range []string{"../mcp", "../web", "../store"} {
+	storeRoot := modroot.Path(t, "internal", "store")
+	for _, pkg := range []string{modroot.Path(t, "internal", "mcp"), modroot.Path(t, "internal", "web"), storeRoot} {
 		// Recursive, not a flat glob: since the store was split into child
 		// packages (store/internal/sqlite, store/sessions, ...) a flat
 		// glob of ../store/*.go left every child outside the scan, so a real use
@@ -145,7 +151,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 			// package (e.g. internal/sqlite/service.go) is NOT allowlisted.
 			rel, err := filepath.Rel(pkg, path)
 			require.NoError(t, err)
-			if pkg == "../store" {
+			if pkg == storeRoot {
 				// index/vec_table.go and vocab/abstraction.go follow the index
 				// and vocab children's moves of vec_table.go and abstraction.go;
 				// each exemption covers the same code as before. The git layer
@@ -182,7 +188,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 	// at least one file scanned. The set of children comes from the tree, not
 	// from a list in this test, so a new child is held to the same check.
 	storeDirs := 0
-	require.NoError(t, filepath.WalkDir("../store", func(path string, d fs.DirEntry, err error) error {
+	require.NoError(t, filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.IsDir() || d.Name() == "testdata" {
 			return err
 		}
@@ -198,7 +204,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 			return nil
 		}
 		storeDirs++
-		require.True(t, scannedDirs[filepath.ToSlash(path)] || path == "../store",
+		require.True(t, scannedDirs[filepath.ToSlash(path)] || path == storeRoot,
 			"store package directory %s has Go files but none were scanned", path)
 		return nil
 	}))
@@ -210,8 +216,8 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 // A repo owner cannot know whether title similarity discriminates on their
 // corpus, so asking them is asking for a guess that then looks like a decision.
 func TestConformance_NoConfigSurface(t *testing.T) {
-	for _, rel := range []string{"../config/config.go", "../repos/instance.go"} {
-		src := strings.ToLower(readSourceFile(t, rel))
+	for _, rel := range []string{"internal/config/config.go", "internal/repos/instance.go"} {
+		src := strings.ToLower(readModuleFile(t, rel))
 		for _, forbidden := range []string{"restatement", "shortlist", "title_vector", "titlevector", "abstraction"} {
 			require.NotContains(t, src, forbidden,
 				"%s must carry no setting for the consolidation-scope fix", rel)
@@ -233,7 +239,7 @@ func TestConformance_NoConfigSurface(t *testing.T) {
 // A CRLF checkout WOULD change this hash, and that is the correct outcome
 // rather than a bug to paper over: the protected file would genuinely not be
 // the bytes this pin names.
-const effortNormalTestSHA256 = "1696beecf52b3424dbc87a9c95938b6140bfea3c1d15d0ef868a5ab4fb8c8185"
+const effortNormalTestSHA256 = "ccd9c4e275215548cac975e8a33a2c4911ec20e3034e901360817462b0cd3014"
 
 // effortNormalTestFile is the one file MN5 protects.
 const effortNormalTestFile = "review_effort_normal_test.go"
@@ -342,6 +348,14 @@ func TestConformance_ShortlistDoesNotBranchOnEffort(t *testing.T) {
 	}
 }
 
+// readModuleFile reads a file named by a slash path from the module root.
+func readModuleFile(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(modroot.Path(t, filepath.FromSlash(rel)))
+	require.NoError(t, err)
+	return string(b)
+}
+
 func readSourceFile(t *testing.T, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Clean(rel))
@@ -354,7 +368,7 @@ func readSourceFile(t *testing.T, rel string) string {
 // inspected: the checks above are about what a file REACHES, and prose about a
 // subsystem is not a dependency on it.
 //
-// This is the same shape as internal/fact's funcsMentioningMotifs, and for the
+// This is the same shape as internal/domain/fact's funcsMentioningMotifs, and for the
 // same reason recorded there: a check has to inspect the form a violation
 // would actually be written in. Here that form is code — an identifier, a
 // selector, or a SQL string naming a table.

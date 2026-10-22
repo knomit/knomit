@@ -14,7 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/testsupport/modroot"
 )
 
 // TestVerifyCmd_SignatureSubcommandsRegistered: F09's ci (the gate), audit
@@ -198,7 +199,7 @@ func TestVerifyCI_UpstreamDefaultsToOriginHead(t *testing.T) {
 // SABOTAGE: restore `git fetch --no-tags origin main` or
 // `--upstream origin/main` → red.
 func TestVerifyCITemplate_NamesNoBranch(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "tools", "ci", "verify-signatures.yml"))
+	b, err := os.ReadFile(modroot.Path(t, "tools", "ci", "verify-signatures.yml"))
 	require.NoError(t, err)
 	for i, line := range strings.Split(string(b), "\n") {
 		code := strings.TrimSpace(line)

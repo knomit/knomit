@@ -8,7 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -221,7 +221,7 @@ func TestExplain_SummaryNodesCarrySources(t *testing.T) {
 
 // TestExplain_ZeroSourcesIsSerialized pins that sources: 0 is emitted rather than
 // dropped. Zero is a claim — "no independent sources recorded" — not an absence.
-// fact.Fact serializes sources without omitempty (internal/fact/format.go), so
+// fact.Fact serializes sources without omitempty (internal/domain/fact/format.go), so
 // knomit_query already reports "sources":0 for these facts; omitting it here made
 // the two tools disagree about the same field on the same corpus.
 func TestExplain_ZeroSourcesIsSerialized(t *testing.T) {

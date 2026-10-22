@@ -25,7 +25,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // disjointnessPercentile names WHERE in the corpus's own label-df distribution

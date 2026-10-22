@@ -24,20 +24,20 @@ func deps(t *testing.T, pkg string) []string {
 	return got
 }
 
-// TestFactStaysPure pins internal/fact as the cheap leaf that everything else
+// TestFactStaysPure pins internal/domain/fact as the cheap leaf that everything else
 // can import freely.
 //
-// internal/fact is imported by store, repos, web, mcp, synthesize, okf, refs and
+// internal/domain/fact is imported by store, repos, web, mcp, synthesize, okf, refs and
 // the test harness — several of them precisely because it is pure: it classifies
 // and formats, it does not read a corpus. The split is deliberate and recorded:
 // fact.ClassifyRef answers what KIND a ref is, while whether a ref RESOLVES is
 // commit-dependent and lives in internal/refs, which may import the store.
 //
 // Without this guard the boundary is a doc comment. The failure it prevents is
-// silent rather than loud: adding a store call to internal/fact still compiles,
+// silent rather than loud: adding a store call to internal/domain/fact still compiles,
 // and merely drags SQLite, go-git and golang-migrate into every consumer that
 // wanted to parse a string. The same trap applies to a subpackage — a
-// hypothetical internal/fact/<something> that imports the store would read as
+// hypothetical internal/domain/fact/<something> that imports the store would read as
 // "part of fact" while carrying 2.5x its dependency weight.
 func TestFactStaysPure(t *testing.T) {
 	forbiddenByFact := []string{
@@ -50,10 +50,10 @@ func TestFactStaysPure(t *testing.T) {
 		"knomit/internal/synthesize",
 	}
 
-	for _, dep := range deps(t, "knomit/internal/fact") {
+	for _, dep := range deps(t, "knomit/internal/domain/fact") {
 		for _, f := range forbiddenByFact {
 			if dep == f || strings.HasPrefix(dep, f+"/") {
-				t.Errorf("internal/fact transitively imports %q — it must stay the pure leaf that "+
+				t.Errorf("internal/domain/fact transitively imports %q — it must stay the pure leaf that "+
 					"every other layer can import cheaply. Ref classification belongs here; anything "+
 					"needing corpus access or repo identity belongs in internal/refs.", dep)
 			}
@@ -61,7 +61,7 @@ func TestFactStaysPure(t *testing.T) {
 	}
 }
 
-// TestParamsHasNoDependencies pins internal/embeddings/params as a dependency-
+// TestParamsHasNoDependencies pins internal/domain/modelparams as a dependency-
 // free leaf.
 //
 // params holds the cgo-free half of the embedding-model contract — the
@@ -77,7 +77,7 @@ func TestFactStaysPure(t *testing.T) {
 // so the check here is the strictest available — zero non-stdlib imports, which
 // forecloses the mistake rather than enumerating it.
 func TestParamsHasNoDependencies(t *testing.T) {
-	const pkg = "knomit/internal/embeddings/params"
+	const pkg = "knomit/internal/domain/modelparams"
 
 	for _, dep := range deps(t, pkg) {
 		if dep == pkg {
@@ -87,7 +87,7 @@ func TestParamsHasNoDependencies(t *testing.T) {
 		// else is a module path (knomit/..., github.com/..., golang.org/x/...).
 		first, _, _ := strings.Cut(dep, "/")
 		if strings.Contains(first, ".") {
-			t.Errorf("internal/embeddings/params imports %q — it must have ZERO non-stdlib "+
+			t.Errorf("internal/domain/modelparams imports %q — it must have ZERO non-stdlib "+
 				"dependencies so that store, config and synthesize can read model thresholds "+
 				"without linking cgo. In particular it must never import its own parent "+
 				"internal/embeddings, which carries the ONNX runtime.", dep)
@@ -163,10 +163,10 @@ func TestPlatformKnowsNothingAboutKnomit(t *testing.T) {
 	}
 }
 
-// TestTextnormImportsNoInternal pins internal/fact/textnorm as a leaf that
+// TestTextnormImportsNoInternal pins internal/domain/fact/textnorm as a leaf that
 // depends on nothing else in the tree.
 //
-// textnorm moved UNDER internal/fact because its subject is a fact concept —
+// textnorm moved UNDER internal/domain/fact because its subject is a fact concept —
 // it decides when two tags, domains or motifs are the same token — and the
 // nesting only reads honestly while the child stays lighter than the parent.
 //
@@ -183,15 +183,15 @@ func TestPlatformKnowsNothingAboutKnomit(t *testing.T) {
 // makes it a normaliser rather than a string switch. The rule is only that no
 // knomit package is among its dependencies.
 func TestTextnormImportsNoInternal(t *testing.T) {
-	const pkg = "knomit/internal/fact/textnorm"
+	const pkg = "knomit/internal/domain/fact/textnorm"
 
 	for _, dep := range deps(t, pkg) {
 		if dep == pkg {
 			continue // the package itself
 		}
 		if strings.HasPrefix(dep, "knomit/") {
-			t.Errorf("internal/fact/textnorm imports %q — it must depend on no knomit package at all. "+
-				"It sits under internal/fact only because it is LIGHTER than its parent; an edge to "+
+			t.Errorf("internal/domain/fact/textnorm imports %q — it must depend on no knomit package at all. "+
+				"It sits under internal/domain/fact only because it is LIGHTER than its parent; an edge to "+
 				"the store or the config inverts that and charges fact, store and synthesize for it "+
 				"on every call. External text libraries are allowed and expected.", dep)
 		}

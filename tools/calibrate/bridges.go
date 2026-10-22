@@ -8,8 +8,8 @@ import (
 	"text/tabwriter"
 
 	"knomit/internal/config"
+	"knomit/internal/domain/fact"
 	"knomit/internal/embeddings"
-	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 

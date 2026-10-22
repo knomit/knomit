@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 )
 
@@ -19,7 +19,7 @@ import (
 const rrfK = 60
 
 // KBScheme is the kb:// wire-path scheme prefix (RFC §6.1). Defined in
-// internal/fact, the single ref-classification authority.
+// internal/domain/fact, the single ref-classification authority.
 const KBScheme = fact.KBScheme
 
 // MountRef addresses one row of a per-mount result list: lists[Mount][Rank].
@@ -110,7 +110,7 @@ func ReadSetFingerprint(b *repos.Binding) string {
 	return strings.Join(parts, ",")
 }
 
-// The four functions below are thin delegations to internal/fact, which owns
+// The four functions below are thin delegations to internal/domain/fact, which owns
 // the single ref-classification rule. federate keeps the API because its shape
 // is the right one for federation callers ("split this wire path") — what was
 // wrong was federate owning a second COPY of the rule, which had already

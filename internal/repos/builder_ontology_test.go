@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -155,7 +155,7 @@ func bootKnomitWithPreDotOnlyOntology(t *testing.T, staleYAML string) (dir, agen
 // TestLoadOntology_PrefersCanonicalOverLegacy with DIFFERENT ids — neither
 // matching an embedded preset — so (a) the assertion can tell which file was
 // actually read, mirroring the discrimination
-// TestOntology_DotKnomitWinsOverLegacy (internal/okf/source/ontology_test.go)
+// TestOntology_DotKnomitWinsOverLegacy (internal/domain/okf/source/ontology_test.go)
 // applies to the exporter's own ontology reader, and (b) EmbeddedPresetByID
 // returns nil for both, keeping the boot-time refresh (which rewrites
 // srcPath when the stored ontology is a preset subset) out of play — this

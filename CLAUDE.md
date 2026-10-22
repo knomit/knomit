@@ -25,7 +25,7 @@ work on>` before:
 
 The argument is free text, not a taxonomy term — `/knomit-recall lens write-repo
 resolution` is a valid call. Name a KIND of knowledge as well when you want one:
-`/knomit-recall invariants for internal/fact` scopes the query to the
+`/knomit-recall invariants for internal/domain/fact` scopes the query to the
 `invariants` topic. The kinds are this repo's ontology topics, listed in the
 knomit MCP server instructions; the skill turns the name you type into the
 path filter.

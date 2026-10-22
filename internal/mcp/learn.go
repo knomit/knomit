@@ -13,7 +13,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
@@ -653,7 +653,7 @@ func applyDedupMerge(
 	retracting map[string]bool,
 	distinctFrom [][]string,
 ) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, error) {
-	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
+	// The near-duplicate cosine floor is model-dependent (see internal/domain/modelparams).
 	dedupThreshold := model.EmbedderThresholds(batchEmb).Dedup
 	// dedupVecs is computed by the CALLER now, because the same-subject stage
 	// downstream needs the same vectors and re-embedding for it would be a

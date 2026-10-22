@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // Axis names for Highlights ranking. All three order the SQL; Recent is

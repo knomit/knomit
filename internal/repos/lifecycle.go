@@ -17,7 +17,7 @@ import (
 	"github.com/segmentio/ksuid"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
 )

@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 )
 
 // floorEmbedder emits unit-norm 768-dim vectors with KNOWN cosines to the
@@ -55,8 +55,8 @@ func (e *floorEmbedder) EmbedDocuments(_ context.Context, titles, bodies []strin
 }
 func (e *floorEmbedder) Dim() int   { return 768 }
 func (e *floorEmbedder) ID() string { return "floor" }
-func (e *floorEmbedder) Thresholds() params.Thresholds {
-	th := params.Defaults()
+func (e *floorEmbedder) Thresholds() modelparams.Thresholds {
+	th := modelparams.Defaults()
 	th.SearchFloor = e.floor
 	return th
 }
@@ -65,7 +65,7 @@ func (e *floorEmbedder) Thresholds() params.Thresholds {
 // thresholds without a nil check: a nil embedder yields the historical defaults
 // rather than panicking, and a real embedder's values pass through unchanged.
 func TestEmbedderThresholds_NilSafe(t *testing.T) {
-	require.Equal(t, params.Defaults(), model.EmbedderThresholds(nil),
+	require.Equal(t, modelparams.Defaults(), model.EmbedderThresholds(nil),
 		"nil embedder must fall back to params.Defaults()")
 	require.Equal(t, 0.83, model.EmbedderThresholds(&floorEmbedder{floor: 0.83}).SearchFloor,
 		"a configured embedder's thresholds must pass through")

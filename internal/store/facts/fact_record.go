@@ -1,7 +1,7 @@
 package facts
 
 import (
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // FactRecord is the stored record — no body, just a blob_hash pointer.

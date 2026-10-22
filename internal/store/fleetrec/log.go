@@ -11,7 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/internal/vcs"
 )
 

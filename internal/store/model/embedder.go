@@ -3,7 +3,7 @@ package model
 import (
 	"context"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 )
 
 // Embedder computes vector embeddings. Roles differ because retrieval models
@@ -31,15 +31,15 @@ type Embedder interface {
 	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
 	// recall, SIMILAR_TO, reflect novelty). They are model-dependent, so they
 	// travel with the embedder rather than living as hard-coded constants.
-	Thresholds() params.Thresholds
+	Thresholds() modelparams.Thresholds
 }
 
 // EmbedderThresholds returns emb's calibrated cutoffs, or the historical
 // nomic-era defaults when no embedder is configured (embeddings disabled), so
 // callers get usable values without a nil check at every site.
-func EmbedderThresholds(emb Embedder) params.Thresholds {
+func EmbedderThresholds(emb Embedder) modelparams.Thresholds {
 	if emb == nil {
-		return params.Defaults()
+		return modelparams.Defaults()
 	}
 	return emb.Thresholds()
 }

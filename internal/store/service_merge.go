@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/merge"
 
 	"github.com/go-git/go-git/v5/plumbing"

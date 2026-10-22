@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"

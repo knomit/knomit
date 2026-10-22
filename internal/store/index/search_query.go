@@ -12,8 +12,8 @@ import (
 
 	"knomit/internal/store/model"
 
-	"knomit/internal/fact"
-	"knomit/internal/fact/textnorm"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/fact/textnorm"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/internal/vcs"
 

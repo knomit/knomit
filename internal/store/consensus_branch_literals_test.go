@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"knomit/internal/testsupport/modroot"
 )
 
 // TestNoHardcodedBranchLiterals holds the user's ruling, "Hardcoded values are
@@ -25,7 +27,7 @@ import (
 // (`upstream := "main"`, `org.Branch = "main"`, `--upstream origin/main`, a
 // "prefer main" loop, ...) turns this red at the line that did it.
 func TestNoHardcodedBranchLiterals(t *testing.T) {
-	root := filepath.Join("..", "..")
+	root := modroot.Dir(t)
 	dirs := []string{"cmd", "internal", filepath.Join("tools", "okf"), filepath.Join("tools", "calibrate")}
 	named := func(v string) bool {
 		for _, n := range []string{"main", "master"} {

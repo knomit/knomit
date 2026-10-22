@@ -70,7 +70,7 @@ function parseQualifiedRef(raw: string): RefParts | null {
  * `kb://<id>/…` carries, so a foreign fact ref in another mounted repo resolves
  * to that repo's name. A `src://` ref carries the SOURCE CODE repo's root
  * commit — a different namespace. knomit stores no source objects and keeps no
- * registry of source repos (internal/okf/concept.go refuses to guess one,
+ * registry of source repos (internal/domain/okf/concept.go refuses to guess one,
  * because a KB repo is usually not the repo it documents), so nothing on either
  * side of the wire can name one. Those ids are left alone.
  *

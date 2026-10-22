@@ -2,15 +2,18 @@ package antigravity
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"knomit/internal/testsupport/modroot"
 )
 
-// claudeBlockPathFromHere locates the Claude host's copy of the rules block on
-// disk, relative to this test file, since that template lives in a sibling
-// package (tools/bridge/claude) and this package cannot embed across the
-// package boundary.
-const claudeBlockPathFromHere = "../claude/templates/CLAUDE-md-block.txt"
+// claudeBlockPath is the Claude host's copy of the rules block, a slash path
+// from the module root: that template lives in a sibling package
+// (tools/bridge/claude) and this package cannot embed across the package
+// boundary.
+const claudeBlockPath = "tools/bridge/claude/templates/CLAUDE-md-block.txt"
 
 // TestRulesBlockMatchesClaude guards against silent drift between the two
 // hosts' copies of the knomit integration rules block.
@@ -34,7 +37,7 @@ const claudeBlockPathFromHere = "../claude/templates/CLAUDE-md-block.txt"
 // Antigravity copy, so an edit to one side without the other turns red here
 // instead of shipping silently.
 func TestRulesBlockMatchesClaude(t *testing.T) {
-	claudeRaw, err := os.ReadFile(claudeBlockPathFromHere)
+	claudeRaw, err := os.ReadFile(modroot.Path(t, filepath.FromSlash(claudeBlockPath)))
 	if err != nil {
 		t.Fatalf("read Claude rules block: %v", err)
 	}
@@ -94,7 +97,7 @@ func TestRulesBlockIsHostNeutral(t *testing.T) {
 			return string(b), err
 		},
 		"claude templates/CLAUDE-md-block.txt (markers stripped)": func() (string, error) {
-			b, err := os.ReadFile(claudeBlockPathFromHere)
+			b, err := os.ReadFile(modroot.Path(t, filepath.FromSlash(claudeBlockPath)))
 			return stripMarkerLines(string(b)), err
 		},
 	}

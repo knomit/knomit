@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // SubjectLabelDF is the document frequency of every SUBJECT LABEL live on a
@@ -35,7 +35,7 @@ type SubjectLabelDF struct {
 // => one row per live path per branch), exactly as TokenDF and BlastRadius do.
 //
 // Tokenisation happens in Go rather than in SQL because the definition of a
-// subject token lives in internal/fact and must stay single: a SQL
+// subject token lives in internal/domain/fact and must stay single: a SQL
 // reimplementation would be a second definition of the same rule, free to
 // drift from the one the write path enforces.
 func (gs *GraphStore) SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error) {

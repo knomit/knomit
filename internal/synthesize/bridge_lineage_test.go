@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // testLocalRepoID is a well-formed 12-hex repo id. It is a REAL id shape, not

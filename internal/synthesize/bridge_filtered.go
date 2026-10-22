@@ -7,7 +7,7 @@ import (
 
 	"knomit/internal/store/index"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // scopeLabel returns a human-readable label for the scope filter. The label is

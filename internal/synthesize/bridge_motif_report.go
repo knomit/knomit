@@ -20,7 +20,7 @@ import (
 	"knomit/internal/store/index"
 	"knomit/internal/store/vocab"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // ScoredMotifBridge is one enumerated motif bridge candidate — SERVED OR

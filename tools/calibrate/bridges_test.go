@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/embeddings"
-	"knomit/internal/embeddings/params"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -145,7 +145,7 @@ func TestCorpusDedupThreshold_UnknownIsNotADefault(t *testing.T) {
 	m, err := embeddings.Lookup("embeddinggemma")
 	require.NoError(t, err)
 	require.Equal(t, m.Thresholds.Dedup, got)
-	require.NotEqual(t, params.Defaults().Dedup, got,
+	require.NotEqual(t, modelparams.Defaults().Dedup, got,
 		"precondition: this model's threshold must DIFFER from the default, or the "+
 			"test cannot tell which one was used")
 }

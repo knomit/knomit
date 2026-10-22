@@ -13,7 +13,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // F24 template reads. Like the skill reader, they read ONE commit's own

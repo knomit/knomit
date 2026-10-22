@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // knomit#122 fix (b). The seed-scan log line carried `seeds` and `elapsed` and

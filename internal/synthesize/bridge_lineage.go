@@ -3,7 +3,7 @@ package synthesize
 import (
 	"sort"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // One-hop lineage exclusion for bridge candidates (#125).

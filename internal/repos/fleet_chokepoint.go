@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/store"
 )

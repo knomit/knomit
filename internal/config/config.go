@@ -16,8 +16,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 )
 
 // GitConfig holds git-related configuration.
@@ -596,7 +596,7 @@ func Defaults() Config {
 			WGap:                 1.0,
 			WSpec:                1.0,
 		},
-		Embeddings: EmbeddingsConfig{Model: params.DefaultModelID},
+		Embeddings: EmbeddingsConfig{Model: modelparams.DefaultModelID},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",

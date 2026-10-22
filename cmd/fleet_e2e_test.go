@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"

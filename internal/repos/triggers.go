@@ -66,7 +66,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/store"
 	"knomit/internal/store/facts"

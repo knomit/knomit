@@ -10,7 +10,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // Skills as MCP prompts, per binding, on ONE MCPServer (F08 §4).

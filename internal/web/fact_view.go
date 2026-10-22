@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/web/hal"
 )
 

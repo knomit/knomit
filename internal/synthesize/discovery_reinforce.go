@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/index"
 )

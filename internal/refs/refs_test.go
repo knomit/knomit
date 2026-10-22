@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 const gateRepoID = "3ec012f5b4d2"
@@ -444,7 +444,7 @@ func TestGate_CarriedSelfRefPlusNewRef_ReinforceShape(t *testing.T) {
 // agent has typed or could type in place of a computed value, and each one was
 // accepted before: the first because nothing checked a src ref here at all, the
 // rest because anything short of the full form classifies as Legacy and the
-// shape rule in internal/fact accepts Legacy unconditionally.
+// shape rule in internal/domain/fact accepts Legacy unconditionally.
 //
 // An invented but well-formed 40-hex blob is NOT on this list: no syntactic
 // check can tell it from a real one.

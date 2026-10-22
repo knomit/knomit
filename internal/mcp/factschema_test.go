@@ -6,14 +6,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
-// TestFactSchema_DescriptionsAreComplete is what makes internal/fact the
+// TestFactSchema_DescriptionsAreComplete is what makes internal/domain/fact the
 // single source of truth for the classification vocabulary rather than merely
 // one of several copies of it.
 //
-// internal/fact owns WHICH values exist; internal/mcp owns HOW they are
+// internal/domain/fact owns WHICH values exist; internal/mcp owns HOW they are
 // described to an LLM tool-caller. That split only holds if adding a value on
 // one side is forced to surface on the other. Without this test, a new leaf
 // type added to fact.AllEpistemicTypes() would silently ship with an empty
@@ -24,14 +24,14 @@ func TestFactSchema_DescriptionsAreComplete(t *testing.T) {
 		for _, ty := range allTypes() {
 			doc, ok := factTypeDocs[ty]
 			require.Truef(t, ok && strings.TrimSpace(doc.Gloss) != "",
-				"leaf type %q exists in internal/fact but has no description in internal/mcp.\n"+
+				"leaf type %q exists in internal/domain/fact but has no description in internal/mcp.\n"+
 					"Add an entry to factTypeDocs in internal/mcp/factschema.go:\n"+
 					"\tfact.%s: {\"<one-clause gloss of what this type is for>\", \"<illustrative example, or \\\"\\\">\"},\n"+
 					"The gloss reaches the knomit_learn/knomit_update JSON schema; the aside reaches "+
-					"the server instructions. Descriptions deliberately do NOT live in internal/fact.",
+					"the server instructions. Descriptions deliberately do NOT live in internal/domain/fact.",
 				ty, strings.ToUpper(string(ty)[:1])+string(ty)[1:])
 		}
-		// And the converse: a description for a type internal/fact no longer
+		// And the converse: a description for a type internal/domain/fact no longer
 		// knows about is dead prose that would still be shown to agents.
 		known := make(map[fact.Type]bool, len(allTypes()))
 		for _, ty := range allTypes() {
@@ -40,7 +40,7 @@ func TestFactSchema_DescriptionsAreComplete(t *testing.T) {
 		for ty := range factTypeDocs {
 			require.Truef(t, known[ty],
 				"factTypeDocs documents %q, which is not in fact.AllEpistemicTypes()+AllPragmaticTypes().\n"+
-					"Either the type was removed from internal/fact (delete this entry) or it was never "+
+					"Either the type was removed from internal/domain/fact (delete this entry) or it was never "+
 					"registered there (add it to the authoritative set).", ty)
 		}
 	})
@@ -59,7 +59,7 @@ func TestFactSchema_DescriptionsAreComplete(t *testing.T) {
 		for o := range factOriginDocs {
 			require.Truef(t, known[o],
 				"factOriginDocs documents %q, which is not in fact.AllOrigins(). Delete the entry "+
-					"or register the origin in internal/fact.", o)
+					"or register the origin in internal/domain/fact.", o)
 		}
 	})
 
@@ -96,7 +96,7 @@ func TestFactSchema_TypeEnumIsMachineEnforced(t *testing.T) {
 		enum, ok := prop["enum"].([]string)
 		require.True(t, ok, "`type` must carry a machine-enforced enum, not prose alone")
 		require.ElementsMatch(t, enumValues(allTypes()), enum,
-			"the `type` enum must be exactly internal/fact's leaf types")
+			"the `type` enum must be exactly internal/domain/fact's leaf types")
 	}
 }
 

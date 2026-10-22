@@ -5,7 +5,7 @@ import (
 
 	"github.com/pmezard/go-difflib/difflib"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store/model"
 )
 

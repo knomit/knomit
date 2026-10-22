@@ -3,7 +3,7 @@ package synthesize
 import (
 	"fmt"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // validPruneActions is the set of allowed decision actions.

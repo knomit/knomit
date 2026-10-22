@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/test/testenv"
 )
 

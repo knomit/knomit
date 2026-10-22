@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 func TestMotifClusters_OneRowPerClusterWithClusterDF(t *testing.T) {

@@ -3,7 +3,7 @@ package testenv
 import (
 	"fmt"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // FactSpec is a fluent builder for fact content. Methods return the spec by

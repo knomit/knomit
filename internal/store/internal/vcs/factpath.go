@@ -3,7 +3,7 @@ package vcs
 import (
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // DefaultOntologyRoot mirrors config.Defaults().OntologyRoot. The store cannot

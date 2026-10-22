@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 func TestValidateOntology_OKReturnsSummary(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 	"knomit/internal/store/model"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store/index"

@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // PR #126, HIGH-1 + MEDIUM-3. Fix (b)'s deliverable is the LOG LINE, and the

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 )
 

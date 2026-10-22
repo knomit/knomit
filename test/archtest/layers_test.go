@@ -39,17 +39,12 @@ const internalPrefix = "knomit/internal/"
 var layerExempt = []string{"testsupport"}
 
 // legacyLayers maps today's flat package paths (relative to knomit/internal/)
-// to their TARGET layer. Longest prefix wins, so embeddings/params can sit in
-// domain while embeddings sits in engine. Every entry is deleted when its
+// to their TARGET layer. Longest prefix wins. Every entry is deleted when its
 // package moves under its layer directory, because layerOf resolves
 // internal/<layer>/... by directory first. When this map is empty the table has
 // become a path-prefix rule and a package that is in neither place is reported
 // as unmapped. Do not add entries for new packages: put them in a layer dir.
 var legacyLayers = map[string]int{
-	// domain
-	"fact":              layerDomain, // includes fact/textnorm
-	"okf":               layerDomain, // includes okf/source
-	"embeddings/params": layerDomain, // becomes domain/modelparams
 	// foundation
 	"config":          layerFoundation,
 	"auth":            layerFoundation,
@@ -82,8 +77,8 @@ var sameLayerEdges = map[string]bool{
 	"platform/diag -> platform/hostguard": true,
 	"platform/diag -> platform/metrics":   true,
 	// domain
-	"okf -> fact":        true,
-	"okf/source -> fact": true,
+	"domain/okf -> domain/fact":        true,
+	"domain/okf/source -> domain/fact": true,
 	// foundation
 	"config -> auth":       true,
 	"serveraddr -> auth":   true,
@@ -354,17 +349,17 @@ func listImports(t *testing.T, env []string, tags string) map[string][]string {
 func TestLayersDetectsViolations(t *testing.T) {
 	const p = internalPrefix
 	graph := map[string][]string{
-		p + "fact":                   {p + "store", "fmt"},          // domain -> engine: upward
-		p + "store":                  {p + "fact", p + "store/git"}, // fine: downward, and own subpackage
+		p + "domain/fact":            {p + "store", "fmt"},                 // domain -> engine: upward
+		p + "store":                  {p + "domain/fact", p + "store/git"}, // fine: downward, and own subpackage
 		p + "store/git":              nil,
-		p + "refs":                   {p + "repos"}, // corpus -> corpus, unlisted
-		p + "repos":                  {p + "store"}, // fine
-		p + "mystery":                {p + "fact"},  // maps to no layer
-		p + "testsupport/testsigner": {p + "store"}, // exempt importer
+		p + "refs":                   {p + "repos"},       // corpus -> corpus, unlisted
+		p + "repos":                  {p + "store"},       // fine
+		p + "mystery":                {p + "domain/fact"}, // maps to no layer
+		p + "testsupport/testsigner": {p + "store"},       // exempt importer
 	}
 	got := layerViolations(graph, nil)
 	want := []string{
-		p + "fact (domain) imports " + p + "store (engine): upward import",
+		p + "domain/fact (domain) imports " + p + "store (engine): upward import",
 		p + "mystery: maps to no layer (put it inside a layer directory)",
 		p + "refs imports " + p + "repos: unlisted same-layer edge in corpus (refs -> repos)",
 	}
@@ -402,7 +397,7 @@ func TestLayers(t *testing.T) {
 	}
 	// Sentinels: one real package per layer, so a wrong pattern cannot pass vacuously.
 	sentinels := map[int]string{
-		layerPlatform: "platform/logging", layerDomain: "fact", layerFoundation: "config",
+		layerPlatform: "platform/logging", layerDomain: "domain/fact", layerFoundation: "config",
 		layerEngine: "store", layerCorpus: "repos", layerEdge: "web", layerApp: "app",
 	}
 	seen := map[string]bool{}

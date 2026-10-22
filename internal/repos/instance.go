@@ -16,7 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/store"
 )
 

@@ -69,7 +69,7 @@ func TestStoreModel_IsALeaf(t *testing.T) {
 // reported, the model package itself and unrelated packages are not.
 func TestStoreModelLeafDetectorSees(t *testing.T) {
 	closure := []string{
-		storeModelPkg, storeModelPkg + " [" + storeModelPkg + ".test]", storeModelPkg + ".test", "fmt", "knomit/internal/fact",
+		storeModelPkg, storeModelPkg + " [" + storeModelPkg + ".test]", storeModelPkg + ".test", "fmt", "knomit/internal/domain/fact",
 		"knomit/internal/store", "knomit/internal/store/internal/vcs", "knomit/internal/storefront",
 	}
 	got := storeImportsIn(closure)

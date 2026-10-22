@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -56,7 +56,7 @@ func newLenEmbedder(t *testing.T) *MockBatchEmbedder {
 	}).AnyTimes()
 	emb.EXPECT().Dim().Return(768).AnyTimes()
 	emb.EXPECT().ID().Return("len-stub").AnyTimes()
-	emb.EXPECT().Thresholds().Return(params.Defaults()).AnyTimes()
+	emb.EXPECT().Thresholds().Return(modelparams.Defaults()).AnyTimes()
 	emb.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, titles, bodies []string) ([][]float32, error) {
 		out := make([][]float32, len(titles))
 		for i := range titles {

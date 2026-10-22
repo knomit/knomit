@@ -17,7 +17,7 @@
 // applies it internally, so reaching SerializeFact IS being gated. The REST
 // raw-editor PUT invokes that gate by hand only because it commits the
 // client's bytes and never reaches SerializeFact at all — copying its call
-// into this path was surplus. internal/fact's MN4 conformance test enforces
+// into this path was surplus. internal/domain/fact's MN4 conformance test enforces
 // exactly that, and enforces it by SCANNING SOURCE TEXT: naming the helper
 // here at all, even in a comment, trips it.
 //
@@ -40,7 +40,7 @@ import (
 
 	"knomit/internal/store/model"
 
-	knomitfact "knomit/internal/fact"
+	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"

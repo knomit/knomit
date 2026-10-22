@@ -2,9 +2,10 @@ package config_test
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"knomit/internal/testsupport/modroot"
 )
 
 // e2e/helpers/appdirs.ts is a hand-written TypeScript copy of this package's
@@ -22,7 +23,7 @@ import (
 // directory. Same technique as tools/desktop's windows_test.go, which greps
 // vite.config.ts for entry documents.
 func TestAppDirsTS_MatchesThisPackage(t *testing.T) {
-	path := filepath.Join("..", "..", "e2e", "helpers", "appdirs.ts")
+	path := modroot.Path(t, "e2e", "helpers", "appdirs.ts")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)

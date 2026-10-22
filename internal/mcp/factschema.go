@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 )
 
 // This file is the single source of truth for how the fact classification
@@ -19,16 +19,16 @@ import (
 //
 // The split of responsibility is deliberate:
 //
-//   - The ENUMS are derived from internal/fact (AllEpistemicTypes,
-//     AllPragmaticTypes, AllOrigins). internal/fact owns which values exist;
+//   - The ENUMS are derived from internal/domain/fact (AllEpistemicTypes,
+//     AllPragmaticTypes, AllOrigins). internal/domain/fact owns which values exist;
 //     this package must never restate them.
-//   - The DESCRIPTIONS live here, not in internal/fact. They are tuned for a
+//   - The DESCRIPTIONS live here, not in internal/domain/fact. They are tuned for a
 //     single audience — an LLM tool-caller reading a JSON schema — and their
 //     wording is driven by prompt-engineering concerns, not domain semantics.
-//     internal/fact stays free of prose.
+//     internal/domain/fact stays free of prose.
 //
 // What keeps the two halves honest is TestFactSchema_DescriptionsAreComplete:
-// adding a Type or Origin to internal/fact without documenting it here fails
+// adding a Type or Origin to internal/domain/fact without documenting it here fails
 // the build's test run. Without that test this is merely shared plumbing, and
 // it would drift straight back to where it started.
 
@@ -47,7 +47,7 @@ type typeDoc struct {
 // factTypeDocs documents every leaf Type. Wording is inherited from the
 // server instructions (historically the fullest of the three enumerations)
 // rather than reinvented, so agents that learned the old phrasing still
-// recognise it. Completeness against internal/fact is enforced by test.
+// recognise it. Completeness against internal/domain/fact is enforced by test.
 var factTypeDocs = map[fact.Type]typeDoc{
 	fact.Observation: {"concrete, specific statements", `"Alice likes Japanese tea"`},
 	fact.Concept:     {"definitions, mental models", `"Japanese tea culture emphasizes mindfulness"`},
@@ -162,7 +162,7 @@ func enumValues[T ~string](vals []T) []string {
 	return out
 }
 
-// allTypes returns every leaf Type, epistemic first, in internal/fact's
+// allTypes returns every leaf Type, epistemic first, in internal/domain/fact's
 // stable order. This is the `type` enum: a typo'd type is now rejected at the
 // protocol layer rather than surviving to fact validation.
 func allTypes() []fact.Type {

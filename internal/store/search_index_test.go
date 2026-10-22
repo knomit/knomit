@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/store/facts"
 )
 
@@ -38,8 +38,8 @@ func (e *configurableEmbedder) EmbedDocument(context.Context, string, string) ([
 }
 func (e *configurableEmbedder) Dim() int   { return e.dim }
 func (e *configurableEmbedder) ID() string { return e.id }
-func (e *configurableEmbedder) Thresholds() params.Thresholds {
-	return params.Defaults()
+func (e *configurableEmbedder) Thresholds() modelparams.Thresholds {
+	return modelparams.Defaults()
 }
 func (e *configurableEmbedder) EmbedDocuments(_ context.Context, titles, _ []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))

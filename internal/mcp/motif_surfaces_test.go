@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"knomit/internal/store/index"
+	"knomit/internal/testsupport/modroot"
 
 	"github.com/stretchr/testify/require"
 )
@@ -127,7 +128,16 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	roots := []struct {
 		dir     string
 		minDirs int
-	}{{".", 1}, {"../synthesize", 1}, {"../web", 1}, {"../store", 5}, {"../repos", 1}}
+	}{
+		// Resolved from the module root, not by "../sibling": a layer move
+		// changes both the depth and the sibling names, and a relative path
+		// would break (or, worse, narrow) the scan with it.
+		{modroot.Path(t, "internal", "mcp"), 1},
+		{modroot.Path(t, "internal", "synthesize"), 1},
+		{modroot.Path(t, "internal", "web"), 1},
+		{modroot.Path(t, "internal", "store"), 5},
+		{modroot.Path(t, "internal", "repos"), 1},
+	}
 	for _, root := range roots {
 		found, dirs := 0, 0
 		require.NoErrorf(t, filepath.WalkDir(root.dir, func(p string, d os.DirEntry, err error) error {

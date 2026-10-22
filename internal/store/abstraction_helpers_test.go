@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/embeddings/params"
+	"knomit/internal/domain/modelparams"
 	"knomit/internal/store/model"
 )
 
@@ -71,7 +71,7 @@ type otherIDEmbedder struct{ stub768Embedder }
 
 func (e *otherIDEmbedder) ID() string { return "stub768-other" }
 
-func (e *otherIDEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+func (e *otherIDEmbedder) Thresholds() modelparams.Thresholds { return modelparams.Defaults() }
 
 // dim512Embedder is a stub at a NON-default dimension, for testing that the vec
 // tables are created at the active model's width rather than the 768 the

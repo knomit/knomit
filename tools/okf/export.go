@@ -9,8 +9,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"knomit/internal/okf"
-	"knomit/internal/okf/source"
+	"knomit/internal/domain/okf"
+	"knomit/internal/domain/okf/source"
 	"knomit/internal/platform/version"
 )
 

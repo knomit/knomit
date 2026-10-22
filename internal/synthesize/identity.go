@@ -38,7 +38,7 @@ import (
 
 	"knomit/internal/store/vocab"
 
-	"knomit/internal/fact/textnorm"
+	"knomit/internal/domain/fact/textnorm"
 )
 
 // maxStructuralPairs is a RESOURCE BUDGET on one refresh's writes: the most

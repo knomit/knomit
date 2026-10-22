@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/pki"
 	"knomit/internal/repos"
 )

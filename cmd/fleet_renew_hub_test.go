@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/fact"
+	"knomit/internal/domain/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
