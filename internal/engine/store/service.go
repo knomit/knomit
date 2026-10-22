@@ -376,6 +376,13 @@ func (s *Service) Close() error {
 }
 
 // SetSigner sets the SSH signer used for commit signing.
+//
+// Precondition (kept): call it right after Open, before the Service is shared;
+// every production caller configures a freshly opened Service. The underlying
+// field is an atomic pointer, so a concurrent read (the trigger dispatcher reads
+// the signer on its own goroutine) is memory-safe, but a swap on a live Service
+// still makes in-flight and later commits sign with whichever key they load, so
+// a caller that needs a specific key for a specific commit must quiesce first.
 func (s *Service) SetSigner(signer ssh.Signer) {
 	s.rh.SetSigner(signer)
 }

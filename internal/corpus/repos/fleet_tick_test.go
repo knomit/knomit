@@ -1,7 +1,6 @@
 package repos
 
 import (
-	"bytes"
 	"context"
 	"math/big"
 	"os"
@@ -133,13 +132,14 @@ func TestFleetTick_NothingInstalledOrAnotherRootInstallsNothing(t *testing.T) {
 // per round.
 // SABOTAGE: drop the nothing-installed early return -> a warning -> red.
 func TestFleetTick_NothingInstalledLogsNothing(t *testing.T) {
+	restoreLoggerLast(t)
 	f := newForgeFleet(t, nil)
 	installMasterLeaf(t, f)
 	alpha := f.namedMember(t, "alpha")
 	f.enrollAndJoin(t, alpha, "alpha")
 	dir := alpha.deps.Cfg.TLS.Dir
 	require.NoError(t, pki.Uninstall(dir))
-	var buf bytes.Buffer
+	var buf syncBuf
 	prev := log.Logger
 	log.Logger = zerolog.New(&buf)
 	t.Cleanup(func() { log.Logger = prev })

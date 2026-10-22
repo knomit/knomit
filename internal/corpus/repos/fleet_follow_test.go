@@ -1,7 +1,6 @@
 package repos
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -318,10 +317,11 @@ func TestFleetFollow_ErrorTextsAreCredentialFree(t *testing.T) {
 	})
 
 	t.Run("the move's publish warning", func(t *testing.T) {
+		restoreLoggerLast(t)
 		f := newForgeFleet(t, nil)
 		hubOf(t, f)
 		_, url := emptyBare(t, f.dir, "moved.git")
-		var buf bytes.Buffer
+		var buf syncBuf
 		orig := log.Logger
 		log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
 		t.Cleanup(func() { log.Logger = orig })

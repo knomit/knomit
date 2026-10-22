@@ -1,7 +1,6 @@
 package repos
 
 import (
-	"bytes"
 	"context"
 	"testing"
 
@@ -336,7 +335,7 @@ topics:
 `
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, flaggedYAML)
 
-	var buf bytes.Buffer
+	var buf syncBuf
 	origLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
 	t.Cleanup(func() { log.Logger = origLogger })
@@ -539,7 +538,7 @@ topics:
 `
 	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, flaggedYAML)
 
-	var buf bytes.Buffer
+	var buf syncBuf
 	origLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
 	t.Cleanup(func() { log.Logger = origLogger })

@@ -173,13 +173,44 @@ func tcpServer(t *testing.T) *httptest.Server {
 // captureLog redirects the bridge's logger at DEBUG level, so a line emitted
 // at Warn by mistake and one emitted at Debug are both captured and can be
 // told apart. A logger that dropped Debug could not distinguish them.
-func captureLog(t *testing.T) *bytes.Buffer {
+func captureLog(t *testing.T) *syncBuf {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &syncBuf{}
 	restore := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	log.Logger = zerolog.New(buf).Level(zerolog.DebugLevel)
 	t.Cleanup(func() { log.Logger = restore })
-	return &buf
+	return buf
+}
+
+// syncBuf is a bytes.Buffer safe for a logger that is written from the
+// goroutines of a test server while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuf) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.b.Reset()
+}
+
+func (s *syncBuf) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.b.Bytes()...)
 }
 
 func get(t *testing.T, c *http.Client, url string) string {

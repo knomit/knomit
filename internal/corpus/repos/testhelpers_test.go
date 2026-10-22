@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store"
@@ -75,4 +76,34 @@ func testService(t *testing.T, ri *RepoInstance) *store.Service {
 	require.NoError(t, err)
 	release()
 	return svc
+}
+
+// restoreLoggerLast registers the restore of the global logger. t.Cleanup is
+// LIFO: call this BEFORE building the fixture (Manager, fleet), so the restore
+// runs after the fixture's teardown and no goroutine of the fixture logs into
+// the swapped logger while it is put back.
+func restoreLoggerLast(t *testing.T) {
+	t.Helper()
+	prev := log.Logger
+	t.Cleanup(func() { log.Logger = prev })
+}
+
+// writeAsPeer commits path on branch signed by ANOTHER key (the "peer"), then
+// puts this instance's signer back. Store.SetSigner is a configuration call
+// for a store that is not yet serving (every production caller runs it right
+// after Open, before the first read or write). The signer field is atomic, so
+// a swap cannot tear, but the trigger dispatcher (kicked by agent-branch
+// advances only) signs with whichever key it loads: settle it before the peer
+// key goes in so a run kicked by an earlier write cannot sign as the peer, and
+// after the peer commit before restoring. A commit on another branch kicks the
+// consensus merger instead (it may sign merge commits when consensus is on);
+// settle does not cover it, and these tests do not enable consensus.
+func writeAsPeer(t *testing.T, ri *RepoInstance, svc *store.Service, branch, path string) string {
+	t.Helper()
+	settle(t, ri)
+	svc.SetSigner(testsigner.Named("peer"))
+	h := writeOn(t, ri, branch, path)
+	settle(t, ri)
+	svc.SetSigner(nil) // back to the test fallback, this instance's key
+	return h
 }

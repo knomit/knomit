@@ -389,9 +389,7 @@ func TestScript_WritesAsThisMachine(t *testing.T) {
 	ctx := context.Background()
 	before := settle(t, ri)
 
-	svc.SetSigner(testsigner.Named("peer"))
-	peer := writeOn(t, ri, "main", "kb/tasks/in/peer.md")
-	svc.SetSigner(nil)
+	peer := writeAsPeer(t, ri, svc, "main", "kb/tasks/in/peer.md")
 	require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
 	settle(t, ri)
 
@@ -502,9 +500,7 @@ func TestScript_ChainAcrossTriggers(t *testing.T) {
 	svc := testService(t, ri)
 	plain := writeOn(t, ri, trigAgent, "kb/other/plain.md")
 	require.Equal(t, model.Trailers{}, trailersOf(t, ri, plain))
-	svc.SetSigner(testsigner.Named("peer"))
-	writeOn(t, ri, "main", "kb/other/peer.md")
-	svc.SetSigner(nil)
+	writeAsPeer(t, ri, svc, "main", "kb/other/peer.md")
 	require.NoError(t, svc.Merge().MergeBranch(context.Background(), "main", trigAgent, merge.StrategyRemoteWins))
 	mergeTip := settle(t, ri)
 	info, err := svc.FactsRepo().CommitInfo(context.Background(), plumbing.NewHash(mergeTip))

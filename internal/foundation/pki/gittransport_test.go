@@ -661,9 +661,40 @@ func (failingSessions) NewReceivePackSession(*transport.Endpoint, transport.Auth
 	return nil, errors.New("sentinel")
 }
 
-func captureZerolog(t *testing.T) *bytes.Buffer {
+// syncBuf is a bytes.Buffer safe for a logger written from the goroutines of
+// the test servers while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuf) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Len()
+}
+
+func (s *syncBuf) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.b.Bytes()...)
+}
+
+func captureZerolog(t *testing.T) *syncBuf {
 	t.Helper()
-	buf := &bytes.Buffer{}
+	buf := &syncBuf{}
 	prev := log.Logger
 	log.Logger = zerolog.New(buf)
 	t.Cleanup(func() { log.Logger = prev })
