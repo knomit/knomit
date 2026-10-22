@@ -19,7 +19,7 @@ import (
 
 // maxConcurrentDedupSearches caps the number of in-flight idx.Search calls
 // during the candidate-pair discovery phase. Same rationale as
-// maxConcurrentNeighborSearches in cluster.go.
+// graph.maxConcurrentNeighborSearches (graph/cluster.go).
 const maxConcurrentDedupSearches = 8
 
 // dedupSearchKinds pins dedupCluster's candidate search to epistemic facts.

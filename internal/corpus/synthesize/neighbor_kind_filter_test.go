@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
@@ -43,7 +44,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 		synthtest.RequireUnfilteredSearchFinds(t, env, synthtest.KindObs, synthtest.KindPol, index.SearchOptions{Path: synthtest.KindDir})
 		require.Equal(t, []string{"epistemic"}, env.RI.ClusterNeighborKinds())
 
-		clusters, err := ScopedCluster(ctx, seeds(), synthtest.CompleteEdges(t, env.Svc, env.Branch),
+		clusters, err := graph.ScopedCluster(ctx, seeds(), synthtest.CompleteEdges(t, env.Svc, env.Branch),
 			1.0, 2, env.RI.ClusterNeighborKinds(), nil, env.Branch)
 		require.NoError(t, err)
 		require.True(t, clustersHoldTogether(clusters, synthtest.KindObs, synthtest.KindObs2),
@@ -54,7 +55,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("widened list admits it as a neighbour", func(t *testing.T) {
 		env := synthtest.KindEnv(t, synthtest.WidenedNeighborKinds)
-		clusters, err := ScopedCluster(ctx, seeds(), synthtest.CompleteEdges(t, env.Svc, env.Branch),
+		clusters, err := graph.ScopedCluster(ctx, seeds(), synthtest.CompleteEdges(t, env.Svc, env.Branch),
 			1.0, 2, env.RI.ClusterNeighborKinds(), nil, env.Branch)
 		require.NoError(t, err)
 		require.True(t, synthtest.ClusterPaths(clusters)[synthtest.KindPol],
@@ -71,7 +72,7 @@ func TestNeighborKinds_ScopedClusterExpansion(t *testing.T) {
 
 	t.Run("empty list is refused, not read as every kind", func(t *testing.T) {
 		env := synthtest.KindEnv(t, nil)
-		_, err := ScopedCluster(ctx, seeds(), synthtest.CompleteEdges(t, env.Svc, env.Branch), 1.0, 2, nil, nil, env.Branch)
+		_, err := graph.ScopedCluster(ctx, seeds(), synthtest.CompleteEdges(t, env.Svc, env.Branch), 1.0, 2, nil, nil, env.Branch)
 		require.ErrorContains(t, err, "neighbour kinds must not be empty")
 	})
 }
@@ -82,7 +83,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("hand-built mixed cluster", func(t *testing.T) {
-		// Bypasses ScopedCluster entirely, so the cluster.go filter cannot be
+		// Bypasses ScopedCluster entirely, so the graph/cluster.go filter cannot be
 		// what keeps these two apart.
 		env := synthtest.KindEnv(t, synthtest.WidenedNeighborKinds)
 		synthtest.RequireUnfilteredSearchFinds(t, env, synthtest.KindPol, synthtest.KindObs, index.SearchOptions{MinSimilarity: env.DedupThreshold()})
@@ -105,7 +106,7 @@ func TestNeighborKinds_DedupNeverMergesAcrossKinds(t *testing.T) {
 		// taken from the search hit, and the cluster goes to dedupCluster as
 		// review_strategy hands it over.
 		env := synthtest.KindEnv(t, synthtest.WidenedNeighborKinds)
-		clusters, err := ScopedCluster(ctx, []step.FactForLLM{synthtest.EpistemicSeed(synthtest.KindObs), synthtest.EpistemicSeed(synthtest.KindObs2)},
+		clusters, err := graph.ScopedCluster(ctx, []step.FactForLLM{synthtest.EpistemicSeed(synthtest.KindObs), synthtest.EpistemicSeed(synthtest.KindObs2)},
 			synthtest.CompleteEdges(t, env.Svc, env.Branch), 1.0, 2, env.RI.ClusterNeighborKinds(), nil, env.Branch)
 		require.NoError(t, err)
 		var mixed []step.FactForLLM

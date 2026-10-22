@@ -1,7 +1,7 @@
-// Package synthesize — Scoped clustering: builds clusters containing only seed
+// Package graph — Scoped clustering: builds clusters containing only seed
 // facts and their nearest neighbors, then runs Louvain community detection on
 // the subgraph. Used by the review orchestrator to focus on changed facts.
-package synthesize
+package graph
 
 import (
 	"context"
@@ -52,7 +52,7 @@ func ScopedCluster(ctx context.Context,
 	if len(seeds) == 0 {
 		return nil, nil
 	}
-	if err := requireNeighborKinds(neighborKinds); err != nil {
+	if err := RequireNeighborKinds(neighborKinds); err != nil {
 		return nil, err
 	}
 
@@ -237,12 +237,12 @@ func filterSmallClusters(clusters [][]step.FactForLLM, minCommunitySize int) [][
 	return out
 }
 
-// requireNeighborKinds refuses an empty neighbour-kind list. The store reads an
+// RequireNeighborKinds refuses an empty neighbour-kind list. The store reads an
 // empty IncludeKinds as "no kind filter", so passing one through would widen
 // every neighbour search to every kind — the opposite of what an unset list
 // should mean. Config refuses [] at boot; this is the same rule for callers
 // that do not come through config, failing loudly instead of defaulting.
-func requireNeighborKinds(kinds []string) error {
+func RequireNeighborKinds(kinds []string) error {
 	if len(kinds) == 0 {
 		return fmt.Errorf("scoped-cluster: neighbour kinds must not be empty (config [cluster_cache] neighbor_kinds)")
 	}

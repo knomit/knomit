@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"errors"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
@@ -276,7 +277,7 @@ var filteredCfg = QualityConfig{
 // buildTwoClusterSeeds returns four seeds in two disjoint communities.
 // {a,b} are in community 0 and 1 respectively; {c,d} in communities 2 and 3.
 // No edges connect the {a,b} group to the {c,d} group — they are disjoint.
-func buildTwoClusterSeeds() (seeds []step.FactForLLM, clusters ClusterResult, pairs [][2]string) {
+func buildTwoClusterSeeds() (seeds []step.FactForLLM, clusters graph.ClusterResult, pairs [][2]string) {
 	seeds = []step.FactForLLM{
 		{File: "kb/a.md", Domain: []string{"auth"}, Entities: []string{"UserService"}},
 		{File: "kb/b.md", Domain: []string{"auth"}, Entities: []string{"TokenStore"}},
@@ -288,7 +289,7 @@ func buildTwoClusterSeeds() (seeds []step.FactForLLM, clusters ClusterResult, pa
 		{"kb/a.md", "kb/b.md"},
 		{"kb/c.md", "kb/d.md"},
 	}
-	clusters = ClusterResult{
+	clusters = graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/a.md"},
 			1: {"kb/b.md"},
@@ -392,7 +393,7 @@ func TestBuildFilteredBridges_RareSharedToken_TokenSet(t *testing.T) {
 		{File: "kb/g2.md", Domain: []string{"billing"}, Entities: []string{}},
 		{File: "kb/h2.md", Domain: []string{"billing"}, Entities: []string{}},
 	}
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/e.md"},
 			1: {"kb/f.md"},
@@ -450,7 +451,7 @@ func TestBuildFilteredBridges_ScopeTokenExcluded_EmptyToken(t *testing.T) {
 		{File: "kb/g.md", Domain: []string{"auth"}, Entities: []string{}},
 		{File: "kb/h.md", Domain: []string{"auth"}, Entities: []string{}},
 	}
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/g.md"},
 			1: {"kb/h.md"},
@@ -541,7 +542,7 @@ func TestBuildFilteredBridges_DerivationGapError(t *testing.T) {
 		{File: "kb/x.md", Domain: []string{"llm"}, Entities: []string{}},
 		{File: "kb/y.md", Domain: []string{"llm"}, Entities: []string{}},
 	}
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/x.md"}, 1: {"kb/y.md"}},
 	}
 	wantErr := errors.New("revdeps failed")
@@ -569,7 +570,7 @@ func TestBuildFilteredBridges_NoCrossCommunitySeam_NilResult(t *testing.T) {
 		{File: "kb/r.md", Domain: []string{"store"}, Entities: []string{}},
 		{File: "kb/s.md", Domain: []string{"store"}, Entities: []string{}},
 	}
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/p.md", "kb/q.md", "kb/r.md", "kb/s.md"}},
 	}
 	// Connect everything — but all same-community so no bridge seam.
@@ -597,7 +598,7 @@ func TestBuildFilteredBridges_DiscoveredOriginExcluded(t *testing.T) {
 		{File: "kb/disc2.md", Origin: string(fact.Discovered), Domain: []string{"auth"}},
 		{File: "kb/real.md", Domain: []string{"auth"}},
 	}
-	clusters := ClusterResult{
+	clusters := graph.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/disc1.md"}, 1: {"kb/disc2.md"}, 2: {"kb/real.md"}},
 	}
 	// No read is allowed: the pool has < 2 non-discovered facts.

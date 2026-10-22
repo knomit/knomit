@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
@@ -193,7 +194,7 @@ func TestMotifAcceptance_BridgeYieldPairs(t *testing.T) {
 	// No cluster assignment: every fact is its own community, so separation
 	// never rejects. That matches the measurement, which asked only whether the
 	// PAIR was subject-disjoint on a shared motif — it did not run Louvain.
-	clusters := ClusterResult{}
+	clusters := graph.ClusterResult{}
 
 	var motifed int
 	for _, f := range facts {
@@ -454,7 +455,7 @@ func TestMotifMeasurement_WriteSupplementaryHarnessPack(t *testing.T) {
 	facts := loadCanonCorpus(t, "knomit-kb")
 	require.NotEmpty(t, facts)
 
-	cands, _ := enumerateMotifCandidates(facts, ClusterResult{}, identityResolver,
+	cands, _ := enumerateMotifCandidates(facts, graph.ClusterResult{}, identityResolver,
 		motifDFFor(facts), labelsFor(facts), tierToken2)
 	kept, _ := suppressContained(cands)
 	require.NotEmpty(t, kept)

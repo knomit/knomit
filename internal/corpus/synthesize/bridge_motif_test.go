@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
@@ -26,8 +27,8 @@ func constDF(n int) motifDFFn { return func(string) int { return n } }
 
 // twoCommunities places each path in its own cluster, which is what makes a
 // pair a BRIDGE rather than an in-cluster neighbour.
-func twoCommunities(a, b string) ClusterResult {
-	return ClusterResult{Clusters: map[int][]string{0: {a}, 1: {b}}}
+func twoCommunities(a, b string) graph.ClusterResult {
+	return graph.ClusterResult{Clusters: map[int][]string{0: {a}, 1: {b}}}
 }
 
 func TestEnumerateMotifCandidates_GroupsOnCanonicalIDAcrossSpellings(t *testing.T) {
@@ -99,7 +100,7 @@ func TestEnumerateMotifCandidates_RequiresTwoCommunities(t *testing.T) {
 		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
 	}
 	// Both in one community: separation 1. A GATE, never a reward (1f536807/MN8).
-	same := ClusterResult{Clusters: map[int][]string{0: {"kb/alpha/1.md", "kb/beta/2.md"}}}
+	same := graph.ClusterResult{Clusters: map[int][]string{0: {"kb/alpha/1.md", "kb/beta/2.md"}}}
 
 	got, _ := enumerateMotifCandidates(seeds, same, identityResolver, constDF(2),
 		labelsWith(200, nil), tierExact)
@@ -153,7 +154,7 @@ func TestEnumerateMotifCandidates_DropsOffendingMemberNotTheGroup(t *testing.T) 
 		// Same rare entity as the first member — a near-duplicate of it.
 		{File: "kb/alpha/3.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
 	}
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/alpha/1.md"}, 1: {"kb/beta/2.md"}, 2: {"kb/alpha/3.md"}}}
 	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2})
 
@@ -484,7 +485,7 @@ func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
 		{File: "kb/gamma/3.md", Motifs: []string{"stale-cache-capture"}, Entities: []string{"Gamma"}},
 		{File: "kb/delta/4.md", Motifs: []string{"cache-capture-drift"}, Entities: []string{"Delta"}},
 	}
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/alpha/1.md"}, 1: {"kb/beta/2.md"}, 2: {"kb/gamma/3.md"}, 3: {"kb/delta/4.md"}}}
 	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2, "delta": 2})
 
@@ -528,9 +529,9 @@ func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
 
 // saturatedMotifCorpus builds n verbatim-matching, subject-disjoint,
 // cross-community pairs — more than any lane's budget.
-func saturatedMotifCorpus(n int) ([]step.FactForLLM, ClusterResult, index.SubjectLabelDF) {
+func saturatedMotifCorpus(n int) ([]step.FactForLLM, graph.ClusterResult, index.SubjectLabelDF) {
 	var seeds []step.FactForLLM
-	clusters := ClusterResult{Clusters: map[int][]string{}}
+	clusters := graph.ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(400, nil)
 	com := 0
 	for i := 0; i < n; i++ {
@@ -788,7 +789,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 		{File: "kb/c/three.md", Motifs: []string{"shared-shape"}, Entities: []string{"Gamma"}},
 	}
 	seeds = append(seeds, activationFillers()...)
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a/one.md"}, 1: {"kb/b/two.md"}, 2: {"kb/c/three.md"}}}
 	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2})
 	idx := motifIdx(t, seeds, [][2]string{[2]string{"kb/a/one.md", "kb/b/two.md"}})
@@ -832,7 +833,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 		{File: "kb/g/seven.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Eta"}},
 	}
 	seeds = append(seeds, activationFillers()...)
-	clusters := ClusterResult{Clusters: map[int][]string{}}
+	clusters := graph.ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
 		clusters.Clusters[i] = []string{f.File}
@@ -880,7 +881,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 		{File: "kb/d/four.md", Motifs: []string{"wide-shape"}, Entities: []string{"Delta"}},
 	}
 	seeds = append(seeds, activationFillers()...)
-	clusters := ClusterResult{Clusters: map[int][]string{}}
+	clusters := graph.ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
 		clusters.Clusters[i] = []string{f.File}
@@ -923,7 +924,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 		{File: "kb/f/six.md", Motifs: []string{"thin-shape"}, Entities: []string{"Zeta"}},
 	}
 	seeds = append(seeds, activationFillers()...)
-	clusters := ClusterResult{Clusters: map[int][]string{}}
+	clusters := graph.ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
 		clusters.Clusters[i] = []string{f.File}
@@ -1053,7 +1054,7 @@ func TestScoreMotifCandidates_CarryDroppedCandidatesWithTheirCause(t *testing.T)
 // cap. Deliberately non-degenerate (lesson 5) — the four groups differ in the
 // properties the attribution turns on, and the test asserts that as a
 // precondition rather than trusting the construction.
-func laneMixtureFixture(t *testing.T) ([]step.FactForLLM, ClusterResult, index.SubjectLabelDF, *index.Facade, QualityConfig) {
+func laneMixtureFixture(t *testing.T) ([]step.FactForLLM, graph.ClusterResult, index.SubjectLabelDF, *index.Facade, QualityConfig) {
 	t.Helper()
 	mk := func(file, motif, entity string) step.FactForLLM {
 		return step.FactForLLM{File: file, Motifs: []string{motif}, Entities: []string{entity}}
@@ -1078,7 +1079,7 @@ func laneMixtureFixture(t *testing.T) ([]step.FactForLLM, ClusterResult, index.S
 		mk("kb/j/10.md", "wide-shape", "Kappa"), mk("kb/k/11.md", "wide-shape", "Lambda"),
 	}
 	seeds = append(seeds, activationFillers()...)
-	clusters := ClusterResult{Clusters: map[int][]string{}}
+	clusters := graph.ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
 		clusters.Clusters[i] = []string{f.File}
@@ -1186,8 +1187,8 @@ func TestSeedRecurrence_TwoSpellingsOnOneFactAreOneCarrier(t *testing.T) {
 
 // oneCommunityEach puts every seed in its own community and gives every entity
 // a df that clears the disjointness gate.
-func oneCommunityEach(seeds []step.FactForLLM) (ClusterResult, index.SubjectLabelDF) {
-	clusters := ClusterResult{Clusters: map[int][]string{}}
+func oneCommunityEach(seeds []step.FactForLLM) (graph.ClusterResult, index.SubjectLabelDF) {
+	clusters := graph.ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
 		clusters.Clusters[i] = []string{f.File}

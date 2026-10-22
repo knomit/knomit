@@ -1,4 +1,4 @@
-package synthesize
+package graph
 
 import (
 	"knomit/internal/corpus/synthesize/step"
@@ -24,7 +24,7 @@ func TestClusterResultFromGroups(t *testing.T) {
 		{{File: "a"}, {File: "b"}},
 		{{File: "c"}},
 	}
-	cr := clusterResultFromGroups(groups)
+	cr := ClusterResultFromGroups(groups)
 	if len(cr.Clusters) != 2 {
 		t.Fatalf("want 2 communities, got %d: %+v", len(cr.Clusters), cr.Clusters)
 	}

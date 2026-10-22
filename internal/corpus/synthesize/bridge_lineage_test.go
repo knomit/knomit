@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"testing"
 
@@ -169,7 +170,7 @@ func TestBridgeLineage_DropsOnlyTheLineageMember(t *testing.T) {
 	stranger := lineageSeed("kb/c-stranger.md")
 
 	// Three communities, so the survivors still span two after the drop.
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a-synthesis.md"}, 1: {"kb/b-child.md"}, 2: {"kb/c-stranger.md"},
 	}}
 
@@ -204,7 +205,7 @@ func TestBridgeLineage_CollapsedSpanDropsTheGroup(t *testing.T) {
 
 	// The CHILD — the member the greedy pass drops — is alone in community 1.
 	// Both survivors sit in community 0.
-	clusters := ClusterResult{Clusters: map[int][]string{
+	clusters := graph.ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a-parent.md", "kb/c-sibling.md"},
 		1: {"kb/b-child.md"},
 	}}
@@ -270,7 +271,7 @@ func TestBridgeLineage_FilteredPathExcludesLineagePair(t *testing.T) {
 			{File: "kb/b.md", Domain: []string{"billing"}, Entities: []string{"Payment"},
 				LineageRefs: step.LocalFactRefPaths(childRefs, testLocalRepoID)},
 		}
-		clusters := ClusterResult{Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}}}
+		clusters := graph.ClusterResult{Clusters: map[int][]string{0: {"kb/a.md"}, 1: {"kb/b.md"}}}
 
 		// The lineage is the seeds' own; the stored facts cite nothing, so the
 		// reverse dependents are the empty set the scoring path expects.

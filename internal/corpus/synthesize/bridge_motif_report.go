@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"sort"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/vocab"
@@ -235,11 +236,11 @@ func MotifComponentReport(
 		}
 	}
 
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
+	groups, err := graph.ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(step.ProgressEvent) {}, branch)
 	if err != nil {
 		return rep, err
 	}
-	cr := clusterResultFromGroups(groups)
+	cr := graph.ClusterResultFromGroups(groups)
 
 	resolve := motifResolverFor(ctx, motifs, branch)
 	labels := subjectLabelsFor(ctx, idx, branch)

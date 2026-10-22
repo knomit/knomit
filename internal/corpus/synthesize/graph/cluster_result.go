@@ -1,4 +1,4 @@
-package synthesize
+package graph
 
 import (
 	"knomit/internal/corpus/synthesize/step"
@@ -14,7 +14,7 @@ import (
 // Louvain pass (store.searchIndex.ClusterFacts). That global clustering was
 // removed when clustering moved in-process and scoped (ScopedCluster over
 // idx.SubgraphEdges); ClusterResult now lives here and is built from
-// ScopedCluster output via clusterResultFromGroups.
+// ScopedCluster output via ClusterResultFromGroups.
 type ClusterResult struct {
 	Clusters map[int][]string // community ID → fact paths
 	Noise    []string         // fact paths in communities below minCommunitySize
@@ -41,14 +41,14 @@ func (c ClusterResult) ClusterOf() map[string]int {
 	return m
 }
 
-// clusterResultFromGroups adapts ScopedCluster output ([][]factForLLM) to the
+// ClusterResultFromGroups adapts ScopedCluster output ([][]factForLLM) to the
 // ClusterResult the bridge engine consumes. Each group becomes a community
 // keyed by its slice index. ScopedCluster has already dropped sub-floor
 // communities (filterSmallClusters), so no group is noise here — Noise stays
 // empty and facts absent from every group are handled downstream by
 // bridgePathCommunities' synthetic-negative-id fallback (identical to the prior
 // per-noise-fact assignment).
-func clusterResultFromGroups(groups [][]step.FactForLLM) ClusterResult {
+func ClusterResultFromGroups(groups [][]step.FactForLLM) ClusterResult {
 	cr := ClusterResult{Clusters: make(map[int][]string, len(groups))}
 	for i, g := range groups {
 		paths := make([]string, 0, len(g))

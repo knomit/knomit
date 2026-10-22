@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"knomit/internal/corpus/synthesize/graph"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/index"
 
@@ -16,7 +17,7 @@ import (
 // Cousin-meeting inside prune (knomit#149).
 //
 // THE BLINDER. ScopedCluster expands each seed's neighbourhood with
-// `Path: categoryDir(seed.File)` (cluster.go), and that filter is a raw path
+// `Path: categoryDir(seed.File)` (graph/cluster.go), and that filter is a raw path
 // PREFIX — `AND f.path LIKE cat||'%'`. So:
 //
 //   - SIBLINGS (same directory) meet.
@@ -41,7 +42,7 @@ import (
 // WHAT THIS DELIBERATELY DOES NOT TOUCH. `clusters` has FIVE consumers in
 // reviewStrategy.Plan: dedupCluster's mechanical merge, the prune items,
 // restatement.PlanShortlist's co-membership, distillGroups, and
-// clusterResultFromGroups (which feeds both bridge axes and discover). The
+// ClusterResultFromGroups (which feeds both bridge axes and discover). The
 // ruling scopes this to prune, so this function takes and returns a SEPARATE
 // prune-cluster slice and never mutates the one those other four read.
 //
@@ -103,7 +104,7 @@ func joinCousinsForPrune(
 	// The same neighbour-kind list ScopedCluster expands with, so both halves
 	// of one neighbourhood admit the same kinds (knomit#308).
 	neighborKinds := d.RI.ClusterNeighborKinds()
-	if err := requireNeighborKinds(neighborKinds); err != nil {
+	if err := graph.RequireNeighborKinds(neighborKinds); err != nil {
 		h.Failure = "cousin search failed"
 		log.Warn().Err(err).Msg("review: cousin sweep skipped; prune clusters keep their category-scoped membership")
 		return pruneClusters, h
@@ -127,7 +128,7 @@ func joinCousinsForPrune(
 	// a single run reproducible; it is what makes the truncated tail independent
 	// of CLUSTER ORDER. Without it, the same corpus clustered into the same
 	// groups in a different sequence sweeps a different subset and produces
-	// different prune items — a wobble of exactly the kind cluster.go's own
+	// different prune items — a wobble of exactly the kind graph/cluster.go's own
 	// sort.Strings exists to stop, one layer down.
 	var targets []string
 	for _, c := range pruneClusters {
@@ -208,7 +209,7 @@ func joinCousinsForPrune(
 		return pruneClusters, h
 	}
 
-	// Deterministic application order, for the same reason cluster.go sorts its
+	// Deterministic application order, for the same reason graph/cluster.go sorts its
 	// subgraph paths: the searches ran concurrently, so `edges` arrives in
 	// completion order. Union-find over an unsorted edge list can produce
 	// different cluster groupings for identical input.
