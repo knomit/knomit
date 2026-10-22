@@ -155,7 +155,7 @@ func TestHandleTopicStats_ReturnsStatsView(t *testing.T) {
 
 // TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull regresses
 // handleTopicStats specifically (not handleHALStats): handleTopicStats calls
-// defaultStatsProvider{}.Stats directly and shares statsView, but has its own
+// loadStats directly and shares statsView, but has its own
 // nil-guard block for types/highlights/default_axis. With no real store
 // backing this test's RepoInstance, ri.WithRead never runs the callback that
 // would populate result, so Stats returns a zero-value StatsResult{} (nil

@@ -72,7 +72,7 @@ type lensStatsResponse struct {
 // handleHALLensStats serves GET /lenses/{lens}/stats — the union stats +
 // activity roll-up of a lens's write repo + N read mounts, with a per-repo
 // breakdown. It fans out over federate.ReadTargetsFor exactly like the other
-// lens reads and reuses the repo statsProvider/activityProvider per mount —
+// lens reads and reuses the repo loadStats/loadActivity reads per mount —
 // no new store logic. Any mount error fails the whole request (RFC §9.1 — a
 // lens never silently shrinks its read set).
 //
@@ -95,7 +95,7 @@ type lensStatsResponse struct {
 // lens spanning a distilled and an authored mount resolves however the
 // COMBINED evidence points, and an empty mount is a no-op (it sums (0,0) into
 // both sides, changing nothing).
-func handleHALLensStats(statsP statsProvider, actP activityProvider) http.HandlerFunc {
+func handleHALLensStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -157,11 +157,11 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		sts := make([]index.StatsResult, len(targets))
 		acts := make([]index.ActivityResult, len(targets))
 		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
-			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, axis)
+			st, err := loadStats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, axis)
 			if err != nil {
 				return "Failed to load stats", err
 			}
-			act, err := actP.Activity(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
+			act, err := loadActivity(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 			if err != nil {
 				return "Failed to load activity", err
 			}
@@ -281,7 +281,7 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		// have returned for the same axis.
 		if index.NormalizeAxis(axis, "") == "" && mountsDisagreeWithResolved {
 			if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
-				hs, fb, err := statsP.Highlights(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
+				hs, fb, err := loadHighlights(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
 				if err != nil {
 					return "Failed to load stats", err
 				}

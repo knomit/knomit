@@ -157,7 +157,7 @@ func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister,
 }
 
 // handleTopicStats serves GET .../topics/{segments...}/stats.
-// Delegates to the statsProvider using the topic's path prefix.
+// Delegates to loadStats using the topic's path prefix.
 func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -168,9 +168,7 @@ func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 
 		pathPrefix := ontologyRoot + "/" + topicPath
 
-		// Use defaultStatsProvider directly — no injection point on this sub-handler.
-		// Tests that need stub stats should test via the full server with a wired provider.
-		result, err := defaultStatsProvider{}.Stats(r.Context(), ri, branch, pathPrefix, "")
+		result, err := loadStats(r.Context(), ri, branch, pathPrefix, "")
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return

@@ -1,124 +1,138 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"knomit/internal/engine/store/index"
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
 )
 
-// lensStatsStub is a per-repo statsProvider: each mount's Stats call is
-// answered from byRepo keyed by the repo's name, so a single stub drives the
-// whole fan-out. It records the last pathPrefix and axis seen per repo so
-// tests can assert per-target forwarding; errRepo makes that one mount fail.
-//
-// byRepoAxis is an optional repo -> requested-axis -> result override, tried
-// before byRepo. It exists to simulate what a real store.Stats does: cut a
-// DIFFERENT top-N candidate set depending on the requested axis (store's SQL
-// LIMIT is ranked by that axis). Without it every axis value would echo the
-// same canned Highlights, which cannot distinguish a correct re-fan-out at a
-// resolved axis from a stale first-pass result cut by the wrong one.
-type lensStatsStub struct {
-	byRepo     map[string]index.StatsResult
-	byRepoAxis map[string]map[string]index.StatsResult
-	errRepo    string
-	// errRepos makes SEVERAL mounts fail at once, so a test can pin WHICH
-	// failure a concurrent fan-out reports.
-	errRepos map[string]bool
-	// delayByRepo staggers per-mount latency. Under a concurrent fan-out this
-	// is what decides completion order, which is exactly what the response must
-	// NOT depend on.
-	delayByRepo map[string]time.Duration
-	// mu guards every recording field below. Both stats fan-out passes call
-	// this provider ONCE PER MOUNT CONCURRENTLY, so the bookkeeping a test
-	// asserts on is shared across goroutines — the production provider is
-	// stateless and needs no lock. Without this, the recording would be the
-	// race, not the code under test.
-	mu       sync.Mutex
-	lastPath map[string]string
-	lastAxis map[string]string
-	// statsCalls / highlightCalls count the two fan-out passes separately, so a
-	// test can assert that the axis correction re-fetches HIGHLIGHTS rather
-	// than re-running the whole aggregate.
-	statsCalls     int
-	highlightCalls int
+// The lens union stats tests run over REAL stores: the mounts are preset repos
+// (newTestLensManager), each test writes the facts it needs into them, and a
+// failing or slow mount is made so through the owner's per-Service test hooks
+// (index.Facade.SetReadFaultForTest for a failure, SetOverridesForTest's
+// observer for a delay or a call count) rather than through a stub of the
+// handler's data source.
+
+// newLensStatsRouter builds started preset repos with the given names and a
+// lens "eng" whose write repo is names[0] and whose read mounts are the rest.
+func newLensStatsRouter(t *testing.T, names ...string) (*repos.Manager, http.Handler) {
+	t.Helper()
+	m, _ := newTestLensManager(t, names...)
+	r := (&Server{Manager: m}).NewAPIRouter()
+	reads := make([]string, 0, len(names)-1)
+	for _, n := range names[1:] {
+		reads = append(reads, fmt.Sprintf(`{"repo":%q}`, n))
+	}
+	createLens(t, m, r, fmt.Sprintf(`{"name":"eng","write":%q,"reads":[%s]}`, names[0], strings.Join(reads, ",")))
+	return m, r
 }
 
-func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix, axis string) (index.StatsResult, error) {
-	name := ri.Name()
-	s.mu.Lock()
-	if s.lastPath == nil {
-		s.lastPath = map[string]string{}
+// obs writes an observation to ri; syn writes a synthesis deriving from refs
+// (its impact is the number of refs); both carry no domain or entity.
+func obs(t *testing.T, ri *repos.RepoInstance, path, title string, conf float64, refs ...string) {
+	t.Helper()
+	writeTypedFact(t, ri, path, title, fact.Observation, conf, refs, nil, nil)
+}
+
+func syn(t *testing.T, ri *repos.RepoInstance, path, title string, conf float64, refs ...string) {
+	t.Helper()
+	writeTypedFact(t, ri, path, title, fact.Synthesis, conf, refs, nil, nil)
+}
+
+// seedAxisMount writes the corpus whose OWN default axis is impact: one
+// observation with no out-edges and one synthesis deriving from it.
+func seedAxisMount(t *testing.T, ri *repos.RepoInstance, tag string, impact int) {
+	t.Helper()
+	refs := make([]string, 0, impact)
+	for i := 0; i < impact; i++ {
+		p := fmt.Sprintf("kb/o/%s%d.md", tag, i)
+		obs(t, ri, p, "obs "+p, 0.5)
+		refs = append(refs, p)
 	}
-	if s.lastAxis == nil {
-		s.lastAxis = map[string]string{}
-	}
-	s.statsCalls++
-	s.lastPath[name] = pathPrefix
-	s.lastAxis[name] = axis
-	s.mu.Unlock()
-	if d := s.delayByRepo[name]; d > 0 {
-		time.Sleep(d)
-	}
-	if (s.errRepo != "" && name == s.errRepo) || s.errRepos[name] {
-		return index.StatsResult{}, errors.New("db on fire: " + name)
-	}
-	if perAxis, ok := s.byRepoAxis[name]; ok {
-		if res, ok := perAxis[axis]; ok {
-			return res, nil
+	syn(t, ri, "kb/s/"+tag+".md", "syn "+tag, 0.8, refs...)
+}
+
+// withMountStore runs fn with the live store of the named mount.
+func withMountStore(t *testing.T, m *repos.Manager, name string, fn func(svc *store.Service)) {
+	t.Helper()
+	require.NoError(t, m.Get(name).WithRead(func(svc *store.Service) {
+		require.NotNil(t, svc, "mount %s must have a live store", name)
+		fn(svc)
+	}))
+}
+
+// failMountRead fails the named read on this mount's store only, with err, and
+// counts how often it was hit (atomic: the fan-out reads every mount on its own
+// goroutine).
+func failMountRead(t *testing.T, m *repos.Manager, name string, read index.ReadName, err error, hits *atomic.Int64) {
+	t.Helper()
+	withMountStore(t, m, name, func(svc *store.Service) {
+		t.Cleanup(svc.Search().SetReadFaultForTest(failIndexRead(read, err, hits)))
+	})
+}
+
+// slowMountRead makes the named public read of this mount's store take d. It
+// goes through the index.Overrides observer, which is per Service, so each
+// mount can be given its own latency.
+func slowMountRead(t *testing.T, m *repos.Manager, name, method string, d time.Duration) {
+	t.Helper()
+	withMountStore(t, m, name, func(svc *store.Service) {
+		t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{Reads: func(got string) error {
+			if got == method {
+				time.Sleep(d)
+			}
+			return nil
+		}}))
+	})
+}
+
+// countMountReads records, per method, how often each mount's store was read.
+// The map is fixed before use and holds atomic counters, so the closure the
+// fan-out goroutines call is race-free.
+type readCounts map[string]*atomic.Int64
+
+func countMountReads(t *testing.T, m *repos.Manager, names []string, methods ...string) map[string]readCounts {
+	t.Helper()
+	out := map[string]readCounts{}
+	for _, n := range names {
+		rc := readCounts{}
+		for _, meth := range methods {
+			rc[meth] = &atomic.Int64{}
 		}
+		out[n] = rc
+		withMountStore(t, m, n, func(svc *store.Service) {
+			t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{Reads: func(got string) error {
+				if c, ok := rc[got]; ok {
+					c.Add(1)
+				}
+				return nil
+			}}))
+		})
 	}
-	return s.byRepo[name], nil
+	return out
 }
 
-// Highlights answers the axis-correction pass from the SAME fixtures Stats
-// answers from, deliberately: the production narrow call shares fq.highlights
-// with Stats, and a stub that served the two paths from different data would
-// hide a divergence rather than pin its absence. Every existing axis-correction
-// assertion therefore keeps its exact meaning.
-func (s *lensStatsStub) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]index.Highlight, bool, error) {
-	res, err := s.Stats(ctx, ri, branch, pathPrefix, axis)
-	s.mu.Lock()
-	s.statsCalls-- // the delegation above is bookkeeping, not a second aggregate fetch
-	s.highlightCalls++
-	s.mu.Unlock()
-	if err != nil {
-		return nil, false, err
-	}
-	return res.Highlights, res.HighlightsFallback, nil
-}
-
-// lensActivityStub is the per-repo activityProvider twin of lensStatsStub.
-type lensActivityStub struct {
-	byRepo  map[string]index.ActivityResult
-	errRepo string
-	// mu guards lastPath — same concurrent fan-out as lensStatsStub.
-	mu       sync.Mutex
-	lastPath map[string]string
-}
-
-func (s *lensActivityStub) Activity(_ context.Context, ri *repos.RepoInstance, _ string, path string) (index.ActivityResult, error) {
-	s.mu.Lock()
-	if s.lastPath == nil {
-		s.lastPath = map[string]string{}
-	}
-	s.lastPath[ri.Name()] = path
-	s.mu.Unlock()
-	if s.errRepo != "" && ri.Name() == s.errRepo {
-		return index.ActivityResult{}, errors.New("git on fire")
-	}
-	return s.byRepo[ri.Name()], nil
+// repoWire GETs a repo-scoped endpoint of one lens mount.
+func repoWire(t *testing.T, r http.Handler, name, endpoint string) []byte {
+	t.Helper()
+	rec := getLensFacts(t, r, "/repos/"+name+"/branches/machine:test/"+endpoint)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	return rec.Body.Bytes()
 }
 
 // lensStatsBody mirrors the union stats wire shape.
@@ -166,883 +180,586 @@ func decodeLensStats(t *testing.T, rec *httptest.ResponseRecorder) lensStatsBody
 	return body
 }
 
-// The union roll-up sums totals/domains/entities across mounts, weights
-// avg_confidence by per-mount total, takes the MAX last_commit, and lists one
-// per-repo row per fanned-out target — is_write set on the write repo only,
-// id = the mount's id12, branch = the Binding-resolved read branch.
-func TestLensStats_UnionAggregates(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	statsStub := &lensStatsStub{byRepo: map[string]index.StatsResult{
-		"alpha": {Total: 200, AvgConfidence: 0.9, Domains: map[string]int{"go": 5, "ai": 10}, Entities: map[string]int{"chi": 3}, Types: map[string]int{"synthesis": 4, "observation": 3}},
-		"beta":  {Total: 50, AvgConfidence: 0.5, Domains: map[string]int{"go": 2, "web": 1}, Entities: map[string]int{"vite": 4}, Types: map[string]int{"synthesis": 1}},
-	}}
-	actStub := &lensActivityStub{byRepo: map[string]index.ActivityResult{
-		"alpha": {LastCommit: "2026-07-19T09:00:00Z", Total: 40, Changes7d: 1, Changes30d: 2, Changes90d: 3},
-		"beta":  {LastCommit: "2026-07-20T10:00:00Z", Total: 7, Changes7d: 4, Changes30d: 5, Changes90d: 6},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-
-	rec := getLensFacts(t, r, "/lenses/eng/stats")
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
+func (b lensStatsBody) highlightTitles() []string {
+	out := make([]string, 0, len(b.Highlights))
+	for _, h := range b.Highlights {
+		out = append(out, h.Title)
 	}
+	return out
+}
+
+const lensStatsURL = "/lenses/eng/stats"
+
+// The union roll-up sums totals/domains/entities/types across mounts, weights
+// avg_confidence by per-mount total, and lists one per-repo row per fanned-out
+// target - is_write set on the write repo only, id = the mount's id12, branch
+// = the Binding-resolved read branch - each carrying that mount's own stats and
+// its own commit activity (the same numbers the repo endpoints answer).
+func TestLensStats_UnionAggregates(t *testing.T) {
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	writeTypedFact(t, alpha, "kb/technology/a1.md", "a1", fact.Observation, 0.9, nil, []string{"go", "ai"}, []string{"chi"})
+	writeTypedFact(t, alpha, "kb/technology/a2.md", "a2", fact.Synthesis, 0.9, []string{"kb/technology/a1.md"}, []string{"ai"}, nil)
+	writeTypedFact(t, beta, "kb/technology/b1.md", "b1", fact.Observation, 0.6, nil, []string{"go", "web"}, []string{"vite"})
+
+	rec := getLensFacts(t, r, lensStatsURL)
+	require.Equal(t, hal.ContentType, rec.Header().Get("Content-Type"))
 	body := decodeLensStats(t, rec)
 
-	if body.Total != 250 {
-		t.Errorf("total: got %d, want 250 (sum across mounts)", body.Total)
+	require.Equal(t, 3, body.Total, "sum across mounts")
+	require.Equal(t, 2, body.RepoCount)
+	// Total-weighted mean: (0.9*2 + 0.6*1) / 3 = 0.8.
+	require.InDelta(t, 0.8, body.AvgConfidence, 1e-9, "total-weighted mean")
+	require.Equal(t, map[string]int{"go": 2, "ai": 2, "web": 1}, body.Domains)
+	require.Equal(t, map[string]int{"chi": 1, "vite": 1}, body.Entities)
+	require.Equal(t, map[string]int{"observation": 2, "synthesis": 1}, body.Types)
+
+	require.Len(t, body.Repos, 2)
+	// Reads() is sorted by repo name: alpha (write) then beta.
+	a, b := body.Repos[0], body.Repos[1]
+	require.Equal(t, "alpha", a.Name)
+	require.True(t, a.IsWrite)
+	require.Equal(t, "beta", b.Name)
+	require.False(t, b.IsWrite)
+	require.Equal(t, federate.ID12(alpha.ID()), a.ID)
+	require.Equal(t, federate.ID12(beta.ID()), b.ID)
+	require.Equal(t, alpha.AgentBranch(), a.Branch)
+	require.Equal(t, beta.AgentBranch(), b.Branch)
+	require.Equal(t, 2, a.Total)
+	require.Equal(t, 0.9, a.AvgConfidence)
+	require.Equal(t, map[string]int{"go": 1, "ai": 2}, a.Domains)
+	require.Equal(t, 1, b.Total)
+	require.Equal(t, 0.6, b.AvgConfidence)
+	require.Equal(t, map[string]int{"vite": 1}, b.Entities)
+
+	// Each row carries ITS mount's activity: exactly what the repo's own
+	// /activity answers, with the two facts written to alpha and the one written
+	// to beta on top of the commits each preset repo already had.
+	for _, row := range body.Repos {
+		own := decodeActivity(t, repoWire(t, r, row.Name, "activity"))
+		require.Equal(t, own.LastCommit, row.LastCommit, row.Name)
+		require.Equal(t, own.Changes7d, row.Changes7d, row.Name)
+		require.Equal(t, own.Changes30d, row.Changes30d, row.Name)
+		require.Equal(t, own.Changes90d, row.Changes90d, row.Name)
 	}
-	if body.RepoCount != 2 {
-		t.Errorf("repo_count: got %d, want 2", body.RepoCount)
-	}
-	// Total-weighted mean: (0.9*200 + 0.5*50) / 250 = 0.82.
-	if diff := body.AvgConfidence - 0.82; diff > 1e-9 || diff < -1e-9 {
-		t.Errorf("avg_confidence: got %v, want 0.82 (total-weighted mean)", body.AvgConfidence)
-	}
-	if body.LastCommit != "2026-07-20T10:00:00Z" {
-		t.Errorf("last_commit: got %q, want the MAX across mounts", body.LastCommit)
-	}
-	if body.Domains["go"] != 7 || body.Domains["ai"] != 10 || body.Domains["web"] != 1 {
-		t.Errorf("domains: got %v, want merged sums {go:7 ai:10 web:1}", body.Domains)
-	}
-	if body.Entities["chi"] != 3 || body.Entities["vite"] != 4 {
-		t.Errorf("entities: got %v, want merged sums {chi:3 vite:4}", body.Entities)
-	}
-	if body.Types["synthesis"] != 5 || body.Types["observation"] != 3 {
-		t.Errorf("types: got %v, want merged sums {synthesis:5 observation:3}", body.Types)
-	}
-	if len(body.Repos) != 2 {
-		t.Fatalf("repos: got %d rows, want 2; body=%+v", len(body.Repos), body)
-	}
-	// Reads() is sorted by repo name → alpha (write) then beta.
-	alpha, beta := body.Repos[0], body.Repos[1]
-	if alpha.Name != "alpha" || !alpha.IsWrite {
-		t.Errorf("row 0: got %+v, want name=alpha is_write=true", alpha)
-	}
-	if beta.Name != "beta" || beta.IsWrite {
-		t.Errorf("row 1: got %+v, want name=beta is_write=false", beta)
-	}
-	alphaRI, betaRI := m.Get("alpha"), m.Get("beta")
-	if alpha.ID != federate.ID12(alphaRI.ID()) || beta.ID != federate.ID12(betaRI.ID()) {
-		t.Errorf("ids: got %q/%q, want the mounts' id12s", alpha.ID, beta.ID)
-	}
-	if alpha.Branch != alphaRI.AgentBranch() || beta.Branch != betaRI.AgentBranch() {
-		t.Errorf("branches: got %q/%q, want the resolved read branches", alpha.Branch, beta.Branch)
-	}
-	if beta.Total != 50 || beta.AvgConfidence != 0.5 || beta.LastCommit != "2026-07-20T10:00:00Z" ||
-		beta.Changes7d != 4 || beta.Changes30d != 5 || beta.Changes90d != 6 {
-		t.Errorf("beta row must carry its own stats+activity, got %+v", beta)
-	}
+	require.Greater(t, body.Repos[0].Changes7d, body.Repos[1].Changes7d, "alpha holds one more commit than beta")
+}
+
+// last_commit is the MAX stamp across mounts, not the first, the last or the
+// min. beta - in the MIDDLE of binding order - commits a second after alpha and
+// gamma, whose newest commit is their preset's.
+func TestLensStats_LastCommitIsTheMaxAcrossMounts(t *testing.T) {
+	m, r := newLensStatsRouter(t, "alpha", "beta", "gamma")
+	// Commit stamps have one-second resolution.
+	time.Sleep(1100 * time.Millisecond)
+	obs(t, m.Get("beta"), "kb/o/late.md", "late", 0.5)
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Len(t, body.Repos, 3)
+	alpha, beta, gamma := body.Repos[0], body.Repos[1], body.Repos[2]
+	require.Equal(t, "beta", beta.Name)
+	require.Greater(t, beta.LastCommit, alpha.LastCommit)
+	require.Greater(t, beta.LastCommit, gamma.LastCommit)
+	require.Equal(t, beta.LastCommit, body.LastCommit)
 }
 
 // repo=<name> narrows the fan-out to the named mount(s): the roll-up and
 // repo_count reflect only those mounts.
 func TestLensStats_RepoFilterNarrows(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	statsStub := &lensStatsStub{byRepo: map[string]index.StatsResult{
-		"alpha": {Total: 200, AvgConfidence: 0.9},
-		"beta":  {Total: 50, AvgConfidence: 0.5},
-	}}
-	actStub := &lensActivityStub{byRepo: map[string]index.ActivityResult{
-		"beta": {LastCommit: "2026-07-20T10:00:00Z"},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	obs(t, m.Get("alpha"), "kb/o/a1.md", "a1", 0.9)
+	obs(t, m.Get("alpha"), "kb/o/a2.md", "a2", 0.9)
+	obs(t, m.Get("beta"), "kb/o/b1.md", "b1", 0.5)
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?repo=beta"))
-	if body.RepoCount != 1 {
-		t.Errorf("repo_count: got %d, want 1 (narrowed)", body.RepoCount)
-	}
-	if body.Total != 50 {
-		t.Errorf("total: got %d, want 50 (beta only)", body.Total)
-	}
-	if len(body.Repos) != 1 || body.Repos[0].Name != "beta" {
-		t.Fatalf("repos: got %+v, want the single beta row", body.Repos)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?repo=beta"))
+
+	require.Equal(t, 1, body.RepoCount, "narrowed")
+	require.Equal(t, 1, body.Total, "beta only")
+	require.Len(t, body.Repos, 1)
+	require.Equal(t, "beta", body.Repos[0].Name)
 }
 
-// An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
+// An unknown repo= name is a well-formed request naming a nonexistent mount -> 422.
 func TestLensStats_UnknownRepoFilter422(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	_, r := newLensStatsRouter(t, "alpha", "beta")
 
-	rec := getLensFacts(t, r, "/lenses/eng/stats?repo=ghost")
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status: got %d, want 422; body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-		t.Errorf("content-type: got %q, want application/problem+json", got)
-	}
+	rec := getLensFacts(t, r, lensStatsURL+"?repo=ghost")
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
 }
 
-// An empty lens (no facts, no commits on any mount) yields zero totals,
-// avg_confidence 0 (no division by zero), last_commit "", NON-NULL maps at
-// both the union and per-repo levels, and a per-repo row per mount.
+// A lens over mounts holding no facts yields zero totals, avg_confidence 0 (no
+// division by zero), NON-NULL maps at both the union and per-repo levels, and a
+// per-repo row per mount. The types union serializes as the literal `{}`, not
+// `null`: the typed assertions only prove a nil map decodes as non-nil, so the
+// exact-string check is what pins the wire representation.
 func TestLensStats_EmptyMounts(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	_, r := newLensStatsRouter(t, "alpha", "beta")
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
-	if body.Total != 0 || body.AvgConfidence != 0 {
-		t.Errorf("empty union: got total=%d avg=%v, want 0/0", body.Total, body.AvgConfidence)
-	}
-	if body.LastCommit != "" {
-		t.Errorf("last_commit: got %q, want \"\"", body.LastCommit)
-	}
-	if body.Domains == nil || body.Entities == nil || body.Types == nil {
-		t.Error("union domains/entities/types must be {} not null")
-	}
-	if len(body.Repos) != 2 {
-		t.Fatalf("repos: got %d rows, want 2 (mounts still listed)", len(body.Repos))
-	}
+	rec := getLensFacts(t, r, lensStatsURL)
+	body := decodeLensStats(t, rec)
+
+	require.Zero(t, body.Total)
+	require.Zero(t, body.AvgConfidence)
+	require.NotNil(t, body.Domains)
+	require.NotNil(t, body.Entities)
+	require.NotNil(t, body.Types)
+	require.Len(t, body.Repos, 2, "mounts still listed")
 	for _, row := range body.Repos {
-		if row.Domains == nil || row.Entities == nil {
-			t.Errorf("row %s: domains/entities must be {} not null", row.Name)
-		}
+		require.NotNil(t, row.Domains, row.Name)
+		require.NotNil(t, row.Entities, row.Name)
 	}
+	require.Contains(t, rec.Body.String(), `"types":{}`)
+	require.Contains(t, rec.Body.String(), `"highlights":[]`)
 }
 
-// An empty lens's types union serializes as the literal `{}`, not `null` —
-// exact-string check on the body, mirroring
-// TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull on the repo
-// endpoint (handlers_stats_test.go). The typed-body assertions above only
-// prove a Go nil map decodes as non-nil; encoding/json would happily accept
-// either `{}` or `null` there, so this is the only check that actually pins
-// the wire representation.
-func TestLensStats_EmptyMountsTypesSerializeAsObjectNotNull(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-
-	rec := getLensFacts(t, r, "/lenses/eng/stats")
-	got := rec.Body.String()
-	if !strings.Contains(got, `"types":{}`) {
-		t.Errorf("types must serialize as {}, got: %s", got)
-	}
-}
-
-// Any mount error fails the WHOLE request (RFC §9.1) — even when the failing
-// mount is a read mount and the write repo answered fine — for BOTH the stats
-// and the activity call.
+// Any mount error fails the WHOLE request (RFC 9.1) - even when the failing
+// mount is a read mount and the write repo answered fine - for BOTH the stats
+// and the activity read. The 500 carries THAT mount's injected error, and the
+// fault fired for the named read on that one mount exactly once.
 func TestLensStats_MountErrorFailsWholeRequest(t *testing.T) {
-	for name, providers := range map[string]struct {
-		stats *lensStatsStub
-		act   *lensActivityStub
+	for _, tc := range []struct {
+		name string
+		read index.ReadName
 	}{
-		"stats error":    {&lensStatsStub{errRepo: "beta"}, &lensActivityStub{}},
-		"activity error": {&lensStatsStub{}, &lensActivityStub{errRepo: "beta"}},
+		{"stats error", index.ReadStats},
+		{"activity error", index.ReadActivity},
 	} {
-		t.Run(name, func(t *testing.T) {
-			m, _ := newTestLensManager(t, "alpha", "beta")
-			s := &Server{Manager: m, providers: storeProviders{stats: providers.stats, activity: providers.act}}
-			r := s.NewAPIRouter()
-			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+		t.Run(tc.name, func(t *testing.T) {
+			m, r := newLensStatsRouter(t, "alpha", "beta")
+			injected := errors.New("injected beta " + string(tc.read) + " failure")
+			var hits atomic.Int64
+			failMountRead(t, m, "beta", tc.read, injected, &hits)
 
-			rec := getLensFacts(t, r, "/lenses/eng/stats")
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
-			}
-			if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-				t.Errorf("content-type: got %q, want application/problem+json", got)
-			}
+			rec := getLensFacts(t, r, lensStatsURL)
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+			require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			require.Contains(t, rec.Body.String(), injected.Error())
+			require.EqualValues(t, 1, hits.Load(), "beta's %s read must have reached the hook exactly once", tc.read)
 		})
 	}
 }
 
-// path= is forwarded to EVERY mount's stats AND activity providers as the
-// per-target (repo-relative) prefix.
+// path= is applied on EVERY mount, for both the stats and the activity read, as
+// the per-target (repo-relative) prefix: only the facts - and the commits -
+// under it count.
 func TestLensStats_ForwardsPathPrefix(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	statsStub := &lensStatsStub{}
-	actStub := &lensActivityStub{}
-	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: actStub}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	obs(t, m.Get("alpha"), "kb/meta/a1.md", "a1", 0.9)
+	obs(t, m.Get("alpha"), "kb/other/a2.md", "a2", 0.9)
+	obs(t, m.Get("beta"), "kb/meta/b1.md", "b1", 0.9)
+	obs(t, m.Get("beta"), "kb/other/b2.md", "b2", 0.9)
+	obs(t, m.Get("beta"), "kb/other/b3.md", "b3", 0.9)
 
-	decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?path=kb/meta"))
-	for _, repo := range []string{"alpha", "beta"} {
-		if got := statsStub.lastPath[repo]; got != "kb/meta" {
-			t.Errorf("stats path for %s: got %q, want kb/meta", repo, got)
-		}
-		if got := actStub.lastPath[repo]; got != "kb/meta" {
-			t.Errorf("activity path for %s: got %q, want kb/meta", repo, got)
-		}
+	whole := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+	require.Equal(t, 5, whole.Total)
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?path=kb/meta"))
+
+	require.Equal(t, 2, body.Total, "one fact per mount under kb/meta")
+	require.Len(t, body.Repos, 2)
+	for _, row := range body.Repos {
+		require.Equal(t, 1, row.Total, "stats path for %s", row.Name)
+		require.Equal(t, 1, row.Changes7d, "activity path for %s", row.Name)
 	}
 }
 
 // An unknown lens is 404 (from LensMiddleware, before the handler runs).
 func TestLensStats_UnknownLens404(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, providers: storeProviders{stats: &lensStatsStub{}, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
+	_, r := newLensStatsRouter(t, "alpha")
 
 	rec := getLensFacts(t, r, "/lenses/missing/stats")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
+
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
-// getLensStatsBody drives GET /lenses/eng/stats over a two-mount lens
-// (alpha = write, beta = read) with per-mount stats supplied by the caller.
-// Reuses the existing newTestLensManager/lensStatsStub/createLens/
-// getLensFacts/decodeLensStats fixture — no new scaffolding.
-func getLensStatsBody(t *testing.T, byRepo map[string]index.StatsResult) lensStatsBody {
-	t.Helper()
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    &lensStatsStub{byRepo: byRepo},
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-
-	return decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
-}
-
-// TestLensStats_HighlightsAreGlobalTopNotFirstMount: mount B holds the highest
-// impact fact; it must lead even though mount A is returned first.
-//
-// TopLayerFacts/TopLayerEdges are set (ObservationFacts left at 0) purely so
-// the pooled default_axis resolves to impact, matching what this fixture's
-// DefaultAxis fields already say per mount — this test is about merge order,
-// not axis pooling; see TestLensStats_DefaultAxis* for that.
+// mount B holds the highest-impact fact; it must lead even though mount A is
+// returned first. Asserted by TITLE, not path: beta is a read mount, so its path
+// is qualified on the wire.
 func TestLensStats_HighlightsAreGlobalTopNotFirstMount(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 1, DefaultAxis: "impact",
-			TopLayerFacts: 1, TopLayerEdges: 5,
-			Highlights: []index.Highlight{
-				{Path: "kb/a.md", Title: "low", Type: "synthesis", Impact: 2},
-			},
-		},
-		"beta": {
-			Total: 1, DefaultAxis: "impact",
-			TopLayerFacts: 1, TopLayerEdges: 5,
-			Highlights: []index.Highlight{
-				{Path: "kb/b.md", Title: "high", Type: "synthesis", Impact: 9},
-			},
-		},
-	}
-	body := getLensStatsBody(t, byRepo)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "a", 1)
+	seedAxisMount(t, m.Get("beta"), "b", 3)
 
-	if len(body.Highlights) != 2 {
-		t.Fatalf("highlights: got %d, want 2", len(body.Highlights))
-	}
-	// Asserted by TITLE, not path: beta is a read mount, so its path is
-	// qualified on the wire (kb://<id12>/…) and a bare-path assertion here was
-	// really asserting the qualification bug rather than the ordering this test
-	// exists for.
-	if body.Highlights[0].Title != "high" {
-		t.Errorf("top: got %q, want the impact-9 highlight from the read mount", body.Highlights[0].Title)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Equal(t, "impact", body.DefaultAxis)
+	require.Equal(t, []string{"syn b", "syn a"}, body.highlightTitles(),
+		"the impact-3 highlight from the read mount leads")
 }
 
-// TestLensStats_HighlightsDedupeAcrossMounts: a re-rooted fork mounted beside
-// its upstream shares fact UUIDs, so the same path can arrive twice. Unlike
-// the aggregate sums, highlights carry paths and MUST dedupe — write mount
-// wins, matching federate.WriteFirstWinners (the facts/search/topics unions'
-// shared dedup). The two copies carry DIFFERENT Title/Confidence so the
-// test can tell WHICH copy survived, not just that dedup happened at all.
+// Seeds the same fact path on a write mount and a read mount (a re-rooted fork
+// shares fact UUIDs, so the same path can arrive twice). The two copies carry
+// DIFFERENT title and confidence so a test can tell WHICH copy survived.
+func seedDuplicatePath(t *testing.T, write, read *repos.RepoInstance) {
+	t.Helper()
+	for _, ri := range []*repos.RepoInstance{write, read} {
+		obs(t, ri, "kb/o/src.md", "source", 0.5)
+	}
+	syn(t, write, "kb/dup.md", "from write ("+write.Name()+")", 0.9, "kb/o/src.md")
+	syn(t, read, "kb/dup.md", "from read ("+read.Name()+")", 0.2, "kb/o/src.md")
+}
+
+// Unlike the aggregate sums, highlights carry paths and MUST dedupe - write
+// mount wins, matching federate.WriteFirstWinners (the facts/search/topics
+// unions' shared dedup).
 func TestLensStats_HighlightsDedupeAcrossMounts(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": { // write mount — must win
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/dup.md", Title: "from write (alpha)", Type: "synthesis", Impact: 5, Confidence: 0.9},
-			},
-		},
-		"beta": { // read mount — must lose
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/dup.md", Title: "from read (beta)", Type: "synthesis", Impact: 5, Confidence: 0.2},
-			},
-		},
-	}
-	body := getLensStatsBody(t, byRepo)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedDuplicatePath(t, m.Get("alpha"), m.Get("beta"))
 
-	if len(body.Highlights) != 1 {
-		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
-	}
-	if got := body.Highlights[0].Title; got != "from write (alpha)" {
-		t.Errorf("dedupe winner: got title %q, want the write mount's copy (\"from write (alpha)\")", got)
-	}
-	if got := body.Highlights[0].Confidence; got != 0.9 {
-		t.Errorf("dedupe winner: got confidence %v, want the write mount's copy (0.9)", got)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Len(t, body.Highlights, 1, "one highlight after dedupe")
+	require.Equal(t, "from write (alpha)", body.Highlights[0].Title, "the write mount's copy wins")
+	require.Equal(t, 0.9, body.Highlights[0].Confidence)
 }
 
-// TestLensStats_HighlightsDedupeWriteWinsEvenWhenWriteSortsAfterRead:
 // control.Lens.normalize sorts Reads alphabetically by repo name, so the write
-// mount is NOT necessarily first in fan-out order — a "first occurrence in
-// iteration order wins" dedup would pick the read mount's copy here, which
-// is wrong. Write must win regardless of where it sorts.
+// mount is NOT necessarily first in fan-out order - a "first occurrence in
+// iteration order wins" dedup would pick the read mount's copy here. Write must
+// win regardless of where it sorts.
 func TestLensStats_HighlightsDedupeWriteWinsEvenWhenWriteSortsAfterRead(t *testing.T) {
-	m, _ := newTestLensManager(t, "zulu", "alpha")
-	byRepo := map[string]index.StatsResult{
-		"zulu": { // write mount, sorts AFTER "alpha" alphabetically
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/dup.md", Title: "from write (zulu)", Type: "synthesis", Impact: 5, Confidence: 0.9},
-			},
-		},
-		"alpha": { // read mount, sorts first in fan-out order
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/dup.md", Title: "from read (alpha)", Type: "synthesis", Impact: 5, Confidence: 0.2},
-			},
-		},
-	}
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    &lensStatsStub{byRepo: byRepo},
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+	m, r := newLensStatsRouter(t, "zulu", "alpha")
+	seedDuplicatePath(t, m.Get("zulu"), m.Get("alpha"))
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
 
-	if len(body.Highlights) != 1 {
-		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
-	}
-	if got := body.Highlights[0].Title; got != "from write (zulu)" {
-		t.Errorf("dedupe winner: got title %q, want the write mount's copy (\"from write (zulu)\") even though it sorts after the read mount", got)
-	}
+	require.Len(t, body.Highlights, 1)
+	require.Equal(t, "from write (zulu)", body.Highlights[0].Title,
+		"the write mount's copy wins even though it sorts after the read mount")
 }
 
-// TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool:
-// store.Stats cuts each mount's SQL top-N by NormalizeAxis(requested axis,
-// THAT MOUNT's own default). With axis omitted and mounts disagreeing on
-// their own default, a naive single fan-out would leave the impact-default
-// mount's candidates cut BY IMPACT while the union ranks by confidence (its
-// resolved default) — silently dropping that mount's true top-N-by-
-// confidence facts that fell outside its impact top-N. The union must
-// re-fan-out at the resolved axis so every mount's candidate pool matches
-// what it is ranked by.
+// With axis omitted and mounts disagreeing on their own default, a naive single
+// fan-out would leave the impact-default mount's candidates cut BY IMPACT while
+// the union ranks by confidence (its resolved default) - silently dropping that
+// mount's true top-N-by-confidence facts that fell outside its impact top-N.
+// The union must re-fan-out at the resolved axis.
+//
+// alpha holds 11 syntheses: ten with impact 1 and low confidence, and one with
+// impact 0 and confidence 0.99 - which a top-10 cut by impact leaves out. alpha
+// alone resolves to impact (its observation has no out-edges). beta alone
+// resolves to confidence, and its observations' out-edges drag the POOLED ratio
+// under the threshold, so the union resolves to confidence.
 func TestLensStats_OmittedAxisWithDisagreeingMountsUsesFullCandidatePool(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		// alpha (write, default impact): its impact-cut first pass carries
-		// only a low-confidence fact — its true highest-confidence fact is
-		// NOT in this list, mirroring a real impact-ranked SQL LIMIT.
-		"alpha": {
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/a-impact-only.md", Title: "impact-only", Type: "synthesis", Impact: 9, Confidence: 0.1},
-			},
-		},
-		// beta (read, default confidence): axis-insensitive in this stub —
-		// same result whichever axis is requested.
-		"beta": {
-			Total: 1, DefaultAxis: "confidence",
-			Highlights: []index.Highlight{
-				{Path: "kb/b.md", Title: "beta", Type: "synthesis", Impact: 1, Confidence: 0.5},
-			},
-		},
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	obs(t, alpha, "kb/o/a.md", "alpha source", 0.5)
+	for i := 0; i < 10; i++ {
+		syn(t, alpha, fmt.Sprintf("kb/s/low%d.md", i), fmt.Sprintf("low %d", i), 0.1, "kb/o/a.md")
 	}
-	byRepoAxis := map[string]map[string]index.StatsResult{
-		// alpha's confidence-cut candidate pool — what a corrective re-fetch
-		// at the resolved union axis (confidence) must return, INCLUDING the
-		// high-confidence fact the impact-cut first pass omitted.
-		"alpha": {
-			"confidence": {
-				Total: 1, DefaultAxis: "impact",
-				Highlights: []index.Highlight{
-					{Path: "kb/a-high-conf.md", Title: "high-conf", Type: "synthesis", Impact: 1, Confidence: 0.99},
-					{Path: "kb/a-impact-only.md", Title: "impact-only", Type: "synthesis", Impact: 9, Confidence: 0.1},
-				},
-			},
-		},
+	syn(t, alpha, "kb/s/high.md", "high-conf", 0.99)
+	// beta: observation b_j derives from every earlier one (mean out-degree 3),
+	// and its one synthesis derives from nothing.
+	var earlier []string
+	for j := 0; j < 7; j++ {
+		p := fmt.Sprintf("kb/o/b%d.md", j)
+		obs(t, beta, p, p, 0.5, earlier...)
+		earlier = append(earlier, p)
 	}
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    &lensStatsStub{byRepo: byRepo, byRepoAxis: byRepoAxis},
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	syn(t, beta, "kb/s/beta.md", "beta syn", 0.5)
+	require.Equal(t, "impact", decodeStats(t, repoWire(t, r, "alpha", "stats")).DefaultAxis)
+	require.Equal(t, "confidence", decodeStats(t, repoWire(t, r, "beta", "stats")).DefaultAxis)
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
 
-	if body.DefaultAxis != "confidence" {
-		t.Fatalf("default_axis: got %q, want confidence (mounts disagree)", body.DefaultAxis)
-	}
-	if len(body.Highlights) != 3 {
-		t.Fatalf("highlights: got %d, want 3 (alpha's confidence-cut pool [2] + beta [1]); "+
-			"a mismatch means alpha was never re-fetched at the resolved axis", len(body.Highlights))
-	}
-	if got := body.Highlights[0].Path; got != "kb/a-high-conf.md" {
-		t.Errorf("top by confidence: got %q, want kb/a-high-conf.md (0.99) — "+
-			"absent entirely means alpha's impact-cut first pass was used unchanged", got)
-	}
+	require.Equal(t, "confidence", body.DefaultAxis, "mounts disagree and the pooled evidence points at confidence")
+	require.NotEmpty(t, body.Highlights)
+	require.Equal(t, "high-conf", body.Highlights[0].Title,
+		"absent means alpha's impact-cut first pass was used unchanged")
+	require.Len(t, body.Highlights, index.MaxHighlights)
 }
 
-// TestLensStats_HighlightsCapAtTen: three mounts of 10 each must yield 10.
-//
-// TopLayerFacts/TopLayerEdges are set purely so the pooled default_axis
-// resolves to impact, matching this fixture's per-mount DefaultAxis — the cap
-// behaviour under test is orthogonal to axis pooling.
+// Three mounts of ten highlights each must yield MaxHighlights, and the cap
+// keeps the best-ranked ones.
 func TestLensStats_HighlightsCapAtTen(t *testing.T) {
-	mk := func(prefix string, base int) []index.Highlight {
-		out := make([]index.Highlight, 0, 10)
-		for i := 0; i < 10; i++ {
-			out = append(out, index.Highlight{
-				Path:  prefix + string(rune('a'+i)) + ".md",
-				Title: "t", Type: "synthesis", Impact: base + i,
-			})
-		}
-		return out
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	obs(t, alpha, "kb/o/a.md", "a src", 0.5)
+	obs(t, beta, "kb/o/b0.md", "b src 0", 0.5)
+	obs(t, beta, "kb/o/b1.md", "b src 1", 0.5)
+	obs(t, beta, "kb/o/b2.md", "b src 2", 0.5)
+	for i := 0; i < 10; i++ {
+		syn(t, alpha, fmt.Sprintf("kb/s/a%d.md", i), fmt.Sprintf("alpha %d", i), 0.5, "kb/o/a.md")
+		syn(t, beta, fmt.Sprintf("kb/s/b%d.md", i), fmt.Sprintf("beta %d", i), 0.5, "kb/o/b0.md", "kb/o/b1.md", "kb/o/b2.md")
 	}
-	byRepo := map[string]index.StatsResult{
-		"alpha": {Total: 10, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 5, Highlights: mk("kb/x/", 0)},
-		"beta":  {Total: 10, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 5, Highlights: mk("kb/y/", 100)},
-	}
-	body := getLensStatsBody(t, byRepo)
 
-	if len(body.Highlights) != 10 {
-		t.Fatalf("highlights: got %d, want 10", len(body.Highlights))
-	}
-	if body.Highlights[0].Impact != 109 {
-		t.Errorf("top impact: got %d, want 109", body.Highlights[0].Impact)
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Len(t, body.Highlights, index.MaxHighlights)
+	for _, h := range body.Highlights {
+		require.Equal(t, 3, h.Impact, "the cap keeps the top-ranked, all from beta: %s", h.Title)
 	}
 }
 
-// TestLensStats_MountWithNoEligibleFactsDoesNotFail: a mount holding only
-// observations contributes nothing to highlights and must not shrink or fail
-// the union (RFC §9.1 — a lens never silently shrinks its read set).
+// A mount holding only observations contributes nothing to highlights and must
+// not shrink or fail the union (RFC 9.1 - a lens never silently shrinks its
+// read set): its facts still count.
 func TestLensStats_MountWithNoEligibleFactsDoesNotFail(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/a.md", Title: "only one", Type: "synthesis", Impact: 4},
-			},
-		},
-		"beta": {Total: 500, DefaultAxis: "impact", Highlights: []index.Highlight{}},
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "a", 1)
+	for i := 0; i < 5; i++ {
+		obs(t, m.Get("beta"), fmt.Sprintf("kb/o/b%d.md", i), "b", 0.5)
 	}
-	body := getLensStatsBody(t, byRepo)
 
-	if len(body.Highlights) != 1 {
-		t.Fatalf("highlights: got %d, want 1", len(body.Highlights))
-	}
-	if body.Total != 501 {
-		t.Errorf("total: got %d, want 501 — the empty mount still counts", body.Total)
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Equal(t, []string{"syn a"}, body.highlightTitles())
+	require.Equal(t, 7, body.Total, "the observation-only mount still counts")
+}
+
+// requireOwnAxes asserts, from the repo endpoints themselves, what each mount
+// would recommend on its own - so a test about POOLING can prove the mounts
+// disagree (or agree) before the union is read.
+func requireOwnAxes(t *testing.T, r http.Handler, want map[string]string) {
+	t.Helper()
+	for name, axis := range want {
+		require.Equal(t, axis, decodeStats(t, repoWire(t, r, name, "stats")).DefaultAxis, "own axis of %s", name)
 	}
 }
 
-// TestLensStats_DefaultAxisPoolsAboveThresholdEvenWhenOneMountDissents is the
-// case the old AND-of-mounts rule got backwards (kb finding I1): alpha alone
-// clears the 3.0 separation ratio (topMean=100/10=10, obsMean=10/10=1, ratio
-// 10x -> its own default is impact) while beta alone does not (topMean=1/1=1,
-// obsMean=1/1=1, ratio 1x -> confidence). Pooled: topMean=(100+1)/(10+1)=9.2,
-// obsMean=(10+1)/(10+1)=1, ratio 9.2x -> impact. An AND rule would let beta's
-// dissent veto the whole lens; pooling correctly lets the combined evidence
-// decide.
+// The case the old AND-of-mounts rule got backwards: alpha alone clears the 3.0
+// separation ratio (top mean 4, observation mean 0: impact) while beta alone
+// does not (top mean 1, observation mean 0.5: confidence). Pooled: 3 top facts
+// with 9 edges against 6 observations with 1 edge - 18x - so impact. An AND
+// rule would let beta's dissent veto the whole lens; pooling lets the combined
+// evidence decide.
 func TestLensStats_DefaultAxisPoolsAboveThresholdEvenWhenOneMountDissents(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 20, DefaultAxis: "impact",
-			TopLayerFacts: 10, TopLayerEdges: 100,
-			ObservationFacts: 10, ObservationEdges: 10,
-		},
-		"beta": {
-			Total: 2, DefaultAxis: "confidence",
-			TopLayerFacts: 1, TopLayerEdges: 1,
-			ObservationFacts: 1, ObservationEdges: 1,
-		},
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	var four []string
+	for i := 0; i < 4; i++ {
+		p := fmt.Sprintf("kb/o/a%d.md", i)
+		obs(t, alpha, p, p, 0.5)
+		four = append(four, p)
 	}
-	body := getLensStatsBody(t, byRepo)
-	if body.DefaultAxis != "impact" {
-		t.Errorf("default_axis: got %q, want impact — pooled ratio 9.2x clears 3.0 even though beta alone dissents", body.DefaultAxis)
-	}
+	syn(t, alpha, "kb/s/a0.md", "a0", 0.8, four...)
+	syn(t, alpha, "kb/s/a1.md", "a1", 0.8, four...)
+	obs(t, beta, "kb/o/q1.md", "q1", 0.5)
+	obs(t, beta, "kb/o/q2.md", "q2", 0.5, "kb/o/q1.md")
+	syn(t, beta, "kb/s/q.md", "q", 0.8, "kb/o/q1.md")
+	requireOwnAxes(t, r, map[string]string{"alpha": "impact", "beta": "confidence"})
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Equal(t, "impact", body.DefaultAxis,
+		"the pooled ratio clears 3.0 even though beta alone dissents")
 }
 
-// TestLensStats_DefaultAxisConfidenceWhenPoolStaysBelowThreshold: both mounts
-// individually AND pooled sit at a 2.0x ratio, below the 3.0 threshold — a
-// genuine confidence case, not a pooling artifact.
+// Both mounts individually AND pooled sit at a 2.0x ratio, below the 3.0
+// threshold - a genuine confidence case, not a pooling artifact. Each mount:
+// one synthesis deriving from two of three observations whose own out-edges
+// total three.
 func TestLensStats_DefaultAxisConfidenceWhenPoolStaysBelowThreshold(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 20, DefaultAxis: "confidence",
-			TopLayerFacts: 10, TopLayerEdges: 20,
-			ObservationFacts: 10, ObservationEdges: 10,
-		},
-		"beta": {
-			Total: 20, DefaultAxis: "confidence",
-			TopLayerFacts: 10, TopLayerEdges: 20,
-			ObservationFacts: 10, ObservationEdges: 10,
-		},
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	for _, name := range []string{"alpha", "beta"} {
+		ri := m.Get(name)
+		obs(t, ri, "kb/o/1.md", "o1", 0.5)
+		obs(t, ri, "kb/o/2.md", "o2", 0.5, "kb/o/1.md")
+		obs(t, ri, "kb/o/3.md", "o3", 0.5, "kb/o/1.md", "kb/o/2.md")
+		syn(t, ri, "kb/s/s.md", "s", 0.8, "kb/o/1.md", "kb/o/2.md")
 	}
-	body := getLensStatsBody(t, byRepo)
-	if body.DefaultAxis != "confidence" {
-		t.Errorf("default_axis: got %q, want confidence — pooled ratio 2.0x stays below 3.0", body.DefaultAxis)
-	}
+	requireOwnAxes(t, r, map[string]string{"alpha": "confidence", "beta": "confidence"})
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Equal(t, "confidence", body.DefaultAxis, "pooled ratio 2.0x stays below 3.0")
 }
 
-// TestLensStats_DefaultAxisIgnoresMountWithZeroFacts: an empty mount (the
-// "all" lens's zero-fact "test" repo, in the real corpus this bug was found
-// against) must not veto or otherwise change the pooled outcome — it sums
-// (0,0) into both sides of the ratio.
+// An empty mount (the "all" lens's zero-fact "test" repo, in the real corpus
+// this bug was found against) must not veto or otherwise change the pooled
+// outcome - it sums (0,0) into both sides of the ratio.
 func TestLensStats_DefaultAxisIgnoresMountWithZeroFacts(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 20, DefaultAxis: "impact",
-			TopLayerFacts: 10, TopLayerEdges: 100,
-			ObservationFacts: 10, ObservationEdges: 10,
-		},
-		"beta": {Total: 0, DefaultAxis: "confidence"},
-	}
-	body := getLensStatsBody(t, byRepo)
-	if body.DefaultAxis != "impact" {
-		t.Errorf("default_axis: got %q, want impact — an empty mount (beta, zero facts) must not veto the pooled ratio", body.DefaultAxis)
-	}
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "a", 2)
+	requireOwnAxes(t, r, map[string]string{"alpha": "impact", "beta": "confidence"})
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Equal(t, "impact", body.DefaultAxis, "an empty mount must not veto the pooled ratio")
 }
 
-// TestLensStats_UnionDefaultAxisImpactWhenAllMountsAgree is the M6 gap: prior
-// coverage only caught default_axis indirectly through highlight row order,
-// whose failure message never names the axis. Assert it directly for the
-// straightforward case where every mount agrees and the pool clears 3.0.
+// default_axis asserted directly (rather than through highlight row order,
+// whose failure message never names the axis) for the straightforward case
+// where every mount agrees and the pool clears 3.0.
 func TestLensStats_UnionDefaultAxisImpactWhenAllMountsAgree(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 10, DefaultAxis: "impact",
-			TopLayerFacts: 5, TopLayerEdges: 50,
-			ObservationFacts: 5, ObservationEdges: 5,
-		},
-		"beta": {
-			Total: 10, DefaultAxis: "impact",
-			TopLayerFacts: 5, TopLayerEdges: 50,
-			ObservationFacts: 5, ObservationEdges: 5,
-		},
-	}
-	body := getLensStatsBody(t, byRepo)
-	if body.DefaultAxis != "impact" {
-		t.Errorf("default_axis: got %q, want impact when every mount agrees and the pool clears 3.0", body.DefaultAxis)
-	}
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "a", 2)
+	seedAxisMount(t, m.Get("beta"), "b", 2)
+	requireOwnAxes(t, r, map[string]string{"alpha": "impact", "beta": "impact"})
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Equal(t, "impact", body.DefaultAxis)
 }
 
-// TestLensStats_HighlightsCarryQualifiedPaths is the regression for a 404 that
-// only ever hit lenses: clicking a highlight on the summary dashboard sent the
-// mount-RELATIVE path to /lenses/{lens}/facts/*, which resolves a bare path
-// against the WRITE repo. Every highlight owned by a read mount 404'd.
-//
-// /facts and /search already return kb://<id12>/… for read-mount rows
-// (TestLensFacts_ReadMountQualifiedPath, TestLensSearch_ReadMountQualifiedPath);
-// /stats was the one lens read still emitting bare paths, which contradicts the
-// one-canonical-form decision the REST surface is supposed to keep.
+// Clicking a highlight on the summary dashboard sent the mount-RELATIVE path to
+// /lenses/{lens}/facts/*, which resolves a bare path against the WRITE repo, so
+// every highlight owned by a read mount 404'd. /facts and /search return
+// kb://<id12>/... for read-mount rows; /stats must too, while the write
+// mount's paths stay bare.
 func TestLensStats_HighlightsCarryQualifiedPaths(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	byRepo := map[string]index.StatsResult{
-		"alpha": { // the write mount: its paths stay bare
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/from-write.md", Title: "write", Type: "synthesis", Impact: 9, Confidence: 0.9},
-			},
-		},
-		"beta": { // a read mount: its paths must be qualified
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/from-read.md", Title: "read", Type: "synthesis", Impact: 8, Confidence: 0.8},
-			},
-		},
-	}
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    &lensStatsStub{byRepo: byRepo},
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "w", 1)
+	seedAxisMount(t, m.Get("beta"), "r", 1)
+
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
 
 	byTitle := map[string]string{}
 	for _, h := range body.Highlights {
 		byTitle[h.Title] = h.Path
 	}
-	if got := byTitle["write"]; got != "kb/from-write.md" {
-		t.Errorf("write mount highlight: got %q, want the bare path", got)
-	}
-	betaID := federate.ID12(m.Get("beta").ID())
-	want := federate.QualifyPath(betaID, "kb/from-read.md")
-	if got := byTitle["read"]; got != want {
-		t.Errorf("read mount highlight: got %q, want %q", got, want)
-	}
+	require.Equal(t, "kb/s/w.md", byTitle["syn w"], "write mount highlight keeps the bare path")
+	require.Equal(t, federate.QualifyPath(federate.ID12(m.Get("beta").ID()), "kb/s/r.md"), byTitle["syn r"],
+		"read mount highlight is qualified")
 }
 
-// Qualification must happen AFTER the dedup, never before: dedup exists because
-// one fact path can live on two mounts (a re-rooted fork shares fact UUIDs), and
-// keying on already-qualified paths would give the two copies different keys, so
-// both would survive and the write mount would stop winning.
+// Qualification must happen AFTER the dedup, never before: keying on already
+// qualified paths would give the two copies different keys, so both would
+// survive and the write mount would stop winning.
 func TestLensStats_QualifyingDoesNotDefeatTheDedupe(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	byRepo := map[string]index.StatsResult{
-		"alpha": {
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/dup.md", Title: "from write", Type: "synthesis", Impact: 5, Confidence: 0.9},
-			},
-		},
-		"beta": {
-			Total: 1, DefaultAxis: "impact",
-			Highlights: []index.Highlight{
-				{Path: "kb/dup.md", Title: "from read", Type: "synthesis", Impact: 5, Confidence: 0.2},
-			},
-		},
-	}
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    &lensStatsStub{byRepo: byRepo},
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedDuplicatePath(t, m.Get("alpha"), m.Get("beta"))
 
-	if len(body.Highlights) != 1 {
-		t.Fatalf("highlights: got %d, want 1 after dedupe", len(body.Highlights))
-	}
-	if got := body.Highlights[0].Title; got != "from write" {
-		t.Errorf("dedupe winner: got %q, want the write mount's copy", got)
-	}
-	if got := body.Highlights[0].Path; got != "kb/dup.md" {
-		t.Errorf("winner path: got %q, want the write mount's BARE path", got)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
+
+	require.Len(t, body.Highlights, 1, "one highlight after dedupe")
+	require.Equal(t, "from write (alpha)", body.Highlights[0].Title)
+	require.Equal(t, "kb/dup.md", body.Highlights[0].Path, "the write mount's BARE path")
 }
 
-// ── The exclusion is about a SCOPE, and a union is a bigger one ──────────────
+// -- The exclusion is about a SCOPE, and a union is a bigger one --------------
 //
 // store lets a scope holding nothing but observations have them as its
-// highlights: the exclusion exists to stop 1,186 observations burying 128
-// syntheses, and where there is no distilled layer to bury it protects nothing
-// and only blanks the panel. That reasoning is per scope — and a mount cannot
-// see the union it is about to be merged into.
-//
-// A lens over a distilled mount plus a pure-observation mount HAS a distilled
-// layer, so the fallback must not travel into the merge. Under AxisConfidence,
-// which orders on confidence alone with no impact term, a confident observation
-// otherwise outranks the syntheses the panel exists to surface.
+// highlights: the exclusion exists to stop observations burying the syntheses,
+// and where there is no distilled layer to bury it only blanks the panel. A lens
+// over a distilled mount plus a pure-observation mount HAS a distilled layer, so
+// the fallback must not travel into the merge.
 
 func TestLensStats_FallbackHighlightsStayOutOfAUnionWithRealOnes(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	statsStub := &lensStatsStub{byRepo: map[string]index.StatsResult{
-		// The distilled mount: real highlights, modest confidence.
-		"alpha": {
-			Total: 200, AvgConfidence: 0.7,
-			Highlights: []index.Highlight{
-				{Path: "kb/s/1.md", Title: "synthesis", Type: "policy", Confidence: 0.7},
-			},
-		},
-		// Pure observation: store had nothing eligible and answered with the
-		// excluded types, flagging that it did.
-		"beta": {
-			Total: 3, AvgConfidence: 0.99,
-			Highlights: []index.Highlight{
-				{Path: "kb/o/1.md", Title: "observation", Type: "observation", Confidence: 0.99},
-			},
-			HighlightsFallback: true,
-		},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	// The distilled mount: a real highlight, modest confidence.
+	writeTypedFact(t, m.Get("alpha"), "kb/s/1.md", "synthesis", fact.Synthesis, 0.7, nil, nil, nil)
+	// Pure observation: the store had nothing eligible and answered with the
+	// excluded types, flagging that it did.
+	obs(t, m.Get("beta"), "kb/o/1.md", "observation", 0.99)
 
 	// Explicit axis: confidence orders on confidence alone, so the observation
 	// would lead the list if it got in.
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
-	if len(body.Highlights) != 1 {
-		t.Fatalf("highlights: got %d, want 1; %+v", len(body.Highlights), body.Highlights)
-	}
-	if body.Highlights[0].Title != "synthesis" {
-		t.Fatalf("highlights[0]: got %q, want the synthesis — a mount's fallback must not bury the union's distilled layer",
-			body.Highlights[0].Title)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?axis=confidence"))
+
+	require.Equal(t, []string{"synthesis"}, body.highlightTitles(),
+		"a mount's fallback must not bury the union's distilled layer")
 }
 
+// The other half of the rule: when NO mount has a distilled layer, the union is
+// itself the pure-observation scope, and blanking the panel is exactly the
+// failure the store-side fallback was written to fix.
 func TestLensStats_AllMountsPureObservationKeepTheirHighlights(t *testing.T) {
-	// The other half of the rule: when NO mount has a distilled layer, the union
-	// is itself the pure-observation scope, and blanking the panel is exactly the
-	// failure the store-side fallback was written to fix.
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	statsStub := &lensStatsStub{byRepo: map[string]index.StatsResult{
-		"alpha": {
-			Total: 3, AvgConfidence: 0.5,
-			Highlights: []index.Highlight{
-				{Path: "kb/o/a.md", Title: "obs-a", Type: "observation", Confidence: 0.5},
-			},
-			HighlightsFallback: true,
-		},
-		"beta": {
-			Total: 2, AvgConfidence: 0.4,
-			Highlights: []index.Highlight{
-				{Path: "kb/o/b.md", Title: "obs-b", Type: "observation", Confidence: 0.4},
-			},
-			HighlightsFallback: true,
-		},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	obs(t, m.Get("alpha"), "kb/o/a.md", "obs-a", 0.5)
+	obs(t, m.Get("beta"), "kb/o/b.md", "obs-b", 0.4)
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
-	if len(body.Highlights) != 2 {
-		t.Fatalf("highlights: got %d, want both mounts' observations; %+v", len(body.Highlights), body.Highlights)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?axis=confidence"))
+
+	require.Equal(t, []string{"obs-a", "obs-b"}, body.highlightTitles(), "both mounts' observations")
 }
 
+// A mount with no facts at all reports neither highlights nor a fallback, so it
+// must not be mistaken for "the union has a distilled layer" - that would
+// suppress the only highlights on offer and blank the panel.
 func TestLensStats_AnEmptyMountDoesNotCountAsARealHighlightList(t *testing.T) {
-	// A mount with no facts at all reports neither highlights nor a fallback, so
-	// it must not be mistaken for "the union has a distilled layer" — that would
-	// suppress the only highlights on offer and blank the panel.
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	statsStub := &lensStatsStub{byRepo: map[string]index.StatsResult{
-		"alpha": {},
-		"beta": {
-			Total: 3, AvgConfidence: 0.5,
-			Highlights: []index.Highlight{
-				{Path: "kb/o/b.md", Title: "obs-b", Type: "observation", Confidence: 0.5},
-			},
-			HighlightsFallback: true,
-		},
-	}}
-	s := &Server{Manager: m, providers: storeProviders{stats: statsStub, activity: &lensActivityStub{}}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	obs(t, m.Get("beta"), "kb/o/b.md", "obs-b", 0.5)
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
-	if len(body.Highlights) != 1 {
-		t.Fatalf("highlights: got %d, want the read mount's own; %+v", len(body.Highlights), body.Highlights)
-	}
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL+"?axis=confidence"))
+
+	require.Equal(t, []string{"obs-b"}, body.highlightTitles(), "the read mount's own")
 }
 
 // The axis correction re-fetches HIGHLIGHTS, not the whole StatsResult.
+// Everything else the union reads from a mount - total, avg_confidence, both
+// histograms, type counts, separation counters - is axis-independent and already
+// in hand after the first pass. Two counters, because "it got faster" is not
+// something a unit test can see, but "it stopped asking for the aggregates
+// twice" is.
 //
-// Everything else the union reads from a mount — total, avg_confidence, both
-// histograms, type counts, separation counters — is axis-independent and
-// already in hand after the first pass. Re-running Stats recomputed all of it
-// to use none of it: 37.0 ms of an 84 ms request on the 5-mount `all` lens,
-// against 10.6 ms for the highlights it wanted. Two counters, because "it got
-// faster" is not something a unit test can see, but "it stopped asking for the
-// aggregates twice" is.
+// alpha defaults to impact, beta to confidence, and the pooled axis is impact:
+// beta disagrees with the pooled verdict, which arms the corrective pass.
 func TestLensStats_AxisCorrectionRefetchesOnlyHighlights(t *testing.T) {
-	// alpha defaults to impact, beta to confidence: the mounts disagree, which
-	// is what arms the corrective pass at all.
-	byRepo := map[string]index.StatsResult{
-		"alpha": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
-			Highlights: []index.Highlight{{Path: "kb/a.md", Type: "synthesis", Impact: 9}}},
-		"beta": {Total: 1, DefaultAxis: "confidence",
-			Highlights: []index.Highlight{{Path: "kb/b.md", Type: "synthesis", Confidence: 0.9}}},
-	}
-	stub := &lensStatsStub{byRepo: byRepo}
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    stub,
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "a", 1)
+	syn(t, m.Get("beta"), "kb/s/b.md", "syn b", 0.5)
+	requireOwnAxes(t, r, map[string]string{"alpha": "impact", "beta": "confidence"})
+	counts := countMountReads(t, m, []string{"alpha", "beta"}, "Stats", "Highlights")
 
-	getLensFacts(t, r, "/lenses/eng/stats")
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
 
-	const mounts = 2
-	if stub.highlightCalls != mounts {
-		t.Errorf("Highlights called %d times, want %d — the corrective pass did not run, "+
-			"so this test is no longer measuring what it claims", stub.highlightCalls, mounts)
-	}
-	if stub.statsCalls != mounts {
-		t.Errorf("Stats called %d times, want %d (one pass); a second full fan-out is the "+
-			"regression this test exists to catch", stub.statsCalls, mounts)
+	require.Equal(t, "impact", body.DefaultAxis)
+	for _, name := range []string{"alpha", "beta"} {
+		require.EqualValues(t, 1, counts[name]["Highlights"].Load(),
+			"%s: the corrective pass did not run, so this test is no longer measuring what it claims", name)
+		require.EqualValues(t, 1, counts[name]["Stats"].Load(),
+			"%s: a second full fan-out is the regression this test exists to catch", name)
 	}
 }
 
 // With every mount already agreeing with the pooled verdict there is nothing to
-// correct, and the narrow call must not fire at all — the fast path stays one
-// fan-out, exactly as before.
+// correct, and the narrow call must not fire at all - the fast path stays one
+// fan-out.
 func TestLensStats_AgreeingMountsSkipTheHighlightsRefetch(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
-			Highlights: []index.Highlight{{Path: "kb/a.md", Type: "synthesis", Impact: 9}}},
-		"beta": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
-			Highlights: []index.Highlight{{Path: "kb/b.md", Type: "synthesis", Impact: 5}}},
-	}
-	stub := &lensStatsStub{byRepo: byRepo}
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    stub,
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta")
+	seedAxisMount(t, m.Get("alpha"), "a", 1)
+	seedAxisMount(t, m.Get("beta"), "b", 1)
+	requireOwnAxes(t, r, map[string]string{"alpha": "impact", "beta": "impact"})
+	counts := countMountReads(t, m, []string{"alpha", "beta"}, "Stats", "Highlights")
 
-	getLensFacts(t, r, "/lenses/eng/stats")
+	decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
 
-	if stub.highlightCalls != 0 {
-		t.Errorf("Highlights called %d times, want 0 — nothing disagreed with the pooled axis",
-			stub.highlightCalls)
+	for _, name := range []string{"alpha", "beta"} {
+		require.EqualValues(t, 1, counts[name]["Stats"].Load(), name)
+		require.Zero(t, counts[name]["Highlights"].Load(),
+			"%s: nothing disagreed with the pooled axis", name)
 	}
 }
 
-// ── concurrent fan-out: §9.1 and determinism ────────────────────────────────
+// -- concurrent fan-out: 9.1 and determinism ---------------------------------
 
 // The response must be a function of the REQUEST, not of which mount finished
 // first. The slowest mount is deliberately the FIRST in binding order, so a
-// handler that assembled results as they arrived — appending from inside a
-// goroutine — would emit the repos rows inverted, and the qualified paths and
+// handler that assembled results as they arrived - appending from inside a
+// goroutine - would emit the repos rows inverted, and the qualified paths and
 // per-mount attribution with them.
 func TestLensStats_ResponseOrderIsBindingOrderNotCompletionOrder(t *testing.T) {
-	byRepo := map[string]index.StatsResult{
-		"alpha": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
-			Highlights: []index.Highlight{{Path: "kb/a.md", Title: "from alpha", Type: "synthesis", Impact: 5}}},
-		"beta": {Total: 2, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
-			Highlights: []index.Highlight{{Path: "kb/b.md", Title: "from beta", Type: "synthesis", Impact: 9}}},
-		"gamma": {Total: 3, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
-			Highlights: []index.Highlight{{Path: "kb/g.md", Title: "from gamma", Type: "synthesis", Impact: 1}}},
-	}
+	m, r := newLensStatsRouter(t, "alpha", "beta", "gamma")
+	seedAxisMount(t, m.Get("alpha"), "a", 1)
+	seedAxisMount(t, m.Get("beta"), "b", 3)
+	obs(t, m.Get("gamma"), "kb/o/g.md", "g src", 0.5)
+	syn(t, m.Get("gamma"), "kb/s/g.md", "syn g", 0.5)
 	// Completion order is forced to the exact reverse of binding order.
-	stub := &lensStatsStub{byRepo: byRepo, delayByRepo: map[string]time.Duration{
-		"alpha": 60 * time.Millisecond,
-		"beta":  30 * time.Millisecond,
-	}}
-	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    stub,
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+	slowMountRead(t, m, "alpha", "Stats", 60*time.Millisecond)
+	slowMountRead(t, m, "beta", "Stats", 30*time.Millisecond)
 
-	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+	body := decodeLensStats(t, getLensFacts(t, r, lensStatsURL))
 
-	want := []string{"alpha", "beta", "gamma"}
 	got := make([]string, 0, len(body.Repos))
 	for _, row := range body.Repos {
 		got = append(got, row.Name)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("repos: got %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("repos order: got %v, want %v (binding order; the slowest mount is first, "+
-				"so this is completion order leaking into the response)", got, want)
-		}
-	}
-	// Highlights are ranked by the axis, never by arrival: beta (impact 9) tops
-	// the list despite finishing second.
-	if len(body.Highlights) != 3 || body.Highlights[0].Title != "from beta" {
-		t.Errorf("highlights: got %+v, want beta's row first (impact 9); note read-mount "+
-			"paths are kb://-qualified, so compare on title", body.Highlights)
-	}
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, got,
+		"binding order; the slowest mount is first, so this is completion order leaking into the response")
+	// Highlights are ranked by the axis, never by arrival: beta (impact 3) tops
+	// the list despite finishing second. Read-mount paths are qualified, so
+	// compare on title.
+	require.Equal(t, []string{"syn b", "syn a", "syn g"}, body.highlightTitles())
 	// The sums are order-independent, but assert them anyway: a reduction that
 	// dropped a slow mount's contribution would still order correctly.
-	if body.Total != 6 {
-		t.Errorf("total: got %d, want 6 — a mount's result was lost", body.Total)
-	}
+	require.Equal(t, 2+4+2, body.Total, "a mount's result was lost")
 }
 
-// §9.1 survives concurrency: one failing mount still fails the whole request,
+// 9.1 survives concurrency: one failing mount still fails the whole request,
 // wherever it sits in the fan-out and however fast it fails relative to the
 // others. The failing mount here finishes FIRST while two healthy mounts are
 // still running, so an implementation that returned early on the first error
@@ -1050,68 +767,52 @@ func TestLensStats_ResponseOrderIsBindingOrderNotCompletionOrder(t *testing.T) {
 func TestLensStats_MountErrorFailsWholeRequestUnderConcurrency(t *testing.T) {
 	for _, failing := range []string{"alpha", "beta", "gamma"} {
 		t.Run("failing="+failing, func(t *testing.T) {
-			stub := &lensStatsStub{
-				byRepo:  map[string]index.StatsResult{},
-				errRepo: failing,
-				delayByRepo: map[string]time.Duration{
-					"alpha": 40 * time.Millisecond,
-					"beta":  40 * time.Millisecond,
-					"gamma": 40 * time.Millisecond,
-				},
-			}
+			m, r := newLensStatsRouter(t, "alpha", "beta", "gamma")
+			injected := errors.New("injected stats failure of " + failing)
+			var hits atomic.Int64
+			failMountRead(t, m, failing, index.ReadStats, injected, &hits)
 			// The failing mount answers immediately; the others are still in flight.
-			delete(stub.delayByRepo, failing)
-
-			m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-			s := &Server{Manager: m, providers: storeProviders{
-				stats:    stub,
-				activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-			}}
-			r := s.NewAPIRouter()
-			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
-
-			rec := getLensFacts(t, r, "/lenses/eng/stats")
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status: got %d, want 500 — a lens must never silently shrink its "+
-					"read set (RFC §9.1); body=%s", rec.Code, rec.Body.String())
+			for _, name := range []string{"alpha", "beta", "gamma"} {
+				if name != failing {
+					slowMountRead(t, m, name, "Stats", 40*time.Millisecond)
+				}
 			}
+
+			rec := getLensFacts(t, r, lensStatsURL)
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code,
+				"a lens must never silently shrink its read set (RFC 9.1); body=%s", rec.Body.String())
+			require.Contains(t, rec.Body.String(), injected.Error())
+			require.EqualValues(t, 1, hits.Load())
 		})
 	}
 }
 
 // When SEVERAL mounts fail, the reported error is deterministic: the
 // LOWEST-INDEXED failing mount, which is the one a serial loop would have hit
-// first. Otherwise the message a caller sees — and a lens error names the
-// offending mount — would be decided by goroutine scheduling, and the same
-// request would answer differently between runs.
+// first. Otherwise the message a caller sees - and a lens error names the
+// offending mount - would be decided by goroutine scheduling.
 //
 // gamma is made to fail FAST and beta SLOWLY, so "first to fail" and "first in
 // binding order" disagree; the assertion is that binding order wins.
 func TestLensStats_ConcurrentFailuresReportTheLowestIndexedMount(t *testing.T) {
-	stub := &lensStatsStub{
-		byRepo:      map[string]index.StatsResult{},
-		errRepos:    map[string]bool{"beta": true, "gamma": true},
-		delayByRepo: map[string]time.Duration{"beta": 50 * time.Millisecond},
-	}
-	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-	s := &Server{Manager: m, providers: storeProviders{
-		stats:    stub,
-		activity: &lensActivityStub{byRepo: map[string]index.ActivityResult{}},
-	}}
-	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+	m, r := newLensStatsRouter(t, "alpha", "beta", "gamma")
+	var betaHits, gammaHits atomic.Int64
+	failMountRead(t, m, "beta", index.ReadStats, errors.New("db on fire: beta"), &betaHits)
+	failMountRead(t, m, "gamma", index.ReadStats, errors.New("db on fire: gamma"), &gammaHits)
+	slowMountRead(t, m, "beta", "Stats", 50*time.Millisecond)
 
 	// Repeated, because a scheduling-dependent answer is exactly the failure
 	// mode and one run could get lucky.
-	for i := 0; i < 10; i++ {
-		rec := getLensFacts(t, r, "/lenses/eng/stats")
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("run %d status: got %d, want 500", i, rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), "db on fire: beta") {
-			t.Fatalf("run %d: got %s\nwant the error of beta (mount 1), the lowest-indexed "+
-				"failing mount — gamma fails sooner, so this is completion order deciding "+
-				"which error the caller sees", i, rec.Body.String())
-		}
+	const runs = 10
+	for i := 0; i < runs; i++ {
+		rec := getLensFacts(t, r, lensStatsURL)
+		require.Equal(t, http.StatusInternalServerError, rec.Code, "run %d", i)
+		require.Contains(t, rec.Body.String(), "db on fire: beta",
+			"run %d: want the error of beta (mount 1), the lowest-indexed failing mount - "+
+				"gamma fails sooner, so this is completion order deciding which error the caller sees", i)
+		require.NotContains(t, rec.Body.String(), "db on fire: gamma", "run %d", i)
 	}
+	require.EqualValues(t, runs, betaHits.Load(), "beta's Stats read must run once per request")
+	require.EqualValues(t, runs, gammaHits.Load(), "gamma's Stats read must run once per request")
 }

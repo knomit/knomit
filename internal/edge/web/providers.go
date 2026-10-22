@@ -22,10 +22,8 @@ type storeProviders struct {
 	search          searchProvider
 	commits         commitsProvider
 	factSub         factSubProvider
-	stats           statsProvider
 	motifs          motifsProvider
 	factsCollection factsCollectionProvider
-	activity        activityProvider
 	origin          originProvider
 }
 
@@ -57,14 +55,8 @@ func (p storeProviders) withDefaults() storeProviders {
 	if p.factSub == nil {
 		p.factSub = defaultFactSubProvider{}
 	}
-	if p.stats == nil {
-		p.stats = defaultStatsProvider{}
-	}
 	if p.factsCollection == nil {
 		p.factsCollection = defaultFactsCollectionProvider{}
-	}
-	if p.activity == nil {
-		p.activity = defaultActivityProvider{}
 	}
 	if p.origin == nil {
 		p.origin = defaultOriginProvider{}

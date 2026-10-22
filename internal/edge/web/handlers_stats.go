@@ -13,22 +13,9 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// statsProvider is the narrow interface the stats handler depends on.
-//
-// Highlights is the lens union's axis-correction path: only that handler needs
-// to re-cut one mount's top-N by an axis the mount did not pick, and it needs
-// to do it without paying for the aggregates it already holds. It sits here
-// rather than in its own interface because it is the same store surface and
-// the same fake in tests.
-type statsProvider interface {
-	Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error)
-	Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]index.Highlight, bool, error)
-}
-
-// defaultStatsProvider is the production statsProvider.
-type defaultStatsProvider struct{}
-
-func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error) {
+// loadStats reads one repo's aggregate stats. A repo whose store is not live
+// yields the zero StatsResult and a nil error.
+func loadStats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error) {
 	var (
 		result index.StatsResult
 		err    error
@@ -42,7 +29,10 @@ func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, b
 	return result, err
 }
 
-func (defaultStatsProvider) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]index.Highlight, bool, error) {
+// loadHighlights is the lens union's axis-correction path: only that handler
+// needs to re-cut one mount's top-N by an axis the mount did not pick, and it
+// needs to do it without paying for the aggregates it already holds.
+func loadHighlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]index.Highlight, bool, error) {
 	var (
 		out      []index.Highlight
 		fallback bool
@@ -70,7 +60,7 @@ type statsView struct {
 }
 
 // handleHALStats serves GET /repos/{repo}/branches/{branch}/stats.
-func handleHALStats(b hal.URLBuilder, provider statsProvider) http.HandlerFunc {
+func handleHALStats(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -80,7 +70,7 @@ func handleHALStats(b hal.URLBuilder, provider statsProvider) http.HandlerFunc {
 
 		pathPrefix := r.URL.Query().Get("path")
 		axisParam := r.URL.Query().Get("axis")
-		result, err := provider.Stats(r.Context(), ri, branch, pathPrefix, axisParam)
+		result, err := loadStats(r.Context(), ri, branch, pathPrefix, axisParam)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
