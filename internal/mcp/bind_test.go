@@ -12,9 +12,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
@@ -22,7 +22,7 @@ import (
 
 // bindFixture stands up a started Manager carrying a normal repo, a
 // subscription, and a lens over two repos, with a real sessions store attached.
-func bindFixture(t *testing.T) (*repos.Manager, *sessions.Store, *mcpserver.MCPServer) {
+func bindFixture(t *testing.T) (*repos.Manager, *clientsessions.Store, *mcpserver.MCPServer) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir()},
@@ -112,7 +112,7 @@ func handleFrom(t *testing.T, res *mcpgo.CallToolResult) string {
 }
 
 // pinOfHandle reads what a handle routes to.
-func pinOfHandle(t *testing.T, st *sessions.Store, handle string) string {
+func pinOfHandle(t *testing.T, st *clientsessions.Store, handle string) string {
 	t.Helper()
 	pin, branch, ok, err := st.BindingHandle(context.Background(), handle, time.Now())
 	require.NoError(t, err)

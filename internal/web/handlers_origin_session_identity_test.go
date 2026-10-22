@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/testsupport/testsigner"

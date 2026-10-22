@@ -11,7 +11,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // installGitTransport is the boot hook app.New calls before repos.New and

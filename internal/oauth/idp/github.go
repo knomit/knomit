@@ -18,7 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/http/httpproxy"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 const (

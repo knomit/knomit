@@ -7,9 +7,9 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
 	"knomit/internal/embeddings"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 

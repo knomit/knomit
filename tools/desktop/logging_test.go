@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // The desktop's defaults differ from the server's on purpose. The server logs

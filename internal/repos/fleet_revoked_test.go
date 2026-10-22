@@ -12,8 +12,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/pki"
+	"knomit/internal/foundation/pki/pkitest"
 )
 
 // pushToFleetRemote commits files (path -> content, on top of main) to the

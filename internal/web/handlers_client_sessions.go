@@ -11,7 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -76,10 +76,10 @@ type clientSessionBridge struct {
 }
 
 type clientSessionView struct {
-	ID         string         `json:"id"`
-	InstanceID string         `json:"instance_id"`
-	State      sessions.State `json:"state"`
-	Transport  string         `json:"transport"`
+	ID         string               `json:"id"`
+	InstanceID string               `json:"instance_id"`
+	State      clientsessions.State `json:"state"`
+	Transport  string               `json:"transport"`
 	// Binding is the LAST pin this session was seen using. Kept as-is for
 	// compatibility; Bindings is the complete picture.
 	Binding clientSessionBinding `json:"binding"`
@@ -150,7 +150,7 @@ type clientSessionsCollection struct {
 // operator's hostname, username, working directory, pids, agent branch and
 // IP. Presence stays visible to a visitor; the operator's machine does not.
 // See redactForDemo.
-func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions.Store, readOnly bool) http.HandlerFunc {
+func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *clientsessions.Store, readOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Client sessions unavailable",
@@ -162,7 +162,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 		// presence page, and the store clamps anyway, so failing the read over
 		// a bad query string would cost more than it protects.
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		rows, truncated, err := store.List(r.Context(), sessions.Filter{
+		rows, truncated, err := store.List(r.Context(), clientsessions.Filter{
 			Binding:       r.URL.Query().Get("binding"),
 			IncludeHidden: r.URL.Query().Get("include") == "hidden",
 			Now:           now,
@@ -198,7 +198,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 		sets, err := store.SessionBindings(r.Context(), sids)
 		if err != nil {
 			log.Warn().Err(err).Msg("client sessions: binding sets unavailable; serving rows without them")
-			sets = map[string][]sessions.SessionBinding{}
+			sets = map[string][]clientsessions.SessionBinding{}
 		}
 		items := make([]clientSessionView, 0, len(rows))
 		for _, s := range rows {
@@ -282,7 +282,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 			Policy: clientSessionPolicy{
 				DeadAfterS: int64(p.DeadAfter.Seconds()), HiddenAfterS: int64(p.HiddenAfter.Seconds()),
 				RetentionS: int64(p.Retention.Seconds()), LiveWindowS: int64(p.LiveWindow().Seconds()),
-				Limit: sessions.ResolveListLimit(limit), MaxLimit: sessions.MaxListLimit,
+				Limit: clientsessions.ResolveListLimit(limit), MaxLimit: clientsessions.MaxListLimit,
 			},
 			Links: hal.LinkMap{
 				"self": {Href: selfWithQuery(b.Sessions(), r)},
@@ -311,7 +311,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 // from it and must re-read the list — which is the endpoint that applies the
 // ReadOnly redaction. That is what makes this stream safe to serve in
 // read-only mode.
-func handleHALClientSessionEvents(store *sessions.Store) http.HandlerFunc {
+func handleHALClientSessionEvents(store *clientsessions.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Client sessions unavailable",
@@ -344,7 +344,7 @@ func handleHALClientSessionEvents(store *sessions.Store) http.HandlerFunc {
 				if !ok {
 					return
 				}
-				c, ok := e.(sessions.Change)
+				c, ok := e.(clientsessions.Change)
 				if !ok {
 					continue
 				}

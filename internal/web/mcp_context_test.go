@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/oauth"
 )
 

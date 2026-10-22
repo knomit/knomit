@@ -18,7 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // pusherOf is the full certificate-key fingerprint an instance holding k

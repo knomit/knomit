@@ -12,13 +12,13 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	storemigrate "knomit/internal/store/migrate"
 )
 
-func newClientSessionsStore(t *testing.T) *sessions.Store {
+func newClientSessionsStore(t *testing.T) *clientsessions.Store {
 	t.Helper()
 	// SyncDSNParam: see newOAuthWebFixture.
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL"+store.SyncDSNParam())
@@ -30,7 +30,7 @@ func newClientSessionsStore(t *testing.T) *sessions.Store {
 	if err := storemigrate.Control(db); err != nil {
 		t.Fatal(err)
 	}
-	return sessions.New(db, sessions.Policy{DeadAfter: time.Hour, HiddenAfter: 3 * time.Hour, Retention: 168 * time.Hour})
+	return clientsessions.New(db, clientsessions.Policy{DeadAfter: time.Hour, HiddenAfter: 3 * time.Hour, Retention: 168 * time.Hour})
 }
 
 // The recorded binding is a PinID, which fails closed on a uid-less
@@ -60,7 +60,7 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 		Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(200),
 	})
 	r := s.NewAPIRouter()
-	hdr := sessions.BridgeInfo{InstanceID: "inst", Transport: "stdio", PID: 7, Host: "h", Cwd: "/w", Branch: "agent/test", Version: "1"}
+	hdr := clientsessions.BridgeInfo{InstanceID: "inst", Transport: "stdio", PID: 7, Host: "h", Cwd: "/w", Branch: "agent/test", Version: "1"}
 
 	post := func(sid, client, method string) int {
 		req := httptest.NewRequest(method, "/repos/alpha/branches/agent:test/mcp",
@@ -71,7 +71,7 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 			req.Header.Set("Mcp-Session-Id", sid)
 		}
 		if client != "" {
-			req.Header.Set(sessions.ClientHeader, client)
+			req.Header.Set(clientsessions.ClientHeader, client)
 		}
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
@@ -84,11 +84,11 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 	post("sid-2", "", http.MethodPost)                  // direct http caller
 	post("sid-2", "garbage-no-equals", http.MethodPost) // unparseable ⇒ still http
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	byID := map[string]sessions.Session{}
+	byID := map[string]clientsessions.Session{}
 	for _, row := range rows {
 		byID[row.ID] = row
 	}
@@ -105,9 +105,9 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 
 	// DELETE ends the session.
 	post("sid-1", hdr.Encode(), http.MethodDelete)
-	rows, _, _ = store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, _ = store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	for _, row := range rows {
-		if row.ID == "sid-1" && (row.Ended == nil || row.State != sessions.StateDead) {
+		if row.ID == "sid-1" && (row.Ended == nil || row.State != clientsessions.StateDead) {
 			t.Fatalf("not ended: %+v", row)
 		}
 	}
@@ -137,7 +137,7 @@ func TestMCPDispatch_RecordsOnlyOnAcceptedStatuses(t *testing.T) {
 			req.Header.Set("Mcp-Session-Id", "mcp-session-attacker-chosen")
 			s.NewAPIRouter().ServeHTTP(httptest.NewRecorder(), req)
 
-			rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+			rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now(), IncludeHidden: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "stale")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
-	rows, _, _ := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, _ := store.List(context.Background(), clientsessions.Filter{Now: time.Now(), IncludeHidden: true})
 	if len(rows) != 0 {
 		t.Fatalf("404 must not create a row: %+v", rows)
 	}
@@ -178,7 +178,7 @@ func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 func TestRecordClientSession_SurvivesRequestCancellation(t *testing.T) {
 	store := newClientSessionsStore(t)
 	ctx := context.Background()
-	if err := store.Touch(ctx, sessions.Observation{SessionID: "sid", Binding: "repo:u-alpha", Now: time.Now()}); err != nil {
+	if err := store.Touch(ctx, clientsessions.Observation{SessionID: "sid", Binding: "repo:u-alpha", Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,7 +189,7 @@ func TestRecordClientSession_SurvivesRequestCancellation(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "sid")
 	recordClientSession(req, store)
 
-	rows, _, err := store.List(ctx, sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, err := store.List(ctx, clientsessions.Filter{Now: time.Now(), IncludeHidden: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestRecordClientSession_TouchSurvivesRequestCancellation(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "sid")
 	recordClientSession(req, store)
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now(), IncludeHidden: true})
 	if err != nil {
 		t.Fatal(err)
 	}

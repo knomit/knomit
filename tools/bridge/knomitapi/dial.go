@@ -12,13 +12,13 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // SocketPath is where a same-machine server listens: a unix socket, or a
-// named pipe on Windows. It DELEGATES to internal/config rather than
+// named pipe on Windows. It DELEGATES to internal/foundation/config rather than
 // resolving the data root itself: `knomit serve` opens exactly that path, and
 // a bridge that computed its own would not fail loudly — it would find no
 // listener, fall back to TCP, and quietly lose the verified identity the

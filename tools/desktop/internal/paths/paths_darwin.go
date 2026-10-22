@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 func stateDir() (string, error) { return config.StateDir() }

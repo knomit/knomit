@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // lockFile takes the cross-process credentials lock, waiting for a holder —

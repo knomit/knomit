@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 func isolateHomeEnv(t *testing.T, home string) string {

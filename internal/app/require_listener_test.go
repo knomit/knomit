@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // [auth].require = true turns the anonymous loopback path off. With no local

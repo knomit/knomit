@@ -11,8 +11,8 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
-	"knomit/internal/config"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
 )

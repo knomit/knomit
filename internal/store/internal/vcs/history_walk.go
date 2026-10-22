@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"

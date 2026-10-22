@@ -14,8 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/auth"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )

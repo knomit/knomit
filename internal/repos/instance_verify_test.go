@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // TestRepoInstance_Verify asserts that the wrapper delegates to Service.Verify

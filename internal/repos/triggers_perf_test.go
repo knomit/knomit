@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store/facts"
 	"knomit/internal/store/merge"
 	"knomit/internal/store/storetest"
@@ -115,7 +115,7 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 
 // SlowTriggerThresholdFromConfig: slow_trigger_ms = 0 disables the detector
 // (no WARN for the same slow `if`). The config half (default 50, TOML, env)
-// is in internal/config. Sabotage: a constant threshold.
+// is in internal/foundation/config. Sabotage: a constant threshold.
 func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	_, ri := newSlowRepo(t, 0, trig("slow", "learn", "", "true"))

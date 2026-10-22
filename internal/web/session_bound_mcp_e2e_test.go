@@ -11,9 +11,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/testsupport/testsigner"
@@ -23,7 +23,7 @@ import (
 // manager holding one writable repo and one subscription, so the whole path —
 // SessionBindingMiddleware, knomit_bind, the stored pin, and the tool handlers
 // — runs end to end over HTTP.
-func sessionBoundE2E(t *testing.T) (http.Handler, *sessions.Store) {
+func sessionBoundE2E(t *testing.T) (http.Handler, *clientsessions.Store) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
@@ -233,9 +233,9 @@ func TestURLScopedMCP_RefusesABindingArgument(t *testing.T) {
 
 // bindingOf returns the binding column of one client_sessions row, or "" when
 // the row does not exist yet.
-func bindingOf(t *testing.T, st *sessions.Store, sid string) string {
+func bindingOf(t *testing.T, st *clientsessions.Store, sid string) string {
 	t.Helper()
-	rows, _, err := st.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, err := st.List(context.Background(), clientsessions.Filter{Now: time.Now(), IncludeHidden: true})
 	require.NoError(t, err)
 	for _, r := range rows {
 		if r.ID == sid {

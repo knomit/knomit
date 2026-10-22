@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // oauthLocalListenerPath is a pipe name for one test's exclusive use: the

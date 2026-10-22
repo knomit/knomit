@@ -14,7 +14,7 @@ import (
 
 	"github.com/Microsoft/go-winio"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // The Windows half of the local-transport fixtures. Its unix twin is

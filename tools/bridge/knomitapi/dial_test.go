@@ -16,8 +16,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 )
 
 // These tests used to skip on Windows (53a0c7b9, naming knomit/knomit#245):
@@ -94,7 +94,7 @@ func writeLockfile(t *testing.T, path, srvURL string) {
 //
 // Without that, this suite would prove only TRANSPORT SELECTION. It did: under
 // a forced failure that downgraded auth.DialLocal to the anonymous
-// impersonation level, internal/auth and internal/config went red and this
+// impersonation level, internal/foundation/auth and internal/foundation/config went red and this
 // package stayed green -- the bridge still reached the listener, and was
 // simply nobody when it got there, which is the exact silent failure
 // knomit#245 is about.

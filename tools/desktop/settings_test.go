@@ -13,8 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // Config layers defaults -> knomit.toml -> env, so an exported KNOMIT_PORT

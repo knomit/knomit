@@ -16,7 +16,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // The desktop does not contain a knomit server. It runs the bundled `knomit`

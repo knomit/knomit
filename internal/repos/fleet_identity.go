@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
 )
 

@@ -61,8 +61,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/foundation/serveraddr"
 	"knomit/internal/platform/version"
-	"knomit/internal/serveraddr"
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"

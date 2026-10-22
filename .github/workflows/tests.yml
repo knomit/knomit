@@ -296,7 +296,7 @@ jobs:
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
           CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh desktop -tags desktop -count=1 ./tools/desktop/
 
-      # internal/config owns the data-root resolution, and it is per-OS code
+      # internal/foundation/config owns the data-root resolution, and it is per-OS code
       # whose branches only the matching runner reaches: the Windows
       # reconstruction (LOCALAPPDATA unset, USERPROFILE set) is exercised by
       # config's paths_windows_test.go and by nothing else in the tree, so it
@@ -308,13 +308,13 @@ jobs:
       # below, via ./internal/platform/... — also on every matrix platform, so
       # the Windows branch is reached there too. BOTH halves are covered, and
       # each by a different step; if either moves, check the other still is.
-      # internal/auth joined this step in 29c5594f. Keeping it here matters
+      # internal/foundation/auth joined this step in 29c5594f. Keeping it here matters
       # doubly for knomit#245: its Windows named-pipe tests are the only
       # coverage the pipe transport has, and they are compiled on no other
       # platform, so a step that did not name the package would let them
       # compile and never execute on windows-2025.
       #
-      # internal/pki (F19 phase 2) is pure Go with in-process fixtures: every
+      # internal/foundation/pki (F19 phase 2) is pure Go with in-process fixtures: every
       # root, key and certificate its tests use is generated in t.TempDir().
       # A new package is not tested until it is named here.
       #
@@ -324,7 +324,7 @@ jobs:
       # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
       # in-process fake provider in internal/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/config/ ./internal/domain/fact/ ./internal/auth/ ./internal/serveraddr/ ./internal/pki/... ./internal/oauth/...
+        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/foundation/config/ ./internal/domain/fact/ ./internal/foundation/auth/ ./internal/foundation/serveraddr/ ./internal/foundation/pki/... ./internal/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

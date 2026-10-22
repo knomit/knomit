@@ -20,8 +20,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // The reload contract (Listeners.Apply / Reload): which listeners follow a

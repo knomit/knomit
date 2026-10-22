@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // Off unless [oauth] is configured: no listener, no error.

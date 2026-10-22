@@ -6,7 +6,7 @@
 // single run — every relaunch re-announced a version the user had already been
 // told about, so "once per version" was really "once per version per launch".
 //
-// Deliberately NOT part of internal/config, which is load-at-startup TOML/env
+// Deliberately NOT part of internal/foundation/config, which is load-at-startup TOML/env
 // with no writer. This is runtime state, and it lives beside the server
 // lockfile in paths.StateDir().
 package updatestate

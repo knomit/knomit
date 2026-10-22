@@ -11,9 +11,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/serveraddr"
 )
 
 // DefaultServer is the address `kb` uses when nothing names one and no
@@ -169,7 +169,7 @@ func readLockfileBaseURL() (string, error) {
 // fell back to the default address, so `kb` silently talked to the wrong port
 // while the desktop's lockfile sat in %LOCALAPPDATA%\knomit unread. The bridge
 // cannot import tools/desktop/internal/paths (Go's internal rule), which is
-// why the copy existed at all — internal/config is the shared owner both of
+// why the copy existed at all — internal/foundation/config is the shared owner both of
 // them can reach.
 func lockfilePath() (string, error) {
 	return config.LockfilePath()

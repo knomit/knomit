@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // installReloadSignal is Windows' SIGHUP: the server creates the session-local

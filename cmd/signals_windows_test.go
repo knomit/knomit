@@ -3,7 +3,7 @@
 package cmd
 
 import (
-	"knomit/internal/serveraddr"
+	"knomit/internal/foundation/serveraddr"
 	"strings"
 	"sync/atomic"
 	"testing"

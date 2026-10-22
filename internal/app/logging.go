@@ -1,7 +1,7 @@
 package app
 
 import (
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/logging"
 )
 
@@ -9,11 +9,11 @@ import (
 // struct the log sink actually consumes.
 //
 // It lives here because neither of the two packages it names can hold it.
-// internal/platform/logging must not import internal/config — nothing under
+// internal/platform/logging must not import internal/foundation/config — nothing under
 // internal/platform may know about knomit, which is the property
 // TestPlatformKnowsNothingAboutKnomit pins and the whole reason the tier
 // exists. The mirror image is worse: a method on config.LogConfig would make
-// internal/config import platform/logging and so gain lumberjack, compress/gzip,
+// internal/foundation/config import platform/logging and so gain lumberjack, compress/gzip,
 // compress/flate and hash/crc32, and config is imported almost everywhere.
 //
 // internal/app is the composition tier — it already imports config, it already

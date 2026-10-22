@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/config"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/repos"
 )
 

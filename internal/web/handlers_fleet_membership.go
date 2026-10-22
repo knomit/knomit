@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )

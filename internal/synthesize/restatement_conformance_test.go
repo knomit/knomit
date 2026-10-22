@@ -216,7 +216,7 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 // A repo owner cannot know whether title similarity discriminates on their
 // corpus, so asking them is asking for a guess that then looks like a decision.
 func TestConformance_NoConfigSurface(t *testing.T) {
-	for _, rel := range []string{"internal/config/config.go", "internal/repos/instance.go"} {
+	for _, rel := range []string{"internal/foundation/config/config.go", "internal/repos/instance.go"} {
 		src := strings.ToLower(readModuleFile(t, rel))
 		for _, forbidden := range []string{"restatement", "shortlist", "title_vector", "titlevector", "abstraction"} {
 			require.NotContains(t, src, forbidden,

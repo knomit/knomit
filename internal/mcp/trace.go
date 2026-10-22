@@ -13,7 +13,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 )
 
 // The `trace` argument (#349): an agent attaches a few short `Key: value`
@@ -153,7 +153,7 @@ func parseTrace(raw any) (model.Trailers, error) {
 func knomitTraceEntry(t *model.Trailers, key, lower, value string) error {
 	switch lower {
 	case strings.ToLower(model.TrailerTrace):
-		if err := traceValueRule(key, value, sessions.MaxFieldLen); err != nil {
+		if err := traceValueRule(key, value, clientsessions.MaxFieldLen); err != nil {
 			return err
 		}
 		t.Trace = value

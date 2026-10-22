@@ -7,7 +7,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 func readOnlyPrincipalCtx() (context.Context, auth.StaticGrants) {

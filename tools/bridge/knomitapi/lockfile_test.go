@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // The bridge finds a running server by reading the lockfile the DESKTOP wrote.

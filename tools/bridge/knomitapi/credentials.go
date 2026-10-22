@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/platform/privdir"
 )
 

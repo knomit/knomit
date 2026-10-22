@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/app"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/crashdump"
 	"knomit/test/testenv"
 )

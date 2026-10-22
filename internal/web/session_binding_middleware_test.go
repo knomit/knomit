@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 )
 
@@ -128,7 +128,7 @@ func TestUnscopedMCPMount_RecordsBindingPin(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	require.NoError(t, err)
 	var found bool
 	for _, row := range rows {
@@ -155,7 +155,7 @@ func TestUnscopedMCPMount_NoPinRecordedLeavesColumnEmpty(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "sid-5")
 	router.ServeHTTP(httptest.NewRecorder(), req)
 
-	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), clientsessions.Filter{Now: time.Now()})
 	require.NoError(t, err)
 	for _, row := range rows {
 		if row.ID == "sid-5" {

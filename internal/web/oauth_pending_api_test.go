@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/oauth"
-	"knomit/internal/pki/pkitest"
 )
 
 // localPeer is the kernel-verified caller on the local listener, spelled the

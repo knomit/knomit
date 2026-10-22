@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 )

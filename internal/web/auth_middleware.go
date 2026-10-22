@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"knomit/internal/auth"
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/hostguard"
 	"knomit/internal/web/hal"
 )
@@ -90,7 +90,7 @@ func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []strin
 				// (knomit#245, defect B). One formatting function per platform,
 				// fed from both ends.
 				ctx = auth.WithPrincipal(ctx, peer.Principal())
-				ctx = sessions.WithVerifiedPID(ctx, peer.PID)
+				ctx = clientsessions.WithVerifiedPID(ctx, peer.PID)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}

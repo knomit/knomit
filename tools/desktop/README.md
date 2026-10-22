@@ -215,7 +215,7 @@ without a separate `make server`:
 `config.Home` is the knomit data root — `control.db`, `repos/`, `models/`, the
 SSH keypair, `bin/` and `knomit.toml`. The default is per-OS and is the **same
 for all three binaries**: `knomit serve`, `kb` and the desktop app resolve it
-through `internal/config` (`config.DefaultHome`, `config.StateDir`), so it
+through `internal/foundation/config` (`config.DefaultHome`, `config.StateDir`), so it
 cannot matter which one starts first. The OS half of that — which directory an
 OS designates for per-user state, and the refusal to guess one when nothing
 resolves — is `internal/platform/userdirs`, which knows no application name.
@@ -339,7 +339,7 @@ gets human-readable output.
 
 `internal/{paths,singleinstance,autostart}` were salvaged from the old
 `tools/tray` and moved here (the lockfile code now lives in
-`internal/serveraddr`, the single-instance lock is an OS lock on
+`internal/foundation/serveraddr`, the single-instance lock is an OS lock on
 `desktop.lock`). The server runs as a supervised subprocess again, this time
 the same `knomit serve` binary the CLI ships.
 

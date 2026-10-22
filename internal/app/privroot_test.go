@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/test/testenv"
 )
 

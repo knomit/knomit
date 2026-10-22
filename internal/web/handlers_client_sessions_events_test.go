@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 )
 
 func TestSessionEvents_ReadyThenChangePerWrite(t *testing.T) {
@@ -43,7 +43,7 @@ func TestSessionEvents_ReadyThenChangePerWrite(t *testing.T) {
 		t.Errorf("Cache-Control: got %q, want \"no-cache, no-transform\"", cc)
 	}
 
-	if err := store.Touch(context.Background(), sessions.Observation{
+	if err := store.Touch(context.Background(), clientsessions.Observation{
 		SessionID: "s1", Binding: "repo:u-alpha", RemoteIP: "1.2.3.4", UserAgent: "ua", Now: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestSessionEvents_ReadyThenChangePerWrite(t *testing.T) {
 
 	body := rec.waitFor(t, "a session frame", func(b string) bool { return strings.Contains(b, "event: session") })
 	frame := lastDataLine(t, body, "event: session")
-	var got sessions.Change
+	var got clientsessions.Change
 	if err := json.Unmarshal([]byte(frame), &got); err != nil {
 		t.Fatalf("session frame %q: %v", frame, err)
 	}
@@ -158,7 +158,7 @@ func TestSessionEvents_WriteFailureEndsTheHandler(t *testing.T) {
 	}
 
 	rec.failWrites(errors.New("connection reset by peer"))
-	if err := store.Touch(context.Background(), sessions.Observation{SessionID: "s1", Now: time.Now()}); err != nil {
+	if err := store.Touch(context.Background(), clientsessions.Observation{SessionID: "s1", Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,7 +228,7 @@ func TestSessionEvents_WorksThroughTheRealMiddlewareChain(t *testing.T) {
 	}
 
 	want("the ready frame", func(l string) bool { return l == "event: ready" })
-	if err := store.Touch(context.Background(), sessions.Observation{SessionID: "s1", Now: time.Now()}); err != nil {
+	if err := store.Touch(context.Background(), clientsessions.Observation{SessionID: "s1", Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	want("a session frame", func(l string) bool { return l == "event: session" })

@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // A refused sync of the fleet repository, classified (fleet design S2; GET

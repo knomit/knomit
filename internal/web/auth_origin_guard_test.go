@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 const originGuardFactBody = `{"title":"csrf","body":"written by a cross-site form","type":"observation","domain":["ai","ml"]}`

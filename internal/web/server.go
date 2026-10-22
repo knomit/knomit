@@ -12,9 +12,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/auth"
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/oauth"
@@ -36,7 +36,7 @@ type Server struct {
 	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
 	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start
 	// opens it.
-	ClientSessions *sessions.Store
+	ClientSessions *clientsessions.Store
 	LLMAdapter     llm.LLMAdapter      // nil if no LLM configured
 	Embedder       model.BatchEmbedder // nil if unavailable
 
@@ -165,7 +165,7 @@ func (s *Server) buildMCPHandler() {
 // to see the ip and User-Agent of the request carrying it, and would derive
 // every direct-HTTP client's identity from two empty strings.
 func mcpHTTPContext(ctx context.Context, r *http.Request) context.Context {
-	ctx = sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
+	ctx = clientsessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
 	// DEFENSIVE, not load-bearing at mcp-go v0.45.0: this func is called only
 	// on the POST path (server/streamable_http.go:420-422), and there ctx is
 	// already derived from r.Context(), so the principal AuthMiddleware
@@ -186,8 +186,8 @@ func mcpHTTPContext(ctx context.Context, r *http.Request) context.Context {
 	if c, ok := auth.CeilingFromContext(r.Context()); ok {
 		ctx = auth.WithCeiling(ctx, c)
 	}
-	if pid, ok := sessions.VerifiedPIDFromContext(r.Context()); ok {
-		ctx = sessions.WithVerifiedPID(ctx, pid)
+	if pid, ok := clientsessions.VerifiedPIDFromContext(r.Context()); ok {
+		ctx = clientsessions.WithVerifiedPID(ctx, pid)
 	}
 	return ctx
 }

@@ -16,8 +16,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
-	"knomit/internal/config"
 	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/store/merge"

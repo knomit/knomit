@@ -70,7 +70,7 @@ func TestDesktopUIPathNeverDialsTCP(t *testing.T) {
 			if forbiddenTCP[short] {
 				t.Errorf("%s: %s opens a path to the server that is not the local socket/pipe", rel, short)
 			}
-			if imp == "knomit/internal/auth" && sel.Sel.Name == "DialLocal" {
+			if imp == "knomit/internal/foundation/auth" && sel.Sel.Name == "DialLocal" {
 				dialsLocal = true
 			}
 			return true

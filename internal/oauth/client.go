@@ -22,7 +22,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // ErrInvalidClient is every reason a client_id does not resolve. The

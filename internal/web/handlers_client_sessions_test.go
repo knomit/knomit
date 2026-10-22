@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -21,9 +21,9 @@ func TestHandleHALClientSessions(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	now := time.Now()
 	ctx := context.Background()
-	if err := store.Touch(ctx, sessions.Observation{
+	if err := store.Touch(ctx, clientsessions.Observation{
 		SessionID: "s1", Binding: "repo:u-alpha", RemoteIP: "1.2.3.4", UserAgent: "ua", Now: now,
-		Client: &sessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", PID: 5, ParentApp: "claude",
+		Client: &clientsessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", PID: 5, ParentApp: "claude",
 			Host: "h", User: "u", Cwd: "/w", Branch: "agent/test", Version: "1"},
 	}); err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestHandleHALClientSessions(t *testing.T) {
 	if err := store.SetClientInfo(ctx, "s1", "repo:u-alpha", "claude-code", "2", "1.2.3.4", "ua", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Touch(ctx, sessions.Observation{SessionID: "old", Binding: "lens:gone", Now: now.Add(-4 * time.Hour)}); err != nil {
+	if err := store.Touch(ctx, clientsessions.Observation{SessionID: "old", Binding: "lens:gone", Now: now.Add(-4 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,9 +116,9 @@ func TestHandleHALClientSessions_ReadOnlyRedactsOperatorDetail(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	now := time.Now()
 	ctx := context.Background()
-	if err := store.Touch(ctx, sessions.Observation{
+	if err := store.Touch(ctx, clientsessions.Observation{
 		SessionID: "s1", Binding: "repo:u-alpha", RemoteIP: "203.0.113.7", UserAgent: "knomit-bridge/1.4", Now: now,
-		Client: &sessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", PID: 5, ParentPID: 4, ParentApp: "claude",
+		Client: &clientsessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", PID: 5, ParentPID: 4, ParentApp: "claude",
 			Host: "h1v302", User: "pba", Cwd: "/home/pba/secret-project", Branch: "agent/h1v302-8215ac8f", Version: "1.4"},
 		Principal: "bridge:uid:501@socket", VerifiedPID: 4242,
 	}); err != nil {
@@ -205,7 +205,7 @@ func TestHandleHALClientSessions_ResolvesEveryRow(t *testing.T) {
 	ctx := context.Background()
 	seed := func(id, binding string) {
 		t.Helper()
-		if err := store.Touch(ctx, sessions.Observation{SessionID: id, Binding: binding, Now: now}); err != nil {
+		if err := store.Touch(ctx, clientsessions.Observation{SessionID: id, Binding: binding, Now: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -249,9 +249,9 @@ func TestHandleHALClientSessions_BindingSet(t *testing.T) {
 	now := time.Now()
 	ctx := context.Background()
 
-	require.NoError(t, store.Touch(ctx, sessions.Observation{
+	require.NoError(t, store.Touch(ctx, clientsessions.Observation{
 		SessionID: "s1", Binding: "repo:u-alpha", Now: now,
-		Client: &sessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", Branch: "agent/test"},
+		Client: &clientsessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", Branch: "agent/test"},
 	}))
 	// TWO handles naming the SAME repo — two callers, two rows. hB is used
 	// later, so it must sort first.
@@ -292,7 +292,7 @@ func TestHandleHALClientSessions_BindingSet(t *testing.T) {
 func TestHandleHALClientSessions_NoHandlesIsEmptyArray(t *testing.T) {
 	store := newClientSessionsStore(t)
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	require.NoError(t, store.Touch(context.Background(), sessions.Observation{
+	require.NoError(t, store.Touch(context.Background(), clientsessions.Observation{
 		SessionID: "s1", Binding: "repo:u-alpha", Now: time.Now(),
 	}))
 
@@ -312,11 +312,11 @@ func TestHandleHALClientSessions_FilterMatchesAnyHandle(t *testing.T) {
 	ctx := context.Background()
 
 	// Last seen on u-other; two live handles on u-alpha.
-	require.NoError(t, store.Touch(ctx, sessions.Observation{SessionID: "s1", Binding: "repo:u-other", Now: now}))
+	require.NoError(t, store.Touch(ctx, clientsessions.Observation{SessionID: "s1", Binding: "repo:u-other", Now: now}))
 	require.NoError(t, store.RecordSessionBinding(ctx, "s1", "hA", "repo:u-alpha", "", now))
 	require.NoError(t, store.RecordSessionBinding(ctx, "s1", "hB", "repo:u-alpha", "", now))
 	// An unrelated session, to prove the filter still excludes.
-	require.NoError(t, store.Touch(ctx, sessions.Observation{SessionID: "s2", Binding: "repo:u-zzz", Now: now}))
+	require.NoError(t, store.Touch(ctx, clientsessions.Observation{SessionID: "s2", Binding: "repo:u-zzz", Now: now}))
 
 	s := &Server{Manager: m, ClientSessions: store}
 	count := func(q string) int {
@@ -343,7 +343,7 @@ func TestHandleHALClientSessions_ReadOnlyRedactsHandleAndBranch(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	now := time.Now()
 	ctx := context.Background()
-	require.NoError(t, store.Touch(ctx, sessions.Observation{SessionID: "s1", Binding: "repo:u-alpha", Now: now}))
+	require.NoError(t, store.Touch(ctx, clientsessions.Observation{SessionID: "s1", Binding: "repo:u-alpha", Now: now}))
 	require.NoError(t, store.RecordSessionBinding(ctx, "s1", "secret-handle", "repo:u-alpha", "agent/hostname", now))
 
 	s := &Server{Manager: m, ClientSessions: store, ReadOnly: true}
@@ -377,7 +377,7 @@ func TestHandleHALClientSessions_LimitAndTruncated(t *testing.T) {
 	// Seeded oldest-first, so insertion order is not what makes the ordering
 	// assertion pass.
 	for i := 0; i < 6; i++ {
-		require.NoError(t, store.Touch(ctx, sessions.Observation{
+		require.NoError(t, store.Touch(ctx, clientsessions.Observation{
 			SessionID: fmt.Sprintf("s%d", i), Binding: "repo:u-alpha",
 			Now: now.Add(-time.Duration(6-i) * time.Minute),
 		}))
@@ -413,20 +413,20 @@ func TestHandleHALClientSessions_LimitAndTruncated(t *testing.T) {
 	// The policy echoes the size actually used and the ceiling, so the UI never
 	// hardcodes either.
 	require.Equal(t, float64(2), policy["limit"])
-	require.Equal(t, float64(sessions.MaxListLimit), policy["max_limit"])
+	require.Equal(t, float64(clientsessions.MaxListLimit), policy["max_limit"])
 
 	// Exhausted: same shape, truncated false.
 	count, truncated, _, policy = get("")
 	require.Equal(t, 6, count)
 	require.False(t, truncated)
-	require.Equal(t, float64(sessions.DefaultListLimit), policy["limit"])
+	require.Equal(t, float64(clientsessions.DefaultListLimit), policy["limit"])
 
 	// A limit past the ceiling is clamped, and the echo tells the truth about it.
-	_, _, _, policy = get(fmt.Sprintf("?limit=%d", sessions.MaxListLimit*10))
-	require.Equal(t, float64(sessions.MaxListLimit), policy["limit"])
+	_, _, _, policy = get(fmt.Sprintf("?limit=%d", clientsessions.MaxListLimit*10))
+	require.Equal(t, float64(clientsessions.MaxListLimit), policy["limit"])
 
 	// A malformed limit is ignored rather than failing the read.
 	count, _, _, policy = get("?limit=banana")
 	require.Equal(t, 6, count)
-	require.Equal(t, float64(sessions.DefaultListLimit), policy["limit"])
+	require.Equal(t, float64(clientsessions.DefaultListLimit), policy["limit"])
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // TestNew_EmbedderRequired regresses the mandatory-embeddings invariant: if no

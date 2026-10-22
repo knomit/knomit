@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // TestParseSessionReaperConfig_NeverDisabled regresses the unbounded-growth hole

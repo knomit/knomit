@@ -20,7 +20,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // Consent path 2 (F19 phase 3b, Task 3): the operator approves or denies a

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // Verifier judges a bearer token on the OAuth listener: known, unexpired,

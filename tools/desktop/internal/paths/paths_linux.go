@@ -2,7 +2,7 @@
 
 package paths
 
-import "knomit/internal/config"
+import "knomit/internal/foundation/config"
 
 func stateDir() (string, error) { return config.StateDir() }
 

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 // knomit#344: closing the local listener must not hang after a client has

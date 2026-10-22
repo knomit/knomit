@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"knomit/internal/app"
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 )
 

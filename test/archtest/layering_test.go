@@ -70,7 +70,7 @@ func TestFactStaysPure(t *testing.T) {
 // what makes the tree honest about whose values these are, but it also puts an
 // import of the parent one line away.
 //
-// That import would be silent and expensive: internal/store, internal/config and
+// That import would be silent and expensive: internal/store, internal/foundation/config and
 // internal/synthesize all import params, so an edge upward would link the ONNX
 // runtime into the store, the config loader, and every binary that touches
 // either. Being importable without cgo is the entire reason the package exists,
@@ -123,7 +123,7 @@ func packages(t *testing.T, pattern string) []string {
 // had seventeen entries.
 //
 // The failure it prevents is the easy one, not the exotic one: reaching for
-// knomit/internal/config (or fact, or store) from inside platform compiles and
+// knomit/internal/foundation/config (or fact, or store) from inside platform compiles and
 // works. logging did exactly that until this tier was created — Build took a
 // config.LogConfig — and the fix was three lines at two call sites. Once ONE
 // such edge is tolerated the test needs an exception list, and an exception
@@ -173,7 +173,7 @@ func TestPlatformKnowsNothingAboutKnomit(t *testing.T) {
 // The obvious mistake is already foreclosed by the compiler rather than by
 // this test: fact imports textnorm, so an edge back to fact is an import cycle
 // and will not build. What is NOT foreclosed is the sideways edge. Reaching
-// for knomit/internal/store or knomit/internal/config from a normaliser
+// for knomit/internal/store or knomit/internal/foundation/config from a normaliser
 // compiles fine and costs every consumer the whole store closure — and the
 // consumers are the ones that most want it cheap: fact itself, plus store and
 // synthesize, which call it per candidate pair while matching.

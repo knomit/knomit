@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/client/sessions"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/clientsessions"
+	"knomit/internal/foundation/config"
 )
 
 // principalEcho writes the principal the middleware attached, or 204 when it
@@ -71,7 +71,7 @@ func TestAuthMiddleware_NonLoopbackWithoutRequireHasNoPrincipal(t *testing.T) {
 // formatting a uid itself, so what these tests pin is the copying. Which
 // spelling a platform actually produces (uid: or sid:) is
 // auth.localID and auth.LocalVia, tested against the real OS in
-// internal/auth.
+// internal/foundation/auth.
 func testPeer(uid, pid int) auth.Peer {
 	return auth.Peer{ID: "uid:" + strconv.Itoa(uid), Via: auth.ViaSocket, PID: pid}
 }
@@ -94,7 +94,7 @@ func TestAuthMiddleware_SocketPeerCarriesVerifiedPID(t *testing.T) {
 	var gotPID int
 	var gotOK bool
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPID, gotOK = sessions.VerifiedPIDFromContext(r.Context())
+		gotPID, gotOK = clientsessions.VerifiedPIDFromContext(r.Context())
 	})
 	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(inner)
 	req := httptest.NewRequest("GET", "/x", nil)

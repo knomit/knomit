@@ -1,5 +1,5 @@
 -- grants: what a verified principal may do on THIS instance (F19 phase 1).
--- Keyed by the principal's string form (<kind>:<id>@<via>, internal/auth
+-- Keyed by the principal's string form (<kind>:<id>@<via>, internal/foundation/auth
 -- Principal.String), so a kernel-verified socket uid and a bearer-token
 -- subject that happen to share an id never share a row -- the via is part
 -- of the key.
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS grants (
 CREATE INDEX IF NOT EXISTS grants_principal_live ON grants(principal) WHERE revoked_at IS NULL;
 
 -- client_session_peers: the pid the KERNEL reported for a unix-socket peer
--- (internal/auth.PeerCred), at most one row per session. ABSENCE means the
+-- (internal/foundation/auth.PeerCred), at most one row per session. ABSENCE means the
 -- session arrived over TCP and has no peer -- there is no zero row to tell
 -- apart from a missing one.
 --

@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/mcp"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"

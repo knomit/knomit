@@ -10,7 +10,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"knomit/internal/config"
+	"knomit/internal/foundation/config"
 )
 
 // The External address field (2026-10-17, PR #545 option a): a save writes

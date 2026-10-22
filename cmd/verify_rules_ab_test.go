@@ -20,7 +20,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/domain/fact"
-	"knomit/internal/pki"
+	"knomit/internal/foundation/pki"
 )
 
 // `knomit verify ci` over two plain checkouts — a knowledge-base checkout

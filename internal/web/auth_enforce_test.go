@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
-	"knomit/internal/pki/pkitest"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/foundation/pki/pkitest"
 )
 
 // A read-only anonymous loopback caller can GET but not POST.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"knomit/internal/auth"
+	"knomit/internal/foundation/auth"
 )
 
 const vIssuer = "https://knomit.example.com"

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/auth"
-	"knomit/internal/config"
+	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 )
 
 // knomit#253: a local listener path too long for sun_path is a WARN and TCP

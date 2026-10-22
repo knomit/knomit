@@ -16,8 +16,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
 
-	"knomit/internal/config"
 	"knomit/internal/domain/fact"
+	"knomit/internal/foundation/config"
 	"knomit/internal/store"
 	"knomit/internal/store/remotesync"
 )

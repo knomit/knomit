@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/client/sessions"
+	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/platform/version"
 )
 
@@ -22,7 +22,7 @@ import (
 // so a pid reused after a reboot does not collapse onto an older run.
 // Nothing is persisted. All of it is self-declared — correlation, not
 // identity — see kb/decisions/mcp/client-sessions/identity-model.
-func buildIdentity(branch string, startedAt time.Time) sessions.BridgeInfo {
+func buildIdentity(branch string, startedAt time.Time) clientsessions.BridgeInfo {
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
 	username := ""
@@ -31,8 +31,8 @@ func buildIdentity(branch string, startedAt time.Time) sessions.BridgeInfo {
 	}
 	pid, ppid := os.Getpid(), os.Getppid()
 	parent := parentAppName(ppid)
-	return sessions.BridgeInfo{
-		InstanceID: sessions.DeriveInstanceID(host, username, cwd, parent,
+	return clientsessions.BridgeInfo{
+		InstanceID: clientsessions.DeriveInstanceID(host, username, cwd, parent,
 			strconv.Itoa(pid), strconv.FormatInt(startedAt.UnixNano(), 10)),
 		Transport: "stdio",
 		PID:       pid,
@@ -71,9 +71,9 @@ func parentAppName(pid int) string {
 // clientHeaders is the fixed header set every outgoing request carries, so a
 // session that outlived a server restart is fully described on its first
 // post-restart touch.
-func clientHeaders(ident sessions.BridgeInfo) http.Header {
+func clientHeaders(ident clientsessions.BridgeInfo) http.Header {
 	h := http.Header{}
 	h.Set("User-Agent", "knomit-bridge/"+version.String())
-	h.Set(sessions.ClientHeader, ident.Encode())
+	h.Set(clientsessions.ClientHeader, ident.Encode())
 	return h
 }

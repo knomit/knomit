@@ -7,7 +7,7 @@
 //
 // Neither answer is a credential. A loopback peer is a TCP address: every
 // local process and every DNS-rebound browser page is one. Who a caller IS
-// comes only from the local socket (internal/auth), never from here.
+// comes only from the local socket (internal/foundation/auth), never from here.
 package hostguard
 
 import (

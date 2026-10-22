@@ -128,8 +128,8 @@ func TestFleetTexts_PKIAndOAuthErrorsNameNoRESTRoutes(t *testing.T) {
 		must string
 	}{
 		// From the module root: a layer move changes the depth and the sibling
-		// names, so "../pki" would break with it. goFiles fails on no match.
-		{modroot.Path(t, "internal", "pki"), "ErrNotEnrolled"},
+		// names, so a relative "../pki" would break with it. goFiles fails on no match.
+		{modroot.Path(t, "internal", "foundation", "pki"), "ErrNotEnrolled"},
 		{modroot.Path(t, "internal", "oauth"), "ErrNoFleetRoot"},
 	} {
 		fset := token.NewFileSet()
