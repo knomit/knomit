@@ -661,14 +661,14 @@ func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
 // Verify runs the integrity check against the current store while holding a
 // store reference (Acquire), so a concurrent SwapStore/Archive drains this
 // call before closing the service instead of closing it mid-check. Delegates
-// to store.Service.Verify and stamps the report with this repo's name.
+// to the store's integrity checker (Service.Integrity) and stamps the report with this repo's name.
 func (ri *RepoInstance) Verify(ctx context.Context, opts fsck.VerifyOpts) (fsck.IntegrityReport, error) {
 	svc, release, err := ri.Acquire()
 	if err != nil {
 		return fsck.IntegrityReport{Repo: ri.Name()}, err
 	}
 	defer release()
-	report, err := svc.Verify(ctx, opts)
+	report, err := svc.Integrity().Verify(ctx, opts)
 	report.Repo = ri.Name()
 	return report, err
 }
@@ -685,7 +685,7 @@ func (ri *RepoInstance) PruneGeneratedRefs(ctx context.Context) (fsck.PruneResul
 		return fsck.PruneResult{}, err
 	}
 	defer release()
-	return svc.PruneGeneratedRefs(ctx)
+	return svc.Integrity().PruneGeneratedRefs(ctx)
 }
 
 // NewTestInstance creates a minimal RepoInstance for use in tests that

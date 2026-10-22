@@ -276,7 +276,7 @@ func TestReceivePack_OwnBranchRegisteredAndIndexed(t *testing.T) {
 	for _, bad := range []string{"force-updated", "rewind", "DISJOINT", `"level":"warn"`} {
 		require.NotContains(t, out, bad, "a first registration must not read as a rewind")
 	}
-	rep, err := h.svc.Verify(context.Background(), fsck.VerifyOpts{})
+	rep, err := h.svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), rep.String())
 	require.Contains(t, rep.Branches, peerBranch, "the pushed branch is a maintained, indexed branch")
@@ -478,7 +478,7 @@ func TestReceivePack_NonFastForwardIndexFollows(t *testing.T) {
 	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_commits
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND commit_hash = ?`, peerBranch, a1.Hash.String()).Scan(&n))
 	require.Equal(t, 0, n, "the dropped commit is no longer on the branch")
-	rep, err := h.svc.Verify(context.Background(), fsck.VerifyOpts{})
+	rep, err := h.svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), rep.String())
 }
@@ -631,7 +631,7 @@ func TestReceivePack_CancelAfterAcceptStillRegistersWhole(t *testing.T) {
 	require.NoError(t, h.svc.rh.DB().QueryRow(`SELECT COUNT(*) FROM branch_facts
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND path = ?`, peerBranch, "kb/notes/x.md").Scan(&n))
 	require.Equal(t, 1, n, "branch_facts describes the tip")
-	rep, err := h.svc.Verify(context.Background(), fsck.VerifyOpts{})
+	rep, err := h.svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsClean(), rep.String())
 }

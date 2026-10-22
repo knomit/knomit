@@ -373,13 +373,54 @@ func serviceChildFields(f *ast.File) map[string]string {
 	return out
 }
 
-// serviceForwards returns the exported methods of *Service in f whose body is
-// ONE statement that is a call (as an expression statement or the sole result
-// of a return) of either s.<field>.M(...), where <field> is in fields (a field
-// whose declared type is an importable child's), or <pkg>.F(...), where <pkg>
-// is an import of an importable store child. It also returns how many exported
+// serviceChildHelpers returns, for the *Service methods f declares, the
+// method name -> import path of every one whose first result is a (pointer
+// to a) type of an IMPORTABLE store child (Facts() *facts.Index,
+// integrity() *fsck.Checker, ...): a call of one is a handle to that child
+// exactly as a field of that type is.
+func serviceChildHelpers(f *ast.File) map[string]string {
+	imps := storeImports(f)
+	out := map[string]string{}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv == nil || len(fd.Recv.List) != 1 || fd.Type.Results == nil || len(fd.Type.Results.List) == 0 {
+			continue
+		}
+		rt := fd.Recv.List[0].Type
+		if s, ok := rt.(*ast.StarExpr); ok {
+			rt = s.X
+		}
+		if id, ok := rt.(*ast.Ident); !ok || id.Name != "Service" {
+			continue
+		}
+		typ := fd.Type.Results.List[0].Type
+		if s, ok := typ.(*ast.StarExpr); ok {
+			typ = s.X
+		}
+		sel, ok := typ.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		if id, ok := sel.X.(*ast.Ident); ok {
+			if p, ok := imps[id.Name]; ok && storeChildImportable(p) {
+				out[fd.Name.Name] = p
+			}
+		}
+	}
+	return out
+}
+
+// serviceForwards returns the exported methods of *Service in f whose body
+// only hands a call to an importable child: zero or more leading
+// `x := <handle>` statements followed by ONE statement that is a call (as an
+// expression statement or the sole result of a return) of <handle>.M(...) or
+// <pkg>.F(...). A <handle> is s.<field> where <field> is in fields (a field
+// whose declared type is an importable child's), a call s.<helper>() where
+// <helper> is in helpers (a Service method returning an importable child's
+// type), or a local bound by a leading statement to one of those. <pkg> is an
+// import of an importable store child. It also returns how many exported
 // *Service methods f declares, for the non-vacuity count.
-func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fields map[string]string) (hits []string, methods int) {
+func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fields, helpers map[string]string) (hits []string, methods int) {
 	t.Helper()
 	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
 	if err != nil {
@@ -403,11 +444,60 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 		if len(fd.Recv.List[0].Names) == 1 {
 			recv = fd.Recv.List[0].Names[0].Name
 		}
-		if len(fd.Body.List) != 1 {
+		// handle describes an expression that is a handle to an importable
+		// child, or "" when it is not one.
+		type target struct{ label, pkg string }
+		locals := map[string]target{}
+		handle := func(e ast.Expr) (target, bool) {
+			switch x := e.(type) {
+			case *ast.Ident:
+				tg, ok := locals[x.Name]
+				return tg, ok
+			case *ast.SelectorExpr: // s.<field>
+				if id, ok := x.X.(*ast.Ident); ok && id.Name == recv {
+					if p, ok := fields[x.Sel.Name]; ok {
+						return target{"s." + x.Sel.Name, p}, true
+					}
+				}
+			case *ast.CallExpr: // s.<helper>()
+				if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
+						if p, ok := helpers[sel.Sel.Name]; ok {
+							return target{"s." + sel.Sel.Name + "()", p}, true
+						}
+					}
+				}
+			}
+			return target{}, false
+		}
+		stmts := fd.Body.List
+		if len(stmts) == 0 {
+			continue
+		}
+		bound := true
+		for _, st := range stmts[:len(stmts)-1] {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				bound = false
+				break
+			}
+			id, ok := as.Lhs[0].(*ast.Ident)
+			if !ok {
+				bound = false
+				break
+			}
+			h, ok := handle(as.Rhs[0])
+			if !ok {
+				bound = false
+				break
+			}
+			locals[id.Name] = h
+		}
+		if !bound {
 			continue
 		}
 		var call *ast.CallExpr
-		switch st := fd.Body.List[0].(type) {
+		switch st := stmts[len(stmts)-1].(type) {
 		case *ast.ExprStmt:
 			call, _ = st.X.(*ast.CallExpr)
 		case *ast.ReturnStmt:
@@ -422,16 +512,15 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 		if !ok {
 			continue
 		}
-		switch x := fun.X.(type) {
-		case *ast.SelectorExpr: // s.<field>.M
-			if id, ok := x.X.(*ast.Ident); ok && id.Name == recv {
-				if p, ok := fields[x.Sel.Name]; ok {
-					hits = append(hits, fd.Name.Name+" -> s."+x.Sel.Name+"."+fun.Sel.Name+" ("+p+")")
+		if h, ok := handle(fun.X); ok {
+			hits = append(hits, fd.Name.Name+" -> "+h.label+"."+fun.Sel.Name+" ("+h.pkg+")")
+			continue
+		}
+		if id, ok := fun.X.(*ast.Ident); ok {
+			if _, local := locals[id.Name]; !local {
+				if p, ok := imps[id.Name]; ok && storeChildImportable(p) {
+					hits = append(hits, fd.Name.Name+" -> "+id.Name+"."+fun.Sel.Name+" ("+p+")")
 				}
-			}
-		case *ast.Ident: // <pkg>.F
-			if p, ok := imps[x.Name]; ok && storeChildImportable(p) {
-				hits = append(hits, fd.Name.Name+" -> "+x.Name+"."+fun.Sel.Name+" ("+p+")")
 			}
 		}
 	}
@@ -444,6 +533,7 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 // something a caller outside the store cannot obtain (the storer, the fact
 // root, the Service's own wiring). A stale entry fails.
 var injectsStoreState = map[string]string{
+	"Integrity":    "fsck.NewChecker is given the Service's repository handler (internal/vcs) and indices: callers outside the store cannot build the checker",
 	"FleetAt":      "fleetrec.At is given s.rh.Storer() and the fact root: the storer cannot be obtained outside the store",
 	"FileAt":       "fleetrec.FileAt is given s.rh.Storer(), which callers outside the store cannot obtain",
 	"FleetKeysOf":  "fleetrec reader over s.rh.Storer()",
@@ -452,18 +542,17 @@ var injectsStoreState = map[string]string{
 }
 
 // TestStoreService_NoForwardIntoImportableChild (guard A2): no exported
-// *Service method is a one-statement forward into an importable child, either
-// through a Service field whose type is the child's (s.fi.M, s.mr.M, s.rr.M,
-// ...) or through a package-qualified call (fleetrec.F). Callers get the
-// concrete handle (Service.Facts, Merge, Remote, ...) and import the child.
-// The vcs-backed operations (Service.OntologyAt, HasSharedHistory, DiffFacts,
-// ...) call a non-importable child and are the ruled exception; they are not
-// matched here. A match must be in injectsStoreState with a reason. Methods
-// that build the child's value first and then call it (Verify and
-// PruneGeneratedRefs call s.integrity().M, which wraps the Service's one
-// *vcs.Repo and indices in a fsck.Checker; Handler caches a gitserve handler
-// behind a sync.Once) are several statements or a call on a call, so the
-// detector does not match them and they need no entry.
+// *Service method only hands a call to an importable child. The handle may be
+// a Service field whose type is the child's (s.fi.M, s.mr.M, s.rr.M, ...), a
+// call of a Service method returning the child's type (s.helper().M), or a
+// local bound to either (m := s.mr; return m.M()); the call may also be
+// package-qualified (fleetrec.F). Callers get the concrete handle
+// (Service.Facts, Merge, Remote, ...) and import the child. The vcs-backed
+// operations (Service.OntologyAt, HasSharedHistory, DiffFacts, ...) call a
+// non-importable child and are the ruled exception; they are not matched
+// here. A match must be in injectsStoreState with a reason. A method that does
+// work between binding the handle and calling it (Handler caches a gitserve
+// handler behind a sync.Once) is not a forward and needs no entry.
 //
 // Non-vacuity: at least minMethods exported Service methods are inspected,
 // every injectsStoreState name is still found as a flagged forward, and the
@@ -477,6 +566,7 @@ func TestStoreService_NoForwardIntoImportableChild(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	fields := map[string]string{}
+	helpers := map[string]string{}
 	for _, p := range paths {
 		if strings.HasSuffix(p, "_test.go") {
 			continue
@@ -487,6 +577,9 @@ func TestStoreService_NoForwardIntoImportableChild(t *testing.T) {
 		}
 		for k, v := range serviceChildFields(f) {
 			fields[k] = v
+		}
+		for k, v := range serviceChildHelpers(f) {
+			helpers[k] = v
 		}
 	}
 	if len(fields) < 5 {
@@ -499,7 +592,7 @@ func TestStoreService_NoForwardIntoImportableChild(t *testing.T) {
 		if strings.HasSuffix(p, "_test.go") {
 			continue
 		}
-		hits, n := serviceForwards(t, fset, p, nil, fields)
+		hits, n := serviceForwards(t, fset, p, nil, fields, helpers)
 		methods += n
 		for _, h := range hits {
 			name, _, _ := strings.Cut(h, " ")
@@ -528,29 +621,41 @@ func TestStoreService_NoForwardIntoImportableChild(t *testing.T) {
 func TestStoreService_ForwardGuardDiscriminates(t *testing.T) {
 	const imp = "package store\nimport (\n\t\"knomit/internal/engine/store/facts\"\n\t\"knomit/internal/engine/store/fleetrec\"\n\t\"knomit/internal/engine/store/internal/vcs\"\n)\ntype Service struct{ fr *facts.Repo; rh *vcs.Repo; n int }\n"
 	fields := map[string]string{"fr": "knomit/internal/engine/store/facts"}
+	helpers := map[string]string{"checker": "knomit/internal/engine/store/fsck", "Facts": "knomit/internal/engine/store/facts"}
 	flagged := map[string]string{
 		"field forward":        imp + "func (s *Service) PushedBranches(a int) error { return s.fr.PushedBranches(a) }\n",
 		"field forward, stmt":  imp + "func (s *Service) Poke() { s.fr.Poke() }\n",
 		"field forward, value": imp + "func (s Service) Poke() int { return s.fr.Poke() }\n",
 		"package-qualified":    imp + "func (s *Service) FleetThing() (any, error) { return fleetrec.At(s.rh, \"main\", \"\") }\n",
+		"call on a call":       imp + "func (s *Service) Verify(a int) error { return s.checker().Verify(a) }\n",
+		"call on a call, stmt": imp + "func (s *Service) Poke() { s.checker().Poke() }\n",
+		"call on accessor":     imp + "func (s *Service) Ask() int { return s.Facts().Ask() }\n",
+		"local copy":           imp + "func (s *Service) F() error { m := s.fr; return m.F() }\n",
+		"local copy of call":   imp + "func (s *Service) F() error { c := s.checker(); return c.F() }\n",
+		"local copy, chained":  imp + "func (s *Service) F() error { m := s.fr; n := m; return n.F() }\n",
+		"local copy, stmt":     imp + "func (s *Service) F() { m := s.fr; m.F() }\n",
 	}
 	for name, src := range flagged {
-		hits, n := serviceForwards(t, token.NewFileSet(), name+".go", src, fields)
+		hits, n := serviceForwards(t, token.NewFileSet(), name+".go", src, fields, helpers)
 		if len(hits) != 1 || n != 1 {
 			t.Errorf("%s: hits %v, methods %d, want 1 hit and 1 method", name, hits, n)
 		}
 	}
 	clean := map[string]string{
-		"vcs-backed forward": imp + "func (s *Service) OntologyAt(a string) error { return s.rh.OntologyAt(a) }\n",
-		"handle accessor":    imp + "func (s *Service) FactsRepo() *facts.Repo { return s.fr }\n",
-		"two statements":     imp + "func (s *Service) F() error { _ = s.n; return s.fr.F() }\n",
-		"unexported method":  imp + "func (s *Service) f() error { return s.fr.F() }\n",
-		"non-Service method": imp + "type Other struct{ fr *facts.Repo }\nfunc (o *Other) F() error { return o.fr.F() }\n",
-		"non-child field":    imp + "func (s *Service) F() int { return s.n.Abs() }\n",
-		"plain function":     imp + "func F(s *Service) error { return s.fr.F() }\n",
+		"vcs-backed forward":      imp + "func (s *Service) OntologyAt(a string) error { return s.rh.OntologyAt(a) }\n",
+		"handle accessor":         imp + "func (s *Service) FactsRepo() *facts.Repo { return s.fr }\n",
+		"two statements":          imp + "func (s *Service) F() error { _ = s.n; return s.fr.F() }\n",
+		"unexported method":       imp + "func (s *Service) f() error { return s.fr.F() }\n",
+		"non-Service method":      imp + "type Other struct{ fr *facts.Repo }\nfunc (o *Other) F() error { return o.fr.F() }\n",
+		"non-child field":         imp + "func (s *Service) F() int { return s.n.Abs() }\n",
+		"plain function":          imp + "func F(s *Service) error { return s.fr.F() }\n",
+		"call on non-child call":  imp + "func (s *Service) F() int { return s.other().F() }\n",
+		"local of non-child":      imp + "func (s *Service) F() int { m := s.n; return m.Abs() }\n",
+		"local of non-child call": imp + "func (s *Service) F() int { m := s.other(); return m.Abs() }\n",
+		"local, then work":        imp + "func (s *Service) F() error { m := s.fr; _ = s.n; return m.F() }\n",
 	}
 	for name, src := range clean {
-		hits, _ := serviceForwards(t, token.NewFileSet(), name+".go", src, fields)
+		hits, _ := serviceForwards(t, token.NewFileSet(), name+".go", src, fields, helpers)
 		if len(hits) != 0 {
 			t.Errorf("%s: wrongly flagged: %v", name, hits)
 		}

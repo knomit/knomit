@@ -560,15 +560,11 @@ func (m *Manager) VerifyAccepts() *VerifyAccepts {
 	return m.accepts
 }
 
-// acceptListFor is the accept list bound to repository uid (nil before Start).
-func (m *Manager) acceptListFor(uid string) func(commit plumbing.Hash) (model.Accept, bool) {
-	return m.VerifyAccepts().For(uid)
-}
-
-// AcceptListFor is acceptListFor for a caller outside the package that opens
-// a Service of its own (the origin wizard's clone store).
+// AcceptListFor is the accept list bound to repository uid (nil before
+// Start). Callers outside the package use it too: the origin wizard's clone
+// store opens a Service of its own.
 func (m *Manager) AcceptListFor(uid string) func(commit plumbing.Hash) (model.Accept, bool) {
-	return m.acceptListFor(uid)
+	return m.VerifyAccepts().For(uid)
 }
 
 // Origins returns the per-repo origin store, or nil before Start.

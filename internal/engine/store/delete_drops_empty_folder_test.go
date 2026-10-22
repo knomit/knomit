@@ -44,7 +44,7 @@ func TestDeleteFact_LastFactDropsFolder(t *testing.T) {
 
 	// The dropped folders' empty trees are never stored, so nothing is left
 	// unreachable for Verify to report as an orphan.
-	rep, err := svc.Verify(context.Background(), fsck.VerifyOpts{})
+	rep, err := svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.True(t, rep.IsStrictlyClean(), "a cascading drop must leave no orphan objects: %v", rep.Issues)
 }

@@ -38,7 +38,7 @@ func TestDropBranch_RemovesGitRef(t *testing.T) {
 	require.Error(t, err, "feature ref should be gone after DropBranch")
 
 	// And Verify must stay clean — this is the end-to-end assertion.
-	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "post-drop repo must be clean: %v", report.Issues)
 }
@@ -81,7 +81,7 @@ func TestDropBranch_DoesNotAffectOtherBranches(t *testing.T) {
 	require.Contains(t, res.Content, "# main fact")
 
 	// Verify clean.
-	report, err := svc.Verify(context.Background(), fsck.VerifyOpts{Deep: true})
+	report, err := svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{Deep: true})
 	require.NoError(t, err)
 	require.True(t, report.IsClean(), "integrity issues: %v", report.Issues)
 }

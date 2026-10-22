@@ -12,7 +12,7 @@ import (
 	"knomit/internal/foundation/config"
 )
 
-// TestRepoInstance_Verify asserts that the wrapper delegates to Service.Verify
+// TestRepoInstance_Verify asserts that the wrapper delegates to the store integrity checker
 // under the read lock, stamps the report with the repo name, and returns a
 // clean report for a fresh repo.
 func TestRepoInstance_Verify(t *testing.T) {

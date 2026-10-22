@@ -50,6 +50,15 @@ func TestFactStaysPure(t *testing.T) {
 		"knomit/internal/corpus/synthesize",
 	}
 
+	// Non-vacuity: a key naming no package of the module (a moved or renamed
+	// one) forbids nothing and would stay green forever.
+	all := packages(t, "knomit/...")
+	for _, f := range forbiddenByFact {
+		if !slices.ContainsFunc(all, func(p string) bool { return p == f || strings.HasPrefix(p, f+"/") }) {
+			t.Errorf("forbiddenByFact lists %q but no package of the module is at or under it: the path moved, so the entry forbids nothing; update it", f)
+		}
+	}
+
 	for _, dep := range deps(t, "knomit/internal/domain/fact") {
 		for _, f := range forbiddenByFact {
 			if dep == f || strings.HasPrefix(dep, f+"/") {

@@ -86,7 +86,7 @@ type IntegrityIssue struct {
 // IntegrityReport collects all issues from a Verify run.
 type IntegrityReport struct {
 	// Repo is populated by the RepoInstance.Verify wrapper from the
-	// repository's registered name. Service.Verify itself leaves it empty
+	// repository's registered name. Checker.Verify itself leaves it empty
 	// because Service has no notion of a logical repo name — only the
 	// containing manager does.
 	Repo      string
@@ -1657,9 +1657,9 @@ func (s *Checker) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	return issues
 }
 
-// integrity is the integrity checker behind Service.Verify and
-// Service.PruneGeneratedRefs. It holds only what the checks read: the
-// repository handler and the two sub-indices. Service.integrity builds one per
+// integrity is the integrity checker behind Checker.Verify and
+// Checker.PruneGeneratedRefs. It holds only what the checks read: the
+// repository handler and the two sub-indices. Service.Integrity builds one per
 // call.
 type Checker struct {
 	rh *vcs.Repo
@@ -1668,7 +1668,7 @@ type Checker struct {
 }
 
 // NewChecker builds the integrity checker over rh and the two sub-indices the
-// checks read. Service.integrity builds one per call.
+// checks read. Service.Integrity builds one per call.
 func NewChecker(rh *vcs.Repo, fi *facts.Index, si *index.Index) *Checker {
 	return &Checker{rh: rh, fi: fi, si: si}
 }

@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -244,12 +245,19 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 			t.Errorf("%s: wrongly flagged: %v", name, got)
 		}
 	}
+	// Every row names a file that exists, except those in notAFile: a
+	// negative row is false at ANY path, so without this a moved or renamed
+	// file would leave its row green and unchecked.
+	notAFile := map[string]bool{
+		"internal/testseams.go": true, // the prefix clause: a testseams.go outside internal/engine/store/ is not a door
+	}
+	root := moduleRoot(t)
 	for rel, want := range map[string]bool{
 		"internal/engine/store/storetest/storetest.go":    true,
 		"internal/engine/store/internal/vcs/testseams.go": true,
 		"internal/engine/store/merge/testseams.go":        true,
 		"test/testenv/corrupt.go":                         true,
-		"internal/testsupport/testsigner/signer.go":       true,
+		"internal/testsupport/testsigner/testsigner.go":   true,
 		"internal/corpus/repos/experiment_sweep.go":       false,
 		"internal/engine/store/service.go":                false,
 		"internal/testseams.go":                           false,
@@ -257,6 +265,9 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 	} {
 		if seamAllowed(rel) != want {
 			t.Errorf("seamAllowed(%q) = %v, want %v", rel, !want, want)
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil && !notAFile[rel] {
+			t.Errorf("seamAllowed table row %q names no file (%v): the file moved or was renamed, so the row checks nothing; update the path", rel, err)
 		}
 	}
 }

@@ -25,7 +25,7 @@ func TestVerify_NoGeneratedRefs(t *testing.T) {
 		testFactBody("A", 0.9, nil), "seed", "learn")
 	require.NoError(t, err)
 
-	report, err := svc.Verify(ctx, fsck.VerifyOpts{})
+	report, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{})
 	require.NoError(t, err)
 	require.Empty(t, report.Issues, "a healthy repo must verify clean")
 	require.Equal(t, []string{"main"}, report.Branches, "no generated refs may appear as branches")

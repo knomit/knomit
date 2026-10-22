@@ -19,7 +19,6 @@ type Repo struct {
 }
 
 // NewRepo wraps the merge handle and the git-layer handle it was built on. The
-// wrapper holds no state of its own; both handles are shared with the parent's
-// parent's other handles, so setters called on any of them configure the same
-// handle.
+// wrapper holds no state of its own; both handles are shared with the Service's
+// other handles, so setters called on any of them configure the same handle.
 func NewRepo(m *merge.Repo, v *vcs.Repo) *Repo { return &Repo{mr: m, vr: v} }
