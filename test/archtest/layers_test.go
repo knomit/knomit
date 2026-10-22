@@ -2,20 +2,15 @@ package archtest
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 )
-
-// enforceLayers is the single switch that turns TestLayers from report-only
-// (violations are t.Log'd) into enforcing (violations fail the test). It is
-// report-only while the layer directories do not exist yet: today's flat
-// packages are mapped to their TARGET layer by legacyLayers below. The PR that
-// finishes the moves flips this to true.
-const enforceLayers = false
 
 // Layer ranks. A package may import its own layer and any layer below it,
 // never above; same-layer edges between distinct packages must be listed in
@@ -37,14 +32,6 @@ const internalPrefix = "knomit/internal/"
 // layerExempt packages are outside the layer table: test-only helpers that
 // only _test.go files may import (enforced by test_signer_isolation_test.go).
 var layerExempt = []string{"testsupport"}
-
-// legacyLayers maps today's flat package paths (relative to knomit/internal/)
-// to their TARGET layer. Longest prefix wins. Every entry is deleted when its
-// package moves under its layer directory, because layerOf resolves
-// internal/<layer>/... by directory first. When this map is empty the table has
-// become a path-prefix rule and a package that is in neither place is reported
-// as unmapped. Do not add entries for new packages: put them in a layer dir.
-var legacyLayers = map[string]int{}
 
 // sameLayerEdges lists the allowed imports between two distinct packages of
 // one layer, as "importer -> imported" with paths relative to knomit/internal/
@@ -222,21 +209,17 @@ func layerOf(pkg string) (rank int, exempt, ok bool) {
 		}
 	}
 	// Layer directory rule: internal/<layer>/... (internal/app is the app layer).
+	// A package in no layer directory maps to no layer, which is a finding.
 	first, _, _ := strings.Cut(rel, "/")
 	if i := slices.Index(layerNames, first); i >= 0 {
 		return i, false, true
 	}
-	// Legacy table, longest prefix wins.
-	best, bestLen := 0, -1
-	for p, r := range legacyLayers {
-		if (rel == p || strings.HasPrefix(rel, p+"/")) && len(p) > bestLen {
-			best, bestLen = r, len(p)
-		}
-	}
-	if bestLen < 0 {
-		return 0, false, false
-	}
-	return best, false, true
+	return 0, false, false
+}
+
+// isKnomit reports whether an import path is a package of this module.
+func isKnomit(path string) bool {
+	return path == "knomit" || strings.HasPrefix(path, "knomit/")
 }
 
 // isFamily reports whether a and b are the same package or one is a
@@ -247,10 +230,21 @@ func isFamily(a, b string) bool {
 
 // layerViolations checks a direct-import graph (importer -> imports) and
 // returns one sorted message per problem: an import of a higher layer, an
-// unlisted same-layer edge, or a package mapped to no layer. Only edges whose
+// unlisted same-layer edge, a package mapped to no layer, or an import of a
+// knomit package outside internal/ that itself imports knomit (it could carry
+// the importer to a higher layer, so it is not a leaf). Only edges whose
 // importer is a knomit/internal package are checked.
 func layerViolations(graph map[string][]string, allowed map[string]bool) []string {
+	out, _ := checkLayers(graph, allowed)
+	return out
+}
+
+// checkLayers is layerViolations that also returns every same-layer edge
+// ("importer -> imported", relative to knomit/internal/) it observed, allowed
+// or not, so TestLayers can require each sameLayerEdges entry to be live.
+func checkLayers(graph map[string][]string, allowed map[string]bool) ([]string, map[string]bool) {
 	var out []string
+	edges := map[string]bool{}
 	unmapped := map[string]bool{}
 	for importer, imports := range graph {
 		if !strings.HasPrefix(importer, internalPrefix) {
@@ -266,13 +260,16 @@ func layerViolations(graph map[string][]string, allowed map[string]bool) []strin
 		}
 		for _, dep := range imports {
 			if !strings.HasPrefix(dep, internalPrefix) {
+				if isKnomit(dep) {
+					if sub, listed := graph[dep]; !listed {
+						out = append(out, fmt.Sprintf("%s imports %s: outside package is not in the listing", importer, dep))
+					} else if i := slices.IndexFunc(sub, isKnomit); i >= 0 {
+						out = append(out, fmt.Sprintf("%s imports %s, which imports %s: a non-internal package may be imported from internal/ only if it imports nothing from knomit", importer, dep, sub[i]))
+					}
+				}
 				continue
 			}
-			dr, dex, dok := layerOf(dep)
-			if !dok {
-				unmapped[dep] = true
-				continue
-			}
+			dr, dex, _ := layerOf(dep)
 			if dex {
 				continue
 			}
@@ -281,6 +278,7 @@ func layerViolations(graph map[string][]string, allowed map[string]bool) []strin
 				out = append(out, fmt.Sprintf("%s (%s) imports %s (%s): upward import", importer, layerNames[ir], dep, layerNames[dr]))
 			case dr == ir && !isFamily(importer, dep):
 				edge := strings.TrimPrefix(importer, internalPrefix) + " -> " + strings.TrimPrefix(dep, internalPrefix)
+				edges[edge] = true
 				if !allowed[edge] {
 					out = append(out, fmt.Sprintf("%s imports %s: unlisted same-layer edge in %s (%s)", importer, dep, layerNames[ir], edge))
 				}
@@ -291,18 +289,22 @@ func layerViolations(graph map[string][]string, allowed map[string]bool) []strin
 		out = append(out, p+": maps to no layer (put it inside a layer directory)")
 	}
 	sort.Strings(out)
-	return out
+	return out, edges
 }
 
-// listImports returns the direct-import graph of every knomit package under
-// internal/ for one build configuration.
+// Deliberate: go list .Imports covers non-test files only, so _test.go imports
+// are never checked. Tests are out of scope by decision; only shipped code is
+// held to the layers.
+// listImports returns the direct-import graph of every package of the knomit
+// module for one build configuration (internal and not, so an internal package
+// cannot reach a higher layer through a package outside internal/).
 func listImports(t *testing.T, env []string, tags string) map[string][]string {
 	t.Helper()
 	args := []string{"list", "-f", "{{.ImportPath}} {{join .Imports \" \"}}"}
 	if tags != "" {
 		args = append(args, "-tags", tags)
 	}
-	args = append(args, "knomit/internal/...")
+	args = append(args, "knomit/...")
 	cmd := exec.Command("go", args...)
 	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
@@ -330,37 +332,47 @@ func TestLayersDetectsViolations(t *testing.T) {
 		p + "domain/fact":            {p + "engine/store", "fmt"},                 // domain -> engine: upward
 		p + "engine/store":           {p + "domain/fact", p + "engine/store/git"}, // fine: downward, and own subpackage
 		p + "engine/store/git":       nil,
-		p + "corpus/refs":            {p + "corpus/repos"}, // corpus -> corpus, unlisted
-		p + "corpus/repos":           {p + "engine/store"}, // fine
-		p + "mystery":                {p + "domain/fact"},  // maps to no layer
-		p + "testsupport/testsigner": {p + "engine/store"}, // exempt importer
+		p + "corpus/refs":            {p + "corpus/repos"},           // corpus -> corpus, unlisted
+		p + "corpus/repos":           {p + "engine/store"},           // fine
+		p + "mystery":                {p + "domain/fact"},            // maps to no layer
+		p + "testsupport/testsigner": {p + "engine/store"},           // exempt importer
+		p + "edge/mcp":               {p + "testsupport/testsigner"}, // exempt dependency
+		p + "platform/hostguard":     {"knomit/tools/bridge"},        // launders: the outside package imports knomit
+		p + "edge/web":               {"knomit/web"},                 // fine: outside leaf (imports nothing from knomit)
+		"knomit/tools/bridge":        {p + "foundation/config"},
+		"knomit/web":                 {"embed"},
 	}
 	got := layerViolations(graph, nil)
 	want := []string{
 		p + "corpus/refs imports " + p + "corpus/repos: unlisted same-layer edge in corpus (corpus/refs -> corpus/repos)",
 		p + "domain/fact (domain) imports " + p + "engine/store (engine): upward import",
 		p + "mystery: maps to no layer (put it inside a layer directory)",
+		p + "platform/hostguard imports knomit/tools/bridge, which imports " + p + "foundation/config: a non-internal package may be imported from internal/ only if it imports nothing from knomit",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("violations =\n%q\nwant\n%q", got, want)
 	}
 	// Listing the edge makes it pass; the rest is unchanged.
 	got = layerViolations(graph, map[string]bool{"corpus/refs -> corpus/repos": true})
-	if len(got) != 2 {
-		t.Fatalf("with corpus/refs -> corpus/repos allowed want 2 violations, got %q", got)
+	if len(got) != 3 {
+		t.Fatalf("with corpus/refs -> corpus/repos allowed want 3 violations, got %q", got)
 	}
-	// Layer-directory rule beats the legacy table.
+	// Layer-directory rule.
 	if r, _, ok := layerOf(p + "domain/anything"); !ok || r != layerDomain {
 		t.Fatalf("internal/domain/anything = (%d, %v), want domain", r, ok)
 	}
 }
 
 // TestLayers enforces the internal/ layer rule: layer(importer) >= layer(imported),
-// same-layer edges only when listed in sameLayerEdges, and every package maps
-// to a layer. See enforceLayers: while it is false violations are logged, not
-// failed. Direct imports are checked (transitive follows by induction) for the
-// default GOOS, -tags desktop, linux, windows and darwin, closing the
-// host-GOOS-only gap.
+// same-layer edges only when listed in sameLayerEdges, every package maps to a
+// layer directory, and every sameLayerEdges entry is still an edge of the real
+// import graph in at least one configuration (a stale entry fails, so the
+// allowlist cannot silently widen). Direct imports are checked (transitive
+// follows by induction) for the default GOOS, -tags desktop, linux, windows and
+// darwin, closing the host-GOOS-only gap (the desktop tag is listed for
+// completeness; no internal file carries that constraint today). The union of
+// the configurations must cover every directory under internal/ that holds a
+// .go file, so a package hidden from every configuration fails by name.
 func TestLayers(t *testing.T) {
 	configs := []struct {
 		name string
@@ -379,11 +391,10 @@ func TestLayers(t *testing.T) {
 		layerEngine: "engine/store", layerCorpus: "corpus/repos", layerEdge: "edge/web", layerApp: "app",
 	}
 	seen := map[string]bool{}
+	observed := map[string]bool{}
+	listed := map[string]bool{}
 	for _, c := range configs {
 		graph := listImports(t, c.env, c.tags)
-		if len(graph) == 0 {
-			t.Fatalf("[%s] go list matched nothing — the guard would pass vacuously", c.name)
-		}
 		for rank, rel := range sentinels {
 			if _, ok := graph[internalPrefix+rel]; !ok {
 				t.Fatalf("[%s] sentinel %s for layer %s is missing — the guard is not watching the tree", c.name, rel, layerNames[rank])
@@ -392,20 +403,72 @@ func TestLayers(t *testing.T) {
 				t.Fatalf("sentinel %s does not map to layer %s", rel, layerNames[rank])
 			}
 		}
-		for _, v := range layerViolations(graph, sameLayerEdges) {
+		for pkg := range graph {
+			if strings.HasPrefix(pkg, internalPrefix) {
+				listed[pkg] = true
+			}
+		}
+		violations, edges := checkLayers(graph, sameLayerEdges)
+		for e := range edges {
+			observed[e] = true
+		}
+		for _, v := range violations {
 			if seen[v] {
 				continue
 			}
 			seen[v] = true
-			if enforceLayers {
-				t.Errorf("[%s] %s", c.name, v)
-			} else {
-				t.Logf("[%s] LAYER VIOLATION (report-only): %s", c.name, v)
-			}
+			t.Errorf("[%s] %s", c.name, v)
 		}
 		t.Logf("[%s] checked %d packages", c.name, len(graph))
 	}
-	if !enforceLayers {
-		t.Logf("report-only: %d distinct violation(s); flip enforceLayers to fail on them", len(seen))
+	// Structural floor: every internal/ directory with a .go file is a package
+	// some configuration must have listed.
+	for _, dir := range internalGoDirs(t, "../../internal") {
+		if !listed[internalPrefix+dir] {
+			t.Errorf("internal/%s holds .go files but no configuration lists it as a package — add a configuration that builds it", dir)
+		}
 	}
+	for pkg := range listed {
+		if _, err := os.Stat(filepath.Join("../../internal", strings.TrimPrefix(pkg, internalPrefix))); err != nil {
+			t.Errorf("%s was listed but has no directory under internal/: %v", pkg, err)
+		}
+	}
+	for e := range sameLayerEdges {
+		if !observed[e] {
+			t.Errorf("sameLayerEdges entry %q is stale: no configuration's import graph has that edge — delete it", e)
+		}
+	}
+}
+
+// internalGoDirs returns, relative to root, every directory that contains a
+// .go file, skipping testdata and directories whose name starts with "_" or ".".
+func internalGoDirs(t *testing.T, root string) []string {
+	t.Helper()
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != root && (name == "testdata" || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(name, ".go") {
+			rel, _ := filepath.Rel(root, filepath.Dir(path))
+			if !slices.Contains(dirs, filepath.ToSlash(rel)) {
+				dirs = append(dirs, filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+	if len(dirs) == 0 {
+		t.Fatalf("no Go directories under %s — the structural floor would pass vacuously", root)
+	}
+	return dirs
 }
