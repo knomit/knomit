@@ -1,7 +1,6 @@
 package repos
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -254,16 +253,16 @@ func newTriggerRepo(t *testing.T, entries ...string) (*Manager, *RepoInstance) {
 }
 
 // captureLogs routes the global logger into a buffer for the test.
-func captureLogs(t *testing.T, level zerolog.Level) *bytes.Buffer {
+func captureLogs(t *testing.T, level zerolog.Level) *syncBuf {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &syncBuf{}
 	orig := log.Logger
-	log.Logger = zerolog.New(&buf).Level(level)
+	log.Logger = zerolog.New(buf).Level(level)
 	t.Cleanup(func() { log.Logger = orig })
-	return &buf
+	return buf
 }
 
-func countLines(buf *bytes.Buffer, needle string) int {
+func countLines(buf *syncBuf, needle string) int {
 	return strings.Count(buf.String(), needle)
 }
 
@@ -362,9 +361,7 @@ func TestDispatch_SourceLocalVsMerged(t *testing.T) {
 
 	// A peer's commit on main, signed with ANOTHER key, merged into the agent
 	// branch.
-	svc.SetSigner(testsigner.Named("peer"))
-	writeOn(t, ri, "main", "kb/tasks/peer.md")
-	svc.SetSigner(nil) // back to the test fallback, this instance's key
+	writeAsPeer(t, ri, svc, "main", "kb/tasks/peer.md")
 	require.NoError(t, svc.Merge().MergeBranch(ctx, "main", trigAgent, merge.StrategyRemoteWins))
 	waitTriggerHead(t, ri, head(t, ri))
 

@@ -76,3 +76,20 @@ func testService(t *testing.T, ri *RepoInstance) *store.Service {
 	release()
 	return svc
 }
+
+// writeAsPeer commits path on branch signed by ANOTHER key (the "peer"), then
+// puts this instance's signer back. Store.SetSigner is a configuration call
+// for a store that is not yet serving (every production caller runs it right
+// after Open, before the first read or write); the trigger dispatcher reads the
+// signer on its own goroutine whenever a branch advances. So the dispatcher is
+// settled both before the key is swapped in and after the peer's commit, and
+// the key is swapped back only then -- never while a run may be reading it.
+func writeAsPeer(t *testing.T, ri *RepoInstance, svc *store.Service, branch, path string) string {
+	t.Helper()
+	settle(t, ri)
+	svc.SetSigner(testsigner.Named("peer"))
+	h := writeOn(t, ri, branch, path)
+	settle(t, ri)
+	svc.SetSigner(nil) // back to the test fallback, this instance's key
+	return h
+}

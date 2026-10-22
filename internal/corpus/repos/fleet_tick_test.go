@@ -1,7 +1,6 @@
 package repos
 
 import (
-	"bytes"
 	"context"
 	"math/big"
 	"os"
@@ -139,7 +138,7 @@ func TestFleetTick_NothingInstalledLogsNothing(t *testing.T) {
 	f.enrollAndJoin(t, alpha, "alpha")
 	dir := alpha.deps.Cfg.TLS.Dir
 	require.NoError(t, pki.Uninstall(dir))
-	var buf bytes.Buffer
+	var buf syncBuf
 	prev := log.Logger
 	log.Logger = zerolog.New(&buf)
 	t.Cleanup(func() { log.Logger = prev })

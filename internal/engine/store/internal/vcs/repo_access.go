@@ -89,7 +89,8 @@ func (rh *Repo) ReadOnly() bool { return rh.readOnly }
 // SetReadOnly sets ReadOnly.
 func (rh *Repo) SetReadOnly(ro bool) { rh.readOnly = ro }
 
-// SetSigner sets the commit signer.
+// SetSigner sets the commit signer. Unsynchronised: configure before the Repo
+// is shared (see store.Service.SetSigner).
 func (rh *Repo) SetSigner(s ssh.Signer) { rh.signer = s }
 
 // SetAgentID sets this instance's persisted agent id.
