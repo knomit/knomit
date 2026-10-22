@@ -17,7 +17,6 @@ import (
 
 	"knomit/internal/engine/store/model"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
@@ -560,13 +559,6 @@ func (m *Manager) VerifyAccepts() *control.VerifyAccepts {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.accepts
-}
-
-// AcceptListFor is the accept list bound to repository uid (nil before
-// Start). Callers outside the package use it too: the origin wizard's clone
-// store opens a Service of its own.
-func (m *Manager) AcceptListFor(uid string) func(commit plumbing.Hash) (model.Accept, bool) {
-	return m.VerifyAccepts().For(uid)
 }
 
 // Origins returns the per-repo origin store, or nil before Start.

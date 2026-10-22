@@ -1097,7 +1097,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// instance's agent branch against (a store with no signer refuses adoption).
 	svc.SetSigner(m.deps.Signer)
 	svc.SetAgentID(m.deps.AgentID)
-	svc.SetAcceptList(m.AcceptListFor(uid))
+	svc.SetAcceptList(m.VerifyAccepts().For(uid))
 	svc.SetOwnKeys(m.ownFleetKeys)
 	// No Crypt is wired here: the clone's credential is already resolved above
 	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
@@ -1268,7 +1268,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	svc.SetAgentID(m.deps.AgentID)
 	svc.SetOwnKeys(m.ownFleetKeys)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
-	svc.SetAcceptList(m.AcceptListFor(uid))
+	svc.SetAcceptList(m.VerifyAccepts().For(uid))
 	// No Crypt is wired here, for the same reason initClone doesn't: the
 	// credential is already resolved above, and its durable copy belongs to
 	// control.db's Origins, which holds the only Crypt.
@@ -1428,7 +1428,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
-	svc.SetAcceptList(m.AcceptListFor(uid))
+	svc.SetAcceptList(m.VerifyAccepts().For(uid))
 
 	upstream, err := svc.Remote().InitSubscription(ctx, gitURL, auth, spec.Origin.Branch,
 		transferProgress(emit, "subscribe"))

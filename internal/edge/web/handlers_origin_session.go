@@ -232,7 +232,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		remoteSvc.SetSigner(rm.Signer())
 		remoteSvc.SetAgentID(rm.AgentID())
 		if ri := repos.RepoFromContext(r.Context()); ri != nil {
-			remoteSvc.SetAcceptList(rm.AcceptListFor(ri.UID()))
+			remoteSvc.SetAcceptList(rm.VerifyAccepts().For(ri.UID()))
 		}
 
 		// Phase: cloning.
