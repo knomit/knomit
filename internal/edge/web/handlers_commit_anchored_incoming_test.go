@@ -1,264 +1,183 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"knomit/internal/engine/store/index"
+	"github.com/stretchr/testify/require"
 
-	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store/index"
 )
 
-// TestCommitAnchoredIncoming_HappyPath verifies the commit-anchored /incoming
-// endpoint returns a HAL collection whose self URL is commit-pinned and whose
-// embedded refs carry their own commit-pinned self links.
+// The commit-anchored /incoming and /outgoing read the fixture of
+// handlers_fact_sub_test.go (newFactSubFixture). The FactReader stays a stub
+// that fails every read: these sub-resources are dispatched before the fact
+// read, so a test reaching it fails.
+
+// anchoredServer is the fixture's server with the FactReader tripwire.
+func (f *factSubFixture) anchoredServer() *Server {
+	return &Server{Manager: f.s.Manager, providers: storeProviders{
+		factReader: &stubFactReader{readErr: errors.New("should not be called")},
+	}}
+}
+
+// anchoredURL is the commit-anchored sub-resource URL of path at step's
+// commit on branchURL.
+func (f *factSubFixture) anchoredURL(branchURL, step, path, sub string) string {
+	return "/repos/alpha/branches/" + branchURL + "/commits/" + f.c[step] + "/facts/" + path + "/" + sub
+}
+
+// The commit-anchored /incoming is the lineage of the version live at the
+// anchor, on the requested branch: at x0 that is kb/t.md v1 (p1, p2), at e14
+// v2 (s1..s4, two retracted). The collection is pinned to the anchor, each
+// item to its own commit. Sabotage: drop the anchor
+// (v2 at x0), read the agent branch (s0 at x0), serve outgoing, link items at
+// the anchor, or reverse them.
 func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
-	provider := &stubFactSubProvider{
-		incoming: []index.RefSummary{
-			{Path: "know/b.md", Title: "Fact B", Type: "principle", Commit: "dead001"},
-			{Path: "know/c.md", Title: "Fact C (deleted)", Type: "concept", Commit: "dead002", Deleted: true},
-		},
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{readErr: errors.New("should not be called")},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
-	r.ServeHTTP(rec, req)
+	url := f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "incoming")
+	body := getRefs(t, s, url)
+	require.Equal(t, APIBase+url, body.Links["self"].Href)
+	f.requireRefs(t, body, fsOtherURL, inT1...)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: %q", got)
-	}
+	f.requireRefs(t, getRefs(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/t.md", "incoming")), fsOtherURL, inT2...)
 
-	var body struct {
-		Count    int         `json:"count"`
-		Links    hal.LinkMap `json:"_links"`
-		Embedded struct {
-			Refs []struct {
-				Path    string      `json:"path"`
-				Type    string      `json:"type"`
-				Commit  string      `json:"commit"`
-				Deleted bool        `json:"deleted"`
-				Links   hal.LinkMap `json:"_links"`
-			} `json:"refs"`
-		} `json:"_embedded"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body.Count != 2 {
-		t.Errorf("count: %d, want 2", body.Count)
-	}
+	// v1 read on the agent branch, at a1 (an A commit where kb/t.md is still
+	// v1), keeps only that branch's source: p1 and p2 are E's.
+	f.requireRefs(t, getRefs(t, s, f.anchoredURL("agent:test", "a1", "kb/t.md", "incoming")), "agent:test",
+		wantRef{"kb/s0.md", "Agent source", "insight", "a1", false})
+}
 
-	// Self URL must be commit-anchored.
-	selfLink, ok := body.Links["self"]
-	if !ok {
-		t.Fatal("missing _links.self")
-	}
-	if !strings.Contains(selfLink.Href, "/commits/abc123/") {
-		t.Errorf("self href %q should contain /commits/abc123/", selfLink.Href)
-	}
-	if !strings.HasSuffix(selfLink.Href, "/incoming") {
-		t.Errorf("self href %q should end with /incoming", selfLink.Href)
-	}
+// The gate is evaluated at the ANCHOR, not at the branch's head. kb/r.md is
+// live at x1 and retracted at E's head (e13), so without ?fallback the anchored
+// edges at x1 are a 200 with r's lineage; with ?fallback=before at x0, which
+// predates r, they are a 404 although r existed before E's head. Sabotage:
+// check liveness at the branch head (x1 404s), or check existence at HEAD
+// (x0 answers 200).
+func TestCommitAnchoredSub_GateIsEvaluatedAtTheAnchor(t *testing.T) {
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
 
-	// Non-deleted ref carries its own commit-pinned self link.
-	if len(body.Embedded.Refs) < 1 {
-		t.Fatal("no embedded refs")
-	}
-	ref0 := body.Embedded.Refs[0]
-	if ref0.Commit != "dead001" {
-		t.Errorf("ref[0].commit: %q, want dead001", ref0.Commit)
-	}
-	if ref0.Type != "principle" {
-		t.Errorf("ref[0].type: %q, want \"principle\"", ref0.Type)
-	}
-	refSelf, ok := ref0.Links["self"]
-	if !ok {
-		t.Fatal("non-deleted ref missing self link")
-	}
-	if !strings.Contains(refSelf.Href, "/commits/dead001/") {
-		t.Errorf("ref self href %q should contain /commits/dead001/", refSelf.Href)
-	}
+	in := getRefs(t, s, f.anchoredURL(fsOtherURL, "x1", "kb/r.md", "incoming"))
+	f.requireRefs(t, in, fsOtherURL, inR...)
+	out := getRefs(t, s, f.anchoredURL(fsOtherURL, "x1", "kb/r.md", "outgoing"))
+	f.requireRefs(t, out, fsOtherURL, outO12...)
+	require.EqualValues(t, 2, reads["FactLiveAtCommit"].Load())
+	require.EqualValues(t, 0, reads["FactExistsAt"].Load())
 
-	// Deleted ref has no self link.
-	ref1 := body.Embedded.Refs[1]
-	if _, ok := ref1.Links["self"]; ok {
-		t.Error("deleted ref should not have self link")
+	for _, sub := range []string{"incoming", "outgoing"} {
+		f.requireAbsentAtCommit(t, s, f.anchoredURL(fsOtherURL, "x0", "kb/r.md", sub)+"?fallback=before", "kb/r.md", "x0")
 	}
+	require.EqualValues(t, 2, reads["FactExistsAt"].Load())
+	require.EqualValues(t, 1, reads["IncomingAtCommit"].Load(), "only the x1 request reads the edges")
+	require.EqualValues(t, 1, reads["OutgoingAtCommit"].Load(), "only the x1 request reads the edges")
 }
 
 // TestCommitAnchoredIncoming_UnknownRepo returns 404 problem+json.
 func TestCommitAnchoredIncoming_UnknownRepo(t *testing.T) {
 	s := &Server{
-		Manager: newTestManagerWithRepos(t),
-		providers: storeProviders{
-			factSub:    &stubFactSubProvider{},
-			factReader: &stubFactReader{},
-		},
+		Manager:   newTestManagerWithRepos(t),
+		providers: storeProviders{factReader: &stubFactReader{}},
 	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/missing/branches/main/commits/abc123/facts/know/a.md/incoming", nil)
-	r.ServeHTTP(rec, req)
-
+	rec := getAPI(t, s, "/repos/missing/branches/main/commits/abc123/facts/know/a.md/incoming")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
 	}
 }
 
-// TestCommitAnchoredIncoming_FactNotLiveAtCommit returns 404 (not an empty 200
-// or a 500) when the fact is retracted/absent as of the pinned commit — the
-// edges 404 in lockstep with the (no-fallback) fact read. Regression for the
-// UI browsing bug where navigating to a fact at a commit it isn't live at hit
-// 404/500.
+// requireAbsentAtCommit requires the "no fact at path" 404 of the
+// commit-anchored sub-resources.
+func (f *factSubFixture) requireAbsentAtCommit(t *testing.T, s *Server, url, path, step string) {
+	t.Helper()
+	rec := getAPI(t, s, url)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	title, detail := decodeProblem(t, rec)
+	require.Equal(t, "Fact not found", title)
+	require.Equal(t, `no fact at path "`+path+`" on branch "agent/elsewhere" at commit "`+f.c[step]+`"`, detail)
+}
+
+// Without ?fallback=before the gate respects deletions: kb/r.md, retracted at
+// e13, is gone at e14 (404, not an empty 200), checked with FactLiveAtCommit
+// and never with the step-over FactExistsAt, and the edges are never read.
+// Sabotage: gate on FactExistsAt (200 with q1, q2), or read the edges anyway.
 func TestCommitAnchoredIncoming_FactNotLiveAtCommit(t *testing.T) {
-	provider := &stubFactSubProvider{
-		notLive:     true,
-		incoming:    []index.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
-		incomingErr: errors.New("IncomingAtCommit must not be called for a non-live fact"),
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "no fact at path") {
-		t.Errorf("body should explain the fact is absent at the commit: %s", rec.Body.String())
-	}
+	f.requireAbsentAtCommit(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming"), "kb/r.md", "e14")
+	require.EqualValues(t, 1, reads["FactLiveAtCommit"].Load())
+	require.EqualValues(t, 0, reads["FactExistsAt"].Load())
+	require.EqualValues(t, 0, reads["IncomingAtCommit"].Load(), "the edges of an absent fact must not be read")
+	require.EqualValues(t, 0, reads["OutgoingAtCommit"].Load())
 }
 
 // TestCommitAnchoredOutgoing_FactNotLiveAtCommit mirrors the incoming case for
 // the /outgoing sub-resource.
 func TestCommitAnchoredOutgoing_FactNotLiveAtCommit(t *testing.T) {
-	provider := &stubFactSubProvider{
-		notLive:     true,
-		outgoingErr: errors.New("OutgoingAtCommit must not be called for a non-live fact"),
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/outgoing", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
+	f.requireAbsentAtCommit(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "outgoing"), "kb/r.md", "e14")
+	require.EqualValues(t, 1, reads["FactLiveAtCommit"].Load())
+	require.EqualValues(t, 0, reads["FactExistsAt"].Load())
+	require.EqualValues(t, 0, reads["OutgoingAtCommit"].Load(), "the edges of an absent fact must not be read")
+	require.EqualValues(t, 0, reads["IncomingAtCommit"].Load())
 }
 
-// TestCommitAnchoredIncoming_LivenessCheckError surfaces a genuine lookup
-// failure as 500, distinct from the 404 not-live case.
+// A failing liveness check is a 500 carrying the store's error, distinct from
+// the 404 of a fact that is not live, and the edges are not read.
 func TestCommitAnchoredIncoming_LivenessCheckError(t *testing.T) {
-	provider := &stubFactSubProvider{
-		liveErr: errors.New("db exploded"),
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "IncomingAtCommit")
+	hits := f.failGraphRead(t, index.ReadFactLiveAtCommit, errors.New("liveness on fire"))
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
-	}
+	rec := getAPI(t, s, f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "incoming"))
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	title, detail := decodeProblem(t, rec)
+	require.Equal(t, "Failed to resolve fact", title)
+	require.Equal(t, "liveness on fire", detail)
+	require.EqualValues(t, 1, hits.Load())
+	require.EqualValues(t, 0, reads["IncomingAtCommit"].Load())
 }
 
-// TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves: with
-// ?fallback=before the gate uses FactExistsAt, so a fact that is retracted as
-// of the commit (notLive) but DID exist earlier (exists) resolves to its
-// last-valid version's edges — the edges follow the fact's fallback read
-// rather than 404ing.
+// With ?fallback=before the gate is FactExistsAt (never FactLiveAtCommit), so
+// kb/r.md, retracted at e13, still resolves at e14 to its last-valid version's
+// edges: the sources q1, q2 citing it and the facts o1, o2 it cites. Sabotage:
+// ignore ?fallback (404), or gate on FactLiveAtCommit.
 func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing.T) {
-	provider := &stubFactSubProvider{
-		notLive:  true, // retracted as of the commit (no-fallback would 404)
-		notExist: false,
-		incoming: []index.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt")
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming?fallback=before", nil)
-	r.ServeHTTP(rec, req)
+	url := f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming") + "?fallback=before"
+	body := getRefs(t, s, url)
+	f.requireRefs(t, body, fsOtherURL, inR...)
+	require.Equal(t, APIBase+f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming"), body.Links["self"].Href)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
+	out := getRefs(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "outgoing")+"?fallback=before")
+	f.requireRefs(t, out, fsOtherURL, outO12...)
+
+	require.EqualValues(t, 2, reads["FactExistsAt"].Load())
+	require.EqualValues(t, 0, reads["FactLiveAtCommit"].Load())
 }
 
 // TestCommitAnchoredIncoming_FallbackBefore_NeverExisted_404: even with
-// fallback, a fact that never existed in the ancestry 404s.
+// fallback, a fact that never existed in the ancestry 404s, and its edges are
+// not read.
 func TestCommitAnchoredIncoming_FallbackBefore_NeverExisted_404(t *testing.T) {
-	provider := &stubFactSubProvider{
-		notExist:    true,
-		incomingErr: errors.New("IncomingAtCommit must not be called when the fact never existed"),
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "FactExistsAt", "IncomingAtCommit")
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming?fallback=before", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
+	f.requireAbsentAtCommit(t, s,
+		f.anchoredURL(fsOtherURL, "e14", "kb/never.md", "incoming")+"?fallback=before", "kb/never.md", "e14")
+	require.EqualValues(t, 1, reads["FactExistsAt"].Load())
+	require.EqualValues(t, 0, reads["IncomingAtCommit"].Load())
 }

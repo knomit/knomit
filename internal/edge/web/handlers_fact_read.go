@@ -190,7 +190,7 @@ func (defaultFactReader) Exists(ctx context.Context, ri *repos.RepoInstance, bra
 
 // handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
 // It also dispatches sub-resource requests (*/commits, */incoming, */outgoing).
-func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
+func handleHALFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -209,7 +209,7 @@ func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvi
 		}
 
 		// Dispatch sub-resource requests before any other processing.
-		if dispatchFactSubResource(b, subProvider, ri, repoName, branch, w, r) {
+		if dispatchFactSubResource(b, ri, repoName, branch, w, r) {
 			return
 		}
 

@@ -2,13 +2,10 @@ package web
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"knomit/internal/engine/store/index"
 
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
@@ -90,36 +87,6 @@ func TestHandleCommitAnchoredFact_ReturnsHALEnvelope(t *testing.T) {
 	}
 }
 
-// TestHandleCommitAnchoredFact_IncomingReturns200 verifies that hitting
-// /commits/{sha}/facts/.../incoming returns a HAL collection (not 404).
-func TestHandleCommitAnchoredFact_IncomingReturns200(t *testing.T) {
-	provider := &stubFactSubProvider{
-		incoming: []index.RefSummary{
-			{Path: "know/b.md", Title: "B", Commit: "abc123"},
-		},
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factSub:    provider,
-			factReader: &stubFactReader{readErr: errors.New("should not be called")},
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: %q", got)
-	}
-}
-
 // TestHandleCommitAnchoredFact_NotFound returns 404 problem+json when the
 // reader signals the fact is absent at the pinned commit.
 func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
@@ -144,74 +111,24 @@ func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
 	}
 }
 
-// TestHandleCommitAnchoredOutgoing_ReturnsCollection verifies the commit-
-// anchored outgoing sub-resource returns a HAL collection with the correct
-// self URL (containing /commits/{sha}/).
+// The commit-anchored /outgoing is what the version live at the anchor cites
+// (newFactSubFixture): at x0 kb/t.md v1 cites o1, o2; at e14 v2 cites o1, o2
+// and the retracted o5, o6. The collection is pinned to the anchor, each item
+// to its target's own commit. The FactReader is a tripwire: the outgoing
+// dispatch happens before the fact read. Sabotage: drop the anchor (v2 at
+// x0), serve incoming, link items at the anchor, or reverse them.
 func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
-	provider := &stubFactSubProvider{
-		outgoing: []index.RefSummary{
-			{Path: "know/b.md", Title: "Fact B", Type: "synthesis", Commit: "abc123"},
-		},
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			// factReader not needed — outgoing dispatch happens before reader call
-			factReader: &stubFactReader{readErr: errors.New("should not be called")},
-			factSub:    provider,
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/outgoing", nil)
-	r.ServeHTTP(rec, req)
+	url := f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "outgoing")
+	body := getRefs(t, s, url)
+	if got, want := body.Links["self"].Href, APIBase+url; got != want {
+		t.Errorf("self: got %q, want %q", got, want)
+	}
+	f.requireRefs(t, body, fsOtherURL, outO12...)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: %q", got)
-	}
-
-	var body struct {
-		Count    int         `json:"count"`
-		Links    hal.LinkMap `json:"_links"`
-		Embedded struct {
-			Refs []struct {
-				Path  string      `json:"path"`
-				Type  string      `json:"type"`
-				Links hal.LinkMap `json:"_links"`
-			} `json:"refs"`
-		} `json:"_embedded"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body.Count != 1 {
-		t.Errorf("count: got %d, want 1", body.Count)
-	}
-
-	selfLink, ok := body.Links["self"]
-	if !ok {
-		t.Fatal("missing _links.self")
-	}
-	if !strings.Contains(selfLink.Href, "/commits/abc123/") {
-		t.Errorf("outgoing self href %q should contain /commits/abc123/", selfLink.Href)
-	}
-
-	// Each ref item's self link should also be commit-anchored.
-	if len(body.Embedded.Refs) != 1 {
-		t.Fatalf("refs: %d, want 1", len(body.Embedded.Refs))
-	}
-	refSelf := body.Embedded.Refs[0].Links["self"].Href
-	if !strings.Contains(refSelf, "/commits/abc123/") {
-		t.Errorf("ref self href %q should contain /commits/abc123/", refSelf)
-	}
-	if body.Embedded.Refs[0].Type != "synthesis" {
-		t.Errorf("ref[0].type: %q, want \"synthesis\"", body.Embedded.Refs[0].Type)
-	}
+	f.requireRefs(t, getRefs(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/t.md", "outgoing")), fsOtherURL, outT2...)
 }
 
 // TestHandleCommitAnchoredOutgoing_UnknownRepo returns 404 problem+json.
@@ -219,7 +136,6 @@ func TestHandleCommitAnchoredOutgoing_UnknownRepo(t *testing.T) {
 	s := &Server{
 		Manager: newTestManagerWithRepos(t),
 		providers: storeProviders{
-			factSub:    &stubFactSubProvider{},
 			factReader: &stubFactReader{},
 		},
 	}

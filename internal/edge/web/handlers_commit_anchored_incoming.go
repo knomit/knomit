@@ -15,7 +15,6 @@ import (
 // written.
 func handleCommitAnchoredIncoming(
 	b hal.URLBuilder,
-	subProvider factSubProvider,
 	w http.ResponseWriter,
 	r *http.Request,
 	repoName string,
@@ -24,11 +23,11 @@ func handleCommitAnchoredIncoming(
 ) {
 	ri := repos.RepoFromContext(r.Context())
 
-	if !factPresentAtCommitOr404(subProvider, w, r, ri, a, factPath) {
+	if !factPresentAtCommitOr404(w, r, ri, a, factPath) {
 		return
 	}
 
-	refs, err := subProvider.IncomingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
+	refs, err := incomingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load incoming refs", a.Branch)
 		return

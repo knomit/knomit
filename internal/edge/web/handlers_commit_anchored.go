@@ -20,7 +20,7 @@ import (
 // Sub-resources /incoming and /outgoing are both supported; /commits is not
 // (a commit-anchored fact IS at a specific commit — use the branch-anchored
 // /facts/.../commits for history).
-func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
+func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -42,7 +42,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		if strings.HasSuffix(path, "/incoming") {
 			factPath := strings.TrimSuffix(path, "/incoming")
 			a := hal.Anchor{Branch: branch, Commit: sha}
-			handleCommitAnchoredIncoming(b, subProvider, w, r, repoName, a, factPath)
+			handleCommitAnchoredIncoming(b, w, r, repoName, a, factPath)
 			return
 		}
 
@@ -50,7 +50,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 		if strings.HasSuffix(path, "/outgoing") {
 			factPath := strings.TrimSuffix(path, "/outgoing")
 			a := hal.Anchor{Branch: branch, Commit: sha}
-			handleCommitAnchoredOutgoing(b, subProvider, w, r, repoName, a, factPath)
+			handleCommitAnchoredOutgoing(b, w, r, repoName, a, factPath)
 			return
 		}
 
@@ -99,7 +99,6 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader, subProvider f
 // GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/*/outgoing.
 func handleCommitAnchoredOutgoing(
 	b hal.URLBuilder,
-	subProvider factSubProvider,
 	w http.ResponseWriter,
 	r *http.Request,
 	repoName string,
@@ -108,11 +107,11 @@ func handleCommitAnchoredOutgoing(
 ) {
 	ri := repos.RepoFromContext(r.Context())
 
-	if !factPresentAtCommitOr404(subProvider, w, r, ri, a, factPath) {
+	if !factPresentAtCommitOr404(w, r, ri, a, factPath) {
 		return
 	}
 
-	refs, err := subProvider.OutgoingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
+	refs, err := outgoingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load outgoing refs", a.Branch)
 		return
