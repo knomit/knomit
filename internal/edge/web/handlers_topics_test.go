@@ -271,3 +271,29 @@ func TestHandleTopics_ListDirErrorIs500(t *testing.T) {
 		})
 	}
 }
+
+// The repo browse handlers list AND enrich at the branch the request names,
+// not at the repo's agent branch. The same path exists on both branches with
+// different titles and types, so enrichment from the agent branch shows, for
+// the topic node and for its /facts sub-resource alike.
+func TestHandleTopics_EnrichesAtTheRequestedBranch(t *testing.T) {
+	ri, svc, s := topicsRepo(t)
+	require.NoError(t, svc.CreateBranch(t.Context(), "agent/elsewhere", "agent/test"))
+	writeOnBranch(t, ri, "agent/elsewhere",
+		plainFact("ontology/ai/x.md", "Elsewhere copy", typed(fact.Hypothesis)))
+	writeFactsInOneCommit(t, ri,
+		plainFact("ontology/ai/x.md", "Agent-branch decoy", typed(fact.Insight)))
+	require.Equal(t, "agent/test", ri.AgentBranch(), "fixture: the requested branch must not be the agent branch")
+
+	node := decodeTopics(t, getAPI(t, s, "/repos/alpha/branches/agent:elsewhere/topics/ai"))
+	require.Len(t, node.Embedded.Topics, 1)
+	require.Equal(t, "Elsewhere copy", node.Embedded.Topics[0].Title)
+	require.Equal(t, "hypothesis", node.Embedded.Topics[0].Type)
+	require.Equal(t, APIBase+"/repos/alpha/branches/agent:elsewhere/facts/ontology/ai/x.md",
+		node.Embedded.Topics[0].Links["self"].Href)
+
+	facts := decodeTopicFacts(t, getAPI(t, s, "/repos/alpha/branches/agent:elsewhere/topics/ai/facts"))
+	require.Len(t, facts.Embedded.Facts, 1)
+	require.Equal(t, "Elsewhere copy", facts.Embedded.Facts[0].Title)
+	require.Equal(t, "hypothesis", facts.Embedded.Facts[0].Type)
+}

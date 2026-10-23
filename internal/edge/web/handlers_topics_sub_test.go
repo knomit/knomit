@@ -218,3 +218,19 @@ func TestHandleTopicNode_StillWorksAfterDispatch(t *testing.T) {
 	require.Equal(t, "ml", body.Embedded.Topics[0].Name)
 	require.True(t, body.Embedded.Topics[0].IsDir)
 }
+
+// /topics/<node>/facts on a branch the store does not have is the same 404 as
+// the topic listing (writeStoreError maps ErrBranchNotFound), not a 500.
+func TestHandleTopicFacts_MissingBranch_Returns404(t *testing.T) {
+	_, svc, s := topicsRepo(t)
+	seen := observeListDir(t, map[string]*store.Service{"alpha": svc})
+
+	rec := getAPI(t, s, "/repos/alpha/branches/does-not-exist/topics/ai/facts")
+
+	require.Equal(t, []string{"ontology/ai"}, seen.of("alpha"), "the 404 must come from the store's ListDir")
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "Branch not found", body["title"])
+	require.Equal(t, `no branch named "does-not-exist"`, body["detail"])
+}
