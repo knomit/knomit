@@ -58,10 +58,13 @@ func pushTo(t *testing.T, svc *store.Service, url string) {
 //   - gamma: an origin that has never run ("" both: never-ran is not healthy)
 //   - delta: no origin, so NO remote key at all (absence, not an empty object
 //     and not ""): a client reads the key's presence as "this repo has an origin"
+//   - epsilon: no store at all (its origin read fails), so NO remote key either:
+//     an unreadable store is "nothing to show", never healthy
 //
 // Sabotage: drop omitempty (or always build the object) → delta has a key →
-// red; swap sync and push → alpha and beta red; read every row's health from
-// one repo → red.
+// red; a read error answered with an empty object → epsilon has a key → red;
+// swap sync and push → alpha and beta red; read every row's health from one
+// repo → red.
 func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 	m, svcs := newRealStoreManager(t, "delta", "beta", "alpha", "gamma")
 	root := t.TempDir()
@@ -69,6 +72,7 @@ func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 	require.NoError(t, svcs["alpha"].Remote().RecordSyncError("origin", "fetch refused"))
 	pushTo(t, svcs["beta"], fileuri.New(filepath.Join(root, "nowhere.git")))
 	injectOrigin(svcs["gamma"], "https://x.test/gamma.git", "main", "none")
+	m.Set("epsilon", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "epsilon", UID: "epsilon-uid", AgentBranch: "agent/test"}))
 
 	s := &Server{Manager: m}
 	rec := httptest.NewRecorder()
@@ -88,7 +92,7 @@ func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 		require.NoError(t, json.Unmarshal(row["name"], &name))
 		rows[name] = row
 	}
-	require.Len(t, rows, 4)
+	require.Len(t, rows, 5)
 
 	remoteOf := func(name string) map[string]string {
 		raw, present := rows[name]["remote"]
@@ -105,6 +109,11 @@ func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 	require.False(t, present, "a repo without an origin has NO remote key; row=%s", rows["delta"])
 	_, hasName := rows["delta"]["name"]
 	require.True(t, hasName, "positive control: delta's row is decoded")
+
+	_, present = rows["epsilon"]["remote"]
+	require.False(t, present, "a repo whose store cannot be read has NO remote key; row=%s", rows["epsilon"])
+	_, hasName = rows["epsilon"]["name"]
+	require.True(t, hasName, "positive control: epsilon's row is decoded")
 }
 
 func TestHandleHALRepos_ReturnsCollection(t *testing.T) {

@@ -245,6 +245,47 @@ func TestHandleHALSetOrigin_PartialUpdateKeepsTheStoredOrigin(t *testing.T) {
 	require.Equal(t, "tok-stored", o.AuthToken)
 }
 
+// PUT attaches on the branch it was asked for: the remote has both main and
+// trunk, and trunk (neither main nor the agent branch) is what is recorded.
+func TestHandleHALSetOrigin_AttachesOnTheRequestedBranch(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	bare := filepath.Join(originsRoot, "upstream.git")
+	url := seedBareRemoteForTest(t, bare)
+	runGitForTest(t, bare, "branch", "trunk", "main")
+	require.NotEqual(t, "trunk", ri.AgentBranch(), "precondition")
+
+	rec := putOrigin(t, s.NewAPIRouter(), "alpha", `{"url":"`+url+`","branch":"trunk","auth_method":"none"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	require.Equal(t, url, o.URL)
+	require.Equal(t, "trunk", o.Branch)
+}
+
+// A stored "cert" auth method is knomit's own decision, not an input: a
+// partial PUT does not carry it into the attach (which would refuse it as an
+// input) but lets the attach decide again, and the stored url is still reused.
+func TestHandleHALSetOrigin_PartialUpdateDoesNotCarryACert(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	// The origin as the Manager injects it from a record whose auth was decided
+	// as cert.
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: url, Branch: "main", AuthMethod: "cert"})
+	}))
+
+	rec := putOrigin(t, s.NewAPIRouter(), "alpha", `{"branch":"main"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	require.Equal(t, url, o.URL, "the stored url is reused")
+	require.NotEqual(t, "cert", o.AuthMethod, "a file:// origin is not decided as cert")
+}
+
 func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
@@ -377,7 +418,7 @@ func upstreamState(t *testing.T, m *repos.Manager, ri *repos.RepoInstance) (stri
 
 // PATCH answers with the branch it was ASKED for, which here is neither the
 // stored upstream ("main") nor the agent branch, and that branch is what was
-// written.
+// written. A second PATCH to another branch tells the echo from a constant.
 func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
 	r, m, ri := attachedUpstreamServer(t)
 	require.NotEqual(t, "develop", ri.AgentBranch(), "precondition: request branch is not the agent branch")
@@ -400,6 +441,41 @@ func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
 
 	b, _ := upstreamState(t, m, ri)
 	require.Equal(t, "develop", b)
+
+	rec = patchUpstream(t, r, "alpha", `{"branch":"release-2"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "release-2", body.Branch)
+	b, _ = upstreamState(t, m, ri)
+	require.Equal(t, "release-2", b)
+}
+
+// Changing the upstream keeps the credential: the injected origin (what the
+// reconcile loop authenticates with) still carries the stored token and auth
+// method after PATCH, with the new branch.
+func TestHandleHALSetOriginUpstream_KeepsTheCredential(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	_, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
+		URL: url, Branch: "main", AuthMethod: "token", AuthToken: "tok-kept",
+	}))
+	require.NoError(t, err)
+
+	rec := patchUpstream(t, s.NewAPIRouter(), "alpha", `{"branch":"develop"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var remote *remotesync.Remote
+	require.NoError(t, ri.WithRead(func(svc *store.Service) { remote, err = svc.Remote().GetRemote("origin") }))
+	require.NoError(t, err)
+	require.NotNil(t, remote)
+	require.Equal(t, "develop", remote.Branch)
+	require.Equal(t, url, remote.URL)
+	require.Equal(t, "token", remote.AuthMethod)
+	require.Equal(t, "tok-kept", remote.AuthToken)
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, "tok-kept", o.AuthToken)
 }
 
 func TestHandleHALSetOriginUpstream_EmptyBranch_Returns400(t *testing.T) {
