@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -68,7 +69,7 @@ func seedAxisMount(t *testing.T, ri *repos.RepoInstance, tag string, impact int)
 }
 
 // withMountStore runs fn with the live store of the named mount.
-func withMountStore(t *testing.T, m *repos.Manager, name string, fn func(svc *store.Service)) {
+func withMountStore(t testing.TB, m *repos.Manager, name string, fn func(svc *store.Service)) {
 	t.Helper()
 	require.NoError(t, m.Get(name).WithRead(func(svc *store.Service) {
 		require.NotNil(t, svc, "mount %s must have a live store", name)
@@ -86,27 +87,54 @@ func failMountRead(t *testing.T, m *repos.Manager, name string, read index.ReadN
 	})
 }
 
+// mountOverrides records which helper installed an index.Overrides on which
+// store. SetOverridesForTest REPLACES the whole struct, so a second observer on
+// the same Service would silently drop the first, and a "0 reads" assertion on
+// the dropped one would pass vacuously. installMountOverrides is the only way
+// these helpers install one, and it refuses a second.
+var mountOverrides sync.Map // *store.Service -> name of the helper that installed it
+
+// installMountOverrides installs o on svc for the rest of the test, or fails
+// the test when another helper already installed an Overrides on svc. A test
+// that needs a delay AND a count on one mount must say so in ONE Overrides, not
+// stack two helpers.
+func installMountOverrides(t testing.TB, svc *store.Service, by string, o index.Overrides) {
+	t.Helper()
+	if prev, loaded := mountOverrides.LoadOrStore(svc, by); loaded {
+		t.Fatalf("%s: this store already has an index.Overrides installed by %v; "+
+			"SetOverridesForTest replaces the whole struct, so the earlier observer would be dropped", by, prev)
+		return
+	}
+	restore := svc.Search().SetOverridesForTest(o)
+	t.Cleanup(func() {
+		restore()
+		mountOverrides.Delete(svc)
+	})
+}
+
 // slowMountRead makes the named public read of this mount's store take d. It
 // goes through the index.Overrides observer, which is per Service, so each
-// mount can be given its own latency.
-func slowMountRead(t *testing.T, m *repos.Manager, name, method string, d time.Duration) {
+// mount can be given its own latency. It fails the test when the mount already
+// has an observer (see installMountOverrides).
+func slowMountRead(t testing.TB, m *repos.Manager, name, method string, d time.Duration) {
 	t.Helper()
 	withMountStore(t, m, name, func(svc *store.Service) {
-		t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{Reads: func(got string) error {
+		installMountOverrides(t, svc, "slowMountRead", index.Overrides{Reads: func(got string) error {
 			if got == method {
 				time.Sleep(d)
 			}
 			return nil
-		}}))
+		}})
 	})
 }
 
 // countMountReads records, per method, how often each mount's store was read.
 // The map is fixed before use and holds atomic counters, so the closure the
-// fan-out goroutines call is race-free.
+// fan-out goroutines call is race-free. It fails the test when a mount already
+// has an observer (see installMountOverrides).
 type readCounts map[string]*atomic.Int64
 
-func countMountReads(t *testing.T, m *repos.Manager, names []string, methods ...string) map[string]readCounts {
+func countMountReads(t testing.TB, m *repos.Manager, names []string, methods ...string) map[string]readCounts {
 	t.Helper()
 	out := map[string]readCounts{}
 	for _, n := range names {
@@ -116,12 +144,12 @@ func countMountReads(t *testing.T, m *repos.Manager, names []string, methods ...
 		}
 		out[n] = rc
 		withMountStore(t, m, n, func(svc *store.Service) {
-			t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{Reads: func(got string) error {
+			installMountOverrides(t, svc, "countMountReads", index.Overrides{Reads: func(got string) error {
 				if c, ok := rc[got]; ok {
 					c.Add(1)
 				}
 				return nil
-			}}))
+			}})
 		})
 	}
 	return out

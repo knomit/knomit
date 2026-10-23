@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -118,6 +119,12 @@ func (e *cosEmbedder) lastQueryText() string {
 // the fact (kind, type, domain, motifs, ...) before it is serialized.
 func writeCosFact(t *testing.T, ri *repos.RepoInstance, path, title string, cos float64, mod func(f *fact.Fact)) {
 	t.Helper()
+	writeFactOp(t, ri, path, title, cos, "", mod)
+}
+
+// factText is the serialized observation writeCosFact writes.
+func factText(t *testing.T, path, title string, cos float64, mod func(f *fact.Fact)) string {
+	t.Helper()
 	f := fact.NewFact(path)
 	f.Title = title
 	f.Body = "cos=" + strconv.FormatFloat(cos, 'f', -1, 64)
@@ -130,11 +137,64 @@ func writeCosFact(t *testing.T, ri *repos.RepoInstance, path, title string, cos 
 	}
 	text, err := fact.SerializeFact(f)
 	require.NoError(t, err)
+	return text
+}
+
+// writeFactOp is writeCosFact whose commit carries the given operation
+// ("learn", "update", ...), which the facts listing serves as `operation`.
+func writeFactOp(t *testing.T, ri *repos.RepoInstance, path, title string, cos float64, op string, mod func(f *fact.Fact)) {
+	t.Helper()
+	text := factText(t, path, title, cos, mod)
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		require.NotNil(t, svc, "the test repo must have a live store")
-		_, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), path, text, "add "+path, "")
+		_, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), path, text, "add "+path, op)
 		require.NoError(t, err)
 	}))
+}
+
+// factSpec is one fact of writeFactsInOneCommit.
+type factSpec struct {
+	path, title string
+	mod         func(f *fact.Fact)
+	// cos is the fact's cosine with every query (see cosEmbedder); 0 means 0.9.
+	cos float64
+}
+
+// plainFact is a factSpec at the default cosine.
+func plainFact(path, title string, mod func(f *fact.Fact)) factSpec {
+	return factSpec{path: path, title: title, mod: mod}
+}
+
+// writeFactsInOneCommit writes every spec to the agent branch of ri in ONE
+// commit, so they share one committed_at and a recency listing orders them by
+// path. A test that needs a total order across commits writes one commit per
+// group and calls awaitNextSecond between them (the commit stamp has one-second
+// resolution).
+func writeFactsInOneCommit(t *testing.T, ri *repos.RepoInstance, specs ...factSpec) {
+	t.Helper()
+	files := map[string]string{}
+	for _, s := range specs {
+		cos := s.cos
+		if cos == 0 {
+			cos = 0.9
+		}
+		files[s.path] = factText(t, s.path, s.title, cos, s.mod)
+	}
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.NotNil(t, svc, "the test repo must have a live store")
+		_, _, err := svc.Facts().BatchWriteFacts(context.Background(), ri.AgentBranch(), files, nil, "add facts", "learn")
+		require.NoError(t, err)
+	}))
+}
+
+// awaitNextSecond returns once the wall clock is in a later second than it was
+// on entry, so every commit written afterwards is stamped strictly after every
+// commit written before the call.
+func awaitNextSecond() {
+	start := time.Now().Unix()
+	for time.Now().Unix() == start {
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // searchLensEnv is a lens "eng" over real mounts that embed with emb, served by
@@ -181,14 +241,15 @@ func (s *searchSeen) of(repo string) []index.SearchOptions {
 
 // observeMountSearch records, per mount, every SearchOptions the mount's store
 // is searched with, and then runs the real search. It is an observer: it calls
-// next unchanged, so what the mount answers is the store's own answer.
-func observeMountSearch(t *testing.T, m *repos.Manager, names ...string) *searchSeen {
+// next unchanged, so what the mount answers is the store's own answer. It fails
+// the test when a mount already has an observer (see installMountOverrides).
+func observeMountSearch(t testing.TB, m *repos.Manager, names ...string) *searchSeen {
 	t.Helper()
 	seen := &searchSeen{opts: map[string][]index.SearchOptions{}}
 	for _, n := range names {
 		n := n
 		withMountStore(t, m, n, func(svc *store.Service) {
-			t.Cleanup(svc.Search().SetOverridesForTest(index.Overrides{
+			installMountOverrides(t, svc, "observeMountSearch", index.Overrides{
 				Search: func(next index.SearchFunc) index.SearchFunc {
 					return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
 						seen.mu.Lock()
@@ -197,7 +258,7 @@ func observeMountSearch(t *testing.T, m *repos.Manager, names ...string) *search
 						return next(ctx, branch, q)
 					}
 				},
-			}))
+			})
 		})
 	}
 	return seen

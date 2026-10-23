@@ -23,15 +23,14 @@ const webPkg = "knomit/internal/edge/web"
 // is no longer an interface) fails, so a deletion cannot leave its entry
 // behind.
 var webInterfaceAllowlist = map[string]string{
-	"FactReader":              "provider seam, deleted with the fact-read handler's rewrite",
-	"FactWriter":              "provider seam, deleted with the fact-write handler's rewrite",
-	"TopicLister":             "provider seam, deleted with the topics handler's rewrite",
-	"commitsProvider":         "provider seam, deleted with the commits handler's rewrite",
-	"factSubProvider":         "provider seam, deleted with the fact sub-resource handler's rewrite",
-	"motifsProvider":          "provider seam, deleted with the motifs handler's rewrite",
-	"factsCollectionProvider": "provider seam, deleted with the facts-collection handler's rewrite",
-	"originProvider":          "provider seam, deleted with the origin handler's rewrite",
-	"RefResolver":             "ref_view.go's resolver seam, deleted with its rewrite",
+	"FactReader":      "provider seam, deleted with the fact-read handler's rewrite",
+	"FactWriter":      "provider seam, deleted with the fact-write handler's rewrite",
+	"TopicLister":     "provider seam, deleted with the topics handler's rewrite",
+	"commitsProvider": "provider seam, deleted with the commits handler's rewrite",
+	"factSubProvider": "provider seam, deleted with the fact sub-resource handler's rewrite",
+	"motifsProvider":  "provider seam, deleted with the motifs handler's rewrite",
+	"originProvider":  "provider seam, deleted with the origin handler's rewrite",
+	"RefResolver":     "ref_view.go's resolver seam, deleted with its rewrite",
 }
 
 // declaredInterfaces parses files (name -> nil to read from disk, or the source

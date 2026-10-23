@@ -257,7 +257,7 @@ func handleHALLensMotifs(b hal.URLBuilder, provider motifsProvider) http.Handler
 // by IDENTITY here, and its identity is a property of the lens, not of where
 // the reader was standing or which mounts they had selected. The repo detail
 // passes "" for the same reason.
-func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts factsCollectionProvider) http.HandlerFunc {
+func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 		lensName := chi.URLParam(r, "lens")
@@ -299,7 +299,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 		total, fetched := 0, 0
 		truncated := false
 		for i, t := range targets {
-			entries, n, err := facts.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, index.SearchOptions{
+			entries, n, err := recentFacts(r.Context(), t.RT.RI, t.RT.Branch, index.SearchOptions{
 				Motifs:     members,
 				MotifMatch: index.MotifMatchExact,
 				Limit:      carrierLimit,

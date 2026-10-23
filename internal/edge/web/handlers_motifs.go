@@ -490,7 +490,7 @@ type motifDetailView struct {
 // through the store's ClusterKey (which degrades to the mechanical key on an
 // unrebuilt corpus — C2), and the self link always carries the cluster_key
 // (C1). 404 only when the resolved key matches no cluster in the vocabulary.
-func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts factsCollectionProvider) http.HandlerFunc {
+func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -544,7 +544,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 		// cannot disagree with the full listing it links to. Passing every
 		// member spelling keeps the union correct on an unrebuilt corpus,
 		// where exact-tier resolution knows nothing about siblings (C2).
-		entries, total, err := facts.RecentFacts(r.Context(), ri, branch, index.SearchOptions{
+		entries, total, err := recentFacts(r.Context(), ri, branch, index.SearchOptions{
 			Motifs:     cluster.Members,
 			MotifMatch: index.MotifMatchExact,
 			Limit:      carrierLimit,

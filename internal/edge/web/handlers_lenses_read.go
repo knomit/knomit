@@ -150,7 +150,7 @@ func lensQueryVec(ctx context.Context, emb model.Embedder, text string) ([]float
 // federate.ReadTargetsFor, fetch each mount's RecentFacts at its pinned branch,
 // dedupe by repo-relative path (the write mount's copy wins), merge by
 // committed_at across mounts, and qualify read-mount paths (kb://<id12>/…).
-func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider, emb model.Embedder) http.HandlerFunc {
+func handleHALLensFacts(motifsP motifsProvider, emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -354,7 +354,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 				q.Path = t.Path
 				q.Limit = depth
 				q.Diag = &diags[i]
-				entries, n, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
+				entries, n, err := recentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
 				if err != nil {
 					writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
 					return

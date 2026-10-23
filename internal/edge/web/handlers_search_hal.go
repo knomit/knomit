@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -32,6 +33,13 @@ func searchRepo(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder,
 			// an empty result.
 			log.Error().Err(err).Msg("search: embed query failed")
 			return nil, fmt.Errorf("search: embed query: %w", err)
+		}
+		if len(vec) == 0 {
+			// An empty vector with a nil error is as unusable as an error:
+			// leaving QueryVec empty would make the store embed the same text
+			// again (a second inference) and fail on its own.
+			log.Error().Msg("search: embedder returned an empty query vector")
+			return nil, errors.New("search: embed query: embedder returned an empty vector")
 		}
 		q.QueryVec = vec
 	}
