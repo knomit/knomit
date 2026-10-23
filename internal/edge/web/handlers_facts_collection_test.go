@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/index"
 )
 
@@ -234,6 +236,36 @@ func TestHandleHALFactsCollection_PathNarrows(t *testing.T) {
 
 	require.Equal(t, []string{"kb/x/a.md"}, body.paths())
 	require.Equal(t, 1, body.Count)
+}
+
+// openExperimentWithFact opens experiment exp/<name> off the agent branch of ri
+// and writes one fact to it, so the experiment has changed exactly that path.
+func openExperimentWithFact(t *testing.T, ri *repos.RepoInstance, name, path, title string) {
+	t.Helper()
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, err := svc.Merge().OpenExperiment(context.Background(), name, "", "agent/test")
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(context.Background(), "exp/"+name, path,
+			factText(t, path, title, 0.9, nil), "add "+path, "learn")
+		require.NoError(t, err)
+	}))
+}
+
+// ?since_fork=true narrows an experiment's listing to what the experiment
+// changed since its fork (a diff from the fork commit, not a timestamp), and is
+// a 400 off an experiment branch. Without it the experiment lists the parent's
+// facts too.
+func TestHandleHALFactsCollection_SinceForkNarrowsToTheExperiment(t *testing.T) {
+	s, ri := factsRepoServer(t)
+	writeCosFact(t, ri, "kb/x/parent.md", "Parent", 0.9, nil)
+	openExperimentWithFact(t, ri, "sf", "kb/x/mine.md", "Mine")
+	exp := "/repos/alpha/branches/exp:sf/facts"
+
+	require.Equal(t, []string{"kb/x/mine.md", "kb/x/parent.md"}, getFacts(t, s, exp).paths(), "control: both without the filter")
+	body := getFacts(t, s, exp+"?since_fork=true")
+	require.Equal(t, []string{"kb/x/mine.md"}, body.paths())
+	require.Equal(t, 1, body.Count)
+	require.Equal(t, http.StatusBadRequest, getAPI(t, s, alphaFacts+"?since_fork=true").Code)
 }
 
 // ?entity=X (singular, the canonical name the HAL template advertises) narrows

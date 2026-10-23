@@ -27,6 +27,20 @@ func TestHandleSearch_PathNarrowsTheResults(t *testing.T) {
 		decodeSearch(t, getAPI(t, s, alphaSearch+"?q=x&path=kb/x/sub/")).paths())
 }
 
+// ?since_fork=true narrows an experiment's search to what the experiment
+// changed since its fork. The parent's fact matches the query just as well, so
+// only the filter keeps it out.
+func TestHandleSearch_SinceForkNarrowsToTheExperiment(t *testing.T) {
+	s, _ := searchRepoServer(t)
+	ri := s.Manager.Get("alpha")
+	writeCosFact(t, ri, "kb/x/parent.md", "Parent", 0.9, nil)
+	openExperimentWithFact(t, ri, "sf", "kb/x/mine.md", "Mine")
+	exp := "/repos/alpha/branches/exp:sf/search?q=x"
+
+	require.ElementsMatch(t, []string{"kb/x/mine.md", "kb/x/parent.md"}, decodeSearch(t, getAPI(t, s, exp)).paths(), "control")
+	require.Equal(t, []string{"kb/x/mine.md"}, decodeSearch(t, getAPI(t, s, exp+"&since_fork=true")).paths())
+}
+
 // A lens search applies an UNQUALIFIED ?path= to every mount in that mount's
 // own terms, and a kb://<id12>/-qualified one to the single mount it names,
 // made repo-relative. Each mount holds a best match outside the prefix. The
