@@ -54,7 +54,6 @@ func TestHandleFactCreate_AcceptsOwnExperimentBranch(t *testing.T) {
 	s := &Server{
 		Manager:      m,
 		OntologyRoot: "know",
-		providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
 	}
 	r := s.NewAPIRouter()
 
@@ -91,7 +90,6 @@ func TestHandleFactCreate_RefusesForeignExperimentBranch(t *testing.T) {
 	s := &Server{
 		Manager:      m,
 		OntologyRoot: "know",
-		providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
 	}
 	r := s.NewAPIRouter()
 

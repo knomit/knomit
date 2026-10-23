@@ -195,17 +195,12 @@ func TestREST_PutGatesContext(t *testing.T) {
 // C2, REST PUT with NO ontology (the bare test instance has none): a context
 // is refused and nothing reaches git.
 func TestREST_PutContextWithoutOntologyRefused(t *testing.T) {
-	writer := &stubFactWriter{writeHash: "abc123"}
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), providers: storeProviders{factWriter: writer}}
-	r := s.NewAPIRouter()
+	fx := newFactWriteFixture(t, "kb")
 	body := `{"content":"---\ntype: observation\nconfidence: 0.9\nsources: 1\ncontext: {task: t-1}\n---\n# T\n\nBody.\n"}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/agent:test/facts/kb/ai/test.md", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	rec := fx.do(http.MethodPut, fx.factURL("kb/ai/test.md"), body)
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), "context is not allowed here")
-	require.Equal(t, 0, writer.writeCalls, "nothing reached git")
+	require.Empty(t, fx.wrote(), "nothing reached git")
 }
 
 // C7: POST create has no `context` field; the strict decoder refuses one, so

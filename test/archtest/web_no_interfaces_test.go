@@ -23,7 +23,6 @@ const webPkg = "knomit/internal/edge/web"
 // is no longer an interface) fails, so a deletion cannot leave its entry
 // behind.
 var webInterfaceAllowlist = map[string]string{
-	"FactWriter":     "provider seam, deleted with the fact-write handler's rewrite",
 	"originProvider": "provider seam, deleted with the origin handler's rewrite",
 }
 

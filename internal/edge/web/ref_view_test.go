@@ -21,10 +21,13 @@ const testLocalRepoID = "3ec012f5b4d2"
 //     only, so a lookup on the wrong branch flips both;
 //   - the commit (anchor vs HEAD): x0 is an E commit before kb/late.md and g2
 //     an A commit before kb/aonly.md, so a lookup at the branch's HEAD instead
-//     of at the anchor calls them facts. The other direction (present at the
-//     anchor, absent at HEAD) exists only across branches, because on one
-//     branch FactExistsAt steps over retractions and so never turns false
-//     later: a1 (A) finds kb/aonly.md, E's HEAD does not;
+//     of at the anchor calls them facts. Only that direction (absent at the
+//     anchor, present at HEAD) is pinned. The other (present at the anchor,
+//     absent at HEAD) cannot be built on one branch, because FactExistsAt
+//     steps over retractions and so never turns false later; across branches
+//     it would need an anchor off the requested branch (a1 on E), which the
+//     anchored walk assumes never happens
+//     (kb/gotchas/store/anchored-read-ignores-branch), so no row asks for it;
 //   - walk-back: kb/gone.md is retracted on E at e2, and still resolves there
 //     (FactExistsAt steps over retractions; a retracted target keeps a
 //     navigable last-valid version).

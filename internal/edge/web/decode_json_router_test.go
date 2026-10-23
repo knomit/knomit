@@ -25,7 +25,7 @@ import (
 // Origin check refuses it when an Origin is present; this layer refuses it
 // whatever the Origin says, including none at all.
 func TestDecodeJSON_PlainTextFactPostIsRefusedThroughTheRouter(t *testing.T) {
-	srv, writer := originGuardServer(t, nil)
+	srv, fx := originGuardServer(t, nil)
 	own := "http://" + ownHostOf(srv)
 
 	for _, c := range []struct {
@@ -40,15 +40,15 @@ func TestDecodeJSON_PlainTextFactPostIsRefusedThroughTheRouter(t *testing.T) {
 			t.Fatalf("%s: text/plain POST /facts: %d %.300s; want 415 Unsupported Media Type", c.name, code, body)
 		}
 	}
-	if writer.writeCalls != 0 {
-		t.Fatalf("a text/plain body reached the fact writer %d time(s)", writer.writeCalls)
+	if w := fx.wrote(); len(w) != 0 {
+		t.Fatalf("a text/plain body reached the store: wrote %v", w)
 	}
 
 	// Control: the same request as JSON is the write it always was.
 	code, body, _ := originReq{method: "POST", path: factsPath, body: originGuardFactBody,
 		contentType: "application/json", origin: own}.do(t, srv)
-	if code != http.StatusCreated || writer.writeCalls != 1 {
-		t.Fatalf("same-origin JSON POST: %d %.300s writeCalls=%d; want 201 and one write", code, body, writer.writeCalls)
+	if code != http.StatusCreated || len(fx.wrote()) != 1 {
+		t.Fatalf("same-origin JSON POST: %d %.300s wrote=%v; want 201 and one write", code, body, fx.wrote())
 	}
 }
 

@@ -381,10 +381,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.With(requireOperator(g, s.authDisabled)).Post("/merge", handlePushedMerge())
 
 				r.Get("/facts", handleHALFactsCollection(b))
-				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter))
+				r.Post("/facts", handleFactCreate(b, s.OntologyRoot))
 				r.Get("/facts/*", handleHALFact(b))
-				r.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot, p.factWriter))
-				r.Delete("/facts/*", handleFactDelete(b, p.factWriter))
+				r.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot))
+				r.Delete("/facts/*", handleFactDelete(b))
 
 				r.Get("/topics", handleTopics(b, s.OntologyRoot))
 				r.Get("/topics/*", handleTopicNode(b, s.OntologyRoot))

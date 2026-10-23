@@ -69,22 +69,22 @@ func rebound(t *testing.T, srv *httptest.Server, method, path, body string) (int
 // unchanged in shape: the full Handler() behind a real 127.0.0.1 listener,
 // default [auth], and the rebound Host. Before the fix every line below was
 // served as anonymous@none — the fact PUT answered 200 and reached the
-// writer. Now every route, reads and the SPA included, is 421 and nothing
+// store. Now every route, reads and the SPA included, is 421 and nothing
 // reaches a handler.
 func TestIssue281_ReboundHostIsRefused(t *testing.T) {
-	writer := &stubFactWriter{writeHash: "abc123"}
+	fx := newFactWriteFixture(t, "know")
 	git := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("the git handler was reached")
 	})
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), Auth: config.Defaults().Auth,
-		providers: storeProviders{factWriter: writer}, GitHandler: git}
+	s := fx.s
+	s.Auth, s.GitHandler = config.Defaults().Auth, git
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/v1/repos", ""},
 		{"GET", "/api/v1/repos/alpha", ""},
-		{"PUT", "/api/v1/repos/alpha/branches/agent:test/facts/know/ai/pwn.md", `{"content":"` + testFactContent + `"}`},
+		{"PUT", "/api/v1/repos/alpha/branches/" + restWriteURL + "/facts/know/ai/pwn.md", `{"content":"` + testFactContent + `"}`},
 		{"PATCH", "/api/v1/repos/alpha", `{"description":"pwned"}`},
 		{"POST", "/api/v1/repos/alpha/rename", `{"name":"beta"}`},
 		{"DELETE", "/api/v1/repos/alpha", ""},
@@ -119,20 +119,19 @@ func TestIssue281_ReboundHostIsRefused(t *testing.T) {
 			t.Errorf("%s %s: detail %q; want it to name this instance's knomit.toml and say restart", c.method, c.path, p.Detail)
 		}
 	}
-	if writer.writeCalls != 0 {
-		t.Fatalf("the rebound PUT reached the fact writer %d time(s)", writer.writeCalls)
+	if w := fx.wrote(); len(w) != 0 {
+		t.Fatalf("the rebound PUT reached the store: wrote %v", w)
 	}
 }
 
 // The same PUT with the server's own Host is served as before: the guard is
 // the only thing standing between the two.
 func TestIssue281_OwnHostStillWrites(t *testing.T) {
-	writer := &stubFactWriter{writeHash: "abc123"}
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), Auth: config.Defaults().Auth,
-		providers: storeProviders{factWriter: writer}}
-	srv := httptest.NewServer(s.Handler())
+	fx := newFactWriteFixture(t, "know")
+	fx.s.Auth = config.Defaults().Auth
+	srv := httptest.NewServer(fx.s.Handler())
 	defer srv.Close()
-	req, _ := http.NewRequest("PUT", srv.URL+"/api/v1/repos/alpha/branches/agent:test/facts/know/ai/ok.md",
+	req, _ := http.NewRequest("PUT", srv.URL+"/api/v1/repos/alpha/branches/"+restWriteURL+"/facts/know/ai/ok.md",
 		strings.NewReader(`{"content":"`+testFactContent+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := srv.Client().Do(req)
@@ -140,8 +139,8 @@ func TestIssue281_OwnHostStillWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK || writer.writeCalls != 1 {
-		t.Fatalf("own Host %s: %d, writeCalls=%d", req.URL.Host, res.StatusCode, writer.writeCalls)
+	if w := fx.wrote(); res.StatusCode != http.StatusOK || len(w) != 1 || w[0] != "know/ai/ok.md" {
+		t.Fatalf("own Host %s: %d, wrote %v; want 200 and know/ai/ok.md written", req.URL.Host, res.StatusCode, w)
 	}
 }
 
