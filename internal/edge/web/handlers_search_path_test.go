@@ -47,7 +47,7 @@ func TestHandleSearch_SinceForkNarrowsToTheExperiment(t *testing.T) {
 // topics are ones the preset ontology carries: an unqualified path under a topic
 // a mount's ontology lacks skips that mount.
 func TestLensSearch_PathNarrowsEveryMount(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	writeCosFact(t, env.m.Get("alpha"), "kb/technology/a.md", "alpha x", 0.8, nil)
 	writeCosFact(t, env.m.Get("alpha"), "kb/science/a.md", "alpha y", 0.95, nil)
 	writeCosFact(t, env.m.Get("beta"), "kb/technology/b.md", "beta x", 0.7, nil)

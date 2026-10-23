@@ -22,7 +22,7 @@ func TestLensFacts_EmbedFailureFailsOnceUpFront(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mounts := []string{"alpha", "beta", "gamma"}
-			env := searchLens(t, storeProviders{}, "alpha", "beta", "gamma")
+			env := searchLens(t, "alpha", "beta", "gamma")
 			for _, n := range mounts {
 				writeCosFact(t, env.m.Get(n), "kb/"+n+".md", n+" fact", 0.9, nil)
 			}
@@ -69,7 +69,7 @@ func TestSearchRepo_EmptyVectorIsAnError(t *testing.T) {
 // or no caller cutoff, does not. The diagnosis is the real stores' own.
 func TestLensFacts_CutoffNotice(t *testing.T) {
 	get := func(cos float64, query string) map[string]any {
-		env := searchLens(t, storeProviders{}, "alpha", "beta")
+		env := searchLens(t, "alpha", "beta")
 		for _, n := range []string{"alpha", "beta"} {
 			writeCosFact(t, env.m.Get(n), "kb/"+n+"/one.md", "A fact on "+n, cos, nil)
 		}

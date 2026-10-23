@@ -18,20 +18,13 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// motifsProvider is the narrow interface the motif vocabulary handlers depend
-// on. Every method is a straight pass-through to vocab.MotifIndex — the seam
-// exists for test injection, mirroring the other providers.
-type motifsProvider interface {
-	Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error)
-	Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]vocab.MotifDefinitionStatus, error)
-	VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (vocab.MotifVocabularyHealth, error)
-	AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]vocab.AliasRow, error)
-	ClusterKey(ctx context.Context, ri *repos.RepoInstance, branch, motif string) (string, error)
-}
+// The motif vocabulary reads the handlers make. Each passes straight through
+// to the repo's vocab.MotifIndex under the repo's read lock: a nil store
+// answers the zero value and a nil error, and a store error comes back
+// unchanged. A test that needs one to fail installs
+// vocab.MotifIndex.SetReadFaultForTest on the real store.
 
-type defaultMotifsProvider struct{}
-
-func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error) {
+func motifClusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error) {
 	var (
 		out []vocab.MotifCluster
 		err error
@@ -45,7 +38,7 @@ func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstanc
 	return out, err
 }
 
-func (defaultMotifsProvider) Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]vocab.MotifDefinitionStatus, error) {
+func motifDefinitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]vocab.MotifDefinitionStatus, error) {
 	var (
 		out map[string]vocab.MotifDefinitionStatus
 		err error
@@ -59,7 +52,7 @@ func (defaultMotifsProvider) Definitions(ctx context.Context, ri *repos.RepoInst
 	return out, err
 }
 
-func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (vocab.MotifVocabularyHealth, error) {
+func motifVocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (vocab.MotifVocabularyHealth, error) {
 	var (
 		out vocab.MotifVocabularyHealth
 		err error
@@ -73,7 +66,7 @@ func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.Rep
 	return out, err
 }
 
-func (defaultMotifsProvider) AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]vocab.AliasRow, error) {
+func motifAliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]vocab.AliasRow, error) {
 	var (
 		out map[string]vocab.AliasRow
 		err error
@@ -87,7 +80,7 @@ func (defaultMotifsProvider) AliasRows(ctx context.Context, ri *repos.RepoInstan
 	return out, err
 }
 
-func (defaultMotifsProvider) ClusterKey(ctx context.Context, ri *repos.RepoInstance, branch, motif string) (string, error) {
+func motifClusterKey(ctx context.Context, ri *repos.RepoInstance, branch, motif string) (string, error) {
 	var (
 		out string
 		err error
@@ -280,9 +273,9 @@ func renderMotifCollection(
 ) {
 	if q := strings.ToLower(strings.TrimSpace(p.q)); q != "" {
 		// A NEW slice, never clusters[:0]: filtering in place rewrites the
-		// backing array the provider handed over, so a provider that
-		// returns a cached or shared slice would be silently corrupted by
-		// a read request.
+		// backing array the caller handed over, so a caller passing a
+		// cached or shared slice would have it silently corrupted by a
+		// read request.
 		kept := make([]vocab.MotifCluster, 0, len(clusters))
 		for _, c := range clusters {
 			if motifClusterMatches(c, defs[c.ClusterKey].Definition, q) {
@@ -297,7 +290,7 @@ func renderMotifCollection(
 	// re-orders.
 	if p.sort == "name" {
 		// Same reasoning as the narrowing above: sort a copy, never the
-		// provider's own slice.
+		// caller's own slice.
 		sorted := make([]vocab.MotifCluster, len(clusters))
 		copy(sorted, clusters)
 		clusters = sorted
@@ -368,7 +361,7 @@ func renderMotifCollection(
 
 // handleHALMotifs serves GET /repos/{repo}/branches/{branch}/motifs — the
 // per-repo motif vocabulary, one entry per cluster, df-desc by default.
-func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
+func handleHALMotifs(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -380,12 +373,12 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 			return
 		}
 
-		clusters, err := provider.Clusters(r.Context(), ri, branch, p.path)
+		clusters, err := motifClusters(r.Context(), ri, branch, p.path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
-		health, err := provider.VocabularyHealth(r.Context(), ri, branch, p.path)
+		health, err := motifVocabularyHealth(r.Context(), ri, branch, p.path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
@@ -393,7 +386,7 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 
 		// Definitions for every cluster in one bulk read. Fetched before
 		// narrowing because ?q= matches definition text too.
-		defs, err := provider.Definitions(r.Context(), ri, branch, motifClusterKeys(clusters))
+		defs, err := motifDefinitions(r.Context(), ri, branch, motifClusterKeys(clusters))
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
@@ -490,7 +483,7 @@ type motifDetailView struct {
 // through the store's ClusterKey (which degrades to the mechanical key on an
 // unrebuilt corpus — C2), and the self link always carries the cluster_key
 // (C1). 404 only when the resolved key matches no cluster in the vocabulary.
-func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
+func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -506,7 +499,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider) http.Handl
 		// Branch-wide, with no path scope: a cluster is being addressed by
 		// identity here, and its detail is the same detail wherever the reader
 		// happened to be standing when they picked it.
-		clusters, err := provider.Clusters(r.Context(), ri, branch, "")
+		clusters, err := motifClusters(r.Context(), ri, branch, "")
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
@@ -519,7 +512,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider) http.Handl
 		cluster, found := byKey[rawKey]
 		if !found {
 			// Not a cluster key — treat it as a spelling and resolve.
-			key, kerr := provider.ClusterKey(r.Context(), ri, branch, rawKey)
+			key, kerr := motifClusterKey(r.Context(), ri, branch, rawKey)
 			if kerr != nil {
 				writeStoreError(w, r, kerr, "Failed to load motif cluster", branch)
 				return
@@ -532,7 +525,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider) http.Handl
 			return
 		}
 
-		defs, err := provider.Definitions(r.Context(), ri, branch, []string{cluster.ClusterKey})
+		defs, err := motifDefinitions(r.Context(), ri, branch, []string{cluster.ClusterKey})
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
@@ -567,7 +560,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider) http.Handl
 			})
 		}
 
-		aliasRows, err := provider.AliasRows(r.Context(), ri, branch)
+		aliasRows, err := motifAliasRows(r.Context(), ri, branch)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return

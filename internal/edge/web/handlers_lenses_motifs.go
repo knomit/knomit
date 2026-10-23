@@ -92,19 +92,19 @@ func definitionRank(st vocab.MotifDefinitionStatus, ok bool) int {
 // before this shipped.
 func gatherLensMotifs(
 	w http.ResponseWriter, r *http.Request, bind *repos.Binding,
-	provider motifsProvider, targets []federate.Target, withDefs, withHealth bool,
+	targets []federate.Target, withDefs, withHealth bool,
 ) (*federate.MotifUnion, []map[string]vocab.MotifDefinitionStatus, vocab.MotifVocabularyHealth, bool) {
 	var pooled vocab.MotifVocabularyHealth
 	defsByMount := make([]map[string]vocab.MotifDefinitionStatus, len(targets))
 	u := federate.NewMotifUnion()
 	for i, t := range targets {
-		clusters, err := provider.Clusters(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
+		clusters, err := motifClusters(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
 			return nil, nil, pooled, false
 		}
 		if withDefs {
-			defs, err := provider.Definitions(r.Context(), t.RT.RI, t.RT.Branch, motifClusterKeys(clusters))
+			defs, err := motifDefinitions(r.Context(), t.RT.RI, t.RT.Branch, motifClusterKeys(clusters))
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
 				return nil, nil, pooled, false
@@ -112,7 +112,7 @@ func gatherLensMotifs(
 			defsByMount[i] = defs
 		}
 		if withHealth {
-			h, err := provider.VocabularyHealth(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
+			h, err := motifVocabularyHealth(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
 				return nil, nil, pooled, false
@@ -147,14 +147,14 @@ func gatherLensMotifs(
 // On error it writes the problem response and returns ok=false.
 func expandLensMotifs(
 	w http.ResponseWriter, r *http.Request, bind *repos.Binding,
-	provider motifsProvider, terms []string,
+	terms []string,
 ) ([]string, bool) {
-	if len(terms) == 0 || provider == nil {
+	if len(terms) == 0 {
 		return terms, true
 	}
 	read := func(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error) {
 		// Branch-wide: identity is not scoped by where the reader stands.
-		return provider.Clusters(ctx, rt.RI, rt.Branch, "")
+		return motifClusters(ctx, rt.RI, rt.Branch, "")
 	}
 	out, err := federate.ExpandMotifTerms(r.Context(), bind, read, terms)
 	if err != nil {
@@ -188,7 +188,7 @@ func expandLensMotifs(
 // This is the surface the v1 motif work deliberately left out — MotifsBlock's
 // header said "there is no single vocabulary across a lens". There is one now,
 // and this is its definition.
-func handleHALLensMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
+func handleHALLensMotifs(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 		lensName := chi.URLParam(r, "lens")
@@ -214,7 +214,7 @@ func handleHALLensMotifs(b hal.URLBuilder, provider motifsProvider) http.Handler
 			return
 		}
 
-		u, defsByMount, health, ok := gatherLensMotifs(w, r, bind, provider, targets, true, true)
+		u, defsByMount, health, ok := gatherLensMotifs(w, r, bind, targets, true, true)
 		if !ok {
 			return
 		}
@@ -257,7 +257,7 @@ func handleHALLensMotifs(b hal.URLBuilder, provider motifsProvider) http.Handler
 // by IDENTITY here, and its identity is a property of the lens, not of where
 // the reader was standing or which mounts they had selected. The repo detail
 // passes "" for the same reason.
-func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
+func handleHALLensMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 		lensName := chi.URLParam(r, "lens")
@@ -275,7 +275,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider) http.H
 			return
 		}
 
-		u, defsByMount, _, ok := gatherLensMotifs(w, r, bind, provider, targets, true, false)
+		u, defsByMount, _, ok := gatherLensMotifs(w, r, bind, targets, true, false)
 		if !ok {
 			return
 		}
@@ -385,7 +385,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider) http.H
 				if (t.RT.RI == bind.Write()) != pass {
 					continue
 				}
-				rows, err := provider.AliasRows(r.Context(), t.RT.RI, t.RT.Branch)
+				rows, err := motifAliasRows(r.Context(), t.RT.RI, t.RT.Branch)
 				if err != nil {
 					writeStoreError(w, r, err, "Failed to load motif cluster", t.RT.Branch)
 					return

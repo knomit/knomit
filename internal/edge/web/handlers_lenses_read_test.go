@@ -20,7 +20,6 @@ import (
 	"knomit/internal/engine/store"
 
 	"knomit/internal/engine/store/index"
-	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
@@ -113,7 +112,7 @@ func decodeLensSearch(t *testing.T, rec *httptest.ResponseRecorder) lensSearchBo
 // the read mount's copy scores HIGHER (so it ranks first under fusion). The
 // shadowed higher-ranked copy must not appear at all.
 func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "zulu", "alpha") // write=zulu sorts after read=alpha
+	env := searchLens(t, "zulu", "alpha") // write=zulu sorts after read=alpha
 	writeCosFact(t, env.m.Get("zulu"), "kb/x/1.md", "Write copy", 0.5, nil)
 	writeCosFact(t, env.m.Get("alpha"), "kb/x/1.md", "Read copy", 0.99, nil) // higher score, would rank first
 
@@ -145,7 +144,7 @@ func TestLensSearch_DuplicatePathWriteWins(t *testing.T) {
 // would order beta-top(99), beta-second(80), alpha-top(50), putting alpha LAST.
 // This test fails under naive interleaving.
 func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	// Reads() is sorted by repo name → alpha is mount 0, beta is mount 1.
 	writeCosFact(t, env.m.Get("alpha"), "kb/a/0.md", "alpha-top", 0.5, nil) // rank 0, LOW score
 	writeCosFact(t, env.m.Get("beta"), "kb/b/0.md", "beta-top", 0.99, nil)
@@ -170,7 +169,7 @@ func TestLensSearch_RRFNotNaiveInterleave(t *testing.T) {
 // A fact that lives only on a read mount is qualified with kb://<id12>/… and
 // carries that mount's source identity.
 func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	writeCosFact(t, env.m.Get("beta"), "kb/y/2.md", "Read only", 0.9, nil)
 
 	beta := env.m.Get("beta")
@@ -193,7 +192,7 @@ func TestLensSearch_ReadMountQualifiedPath(t *testing.T) {
 // repo=<name> narrows the fan-out to the named mount(s); other mounts' results
 // do not appear.
 func TestLensSearch_RepoFilterNarrows(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	writeCosFact(t, env.m.Get("alpha"), "kb/a/1.md", "Write fact", 0.99, nil)
 	writeCosFact(t, env.m.Get("beta"), "kb/b/2.md", "Read fact", 0.8, nil)
 
@@ -208,7 +207,7 @@ func TestLensSearch_RepoFilterNarrows(t *testing.T) {
 
 // An unknown repo= name is a well-formed request naming a nonexistent mount → 422.
 func TestLensSearch_UnknownRepoFilter422(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 
 	rec := env.get(t, "/lenses/eng/search?q=x&repo=ghost")
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -261,7 +260,7 @@ func TestLensSearch_EmbedderOffFallback(t *testing.T) {
 
 // An empty union (no mount returns results) yields results:[] and total:0, never null.
 func TestLensSearch_EmptyMounts(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 
 	rec := env.get(t, "/lenses/eng/search?q=x")
 	body := decodeLensSearch(t, rec)
@@ -692,7 +691,7 @@ func TestLensFanoutDepth_OverflowingOffsetStillClamps(t *testing.T) {
 // mount (a fact sharing two stemmed tokens with the query but not its spelling),
 // so a mount that was not handed the tier answers differently from one that was.
 func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	spell := func(m string) func(*knomitfact.Fact) { return func(f *knomitfact.Fact) { f.Motifs = []string{m} } }
 	writeCosFact(t, env.m.Get("alpha"), "kb/a1.md", "alpha exact", 0.9, spell("silent-fallback-path"))
 	writeCosFact(t, env.m.Get("alpha"), "kb/a2.md", "alpha near", 0.9, spell("silent-fallback-retry"))
@@ -719,7 +718,7 @@ func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
 }
 
 func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	reads := countMountReads(t, env.m, []string{"alpha", "beta"}, "Search")
 
 	rec := env.get(t, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-1")
@@ -739,7 +738,7 @@ func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
 }
 
 func TestLensSearch_MotifsOnTheWire(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha")
+	env := searchLens(t, "alpha")
 	writeCosFact(t, env.m.Get("alpha"), "kb/a.md", "Carries a motif", 0.9, func(f *knomitfact.Fact) { f.Motifs = []string{"a-b"} })
 	writeCosFact(t, env.m.Get("alpha"), "kb/b.md", "Carries none", 0.8, nil)
 
@@ -764,35 +763,13 @@ func TestLensSearch_MotifsOnTheWire(t *testing.T) {
 	}
 }
 
-// divergentVocabulariesUnion is the motif VOCABULARY behind the same asymmetry:
-// alpha's judge merge produced one cluster holding both spellings; beta filed
-// its lone spelling as a singleton. The two share the spelling
-// `configuration-drifts`, so the lens union merges them into one shape.
-//
-// Supplying this is what makes the tests below test anything. Without a motifs
-// provider the union is empty, every term falls through unwidened, and the
-// assertions pass by describing a code path that never ran.
-func divergentVocabulariesUnion() *lensMotifsStub {
-	return &lensMotifsStub{clusters: map[string][]vocab.MotifCluster{
-		"alpha": {{ClusterKey: "config-drift", CanonicalID: "config-drift",
-			Members: []string{"config-drift", "configuration-drifts"}, DF: 1, DFTotal: 1}},
-		"beta": {{ClusterKey: "configuration-drifts", CanonicalID: "configuration-drifts",
-			Members: []string{"configuration-drifts"}, DF: 1, DFTotal: 1}},
-	}}
-}
-
-// The /search twin of the inversion above — the same rule, the other envelope.
-// The mounts are real stores holding the same facts as divergentVocabularies;
-// only the lens-wide vocabulary (the motifs provider) is still supplied. Each
-// store matches the spellings it is handed, so what the lens widens the query
-// to decides who answers.
+// The /search twin of the inversion in TestLensFacts_AMergeOnAnyMountBindsTheWholeLens
+// — the same rule, the other envelope, over the same real stores and
+// vocabularies (seedDivergentVocabularies). Each store matches the spellings it
+// is handed, so what the lens widens the query to decides who answers.
 func TestLensSearch_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
-	env := searchLens(t, storeProviders{motifs: divergentVocabulariesUnion()}, "alpha", "beta")
-	motifs := func(m ...string) func(*knomitfact.Fact) { return func(f *knomitfact.Fact) { f.Motifs = m } }
-	writeCosFact(t, env.m.Get("alpha"), "kb/alpha-aliased.md", "Alpha aliased", 0.9, motifs("configuration-drifts"))
-	writeCosFact(t, env.m.Get("beta"), "kb/beta-exact.md", "Beta exact", 0.8, motifs("config-drift"))
-	writeCosFact(t, env.m.Get("beta"), "kb/beta-aliased.md", "Beta aliased", 0.7, motifs("configuration-drifts"))
-	writeCosFact(t, env.m.Get("beta"), "kb/beta-other.md", "Beta other", 0.7, motifs("something-else"))
+	env := searchLens(t, "alpha", "beta")
+	seedDivergentVocabularies(t, env.m)
 
 	rec := env.get(t, "/lenses/eng/search?q=x&motifs=config-drift")
 	if rec.Code != http.StatusOK {
@@ -810,8 +787,8 @@ func TestLensSearch_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
 	for _, res := range body.Results {
 		titles[res.Title] = true
 	}
-	if !titles["Alpha aliased"] {
-		t.Errorf("the merging mount's aliased fact is missing: %v", titles)
+	if !titles["Alpha aliased"] || !titles["Alpha exact"] {
+		t.Errorf("the merging mount's carriers are missing: %v", titles)
 	}
 	if !titles["Beta aliased"] {
 		t.Errorf("the non-merging mount did not answer for the merged shape: %v", titles)

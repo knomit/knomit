@@ -126,7 +126,7 @@ func TestLensFacts_EmbedsQueryOncePerRequest_AndNotAtAllWithoutText(t *testing.T
 		{"no text", "/lenses/eng/facts", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env := searchLens(t, storeProviders{}, "alpha", "beta", "gamma")
+			env := searchLens(t, "alpha", "beta", "gamma")
 			for _, n := range []string{"alpha", "beta", "gamma"} {
 				writeCosFact(t, env.m.Get(n), "kb/"+n+".md", n+" fact", 0.9, nil)
 			}

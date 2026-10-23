@@ -150,7 +150,7 @@ func lensQueryVec(ctx context.Context, emb model.Embedder, text string) ([]float
 // federate.ReadTargetsFor, fetch each mount's RecentFacts at its pinned branch,
 // dedupe by repo-relative path (the write mount's copy wins), merge by
 // committed_at across mounts, and qualify read-mount paths (kb://<id12>/…).
-func handleHALLensFacts(motifsP motifsProvider, emb model.Embedder) http.HandlerFunc {
+func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -217,7 +217,7 @@ func handleHALLensFacts(motifsP motifsProvider, emb model.Embedder) http.Handler
 		// tiers resolve a term through ONE branch's alias table, so a mount that
 		// spells the shape differently would contribute nothing to a filter the
 		// lens's own vocabulary counted — see expandLensMotifs.
-		motifs, ok = expandLensMotifs(w, r, b, motifsP, motifs)
+		motifs, ok = expandLensMotifs(w, r, b, motifs)
 		if !ok {
 			return
 		}
@@ -813,7 +813,7 @@ func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float6
 // the facts collection dedupes. A shadowed copy is dropped even when it ranks
 // higher in the fused order than the winner. Read-mount paths are qualified
 // (kb://<id12>/…); each row carries its source {repo,id,branch}.
-func handleHALLensSearch(emb model.Embedder, motifsP motifsProvider) http.HandlerFunc {
+func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -857,7 +857,7 @@ func handleHALLensSearch(emb model.Embedder, motifsP motifsProvider) http.Handle
 		// tiers resolve a term through ONE branch's alias table, so a mount that
 		// spells the shape differently would contribute nothing to a filter the
 		// lens's own vocabulary counted — see expandLensMotifs.
-		motifs, ok = expandLensMotifs(w, r, b, motifsP, motifs)
+		motifs, ok = expandLensMotifs(w, r, b, motifs)
 		if !ok {
 			return
 		}
