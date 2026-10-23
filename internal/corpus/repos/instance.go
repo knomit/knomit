@@ -174,7 +174,7 @@ type RepoInstance struct {
 	// branch. Built once and never reassigned, like triggers; it runs under
 	// the Serve stage's life.
 	consensus *consensusMerger
-	// peers is the fleet master's fetch-time judge state (fleet_master.go),
+	// peers is the fleet master's fetch-time judge state (fleet_peers.go),
 	// built beside consensus and nil where it is; it acts only on the fleet
 	// repository, at its master, in the origin round.
 	peers *fleetPeers

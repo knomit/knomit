@@ -96,8 +96,9 @@ func seedFleetRemoteOn(t *testing.T, bare, branch string) string {
 // member records (and this instance's own keys, E4) at trunk: the recorded
 // consensus branch, not a branch called main.
 //
-// SABOTAGE: restore `upstream := "main"` in fleetMembersAtMain → FleetMembers
-// errors/reads nothing → red. In ownFleetKeys → no keys → red.
+// SABOTAGE: restore `upstream := "main"` in fleetAtMain (fleet.go; the live
+// reader behind FleetMembers) → FleetMembers errors/reads nothing → red. In
+// ownFleetKeys → no keys → red.
 func TestFleet_TrunkWithoutOriginReadsTheRecordedBranch(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

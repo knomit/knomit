@@ -48,9 +48,11 @@ func activeRecordFile(t *testing.T, id string, pub ed25519.PublicKey) []byte {
 // they say revoked for this instance only, while the record on main still
 // says active (nothing wrote the word).
 //
-// SABOTAGE: drop the Revoked derivation in fleetMembersAtMain → both reads
-// stay active → red; make FleetPKI.Revoked ignore the CRL (return true for any
-// chaining leaf) → "other" reads revoked → red.
+// SABOTAGE: drop the deriveRevoked(f) call in FleetMembers (fleet.go) → the
+// members read stays active → red; pass false for the f.PKI.Revoked argument of
+// recordStateOf in FleetStatus (fleet.go) → the status read stays active → red;
+// make FleetPKI.Revoked ignore the CRL (return true for any chaining leaf) →
+// "other" reads revoked → red.
 func TestFleet_RevokedIsDerivedFromTheCRLAtMain(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

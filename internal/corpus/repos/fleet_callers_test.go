@@ -17,7 +17,7 @@ import (
 // write path.
 func TestFleetRecordWriters_OnlyFleetCallers(t *testing.T) {
 	writers := map[string]bool{"writeRecord": true, "writeOwnRecord": true, "refreshOwnRecord": true, "fleetBootReconcile": true, "startFleetBootReconcile": true}
-	allowed := map[string]bool{"fleet.go": true, "fleet_create.go": true, "fleet_membership.go": true, "fleet_reconcile.go": true, "manager.go": true}
+	allowed := map[string]bool{"fleet.go": true, "fleet_create.go": true, "fleet_join.go": true, "fleet_leave.go": true, "fleet_reconcile.go": true, "manager.go": true}
 	// WALKED, not globbed: a writer call in a child package of internal/corpus/repos
 	// would otherwise be invisible. Keys are slash paths relative to this
 	// directory, so `allowed` names only the top-level files and a child's file
@@ -63,7 +63,7 @@ func TestFleetRecordWriters_OnlyFleetCallers(t *testing.T) {
 	sort.Strings(sites)
 	// The exact call sites: a new one (a second automatic writer) must be a
 	// deliberate edit here. manager.go's one call is Start's.
-	want := "fleet.go:writeRecord fleet_create.go:writeOwnRecord fleet_membership.go:writeOwnRecord fleet_membership.go:writeOwnRecord " +
+	want := "fleet.go:writeRecord fleet_create.go:writeOwnRecord fleet_join.go:writeOwnRecord fleet_leave.go:writeOwnRecord " +
 		"fleet_reconcile.go:fleetBootReconcile fleet_reconcile.go:refreshOwnRecord fleet_reconcile.go:writeRecord manager.go:startFleetBootReconcile"
 	if got := strings.Join(sites, " "); got != want {
 		t.Fatalf("member record write call sites changed:\n got %s\nwant %s", got, want)

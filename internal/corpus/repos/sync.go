@@ -268,7 +268,7 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // string, because `repo` below is fixed when the loop starts and a rename
 // does not restart it; `repo` labels this loop's logs and hooks only.
 //
-// peers (nil-safe) is the fleet master's share of the round (fleet_master.go):
+// peers (nil-safe) is the fleet master's share of the round (fleet_peers.go):
 // on a round where this instance is the fleet repository's master, the fetch
 // also brings every agent/* branch, each fetched member tip is judged and an
 // admitted one becomes a local branch the consensus merger merges, and after

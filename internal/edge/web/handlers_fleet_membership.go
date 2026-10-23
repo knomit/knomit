@@ -9,8 +9,8 @@ import (
 	"knomit/internal/foundation/pki"
 )
 
-// The fleet membership routes (repos.Manager's fleet_membership.go). Every
-// one is mounted behind RequireLocalVia (router): it uses the fleet root key,
+// The fleet membership routes (repos.Manager's fleet_enroll.go, fleet_join.go,
+// fleet_leave.go, fleet_revoke.go and fleet_root.go). Every one is mounted behind RequireLocalVia (router): it uses the fleet root key,
 // or installs or removes this instance's trust material.
 
 // handleEnrollFleet: POST /api/v1/fleet/enroll {agent_id, public_key,

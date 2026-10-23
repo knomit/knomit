@@ -33,7 +33,8 @@ func TestFleetStateWriters_OnlyFleetCallers(t *testing.T) {
 	const declFile = "fleet_identity.go"
 	allowed := map[string]bool{
 		"fleet.go": true, "fleet_create.go": true, "fleet_identity.go": true,
-		"fleet_master.go": true, "fleet_membership.go": true, "fleet_refusal.go": true,
+		"fleet_join.go": true, "fleet_leave.go": true, "fleet_master.go": true, "fleet_move.go": true,
+		"fleet_refusal.go": true,
 	}
 	var sites []string
 	declared := map[string]string{}
@@ -115,10 +116,10 @@ func TestFleetStateWriters_OnlyFleetCallers(t *testing.T) {
 		"fleet_create.go:finishFleetCreate fleet_create.go:finishFleetCreate fleet_create.go:recordFleetAttempt " +
 		"fleet_create.go:recordFleetAttempt fleet_create.go:recordFleetAttempt fleet_create.go:recordFleetRepo " +
 		"fleet_create.go:setFleetCreateRoot fleet_create.go:setFleetState fleet_create.go:writeFleetCreateMarker " +
-		"fleet_identity.go:setFleetState fleet_master.go:recordFleetAttempt fleet_master.go:recordFleetAttempt " +
-		"fleet_membership.go:recordFleetAttempt fleet_membership.go:recordFleetAttempt fleet_membership.go:recordFleetAttempt " +
-		"fleet_membership.go:recordFleetRepo fleet_membership.go:setFleetState fleet_membership.go:setFleetState " +
-		"fleet_membership.go:setFleetState fleet_refusal.go:recordFleetAttempt"
+		"fleet_identity.go:setFleetState fleet_join.go:recordFleetAttempt fleet_join.go:recordFleetAttempt " +
+		"fleet_join.go:recordFleetRepo fleet_join.go:setFleetState fleet_leave.go:setFleetState fleet_leave.go:setFleetState " +
+		"fleet_master.go:recordFleetAttempt fleet_master.go:recordFleetAttempt fleet_move.go:recordFleetAttempt " +
+		"fleet_refusal.go:recordFleetAttempt"
 	if got := strings.Join(sites, " "); got != want {
 		t.Fatalf("fleet-state writer call sites changed:\n got %s\nwant %s", got, want)
 	}

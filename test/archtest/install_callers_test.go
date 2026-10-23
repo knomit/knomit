@@ -26,7 +26,7 @@ import (
 //   - internal/corpus/repos/fleet_create.go, the fleet create. It installs this
 //     instance's OWN leaf, which it has just issued from the fresh root it
 //     minted, so the material never comes from a request;
-//   - internal/corpus/repos/fleet_membership.go, the fleet join. It installs the
+//   - internal/corpus/repos/fleet_join.go, the fleet join. It installs the
 //     bundle the operator brought from the master's enroll, after checking
 //     it is for THIS instance's key and agent id, and only on an instance
 //     with no trust material installed; a refused join uninstalls it.
@@ -39,7 +39,7 @@ import (
 // production code, route or not, that starts calling install.
 var installCallers = []string{
 	"internal/corpus/repos/fleet_create.go",
-	"internal/corpus/repos/fleet_membership.go",
+	"internal/corpus/repos/fleet_join.go",
 }
 
 // installCRLCallers are the ONLY production files that may call
@@ -47,7 +47,7 @@ var installCallers = []string{
 // material like InstallBundle and must never be reachable over a network
 // route. The callers are:
 //
-//   - internal/corpus/repos/fleet_membership.go, the master's revoke (POST
+//   - internal/corpus/repos/fleet_revoke.go, the master's revoke (POST
 //     /api/v1/fleet/revoke, behind RequireLocalVia, and the master's leave
 //     duty), which installs the CRL it just signed under its own installed
 //     root;
@@ -58,7 +58,7 @@ var installCallers = []string{
 //     it runs in the sync rounds, from what the master published to main,
 //     which the master's own judge held before it moved.
 var installCRLCallers = []string{
-	"internal/corpus/repos/fleet_membership.go",
+	"internal/corpus/repos/fleet_revoke.go",
 	"internal/corpus/repos/fleet_tick.go",
 }
 

@@ -2282,7 +2282,7 @@ func (m *Manager) RenameLens(oldName, newName string) error {
 // fleetCloneOptions is the fleet door's clone rule (R-visibility, PR #524
 // S2): a create through the fleet door fetches the remote's branches but
 // never another instance's agent/* branch, from its first fetch on. Only the
-// master ever fetches those, judged, on its rounds (fleet_master.go).
+// master ever fetches those, judged, on its rounds (fleet_peers.go).
 func fleetCloneOptions(spec CreateSpec) []remotesync.InitOption {
 	if spec.fleetDoor {
 		return []remotesync.InitOption{remotesync.OwnBranchesOnly()}

@@ -6,7 +6,11 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
+	"time"
 
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store/fleetrec"
 
 	"github.com/rs/zerolog/log"
@@ -182,4 +186,151 @@ func (ri *RepoInstance) fleetMasterDuty(ctx context.Context, svc *store.Service)
 	defer m.fleetOpMu.Unlock()
 	ri.fleetLeaveRound(ctx, svc)
 	ri.fleetRenewRound(ctx, svc) // fleet_renew.go
+}
+
+// FleetLeft is what POST /fleet/leave answers: the state after the leave,
+// and whether the `left` record reached the fleet.
+type FleetLeft struct {
+	FleetStatus
+	Pushed    bool   `json:"pushed"`
+	PushError string `json:"push_error,omitempty"`
+}
+
+// LeaveFleet leaves the fleet (member): `left` on the agent branch, ONE push
+// attempt, then the fleet is removed here whatever the push did: the
+// repository (dropped from every lens first), the installed material, state
+// standalone. The master is refused: it decommissions, or hands the root on
+// and stands down first.
+func (m *Manager) LeaveFleet(ctx context.Context) (FleetLeft, error) {
+	defer m.lockFleetOp()()
+	row, err := m.fleetDB()
+	if err != nil {
+		return FleetLeft{}, err
+	}
+	ri := m.fleetRepo()
+	if ri == nil && row.State == FleetStandalone {
+		return FleetLeft{}, fleetErr(http.StatusConflict, "not_registered", "this instance is standalone")
+	}
+	var out FleetLeft
+	if ri != nil {
+		holds := false
+		if err := ri.WithRead(func(svc *store.Service) { holds = ri.fleetDoor && ri.IsFleet() && m.holdsFleetRoot(svc) }); err != nil {
+			return FleetLeft{}, err
+		}
+		if holds {
+			return FleetLeft{}, fleetErr(http.StatusConflict, "is_master", "this instance holds the fleet's root key: decommission the fleet (Fleet → Settings → Decommission), or first hand the root key to another member (Fleet → Settings → Export root key here, Import root key there) and stand down (Fleet → Settings → Stand down)")
+		}
+		if err := m.writeOwnRecord(ctx, ri, fact.MemberLeft); err != nil {
+			out.PushError = "the left record was not written: " + err.Error()
+		} else if err := m.pushAgentBranch(ctx, ri); err != nil {
+			out.PushError = err.Error()
+		} else {
+			out.Pushed = true
+		}
+		if err := m.removeFleetHere(ri, "fleet left"); err != nil {
+			return FleetLeft{}, err
+		}
+	}
+	if err := pki.Uninstall(m.deps.Cfg.TLS.Dir); err != nil {
+		return FleetLeft{}, fmt.Errorf("fleet leave: the repository is removed, uninstalling the certificate failed: %w", err)
+	}
+	if err := setFleetState(m.ControlDB(), FleetStandalone, time.Now()); err != nil {
+		return FleetLeft{}, err
+	}
+	log.Info().Bool("pushed", out.Pushed).Msg("fleet: left; the master revokes the leaf once the left record is on main (by hand when it was not pushed)")
+	out.FleetStatus, err = m.FleetStatus(ctx)
+	return out, err
+}
+
+// removeFleetHere deletes the fleet repository here after dropping it from
+// every lens that reads it (a lens may hold it as a read mount only).
+func (m *Manager) removeFleetHere(ri *RepoInstance, reason string) error {
+	if err := m.dropFromLenses(ri.UID()); err != nil {
+		return err
+	}
+	return m.deleteRepo(ri.Name(), reason)
+}
+
+// dropFromLenses removes the read mount of repo uid from every lens. Under
+// m.mu, as UpdateLens persists.
+func (m *Manager) dropFromLenses(uid string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.registry == nil {
+		return nil
+	}
+	names, err := m.registry.RefsRepo(uid)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		l, ok, err := m.registry.Get(name)
+		if err != nil {
+			return err
+		}
+		if !ok || l.WriteUID == uid {
+			continue
+		}
+		reads := make([]control.LensRead, 0, len(l.Reads))
+		for _, r := range l.Reads {
+			if r.RepoUID != uid {
+				reads = append(reads, r)
+			}
+		}
+		l.Reads, l.UpdatedAt = reads, time.Now().Unix()
+		if _, err := m.registry.Update(l); err != nil {
+			return fmt.Errorf("drop the fleet repository from lens %q: %w", name, err)
+		}
+		log.Info().Str("lens", name).Msg("fleet: the fleet repository is dropped from the lens")
+	}
+	return nil
+}
+
+// DecommissionFleet ends the fleet (master only): the fleet repository here
+// (dropped from every lens first; a forge keeps its copy, inert), the
+// installed material and <home>/fleet, root key included. State standalone.
+// Members' syncs then fail, and each leaves (which works offline). On a
+// forge it first flushes (flushBeforeSwitch: 409 unpublished_changes while
+// main lacks a commit of this branch), since another root holder can take
+// the fleet over from main.
+func (m *Manager) DecommissionFleet(ctx context.Context) (FleetStatus, error) {
+	defer m.lockFleetOp()()
+	ri, err := m.masterFleet()
+	if err != nil {
+		return FleetStatus{}, err
+	}
+	// On a forge the fleet repository lives on: its main must stop naming
+	// this instance, so another holder of the root key can claim the role
+	// (user ruling 2026-10-16). On the hub the repository goes with it.
+	if o, oerr := m.originOf(ri); oerr != nil {
+		return FleetStatus{}, oerr
+	} else if o != nil {
+		// A hand-off like a stand-down: flush first (flushBeforeSwitch), or
+		// a revoke this branch holds and main lacks is deleted with the
+		// repository below and the next master never sees it (PR #537
+		// re-review 2). Under fleetOpMu only, unlike StandDown: holding the
+		// merger's run lock across the removal below (removeFleetHere archives
+		// and purges the repository, stopping its loops) hung until the test
+		// timed out.
+		if err := m.flushBeforeSwitch(ctx, ri); err != nil {
+			return FleetStatus{}, err
+		}
+		if err := m.deleteFleetMaster(ctx, ri); err != nil {
+			return FleetStatus{}, fleetErr(http.StatusConflict, "decommission_unpublished", "the commit that removes this instance as the acting master did not reach the forge's main ("+credentialFreeErr(err).Error()+"): nothing is decommissioned. Try again")
+		}
+	}
+	if err := m.removeFleetHere(ri, "fleet decommissioned"); err != nil {
+		return FleetStatus{}, err
+	}
+	if err := pki.Uninstall(m.deps.Cfg.TLS.Dir); err != nil {
+		return FleetStatus{}, fmt.Errorf("fleet decommission: the repository is removed, uninstalling the certificate failed: %w", err)
+	}
+	if err := os.RemoveAll(m.fleetRootDir()); err != nil {
+		return FleetStatus{}, fmt.Errorf("fleet decommission: the repository is removed, deleting %s failed: %w", m.fleetRootDir(), err)
+	}
+	if err := setFleetState(m.ControlDB(), FleetStandalone, time.Now()); err != nil {
+		return FleetStatus{}, err
+	}
+	log.Info().Msg("fleet: decommissioned; the root key is deleted")
+	return m.FleetStatus(ctx)
 }
