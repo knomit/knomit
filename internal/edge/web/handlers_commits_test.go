@@ -46,7 +46,8 @@ type commitsFixture struct {
 	// c4: elsewhere adds kb/b.md "B one" (learn).
 	// c5: elsewhere updates kb/b.md to "B two" (update).
 	// c6: elsewhere deletes kb/b.md.
-	// c7: elsewhere adds kb/c.md "C one" AND notes/out.md, one commit (learn).
+	// c7: elsewhere adds kb/c.md "C one", kb/d.md "D one" AND notes/out.md,
+	//     one commit (learn).
 	// c8: elsewhere adds only notes/only.md, outside the ontology root.
 	c1, c2, c3, c4, c5, c6, c7, c8 string
 }
@@ -56,6 +57,20 @@ func commitsFactText(title string) string {
 }
 
 func newCommitsFixture(t *testing.T) *commitsFixture {
+	t.Helper()
+	return buildCommitsFixture(t, false)
+}
+
+// newSpacedCommitsFixture is newCommitsFixture whose c5, c6 and c7 are each
+// stamped in a later second than the one before, so the three carry distinct
+// dates (committed_at has one-second resolution). It costs two seconds, so
+// only the test that pins dates uses it.
+func newSpacedCommitsFixture(t *testing.T) *commitsFixture {
+	t.Helper()
+	return buildCommitsFixture(t, true)
+}
+
+func buildCommitsFixture(t *testing.T, spaced bool) *commitsFixture {
 	t.Helper()
 	ctx := context.Background()
 	m, svcs := newRealStoreManager(t, "alpha")
@@ -77,11 +92,18 @@ func newCommitsFixture(t *testing.T) *commitsFixture {
 	f.c3 = write(commitsOtherBranch, "kb/a.md", "A elsewhere two", "elsewhere edits a", "update")
 	f.c4 = write(commitsOtherBranch, "kb/b.md", "B one", "add b", "learn")
 	f.c5 = write(commitsOtherBranch, "kb/b.md", "B two", "edit b", "update")
+	if spaced {
+		awaitNextSecond()
+	}
 	c6, err := svc.Facts().DeleteFact(ctx, commitsOtherBranch, "kb/b.md", "delete b")
 	require.NoError(t, err)
 	f.c6 = c6
+	if spaced {
+		awaitNextSecond()
+	}
 	c7, _, err := svc.Facts().BatchWriteFacts(ctx, commitsOtherBranch, map[string]string{
 		"kb/c.md":      commitsFactText("C one"),
+		"kb/d.md":      commitsFactText("D one"),
 		"notes/out.md": commitsFactText("Out of root"),
 	}, nil, "add c and a note", "learn")
 	require.NoError(t, err)
@@ -129,7 +151,7 @@ func (b commitsListBody) hashes() []string {
 // Sabotage: list the agent branch (c2 appears, c3..c7 vanish), drop the
 // ontology root (c8 appears), reverse the items, or swap next and prev.
 func TestHandleCommitsList_ReturnsTheRequestedBranchUnderTheRoot(t *testing.T) {
-	f := newCommitsFixture(t)
+	f := newSpacedCommitsFixture(t)
 	base := APIBase + "/repos/alpha/branches/" + commitsOtherURL + "/commits"
 
 	body := getCommitsList(t, f.s, "/repos/alpha/branches/"+commitsOtherURL+"/commits?limit=3")
@@ -144,7 +166,7 @@ func TestHandleCommitsList_ReturnsTheRequestedBranchUnderTheRoot(t *testing.T) {
 	c7 := body.Embedded.Commits[0]
 	require.Equal(t, "add c and a note", c7.Message)
 	require.Equal(t, "learn", c7.Operation)
-	require.Equal(t, index.FileCounts{Added: 2}, c7.Files, "counts are per commit, the note included")
+	require.Equal(t, index.FileCounts{Added: 3}, c7.Files, "counts are per commit, the note included")
 	require.Equal(t, base+"/"+f.c7, c7.Links["self"].Href)
 	requireRFC3339Date(t, c7.Date, "commit list item")
 	// The store names a commit's author by the branch that wrote it and the
@@ -155,6 +177,18 @@ func TestHandleCommitsList_ReturnsTheRequestedBranchUnderTheRoot(t *testing.T) {
 	require.Equal(t, index.FileCounts{Deleted: 1}, body.Embedded.Commits[1].Files)
 	require.Equal(t, index.FileCounts{Modified: 1}, body.Embedded.Commits[2].Files)
 	require.Equal(t, "update", body.Embedded.Commits[2].Operation)
+
+	// c5, c6 and c7 were stamped in three different seconds, so each item
+	// carries its own date, newest first, and the detail serves the same date
+	// for the same commit. Sabotage: take every item's date from one entry,
+	// or the detail's date from anywhere but its commit.
+	d7, d6, d5 := c7.Date, body.Embedded.Commits[1].Date, body.Embedded.Commits[2].Date
+	requireRFC3339Date(t, d6, "commit list item")
+	requireRFC3339Date(t, d5, "commit list item")
+	require.Greater(t, d7, d6, "c7 is stamped after c6")
+	require.Greater(t, d6, d5, "c6 is stamped after c5")
+	require.Equal(t, d7, getCommitDetail(t, f.s, commitsOtherURL, f.c7).Date)
+	require.Equal(t, d5, getCommitDetail(t, f.s, commitsOtherURL, f.c5).Date)
 
 	// Page two follows the next cursor and ends the log: c1 is shared with
 	// the agent branch (written before the fork), c2 is not.
@@ -282,16 +316,26 @@ func TestHandleCommitDetail_DeletedFileTakesItsTitleBeforeTheCommit(t *testing.T
 	require.Equal(t, "B two", body.Files[0].Title)
 }
 
-// Only files under the ontology root are listed: c7 also wrote notes/out.md.
-// Sabotage: pass no root (two files).
+// Only files under the ontology root are listed (c7 also wrote notes/out.md),
+// in path order, and each file carries ITS OWN title and link: c7 has two
+// files under the root with different titles. Sabotage: pass no root (three
+// files), reverse the files, or resolve every title from the first file.
 func TestHandleCommitDetail_ListsOnlyFilesUnderTheRoot(t *testing.T) {
 	f := newCommitsFixture(t)
 
+	branchURL := APIBase + "/repos/alpha/branches/" + commitsOtherURL
 	body := getCommitDetail(t, f.s, commitsOtherURL, f.c7)
-	require.Len(t, body.Files, 1, "%+v", body.Files)
-	require.Equal(t, "kb/c.md", body.Files[0].Path)
-	require.Equal(t, "added", body.Files[0].Action)
-	require.Equal(t, "C one", body.Files[0].Title)
+	require.Len(t, body.Files, 2, "%+v", body.Files)
+	for i, want := range []struct{ path, title string }{
+		{"kb/c.md", "C one"},
+		{"kb/d.md", "D one"},
+	} {
+		got := body.Files[i]
+		require.Equal(t, want.path, got.Path, "file %d", i)
+		require.Equal(t, "added", got.Action, "file %d", i)
+		require.Equal(t, want.title, got.Title, "file %d", i)
+		require.Equal(t, branchURL+"/facts/"+want.path, got.Links["self"].Href, "file %d", i)
+	}
 }
 
 // An unknown commit is a 404 problem carrying the store's reason.
