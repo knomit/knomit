@@ -81,8 +81,8 @@ func (v FactView) MarshalJSON() ([]byte, error) {
 
 // BuildFactView serializes a knomitfact.Fact into a HAL FactView for the
 // given anchor. The repo name and URLBuilder give it the absolute URLs;
-// the resolver is used for each fact-path ref to decide `kind` and
-// target-link presence.
+// resolver, which the handler built with the same anchor, is asked about each
+// fact-path ref to decide `kind` and target-link presence.
 //
 // headCommit is the resolved HEAD sha of the branch, used for the `snapshot`
 // link on HEAD views and for the `as_of.commit` stamp. It is independent of
@@ -96,7 +96,7 @@ func BuildFactView(
 	a hal.Anchor,
 	headCommit string,
 	f knomitfact.Fact,
-	resolver RefResolver,
+	resolver readerRefResolver,
 	localRepoID string,
 ) FactView {
 	asOfCommit := a.Commit

@@ -18,7 +18,8 @@ func makeTestFact() knomitfact.Fact {
 	f.Type = knomitfact.Type("observation")
 	f.Domain = []string{"ai", "ml"}
 	f.Entities = []string{"transformer"}
-	f.Refs = []string{"know/ai/ml/xyz99999.md", "https://arxiv.org/abs/1706.03762"}
+	// kb/shared.md exists on newRefResolverFixture's branches.
+	f.Refs = []string{"kb/shared.md", "https://arxiv.org/abs/1706.03762"}
 	f.Confidence = 0.92
 	f.Sources = 3
 	return f
@@ -27,7 +28,7 @@ func makeTestFact() knomitfact.Fact {
 func TestFactView_Origin_SerializesNonDefaultAndElidesAuthored(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
-	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+	resolver := newRefResolverFixture(t).head
 
 	// Non-default origin is serialized.
 	f := makeTestFact()
@@ -51,7 +52,7 @@ func TestFactView_HEAD_RequiredLinks(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"} // HEAD: empty Commit
 	headCommit := "7f3a8b2c"
-	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+	resolver := newRefResolverFixture(t).head
 
 	view := BuildFactView(b, "alpha", a, headCommit, makeTestFact(), resolver, testLocalRepoID)
 	raw, err := json.Marshal(view)
@@ -76,7 +77,7 @@ func TestFactView_HEAD_RequiredLinks(t *testing.T) {
 func TestFactView_CommitAnchored_HasIncomingLiveNoSnapshot(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
-	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+	resolver := newRefResolverFixture(t).head
 
 	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver, testLocalRepoID)
 	raw, err := json.Marshal(view)
@@ -102,7 +103,7 @@ func TestFactView_CommitAnchored_HasIncomingLiveNoSnapshot(t *testing.T) {
 func TestFactView_RefsAreStructured_AnchorPropagates(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
-	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+	resolver := newRefResolverFixture(t).head
 
 	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver, testLocalRepoID)
 	if len(view.Refs) != 2 {
@@ -112,7 +113,7 @@ func TestFactView_RefsAreStructured_AnchorPropagates(t *testing.T) {
 		t.Errorf("ref 0 kind: %q", view.Refs[0].Kind)
 	}
 	target := view.Refs[0].Links["target"].Href
-	if !strings.Contains(target, "/commits/abc12399999999999999999999999999999999/facts/know/ai/ml/xyz99999.md") {
+	if !strings.Contains(target, "/commits/abc12399999999999999999999999999999999/facts/kb/shared.md") {
 		t.Errorf("ref 0 target must carry commit anchor: %q", target)
 	}
 	if view.Refs[1].Kind != "url" {
@@ -126,7 +127,7 @@ func TestFactView_RefsAreStructured_AnchorPropagates(t *testing.T) {
 func TestFactView_AsOf_HEADUsesHeadCommit(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
-	resolver := &stubRefResolver{}
+	resolver := newRefResolverFixture(t).head
 
 	view := BuildFactView(b, "alpha", a, "7f3a8b2c", makeTestFact(), resolver, testLocalRepoID)
 	if view.AsOf.Branch != "agent/test" || view.AsOf.Commit != "7f3a8b2c" {
@@ -137,7 +138,7 @@ func TestFactView_AsOf_HEADUsesHeadCommit(t *testing.T) {
 func TestFactView_AsOf_CommitAnchoredUsesAnchorCommit(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc123"}
-	resolver := &stubRefResolver{}
+	resolver := newRefResolverFixture(t).head
 
 	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver, testLocalRepoID)
 	if view.AsOf.Branch != "agent/test" || view.AsOf.Commit != "abc123" {
@@ -150,7 +151,7 @@ func TestFactView_AsOf_CommitAnchoredUsesAnchorCommit(t *testing.T) {
 func TestFactView_Kind_PragmaticSerializes(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
-	resolver := &stubRefResolver{}
+	resolver := newRefResolverFixture(t).head
 
 	f := knomitfact.NewFact("know/ops/abc12345.md")
 	f.Title = "Always pin container images"
@@ -178,7 +179,7 @@ func TestFactView_Kind_PragmaticSerializes(t *testing.T) {
 func TestFactView_Kind_EpistemicOmitted(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
-	resolver := &stubRefResolver{}
+	resolver := newRefResolverFixture(t).head
 
 	// Explicit epistemic — should still elide on the wire.
 	f := makeTestFact()
@@ -220,7 +221,7 @@ func TestBuildFactLinks_CommitAnchoredHasIncoming(t *testing.T) {
 func TestFactView_Motifs_SerializedWhenPresentAndOmittedWhenEmpty(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
-	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+	resolver := newRefResolverFixture(t).head
 
 	// Two distinct motifs, in the order the fact declares them: a view that
 	// dropped one, or reordered them, fails here rather than in a UI that would

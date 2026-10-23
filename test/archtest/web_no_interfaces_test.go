@@ -25,7 +25,6 @@ const webPkg = "knomit/internal/edge/web"
 var webInterfaceAllowlist = map[string]string{
 	"FactWriter":     "provider seam, deleted with the fact-write handler's rewrite",
 	"originProvider": "provider seam, deleted with the origin handler's rewrite",
-	"RefResolver":    "ref_view.go's resolver seam, deleted with its rewrite",
 }
 
 // declaredInterfaces parses files (name -> nil to read from disk, or the source

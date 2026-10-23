@@ -23,18 +23,17 @@ import (
 // (which propagates to 500 instead of masquerading as 404).
 var errFactNotFound = errors.New("fact not found")
 
-// readerRefResolver is the RefResolver the fact views use: Exists asks the
-// store whether a ref target has a navigable version at the per-request anchor
-// (ri, branch, commit) baked into it. The handler builds one of these per
-// response so the resolver carries the same anchor as the surrounding fact
-// view.
+// readerRefResolver is what BuildRefViews and BuildFactView take to classify a
+// fact-path ref: Exists asks the store whether a ref target has a navigable
+// version at the per-request anchor (ri, branch, commit) baked into it. The
+// handler builds one of these per response so the resolver carries the same
+// anchor as the surrounding fact view. It is a concrete struct, not an
+// interface: it has one implementation, and tests build it over a real store.
 type readerRefResolver struct {
-	// ctx is baked in for the same reason the anchor is: RefResolver.Exists
-	// takes only a path, and BuildRefViews calls it once per ref, so there is
-	// no parameter to thread the request context through. It is request-scoped
-	// — this struct must not outlive the handler invocation that built it.
-	// Widening RefResolver.Exists to take a ctx instead would ripple through
-	// BuildRefViews and every RefResolver stub for no lifetime-safety gain.
+	// ctx is baked in for the same reason the anchor is: BuildRefViews calls
+	// Exists once per ref with only the ref's path, so the request context
+	// travels in the struct with the anchor. It is request-scoped — this struct
+	// must not outlive the handler invocation that built it.
 	ctx    context.Context
 	ri     *repos.RepoInstance
 	branch string
@@ -48,10 +47,10 @@ type readerRefResolver struct {
 // branch_facts (with the same walk-back fallback for paths that have been
 // retracted at HEAD).
 //
-// On error the ref degrades to "broken" in the view (the resolver
-// interface can't propagate errors per-ref without failing the whole
-// response), but the error is logged so transient DB issues are
-// observable rather than silently misclassifying refs.
+// On error the ref degrades to "broken" in the view (Exists answers per ref,
+// and one ref's failed lookup does not fail the whole response), but the error
+// is logged so transient DB issues are observable rather than silently
+// misclassifying refs.
 //
 // Cancellation is the one error class that logs at DEBUG instead. A page with
 // N refs calls this N times, so a client that hangs up mid-render would emit N

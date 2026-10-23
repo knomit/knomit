@@ -108,3 +108,36 @@ func TestReaderRefResolver_Exists_ExpiredDeadlineLogsDebug(t *testing.T) {
 	require.Contains(t, out, "FactExistsAt failed", out)
 	require.Contains(t, out, "deadline exceeded", out)
 }
+
+// Any other lookup failure logs at ERROR with the anchor and the path, and the
+// ref reads as absent. A HEAD lookup on a branch the store does not know fails
+// in FactExistsAt's branch lookup, a real store error reached without a fault
+// hook. Sabotage: log every failure at DEBUG, or drop the branch, path or
+// commit field.
+func TestReaderRefResolver_Exists_StoreErrorLogsError(t *testing.T) {
+	r, path := seedCtxTestRepo(t)
+
+	var buf bytes.Buffer
+	origLogger, origLevel := log.Logger, zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = origLogger
+		zerolog.SetGlobalLevel(origLevel)
+	})
+
+	require.True(t, readerRefResolver{ctx: context.Background(), ri: r.Instance(), branch: "main"}.Exists(path),
+		"precondition: the path exists on the seeded branch")
+	require.Empty(t, buf.String(), "precondition: a successful lookup logs nothing")
+
+	exists := readerRefResolver{ctx: context.Background(), ri: r.Instance(), branch: "no/such-branch"}.Exists(path)
+	require.False(t, exists, "a failed lookup cannot claim the ref exists")
+
+	out := buf.String()
+	require.Contains(t, out, `"level":"error"`, out)
+	require.NotContains(t, out, `"level":"debug"`, out)
+	require.Contains(t, out, "FactExistsAt failed", out)
+	require.Contains(t, out, `"branch":"no/such-branch"`, out)
+	require.Contains(t, out, `"path":"`+path+`"`, out)
+	require.Contains(t, out, `"commit":""`, out)
+}
