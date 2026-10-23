@@ -6,14 +6,17 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
-	"knomit/internal/engine/store/index"
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/engine/store/vocab"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 )
 
 // stubMotifsProvider implements motifsProvider for tests.
@@ -351,16 +354,15 @@ type motifDetailBody struct {
 	} `json:"_links"`
 }
 
-func motifDetailServer(t *testing.T, stub *stubMotifsProvider, facts *stubFactsCollectionProvider) http.Handler {
+// motifDetailServer serves the cluster detail over a REAL store for repo
+// "alpha": the vocabulary is still answered by stub (its provider goes with the
+// motifs handlers' rewrite), the carriers are whatever the test wrote into the
+// returned repo.
+func motifDetailServer(t *testing.T, stub *stubMotifsProvider) (http.Handler, *repos.RepoInstance) {
 	t.Helper()
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			motifs:          stub,
-			factsCollection: facts,
-		},
-	}
-	return s.NewAPIRouter()
+	m, _ := newRealStoreManager(t, "alpha")
+	s := &Server{Manager: m, providers: storeProviders{motifs: stub}}
+	return s.NewAPIRouter(), m.Get("alpha")
 }
 
 func decodeMotifDetail(t *testing.T, rec *httptest.ResponseRecorder) motifDetailBody {
@@ -403,20 +405,34 @@ func driftClusterStub() *stubMotifsProvider {
 	}
 }
 
-func driftCarriers() *stubFactsCollectionProvider {
-	return &stubFactsCollectionProvider{
-		entries: []index.RecentFactEntry{
-			{Path: "kb/a.md", Title: "Newest carrier", Type: "observation", CommittedAt: 200},
-			{Path: "kb/b.md", Title: "Older carrier", Type: "policy", CommittedAt: 100},
-		},
-		// The corpus holds more carriers than this preview page shows.
-		total: 4,
-	}
+// withMotifs sets a fact's motif spellings.
+func withMotifs(ms ...string) func(*fact.Fact) { return func(f *fact.Fact) { f.Motifs = ms } }
+
+// writeDriftCarriers writes the corpus behind driftClusterStub into ri: FOUR
+// carriers of the cluster, split by SPELLING (kb/c.md carries only
+// `config-drift`, kb/b.md only `configuration-drifts`, kb/d.md both), the
+// newest one committed last. Two facts stand outside it: a stranger, and a
+// plural spelling `config-drifts` that only the stem tier would reach. The
+// cluster holds more carriers than a small preview page shows.
+func writeDriftCarriers(t *testing.T, ri *repos.RepoInstance) {
+	t.Helper()
+	writeFactsInOneCommit(t, ri,
+		plainFact("kb/b.md", "Older carrier", func(f *fact.Fact) {
+			f.Kind, f.Type = fact.Pragmatic, fact.Policy
+			withMotifs("configuration-drifts")(f)
+		}),
+		plainFact("kb/c.md", "Third carrier", withMotifs("config-drift")),
+		plainFact("kb/d.md", "Fourth carrier", withMotifs("config-drift", "configuration-drifts")),
+		plainFact("kb/p.md", "Plural spelling", withMotifs("config-drifts")),
+		plainFact("kb/x.md", "Stranger", withMotifs("scope-creep")))
+	awaitNextSecond()
+	writeCosFact(t, ri, "kb/a.md", "Newest carrier", 0.9, withMotifs("config-drift"))
 }
 
 func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
-	stub, facts := driftClusterStub(), driftCarriers()
-	r := motifDetailServer(t, stub, facts)
+	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
+	r, ri := motifDetailServer(t, driftClusterStub())
+	writeDriftCarriers(t, ri)
 	body := decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config"))
 
 	if body.ClusterKey != "drift-config" || body.Canonical != "config-drift" {
@@ -434,16 +450,22 @@ func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
 	if body.DefinitionState != "current" {
 		t.Errorf("definition_state: got %q, want current", body.DefinitionState)
 	}
-	if len(body.Carriers) != 2 {
-		t.Fatalf("carriers: got %d, want 2", len(body.Carriers))
+	// The carriers ARE the pivot query: every member spelling at the exact tier
+	// (so the plural spelling and the stranger are out, and each spelling's own
+	// carriers are in), newest first, under the default preview limit of 20.
+	var carriers []string
+	for _, c := range body.Carriers {
+		carriers = append(carriers, c.Title)
 	}
-	if body.Carriers[0].Path != "kb/a.md" || body.Carriers[0].Title != "Newest carrier" {
-		t.Errorf("carrier 0: got %+v", body.Carriers[0])
+	require.Equal(t, []string{"Newest carrier", "Older carrier", "Third carrier", "Fourth carrier"}, carriers)
+	if body.Carriers[0].Path != "kb/a.md" || body.Carriers[1].Type != "policy" {
+		t.Errorf("carrier rows: got %+v", body.Carriers)
 	}
-	// carrier_count is the CORPUS total, not the page length — a preview that
-	// reported its own length would claim the cluster has two carriers.
+	if body.Carriers[0].CommittedAt <= body.Carriers[1].CommittedAt {
+		t.Errorf("carriers are not newest-first: %+v", body.Carriers)
+	}
 	if body.CarrierCount != 4 {
-		t.Errorf("carrier_count: got %d, want 4 (the store's total)", body.CarrierCount)
+		t.Errorf("carrier_count: got %d, want 4", body.CarrierCount)
 	}
 	if len(body.Aliases) != 2 {
 		t.Fatalf("aliases: got %d, want 2", len(body.Aliases))
@@ -466,23 +488,25 @@ func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
 		t.Errorf("facts link: got %q, want suffix %q", body.Links.Facts.Href, wantFacts)
 	}
 
-	// The carriers preview IS the pivot query: same filter, same tier, so the
-	// preview can never disagree with the listing it links to.
-	if got := strings.Join(facts.lastOpts.Motifs, ","); got != "config-drift,configuration-drifts" {
-		t.Errorf("carriers query Motifs: got %v, want every member spelling", facts.lastOpts.Motifs)
+	// The preview can never disagree with the listing it links to: the facts
+	// link, followed, lists exactly the carriers the detail previewed.
+	rec := getMotifs(t, r, strings.TrimPrefix(body.Links.Facts.Href, APIBase))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var linked factsWire
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &linked))
+	var previewed []string
+	for _, c := range body.Carriers {
+		previewed = append(previewed, c.Path)
 	}
-	if facts.lastOpts.MotifMatch != index.MotifMatchExact {
-		t.Errorf("carriers query MotifMatch: got %q, want exact", facts.lastOpts.MotifMatch)
-	}
-	if facts.lastOpts.Limit != 20 {
-		t.Errorf("carriers query Limit: got %d, want the default 20", facts.lastOpts.Limit)
-	}
+	sort.Strings(previewed)
+	require.Equal(t, previewed, linked.paths())
+	require.Equal(t, body.CarrierCount, linked.Count)
 }
 
 func TestHandleHALMotifCluster_BySpelling(t *testing.T) {
 	stub := driftClusterStub()
 	stub.clusterKeys = map[string]string{"configuration-drifts": "drift-config"}
-	r := motifDetailServer(t, stub, driftCarriers())
+	r, _ := motifDetailServer(t, stub)
 	body := decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/configuration-drifts"))
 
 	if body.ClusterKey != "drift-config" {
@@ -496,7 +520,7 @@ func TestHandleHALMotifCluster_BySpelling(t *testing.T) {
 }
 
 func TestHandleHALMotifCluster_UnknownIs404(t *testing.T) {
-	r := motifDetailServer(t, driftClusterStub(), driftCarriers())
+	r, _ := motifDetailServer(t, driftClusterStub())
 	rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/never-heard-of-it")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404, body=%s", rec.Code, rec.Body.String())
@@ -514,8 +538,8 @@ func TestHandleHALMotifCluster_SingletonOnUnrebuiltCorpus(t *testing.T) {
 		}},
 		aliases: map[string]vocab.AliasRow{},
 	}
-	rec := getMotifs(t, motifDetailServer(t, stub, driftCarriers()),
-		"/repos/alpha/branches/agent:test/motifs/silent-fallback")
+	r, _ := motifDetailServer(t, stub)
+	rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/silent-fallback")
 	body := decodeMotifDetail(t, rec)
 
 	if len(body.Members) != 1 || body.Members[0] != "silent-fallback" {
@@ -533,14 +557,18 @@ func TestHandleHALMotifCluster_SingletonOnUnrebuiltCorpus(t *testing.T) {
 }
 
 func TestHandleHALMotifCluster_CarriersLimitParam(t *testing.T) {
-	stub := driftClusterStub()
-	facts := driftCarriers()
-	r := motifDetailServer(t, stub, facts)
+	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
+	r, ri := motifDetailServer(t, driftClusterStub())
+	writeDriftCarriers(t, ri)
 
-	decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=5"))
-	if facts.lastOpts.Limit != 5 {
-		t.Errorf("limit=5: got %d", facts.lastOpts.Limit)
-	}
+	// limit bounds the PREVIEW, never the count: two of the four carriers, the
+	// newest first, and carrier_count still names all four.
+	body := decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=2"))
+	require.Len(t, body.Carriers, 2)
+	require.Equal(t, "Newest carrier", body.Carriers[0].Title)
+	require.Equal(t, 4, body.CarrierCount, "bounding the preview must never bound the count")
+	// The ceiling itself is a valid limit.
+	decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=100"))
 
 	// The carrier ceiling is hard too: over it is a 400, never a quiet 100.
 	for _, bad := range []string{"limit=101", "limit=500", "limit=0", "limit=x"} {

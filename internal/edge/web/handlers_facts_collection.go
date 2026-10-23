@@ -22,15 +22,11 @@ import (
 // `path=kb/X/`. Kept in sync with internal/domain/fact.NewFact's lowercased root.
 const factsTopicPrefix = "kb/"
 
-// factsCollectionProvider is the narrow interface the facts collection handler depends on.
-type factsCollectionProvider interface {
-	RecentFacts(ctx context.Context, ri *repos.RepoInstance, branch string, opts index.SearchOptions) ([]index.RecentFactEntry, int, error)
-}
-
-// defaultFactsCollectionProvider implements factsCollectionProvider using the store.
-type defaultFactsCollectionProvider struct{}
-
-func (defaultFactsCollectionProvider) RecentFacts(
+// recentFacts reads one repo's recency-ordered (or, with Text, relevance
+// ordered) fact page and its total. A nil store yields no rows and a nil error.
+// The repo facts collection, the motif cluster carriers and every mount of the
+// lens facts fan-out read through it.
+func recentFacts(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch string, opts index.SearchOptions,
 ) ([]index.RecentFactEntry, int, error) {
@@ -67,7 +63,7 @@ type recentFactItem struct {
 
 // handleHALFactsCollection serves GET /repos/{repo}/branches/{branch}/facts
 // (exact path, no wildcard).
-func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider) http.HandlerFunc {
+func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -168,7 +164,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			err     error
 		)
 		if !empty {
-			entries, total, err = provider.RecentFacts(r.Context(), ri, branch, opts)
+			entries, total, err = recentFacts(r.Context(), ri, branch, opts)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list facts", branch)
 				return

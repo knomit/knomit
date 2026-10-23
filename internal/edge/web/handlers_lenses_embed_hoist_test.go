@@ -126,18 +126,22 @@ func TestLensFacts_EmbedsQueryOncePerRequest_AndNotAtAllWithoutText(t *testing.T
 		{"no text", "/lenses/eng/facts", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-			stub := &lensFactsStub{}
-			emb := &cosEmbedder{}
-			s := &Server{Manager: m, Embedder: emb, providers: storeProviders{factsCollection: stub}}
-			r := s.NewAPIRouter()
-			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
-
-			getLensFacts(t, r, tc.query)
-
-			if got := emb.queries.Load(); got != tc.want {
-				t.Errorf("EmbedQuery called %d times across 3 mounts, want %d", got, tc.want)
+			env := searchLens(t, storeProviders{}, "alpha", "beta", "gamma")
+			for _, n := range []string{"alpha", "beta", "gamma"} {
+				writeCosFact(t, env.m.Get(n), "kb/"+n+".md", n+" fact", 0.9, nil)
 			}
+			reads := countMountReads(t, env.m, []string{"alpha", "beta", "gamma"}, "RecentFacts")
+			before := env.emb.queries.Load()
+
+			body := decodeLensFacts(t, env.get(t, tc.query))
+
+			// Every mount was read and answered, so the inference count is
+			// against the full fan-out.
+			require.Len(t, body.Facts, 3)
+			for _, n := range []string{"alpha", "beta", "gamma"} {
+				require.EqualValues(t, 1, reads[n]["RecentFacts"].Load(), "mount %s", n)
+			}
+			require.Equal(t, tc.want, env.emb.queries.Load()-before, "EmbedQuery across 3 mounts")
 		})
 	}
 }

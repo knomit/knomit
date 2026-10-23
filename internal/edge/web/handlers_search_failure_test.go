@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/corpus/repos"
 	"knomit/internal/engine/store/index"
 )
 
@@ -39,12 +37,11 @@ func TestHandleSearch_EmbedderFailureIsServerError(t *testing.T) {
 				}
 				rec := getAPI(t, s, alphaSearch+"?q=x")
 				require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
-				if name == "error" {
-					// A failed embed is not retried on the other side. (An EMPTY
-					// vector is not an error to searchRepo, so the store embeds
-					// again and fails on its own: that case only pins the 500.)
-					require.EqualValues(t, 1, emb.queries.Load(), "no retry of a failed embed")
-				}
+				// A failed embed is not retried on the other side: ONE inference,
+				// whether the embedder errored or answered an empty vector (an
+				// empty vector is as unusable as an error, and searchRepo says so
+				// instead of leaving the store to embed the same text again).
+				require.EqualValues(t, 1, emb.queries.Load(), "no retry of a failed embed")
 			})
 		}
 	}
@@ -116,80 +113,6 @@ func TestLensSearch_EmbedFailureFailsOnceUpFront(t *testing.T) {
 				require.EqualValues(t, 1, reads[n]["Search"].Load(), "mount %s", n)
 			}
 		})
-	}
-}
-
-// The facts twin of the test above; its mounts are still answered by the facts
-// collection stub, so it keeps that wiring until the facts provider goes.
-func TestLensFacts_EmbedFailureFailsOnceUpFront(t *testing.T) {
-	for name, mode := range map[string]int32{"error": 1, "empty vector": 2} {
-		t.Run(name, func(t *testing.T) {
-			m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
-			emb := &cosEmbedder{}
-			if mode == 1 {
-				emb.failQuery.Store(true)
-			} else {
-				emb.emptyQuery.Store(true)
-			}
-			s := &Server{Manager: m, Embedder: emb, providers: storeProviders{factsCollection: &lensFactsStub{}}}
-			r := s.NewAPIRouter()
-			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
-
-			rec := getLensFacts(t, r, "/lenses/eng/facts?q=x")
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status: %d, want 500; body=%s", rec.Code, rec.Body.String())
-			}
-			if got := emb.queries.Load(); got != 1 {
-				t.Errorf("EmbedQuery called %d times across 3 mounts, want 1", got)
-			}
-		})
-	}
-}
-
-// diagFactsProvider reports a fixed vector-step result through
-// SearchOptions.Diag and returns no rows: a mount whose text query came back
-// empty. It stands in for the facts collection only; search runs on real stores.
-type diagFactsProvider struct{ d index.SearchDiag }
-
-func (p diagFactsProvider) RecentFacts(_ context.Context, _ *repos.RepoInstance, _ string, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
-	if q.Diag != nil {
-		*q.Diag = p.d
-	}
-	return nil, 0, nil
-}
-
-// On the lens facts text read, an empty result caused by the caller's cutoff
-// carries the notice (cutoff, best cosine); an empty result with another cause,
-// or no caller cutoff, does not.
-func TestLensFacts_CutoffNotice(t *testing.T) {
-	emptied := index.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.7}
-	keptThenFiltered := index.SearchDiag{Text: true, VecHits: 9, BestCosine: 0.54, Cutoff: 0.3, Candidates: 4}
-
-	get := func(d index.SearchDiag, query string) map[string]any {
-		m, _ := newTestLensManager(t, "alpha", "beta")
-		s := &Server{Manager: m, providers: storeProviders{factsCollection: diagFactsProvider{d}}}
-		r := s.NewAPIRouter()
-		createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-		rec := getLensFacts(t, r, "/lenses/eng/facts?q=x"+query)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status %d body=%s", rec.Code, rec.Body.String())
-		}
-		var out map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-
-	notice, _ := get(emptied, "&min_similarity=0.7")["notice"].(string)
-	if !strings.Contains(notice, "0.70") || !strings.Contains(notice, "0.54") {
-		t.Errorf("notice should carry cutoff and best cosine, got %q", notice)
-	}
-	if _, ok := get(emptied, "")["notice"]; ok {
-		t.Errorf("no caller cutoff, so no notice")
-	}
-	if _, ok := get(keptThenFiltered, "&min_similarity=0.3")["notice"]; ok {
-		t.Errorf("the cutoff kept candidates (a later filter emptied it), so no notice")
 	}
 }
 

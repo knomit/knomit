@@ -36,8 +36,7 @@ func TestHandleSearch_MinSimilarityOutOfRangeRejected(t *testing.T) {
 	}
 }
 
-// The lens twins validate the same way. The search twin runs on real mounts;
-// the facts twin keeps its facts collection stub until that provider goes.
+// The lens twins validate the same way. Both run on real mounts.
 func TestLensSearch_MinSimilarityOutOfRange400(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
 	s := &Server{Manager: m}
@@ -52,7 +51,7 @@ func TestLensSearch_MinSimilarityOutOfRange400(t *testing.T) {
 
 func TestLensFacts_MinSimilarityOutOfRange400(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha")
-	s := &Server{Manager: m, providers: storeProviders{factsCollection: &lensFactsStub{}}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[]}`)
 	rec := httptest.NewRecorder()

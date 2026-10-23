@@ -105,12 +105,7 @@ func TestAnchor_RepoArchive_UnknownRepo_KeepsOwnEnvelope(t *testing.T) {
 func TestAnchor_FactsCollection_LimitStrict(t *testing.T) {
 	for _, q := range []string{"limit=abc", "limit=0", "limit=-5", "limit=501"} {
 		t.Run(q, func(t *testing.T) {
-			s := &Server{
-				Manager: newTestManagerWithRepos(t, "alpha"),
-				providers: storeProviders{
-					factsCollection: &stubFactsCollectionProvider{},
-				},
-			}
+			s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 			r := s.NewAPIRouter()
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
