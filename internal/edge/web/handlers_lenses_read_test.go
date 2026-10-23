@@ -452,45 +452,58 @@ func TestLensCompletions_MountErrorFailsTheWholeRequest(t *testing.T) {
 }
 
 // ---- Single fact read through a lens (GET /lenses/{lens}/facts/{path...}) ----
+//
+// The mounts are real stores. The fact a test reads lives on the RESOLVED
+// mount at its pinned branch, and every other candidate — the other mount, and
+// the resolved mount's own agent branch — holds a twin at the same path with
+// another title. The fact cites two targets that exist on the resolved mount's
+// branch and two that exist only on the candidates (lensFactRefs), so reading
+// the fact or resolving its refs anywhere else is seen.
 
-// lensFactReaderStub is a per-repo FactReader: Read is keyed by (repo name,
-// repo-relative path), so one stub drives the whole binding. A read that finds
-// no fact returns errFactNotFound (the sentinel the handler maps to 404); a
-// preset err short-circuits every read (exercises the 500 path).
-type lensFactReaderStub struct {
-	byRepo map[string]map[string]knomitfact.Fact
-	head   string
-	err    error
-	reads  map[string]int // per-repo Read call count
+// lensFactRefs is the refs mod of a lens fact under dir: dir/p1.md and
+// dir/p2.md are written with it, dir/d1.md and dir/d2.md only with its decoys.
+func lensFactRefs(dir string) func(*knomitfact.Fact) {
+	return refsTo(knomitfact.Observation, dir+"/p1.md", dir+"/d1.md", dir+"/p2.md", dir+"/d2.md")
 }
 
-func (s *lensFactReaderStub) Read(_ context.Context, ri *repos.RepoInstance, _ hal.Anchor, path string, _ bool) (knomitfact.Fact, string, error) {
-	if s.reads == nil {
-		s.reads = map[string]int{}
-	}
-	s.reads[ri.Name()]++
-	if s.err != nil {
-		return knomitfact.Fact{}, "", s.err
-	}
-	f, ok := s.byRepo[ri.Name()][path]
-	if !ok {
-		return knomitfact.Fact{}, "", errFactNotFound
-	}
-	return f, s.head, nil
+// wantLensFactRefs is what lensFactRefs(dir) resolves to on the resolved mount.
+func wantLensFactRefs(dir string) [][2]string {
+	return [][2]string{{dir + "/p1.md", "fact"}, {dir + "/d1.md", "broken"}, {dir + "/p2.md", "fact"}, {dir + "/d2.md", "broken"}}
 }
 
-func (s *lensFactReaderStub) Exists(_ context.Context, _ *repos.RepoInstance, _ string, _, _ string) bool {
-	return true
+// writeLensFact writes path titled title, citing lensFactRefs(dir), and its
+// targets dir/p1.md and dir/p2.md to (ri, branch) in one commit, and returns
+// the commit.
+func writeLensFact(t *testing.T, ri *repos.RepoInstance, branch, dir, path, title string) string {
+	t.Helper()
+	return writeLensStep(t, ri, branch,
+		plainFact(path, title, lensFactRefs(dir)),
+		plainFact(dir+"/p1.md", "Target one", nil),
+		plainFact(dir+"/p2.md", "Target two", nil))
+}
+
+// writeLensDecoy writes a twin of path titled title, and the targets only the
+// decoys have (dir/d1.md, dir/d2.md), to (ri, branch).
+func writeLensDecoy(t *testing.T, ri *repos.RepoInstance, branch, dir, path, title string) {
+	t.Helper()
+	writeLensStep(t, ri, branch,
+		plainFact(path, title, nil),
+		plainFact(dir+"/d1.md", "Decoy one", nil),
+		plainFact(dir+"/d2.md", "Decoy two", nil))
+}
+
+// hookMountReadFact is hookReadFact on the named mount's store.
+func hookMountReadFact(t *testing.T, m *repos.Manager, name, fail string, err error) *readFactLog {
+	t.Helper()
+	var l *readFactLog
+	withMountStore(t, m, name, func(svc *store.Service) { l = hookReadFact(t, svc, fail, err) })
+	return l
 }
 
 // lensFactViewBody mirrors the single-fact wire shape: the repo FactView body
-// (path/title/body/as_of/_links) plus the lens-level source block.
+// (path/title/body/as_of/refs/_links) plus the lens-level source block.
 type lensFactViewBody struct {
-	Path   string      `json:"path"`
-	Title  string      `json:"title"`
-	Body   string      `json:"body"`
-	AsOf   AsOf        `json:"as_of"`
-	Links  hal.LinkMap `json:"_links"`
+	factViewBody
 	Source struct {
 		Repo   string `json:"repo"`
 		ID     string `json:"id"`
@@ -498,111 +511,110 @@ type lensFactViewBody struct {
 	} `json:"source"`
 }
 
-func mkFact(path, title string) knomitfact.Fact {
-	f := knomitfact.NewFact(path)
-	f.Title = title
-	f.Type = knomitfact.Type("observation")
-	return f
+func decodeLensFactView(t *testing.T, rec *httptest.ResponseRecorder) lensFactViewBody {
+	t.Helper()
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body lensFactViewBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), rec.Body.String())
+	return body
 }
 
-// A bare kb/... path reads from the WRITE repo — no dedupe scan — even when a
-// read mount shadows the SAME repo-relative path with different content. The
-// write repo's body wins and the source names the write repo.
+// requireLensProblem requires a problem+json answer with this status, title
+// and detail.
+func requireLensProblem(t *testing.T, rec *httptest.ResponseRecorder, status int, title, detail string) {
+	t.Helper()
+	require.Equal(t, status, rec.Code, rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	gotTitle, gotDetail := decodeProblem(t, rec)
+	require.Equal(t, title, gotTitle)
+	require.Equal(t, detail, gotDetail)
+}
+
+// A bare kb/... path reads from the WRITE repo at its read-mount branch — no
+// dedupe scan — even when a read mount shadows the SAME repo-relative path with
+// different content. The write repo's body wins, the source and as_of name the
+// write repo's pinned branch and its head, and refs resolve there. Sabotage:
+// read the read mount (alpha), read the write repo at its agent branch, stamp
+// another head, or resolve refs on another candidate.
 func TestLensFact_BarePathReadsWriteRepo(t *testing.T) {
 	m, _ := newTestLensManager(t, "zulu", "alpha") // write=zulu sorts after read=alpha
-	reader := &lensFactReaderStub{
-		head: "deadbeef",
-		byRepo: map[string]map[string]knomitfact.Fact{
-			"zulu":  {"kb/x/1.md": mkFact("kb/x/1.md", "Write copy")},
-			"alpha": {"kb/x/1.md": mkFact("kb/x/1.md", "Read copy")},
-		},
-	}
-	s := &Server{Manager: m, providers: storeProviders{factReader: reader}}
+	zulu, alpha := m.Get("zulu"), m.Get("alpha")
+	withMountStore(t, m, "zulu", func(svc *store.Service) {
+		require.NoError(t, svc.CreateBranch(t.Context(), betaPinnedBranch, zulu.AgentBranch()))
+	})
+	head := writeLensFact(t, zulu, betaPinnedBranch, "kb/x", "kb/x/1.md", "Write copy")
+	writeLensDecoy(t, zulu, zulu.AgentBranch(), "kb/x", "kb/x/1.md", "Agent copy")
+	writeLensDecoy(t, alpha, alpha.AgentBranch(), "kb/x", "kb/x/1.md", "Read copy")
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"zulu","branch":"`+betaPinnedBranch+`"},{"repo":"alpha"}]}`)
+	zuluReads := hookMountReadFact(t, m, "zulu", "", nil)
+	alphaReads := hookMountReadFact(t, m, "alpha", "", nil)
 
-	rec := getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
-	}
-	var body lensFactViewBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
-	}
-	if body.Path != "kb/x/1.md" {
-		t.Errorf("path: got %q, want bare kb/x/1.md", body.Path)
-	}
-	if body.Title != "Write copy" {
-		t.Errorf("title: got %q, want the WRITE repo's copy", body.Title)
-	}
-	zulu := m.Get("zulu")
-	if body.Source.Repo != "zulu" || body.Source.ID != federate.ID12(zulu.ID()) || body.Source.Branch != zulu.AgentBranch() {
-		t.Errorf("source: got %+v, want {zulu %s %s}", body.Source, federate.ID12(zulu.ID()), zulu.AgentBranch())
-	}
-	if _, ok := body.Links["self"]; !ok {
-		t.Errorf("missing _links.self; links=%+v", body.Links)
-	}
-	// No dedupe scan on a bare path: the read mount is NEVER queried — only the
-	// write repo is read. Locks in "bare means write repo, period" behaviorally.
-	if got := reader.reads["alpha"]; got != 0 {
-		t.Errorf("read mount queried %d times on a bare-path request, want 0", got)
-	}
-	if got := reader.reads["zulu"]; got != 1 {
-		t.Errorf("write repo read %d times, want exactly 1", got)
-	}
+	body := decodeLensFactView(t, getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md"))
+	require.Equal(t, "kb/x/1.md", body.Path, "a write-repo fact echoes the bare path")
+	require.Equal(t, "Write copy", body.Title)
+	require.Equal(t, "zulu", body.Source.Repo)
+	require.Equal(t, federate.ID12(zulu.ID()), body.Source.ID)
+	require.Equal(t, betaPinnedBranch, body.Source.Branch)
+	require.Equal(t, betaPinnedBranch, body.AsOf.Branch)
+	require.Equal(t, head, body.AsOf.Commit, "as_of is the pinned branch's head")
+	require.Equal(t, APIBase+"/repos/zulu/branches/"+hal.EncodeBranch(betaPinnedBranch)+"/facts/kb/x/1.md",
+		body.Links["self"].Href)
+	requireRefKinds(t, body.factViewBody, wantLensFactRefs("kb/x")...)
+	// No dedupe scan on a bare path: the read mount is NEVER read — only the
+	// write repo is, once. Locks in "bare means write repo, period".
+	require.Equal(t, []string{"head kb/x/1.md"}, zuluReads.all())
+	require.Empty(t, alphaReads.all(), "a bare-path request must not read the read mount")
 }
 
-// A kb://<id12>/kb/... path (URL-encoded by the client) resolves to that mount,
-// returns its fact body, and carries that mount's source identity.
+// A kb://<id12>/kb/... path (URL-encoded by the client) resolves to that mount
+// at its own pinned branch, reads the MOUNT-RELATIVE path, returns its fact
+// body, and carries that mount's source identity. Sabotage: read the write
+// repo, read the mount's agent branch, keep the qualifier on the read path, or
+// resolve refs on another candidate.
 func TestLensFact_QualifiedPathHitsMount(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	reader := &lensFactReaderStub{
-		head: "cafe1234",
-		byRepo: map[string]map[string]knomitfact.Fact{
-			"beta": {"kb/y/2.md": mkFact("kb/y/2.md", "Read only")},
-		},
-	}
-	s := &Server{Manager: m, providers: storeProviders{factReader: reader}}
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	withMountStore(t, m, "beta", func(svc *store.Service) {
+		require.NoError(t, svc.CreateBranch(t.Context(), betaPinnedBranch, beta.AgentBranch()))
+	})
+	head := writeLensFact(t, beta, betaPinnedBranch, "kb/y", "kb/y/2.md", "Read only")
+	writeLensDecoy(t, beta, beta.AgentBranch(), "kb/y", "kb/y/2.md", "Beta agent copy")
+	writeLensDecoy(t, alpha, alpha.AgentBranch(), "kb/y", "kb/y/2.md", "Write copy")
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
-	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta","branch":"`+betaPinnedBranch+`"}]}`)
+	betaReads := hookMountReadFact(t, m, "beta", "", nil)
+	alphaReads := hookMountReadFact(t, m, "alpha", "", nil)
 
-	beta := m.Get("beta")
 	id := federate.ID12(beta.ID())
-	rawURL := "/lenses/eng/facts/" + url.PathEscape("kb://"+id+"/kb/y/2.md")
-
-	rec := getLensFacts(t, r, rawURL)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
-	}
-	var body lensFactViewBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
-	}
-	if body.Title != "Read only" {
-		t.Errorf("title: got %q, want Read only", body.Title)
-	}
+	body := decodeLensFactView(t, getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape("kb://"+id+"/kb/y/2.md")))
+	require.Equal(t, "Read only", body.Title)
 	// The top-level path echoes the canonical QUALIFIED wire form for a read
 	// mount, so a client can round-trip it into another lens request and land on
 	// the same fact (not silently on the write repo).
-	wantPath := "kb://" + id + "/kb/y/2.md"
-	if body.Path != wantPath {
-		t.Errorf("path: got %q, want qualified %q", body.Path, wantPath)
-	}
-	if body.Source.Repo != "beta" || body.Source.ID != id || body.Source.Branch != beta.AgentBranch() {
-		t.Errorf("source: got %+v, want {beta %s %s}", body.Source, id, beta.AgentBranch())
-	}
+	require.Equal(t, "kb://"+id+"/kb/y/2.md", body.Path)
+	require.Equal(t, "beta", body.Source.Repo)
+	require.Equal(t, id, body.Source.ID)
+	require.Equal(t, betaPinnedBranch, body.Source.Branch)
+	require.Equal(t, betaPinnedBranch, body.AsOf.Branch)
+	require.Equal(t, head, body.AsOf.Commit)
+	require.Equal(t, APIBase+"/repos/beta/branches/"+hal.EncodeBranch(betaPinnedBranch)+"/facts/kb/y/2.md",
+		body.Links["self"].Href)
+	requireRefKinds(t, body.factViewBody, wantLensFactRefs("kb/y")...)
+	require.Equal(t, []string{"head kb/y/2.md"}, betaReads.all())
+	require.Empty(t, alphaReads.all())
 }
 
 // A kb://<id12>/… whose id12 is not mounted in the lens returns 404 with the
 // SAME body as a genuinely-missing fact — mount topology must not leak (a
 // caller cannot tell "unknown mount" from "no such fact").
 func TestLensFact_UnknownID404MatchesNotFound(t *testing.T) {
-	m, _ := newTestLensManager(t, "alpha", "beta")
-	reader := &lensFactReaderStub{head: "cafe1234"} // no facts anywhere
-	s := &Server{Manager: m, providers: storeProviders{factReader: reader}}
+	m, _ := newTestLensManager(t, "alpha", "beta") // no facts anywhere
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-
 	beta := m.Get("beta")
 	knownID := federate.ID12(beta.ID())
 	unknownID := "0123456789ab" // 12 hex, not a mounted repo id
@@ -636,26 +648,27 @@ func TestLensFact_UnknownID404MatchesNotFound(t *testing.T) {
 }
 
 // A retracted/missing fact on the write repo is a 404 (parity with the repo
-// single-fact handler), and a real backend error is a 500 (not masked as 404).
+// single-fact handler), and a real backend error is a 500 carrying the store's
+// error (not masked as 404).
 func TestLensFact_MissingAndBackendError(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{factReader: &lensFactReaderStub{}}} // no facts
+	alpha := m.Get("alpha")
+	writeLensStep(t, alpha, alpha.AgentBranch(), plainFact("kb/gone.md", "Gone", nil), plainFact("kb/x/1.md", "Present", nil))
+	withMountStore(t, m, "alpha", func(svc *store.Service) {
+		_, _, err := svc.Facts().BatchWriteFacts(t.Context(), alpha.AgentBranch(), nil, []string{"kb/gone.md"}, "retract", "retract")
+		require.NoError(t, err)
+	})
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
-	rec := getLensFacts(t, r, "/lenses/eng/facts/kb/gone.md")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("missing status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
+	requireLensProblem(t, getLensFacts(t, r, "/lenses/eng/facts/kb/gone.md"), http.StatusNotFound,
+		"Fact not found", `no fact at path "kb/gone.md"`)
 
-	mErr, _ := newTestLensManager(t, "alpha", "beta")
-	sErr := &Server{Manager: mErr, providers: storeProviders{factReader: &lensFactReaderStub{err: fmt.Errorf("disk on fire")}}}
-	rErr := sErr.NewAPIRouter()
-	createLens(t, mErr, rErr, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
-	recErr := getLensFacts(t, rErr, "/lenses/eng/facts/kb/x/1.md")
-	if recErr.Code != http.StatusInternalServerError {
-		t.Fatalf("backend-error status: got %d, want 500; body=%s", recErr.Code, recErr.Body.String())
-	}
+	reads := hookMountReadFact(t, m, "alpha", "head kb/x/1.md", errors.New("disk on fire"))
+	requireLensProblem(t, getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md"), http.StatusInternalServerError,
+		"Failed to read fact", "disk on fire")
+	require.Equal(t, []string{"head kb/x/1.md"}, reads.all())
 }
 
 // An offset near MaxInt overflows offset+limit into a NEGATIVE depth, which
@@ -814,7 +827,8 @@ func TestLensSearch_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
 // The mounts are real stores, so the sub-resource reads what the RESOLVED
 // mount holds at its OWN branch: each test gives every other candidate (the
 // other mount, the mount's agent branch) the same fact path with other refs.
-// The FactReader stays a stub: it is the gate the dispatch passes first.
+// The fact the sub-resource names exists at the resolved mount: the dispatch
+// is gated on the same read the fact endpoint performs.
 
 // writeLensStep writes files to branch of ri's store in one commit and returns
 // the commit.
@@ -856,13 +870,7 @@ func TestLensFactIncoming_BarePathReadsWriteRepo(t *testing.T) {
 		plainFact("kb/x/1.md", "Alpha copy", nil),
 		plainFact("kb/x/5.md", "Alpha decoy", refsTo(knomitfact.Insight, "kb/x/1.md")))
 
-	s := &Server{Manager: m, providers: storeProviders{
-		// The fact must exist at the mount: sub-resources are gated on the same
-		// read the fact endpoint performs, so an absent fact 404s here too.
-		factReader: &lensFactReaderStub{head: "deadbeef", byRepo: map[string]map[string]knomitfact.Fact{
-			"zulu": {"kb/x/1.md": mkFact("kb/x/1.md", "Write copy")},
-		}},
-	}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"zulu","branch":"`+betaPinnedBranch+`"},{"repo":"alpha"}]}`)
 
@@ -898,11 +906,7 @@ func TestLensFactOutgoing_QualifiedPathHitsMount(t *testing.T) {
 		plainFact("kb/y/6.md", "Write target", nil),
 		plainFact("kb/y/2.md", "Write copy", refsTo(knomitfact.Observation, "kb/y/6.md")))
 
-	s := &Server{Manager: m, providers: storeProviders{
-		factReader: &lensFactReaderStub{head: "cafe1234", byRepo: map[string]map[string]knomitfact.Fact{
-			"beta": {"kb/y/2.md": mkFact("kb/y/2.md", "Read only")},
-		}},
-	}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta","branch":"`+betaPinnedBranch+`"}]}`)
 
@@ -919,9 +923,7 @@ func TestLensFactOutgoing_QualifiedPathHitsMount(t *testing.T) {
 // body as a missing fact — the dispatch may not become a mount-topology oracle.
 func TestLensFactSub_UnknownID404(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		factReader: &lensFactReaderStub{head: "cafe1234"},
-	}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -950,9 +952,7 @@ func TestLensFactSub_UnknownID404(t *testing.T) {
 // doc and openapi.yaml both promise cannot happen.
 func TestLensFactSub_AbsentFactNeverNamesTheMount(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
-	s := &Server{Manager: m, providers: storeProviders{
-		factReader: &lensFactReaderStub{head: "cafe1234"}, // no facts anywhere
-	}}
+	s := &Server{Manager: m} // no facts anywhere
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -983,4 +983,52 @@ func TestLensFactSub_AbsentFactNeverNamesTheMount(t *testing.T) {
 			t.Errorf("/%s response names the mount branch %q: %s", sub, beta.AgentBranch(), body)
 		}
 	}
+}
+
+// The gate reads the fact at the RESOLVED mount and branch, not at any other
+// candidate: kb/x/only.md exists on the write repo's agent branch and on the
+// read mount, but not at the write repo's pinned branch, so all three
+// sub-resources are the lens 404, and only the resolved mount was read.
+// Sabotage: gate on the mount's agent branch or on another mount (/commits
+// answers an empty 200), or skip the gate.
+func TestLensFactSub_GateReadsTheResolvedMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha")
+	zulu, alpha := m.Get("zulu"), m.Get("alpha")
+	withMountStore(t, m, "zulu", func(svc *store.Service) {
+		require.NoError(t, svc.CreateBranch(t.Context(), betaPinnedBranch, zulu.AgentBranch()))
+	})
+	writeLensStep(t, zulu, betaPinnedBranch, plainFact("kb/x/1.md", "Write copy", nil))
+	writeLensStep(t, zulu, zulu.AgentBranch(), plainFact("kb/x/only.md", "Agent only", nil))
+	writeLensStep(t, alpha, alpha.AgentBranch(), plainFact("kb/x/only.md", "Alpha only", nil))
+	s := &Server{Manager: m}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"zulu","branch":"`+betaPinnedBranch+`"},{"repo":"alpha"}]}`)
+	zuluReads := hookMountReadFact(t, m, "zulu", "", nil)
+	alphaReads := hookMountReadFact(t, m, "alpha", "", nil)
+
+	for _, sub := range []string{"commits", "incoming", "outgoing"} {
+		requireLensProblem(t, getLensFacts(t, r, "/lenses/eng/facts/kb/x/only.md/"+sub), http.StatusNotFound,
+			"Fact not found", `no fact at path "kb/x/only.md/`+sub+`"`)
+	}
+	require.Equal(t, []string{"head kb/x/only.md", "head kb/x/only.md", "head kb/x/only.md"}, zuluReads.all())
+	require.Empty(t, alphaReads.all())
+}
+
+// A gate read that fails with anything but "not found" is a 500 carrying the
+// store's error, and the sub-resource is not served. Sabotage: ignore the
+// gate's error, or map it to the lens 404.
+func TestLensFactSub_GateErrorIs500(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha")
+	zulu := m.Get("zulu")
+	writeLensStep(t, zulu, zulu.AgentBranch(), plainFact("kb/x/1.md", "Write copy", nil))
+	s := &Server{Manager: m}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+	reads := hookMountReadFact(t, m, "zulu", "head kb/x/1.md", errors.New("gate on fire"))
+	counts := countMountReads(t, m, []string{"zulu"}, "ExplainFact")
+
+	requireLensProblem(t, getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md/incoming"), http.StatusInternalServerError,
+		"Failed to read fact", "gate on fire")
+	require.Equal(t, []string{"head kb/x/1.md"}, reads.all())
+	require.EqualValues(t, 0, counts["zulu"]["ExplainFact"].Load(), "the sub-resource must not be served past a failed gate")
 }

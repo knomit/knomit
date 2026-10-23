@@ -38,7 +38,7 @@ type RefView struct {
 
 // RefResolver is used by BuildRefViews to decide whether a fact-path ref is
 // navigable at the current anchor. Tests provide stub resolvers; production
-// uses FactQuery.FactExistsAt via readerRefResolver, which has already been
+// uses FactQuery.FactExistsAt (factExistsAt) via readerRefResolver, which has already been
 // handed the caller's anchor.
 type RefResolver interface {
 	// Exists returns true when a fact exists at the given repo-relative path,

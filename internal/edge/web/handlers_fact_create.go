@@ -167,7 +167,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		// Resolver anchored at HEAD (commit:""): the just-created fact is
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies outgoing refs in the response view.
-		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
 		locationURL := b.Fact(repoName, a, path)
 		w.Header().Set("Location", locationURL)
