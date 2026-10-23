@@ -86,11 +86,6 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
 	})
 
-	// Materialize the data-access seams once. Every route below reads from
-	// p; nothing re-checks for nil. Value semantics mean s.providers is
-	// untouched, so a caller may build the router more than once.
-	p := s.providers.withDefaults()
-
 	b := hal.URLBuilder{Base: APIBase}
 
 	// mcpDispatch is shared by the repo-scoped and lens-scoped MCP mounts.
@@ -199,7 +194,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// treats only "{...}" and "*" as special, so such a route diverges from
 	// "/repos/..." at the ':' and never enters the {repo} param edge either
 	// way.
-	r.Get("/repos", handleHALRepos(b, s.Manager, p.origin))
+	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING
@@ -320,10 +315,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			// the source.
 			r.Get("/templates", handleRepoTemplates(s.Manager))
 
-			r.Get("/origin", handleHALGetOrigin(b, p.origin))
-			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
-			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager, p.origin))
-			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager, p.origin))
+			r.Get("/origin", handleHALGetOrigin(b))
+			r.Put("/origin", handleHALSetOrigin(b, s.Manager))
+			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager))
+			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager))
 
 			// Cancels the repo's index job: an ACTION on the repo, a POST on a
 			// colon-suffixed sub-resource like /repo-creates/{id}:cancel. It is

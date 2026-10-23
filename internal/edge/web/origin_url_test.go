@@ -237,7 +237,6 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 				s := &Server{
 					Manager:        newTestManagerWithRepos(t, "alpha"),
 					SessionManager: NewSessionManager(),
-					providers:      storeProviders{origin: &stubOriginProvider{}},
 				}
 				t.Cleanup(s.SessionManager.Shutdown)
 				r := s.NewAPIRouter()

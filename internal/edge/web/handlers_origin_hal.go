@@ -25,34 +25,6 @@ var (
 	errOriginInvalidURL  = errors.New("invalid url")
 )
 
-// originProvider is the narrow interface the origin HAL handlers read and
-// patch through. Tests inject a stub; production wires through
-// RepoInstance.WithRead. Attaching and detaching an origin are NOT here: they
-// are lifecycle events (AttachOrigin, DetachOrigin) sent to the repo's
-// machine, which restarts the Sync stage around the change.
-//
-// The ctx these methods take is currently unused by the default provider: the
-// store's Remote sub-service (svc.Remote()) takes no context, so there is
-// nothing below to hand it to. It is threaded anyway so that giving Remote a
-// ctx — a small store-layer follow-up — needs no second signature change here,
-// and so this interface matches every sibling provider rather than being the
-// one exception a reader has to explain to themselves.
-//
-// SetOriginUpstream takes the Manager because it writes through it: connection identity (url/branch/auth) is control.db's now (via
-// Manager.Origins()), not the repo's own store — a lost .db can be re-cloned
-// from the record that outlives it. GetOrigin needs no Manager: the injected
-// origin already makes GetRemote return the control.db-backed record.
-type originProvider interface {
-	GetOrigin(ctx context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error)
-	SetOriginUpstream(ctx context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error
-}
-
-// defaultOriginProvider is the production originProvider backed by the store.
-// It is pure storage; the local-origin policy is enforced upstream in
-// handleHALSetOrigin (which holds the real Manager) so the gate can never be
-// silently skipped by a provider constructed without it.
-type defaultOriginProvider struct{}
-
 // acquireFailed wraps a WithRead failure as errOriginNoStore.
 //
 // ri.WithRead returns Acquire's error WITHOUT invoking the closure — that is
@@ -62,7 +34,7 @@ type defaultOriginProvider struct{}
 // came to answer 204 having done nothing but destroy the record.
 //
 // Acquire never yields a nil service with a nil error, so the `svc == nil`
-// branches these methods used to carry were unreachable; this is the real
+// branches these functions used to carry were unreachable; this is the real
 // no-store signal, and it is now the only one.
 func acquireFailed(err error) error {
 	return fmt.Errorf("%w: %v", errOriginNoStore, err)
@@ -127,7 +99,25 @@ func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *remot
 	}
 }
 
-func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error) {
+// getOrigin reads a repo's origin for the origin HAL handlers (and for the
+// GET /repos health column); it and setOriginUpstream are their store read and
+// write, through RepoInstance.WithRead. Attaching and detaching an origin are
+// NOT here: they are lifecycle events (AttachOrigin, DetachOrigin) sent to the
+// repo's machine, which restarts the Sync stage around the change. Both are
+// pure storage; the local-origin policy is enforced in handleHALSetOrigin,
+// which holds the real Manager.
+//
+// The ctx they take is currently unused: the store's Remote sub-service
+// (svc.Remote()) takes no context, so there is nothing below to hand it to.
+// It is threaded anyway so that giving Remote a ctx (a small store-layer
+// follow-up) needs no second signature change here.
+//
+// setOriginUpstream takes the Manager because it writes through it: connection
+// identity (url/branch/auth) is control.db's now (via Manager.Origins()), not
+// the repo's own store, so a lost .db can be re-cloned from the record that
+// outlives it. getOrigin needs no Manager: the injected origin already makes
+// GetRemote return the control.db-backed record.
+func getOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error) {
 	var (
 		remote *remotesync.Remote
 		err    error
@@ -140,7 +130,7 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 	return remote, err
 }
 
-// SetOriginUpstream changes only the upstream branch, preserving the ordering
+// setOriginUpstream changes only the upstream branch, preserving the ordering
 // discipline SetUpstreamBranch used to enforce in one place: rewrite the git
 // fetch refspec FIRST (ConfigureRemote), and only on success touch the stored
 // branch (Origins.SetBranch + svc.SetOrigin). A failure between the two used
@@ -154,7 +144,7 @@ func (defaultOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance
 // reconcileNow reconciling against a refs/remotes/origin/<old> nothing updates
 // any more. So the same rollback applies — restore the refspec, then return the
 // error.
-func (defaultOriginProvider) SetOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
+func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
 	origins, oerr := originsOf(m)
 	if oerr != nil {
 		return oerr
@@ -222,12 +212,12 @@ func originSelfURL(b hal.URLBuilder, repo string) string {
 
 // handleHALGetOrigin serves GET /repos/{repo}/origin.
 // Returns 200 with HAL origin view, or 204 if no origin is configured.
-func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
+func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		remote, err := op.GetOrigin(r.Context(), ri)
+		remote, err := getOrigin(r.Context(), ri)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to get origin",
 				err.Error(), r.URL.Path)
@@ -273,7 +263,7 @@ func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 // untouched, a different knowledge base a 409. While the repo is indexing the
 // attach is refused with 409 and a cancel-index link. On success the Sync
 // stage has been restarted on the new origin when this answers 200.
-func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -298,7 +288,7 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			}
 		}
 
-		existing, err := op.GetOrigin(r.Context(), ri)
+		existing, err := getOrigin(r.Context(), ri)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "No store available", err.Error(), r.URL.Path)
 			return
@@ -410,7 +400,7 @@ func isValidUpstreamBranch(b string) bool {
 // running reconcile loop reads the remote record fresh each tick, so the new
 // upstream takes effect on the next cycle. Use this to recover from a config
 // where the upstream was mistakenly the agent branch (which forces push-only).
-func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -429,7 +419,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 				"branch name contains characters not allowed in a git ref", r.URL.Path)
 			return
 		}
-		if err := op.SetOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
+		if err := setOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
 			if errors.Is(err, errOriginNoStore) {
 				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
 					err.Error(), r.URL.Path)
@@ -459,7 +449,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 // with the origin-less local loop, so the consensus branch keeps following
 // the agent branch at once. A subscription IS its origin and is refused (409),
 // as is a repo that is indexing (409 with a cancel-index link). Returns 204.
-func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, _ originProvider) http.HandlerFunc {
+func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())

@@ -96,12 +96,12 @@ type repoRemoteHealth struct {
 	Push string `json:"push"`
 }
 
-// remoteHealthOf reads a listed repo's origin health through the same
-// provider GET /origin uses. Every failure is an absent field: a list row is
+// remoteHealthOf reads a listed repo's origin health through getOrigin, the
+// read GET /origin uses. Every failure is an absent field: a list row is
 // not the place to report that one repo's status row is unreadable, and the
 // repo's own origin view still says why.
-func remoteHealthOf(ctx context.Context, op originProvider, ri *repos.RepoInstance) *repoRemoteHealth {
-	remote, err := op.GetOrigin(ctx, ri)
+func remoteHealthOf(ctx context.Context, ri *repos.RepoInstance) *repoRemoteHealth {
+	remote, err := getOrigin(ctx, ri)
 	if err != nil || remote == nil {
 		return nil
 	}
@@ -151,7 +151,7 @@ const repoStateActive = "active"
 // break that. A repo being CREATED is mounted (its machine is at stage
 // populate, and its Acquire answers "repo is populating"), so it is listed with
 // its stage.
-func handleHALRepos(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
+func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
 		instances := make(map[string]*repos.RepoInstance)
@@ -165,7 +165,7 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager, op originProvider) http.
 			row := summaryFor(b, name, instances[name])
 			// Per-repo remote health, so the client can mark every listed repo
 			// without a GET /origin per repo. Only live rows have a store to ask.
-			row.Remote = remoteHealthOf(r.Context(), op, instances[name])
+			row.Remote = remoteHealthOf(r.Context(), instances[name])
 			items = append(items, row)
 		}
 		for _, u := range m.Unavailable() {

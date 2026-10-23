@@ -17,14 +17,12 @@ const webPkg = "knomit/internal/edge/web"
 // declare, with where it goes. The web handlers take the concrete store
 // handles (svc.Search(), svc.Facts(), ...) and tests use real stores, failing
 // a read through the owner's fault hook; a provider interface is a seam that
-// only a stub fills. The refactor deletes them in steps (W0b..W0i), so the
-// list shrinks and never grows: an entry is removed in the PR that deletes the
-// interface, a new interface in web is not added here. A stale entry (the name
-// is no longer an interface) fails, so a deletion cannot leave its entry
-// behind.
-var webInterfaceAllowlist = map[string]string{
-	"originProvider": "provider seam, deleted with the origin handler's rewrite",
-}
+// only a stub fills. The refactor deleted them in steps (W0b..W0i), and the
+// last one (originProvider) went in W0i, so the list is EMPTY. It never grows:
+// a new interface in web is not added here. The stale-entry check below stays
+// for the same reason the list does: an entry whose name is no longer an
+// interface fails, so nothing can be parked here.
+var webInterfaceAllowlist = map[string]string{}
 
 // declaredInterfaces parses files (name -> nil to read from disk, or the source
 // text) and returns (named) every type declaration whose type is an interface,
@@ -61,8 +59,8 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 }
 
 // TestWeb_DeclaresNoInterfacesBeyondTheAllowlist (guard W): internal/edge/web
-// declares no interface type except the provider seams still awaiting
-// deletion in webInterfaceAllowlist. A stub-only interface in the handlers is
+// declares no interface type except the names in webInterfaceAllowlist, which
+// is empty since W0i. A stub-only interface in the handlers is
 // what the refactor removes: a handler takes the concrete type and a test
 // builds a real store. Build-constrained files are scanned too (go list
 // IgnoredGoFiles); test files are not (a test helper interface is not a seam
@@ -76,8 +74,12 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 // not an interface and is not detected.
 //
 // Non-vacuity: the file list comes from go list, not from a count here; web
-// must be listed with files, and every one of them must have been parsed. The
-// self-test runs the detector on inline source with a flagged and a clean case.
+// must be listed with files, and every one of them must have been parsed (a
+// parse error is fatal in declaredInterfaces). With the allowlist empty, an
+// empty result is the expected one (a non-empty allowlist with nothing found
+// fails as stale entries), so the detector's own discrimination is
+// pinned by TestWeb_InterfaceDetector_Discriminates on inline source with a
+// flagged and a clean case.
 func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 	var web *goListPackage
 	for _, p := range listModulePackages(t) {
@@ -113,9 +115,6 @@ func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 	sort.Strings(bad)
 	for _, b := range bad {
 		t.Error(b)
-	}
-	if len(found) == 0 {
-		t.Error("no interface found in web at all: with the allowlist non-empty the parse is broken")
 	}
 }
 

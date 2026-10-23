@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,8 +15,8 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
-	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -37,36 +38,39 @@ func newTestManagerWithRepos(t *testing.T, names ...string) *repos.Manager {
 	return m
 }
 
-// perRepoOriginProvider answers GetOrigin by repo name: a repo missing from
-// the map has no origin (nil, nil), the GET /origin provider's own "none".
-type perRepoOriginProvider struct {
-	stubOriginProvider
-	byName map[string]*remotesync.Remote
+// pushTo points svc's origin at url (injected origin plus git remote, as an
+// attach leaves it) and runs one real push of the agent branch, which records
+// the push status on svc's own remotes row: "ok" when url is a reachable bare
+// repo, "error" when nothing is there.
+func pushTo(t *testing.T, svc *store.Service, url string) {
+	t.Helper()
+	injectOrigin(svc, url, "main", "none")
+	require.NoError(t, repos.ConfigureGitRemote(svc, url, "none", "main", "agent/test"))
+	_, _ = svc.Remote().Push(context.Background(), "agent/test", nil)
 }
 
-func (p *perRepoOriginProvider) GetOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, error) {
-	return p.byName[ri.Name()], nil
-}
-
-// Each listed row carries its origin's persisted health as
+// Each listed row carries ITS OWN origin's persisted health as
 // remote:{sync, push}, so a client can mark every repo without a GET /origin
-// per repo. A repo with NO origin carries no `remote` key at all — absence,
-// not an empty object and not "": a client reads the key's presence as "this
-// repo has an origin". beta's half that never ran is "" (NULL column), not
-// "ok": never-ran must not read as healthy.
+// per repo. Four real stores, each in a different state, so a row given
+// another repo's health, or a pair read the wrong way round, is visible:
+//   - alpha: pushed to a real bare remote (push "ok") with a sync error recorded
+//   - beta: pushed to a remote that does not exist (push "error"), never synced
+//   - gamma: an origin that has never run ("" both: never-ran is not healthy)
+//   - delta: no origin, so NO remote key at all (absence, not an empty object
+//     and not ""): a client reads the key's presence as "this repo has an origin"
 //
-// Sabotage: drop omitempty (or always build the object) → gamma has a key →
-// red; read last_status into both fields → alpha's push is "ok" → red.
+// Sabotage: drop omitempty (or always build the object) → delta has a key →
+// red; swap sync and push → alpha and beta red; read every row's health from
+// one repo → red.
 func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
-	ok, bad := "ok", "error"
-	op := &perRepoOriginProvider{byName: map[string]*remotesync.Remote{
-		"alpha": {Name: "origin", URL: "https://x.test/a.git", LastStatus: &ok, LastPushStatus: &bad},
-		"beta":  {Name: "origin", URL: "https://x.test/b.git", LastStatus: &bad},
-	}}
-	s := &Server{
-		Manager:   newTestManagerWithRepos(t, "alpha", "beta", "gamma"),
-		providers: storeProviders{origin: op},
-	}
+	m, svcs := newRealStoreManager(t, "delta", "beta", "alpha", "gamma")
+	root := t.TempDir()
+	pushTo(t, svcs["alpha"], seedBareRemoteForTest(t, filepath.Join(root, "alpha.git")))
+	require.NoError(t, svcs["alpha"].Remote().RecordSyncError("origin", "fetch refused"))
+	pushTo(t, svcs["beta"], fileuri.New(filepath.Join(root, "nowhere.git")))
+	injectOrigin(svcs["gamma"], "https://x.test/gamma.git", "main", "none")
+
+	s := &Server{Manager: m}
 	rec := httptest.NewRecorder()
 	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
 	if rec.Code != http.StatusOK {
@@ -84,7 +88,7 @@ func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 		require.NoError(t, json.Unmarshal(row["name"], &name))
 		rows[name] = row
 	}
-	require.Len(t, rows, 3)
+	require.Len(t, rows, 4)
 
 	remoteOf := func(name string) map[string]string {
 		raw, present := rows[name]["remote"]
@@ -93,13 +97,14 @@ func TestHandleHALRepos_CarriesRemoteHealth(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &got))
 		return got
 	}
-	require.Equal(t, map[string]string{"sync": "ok", "push": "error"}, remoteOf("alpha"))
-	require.Equal(t, map[string]string{"sync": "error", "push": ""}, remoteOf("beta"))
+	require.Equal(t, map[string]string{"sync": "error", "push": "ok"}, remoteOf("alpha"))
+	require.Equal(t, map[string]string{"sync": "", "push": "error"}, remoteOf("beta"))
+	require.Equal(t, map[string]string{"sync": "", "push": ""}, remoteOf("gamma"))
 
-	_, present := rows["gamma"]["remote"]
-	require.False(t, present, "a repo without an origin has NO remote key; row=%s", rows["gamma"])
-	_, hasName := rows["gamma"]["name"]
-	require.True(t, hasName, "positive control: gamma's row is decoded")
+	_, present := rows["delta"]["remote"]
+	require.False(t, present, "a repo without an origin has NO remote key; row=%s", rows["delta"])
+	_, hasName := rows["delta"]["name"]
+	require.True(t, hasName, "positive control: delta's row is decoded")
 }
 
 func TestHandleHALRepos_ReturnsCollection(t *testing.T) {

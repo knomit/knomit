@@ -109,12 +109,6 @@ type Server struct {
 	// because web/dist holds only .gitkeep until `make web` has run, and the
 	// Go tests must not depend on the npm build.
 	staticFS fs.FS
-
-	// providers holds the test-injectable data-access seams the API router
-	// wires into handlers. The zero value means "all production defaults";
-	// NewAPIRouter materializes them via withDefaults(). Tests set only the
-	// members they stub. See storeProviders in providers.go.
-	providers storeProviders
 }
 
 // grants is the Grants every enforcement point in this server consults: the
