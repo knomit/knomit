@@ -18,7 +18,6 @@ package web
 type storeProviders struct {
 	factReader FactReader
 	factWriter FactWriter
-	commits    commitsProvider
 	factSub    factSubProvider
 	origin     originProvider
 }
@@ -35,9 +34,6 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.factWriter == nil {
 		p.factWriter = defaultFactWriter{}
-	}
-	if p.commits == nil {
-		p.commits = defaultCommitsProvider{}
 	}
 	if p.factSub == nil {
 		p.factSub = defaultFactSubProvider{}

@@ -25,23 +25,10 @@ type commitFileView struct {
 	Links  hal.LinkMap `json:"_links,omitempty"`
 }
 
-// commitsProvider is the narrow interface the commits handlers depend on.
-// Production wires defaultCommitsProvider; tests inject stubs.
-type commitsProvider interface {
-	// LogPaginated returns a paged branch-wide commit log. Use empty path for
-	// all commits on the branch.
-	LogPaginated(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]index.LogEntryWithTags, string, string, error)
-
-	// CommitDetail returns the detail for a single commit, including files
-	// enriched with titles. Only files under ontologyRoot are returned.
-	CommitDetail(ctx context.Context, ri *repos.RepoInstance, branch, hash, ontologyRoot string) (*index.CommitDetailResult, []commitFileView, error)
-}
-
-// defaultCommitsProvider is the production commitsProvider that calls through
-// ri.WithRead to access the real store.
-type defaultCommitsProvider struct{}
-
-func (defaultCommitsProvider) LogPaginated(
+// logPaginated returns a paged branch-wide commit log of ri's store. Use an
+// empty path for all commits on the branch. A repo with no live store yields
+// no entries and a nil error.
+func logPaginated(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
 ) ([]index.LogEntryWithTags, string, string, error) {
@@ -60,7 +47,9 @@ func (defaultCommitsProvider) LogPaginated(
 	return entries, next, prev, err
 }
 
-func (defaultCommitsProvider) CommitDetail(
+// commitDetail returns the detail for a single commit, including files
+// enriched with titles. Only files under ontologyRoot are returned.
+func commitDetail(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, hash, ontologyRoot string,
 ) (*index.CommitDetailResult, []commitFileView, error) {
@@ -129,7 +118,7 @@ type commitItem struct {
 }
 
 // handleHALCommitsList serves GET /repos/{repo}/branches/{branch}/commits.
-func handleHALCommitsList(b hal.URLBuilder, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
+func handleHALCommitsList(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -146,7 +135,7 @@ func handleHALCommitsList(b hal.URLBuilder, provider commitsProvider, ontologyRo
 		from := r.URL.Query().Get("from")
 		before := r.URL.Query().Get("before")
 
-		entries, next, prev, err := provider.LogPaginated(r.Context(), ri, branch, ontologyRoot, limit, after, from, before)
+		entries, next, prev, err := logPaginated(r.Context(), ri, branch, ontologyRoot, limit, after, from, before)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list commits", branch)
 			return
@@ -194,7 +183,7 @@ func handleHALCommitsList(b hal.URLBuilder, provider commitsProvider, ontologyRo
 }
 
 // handleHALCommitDetail serves GET /repos/{repo}/branches/{branch}/commits/{sha}.
-func handleHALCommitDetail(b hal.URLBuilder, provider commitsProvider, ontologyRoot string) http.HandlerFunc {
+func handleHALCommitDetail(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -207,7 +196,7 @@ func handleHALCommitDetail(b hal.URLBuilder, provider commitsProvider, ontologyR
 			return
 		}
 
-		detail, files, err := provider.CommitDetail(r.Context(), ri, branch, sha, ontologyRoot)
+		detail, files, err := commitDetail(r.Context(), ri, branch, sha, ontologyRoot)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusNotFound, "Commit not found",
 				err.Error(), r.URL.Path)
