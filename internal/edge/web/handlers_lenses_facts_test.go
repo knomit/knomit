@@ -221,7 +221,7 @@ func allSlugsBut(drop ...string) []string {
 // see seedFilterCorpus), so a filter that is dropped, or reaches only one mount,
 // lets that mount's decoy into the union.
 func TestLensFacts_ForwardsFullFilterSet(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	mounts := []string{"alpha", "beta"}
 	for _, n := range mounts {
 		seedFilterCorpus(t, env.m.Get(n), n)
@@ -306,7 +306,7 @@ func TestLensFacts_InvalidNumericFilters400(t *testing.T) {
 // are written best-first, so recency order is the exact reverse of relevance.
 func TestLensFacts_TextQueryPreservesRelevanceOrder(t *testing.T) {
 	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
-	env := searchLens(t, storeProviders{}, "solo")
+	env := searchLens(t, "solo")
 	ri := env.m.Get("solo")
 	writeCosFact(t, ri, "kb/x/best.md", "best", 0.9, nil)
 	awaitNextSecond()
@@ -326,7 +326,7 @@ func TestLensFacts_TextQueryPreservesRelevanceOrder(t *testing.T) {
 // rank-0 rows first regardless of their timestamps — not a global recency sort.
 func TestLensFacts_TextQueryFusesByRankNotTimestamp(t *testing.T) {
 	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	writeFactsInOneCommit(t, env.m.Get("beta"),
 		factSpec{path: "kb/b/0.md", title: "b0", cos: 0.8},
 		factSpec{path: "kb/b/1.md", title: "b1", cos: 0.6})
@@ -347,7 +347,7 @@ func TestLensFacts_TextQueryFusesByRankNotTimestamp(t *testing.T) {
 // A text query reaches past the first page: the retrieval depth covers
 // offset+limit, so a page deep in the relevance list is served, not cut off.
 func TestLensFacts_TextQueryReachesPastTheFirstPage(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha")
+	env := searchLens(t, "alpha")
 	var specs []factSpec
 	for i := 0; i < 12; i++ {
 		specs = append(specs, factSpec{path: fmt.Sprintf("kb/a/%02d.md", i), title: fmt.Sprintf("a%02d", i)})
@@ -502,7 +502,7 @@ func TestLensFacts_NoRefanWhenNothingWasTruncated(t *testing.T) {
 // alpha's three, beta's two own, beta's three copies.
 func TestLensFacts_DedupedDuplicatesDoNotEatTheDepth(t *testing.T) {
 	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	writeFactsInOneCommit(t, env.m.Get("alpha"),
 		factSpec{path: "kb/a.md", title: "a"}, factSpec{path: "kb/b.md", title: "b"}, factSpec{path: "kb/c.md", title: "c"})
 	awaitNextSecond()

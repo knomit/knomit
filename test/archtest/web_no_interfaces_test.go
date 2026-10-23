@@ -28,7 +28,6 @@ var webInterfaceAllowlist = map[string]string{
 	"TopicLister":     "provider seam, deleted with the topics handler's rewrite",
 	"commitsProvider": "provider seam, deleted with the commits handler's rewrite",
 	"factSubProvider": "provider seam, deleted with the fact sub-resource handler's rewrite",
-	"motifsProvider":  "provider seam, deleted with the motifs handler's rewrite",
 	"originProvider":  "provider seam, deleted with the origin handler's rewrite",
 	"RefResolver":     "ref_view.go's resolver seam, deleted with its rewrite",
 }

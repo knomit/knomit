@@ -21,7 +21,6 @@ type storeProviders struct {
 	topicLister TopicLister
 	commits     commitsProvider
 	factSub     factSubProvider
-	motifs      motifsProvider
 	origin      originProvider
 }
 
@@ -40,9 +39,6 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.topicLister == nil {
 		p.topicLister = defaultTopicLister{}
-	}
-	if p.motifs == nil {
-		p.motifs = defaultMotifsProvider{}
 	}
 	if p.commits == nil {
 		p.commits = defaultCommitsProvider{}

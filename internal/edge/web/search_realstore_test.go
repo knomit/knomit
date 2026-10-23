@@ -206,13 +206,12 @@ type searchLensEnv struct {
 }
 
 // searchLens creates the repos (write first, then reads), a lens "eng" binding
-// them, and a router. providers carries whatever other provider a test still
-// stubs (the motifs vocabulary); the zero value is all defaults.
-func searchLens(t *testing.T, providers storeProviders, write string, reads ...string) searchLensEnv {
+// them, and a router over every mount's real store.
+func searchLens(t *testing.T, write string, reads ...string) searchLensEnv {
 	t.Helper()
 	emb := &cosEmbedder{}
 	m, _ := newTestLensManagerWith(t, emb, append([]string{write}, reads...)...)
-	r := (&Server{Manager: m, Embedder: emb, providers: providers}).NewAPIRouter()
+	r := (&Server{Manager: m, Embedder: emb}).NewAPIRouter()
 	rs := make([]string, 0, len(reads))
 	for _, n := range reads {
 		rs = append(rs, `{"repo":"`+n+`"}`)

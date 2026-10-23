@@ -2,9 +2,11 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,27 +18,15 @@ import (
 )
 
 // The lens motif carriers and the lens motif pivot (GET /lenses/{lens}/facts
-// ?motifs=…) read REAL stores: only the lens-wide VOCABULARY is still answered
-// by a stub (lensMotifsStub, until the motifs provider goes). A mount matches
+// ?motifs=…) read REAL stores, the lens-wide vocabulary included: each mount's
+// vocabulary is what its own facts and judge merges make it. A mount matches
 // the spellings it is handed against the facts it holds, so which mount answers
 // is decided by what the lens widens the query to.
 
-// lensMotifsEnv is lens "eng" (write alpha, read beta) over real stores, whose
-// vocabulary is answered by stub.
-func lensMotifsEnv(t *testing.T, stub *lensMotifsStub) searchLensEnv {
-	t.Helper()
-	return searchLens(t, storeProviders{motifs: stub}, "alpha", "beta")
-}
-
 func TestLensMotifCluster_PivotLinkCarriesTheMergedMembers(t *testing.T) {
-	env := lensMotifsEnv(t, splitVocabularyStub())
-	// degradation-quiet merges the spellings quiet-degradation (beta's) and
-	// silent-fallback (alpha's). The plural spelling and the strangers are out.
-	writeCosFact(t, env.m.Get("alpha"), "kb/a1.md", "alpha silent", 0.9, withMotifs("silent-fallback"))
-	writeCosFact(t, env.m.Get("alpha"), "kb/a2.md", "alpha plural", 0.9, withMotifs("silent-fallbacks"))
-	writeCosFact(t, env.m.Get("alpha"), "kb/a3.md", "alpha stranger", 0.9, withMotifs("scope-creep"))
-	writeCosFact(t, env.m.Get("beta"), "kb/b1.md", "beta quiet", 0.9, withMotifs("quiet-degradation"))
-	writeCosFact(t, env.m.Get("beta"), "kb/b2.md", "beta stranger", 0.9, withMotifs("scope-creep"))
+	// degradation-quiet merges alpha's judge-merged quiet-degradation +
+	// silent-fallback with beta's silent-fallback (writeLensVocabulary).
+	env := lensVocabulary(t)
 
 	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/degradation-quiet"))
 
@@ -44,16 +34,19 @@ func TestLensMotifCluster_PivotLinkCarriesTheMergedMembers(t *testing.T) {
 	require.Contains(t, href, "/lenses/eng/facts?", "the facts link must point at the lens")
 	require.Contains(t, href, "motifs=quiet-degradation%2Csilent-fallback")
 	require.Contains(t, href, "motif_match=exact")
-	// Every mount was asked with the same union filter, at the exact tier: each
-	// mount's own carrier is in, the plural spelling (stem tier only) and the
-	// strangers are out.
+	// Every mount was asked with the same union filter, at the exact tier:
+	// alpha's carriers of both spellings and beta's five are in, and the
+	// config-drift and scope-creep carriers are out.
 	var carriers []string
 	for _, c := range body.Carriers {
 		carriers = append(carriers, c.Title)
 	}
 	sort.Strings(carriers)
-	require.Equal(t, []string{"alpha silent", "beta quiet"}, carriers)
-	require.Equal(t, 2, body.CarrierCount)
+	require.Equal(t, []string{
+		"alpha quiet 0", "alpha quiet 1", "alpha silent 0",
+		"beta silent 0", "beta silent 1", "beta silent 2", "beta silent 3", "beta silent 4",
+	}, carriers)
+	require.Equal(t, 8, body.CarrierCount)
 	// And the preview cannot disagree with the listing the link opens.
 	linked := decodeLensFacts(t, env.get(t, strings.TrimPrefix(href, APIBase)))
 	require.Equal(t, carriers, linked.sortedTitles())
@@ -63,14 +56,15 @@ func TestLensMotifCluster_PivotLinkCarriesTheMergedMembers(t *testing.T) {
 // TestLensStats_HighlightsCarryQualifiedPaths: every path-bearing row a lens
 // read emits must carry the canonical wire path — bare for the write mount,
 // kb://<id12>/… for a read mount — or opening it 404s against the write repo.
+// beta spells the shape `config-drifts`, which shares alpha's cluster key.
 func TestLensMotifCluster_CarriersCarryQualifiedPaths(t *testing.T) {
 	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
-	env := lensMotifsEnv(t, splitVocabularyStub())
-	writeCosFact(t, env.m.Get("beta"), "kb/from-read.md", "read", 0.9, withMotifs("configuration-drifts"))
+	env := searchLens(t, "alpha", "beta")
+	writeCosFact(t, env.m.Get("beta"), "kb/from-read.md", "read", 0.9, withMotifs("config-drifts"))
 	awaitNextSecond()
 	writeCosFact(t, env.m.Get("alpha"), "kb/from-write.md", "write", 0.9, withMotifs("config-drift"))
 
-	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/drift-config"))
+	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift"))
 
 	byTitle := map[string]string{}
 	for _, c := range body.Carriers {
@@ -88,12 +82,12 @@ func TestLensMotifCluster_CarriersCarryQualifiedPaths(t *testing.T) {
 // mounts and the WRITE mount's copy must win exactly once.
 func TestLensMotifCluster_CarrierDedupeKeepsTheWriteCopy(t *testing.T) {
 	t.Parallel() // waits on commit stamps (see awaitNextSecond); overlaps the wait with the other such tests
-	env := lensMotifsEnv(t, splitVocabularyStub())
+	env := searchLens(t, "alpha", "beta")
 	writeCosFact(t, env.m.Get("alpha"), "kb/dup.md", "from write", 0.9, withMotifs("config-drift"))
 	awaitNextSecond()
 	writeCosFact(t, env.m.Get("beta"), "kb/dup.md", "from read", 0.9, withMotifs("config-drift"))
 
-	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/drift-config"))
+	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift"))
 
 	require.Len(t, body.Carriers, 1, "deduped; %+v", body.Carriers)
 	require.Equal(t, "from write", body.Carriers[0].Title)
@@ -104,21 +98,21 @@ func TestLensMotifCluster_CarrierDedupeKeepsTheWriteCopy(t *testing.T) {
 // carrier_count counts MATCHES, never fetched rows: bounding the preview must
 // never bound the count (kb/invariants/web/collections/count-vs-transfer).
 func TestLensMotifCluster_CarrierCountIsNotBoundedByThePreview(t *testing.T) {
-	env := lensMotifsEnv(t, splitVocabularyStub())
+	env := searchLens(t, "alpha", "beta")
 	writeFactsInOneCommit(t, env.m.Get("alpha"),
 		plainFact("kb/a0.md", "a0", withMotifs("config-drift")),
 		plainFact("kb/a1.md", "a1", withMotifs("config-drift")),
 		plainFact("kb/a2.md", "a2", withMotifs("config-drift")))
 	writeFactsInOneCommit(t, env.m.Get("beta"),
-		plainFact("kb/b0.md", "b0", withMotifs("configuration-drifts")),
-		plainFact("kb/b1.md", "b1", withMotifs("configuration-drifts")),
+		plainFact("kb/b0.md", "b0", withMotifs("config-drifts")),
+		plainFact("kb/b1.md", "b1", withMotifs("config-drifts")),
 		// The same path as alpha's a0: one fact in the union, two matches in
 		// the per-mount counts.
-		plainFact("kb/a0.md", "beta copy of a0", withMotifs("configuration-drifts")))
+		plainFact("kb/a0.md", "beta copy of a0", withMotifs("config-drifts")))
 
 	// Unbounded, every mount hands over everything, so the union is deduped
 	// and the count is exact: five facts.
-	all := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/drift-config"))
+	all := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift"))
 	require.Len(t, all.Carriers, 5)
 	require.Equal(t, 5, all.CarrierCount)
 
@@ -126,16 +120,17 @@ func TestLensMotifCluster_CarrierCountIsNotBoundedByThePreview(t *testing.T) {
 	// without fetching the rest, and the count falls back to the summed
 	// per-mount match counts (3+3), a documented upper bound — never to the
 	// one row the preview shows.
-	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/drift-config?limit=1"))
+	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift?limit=1"))
 	require.Len(t, body.Carriers, 1, "the preview is bounded by the requested limit")
 	require.Equal(t, 6, body.CarrierCount, "the summed per-mount match counts")
 }
 
-// writeLensDriftCarriers writes the carriers of the merged `drift-config`
-// cluster (splitVocabularyStub), split across mounts by SPELLING: alpha's five
-// carry `config-drift` (the elected canonical), beta's two carry
-// `configuration-drifts` and nothing else, and beta holds one stranger.
-// splitVocabularyStub says df 5 + 2, so the merged row promises 7.
+// writeLensDriftCarriers writes the carriers of the merged `config-drift`
+// cluster, split across mounts by SPELLING: alpha's five carry `config-drift`
+// (the elected canonical), beta's two carry `config-drifts` and nothing else,
+// and beta holds one stranger. The two spellings share the cluster key
+// config-drift, so the lens merges them (df 5 + 2 = 7); beta's own exact tier
+// resolves `config-drift` only to itself and finds nothing there.
 func writeLensDriftCarriers(t *testing.T, m *repos.Manager) {
 	t.Helper()
 	var alpha []factSpec
@@ -144,8 +139,8 @@ func writeLensDriftCarriers(t *testing.T, m *repos.Manager) {
 	}
 	writeFactsInOneCommit(t, m.Get("alpha"), alpha...)
 	writeFactsInOneCommit(t, m.Get("beta"),
-		plainFact("kb/b0.md", "beta 0", withMotifs("configuration-drifts")),
-		plainFact("kb/b1.md", "beta 1", withMotifs("configuration-drifts")),
+		plainFact("kb/b0.md", "beta 0", withMotifs("config-drifts")),
+		plainFact("kb/b1.md", "beta 1", withMotifs("config-drifts")),
 		plainFact("kb/b2.md", "beta stranger", withMotifs("scope-creep")))
 }
 
@@ -157,7 +152,7 @@ func writeLensDriftCarriers(t *testing.T, m *repos.Manager) {
 // The count and the list are the same query or the surface is lying, so the
 // assertion is exactly that: the pivot's total equals the df beside the name.
 func TestLensFacts_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
-	env := lensMotifsEnv(t, splitVocabularyStub())
+	env := searchLens(t, "alpha", "beta")
 	writeLensDriftCarriers(t, env.m)
 
 	// The df the vocabulary row promises.
@@ -165,7 +160,7 @@ func TestLensFacts_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
 	wantDF := 0
 	var canonical string
 	for _, e := range vocabulary.Embedded.Motifs {
-		if e.ClusterKey == "drift-config" {
+		if e.ClusterKey == "config-drift" {
 			wantDF, canonical = e.DF, e.Canonical
 		}
 	}
@@ -194,7 +189,7 @@ func TestLensFacts_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
 // list under it is narrowed — resolving it through a one-mount union would
 // re-run the exact bug, since that mount is the one spelling it differently.
 func TestLensFacts_PivotWideningIgnoresRepoNarrowing(t *testing.T) {
-	env := lensMotifsEnv(t, splitVocabularyStub())
+	env := searchLens(t, "alpha", "beta")
 	writeLensDriftCarriers(t, env.m)
 
 	body := decodeLensFacts(t, env.get(t, "/lenses/eng/facts?motifs=config-drift&motif_match=exact&repo=beta"))
@@ -207,7 +202,7 @@ func TestLensFacts_PivotWideningIgnoresRepoNarrowing(t *testing.T) {
 // singleton, which is what the store does with it too — each mount answers for
 // the literal spelling, and nothing else comes along.
 func TestLensFacts_UnknownMotifTermIsPassedThroughUnchanged(t *testing.T) {
-	env := lensMotifsEnv(t, splitVocabularyStub())
+	env := searchLens(t, "alpha", "beta")
 	writeLensDriftCarriers(t, env.m)
 	writeCosFact(t, env.m.Get("alpha"), "kb/n.md", "alpha unknown", 0.9, withMotifs("nothing-like-this"))
 	writeCosFact(t, env.m.Get("beta"), "kb/n.md", "beta unknown", 0.9, withMotifs("nothing-like-this"))
@@ -230,14 +225,18 @@ func TestLensFacts_UnknownMotifTermIsPassedThroughUnchanged(t *testing.T) {
 // same repo read directly does not. The skip is what keeps a lens of one
 // answering exactly like the repo it wraps. The vocabulary here HAS the
 // sibling, and the corpus has a fact carrying it, so a widened term would
-// return that fact and the lens would differ from the repo.
+// return that fact and the lens would differ from the repo. The sibling is
+// `config-drifts`: it shares the grouping key of `config-drift`, and the alias
+// table (never rebuilt here) resolves each spelling only to itself.
 func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
-	env := searchLens(t, storeProviders{motifs: &lensMotifsStub{clusters: map[string][]vocab.MotifCluster{
-		"alpha": {{ClusterKey: "drift-config", CanonicalID: "config-drift",
-			Members: []string{"config-drift", "configuration-drifts"}, DF: 2, DFTotal: 2}},
-	}}}, "alpha")
+	env := searchLens(t, "alpha")
 	writeCosFact(t, env.m.Get("alpha"), "kb/a.md", "carries the canonical", 0.9, withMotifs("config-drift"))
-	writeCosFact(t, env.m.Get("alpha"), "kb/b.md", "carries the sibling", 0.9, withMotifs("configuration-drifts"))
+	writeCosFact(t, env.m.Get("alpha"), "kb/b.md", "carries the sibling", 0.9, withMotifs("config-drifts"))
+
+	// Positive control: the lens vocabulary does hold the sibling, so a
+	// widened term would reach kb/b.md.
+	cluster := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift"))
+	require.Equal(t, []string{"config-drift", "config-drifts"}, cluster.Members)
 
 	repo := factsWire{}
 	require.NoError(t, json.Unmarshal(repoWire(t, env.r, "alpha", "facts?motifs=config-drift&motif_match=exact"), &repo))
@@ -265,23 +264,29 @@ func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
 // lens whose answer depends on which mount a reader's vocabulary happened to
 // come from — the shape the merged vocabulary exists to remove.
 func TestLensFacts_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
-	env := lensMotifsEnv(t, divergentVocabulariesUnion())
+	env := searchLens(t, "alpha", "beta")
 	seedDivergentVocabularies(t, env.m)
 
 	titles := lensFactTitles(t, env.r, "/lenses/eng/facts?motifs=config-drift")
 
-	// alpha merged the spellings, so its aliased fact answers; beta never did and
-	// answers anyway, because the LENS did; and beta's exact carrier is still
-	// there; and a fact outside the shape does not answer.
-	require.Equal(t, []string{"Alpha aliased", "Beta aliased", "Beta exact"}, titles)
+	// alpha merged the spellings, so both its carriers answer; beta never did
+	// and its aliased fact answers anyway, because the LENS did; and beta's
+	// exact carrier is still there; and a fact outside the shape does not
+	// answer.
+	require.Equal(t, []string{"Alpha aliased", "Alpha exact", "Beta aliased", "Beta exact"}, titles)
 }
 
 // seedDivergentVocabularies writes the asymmetry the semantics turn on: mount
-// alpha judge-merged "config-drift" and "configuration-drifts" (its vocabulary,
-// divergentVocabulariesUnion); mount beta never did, and holds both spellings.
+// alpha holds both spellings and judge-merged "config-drift" and
+// "configuration-drifts" (which share no grouping key); mount beta holds both
+// spellings too and never merged them, so on beta they are two clusters. The
+// lens unions alpha's merged cluster with both of beta's (one by key, one by
+// the shared spelling) into one shape.
 func seedDivergentVocabularies(t *testing.T, m *repos.Manager) {
 	t.Helper()
+	writeCosFact(t, m.Get("alpha"), "kb/alpha-exact.md", "Alpha exact", 0.9, withMotifs("config-drift"))
 	writeCosFact(t, m.Get("alpha"), "kb/alpha-aliased.md", "Alpha aliased", 0.9, withMotifs("configuration-drifts"))
+	judgeMerge(t, m.Get("alpha"), "config-drift", "configuration-drifts", "same mechanism")
 	writeCosFact(t, m.Get("beta"), "kb/beta-exact.md", "Beta exact", 0.9, withMotifs("config-drift"))
 	writeCosFact(t, m.Get("beta"), "kb/beta-aliased.md", "Beta aliased", 0.9, withMotifs("configuration-drifts"))
 	writeCosFact(t, m.Get("beta"), "kb/beta-other.md", "Beta other", 0.9, withMotifs("something-else"))
@@ -292,7 +297,7 @@ func seedDivergentVocabularies(t *testing.T, m *repos.Manager) {
 // spelling — the per-mount rule the test above used to assert is still the rule
 // for a mount read on its own.
 func TestLensFacts_TheMergeBindsReadsAndRewritesNothing(t *testing.T) {
-	env := lensMotifsEnv(t, divergentVocabulariesUnion())
+	env := searchLens(t, "alpha", "beta")
 	seedDivergentVocabularies(t, env.m)
 
 	// The lens widened the TERM, which is why "Beta aliased" comes back.
@@ -317,7 +322,7 @@ func TestLensFacts_TheMergeBindsReadsAndRewritesNothing(t *testing.T) {
 // the query but not its spelling), so a mount that was not handed the tier
 // answers differently from one that was.
 func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	writeCosFact(t, env.m.Get("alpha"), "kb/a1.md", "alpha exact", 0.9, withMotifs("silent-fallback-path"))
 	writeCosFact(t, env.m.Get("alpha"), "kb/a2.md", "alpha near", 0.9, withMotifs("silent-fallback-retry"))
 	writeCosFact(t, env.m.Get("beta"), "kb/b1.md", "beta near", 0.9, withMotifs("silent-fallback-timeout"))
@@ -337,7 +342,7 @@ func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
 // mount is queried at all (C3/MN6). A permitted tier does read every mount, so
 // the counter could have moved.
 func TestLensFacts_LooseMotifTierRejected(t *testing.T) {
-	env := searchLens(t, storeProviders{}, "alpha", "beta")
+	env := searchLens(t, "alpha", "beta")
 	reads := countMountReads(t, env.m, []string{"alpha", "beta"}, "RecentFacts")
 
 	rec := env.get(t, "/lenses/eng/facts?motifs=a-b&motif_match=token-1")
@@ -386,11 +391,10 @@ func TestLensFacts_MotifsOnTheWire(t *testing.T) {
 // fan-out that dropped the branch on its way out would print the message with
 // the one word it exists to carry missing.
 func TestLensFacts_MotifWideningNamesTheFailingMountsBranch(t *testing.T) {
-	stub := splitVocabularyStub()
-	stub.errRepo = "beta"
-	stub.errWith = model.ErrBranchNotFound
-	env := lensMotifsEnv(t, stub)
+	env := searchLens(t, "alpha", "beta")
 	writeLensDriftCarriers(t, env.m)
+	var hits atomic.Int64
+	failMotifRead(t, env.m.Get("beta"), vocab.ReadClustersUnder, model.ErrBranchNotFound, &hits)
 
 	rec := env.get(t, "/lenses/eng/facts?motifs=config-drift&motif_match=exact")
 
@@ -404,6 +408,7 @@ func TestLensFacts_MotifWideningNamesTheFailingMountsBranch(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &problem), rec.Body.String())
 	require.Equal(t, `no branch named "`+env.m.Get("beta").AgentBranch()+`"`, problem.Detail,
 		"the failing mount's branch, not an empty one")
+	require.EqualValues(t, 1, hits.Load(), "the widening read beta's vocabulary once")
 }
 
 // A mount failing the widening fails the WHOLE request, exactly as a mount
@@ -412,10 +417,11 @@ func TestLensFacts_MotifWideningNamesTheFailingMountsBranch(t *testing.T) {
 // rule as everywhere else; it is asserted here because the widening is the one
 // place it reaches a mount the caller did not ask about.
 func TestLensFacts_MotifWideningFailsTheWholeRequest(t *testing.T) {
-	stub := splitVocabularyStub()
-	stub.errRepo = "beta"
-	env := lensMotifsEnv(t, stub)
+	env := searchLens(t, "alpha", "beta")
 	writeLensDriftCarriers(t, env.m)
+	sentinel := errors.New("beta vocabulary on fire")
+	var hits atomic.Int64
+	failMotifRead(t, env.m.Get("beta"), vocab.ReadClustersUnder, sentinel, &hits)
 
 	// ...and it does so even when the caller narrowed beta AWAY: the term's
 	// meaning is lens-wide, so beta is still read to resolve it. That coupling
@@ -423,8 +429,7 @@ func TestLensFacts_MotifWideningFailsTheWholeRequest(t *testing.T) {
 	// accidental, so a later change cannot quietly drop it as a bug.
 	rec := env.get(t, "/lenses/eng/facts?motifs=config-drift&repo=alpha")
 
-	// The exact status, not merely "not 200": the stub fails with a plain
-	// error, so 500 is the one right answer here.
-	require.Equal(t, http.StatusInternalServerError, rec.Code,
-		"a mount excluded by repo= still resolves the term, so its failure fails the request; body=%s", rec.Body.String())
+	// The exact status, not merely "not 200": the read fails with a plain
+	// error, so 500 is the one right answer here, carrying that error.
+	requireFailedWith(t, rec, sentinel, &hits)
 }
