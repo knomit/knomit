@@ -144,13 +144,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		// just minted, so every ref here is new.
 		canonRefs, _, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, nil)
 		if gerr != nil {
-			// A resolver that could not reach the store is not a broken ref.
-			if storeUnavailable(gerr) {
-				writeStoreUnavailable(w, r)
-				return
-			}
-			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
-				gerr.Error(), r.URL.Path)
+			writeGateProblem(w, r, gerr)
 			return
 		}
 		f.Refs = canonRefs

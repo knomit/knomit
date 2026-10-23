@@ -29,6 +29,20 @@ func writerGate(ri *repos.RepoInstance, branch string) refs.Gate {
 	}).WithFiles(systemFileResolver(ri, branch))
 }
 
+// writeGateProblem answers a writerGate refusal for POST and PUT alike: 422
+// for refs that do not resolve, 503 when a resolver could not reach the store
+// at all (the gate wraps the resolver's error, %w). One spelling, because PUT
+// reaches the gate only after priorRefs has read the same store — its copy of
+// this branch would be reachable only in a teardown race, and untestable.
+func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
+	if storeUnavailable(gerr) {
+		writeStoreUnavailable(w, r)
+		return
+	}
+	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
+		gerr.Error(), r.URL.Path)
+}
+
 // systemFileResolver resolves a ref to a .knomit/ file in ri at the tip of
 // branch — the same branch and moment the fact resolver uses.
 //
@@ -314,13 +328,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		}
 		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)
 		if gerr != nil {
-			// A resolver that could not reach the store is not a broken ref.
-			if storeUnavailable(gerr) {
-				writeStoreUnavailable(w, r)
-				return
-			}
-			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
-				gerr.Error(), r.URL.Path)
+			writeGateProblem(w, r, gerr)
 			return
 		}
 
