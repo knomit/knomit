@@ -551,7 +551,7 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // how to do it. Registering the reader alone left those suffixes to fall
 // through into the fact read, where "<uuid>.md/incoming" is just a path that
 // does not exist — a deterministic 500 for every fact (issue #178).
-func handleHALLensFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
+func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 
@@ -646,7 +646,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader, subProvider factSubP
 				writeStoreError(w, r, err, "Failed to read fact", branch)
 				return
 			}
-			if dispatchResolvedFactSubResource(b, subProvider, ri, ri.Name(), branch, rel, sub, w, r) {
+			if dispatchResolvedFactSubResource(b, ri, ri.Name(), branch, rel, sub, w, r) {
 				return
 			}
 		}

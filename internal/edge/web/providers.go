@@ -18,7 +18,6 @@ package web
 type storeProviders struct {
 	factReader FactReader
 	factWriter FactWriter
-	factSub    factSubProvider
 	origin     originProvider
 }
 
@@ -34,9 +33,6 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.factWriter == nil {
 		p.factWriter = defaultFactWriter{}
-	}
-	if p.factSub == nil {
-		p.factSub = defaultFactSubProvider{}
 	}
 	if p.origin == nil {
 		p.origin = defaultOriginProvider{}
