@@ -36,16 +36,6 @@ type RefView struct {
 	Links hal.LinkMap `json:"_links,omitempty"`
 }
 
-// RefResolver is used by BuildRefViews to decide whether a fact-path ref is
-// navigable at the current anchor. Tests provide stub resolvers; production
-// uses FactQuery.FactExistsAt (factExistsAt) via readerRefResolver, which has
-// already been handed the caller's anchor.
-type RefResolver interface {
-	// Exists returns true when a fact exists at the given repo-relative path,
-	// visible at the caller's anchor.
-	Exists(path string) bool
-}
-
 // BuildRefViews transforms a fact's raw refs into structured RefView entries.
 //
 // KIND comes from fact.ClassifyRef — the single ref-classification authority —
@@ -58,9 +48,10 @@ type RefResolver interface {
 // "url" the client then rendered as a clickable anchor for a scheme no browser
 // can open.
 //
-// RESOLUTION is unchanged and stays commit-anchored: the resolver already holds
-// the caller's anchor, so Exists answers "did this fact exist at the version
-// being viewed", not "does it exist now". That is why the fact/broken split
+// RESOLUTION stays commit-anchored: resolver is the readerRefResolver the
+// handler built with the caller's anchor (ri, branch, commit), so Exists asks
+// the store (FactQuery.FactExistsAt) "did this fact exist at the version being
+// viewed", not "does it exist now". That is why the fact/broken split
 // lives here and not in ClassifyRef, which is pure and has no anchor.
 //
 // The anchor also shapes _links.target: branch-anchored at HEAD,
@@ -75,7 +66,7 @@ func BuildRefViews(
 	repo string,
 	a hal.Anchor,
 	raw []string,
-	resolver RefResolver,
+	resolver readerRefResolver,
 	localRepoID string,
 ) []RefView {
 	out := make([]RefView, 0, len(raw))
