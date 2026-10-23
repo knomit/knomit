@@ -21,6 +21,7 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/testsupport/modroot"
 )
 
 // F22: merges and work items.
@@ -83,7 +84,7 @@ func TestApplyPruneDecisions_ContextKeepsOnlyAgreedKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged, "fixture: the merge must have happened")
 
-	merged := readFactForTest(t, svc, branch, mergedFactPath(t, svc, branch, "Merged"))
+	merged := synthtest.ReadFact(t, svc, branch, mergedFactPath(t, svc, branch, "Merged"))
 	require.Equal(t, map[string]any{"task": "t-17"}, merged.Context)
 	w := contextWarn(*warns)
 	require.NotEmpty(t, w, "the dropped key must be named: %v", *warns)
@@ -114,7 +115,7 @@ func TestApplyPruneDecisions_ContextAgreedButUndeclaredAtTarget(t *testing.T) {
 			}}, "review-test", sink, branch, synthtest.BareRefFixture, "kb", tc.o)
 			require.NoError(t, err)
 			require.Equal(t, 1, stats.Merged)
-			merged := readFactForTest(t, svc, branch, mergedFactPath(t, svc, branch, "Merged"))
+			merged := synthtest.ReadFact(t, svc, branch, mergedFactPath(t, svc, branch, "Merged"))
 			require.Nil(t, merged.Context)
 			require.Contains(t, contextWarn(*warns), ": task")
 		})
@@ -131,7 +132,7 @@ func TestApplyPruneDecisions_ConfidenceUpdateKeepsContext(t *testing.T) {
 		"review-test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Contains(t, stats.Rewritten, "kb/verdicts/a.md", "fixture: the update must have been applied")
-	got := readFactForTest(t, svc, branch, "kb/verdicts/a.md")
+	got := synthtest.ReadFact(t, svc, branch, "kb/verdicts/a.md")
 	require.Equal(t, 0.42, got.Confidence)
 	require.Equal(t, map[string]any{"task": "t-17", "verdict": "agree"}, got.Context)
 }
@@ -172,7 +173,7 @@ func TestDedupCluster_ContextIsTheWinnersWholeMap(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, surviving, 1)
 	require.Equal(t, winnerPath, surviving[0].File, "fixture: the more confident fact wins")
-	require.Equal(t, map[string]any{"task": "t-1"}, readFactForTest(t, svc, branch, winnerPath).Context)
+	require.Equal(t, map[string]any{"task": "t-1"}, synthtest.ReadFact(t, svc, branch, winnerPath).Context)
 }
 
 // Distill writes a NEW claim; it inherits nothing from its inputs.
@@ -188,7 +189,7 @@ func TestApplyDistillDecisions_NewClaimInheritsNoContext(t *testing.T) {
 		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)
-	require.Nil(t, readFactForTest(t, svc, branch, written[0].Path).Context)
+	require.Nil(t, synthtest.ReadFact(t, svc, branch, written[0].Path).Context)
 }
 
 // C1 (a)(b): a prune/distill member and a hypothesize seed carry their context
@@ -264,7 +265,7 @@ func TestPrompts_NeverInterpolateContext(t *testing.T) {
 	// shared prompt payload vocabulary (FactForLLM and WorkItemContent moved there
 	// in 13a, carrying Context into the payload), so a new step file is where a
 	// leak would appear. The glob is non-vacuous: step must have files.
-	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go", "discovery.go"}
+	builders := []string{"prompts.go", "prompt_review.go", "review_strategy.go", "hypothesize_strategy.go"}
 	stepFiles, err := filepath.Glob(filepath.Join("step", "*.go"))
 	require.NoError(t, err)
 	for _, f := range stepFiles {
@@ -272,7 +273,21 @@ func TestPrompts_NeverInterpolateContext(t *testing.T) {
 			builders = append(builders, filepath.ToSlash(f))
 		}
 	}
-	require.Greater(t, len(builders), 5, "fixture: the step files must be found")
+	require.Greater(t, len(builders), 4, "fixture: the step files must be found")
+
+	// The discovery child builds the discover prompt (renderDiscoverPrompt), so
+	// every non-test file of it is scanned too, by directory rather than by a
+	// named file. Non-vacuous: the child must have files.
+	discoveryFiles, err := filepath.Glob(modroot.Path(t, "internal", "corpus", "synthesize", "discovery", "*.go"))
+	require.NoError(t, err)
+	discoveryScanned := 0
+	for _, f := range discoveryFiles {
+		if !strings.HasSuffix(f, "_test.go") {
+			builders = append(builders, f)
+			discoveryScanned++
+		}
+	}
+	require.GreaterOrEqual(t, discoveryScanned, 1, "fixture: the discovery files must be found")
 	for _, name := range builders {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, name, nil, 0)

@@ -82,6 +82,16 @@ func ReadSources(t *testing.T, svc *store.Service, branch, path string) int {
 	return parsed.Sources
 }
 
+// ReadFact parses the fact at path on branch.
+func ReadFact(t *testing.T, svc *store.Service, branch, path string) fact.Fact {
+	t.Helper()
+	res, err := svc.Facts().ReadFact(context.Background(), branch, path, nil)
+	require.NoError(t, err)
+	f, err := fact.ParseFact(path, res.Content)
+	require.NoError(t, err)
+	return f
+}
+
 // CollectWarns returns an onProgress sink plus a pointer to the warn messages
 // it accumulates.
 func CollectWarns() (func(step.ProgressEvent), *[]string) {

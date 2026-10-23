@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/step"
 	"os"
 	"strings"
@@ -40,8 +41,8 @@ func TestFarLaneDemo_RenderTheShipPrompt(t *testing.T) {
 	}
 	const motif = "measure-becomes-target"
 
-	payload := DiscoverWorkPayload{
-		Direction: DiscoverBackward, // far lane routes backward → hypothesize
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverBackward, // far lane routes backward → hypothesize
 		Lane:      bridge.LaneFar,
 		Bridge: bridge.BridgeSeedSet{
 			Token: motif,
@@ -87,7 +88,7 @@ func TestFarLaneDemo_RenderTheShipPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := renderDiscoverPrompt(payload, "kb")
+	prompt := discovery.RenderDiscoverWorkItem(payload, "kb").Prompt
 
 	// The SHIP line now comes from the renderer. Asserted rather than spliced:
 	// a demo that printed a line the code does not produce would be a claim

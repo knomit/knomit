@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -259,7 +260,7 @@ func enqueueBackwardBridgeItems(ctx context.Context, d step.Deps, sessionID stri
 
 	sl := bridge.ScopeLabel(d.Scope)
 	for i, rb := range ranked {
-		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: rb.b, ScopeLabel: sl}
+		payload := discovery.DiscoverWorkPayload{Direction: discovery.DiscoverBackward, Bridge: rb.b, ScopeLabel: sl}
 		payloadJSON, mErr := json.Marshal(payload)
 		if mErr != nil {
 			return step.Wrapf(hypothesizeTool, mErr, "marshal backward discover %d", i)
@@ -381,13 +382,13 @@ func (hypothesizeStrategy) Render(ctx context.Context, d step.Deps, sess *model.
 		}, nil
 
 	case "discover":
-		var payload DiscoverWorkPayload
+		var payload discovery.DiscoverWorkPayload
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 			return nil, step.Wrapf(hypothesizeTool, err, "unmarshal discover payload for prompt")
 		}
 		return &step.WorkItemView{
 			Type:   "discover",
-			Prompt: RenderDiscoverWorkItem(payload, d.RI.OntologyRoot()).Prompt,
+			Prompt: discovery.RenderDiscoverWorkItem(payload, d.RI.OntologyRoot()).Prompt,
 		}, nil
 
 	default:

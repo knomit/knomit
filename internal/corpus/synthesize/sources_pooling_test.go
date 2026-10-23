@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"testing"
@@ -107,20 +108,20 @@ func TestApplyDiscoveredProposals_SourcesIsOne(t *testing.T) {
 	synthtest.SeedFactWithSources(t, svc, branch, "kb/a.md", 4)
 	synthtest.SeedFactWithSources(t, svc, branch, "kb/b.md", 7)
 
-	payload := DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{
 			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
-	props := []DiscoveredFact{{
+	props := []discovery.DiscoveredFact{{
 		Path: "kb/d.md", Title: "d", Body: "d", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
 
-	written, err := applyDiscoveredProposals(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil,
-		payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := discovery.ApplyDiscoveredProposals(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil,
+		payload, props, discovery.DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
 

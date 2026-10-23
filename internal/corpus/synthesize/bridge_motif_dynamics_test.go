@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"strings"
 	"testing"
@@ -181,23 +182,51 @@ func TestMotifBridging_FromNothing(t *testing.T) {
 // makes must still be there when the next session reads the corpus, and must
 // not be re-applied by it.
 func TestMotifBridging_ReinforcementSurvivesLaterSessions(t *testing.T) {
-	env := newReinforceEnv(t)
+	env := synthtest.NewReinforceCorpus(t)
+	ctx := context.Background()
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverBackward,
+		Lane:      bridge.LaneFar,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "measure-becomes-target",
+			Kind:  bridge.BridgeMotif,
+			Members: []step.FactForLLM{
+				{File: synthtest.ReinforceSeedOnePath}, {File: synthtest.ReinforceSeedTwoPath},
+			},
+		},
+	}
+	repoID := fact.ID12(env.RI.ID())
+	apply := func() []string {
+		return discovery.ApplyReinforcements(ctx, env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+			payload, []discovery.FactReinforcement{{
+				Path:   synthtest.ReinforceTargetPath,
+				Reason: "Both state that the verifier sits inside the agent's reachable action space.",
+				Refs:   step.FlexStrings{synthtest.ReinforceSeedOnePath, synthtest.ReinforceSeedTwoPath},
+			}}, env.Branch, repoID, func(step.ProgressEvent) {})
+	}
+	read := func() fact.Fact {
+		res, err := env.Svc.Facts().ReadFact(ctx, env.Branch, synthtest.ReinforceTargetPath, nil)
+		require.NoError(t, err)
+		f, err := fact.ParseFact(synthtest.ReinforceTargetPath, res.Content)
+		require.NoError(t, err)
+		return f
+	}
 
-	require.Equal(t, []string{reinforcePath}, env.apply(goodReinforcement()))
-	afterWrite := env.read(reinforcePath)
+	require.Equal(t, []string{synthtest.ReinforceTargetPath}, apply())
+	afterWrite := read()
 	require.Equal(t, 2, afterWrite.Sources)
 
 	// A whole session runs over the corpus in between.
-	_, _ = motifBridgeSession(env.RestatementEnv, step.EffortHigh)
+	_, _ = motifBridgeSession(env, step.EffortHigh)
 
-	afterSession := env.read(reinforcePath)
+	afterSession := read()
 	require.Equal(t, afterWrite.Sources, afterSession.Sources)
 	require.Equal(t, afterWrite.Refs, afterSession.Refs)
 	require.Equal(t, afterWrite.EvidenceWeight, afterSession.EvidenceWeight)
 
 	// And a second reinforcement attempt after that session is still a no-op.
-	require.Empty(t, env.apply(goodReinforcement()))
-	require.Equal(t, afterWrite.Sources, env.read(reinforcePath).Sources)
+	require.Empty(t, apply())
+	require.Equal(t, afterWrite.Sources, read().Sources)
 }
 
 // seedActivationVocabulary gives the corpus enough RECURRING vocabulary to
@@ -243,8 +272,8 @@ func seedActivationVocabulary(e *synthtest.RestatementEnv) {
 // brings filler vocabulary — and the fillers enumerate too. Asserting on the
 // total would be asserting on the fillers. Filtering by token asserts on the
 // subject, which is what these tests always meant.
-func motifPayloadsFor(payloads []DiscoverWorkPayload, token string) []DiscoverWorkPayload {
-	var out []DiscoverWorkPayload
+func motifPayloadsFor(payloads []discovery.DiscoverWorkPayload, token string) []discovery.DiscoverWorkPayload {
+	var out []discovery.DiscoverWorkPayload
 	for _, p := range motifPayloads(payloads) {
 		if p.Bridge.Token == token {
 			out = append(out, p)

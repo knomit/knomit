@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"strings"
@@ -39,7 +41,7 @@ func seedDated(t *testing.T, svc *store.Service, branch, path string, typ fact.T
 
 func expiresOf(t *testing.T, svc *store.Service, branch, path string) string {
 	t.Helper()
-	return readFactForTest(t, svc, branch, path).Expires
+	return synthtest.ReadFact(t, svc, branch, path).Expires
 }
 
 // TestApplyPruneDecisions_MergedFactCarriesNoExpires (ruling (a)): a prune
@@ -133,19 +135,26 @@ func TestApplyReflectDecisions_NewMethodologyInheritsNoExpires(t *testing.T) {
 
 // TestApplyDiscoveredProposals_NewClaimInheritsNoExpires.
 func TestApplyDiscoveredProposals_NewClaimInheritsNoExpires(t *testing.T) {
-	svc, branch, payload := threeSeedProposalEnv(t)
+	svc, branch := synthtest.NewSourcesTestRepo(t)
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
+		Bridge: bridge.BridgeSeedSet{
+			Token: "x", Kind: bridge.BridgeEntity,
+			Members: []step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+		},
+	}
 	seedDated(t, svc, branch, "kb/a.md", fact.Hypothesis, expA)
 	seedDated(t, svc, branch, "kb/b.md", fact.Observation, expB)
-	props := []DiscoveredFact{{
+	props := []discovery.DiscoveredFact{{
 		Path: "kb/kept.md", Title: "kept", Body: "kept", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9,
 		Refs: []string{"kb/a.md", "kb/b.md"},
 	}}
-	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
-		nil, payload, props, DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
+	written, err := discovery.ApplyDiscoveredProposals(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+		nil, payload, props, discovery.DiscoveryGates{}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Len(t, written, 1)
-	require.Equal(t, "", readFactForTest(t, svc, branch, written[0]).Expires)
+	require.Equal(t, "", synthtest.ReadFact(t, svc, branch, written[0]).Expires)
 }
 
 // TestDedupCluster_WinnerKeepsItsOwnExpires: review's pairwise dedup HAS a

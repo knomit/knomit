@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
@@ -452,7 +453,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	sl := bridge.ScopeLabel(d.Scope)
 	rank := 0
 	for _, b := range bridges {
-		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl}
+		payload := discovery.DiscoverWorkPayload{Direction: discovery.DiscoverForward, Bridge: b, ScopeLabel: sl}
 		if err := enqueueDiscover(ctx, d, sess, payload,
 			fmt.Sprintf("discover-fwd-%d", rank), bridge.ForwardDiscoverPriority(rank)); err != nil {
 			return err
@@ -491,7 +492,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 	// asserted on the total in TestEffortBudget_StaysBelowPriorityBand — do not
 	// "fix" this by inventing a second band.
 	for _, b := range nearMotif {
-		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl, Lane: bridge.LaneNear}
+		payload := discovery.DiscoverWorkPayload{Direction: discovery.DiscoverForward, Bridge: b, ScopeLabel: sl, Lane: bridge.LaneNear}
 		if err := enqueueDiscover(ctx, d, sess, payload,
 			fmt.Sprintf("discover-motif-near-%d", rank), bridge.ForwardDiscoverPriority(rank)); err != nil {
 			return err
@@ -499,7 +500,7 @@ func (reviewStrategy) Plan(ctx context.Context, d step.Deps, sess *model.Pipelin
 		rank++
 	}
 	for _, b := range farMotif {
-		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: b, ScopeLabel: sl, Lane: bridge.LaneFar}
+		payload := discovery.DiscoverWorkPayload{Direction: discovery.DiscoverBackward, Bridge: b, ScopeLabel: sl, Lane: bridge.LaneFar}
 		if err := enqueueDiscover(ctx, d, sess, payload,
 			fmt.Sprintf("discover-motif-far-%d", rank), bridge.ForwardDiscoverPriority(rank)); err != nil {
 			return err
@@ -1056,11 +1057,11 @@ func (reviewStrategy) Render(ctx context.Context, d step.Deps, sess *model.Pipel
 	case motif.DefineStepType:
 		content, err = RenderMotifDefineWorkItem(item.FactsJSON)
 	case "discover":
-		var payload DiscoverWorkPayload
+		var payload discovery.DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
 			return nil, step.Wrapf(step.ReviewTool, uerr, "unmarshal discover payload for prompt")
 		}
-		content = RenderDiscoverWorkItem(payload, ontologyRoot)
+		content = discovery.RenderDiscoverWorkItem(payload, ontologyRoot)
 	default:
 		return nil, step.Errf(step.ReviewTool, "unknown step type %q", item.StepType)
 	}

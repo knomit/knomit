@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -153,8 +154,8 @@ func TestPaging_TokenRequiredOnlyWhereItIsIssued(t *testing.T) {
 	require.Greater(t, len(reflectJSON), step.MaxPageFactBytes,
 		"precondition: the reflect payload must be big enough to page if anything paged it")
 
-	discoverJSON, err := json.Marshal(DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	discoverJSON, err := json.Marshal(discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge:    bridge.BridgeSeedSet{Token: "x", Kind: bridge.BridgeEntity, Members: bigPruneFacts(40, 3*1024)},
 	})
 	require.NoError(t, err)

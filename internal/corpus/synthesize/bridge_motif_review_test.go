@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/internal/synthtest"
 	"knomit/internal/corpus/synthesize/step"
 	"strings"
@@ -19,17 +20,17 @@ import (
 
 // motifBridgeSession runs one real review session at the given effort and
 // returns the discover payloads it enqueued, plus the session's health lines.
-func motifBridgeSession(e *synthtest.RestatementEnv, effort step.Effort) ([]DiscoverWorkPayload, []string) {
+func motifBridgeSession(e *synthtest.RestatementEnv, effort step.Effort) ([]discovery.DiscoverWorkPayload, []string) {
 	e.T.Helper()
 	res, err := NewReviewerWithOptions(e.RI, nil, effort, step.ScopeFilter{}).StartSession(context.Background())
 	require.NoError(e.T, err)
 
-	var out []DiscoverWorkPayload
+	var out []discovery.DiscoverWorkPayload
 	for _, item := range e.WorkItems(res.SessionID) {
 		if item.StepType != "discover" {
 			continue
 		}
-		var p DiscoverWorkPayload
+		var p discovery.DiscoverWorkPayload
 		require.NoError(e.T, json.Unmarshal([]byte(item.FactsJSON), &p))
 		out = append(out, p)
 	}
@@ -37,8 +38,8 @@ func motifBridgeSession(e *synthtest.RestatementEnv, effort step.Effort) ([]Disc
 }
 
 // motifPayloads filters to the motif axis.
-func motifPayloads(in []DiscoverWorkPayload) []DiscoverWorkPayload {
-	var out []DiscoverWorkPayload
+func motifPayloads(in []discovery.DiscoverWorkPayload) []discovery.DiscoverWorkPayload {
+	var out []discovery.DiscoverWorkPayload
 	for _, p := range in {
 		if p.Bridge.Kind == bridge.BridgeMotif {
 			out = append(out, p)
@@ -88,7 +89,7 @@ func TestReviewPlan_FarLaneRoutesBackward(t *testing.T) {
 	require.Len(t, motifs, 1)
 	require.Equal(t, bridge.LaneFar, motifs[0].Lane,
 		"precondition: with no SIMILAR_TO edge the pair is a far-lane group")
-	require.Equal(t, DiscoverBackward, motifs[0].Direction)
+	require.Equal(t, discovery.DiscoverBackward, motifs[0].Direction)
 	require.Equal(t, "measure-becomes-target", motifs[0].Bridge.Token)
 	require.Len(t, motifs[0].Bridge.Members, 2)
 }

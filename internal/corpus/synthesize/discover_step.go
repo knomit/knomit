@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/model"
@@ -37,10 +38,10 @@ import (
 // not parse on a retry either, so leaving it unanswered would wedge the
 // session on an unanswerable item.
 type discoverDecision struct {
-	payload        DiscoverWorkPayload
+	payload        discovery.DiscoverWorkPayload
 	parsed         bool
-	proposals      []DiscoveredFact
-	reinforcements []FactReinforcement
+	proposals      []discovery.DiscoveredFact
+	reinforcements []discovery.FactReinforcement
 }
 
 // decodeDiscoverStep is the shared Decode half of the discover step. tool
@@ -50,12 +51,12 @@ type discoverDecision struct {
 // server-written, so failing to read it back means the queue is corrupt, not
 // that the agent answered badly.
 func decodeDiscoverStep(tool string, item *model.PipelineWorkItem, response string) (*discoverDecision, error) {
-	var payload DiscoverWorkPayload
+	var payload discovery.DiscoverWorkPayload
 	if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 		return nil, step.Wrapf(tool, err, "unmarshal discover payload")
 	}
 	d := &discoverDecision{payload: payload}
-	parsed, perr := parseDiscoverResponse(response)
+	parsed, perr := discovery.ParseDiscoverResponse(response)
 	if perr != nil {
 		log.Warn().Err(perr).Str("tool", tool).Str("session", item.SessionID).
 			Msg("discover response parse failed; treating as no-op")
@@ -77,8 +78,8 @@ func applyDiscoverStep(ctx context.Context, tool string, d step.Deps, sess *mode
 	if !dec.parsed {
 		return nil
 	}
-	gates := DiscoveryGatesFor(d.RI, dec.payload.Direction)
-	written, err := applyDiscoveredProposals(ctx, d.Facts, d.Files, d.Search, d.RI.Embedder(),
+	gates := discovery.DiscoveryGatesFor(d.RI, dec.payload.Direction)
+	written, err := discovery.ApplyDiscoveredProposals(ctx, d.Facts, d.Files, d.Search, d.RI.Embedder(),
 		dec.payload, dec.proposals, gates, sess.Branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot(), d.OnProgress)
 	if err != nil {
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
@@ -104,7 +105,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d step.Deps, sess *mode
 	// Phase-3 review (L7) pointed out the branch handling it was unreachable —
 	// a handled failure mode that did not exist reads as a risk that was
 	// considered, which is worse than no branch at all.
-	reinforced := applyReinforcements(ctx, d.Facts, d.Files, d.Search, dec.payload,
+	reinforced := discovery.ApplyReinforcements(ctx, d.Facts, d.Files, d.Search, dec.payload,
 		dec.reinforcements, sess.Branch, fact.ID12(d.RI.ID()), d.OnProgress)
 	if len(reinforced) > 0 {
 		// Reinforcement REWRITES a live fact — it bumps sources and adds a ref
@@ -133,7 +134,7 @@ func applyDiscoverStep(ctx context.Context, tool string, d step.Deps, sess *mode
 // enqueueDiscover writes one discover work item. One definition, so the
 // entity/domain path and both motif lanes cannot drift apart in how an item is
 // shaped, keyed, or prioritised.
-func enqueueDiscover(ctx context.Context, d step.Deps, sess *model.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
+func enqueueDiscover(ctx context.Context, d step.Deps, sess *model.PipelineSession, payload discovery.DiscoverWorkPayload, clusterKey string, priority float64) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return step.Wrapf(step.ReviewTool, err, "marshal discover payload %s", clusterKey)

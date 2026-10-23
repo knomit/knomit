@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/engine/store/model"
 
@@ -134,8 +135,8 @@ func TestReviewer_DiscoverWrites_CountedInSummary(t *testing.T) {
 	seedObservation(t, svc, branch, "kb/technology/b.md")
 
 	sess := manualSession(t, svc, branch)
-	payload := DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{
 			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{

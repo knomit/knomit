@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/synthesize/bridge"
+	"knomit/internal/corpus/synthesize/discovery"
 	"knomit/internal/engine/store/model"
 
 	"github.com/stretchr/testify/require"
@@ -56,8 +57,8 @@ func TestReviewer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	// Inject a discover work item at a high priority so it is the next item
 	// ContinueSession picks up. The payload itself is well-formed JSON (an
 	// internal-corruption guard stays fatal); only the agent RESPONSE is junk.
-	payload := DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{
 			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},
@@ -104,8 +105,8 @@ func TestReviewer_EmptyDiscoverResponse_AnswersItem(t *testing.T) {
 
 	sess := manualSession(t, svc, branch)
 
-	payload := DiscoverWorkPayload{
-		Direction: DiscoverForward,
+	payload := discovery.DiscoverWorkPayload{
+		Direction: discovery.DiscoverForward,
 		Bridge: bridge.BridgeSeedSet{
 			Token: "x", Kind: bridge.BridgeEntity,
 			Members: []step.FactForLLM{{File: "kb/test/alpha.md", Title: "alpha"}},

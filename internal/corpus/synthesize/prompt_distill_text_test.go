@@ -3,6 +3,8 @@ package synthesize
 import (
 	"testing"
 
+	"knomit/internal/corpus/synthesize/step"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,4 +89,19 @@ func TestDistillPrompt_RemainderSwapsTheAsk(t *testing.T) {
 	require.Contains(t, rest.Prompt, "it is expected that most members belong to none")
 	require.Contains(t, rest.Prompt, "subgroups_considered")
 	require.NotContains(t, rest.Prompt, "Identify patterns across these facts")
+}
+
+// TestRenderDistillWorkItem_MandatesDistilledOrigin verifies the symmetric
+// rule for the regular-cluster path: a fact distilled from a cluster is
+// origin=distilled, and saving it directly via knomit_learn after previewing
+// requires setting that origin and citing the cluster sources.
+func TestRenderDistillWorkItem_MandatesDistilledOrigin(t *testing.T) {
+	wic, err := RenderDistillWorkItem(
+		[]step.FactForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
+		"kb", "", false)
+	require.NoError(t, err)
+	require.Contains(t, wic.Prompt, "origin: distilled",
+		"distill prompt must name the distilled origin at proposal time")
+	require.Contains(t, wic.Prompt, "knomit_learn",
+		"distill prompt must address the direct-save path")
 }
