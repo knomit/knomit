@@ -402,36 +402,35 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 
 // TestHandleFactDelete_MissingPath_Returns404 (F25 follow-up): DELETE of a
 // fact path that is not there — plain, or with a segment percent-encoded —
-// answers 404 "Fact not found", exactly as a GET of the same missing path
-// does, instead of 500. Against the REAL store (contextManager): the bug was
-// in deleteFile's own existence check (internal/engine/store/fact_write.go),
-// which returned a bare error string writeStoreError's switch could not
-// recognise, so EVERY missing-path delete — encoded or not — fell through to
-// the default 500 case.
+// answers 404 "Fact not found" naming the path and the REQUEST branch, exactly
+// as a GET of the same missing path does, instead of 500. Against the REAL
+// store: the bug was in deleteFile's own existence check
+// (internal/engine/store/fact_write.go), which returned a bare error string
+// writeStoreError's switch could not recognise, so EVERY missing-path delete —
+// encoded or not — fell through to the default 500 case. The path exists on
+// the agent branch, so a delete there would succeed.
 // Sabotage: drop the wrapped store.ErrPathNotFound from deleteFile's
-// existence check, or drop its translation in deleteFact or the
-// errFactNotFound check in handleFactDelete → 500.
+// existence check, drop its translation in deleteFact or the errFactNotFound
+// check in handleFactDelete (500), change the title, or delete on the agent
+// branch (204).
 func TestHandleFactDelete_MissingPath_Returns404(t *testing.T) {
-	m := contextManager(t, "alpha")
-	s := &Server{Manager: m, AgentBranch: "machine/test"}
-	r := s.NewAPIRouter()
-	branch := urlBranch("machine/test")
+	f := newFactWriteFixture(t, "kb")
+	f.seed(fsAgentBranch, "kb/verdicts/missing.md", factText(t, "kb/verdicts/missing.md", "Agent only", 0.9, nil))
 
 	for _, path := range []string{
 		"kb/verdicts/missing.md",
 		"kb/verdicts%2Fmissing.md", // the slash itself percent-encoded
 	} {
-		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodDelete,
-			"/repos/alpha/branches/"+branch+"/facts/"+path, nil))
-		r.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("DELETE %s: status: got %d, want 404; body=%s", path, rec.Code, rec.Body.String())
-		}
-		if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-			t.Errorf("DELETE %s: content-type: got %q, want application/problem+json", path, got)
-		}
+		rec := f.do(http.MethodDelete, f.factURL(path), "")
+		require.Equal(t, http.StatusNotFound, rec.Code, "DELETE %s: %s", path, rec.Body.String())
+		require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"), "DELETE %s", path)
+		p := writeProblem(t, rec)
+		require.Equal(t, "Fact not found", p.Title, "DELETE %s", path)
+		// The detail echoes the path as the request spelled it.
+		require.Equal(t, `no fact at path "`+path+`" on branch "`+restWriteBranch+`"`, p.Detail, "DELETE %s", path)
 	}
+	_, ok := f.read(fsAgentBranch, "kb/verdicts/missing.md")
+	require.True(t, ok, "the agent branch's copy stays")
 }
 
 // TestHandleFactUpdate_InvalidContent_RejectsBeforeWriting: content that

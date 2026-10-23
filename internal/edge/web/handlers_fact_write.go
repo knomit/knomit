@@ -52,8 +52,12 @@ func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc 
 // It is FactExistsAt at the head of branch — the SAME predicate the read path
 // uses to decide `fact` vs `broken`, walking back past retractions. The gate
 // and the reader must ask one question: a narrower "is it live right now"
-// check would reject writes whose refs the UI renders as live links. A repo
-// with no live store answers errFactNotFound.
+// check would reject writes whose refs the UI renders as live links.
+//
+// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
+// has no store (Acquire fails: unavailable, populating, closed) WithRead does
+// not run the closure, so this returns zero values and a nil error; the
+// svc == nil branch inside never runs.
 func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path string) (bool, error) {
 	var (
 		ok  bool
@@ -74,8 +78,13 @@ func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path stri
 // priorRefs returns the refs the fact at path on branch already carries, or nil
 // when there is no such fact (a create, or a PUT to a fresh path) or its stored
 // version does not parse. Those refs resolved at the commit that wrote them and
-// are never re-judged — see the refs gate's temporal contract. A repo with no
-// live store answers errFactNotFound; any other read error is returned.
+// are never re-judged — see the refs gate's temporal contract. Any other read
+// error is returned.
+//
+// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
+// has no store (Acquire fails: unavailable, populating, closed) WithRead does
+// not run the closure, so this returns zero values and a nil error; the
+// svc == nil branch inside never runs.
 func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
 	var (
 		refs []string
@@ -109,8 +118,13 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 }
 
 // writeFact commits content at path on branch with message and returns the
-// commit hash. A repo with no live store answers errFactNotFound; a store
-// error is returned unchanged.
+// commit hash. A store error is returned unchanged.
+//
+// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
+// has no store (Acquire fails: unavailable, populating, closed) WithRead does
+// not run the closure, so this returns zero values and a nil error; the
+// svc == nil branch inside never runs. A write to such a repo
+// therefore reports success and writes nothing.
 func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
 	var (
 		commitHash string
@@ -132,8 +146,14 @@ func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, conten
 }
 
 // deleteFact retracts path on branch with message and returns the commit hash.
-// A repo with no live store, or a path that is not there, answers
-// errFactNotFound; any other store error is returned unchanged.
+// A path that is not there answers errFactNotFound; any other store error is
+// returned unchanged.
+//
+// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
+// has no store (Acquire fails: unavailable, populating, closed) WithRead does
+// not run the closure, so this returns zero values and a nil error; the
+// svc == nil branch inside never runs. A delete on such a repo
+// therefore reports success and deletes nothing.
 func deleteFact(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
 	var (
 		commitHash string

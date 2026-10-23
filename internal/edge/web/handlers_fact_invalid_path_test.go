@@ -30,7 +30,7 @@ func TestHandleFactCreate_UnreadablePathInDomain_Returns400(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, svc := newExperimentRESTManager(t, "alpha")
-			s := &Server{Manager: m, OntologyRoot: "know"} // default, store-backed writer
+			s := &Server{Manager: m, OntologyRoot: "know"} // real store behind the write handlers
 			r := s.NewAPIRouter()
 			before := restHead(t, svc)
 
