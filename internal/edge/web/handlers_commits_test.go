@@ -44,8 +44,9 @@ type commitsFixture struct {
 	// c2: agent/test updates kb/a.md to "A agent two" (update).
 	// c3: elsewhere updates kb/a.md to "A elsewhere two" (update).
 	// c4: elsewhere adds kb/b.md "B one" (learn).
-	// c5: elsewhere updates kb/b.md to "B two" (update).
-	// c6: elsewhere deletes kb/b.md.
+	// c5: elsewhere updates kb/b.md to "B two" AND adds kb/e.md "E one",
+	//     one commit (update).
+	// c6: elsewhere deletes kb/b.md AND kb/e.md, one commit (retract).
 	// c7: elsewhere adds kb/c.md "C one", kb/d.md "D one" AND notes/out.md,
 	//     one commit (learn).
 	// c8: elsewhere adds only notes/only.md, outside the ontology root.
@@ -91,11 +92,17 @@ func buildCommitsFixture(t *testing.T, spaced bool) *commitsFixture {
 	f.c2 = write(commitsAgentBranch, "kb/a.md", "A agent two", "agent edits a", "update")
 	f.c3 = write(commitsOtherBranch, "kb/a.md", "A elsewhere two", "elsewhere edits a", "update")
 	f.c4 = write(commitsOtherBranch, "kb/b.md", "B one", "add b", "learn")
-	f.c5 = write(commitsOtherBranch, "kb/b.md", "B two", "edit b", "update")
+	c5, _, err := svc.Facts().BatchWriteFacts(ctx, commitsOtherBranch, map[string]string{
+		"kb/b.md": commitsFactText("B two"),
+		"kb/e.md": commitsFactText("E one"),
+	}, nil, "edit b, add e", "update")
+	require.NoError(t, err)
+	f.c5 = c5
 	if spaced {
 		awaitNextSecond()
 	}
-	c6, err := svc.Facts().DeleteFact(ctx, commitsOtherBranch, "kb/b.md", "delete b")
+	c6, _, err := svc.Facts().BatchWriteFacts(ctx, commitsOtherBranch, nil,
+		[]string{"kb/b.md", "kb/e.md"}, "delete b and e", "retract")
 	require.NoError(t, err)
 	f.c6 = c6
 	if spaced {
@@ -174,8 +181,8 @@ func TestHandleCommitsList_ReturnsTheRequestedBranchUnderTheRoot(t *testing.T) {
 	require.Equal(t, index.CommitAuthor{Name: "elsewhere", Email: "elsewhere+learn@agents.knomit.io"}, c7.Author)
 	require.Equal(t, index.CommitAuthor{Name: "elsewhere", Email: "elsewhere+retract@agents.knomit.io"}, body.Embedded.Commits[1].Author)
 	require.Equal(t, "retract", body.Embedded.Commits[1].Operation)
-	require.Equal(t, index.FileCounts{Deleted: 1}, body.Embedded.Commits[1].Files)
-	require.Equal(t, index.FileCounts{Modified: 1}, body.Embedded.Commits[2].Files)
+	require.Equal(t, index.FileCounts{Deleted: 2}, body.Embedded.Commits[1].Files)
+	require.Equal(t, index.FileCounts{Added: 1, Modified: 1}, body.Embedded.Commits[2].Files)
 	require.Equal(t, "update", body.Embedded.Commits[2].Operation)
 
 	// c5, c6 and c7 were stamped in three different seconds, so each item
@@ -287,22 +294,28 @@ func TestHandleCommitDetail_LiveFileTakesTheRequestedBranchTitle(t *testing.T) {
 }
 
 // A file no longer on the branch takes its title AT the commit when the
-// commit has it: c5 modified kb/b.md to "B two"; the version before c5 is
-// "B one". Sabotage: read before the commit instead (title "B one").
+// commit has it: c5 modified kb/b.md to "B two" (the version before c5 is
+// "B one") and added kb/e.md "E one"; both are gone at the branch tip, and
+// each takes its own title. Sabotage: read before the commit instead (titles
+// "B one" and ""), or read every file at the first file's path.
 func TestHandleCommitDetail_GoneFileTakesItsTitleAtTheCommit(t *testing.T) {
 	f := newCommitsFixture(t)
 
 	body := getCommitDetail(t, f.s, commitsOtherURL, f.c5)
-	require.Len(t, body.Files, 1)
+	require.Len(t, body.Files, 2, "%+v", body.Files)
 	require.Equal(t, "kb/b.md", body.Files[0].Path)
 	require.Equal(t, "modified", body.Files[0].Action)
 	require.Equal(t, "B two", body.Files[0].Title)
+	require.Equal(t, "kb/e.md", body.Files[1].Path)
+	require.Equal(t, "added", body.Files[1].Action)
+	require.Equal(t, "E one", body.Files[1].Title)
 	require.Equal(t, "update", body.Operation)
 }
 
 // The commit that deleted a file has no version of it, so the file takes the
-// title it had BEFORE the commit. Sabotage: drop the last resort, or read it
-// at the commit (title "" either way). The branch passed to this read is not
+// title it had BEFORE the commit; c6 deleted two, and each takes its own.
+// Sabotage: drop the last resort, read it at the commit (titles "" either
+// way), or read every file at the first file's path. The branch passed to this read is not
 // pinned: the store resolves "before" along the commit's first-parent chain
 // and ignores the branch (vcs ResolveActiveCommitForPath), so a swapped
 // branch is an equivalent mutant.
@@ -310,10 +323,13 @@ func TestHandleCommitDetail_DeletedFileTakesItsTitleBeforeTheCommit(t *testing.T
 	f := newCommitsFixture(t)
 
 	body := getCommitDetail(t, f.s, commitsOtherURL, f.c6)
-	require.Len(t, body.Files, 1)
+	require.Len(t, body.Files, 2, "%+v", body.Files)
 	require.Equal(t, "kb/b.md", body.Files[0].Path)
 	require.Equal(t, "deleted", body.Files[0].Action)
 	require.Equal(t, "B two", body.Files[0].Title)
+	require.Equal(t, "kb/e.md", body.Files[1].Path)
+	require.Equal(t, "deleted", body.Files[1].Action)
+	require.Equal(t, "E one", body.Files[1].Title)
 }
 
 // Only files under the ontology root are listed (c7 also wrote notes/out.md),
