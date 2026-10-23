@@ -17,38 +17,17 @@ import (
 	"knomit/internal/engine/store/facts"
 )
 
-// errFactNotFound is the sentinel the fact handler maps to 404 problem+json.
-// Production code returns this from defaultFactReader when ReadFact surfaces
-// model.ErrPathNotFound — distinguishing "no fact at this path/commit" from a
-// real backend error (which propagates to 500 instead of masquerading as 404).
+// errFactNotFound is the sentinel the fact handlers map to 404 problem+json.
+// readFact returns it when ReadFact surfaces model.ErrPathNotFound —
+// distinguishing "no fact at this path/commit" from a real backend error
+// (which propagates to 500 instead of masquerading as 404).
 var errFactNotFound = errors.New("fact not found")
 
-// FactReader is the narrow interface the HAL fact handler depends on.
-type FactReader interface {
-	// Read loads the fact at (repo, anchor, path). Returns errFactNotFound
-	// when the path does not exist; other store errors are propagated as-is
-	// for the handler to surface as 500. The returned headOrCommit string is
-	// the resolved commit to stamp into the view's as_of (HEAD's head-commit
-	// when the anchor is HEAD, or the pinned sha unchanged when commit-
-	// anchored).
-	//
-	// fallback is only consulted for commit-anchored reads: when set, a
-	// path missing at the pinned commit walks back to the most recent
-	// ancestor where it existed, and headOrCommit reflects that ancestor.
-	Read(ctx context.Context, ri *repos.RepoInstance, a hal.Anchor, path string, fallback bool) (_ knomitfact.Fact, headOrCommit string, _ error)
-
-	// Exists reports whether `path` has a navigable version at (branch,
-	// commit). Commit == "" means HEAD-anchored. Implementations must walk
-	// back through retractions per the historical-graph invariant: a target
-	// retracted before the anchor is still "exists" if any prior version
-	// is reachable via fallback-before.
-	Exists(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) bool
-}
-
-// readerRefResolver is a thin RefResolver that delegates Exists to a
-// FactReader, baking in the per-request anchor (ri, branch, commit). The
-// handler builds one of these per response so the resolver carries the
-// same anchor as the surrounding fact view.
+// readerRefResolver is the RefResolver the fact views use: Exists asks the
+// store whether a ref target has a navigable version at the per-request anchor
+// (ri, branch, commit) baked into it. The handler builds one of these per
+// response so the resolver carries the same anchor as the surrounding fact
+// view.
 type readerRefResolver struct {
 	// ctx is baked in for the same reason the anchor is: RefResolver.Exists
 	// takes only a path, and BuildRefViews calls it once per ref, so there is
@@ -57,21 +36,55 @@ type readerRefResolver struct {
 	// Widening RefResolver.Exists to take a ctx instead would ripple through
 	// BuildRefViews and every RefResolver stub for no lifetime-safety gain.
 	ctx    context.Context
-	reader FactReader
 	ri     *repos.RepoInstance
 	branch string
 	commit string // "" for HEAD
 }
 
+// Exists reports whether path has a navigable version at the resolver's
+// anchor, through FactQuery.FactExistsAt (factExistsAt). Honors the
+// historical-graph invariant: commit-anchored views classify refs against the
+// anchor (with walk-back through retractions), and HEAD views use
+// branch_facts (with the same walk-back fallback for paths that have been
+// retracted at HEAD).
+//
+// On error the ref degrades to "broken" in the view (the resolver
+// interface can't propagate errors per-ref without failing the whole
+// response), but the error is logged so transient DB issues are
+// observable rather than silently misclassifying refs.
+//
+// Cancellation is the one error class that logs at DEBUG instead. A page with
+// N refs calls this N times, so a client that hangs up mid-render would emit N
+// ERROR records describing nothing more than "the reader left" — noise that
+// would drown the real DB faults this log exists to surface. The ref still
+// degrades to "broken", but nobody is left to receive the response anyway.
 func (r readerRefResolver) Exists(path string) bool {
-	return r.reader.Exists(r.ctx, r.ri, r.branch, path, r.commit)
+	ok, err := factExistsAt(r.ctx, r.ri, r.branch, path, r.commit)
+	if err != nil {
+		ev := log.Error()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			ev = log.Debug()
+		}
+		ev.Err(err).
+			Str("branch", r.branch).
+			Str("path", path).
+			Str("commit", r.commit).
+			Msg("FactExistsAt failed — ref will classify as broken")
+		return false
+	}
+	return ok
 }
 
-// defaultFactReader is the production FactReader wired over the store.
-// Stateless adapter — takes RepoInstance per call and uses WithRead.
-type defaultFactReader struct{}
-
-func (defaultFactReader) Read(
+// readFact loads the fact at (ri, anchor, path) through the store's ReadFact.
+// It returns errFactNotFound when the path does not exist; other store errors
+// are returned as-is for the handler to surface as 500. The returned head is
+// the resolved commit to stamp into the view's as_of: the branch's head commit
+// when the anchor is HEAD, or the pinned sha unchanged when commit-anchored.
+//
+// fallback is only consulted for commit-anchored reads: when set, a path
+// missing at the pinned commit walks back to the most recent ancestor where it
+// existed, and head is that ancestor.
+func readFact(
 	ctx context.Context,
 	ri *repos.RepoInstance,
 	a hal.Anchor,
@@ -148,49 +161,9 @@ func (defaultFactReader) Read(
 	return f, head, err
 }
 
-// Exists routes to FactQuery.FactExistsAt via the per-request store
-// snapshot. Honors the historical-graph invariant: passes commit through
-// so commit-anchored reads classify refs against the anchor (with walk-
-// back through retractions), and HEAD reads use branch_facts (with the
-// same walk-back fallback for paths that have been retracted at HEAD).
-//
-// On error the ref degrades to "broken" in the view (the resolver
-// interface can't propagate errors per-ref without failing the whole
-// response), but the error is logged so transient DB issues are
-// observable rather than silently misclassifying refs.
-//
-// Cancellation is the one error class that logs at DEBUG instead. A page with
-// N refs calls this N times, so a client that hangs up mid-render would emit N
-// ERROR records describing nothing more than "the reader left" — noise that
-// would drown the real DB faults this log exists to surface. The ref still
-// degrades to "broken", but nobody is left to receive the response anyway.
-func (defaultFactReader) Exists(ctx context.Context, ri *repos.RepoInstance, branch, path, commit string) bool {
-	var exists bool
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
-		ok, err := svc.FactQuery().FactExistsAt(ctx, branch, path, commit)
-		if err != nil {
-			ev := log.Error()
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				ev = log.Debug()
-			}
-			ev.Err(err).
-				Str("branch", branch).
-				Str("path", path).
-				Str("commit", commit).
-				Msg("FactExistsAt failed — ref will classify as broken")
-			return
-		}
-		exists = ok
-	})
-	return exists
-}
-
 // handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
 // It also dispatches sub-resource requests (*/commits, */incoming, */outgoing).
-func handleHALFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
+func handleHALFact(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -224,7 +197,7 @@ func handleHALFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		// HEAD-anchored reads ignore the fallback parameter (the file either
 		// exists at HEAD or it doesn't — there's no "previous version" to
 		// fall back to). Always pass false here.
-		f, head, err := reader.Read(r.Context(), ri, a, path, false)
+		f, head, err := readFact(r.Context(), ri, a, path, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
@@ -238,7 +211,7 @@ func handleHALFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		// HEAD anchor — empty commit. Ref kind classification walks back from
 		// the branch's HEAD via FactExistsAt to honor the historical-graph
 		// invariant (retracted-but-recoverable targets still classify as fact).
-		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, head, f, resolver, knomitfact.ID12(ri.ID()))
 		view.AsOf.Date = factVersionDate(r.Context(), ri, a.Branch, f.Path(), view.AsOf.Commit)
 		hal.WriteHAL(w, http.StatusOK, view)

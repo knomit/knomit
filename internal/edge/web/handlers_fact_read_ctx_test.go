@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -15,7 +16,7 @@ import (
 )
 
 // seedCtxTestRepo builds a real store-backed repo with one fact, so the
-// cancellation anchors below exercise the production provider against the
+// cancellation anchors below exercise the production read against the
 // production store rather than a stub that could pass by construction.
 func seedCtxTestRepo(t *testing.T) (*testenv.RepoHandle, string) {
 	t.Helper()
@@ -26,31 +27,31 @@ func seedCtxTestRepo(t *testing.T) (*testenv.RepoHandle, string) {
 	return r, path
 }
 
-// TestDefaultFactReader_Read_CancelledContext pins that the web provider layer
-// actually honours the caller's context. Before ctx threading the provider used
+// TestReadFact_CancelledContext pins that the web read layer actually honours
+// the caller's context. Before ctx threading the read used
 // contextTODO() (== context.Background()), so a cancelled request context was
 // invisible to the store and the read succeeded anyway — a client that hung up
 // still paid for the full query. The read must now fail with the caller's
 // cancellation instead of returning data nobody is waiting for.
-func TestDefaultFactReader_Read_CancelledContext(t *testing.T) {
+func TestReadFact_CancelledContext(t *testing.T) {
 	r, path := seedCtxTestRepo(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := defaultFactReader{}.Read(ctx, r.Instance(), hal.Anchor{Branch: "main"}, path, false)
+	_, _, err := readFact(ctx, r.Instance(), hal.Anchor{Branch: "main"}, path, false)
 	require.Error(t, err, "a cancelled request context must not yield a successful read")
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-// TestDefaultFactReader_Exists_CancelledContextLogsDebug pins the log-level
+// TestReaderRefResolver_Exists_CancelledContextLogsDebug pins the log-level
 // refinement that ctx threading makes necessary. Exists collapses every error
 // into "broken" and logs at ERROR so transient DB faults stay observable — but
 // once the request context reaches FactExistsAt, an ordinary client disconnect
 // mid-render becomes an error, and every abandoned page would emit ERROR spam
 // for each ref it was resolving. Cancellation is expected, not exceptional, so
 // it logs at DEBUG; everything else keeps its ERROR.
-func TestDefaultFactReader_Exists_CancelledContextLogsDebug(t *testing.T) {
+func TestReaderRefResolver_Exists_CancelledContextLogsDebug(t *testing.T) {
 	r, path := seedCtxTestRepo(t)
 
 	// Capture the global logger at DEBUG so both an offending ERROR and the
@@ -67,7 +68,7 @@ func TestDefaultFactReader_Exists_CancelledContextLogsDebug(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	exists := defaultFactReader{}.Exists(ctx, r.Instance(), "main", path, "")
+	exists := readerRefResolver{ctx: ctx, ri: r.Instance(), branch: "main"}.Exists(path)
 	require.False(t, exists, "a cancelled lookup cannot claim the ref exists")
 
 	out := buf.String()
@@ -76,4 +77,34 @@ func TestDefaultFactReader_Exists_CancelledContextLogsDebug(t *testing.T) {
 	require.True(t,
 		strings.Contains(out, `"level":"debug"`) || out == "",
 		"expected the cancellation to be recorded at DEBUG (or not at all); got:\n"+out)
+}
+
+// An expired deadline is the other routine abandonment: Exists logs it at
+// DEBUG too, never ERROR. Unlike the cancellation test above, this requires the
+// DEBUG record itself, so the lookup must really have failed with
+// context.DeadlineExceeded. Sabotage: drop the DeadlineExceeded case (ERROR).
+func TestReaderRefResolver_Exists_ExpiredDeadlineLogsDebug(t *testing.T) {
+	r, path := seedCtxTestRepo(t)
+
+	var buf bytes.Buffer
+	origLogger, origLevel := log.Logger, zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = origLogger
+		zerolog.SetGlobalLevel(origLevel)
+	})
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded, "precondition: the deadline has passed")
+
+	exists := readerRefResolver{ctx: ctx, ri: r.Instance(), branch: "main"}.Exists(path)
+	require.False(t, exists, "an expired lookup cannot claim the ref exists")
+
+	out := buf.String()
+	require.NotContains(t, out, `"level":"error"`, out)
+	require.Contains(t, out, `"level":"debug"`, out)
+	require.Contains(t, out, "FactExistsAt failed", out)
+	require.Contains(t, out, "deadline exceeded", out)
 }

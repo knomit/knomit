@@ -3,23 +3,36 @@ package web
 import (
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/index"
 )
 
 // The commit-anchored /incoming and /outgoing read the fixture of
-// handlers_fact_sub_test.go (newFactSubFixture). The FactReader stays a stub
-// that fails every read: these sub-resources are dispatched before the fact
-// read, so a test reaching it fails.
+// handlers_fact_sub_test.go (newFactSubFixture). The fact read is a tripwire:
+// these sub-resources are dispatched before it, so a test reaching it fails.
 
-// anchoredServer is the fixture's server with the FactReader tripwire.
-func (f *factSubFixture) anchoredServer() *Server {
-	return &Server{Manager: f.s.Manager, providers: storeProviders{
-		factReader: &stubFactReader{readErr: errors.New("should not be called")},
-	}}
+// anchoredServer is the fixture's server with the fact read as a tripwire:
+// every ReadFact on the fixture's store fails (facts.Index.SetReadFactFaultForTest),
+// and the test fails at cleanup if one was made.
+func (f *factSubFixture) anchoredServer(t *testing.T) *Server {
+	t.Helper()
+	var hits atomic.Int64
+	restore := f.svc.Facts().SetReadFactFaultForTest(func(string, *facts.ReadFactOpts) error {
+		hits.Add(1)
+		return errors.New("the fact read must not be reached")
+	})
+	t.Cleanup(func() {
+		restore()
+		if n := hits.Load(); n != 0 {
+			t.Errorf("the fact read was reached %d times; the sub-resource is dispatched before it", n)
+		}
+	})
+	return f.s
 }
 
 // anchoredURL is the commit-anchored sub-resource URL of path at step's
@@ -36,7 +49,7 @@ func (f *factSubFixture) anchoredURL(branchURL, step, path, sub string) string {
 // the anchor, or reverse them.
 func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 
 	url := f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "incoming")
 	body := getRefs(t, s, url)
@@ -59,7 +72,7 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 // (x0 answers 200).
 func TestCommitAnchoredSub_GateIsEvaluatedAtTheAnchor(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
 
 	in := getRefs(t, s, f.anchoredURL(fsOtherURL, "x1", "kb/r.md", "incoming"))
@@ -79,10 +92,7 @@ func TestCommitAnchoredSub_GateIsEvaluatedAtTheAnchor(t *testing.T) {
 
 // TestCommitAnchoredIncoming_UnknownRepo returns 404 problem+json.
 func TestCommitAnchoredIncoming_UnknownRepo(t *testing.T) {
-	s := &Server{
-		Manager:   newTestManagerWithRepos(t),
-		providers: storeProviders{factReader: &stubFactReader{}},
-	}
+	s := &Server{Manager: newTestManagerWithRepos(t)}
 	rec := getAPI(t, s, "/repos/missing/branches/main/commits/abc123/facts/know/a.md/incoming")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
@@ -106,7 +116,7 @@ func (f *factSubFixture) requireAbsentAtCommit(t *testing.T, s *Server, url, pat
 // Sabotage: gate on FactExistsAt (200 with q1, q2), or read the edges anyway.
 func TestCommitAnchoredIncoming_FactNotLiveAtCommit(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
 
 	f.requireAbsentAtCommit(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming"), "kb/r.md", "e14")
@@ -120,7 +130,7 @@ func TestCommitAnchoredIncoming_FactNotLiveAtCommit(t *testing.T) {
 // the /outgoing sub-resource.
 func TestCommitAnchoredOutgoing_FactNotLiveAtCommit(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
 
 	f.requireAbsentAtCommit(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "outgoing"), "kb/r.md", "e14")
@@ -134,7 +144,7 @@ func TestCommitAnchoredOutgoing_FactNotLiveAtCommit(t *testing.T) {
 // the 404 of a fact that is not live, and the edges are not read.
 func TestCommitAnchoredIncoming_LivenessCheckError(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 	reads := f.countGraphReads(t, "IncomingAtCommit")
 	hits := f.failGraphRead(t, index.ReadFactLiveAtCommit, errors.New("liveness on fire"))
 
@@ -153,7 +163,7 @@ func TestCommitAnchoredIncoming_LivenessCheckError(t *testing.T) {
 // ignore ?fallback (404), or gate on FactLiveAtCommit.
 func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt")
 
 	url := f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming") + "?fallback=before"
@@ -173,7 +183,7 @@ func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing
 // not read.
 func TestCommitAnchoredIncoming_FallbackBefore_NeverExisted_404(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 	reads := f.countGraphReads(t, "FactExistsAt", "IncomingAtCommit")
 
 	f.requireAbsentAtCommit(t, s,

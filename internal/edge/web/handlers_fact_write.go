@@ -372,7 +372,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		// Resolver anchored at HEAD (commit:""): the just-written content is
 		// now the active state of the branch, so HEAD walk-back correctly
 		// classifies the fact's outgoing refs.
-		resolver := readerRefResolver{ctx: r.Context(), reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
 		hal.WriteHAL(w, http.StatusOK, view)
 	}

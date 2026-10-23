@@ -551,7 +551,7 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // how to do it. Registering the reader alone left those suffixes to fall
 // through into the fact read, where "<uuid>.md/incoming" is just a path that
 // does not exist — a deterministic 500 for every fact (issue #178).
-func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
+func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 
@@ -638,7 +638,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		// ErrFactNotLive from a handler, whose detail names the mount branch.
 		// That needs a mounted id to reach at all, so it is not an oracle.)
 		if sub != "" {
-			if _, _, err := reader.Read(r.Context(), ri, hal.Anchor{Branch: branch}, rel, false); err != nil {
+			if _, _, err := readFact(r.Context(), ri, hal.Anchor{Branch: branch}, rel, false); err != nil {
 				if errors.Is(err, errFactNotFound) {
 					lensFactNotFound(w, r, requested)
 					return
@@ -652,7 +652,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		}
 
 		a := hal.Anchor{Branch: branch}
-		f, head, err := reader.Read(r.Context(), ri, a, rel, false)
+		f, head, err := readFact(r.Context(), ri, a, rel, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				lensFactNotFound(w, r, requested)
@@ -662,7 +662,7 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 			return
 		}
 
-		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
+		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, ri.Name(), a, head, f, resolver, knomitfact.ID12(ri.ID()))
 		// `rel` is the MOUNT-RELATIVE path, which is what commit_log stores. Must
 		// not use view.Path — that is rewritten to the kb://<id12>/… wire form

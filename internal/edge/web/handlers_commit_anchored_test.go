@@ -1,125 +1,158 @@
 package web
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
-	knomitfact "knomit/internal/domain/fact"
-	"knomit/internal/edge/web/hal"
+	"github.com/stretchr/testify/require"
 )
 
-// TestHandleCommitAnchoredFact_ReturnsHALEnvelope verifies the basic
-// commit-anchored fact response: as_of.commit is the pinned SHA, _links.self
-// contains /commits/{sha}/, and _links.live points to the HEAD view.
-func TestHandleCommitAnchoredFact_ReturnsHALEnvelope(t *testing.T) {
-	f := knomitfact.NewFact("know/a.md")
-	f.Title = "A Fact"
-	f.Body = "Body text"
-	f.Domain = []string{}
-	f.Entities = []string{}
-	f.Refs = []string{}
+// The commit-anchored fact read runs on newFactReadFixture
+// (handlers_fact_read_test.go).
 
-	reader := &stubFactReader{
-		fact: f,
-		head: "abc123", // returned as-is for commit-anchored reads
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factReader: reader,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: %q", got)
-	}
-
-	var body struct {
-		Path  string      `json:"path"`
-		AsOf  AsOf        `json:"as_of"`
-		Links hal.LinkMap `json:"_links"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if body.AsOf.Commit != "abc123" {
-		t.Errorf("as_of.commit: got %q, want %q", body.AsOf.Commit, "abc123")
-	}
-	if body.AsOf.Branch != "agent/test" {
-		t.Errorf("as_of.branch: got %q, want %q", body.AsOf.Branch, "agent/test")
-	}
-
-	selfLink, ok := body.Links["self"]
-	if !ok {
-		t.Fatal("missing _links.self")
-	}
-	if !strings.Contains(selfLink.Href, "/commits/abc123/") {
-		t.Errorf("self href %q should contain /commits/abc123/", selfLink.Href)
-	}
-
-	liveLink, ok := body.Links["live"]
-	if !ok {
-		t.Fatal("missing _links.live")
-	}
-	if strings.Contains(liveLink.Href, "/commits/") {
-		t.Errorf("live href %q should not contain /commits/", liveLink.Href)
-	}
-
-	// Commit-anchored views must have both incoming and outgoing links.
-	if _, ok := body.Links["incoming"]; !ok {
-		t.Error("missing _links.incoming on commit-anchored view")
-	}
-	if _, ok := body.Links["outgoing"]; !ok {
-		t.Error("missing _links.outgoing")
-	}
+// anchoredFactURL is the commit-anchored fact URL of path at step's commit on
+// E.
+func (f *factReadFixture) anchoredFactURL(step, path string) string {
+	return "/repos/alpha/branches/" + fsOtherURL + "/commits/" + f.c[step] + "/facts/" + path
 }
 
-// TestHandleCommitAnchoredFact_NotFound returns 404 problem+json when the
-// reader signals the fact is absent at the pinned commit.
+// requireAnchoredLinks requires the anchored view's links pinned to step's
+// commit, with a live link to the HEAD view.
+func (f *factReadFixture) requireAnchoredLinks(t *testing.T, body factViewBody, step, path string) {
+	t.Helper()
+	branch := APIBase + "/repos/alpha/branches/" + fsOtherURL
+	got := hrefs(body.Links)
+	require.ElementsMatch(t, []string{"self", "incoming", "outgoing", "commits", "live", "commit", "parent", "branch"},
+		keys(got))
+	require.Equal(t, branch+"/commits/"+f.c[step]+"/facts/"+path, got["self"])
+	require.Equal(t, branch+"/commits/"+f.c[step]+"/facts/"+path+"/incoming", got["incoming"])
+	require.Equal(t, branch+"/commits/"+f.c[step]+"/facts/"+path+"/outgoing", got["outgoing"])
+	require.Equal(t, branch+"/commits/"+f.c[step], got["commit"])
+	require.Equal(t, branch+"/facts/"+path, got["live"])
+}
+
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// The commit-anchored read is the version live at the pinned commit, stamped
+// with that commit, its refs resolved at that commit. At x0 kb/f.md is v1,
+// whose refs n2 and n3 are only written after x0. Sabotage: read HEAD ("Fact
+// two"), stamp E's head, or resolve refs at HEAD (n2 and n3 become facts).
+func TestHandleCommitAnchoredFact_ReturnsHALEnvelope(t *testing.T) {
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, "", nil)
+
+	body := getFactView(t, f.s, f.anchoredFactURL("x0", "kb/f.md"))
+	require.Equal(t, "kb/f.md", body.Path)
+	require.Equal(t, "Fact one", body.Title)
+	require.Equal(t, fsOtherBranch, body.AsOf.Branch)
+	require.Equal(t, f.c["x0"], body.AsOf.Commit, "as_of is the pinned commit, not kb/f.md's own commit (g3) or E's head")
+	f.requireAnchoredLinks(t, body, "x0", "kb/f.md")
+	requireRefKinds(t, body,
+		[2]string{"kb/n1.md", "fact"}, [2]string{"kb/n2.md", "broken"},
+		[2]string{"kb/n0.md", "fact"}, [2]string{"kb/n3.md", "broken"})
+	require.Equal(t, []string{f.at("x0", "kb/f.md")}, reads.all())
+}
+
+// Without ?fallback=before a fact absent at the pinned commit is a 404 naming
+// the commit, and the walk-back read never runs: kb/r.md is retracted at e8,
+// kb/missing.md never existed. Sabotage: always fall back (r answers 200).
 func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factReader: &stubFactReader{readErr: errFactNotFound},
-		},
-	}
-	r := s.NewAPIRouter()
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, "", nil)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/missing.md", nil)
-	r.ServeHTTP(rec, req)
+	for _, path := range []string{"kb/r.md", "kb/missing.md"} {
+		requireProblem(t, f.s, f.anchoredFactURL("e8", path), http.StatusNotFound, "Fact not found",
+			`no fact at path "`+path+`" on branch "agent/elsewhere" at commit "`+f.c["e8"]+`"`)
+	}
+	require.Equal(t, []string{f.at("e8", "kb/r.md"), f.at("e8", "kb/missing.md")}, reads.all())
+}
 
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-		t.Errorf("content-type: %q", got)
-	}
+// With ?fallback=before, a fact present at the pinned commit is read there, not
+// walked back: e3 wrote kb/f.md v2, and the version before e3 is v1. Sabotage:
+// always take the walk-back read ("Fact one", stamped g3).
+func TestCommitAnchoredFact_FallbackBefore_FactExistsAtCommit(t *testing.T) {
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, "", nil)
+
+	body := getFactView(t, f.s, f.anchoredFactURL("e3", "kb/f.md")+"?fallback=before")
+	require.Equal(t, "Fact two", body.Title)
+	require.Equal(t, f.c["e3"], body.AsOf.Commit)
+	f.requireAnchoredLinks(t, body, "e3", "kb/f.md")
+	require.Equal(t, []string{f.at("e3", "kb/f.md")}, reads.all())
+}
+
+// With ?fallback=before, a fact retracted at the pinned commit resolves to its
+// last valid version: kb/r.md, retracted at e8, is v2 from e6, and the view —
+// as_of, links and ref resolution — is anchored at e6, not at the URL's e8.
+// kb/m1.md is written between them and kb/m2.md after e8. Sabotage: ignore
+// ?fallback (404), stamp or link the URL's sha, resolve refs at e8 (m1 becomes
+// a fact) or at HEAD (m1 and m2 do).
+func TestCommitAnchoredFact_FallbackBefore_FactRetractedAtCommit(t *testing.T) {
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, "", nil)
+
+	body := getFactView(t, f.s, f.anchoredFactURL("e8", "kb/r.md")+"?fallback=before")
+	require.Equal(t, "Retract two", body.Title)
+	require.Equal(t, fsOtherBranch, body.AsOf.Branch)
+	require.Equal(t, f.c["e6"], body.AsOf.Commit, "as_of is the version's own commit, not the URL's")
+	f.requireAnchoredLinks(t, body, "e6", "kb/r.md")
+	requireRefKinds(t, body,
+		[2]string{"kb/n1.md", "fact"}, [2]string{"kb/m1.md", "broken"},
+		[2]string{"kb/n0.md", "fact"}, [2]string{"kb/m2.md", "broken"})
+	require.Equal(t, []string{f.at("e8", "kb/r.md"), f.before("e8", "kb/r.md")}, reads.all())
+}
+
+// TestCommitAnchoredFact_FallbackBefore_StillNotFound: a fact that never
+// existed in the ancestry is a 404 even with the fallback, which was tried.
+func TestCommitAnchoredFact_FallbackBefore_StillNotFound(t *testing.T) {
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, "", nil)
+
+	requireProblem(t, f.s, f.anchoredFactURL("e8", "kb/never.md")+"?fallback=before", http.StatusNotFound,
+		"Fact not found", `no fact at path "kb/never.md" on branch "agent/elsewhere" at commit "`+f.c["e8"]+`"`)
+	require.Equal(t, []string{f.at("e8", "kb/never.md"), f.before("e8", "kb/never.md")}, reads.all())
+}
+
+// A pinned read that fails with anything but "not found" is a 500 carrying the
+// store's error, and does not fall back. Sabotage: fall back on every error
+// (200 "Retract two"), or map every error to 404.
+func TestCommitAnchoredFact_ReadError_Returns500WithoutFallback(t *testing.T) {
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, f.at("e8", "kb/r.md"), errors.New("pinned read on fire"))
+
+	requireProblem(t, f.s, f.anchoredFactURL("e8", "kb/r.md")+"?fallback=before", http.StatusInternalServerError,
+		"Failed to read fact", "pinned read on fire")
+	require.Equal(t, []string{f.at("e8", "kb/r.md")}, reads.all())
+}
+
+// A walk-back read that fails with anything but "not found" is a 500 carrying
+// the store's error. Sabotage: map the fallback's error to 404.
+func TestCommitAnchoredFact_FallbackError_Returns500(t *testing.T) {
+	f := newFactReadFixture(t)
+	reads := hookReadFact(t, f.svc, f.before("e8", "kb/r.md"), errors.New("walk-back on fire"))
+
+	requireProblem(t, f.s, f.anchoredFactURL("e8", "kb/r.md")+"?fallback=before", http.StatusInternalServerError,
+		"Failed to read fact", "walk-back on fire")
+	require.Equal(t, []string{f.at("e8", "kb/r.md"), f.before("e8", "kb/r.md")}, reads.all())
 }
 
 // The commit-anchored /outgoing is what the version live at the anchor cites
 // (newFactSubFixture): at x0 kb/t.md v1 cites o1, o2; at e14 v2 cites o1, o2
 // and the retracted o5, o6. The collection is pinned to the anchor, each item
-// to its target's own commit. The FactReader is a tripwire: the outgoing
-// dispatch happens before the fact read. Sabotage: drop the anchor (v2 at
-// x0), serve incoming, link items at the anchor, or reverse them.
+// to its target's own commit. The fact read is a tripwire: the outgoing
+// dispatch happens before it. Sabotage: drop the anchor (v2 at x0), serve
+// incoming, link items at the anchor, or reverse them.
 func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 	f := newFactSubFixture(t, false)
-	s := f.anchoredServer()
+	s := f.anchoredServer(t)
 
 	url := f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "outgoing")
 	body := getRefs(t, s, url)
@@ -133,12 +166,7 @@ func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 
 // TestHandleCommitAnchoredOutgoing_UnknownRepo returns 404 problem+json.
 func TestHandleCommitAnchoredOutgoing_UnknownRepo(t *testing.T) {
-	s := &Server{
-		Manager: newTestManagerWithRepos(t),
-		providers: storeProviders{
-			factReader: &stubFactReader{},
-		},
-	}
+	s := &Server{Manager: newTestManagerWithRepos(t)}
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
@@ -148,178 +176,5 @@ func TestHandleCommitAnchoredOutgoing_UnknownRepo(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-}
-
-// TestCommitAnchoredFact_FallbackBefore_FactExistsAtCommit verifies that when
-// ?fallback=before is set AND the fact exists at the pinned commit, the
-// response uses the URL's sha as as_of.commit (no fallback fired) AND the
-// reader was called with fallback=true (the handler always forwards the flag,
-// even when the primary read succeeds — the reader decides whether to use it).
-func TestCommitAnchoredFact_FallbackBefore_FactExistsAtCommit(t *testing.T) {
-	f := knomitfact.NewFact("know/a.md")
-	f.Title = "A"
-	f.Body = "live body"
-	f.Domain = []string{}
-	f.Entities = []string{}
-	f.Refs = []string{}
-
-	reader := &stubFactReader{
-		fact: f,
-		head: "abc1234", // matches the URL sha — primary read succeeded
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factReader: reader,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc1234/facts/know/a.md?fallback=before", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !reader.lastFallback {
-		t.Errorf("reader.lastFallback: got %v, want true (handler must forward ?fallback=before)", reader.lastFallback)
-	}
-
-	var body struct {
-		AsOf AsOf   `json:"as_of"`
-		Body string `json:"body"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body.AsOf.Commit != "abc1234" {
-		t.Errorf("as_of.commit: got %q, want %q (fallback should not fire)", body.AsOf.Commit, "abc1234")
-	}
-	if body.Body != "live body" {
-		t.Errorf("body: got %q, want primary content", body.Body)
-	}
-}
-
-// TestCommitAnchoredFact_FallbackBefore_FactRetractedAtCommit verifies that
-// when ?fallback=before is set AND the fact is missing at the pinned commit,
-// the reader's fallback path returns the pre-retraction version, and the
-// response stamps as_of.commit with that earlier source commit (not the URL
-// sha). This is the History view's retract-commit happy path.
-func TestCommitAnchoredFact_FallbackBefore_FactRetractedAtCommit(t *testing.T) {
-	pre := knomitfact.NewFact("know/a.md")
-	pre.Title = "A (pre-retraction)"
-	pre.Body = "version before retract"
-	pre.Domain = []string{}
-	pre.Entities = []string{}
-	pre.Refs = []string{}
-
-	reader := &stubFactReader{
-		// Primary read fails (file gone at the retract commit).
-		readErr: errFactNotFound,
-		// Fallback path returns the pre-retraction content keyed to an
-		// earlier commit.
-		fallbackFact:    pre,
-		fallbackHead:    "deadbee", // the actual content's source commit
-		useFallbackData: true,
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factReader: reader,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc1234/facts/know/a.md?fallback=before", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !reader.lastFallback {
-		t.Errorf("reader.lastFallback: got %v, want true", reader.lastFallback)
-	}
-
-	var body struct {
-		AsOf AsOf   `json:"as_of"`
-		Body string `json:"body"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body.AsOf.Commit != "deadbee" {
-		t.Errorf("as_of.commit: got %q, want %q (should reflect the fallback's source commit, not the URL sha)", body.AsOf.Commit, "deadbee")
-	}
-	if body.Body != "version before retract" {
-		t.Errorf("body: got %q, want pre-retraction content", body.Body)
-	}
-}
-
-// TestCommitAnchoredFact_NoFallback_404OnMissing verifies the default
-// behavior is unchanged: without ?fallback=before, a missing fact at the
-// pinned commit returns 404 problem+json. The handler must pass fallback=false
-// to the reader in this case.
-func TestCommitAnchoredFact_NoFallback_404OnMissing(t *testing.T) {
-	reader := &stubFactReader{readErr: errFactNotFound}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factReader: reader,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc1234/facts/know/missing.md", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-	if reader.lastFallback {
-		t.Errorf("reader.lastFallback: got %v, want false (no ?fallback=before in URL)", reader.lastFallback)
-	}
-	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-		t.Errorf("content-type: %q", got)
-	}
-}
-
-// TestCommitAnchoredFact_FallbackBefore_StillNotFound verifies that when
-// ?fallback=before is set AND the fact never existed at any ancestor, the
-// reader's fallback also returns errFactNotFound, and the handler returns
-// 404 problem+json.
-func TestCommitAnchoredFact_FallbackBefore_StillNotFound(t *testing.T) {
-	reader := &stubFactReader{
-		readErr:         errFactNotFound,
-		fallbackErr:     errFactNotFound,
-		useFallbackData: true,
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			factReader: reader,
-		},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/commits/abc1234/facts/know/never.md?fallback=before", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-	if !reader.lastFallback {
-		t.Errorf("reader.lastFallback: got %v, want true", reader.lastFallback)
-	}
-	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-		t.Errorf("content-type: %q", got)
 	}
 }

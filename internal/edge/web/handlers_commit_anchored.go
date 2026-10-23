@@ -20,7 +20,7 @@ import (
 // Sub-resources /incoming and /outgoing are both supported; /commits is not
 // (a commit-anchored fact IS at a specific commit — use the branch-anchored
 // /facts/.../commits for history).
-func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
+func handleCommitAnchoredFact(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
@@ -65,7 +65,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader) http.HandlerF
 		// ?fallback=before: when the fact is missing at the pinned commit,
 		// fall back to the most recent ancestor where it existed.
 		fallback := r.URL.Query().Get("fallback") == "before"
-		f, head, err := reader.Read(r.Context(), ri, a, path, fallback)
+		f, head, err := readFact(r.Context(), ri, a, path, fallback)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
@@ -88,7 +88,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, reader FactReader) http.HandlerF
 		// ref-kind classification is consistent with the displayed content
 		// (walks back to find any prior valid version per the historical-
 		// graph invariant).
-		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
+		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: viewAnchor.Commit}
 		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver, knomitfact.ID12(ri.ID()))
 		view.AsOf.Date = factVersionDate(r.Context(), ri, viewAnchor.Branch, f.Path(), view.AsOf.Commit)
 		hal.WriteHAL(w, http.StatusOK, view)

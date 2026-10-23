@@ -13,8 +13,8 @@ import (
 
 // TestMidQueryCancellation_SurfacesAsContextCanceled pins the driver contract
 // that the caller-side cancellation checks rely on — notably the ERROR→DEBUG
-// downgrade in web's defaultFactReader.Exists, which tests errors.Is(err,
-// context.Canceled) and nothing else.
+// downgrade in web's readerRefResolver.Exists, which tests errors.Is(err,
+// context.Canceled) (and context.DeadlineExceeded) and nothing else.
 //
 // The concern this pins is specific: mattn/go-sqlite3 aborts a running
 // statement by calling sqlite3_interrupt, whose native error is
