@@ -1,204 +1,171 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 
-	"knomit/internal/engine/store/model"
+	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
-	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store"
 )
 
-// stubTopicLister implements TopicLister for tests.
-type stubTopicLister struct {
-	dirs    []facts.DirEntry
-	listErr error
-	byPath  map[string]*facts.FactWithBody
-	getErr  error
+// listDirSeen records, per store, every path the topic browse handlers asked
+// ListDir for. It is an observer: its hook returns nil, so the real listing
+// runs and what the handler serves is the store's own answer. The lens fan-out
+// lists every mount on its own goroutine, hence the mutex.
+type listDirSeen struct {
+	mu    sync.Mutex
+	paths map[string][]string
 }
 
-func (s *stubTopicLister) ListDir(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]facts.DirEntry, error) {
-	return s.dirs, s.listErr
+func (s *listDirSeen) of(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.paths[name]...)
 }
 
-func (s *stubTopicLister) GetByPath(_ context.Context, _ *repos.RepoInstance, _, path string) (*facts.FactWithBody, error) {
-	if s.byPath != nil {
-		if fb, ok := s.byPath[path]; ok {
-			return fb, nil
+// observeListDir installs a pass-through ListDir hook on each named store.
+func observeListDir(t *testing.T, svcs map[string]*store.Service) *listDirSeen {
+	t.Helper()
+	seen := &listDirSeen{paths: map[string][]string{}}
+	for name, svc := range svcs {
+		name := name
+		t.Cleanup(svc.Facts().SetListDirFaultForTest(func(path string) error {
+			seen.mu.Lock()
+			seen.paths[name] = append(seen.paths[name], path)
+			seen.mu.Unlock()
+			return nil
+		}))
+	}
+	return seen
+}
+
+// failListDir fails ListDir of exactly path on svc with err and fails no other
+// listing; hits counts how often that path reached the hook.
+func failListDir(t *testing.T, svc *store.Service, path string, err error, hits *atomic.Int64) {
+	t.Helper()
+	t.Cleanup(svc.Facts().SetListDirFaultForTest(func(got string) error {
+		if got != path {
+			return nil
 		}
-	}
-	return nil, s.getErr
+		hits.Add(1)
+		return err
+	}))
 }
 
+// typed is a factSpec mod that sets the fact's (epistemic) type.
+func typed(ty fact.Type) func(f *fact.Fact) {
+	return func(f *fact.Fact) { f.Type = ty }
+}
+
+// topicsRepo is a real-store repo "alpha" whose store and server both use the
+// ontology root "ontology", as the repos builder configures a store from the
+// one global root. It is deliberately not the default "kb", so a handler that
+// hard-codes the default lists the wrong directory.
+func topicsRepo(t *testing.T) (*repos.RepoInstance, *store.Service, *Server) {
+	t.Helper()
+	m, svcs := newRealStoreManager(t, "alpha")
+	svcs["alpha"].SetOntologyRoot("ontology")
+	return m.Get("alpha"), svcs["alpha"], &Server{Manager: m, OntologyRoot: "ontology"}
+}
+
+type topicsBody struct {
+	Count    int         `json:"count"`
+	Links    hal.LinkMap `json:"_links"`
+	Embedded struct {
+		Topics []struct {
+			Name  string      `json:"name"`
+			IsDir bool        `json:"is_dir"`
+			Type  string      `json:"type,omitempty"`
+			Title string      `json:"title,omitempty"`
+			Links hal.LinkMap `json:"_links"`
+		} `json:"topics"`
+	} `json:"_embedded"`
+}
+
+func decodeTopics(t *testing.T, rec *httptest.ResponseRecorder) topicsBody {
+	t.Helper()
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, hal.ContentType, rec.Header().Get("Content-Type"))
+	var body topicsBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), rec.Body.String())
+	return body
+}
+
+// The root listing lists the ontology root: a directory links to its topic
+// node, a fact links to its fact resource and carries the type and title of
+// THAT fact (the facts under ai/ have other titles and types, so enrichment
+// from the wrong path is caught).
 func TestHandleTopics_ReturnsCollection(t *testing.T) {
-	lister := &stubTopicLister{
-		dirs: []facts.DirEntry{
-			{Name: "ai", IsDir: true},
-			{Name: "intro.md", IsDir: false},
-		},
-		byPath: map[string]*facts.FactWithBody{
-			"ontology/intro.md": {
-				FactRecord: facts.FactRecord{
-					Title: "Introduction",
-					Type:  "observation",
-				},
-			},
-		},
-	}
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "ontology",
-		providers: storeProviders{
-			topicLister: lister,
-		},
-	}
-	r := s.NewAPIRouter()
+	ri, svc, s := topicsRepo(t)
+	writeFactsInOneCommit(t, ri,
+		plainFact("ontology/ai/nested.md", "Nested", typed(fact.Concept)),
+		plainFact("ontology/intro.md", "Introduction", typed(fact.Principle)),
+		plainFact("kb/elsewhere.md", "Not under the root", nil),
+	)
+	seen := observeListDir(t, map[string]*store.Service{"alpha": svc})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics", nil)
-	r.ServeHTTP(rec, req)
+	body := decodeTopics(t, getAPI(t, s, "/repos/alpha/branches/agent:test/topics"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
-	}
+	require.Equal(t, []string{"ontology"}, seen.of("alpha"), "the root listing lists the ontology root, once")
+	branchURL := APIBase + "/repos/alpha/branches/agent:test"
+	require.Equal(t, branchURL+"/topics", body.Links["self"].Href)
+	require.Equal(t, 2, body.Count)
+	require.Len(t, body.Embedded.Topics, 2)
 
-	var body struct {
-		Count    int         `json:"count"`
-		Links    hal.LinkMap `json:"_links"`
-		Embedded struct {
-			Topics []struct {
-				Name  string      `json:"name"`
-				IsDir bool        `json:"is_dir"`
-				Type  string      `json:"type,omitempty"`
-				Title string      `json:"title,omitempty"`
-				Links hal.LinkMap `json:"_links"`
-			} `json:"topics"`
-		} `json:"_embedded"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	dir := body.Embedded.Topics[0]
+	require.Equal(t, "ai", dir.Name)
+	require.True(t, dir.IsDir)
+	require.Empty(t, dir.Type, "a directory is not enriched")
+	require.Empty(t, dir.Title, "a directory is not enriched")
+	require.Equal(t, branchURL+"/topics/ai", dir.Links["self"].Href)
 
-	if body.Count != 2 {
-		t.Errorf("count: %d, want 2", body.Count)
-	}
-	if _, ok := body.Links["self"]; !ok {
-		t.Error("missing self link on collection")
-	}
-	if len(body.Embedded.Topics) != 2 {
-		t.Fatalf("embedded topics: %d, want 2", len(body.Embedded.Topics))
-	}
-
-	// directory entry links to /topics/{name}
-	dirEntry := body.Embedded.Topics[0]
-	if dirEntry.Name != "ai" || !dirEntry.IsDir {
-		t.Errorf("dir entry: %+v", dirEntry)
-	}
-	wantDirSelf := APIBase + "/repos/alpha/branches/agent:test/topics/ai"
-	if got := dirEntry.Links["self"].Href; got != wantDirSelf {
-		t.Errorf("dir self: got %q, want %q", got, wantDirSelf)
-	}
-
-	// file entry links to a fact URL and has type/title enrichment
-	fileEntry := body.Embedded.Topics[1]
-	if fileEntry.Name != "intro.md" || fileEntry.IsDir {
-		t.Errorf("file entry: %+v", fileEntry)
-	}
-	if fileEntry.Type != "observation" {
-		t.Errorf("type: %q, want observation", fileEntry.Type)
-	}
-	if fileEntry.Title != "Introduction" {
-		t.Errorf("title: %q, want Introduction", fileEntry.Title)
-	}
-	wantFileSelf := APIBase + "/repos/alpha/branches/agent:test/facts/ontology/intro.md"
-	if got := fileEntry.Links["self"].Href; got != wantFileSelf {
-		t.Errorf("file self: got %q, want %q", got, wantFileSelf)
-	}
+	file := body.Embedded.Topics[1]
+	require.Equal(t, "intro.md", file.Name)
+	require.False(t, file.IsDir)
+	require.Equal(t, "principle", file.Type)
+	require.Equal(t, "Introduction", file.Title)
+	require.Equal(t, branchURL+"/facts/ontology/intro.md", file.Links["self"].Href)
 }
 
+// A topic node lists ontology/<node>: its child directory links one level
+// deeper, and its fact is enriched from ontology/<node>/<name>, not from the
+// same-named fact at the root (a decoy with another title and type).
 func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
-	lister := &stubTopicLister{
-		dirs: []facts.DirEntry{
-			{Name: "ml", IsDir: true},
-			{Name: "overview.md", IsDir: false},
-		},
-		byPath: map[string]*facts.FactWithBody{
-			"ontology/ai/overview.md": {
-				FactRecord: facts.FactRecord{
-					Title: "AI Overview",
-					Type:  "claim",
-				},
-			},
-		},
-	}
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "ontology",
-		providers: storeProviders{
-			topicLister: lister,
-		},
-	}
-	r := s.NewAPIRouter()
+	ri, svc, s := topicsRepo(t)
+	writeFactsInOneCommit(t, ri,
+		plainFact("ontology/ai/ml/deep.md", "Deep", nil),
+		plainFact("ontology/ai/overview.md", "AI Overview", typed(fact.Hypothesis)),
+		plainFact("ontology/overview.md", "Root overview decoy", typed(fact.Insight)),
+	)
+	seen := observeListDir(t, map[string]*store.Service{"alpha": svc})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics/ai", nil)
-	r.ServeHTTP(rec, req)
+	body := decodeTopics(t, getAPI(t, s, "/repos/alpha/branches/agent:test/topics/ai"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
-	}
-
-	var body struct {
-		Count    int         `json:"count"`
-		Links    hal.LinkMap `json:"_links"`
-		Embedded struct {
-			Topics []struct {
-				Name  string      `json:"name"`
-				IsDir bool        `json:"is_dir"`
-				Links hal.LinkMap `json:"_links"`
-			} `json:"topics"`
-		} `json:"_embedded"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if body.Count != 2 {
-		t.Errorf("count: %d, want 2", body.Count)
-	}
-
-	// self link on collection
+	require.Equal(t, []string{"ontology/ai"}, seen.of("alpha"))
 	branchURL := APIBase + "/repos/alpha/branches/agent:test"
-	wantSelf := branchURL + "/topics/ai"
-	if got := body.Links["self"].Href; got != wantSelf {
-		t.Errorf("collection self: got %q, want %q", got, wantSelf)
-	}
+	require.Equal(t, branchURL+"/topics/ai", body.Links["self"].Href)
+	require.Equal(t, 2, body.Count)
+	require.Len(t, body.Embedded.Topics, 2)
 
-	// dir child links to /topics/ai/ml
-	dirChild := body.Embedded.Topics[0]
-	wantChildDir := branchURL + "/topics/ai/ml"
-	if got := dirChild.Links["self"].Href; got != wantChildDir {
-		t.Errorf("child dir self: got %q, want %q", got, wantChildDir)
-	}
+	dir := body.Embedded.Topics[0]
+	require.Equal(t, "ml", dir.Name)
+	require.True(t, dir.IsDir)
+	require.Equal(t, branchURL+"/topics/ai/ml", dir.Links["self"].Href)
 
-	// file child links to fact
-	fileChild := body.Embedded.Topics[1]
-	wantChildFile := branchURL + "/facts/ontology/ai/overview.md"
-	if got := fileChild.Links["self"].Href; got != wantChildFile {
-		t.Errorf("child file self: got %q, want %q", got, wantChildFile)
-	}
+	file := body.Embedded.Topics[1]
+	require.Equal(t, "overview.md", file.Name)
+	require.Equal(t, "hypothesis", file.Type)
+	require.Equal(t, "AI Overview", file.Title)
+	require.Equal(t, branchURL+"/facts/ontology/ai/overview.md", file.Links["self"].Href)
 }
 
 // TestHandleTopics_HidesPrivateDirectory pins spec/mbekg.md §3.8: a
@@ -208,58 +175,28 @@ func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 // the store's — the same call site the reviewer flagged as listing
 // ".drafts" as an ordinary topic.
 func TestHandleTopics_HidesPrivateDirectory(t *testing.T) {
-	lister := &stubTopicLister{
-		dirs: []facts.DirEntry{
-			{Name: "ai", IsDir: true},
-			{Name: ".drafts", IsDir: true},
-		},
-	}
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "ontology",
-		providers: storeProviders{
-			topicLister: lister,
-		},
-	}
-	r := s.NewAPIRouter()
+	ri, svc, s := topicsRepo(t)
+	writeFactsInOneCommit(t, ri,
+		plainFact("ontology/ai/x.md", "X", nil),
+		plainFact("ontology/.drafts/y.md", "Draft", nil),
+	)
+	// The store itself does list the private directory: the handler's guard
+	// is what hides it.
+	entries, err := svc.Facts().ListDir(t.Context(), "agent/test", "ontology")
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "fixture: ListDir must return .drafts for the guard to have work")
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics", nil)
-	r.ServeHTTP(rec, req)
+	body := decodeTopics(t, getAPI(t, s, "/repos/alpha/branches/agent:test/topics"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
-	}
-
-	var body struct {
-		Count    int `json:"count"`
-		Embedded struct {
-			Topics []struct {
-				Name string `json:"name"`
-			} `json:"topics"`
-		} `json:"_embedded"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if body.Count != 1 {
-		t.Fatalf("count: %d, want 1 (the private dir must be hidden)", body.Count)
-	}
-	for _, topic := range body.Embedded.Topics {
-		if topic.Name == ".drafts" {
-			t.Errorf("private directory %q appeared in the topics listing", topic.Name)
-		}
-	}
+	require.Equal(t, 1, body.Count, "the private dir must be hidden")
+	require.Len(t, body.Embedded.Topics, 1)
+	require.Equal(t, "ai", body.Embedded.Topics[0].Name)
 }
 
 func TestHandleTopics_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		providers: storeProviders{
-			topicLister: &stubTopicLister{},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -279,9 +216,6 @@ func TestHandleTopicNode_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "ontology",
-		providers: storeProviders{
-			topicLister: &stubTopicLister{},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -297,32 +231,43 @@ func TestHandleTopicNode_UnknownRepo_Returns404(t *testing.T) {
 	}
 }
 
+// A branch the store does not have fails ListDir with ErrBranchNotFound, which
+// the handler serves as a 404 naming the branch, not as a 500.
 func TestHandleTopics_MissingBranch_Returns404(t *testing.T) {
-	lister := &stubTopicLister{
-		listErr: fmt.Errorf("ListDir: ref: %w", model.ErrBranchNotFound),
-	}
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "ontology",
-		providers: storeProviders{
-			topicLister: lister,
-		},
-	}
-	r := s.NewAPIRouter()
+	_, svc, s := topicsRepo(t)
+	seen := observeListDir(t, map[string]*store.Service{"alpha": svc})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/does-not-exist/topics", nil)
-	r.ServeHTTP(rec, req)
+	rec := getAPI(t, s, "/repos/alpha/branches/does-not-exist/topics")
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
-	}
+	require.Equal(t, []string{"ontology"}, seen.of("alpha"), "the 404 must come from the store's ListDir")
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body["title"] != "Branch not found" {
-		t.Errorf("title = %q, want Branch not found", body["title"])
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "Branch not found", body["title"])
+	require.Equal(t, `no branch named "does-not-exist"`, body["detail"])
+}
+
+// A ListDir failure is a 500 carrying the store's error, for the root listing
+// and for a topic node.
+func TestHandleTopics_ListDirErrorIs500(t *testing.T) {
+	for _, tc := range []struct{ url, dir string }{
+		{"/repos/alpha/branches/agent:test/topics", "ontology"},
+		{"/repos/alpha/branches/agent:test/topics/ai", "ontology/ai"},
+	} {
+		t.Run(tc.dir, func(t *testing.T) {
+			ri, svc, s := topicsRepo(t)
+			writeFactsInOneCommit(t, ri, plainFact("ontology/ai/x.md", "X", nil))
+			injected := errors.New("topics tree unreadable")
+			var hits atomic.Int64
+			failListDir(t, svc, tc.dir, injected, &hits)
+
+			rec := getAPI(t, s, tc.url)
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+			require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			require.Contains(t, rec.Body.String(), "Failed to list topics")
+			require.Contains(t, rec.Body.String(), injected.Error())
+			require.EqualValues(t, 1, hits.Load())
+		})
 	}
 }

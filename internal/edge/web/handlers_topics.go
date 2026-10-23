@@ -17,19 +17,9 @@ import (
 	"knomit/internal/engine/store/facts"
 )
 
-// TopicLister is the narrow interface the topic browse handlers depend on.
-// Both methods receive the RepoInstance so they can call through WithRead.
-// Production wires these via defaultTopicLister; tests inject stubs.
-type TopicLister interface {
-	ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error)
-	GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*facts.FactWithBody, error)
-}
-
-// defaultTopicLister is the production TopicLister that calls through
-// ri.WithRead to access the real store.
-type defaultTopicLister struct{}
-
-func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error) {
+// listTopicDir lists path on branch of ri's store through ri.WithRead. A nil
+// store (the repo is not open) yields no entries and a nil error.
+func listTopicDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error) {
 	var (
 		out []facts.DirEntry
 		err error
@@ -43,7 +33,10 @@ func (defaultTopicLister) ListDir(ctx context.Context, ri *repos.RepoInstance, b
 	return out, err
 }
 
-func (defaultTopicLister) GetByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*facts.FactWithBody, error) {
+// topicFactByPath reads the indexed fact at path on branch of ri's store
+// through ri.WithRead, for a topic listing's type/title enrichment. A nil store
+// yields a nil fact and a nil error.
+func topicFactByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*facts.FactWithBody, error) {
 	var (
 		out *facts.FactWithBody
 		err error
@@ -70,19 +63,19 @@ type topicEntry struct {
 
 // handleTopics serves GET /repos/{repo}/branches/{branch}/topics.
 // It lists the ontology root directory and returns a HAL collection.
-func handleTopics(b hal.URLBuilder, ontologyRoot string, lister TopicLister) http.HandlerFunc {
-	return topicHandler(b, ontologyRoot, lister, false)
+func handleTopics(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
+	return topicHandler(b, ontologyRoot, false)
 }
 
 // handleTopicNode serves GET /repos/{repo}/branches/{branch}/topics/*.
 // It lists a subdirectory of the ontology, or dispatches to /facts or /stats
 // sub-resources when the wildcard path ends with those suffixes.
-func handleTopicNode(b hal.URLBuilder, ontologyRoot string, lister TopicLister) http.HandlerFunc {
+func handleTopicNode(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodePath := chi.URLParam(r, "*")
 		if strings.HasSuffix(nodePath, "/facts") {
 			topicPath := strings.TrimSuffix(nodePath, "/facts")
-			handleTopicFacts(b, ontologyRoot, lister, topicPath)(w, r)
+			handleTopicFacts(b, ontologyRoot, topicPath)(w, r)
 			return
 		}
 		if strings.HasSuffix(nodePath, "/stats") {
@@ -90,13 +83,13 @@ func handleTopicNode(b hal.URLBuilder, ontologyRoot string, lister TopicLister) 
 			handleTopicStats(b, ontologyRoot, topicPath)(w, r)
 			return
 		}
-		topicHandler(b, ontologyRoot, lister, true)(w, r)
+		topicHandler(b, ontologyRoot, true)(w, r)
 	}
 }
 
 // handleTopicFacts serves GET .../topics/{segments...}/facts.
 // Returns a CollectionView of non-directory entries (facts) directly at the topic node.
-func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister, topicPath string) http.HandlerFunc {
+func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, topicPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -105,7 +98,7 @@ func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister,
 		a := hal.Anchor{Branch: branch}
 
 		dirPath := ontologyRoot + "/" + topicPath
-		entries, err := lister.ListDir(r.Context(), ri, branch, dirPath)
+		entries, err := listTopicDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list topic facts", branch)
 			return
@@ -137,7 +130,7 @@ func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, lister TopicLister,
 				continue
 			}
 			item := factSummary{Name: e.Name}
-			if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
+			if fb, gerr := topicFactByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 				item.Type = fb.Type
 				item.Title = fb.Title
 			}
@@ -214,7 +207,7 @@ func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 
 // topicHandler is the shared implementation for both topic endpoints.
 // When node is true the handler reads the wildcard path segment from chi.
-func topicHandler(b hal.URLBuilder, ontologyRoot string, lister TopicLister, node bool) http.HandlerFunc {
+func topicHandler(b hal.URLBuilder, ontologyRoot string, node bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -232,7 +225,7 @@ func topicHandler(b hal.URLBuilder, ontologyRoot string, lister TopicLister, nod
 			nodePath = ""
 		}
 
-		entries, err := lister.ListDir(r.Context(), ri, branch, dirPath)
+		entries, err := listTopicDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			log.Error().Err(err).Str("branch", branch).Str("path", dirPath).Msg("ListDir failed")
 			writeStoreError(w, r, err, "Failed to list topics", branch)
@@ -282,7 +275,7 @@ func topicHandler(b hal.URLBuilder, ontologyRoot string, lister TopicLister, nod
 					fullPath = ontologyRoot + "/" + nodePath + "/" + e.Name
 				}
 				// Enrich with type/title from search index (best-effort).
-				if fb, gerr := lister.GetByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
+				if fb, gerr := topicFactByPath(r.Context(), ri, branch, fullPath); gerr == nil && fb != nil {
 					entry.Type = fb.Type
 					entry.Title = fb.Title
 				}

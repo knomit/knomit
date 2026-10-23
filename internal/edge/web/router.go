@@ -386,8 +386,8 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot, p.factWriter))
 				r.Delete("/facts/*", handleFactDelete(b, p.factWriter))
 
-				r.Get("/topics", handleTopics(b, s.OntologyRoot, p.topicLister))
-				r.Get("/topics/*", handleTopicNode(b, s.OntologyRoot, p.topicLister))
+				r.Get("/topics", handleTopics(b, s.OntologyRoot))
+				r.Get("/topics/*", handleTopicNode(b, s.OntologyRoot))
 
 				r.Get("/changes", handleHALChanges(b))
 				r.Get("/commits", handleHALCommitsList(b, p.commits, s.OntologyRoot))
@@ -462,8 +462,8 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			r.Get("/motifs", handleHALLensMotifs(b))
 			r.Get("/motifs/{key}", handleHALLensMotifCluster(b))
 			r.Get("/stats", handleHALLensStats())
-			r.Get("/topics", handleHALLensTopics(p.topicLister, s.OntologyRoot))
-			r.Get("/topics/*", handleHALLensTopics(p.topicLister, s.OntologyRoot))
+			r.Get("/topics", handleHALLensTopics(s.OntologyRoot))
+			r.Get("/topics/*", handleHALLensTopics(s.OntologyRoot))
 			// As on the repo subtree: the session's experiment applies to the
 			// MCP mount only. The HAL reads above federate at each member's
 			// own pinned branch and must keep doing so.
