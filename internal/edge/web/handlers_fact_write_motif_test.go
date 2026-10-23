@@ -2,7 +2,6 @@ package web
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -20,21 +19,13 @@ func putFactContent(motifsLine string) string {
 }
 
 // putFact drives a PUT through the real router and returns the bytes the
-// handler handed to git.
+// store holds at the path afterwards, on the request branch.
 func putFact(t *testing.T, content string) (int, string) {
 	t.Helper()
-	writer := &stubFactWriter{writeHash: "abc123"}
-	s := &Server{
-		Manager:   newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{factWriter: writer},
-	}
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut,
-		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
-		strings.NewReader(`{"content":"`+content+`"}`)))
-	req.Header.Set("Content-Type", "application/json")
-	s.NewAPIRouter().ServeHTTP(rec, req)
-	return rec.Code, writer.lastWriteContent
+	fx := newFactWriteFixture(t, "know")
+	rec := fx.do(http.MethodPut, fx.factURL("know/ai/test.md"), `{"content":"`+content+`"}`)
+	written, _ := fx.read(restWriteBranch, "know/ai/test.md")
+	return rec.Code, written
 }
 
 // TestFactPut_SubjectMotifIsStripped is the Phase-1 acceptance property on the

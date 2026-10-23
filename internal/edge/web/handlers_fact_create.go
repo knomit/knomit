@@ -47,7 +47,7 @@ const (
 // handleFactCreate serves POST /repos/{repo}/branches/{branch}/facts.
 // Allocates a new path via fact.BuildFactPath, serializes the fact, writes it
 // to the branch and returns 201 Created with a Location header and FactView.
-func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) http.HandlerFunc {
+func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -142,7 +142,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		// holds on one of two write APIs is not one. Runs before serializing so
 		// a rejected request writes nothing at all. prior is nil: the path was
 		// just minted, so every ref here is new.
-		canonRefs, _, gerr := writerGate(writer, ri, branch).Apply(r.Context(), path, f.Refs, nil)
+		canonRefs, _, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, nil)
 		if gerr != nil {
 			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
 				gerr.Error(), r.URL.Path)
@@ -158,7 +158,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		}
 		msg := "create: " + req.Title + " via API"
 
-		if _, err := writer.Write(r.Context(), ri, branch, path, content, msg); err != nil {
+		if _, err := writeFact(r.Context(), ri, branch, path, content, msg); err != nil {
 			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}

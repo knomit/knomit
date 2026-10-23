@@ -16,8 +16,7 @@ package web
 // visible at its registration site; passing the bundle around would make
 // every handler nominally depend on every seam.
 type storeProviders struct {
-	factWriter FactWriter
-	origin     originProvider
+	origin originProvider
 }
 
 // withDefaults returns a copy with every nil member replaced by its
@@ -27,9 +26,6 @@ type storeProviders struct {
 // mutated, so a test's sparse overrides stay sparse and NewAPIRouter can be
 // called twice on the same Server with identical results.
 func (p storeProviders) withDefaults() storeProviders {
-	if p.factWriter == nil {
-		p.factWriter = defaultFactWriter{}
-	}
 	if p.origin == nil {
 		p.origin = defaultOriginProvider{}
 	}

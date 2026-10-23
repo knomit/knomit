@@ -13,40 +13,27 @@ import (
 )
 
 // refusedByGuard drives PUT and DELETE at path and asserts BOTH are refused
-// with 400 and that neither ever reached the writer. The pair matters: the two
+// with 400 and that neither ever reached the store. The pair matters: the two
 // handlers carry the same rule in two places, and a fix applied to one only is
 // the exact shape of bug this file exists to catch.
 func refusedByGuard(t *testing.T, path string) {
 	t.Helper()
-	writer := &stubFactWriter{writeHash: "abc123"}
-	s := &Server{
-		Manager:   newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{factWriter: writer},
-	}
-	r := s.NewAPIRouter()
+	fx := newFactWriteFixture(t, "kb")
 
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut,
-		"/repos/alpha/branches/agent:test/facts/"+path,
-		strings.NewReader(`{"content":"`+testFactContent+`"}`)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	rec := fx.do(http.MethodPut, fx.factURL(path), `{"content":"`+testFactContent+`"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("PUT %s: status %d, want 400, body=%s", path, rec.Code, rec.Body.String())
 	}
-	if writer.writeCalls != 0 {
-		t.Errorf("PUT %s: writer.Write called %d times; it must never reach git", path, writer.writeCalls)
+	if w := fx.wrote(); len(w) != 0 {
+		t.Errorf("PUT %s: the store wrote %v; it must never reach git", path, w)
 	}
 
-	rec = httptest.NewRecorder()
-	req = fromLoopback(httptest.NewRequest(http.MethodDelete,
-		"/repos/alpha/branches/agent:test/facts/"+path, nil))
-	r.ServeHTTP(rec, req)
+	rec = fx.do(http.MethodDelete, fx.factURL(path), "")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("DELETE %s: status %d, want 400, body=%s", path, rec.Code, rec.Body.String())
 	}
-	if writer.deleteCalls != 0 {
-		t.Errorf("DELETE %s: writer.Delete called %d times; it must never reach git", path, writer.deleteCalls)
+	if d := fx.deleted(); len(d) != 0 {
+		t.Errorf("DELETE %s: the store deleted %v; it must never reach git", path, d)
 	}
 }
 
@@ -106,22 +93,12 @@ func TestFactEndpoints_AllowOrdinaryFactsNearServerOwnedNames(t *testing.T) {
 		"domains/ontology.yaml.md",
 	} {
 		t.Run(path, func(t *testing.T) {
-			writer := &stubFactWriter{writeHash: "abc123"}
-			s := &Server{
-				Manager:   newTestManagerWithRepos(t, "alpha"),
-				providers: storeProviders{factWriter: writer},
-			}
-			r := s.NewAPIRouter()
-
-			rec := httptest.NewRecorder()
-			req := fromLoopback(httptest.NewRequest(http.MethodPut,
-				"/repos/alpha/branches/agent:test/facts/"+path,
-				strings.NewReader(`{"content":"`+testFactContent+`"}`)))
-			req.Header.Set("Content-Type", "application/json")
-			r.ServeHTTP(rec, req)
+			fx := newFactWriteFixture(t, "kb")
+			rec := fx.do(http.MethodPut, fx.factURL(path), `{"content":"`+testFactContent+`"}`)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("PUT %s: status %d, want 200, body=%s", path, rec.Code, rec.Body.String())
 			}
+			require.Equal(t, []string{path}, fx.wrote())
 		})
 	}
 }
@@ -144,8 +121,7 @@ func TestFactWrite_RefusesNonWritableBranchWith403(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{})
 	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "sub", Subscribed: true, ReadBranch: "main"}))
 	m.Set("rw", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "rw", AgentBranch: "agent/test"}))
-	writer := &stubFactWriter{writeHash: "abc123"}
-	s := &Server{Manager: m, providers: storeProviders{factWriter: writer}}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 
 	const subDetail = "is a subscription: it follows a remote branch read-only"
@@ -168,6 +144,4 @@ func TestFactWrite_RefusesNonWritableBranchWith403(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "Read-only branch", tc.name)
 		require.Contains(t, rec.Body.String(), tc.wantDetail, "%s: wrong advice in the refusal detail", tc.name)
 	}
-	require.Zero(t, writer.writeCalls, "the writer must never be reached")
-	require.Zero(t, writer.deleteCalls, "the writer must never be reached")
 }

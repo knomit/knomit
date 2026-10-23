@@ -33,18 +33,18 @@ import (
 const originGuardFactBody = `{"title":"csrf","body":"written by a cross-site form","type":"observation","domain":["ai","ml"]}`
 
 // originGuardServer is the full plain-listener Handler over a real loopback
-// TCP listener, with a counting fact writer behind it.
-func originGuardServer(t *testing.T, mutate func(*Server)) (*httptest.Server, *stubFactWriter) {
+// TCP listener, with a real store behind it whose writes and deletes the
+// returned fixture records.
+func originGuardServer(t *testing.T, mutate func(*Server)) (*httptest.Server, *factWriteFixture) {
 	t.Helper()
-	writer := &stubFactWriter{writeHash: "abc123"}
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), Auth: config.Defaults().Auth,
-		OntologyRoot: "know", providers: storeProviders{factWriter: writer}}
+	fx := newFactWriteFixture(t, "know")
+	fx.s.Auth = config.Defaults().Auth
 	if mutate != nil {
-		mutate(s)
+		mutate(fx.s)
 	}
-	srv := httptest.NewServer(s.Handler())
+	srv := httptest.NewServer(fx.s.Handler())
 	t.Cleanup(srv.Close)
-	return srv, writer
+	return srv, fx
 }
 
 type originReq struct {
@@ -89,34 +89,34 @@ func (c originReq) do(t *testing.T, srv *httptest.Server) (int, string, http.Hea
 
 func ownHostOf(srv *httptest.Server) string { return strings.TrimPrefix(srv.URL, "http://") }
 
-const factsPath = "/api/v1/repos/alpha/branches/agent:test/facts"
+const factsPath = "/api/v1/repos/alpha/branches/" + restWriteURL + "/facts"
 
 // The request measured in the #281 RCA (reviewer input 5): a cross-site
 // page's form post — text/plain, no preflight, a legitimate loopback Host —
 // used to answer 201 and write a fact as anonymous@none.
 func TestIssue287_CrossSitePlainPostIsRefused(t *testing.T) {
-	srv, writer := originGuardServer(t, nil)
+	srv, fx := originGuardServer(t, nil)
 	code, body, _ := originReq{method: "POST", path: factsPath, body: originGuardFactBody,
 		contentType: "text/plain", origin: "https://evil.example"}.do(t, srv)
 	if code != http.StatusForbidden || !strings.Contains(body, "Cross-origin request refused") ||
 		!strings.Contains(body, "evil.example") {
 		t.Fatalf("cross-site text/plain POST: %d %.300s; want 403 Cross-origin request refused", code, body)
 	}
-	if writer.writeCalls != 0 {
-		t.Fatalf("the cross-site POST reached the fact writer %d time(s)", writer.writeCalls)
+	if len(fx.wrote()) != 0 {
+		t.Fatalf("the cross-site POST reached the store: %d write(s)", len(fx.wrote()))
 	}
 
 	// Control: the same request from the page this listener served is the
 	// write it always was.
 	code, body, _ = originReq{method: "POST", path: factsPath, body: originGuardFactBody,
 		contentType: "application/json", origin: "http://" + ownHostOf(srv)}.do(t, srv)
-	if code != http.StatusCreated || writer.writeCalls != 1 {
-		t.Fatalf("same-origin POST: %d %.300s writeCalls=%d; want 201 and one write", code, body, writer.writeCalls)
+	if code != http.StatusCreated || len(fx.wrote()) != 1 {
+		t.Fatalf("same-origin POST: %d %.300s writeCalls=%d; want 201 and one write", code, body, len(fx.wrote()))
 	}
 }
 
 func TestOriginGuard_RefusedOrigins(t *testing.T) {
-	srv, writer := originGuardServer(t, nil)
+	srv, fx := originGuardServer(t, nil)
 	own := ownHostOf(srv)
 	for _, c := range []struct {
 		name string
@@ -141,13 +141,13 @@ func TestOriginGuard_RefusedOrigins(t *testing.T) {
 			t.Errorf("%s: %d %.200s; want 403 Cross-origin request refused", c.name, code, body)
 		}
 	}
-	if writer.writeCalls != 0 {
-		t.Fatalf("a refused origin reached the fact writer %d time(s)", writer.writeCalls)
+	if len(fx.wrote()) != 0 {
+		t.Fatalf("a refused origin reached the store: %d write(s)", len(fx.wrote()))
 	}
 }
 
 func TestOriginGuard_AdmittedOrigins(t *testing.T) {
-	srv, writer := originGuardServer(t, func(s *Server) {
+	srv, fx := originGuardServer(t, func(s *Server) {
 		s.Auth.LoopbackHosts = []string{"box.tail1234.ts.net"}
 	})
 	own := ownHostOf(srv)
@@ -166,9 +166,9 @@ func TestOriginGuard_AdmittedOrigins(t *testing.T) {
 	} {
 		r := c.req
 		r.method, r.path, r.body, r.contentType = "POST", factsPath, originGuardFactBody, "application/json"
-		before := writer.writeCalls
+		before := len(fx.wrote())
 		code, body, _ := r.do(t, srv)
-		if code != http.StatusCreated || writer.writeCalls != before+1 {
+		if code != http.StatusCreated || len(fx.wrote()) != before+1 {
 			t.Errorf("%s: %d %.200s; want 201 and a write", c.name, code, body)
 		}
 	}
@@ -178,12 +178,12 @@ func TestOriginGuard_AdmittedOrigins(t *testing.T) {
 // does not keep a method list that ages: every non-GET/HEAD/OPTIONS method is
 // judged. Another plain-listener route is covered too, not only /facts.
 func TestOriginGuard_EveryMutatingMethodAndRoute(t *testing.T) {
-	srv, writer := originGuardServer(t, nil)
+	srv, fx := originGuardServer(t, nil)
 	for _, r := range []originReq{
 		{method: "POST", path: "/api/v1/repos:probe-origin", body: `{"url":"https://example.com/x.git"}`, contentType: "text/plain"},
-		{method: "PUT", path: "/api/v1/repos/alpha/branches/agent:test/facts/know/ai/x.md", body: `{"content":"` + testFactContent + `"}`, contentType: "application/json"},
+		{method: "PUT", path: "/api/v1/repos/alpha/branches/" + restWriteURL + "/facts/know/ai/x.md", body: `{"content":"` + testFactContent + `"}`, contentType: "application/json"},
 		{method: "PATCH", path: "/api/v1/repos/alpha", body: `{"description":"pwned"}`, contentType: "application/json"},
-		{method: "DELETE", path: "/api/v1/repos/alpha/branches/agent:test/facts/know/ai/x.md"},
+		{method: "DELETE", path: "/api/v1/repos/alpha/branches/" + restWriteURL + "/facts/know/ai/x.md"},
 	} {
 		r.origin = "https://evil.example"
 		code, body, _ := r.do(t, srv)
@@ -191,8 +191,8 @@ func TestOriginGuard_EveryMutatingMethodAndRoute(t *testing.T) {
 			t.Errorf("%s %s: %d %.200s; want 403 Cross-origin request refused", r.method, r.path, code, body)
 		}
 	}
-	if writer.writeCalls != 0 || writer.deleteCalls != 0 {
-		t.Fatalf("a refused request reached the writer: writes=%d deletes=%d", writer.writeCalls, writer.deleteCalls)
+	if len(fx.wrote()) != 0 || len(fx.deleted()) != 0 {
+		t.Fatalf("a refused request reached the store: writes=%d deletes=%d", len(fx.wrote()), len(fx.deleted()))
 	}
 
 	// Reads are the Host check's business: a GET with a foreign Origin is
@@ -225,15 +225,15 @@ var desktopOrigins = []string{"wails://localhost", "http://wails.localhost"}
 // runs on BOTH the outer router and the API router; a POST through the real
 // Handler proves both carry the allowlist.
 func TestOriginGuard_DesktopWailsOriginWrites(t *testing.T) {
-	srv, writer := originGuardServer(t, func(s *Server) {
+	srv, fx := originGuardServer(t, func(s *Server) {
 		s.APIOnly = true
 		s.CORSOrigins = desktopOrigins
 	})
 	for _, origin := range desktopOrigins {
-		before := writer.writeCalls
+		before := len(fx.wrote())
 		code, body, hdr := originReq{method: "POST", path: factsPath, body: originGuardFactBody,
 			contentType: "application/json", origin: origin}.do(t, srv)
-		if code != http.StatusCreated || writer.writeCalls != before+1 || hdr.Get("Access-Control-Allow-Origin") != origin {
+		if code != http.StatusCreated || len(fx.wrote()) != before+1 || hdr.Get("Access-Control-Allow-Origin") != origin {
 			t.Fatalf("desktop POST from %s: %d %.200s ACAO=%q; want 201, a write and ACAO", origin, code, body, hdr.Get("Access-Control-Allow-Origin"))
 		}
 	}

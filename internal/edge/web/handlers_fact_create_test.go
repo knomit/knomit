@@ -1,61 +1,48 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 )
 
-// stubFactWriterForCreate is a minimal FactWriter for create handler tests.
-// The ref gate sees an empty corpus, which is right for every test here that
-// posts a fact with no refs.
-type stubFactWriterForCreate struct{}
-
-func (stubFactWriterForCreate) FactResolves(_ context.Context, _ *repos.RepoInstance, _, _ string) (bool, error) {
-	return false, nil
-}
-
-func (stubFactWriterForCreate) PriorRefs(_ context.Context, _ *repos.RepoInstance, _, _ string) ([]string, error) {
-	return nil, nil
-}
-
-func (stubFactWriterForCreate) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
-	return "abc123", nil
-}
-func (stubFactWriterForCreate) Delete(_ context.Context, _ *repos.RepoInstance, _, _, _ string) (string, error) {
-	return "abc123", nil
-}
-
+// A POST mints a path under the server's ontology root from the domain,
+// commits the fact there on the REQUEST branch with the create message, and
+// answers 201 with a Location naming that path on that branch. Sabotage: write
+// on ri.AgentBranch(), ignore the ontology root, or change the message.
 func TestHandleFactCreate_Returns201WithLocation(t *testing.T) {
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "know",
-		providers: storeProviders{
-			factWriter: stubFactWriterForCreate{},
-		},
-	}
-	r := s.NewAPIRouter()
+	fx := newFactWriteFixture(t, "know")
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","domain":["ai","ml"],"confidence":0.9,"sources":1}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	rec := fx.do(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts", body)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status: got %d, want 201, body=%s", rec.Code, rec.Body.String())
 	}
-	if loc := rec.Header().Get("Location"); loc == "" {
-		t.Error("Location header missing")
+	w := fx.wrote()
+	if len(w) != 1 || !strings.HasPrefix(w[0], "know/ai/ml/") {
+		t.Fatalf("wrote %v; want one fact under know/ai/ml/", w)
+	}
+	if loc := rec.Header().Get("Location"); !strings.HasSuffix(loc, "/repos/alpha/branches/"+restWriteURL+"/facts/"+w[0]) {
+		t.Errorf("Location: got %q, want the written path %s on %s", loc, w[0], restWriteURL)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != hal.ContentType {
 		t.Errorf("Content-Type: got %q, want %q", ct, hal.ContentType)
+	}
+	stored, ok := fx.read(restWriteBranch, w[0])
+	if !ok || !strings.Contains(stored, "# My Fact") {
+		t.Errorf("the request branch holds %q at %s; want the created fact", stored, w[0])
+	}
+	if _, ok := fx.read(fsAgentBranch, w[0]); ok {
+		t.Errorf("the fact also landed on the agent branch")
+	}
+	if msg, op := fx.head(restWriteBranch); msg != "create: My Fact via API" || op != "update" {
+		t.Errorf("commit: message %q operation %q; want %q, %q", msg, op, "create: My Fact via API", "update")
 	}
 
 	var view struct {
@@ -75,13 +62,37 @@ func TestHandleFactCreate_Returns201WithLocation(t *testing.T) {
 	}
 }
 
+// A store write that fails is a 500 naming the store's error, with no
+// Location. Sabotage: drop the write error check in handleFactCreate.
+func TestHandleFactCreate_WriteError_Returns500(t *testing.T) {
+	fx := newFactWriteFixture(t, "know")
+	injected := errors.New("w0h: injected create fault")
+	var hits []string
+	t.Cleanup(fx.svc.Facts().SetWriteFaultForTest(func(path string) error {
+		hits = append(hits, path)
+		return injected
+	}))
+
+	rec := fx.do(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts", `{"title":"T","body":"b","domain":["ai","ml"]}`)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+	if p := writeProblem(t, rec); p.Title != "Failed to write fact" || !strings.Contains(p.Detail, injected.Error()) {
+		t.Errorf("problem %q / %q; want the write failure naming %q", p.Title, p.Detail, injected)
+	}
+	if len(hits) != 1 || !strings.HasPrefix(hits[0], "know/ai/ml/") {
+		t.Errorf("write fault hits %v; want one, at the minted path", hits)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("Location %q on a failed create", loc)
+	}
+}
+
 func TestHandleFactCreate_MissingTitle_Returns400(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		providers: storeProviders{
-			factWriter: stubFactWriterForCreate{},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -102,9 +113,6 @@ func TestHandleFactCreate_WhitespaceTitle_Returns400(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		providers: storeProviders{
-			factWriter: stubFactWriterForCreate{},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -124,7 +132,6 @@ func TestHandleFactCreate_MultilineTitle_Returns400(t *testing.T) {
 		s := &Server{
 			Manager:      newTestManagerWithRepos(t, "alpha"),
 			OntologyRoot: "know",
-			providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
 		}
 		r := s.NewAPIRouter()
 		body := `{"title":"` + title + `","body":"b"}`
@@ -139,14 +146,10 @@ func TestHandleFactCreate_MultilineTitle_Returns400(t *testing.T) {
 }
 
 func TestHandleFactCreate_TrimsTitleEdges(t *testing.T) {
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "know",
-		providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
-	}
-	r := s.NewAPIRouter()
+	fx := newFactWriteFixture(t, "know")
+	r := fx.s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts",
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts",
 		strings.NewReader(`{"title":"  Padded  ","body":"b"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
@@ -168,9 +171,6 @@ func TestHandleFactCreate_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),
 		OntologyRoot: "know",
-		providers: storeProviders{
-			factWriter: stubFactWriterForCreate{},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -189,9 +189,6 @@ func TestHandleFactCreate_InvalidType_Returns400(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		providers: storeProviders{
-			factWriter: stubFactWriterForCreate{},
-		},
 	}
 	r := s.NewAPIRouter()
 
@@ -304,16 +301,12 @@ func TestGetOpenAPISpec_Returns200(t *testing.T) {
 // sources 0 contributes nothing to any downstream evidence weight, which
 // multiplies by sources.
 func TestHandleFactCreate_AppliesDefaults(t *testing.T) {
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "know",
-		providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
-	}
-	r := s.NewAPIRouter()
+	fx := newFactWriteFixture(t, "know")
+	r := fx.s.NewAPIRouter()
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","domain":["ai"]}`
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -338,16 +331,12 @@ func TestHandleFactCreate_AppliesDefaults(t *testing.T) {
 // TestHandleFactCreate_ExplicitZeroSourcesSurvives guards the other side: an
 // explicit 0 is a legal value and must not be defaulted away.
 func TestHandleFactCreate_ExplicitZeroSourcesSurvives(t *testing.T) {
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "know",
-		providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
-	}
-	r := s.NewAPIRouter()
+	fx := newFactWriteFixture(t, "know")
+	r := fx.s.NewAPIRouter()
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","sources":0,"confidence":0}`
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -376,9 +365,6 @@ func TestHandleFactCreate_RejectsPrivateDomain(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t, "alpha"),
 		OntologyRoot: "know",
-		providers: storeProviders{
-			factWriter: stubFactWriterForCreate{},
-		},
 	}
 	r := s.NewAPIRouter()
 

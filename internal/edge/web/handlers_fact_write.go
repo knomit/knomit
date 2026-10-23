@@ -20,33 +20,12 @@ import (
 	"knomit/internal/engine/store/facts"
 )
 
-// FactWriter is the narrow write interface the fact POST/PUT/DELETE handlers
-// depend on. Tests inject a stub; production wires through RepoInstance.WithRead.
-type FactWriter interface {
-	Write(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error)
-	Delete(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error)
-	// FactResolves backs the ref gate every write runs through. It is
-	// FactExistsAt at the branch head — the SAME predicate the read path uses
-	// to decide `fact` vs `broken`, walking back past retractions. The gate and
-	// the reader must ask one question: a narrower "is it live right now" check
-	// would reject writes whose refs the UI renders as live links.
-	//
-	// It lives on the WRITE interface, not the read one, so a new writer cannot
-	// be introduced without supplying the check its writes are validated against.
-	FactResolves(ctx context.Context, ri *repos.RepoInstance, branch, path string) (bool, error)
-
-	// PriorRefs returns the refs the fact at path already carries, or nil when
-	// there is no such fact. Those refs resolved at the commit that wrote them
-	// and are never re-judged — see the refs gate's temporal contract.
-	PriorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error)
-}
-
 // writerGate builds the one Gate the REST write handlers use. Both POST and PUT
 // call this rather than assembling a gate each, so "check then canonicalize" has
 // a single spelling here exactly as it does in internal/edge/mcp.
-func writerGate(writer FactWriter, ri *repos.RepoInstance, branch string) refs.Gate {
+func writerGate(ri *repos.RepoInstance, branch string) refs.Gate {
 	return refs.New(knomitfact.ID12(ri.ID()), func(ctx context.Context, path string) (bool, error) {
-		return writer.FactResolves(ctx, ri, branch, path)
+		return factResolves(ctx, ri, branch, path)
 	}).WithFiles(systemFileResolver(ri, branch))
 }
 
@@ -69,10 +48,13 @@ func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc 
 	}
 }
 
-// defaultFactWriter is the production FactWriter backed by the store.
-type defaultFactWriter struct{}
-
-func (defaultFactWriter) FactResolves(ctx context.Context, ri *repos.RepoInstance, branch, path string) (bool, error) {
+// factResolves backs the ref gate every REST write runs through (writerGate).
+// It is FactExistsAt at the head of branch — the SAME predicate the read path
+// uses to decide `fact` vs `broken`, walking back past retractions. The gate
+// and the reader must ask one question: a narrower "is it live right now"
+// check would reject writes whose refs the UI renders as live links. A repo
+// with no live store answers errFactNotFound.
+func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path string) (bool, error) {
 	var (
 		ok  bool
 		err error
@@ -89,7 +71,12 @@ func (defaultFactWriter) FactResolves(ctx context.Context, ri *repos.RepoInstanc
 	return ok, err
 }
 
-func (defaultFactWriter) PriorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
+// priorRefs returns the refs the fact at path on branch already carries, or nil
+// when there is no such fact (a create, or a PUT to a fresh path) or its stored
+// version does not parse. Those refs resolved at the commit that wrote them and
+// are never re-judged — see the refs gate's temporal contract. A repo with no
+// live store answers errFactNotFound; any other read error is returned.
+func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
 	var (
 		refs []string
 		err  error
@@ -121,7 +108,10 @@ func (defaultFactWriter) PriorRefs(ctx context.Context, ri *repos.RepoInstance, 
 	return refs, err
 }
 
-func (defaultFactWriter) Write(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
+// writeFact commits content at path on branch with message and returns the
+// commit hash. A repo with no live store answers errFactNotFound; a store
+// error is returned unchanged.
+func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
 	var (
 		commitHash string
 		err        error
@@ -141,7 +131,10 @@ func (defaultFactWriter) Write(ctx context.Context, ri *repos.RepoInstance, bran
 	return commitHash, err
 }
 
-func (defaultFactWriter) Delete(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
+// deleteFact retracts path on branch with message and returns the commit hash.
+// A repo with no live store, or a path that is not there, answers
+// errFactNotFound; any other store error is returned unchanged.
+func deleteFact(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
 	var (
 		commitHash string
 		err        error
@@ -212,7 +205,7 @@ func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL FactView with 200 OK.
-func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) http.HandlerFunc {
+func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -232,7 +225,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		// Unlike the create paths, which derive their target from topic/category
 		// and guard the path they construct, this handler receives the path
 		// verbatim from the caller — it is also how a fresh path gets created
-		// (PriorRefs returns nil for one), so a private segment here would be
+		// (priorRefs returns nil for one), so a private segment here would be
 		// indexed nowhere but still committed to git, permanently invisible.
 		// Same rule as knomit_update — this endpoint is its REST twin, with a
 		// fully caller-supplied path. knomit_update is spared the server-owned
@@ -301,7 +294,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		// the stored version already carried resolved at its own commit and is
 		// not re-judged, or editing a title would be refused over a citation
 		// written months ago.
-		prior, perr := writer.PriorRefs(r.Context(), ri, branch, path)
+		prior, perr := priorRefs(r.Context(), ri, branch, path)
 		if perr != nil {
 			// The prior-version read is the first thing to touch the path, so
 			// go-git's refusal of a path it will not look up surfaces here,
@@ -314,7 +307,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 			writeStoreError(w, r, perr, "Failed to read fact", branch)
 			return
 		}
-		canonRefs, changed, gerr := writerGate(writer, ri, branch).Apply(r.Context(), path, f.Refs, prior)
+		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)
 		if gerr != nil {
 			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
 				gerr.Error(), r.URL.Path)
@@ -363,7 +356,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		}
 
 		msg := "edit: update " + path + " via API"
-		if _, err := writer.Write(r.Context(), ri, branch, path, content, msg); err != nil {
+		if _, err := writeFact(r.Context(), ri, branch, path, content, msg); err != nil {
 			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
@@ -380,7 +373,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 
 // handleFactDelete serves DELETE /repos/{repo}/branches/{branch}/facts/{path...}.
 // Returns 204 No Content on success.
-func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
+func handleFactDelete(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 
@@ -408,7 +401,7 @@ func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		}
 
 		msg := "manual-review: retract " + path
-		if _, err := writer.Delete(r.Context(), ri, branch, path, msg); err != nil {
+		if _, err := deleteFact(r.Context(), ri, branch, path, msg); err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
 					`no fact at path "`+path+`" on branch "`+branch+`"`, r.URL.Path)
