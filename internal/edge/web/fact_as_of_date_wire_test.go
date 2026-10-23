@@ -27,9 +27,9 @@ import (
 // Every test below is written so that deleting its handler's stamp line fails
 // it; that is the property to preserve when editing them.
 //
-// They run against REAL stores, not stubFactReader: the date comes from the
-// repo's commit_log via RevisionsBefore, so a stubbed reader would report ""
-// no matter what the handler did.
+// They run against REAL stores: the date comes from the repo's commit_log via
+// RevisionsBefore, so a stubbed read would report "" no matter what the
+// handler did.
 
 // seedFactRepo writes one real fact into ri on its agent branch and returns the
 // commit that wrote it.

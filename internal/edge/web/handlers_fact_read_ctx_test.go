@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -76,4 +77,34 @@ func TestReaderRefResolver_Exists_CancelledContextLogsDebug(t *testing.T) {
 	require.True(t,
 		strings.Contains(out, `"level":"debug"`) || out == "",
 		"expected the cancellation to be recorded at DEBUG (or not at all); got:\n"+out)
+}
+
+// An expired deadline is the other routine abandonment: Exists logs it at
+// DEBUG too, never ERROR. Unlike the cancellation test above, this requires the
+// DEBUG record itself, so the lookup must really have failed with
+// context.DeadlineExceeded. Sabotage: drop the DeadlineExceeded case (ERROR).
+func TestReaderRefResolver_Exists_ExpiredDeadlineLogsDebug(t *testing.T) {
+	r, path := seedCtxTestRepo(t)
+
+	var buf bytes.Buffer
+	origLogger, origLevel := log.Logger, zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = origLogger
+		zerolog.SetGlobalLevel(origLevel)
+	})
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded, "precondition: the deadline has passed")
+
+	exists := readerRefResolver{ctx: ctx, ri: r.Instance(), branch: "main"}.Exists(path)
+	require.False(t, exists, "an expired lookup cannot claim the ref exists")
+
+	out := buf.String()
+	require.NotContains(t, out, `"level":"error"`, out)
+	require.Contains(t, out, `"level":"debug"`, out)
+	require.Contains(t, out, "FactExistsAt failed", out)
+	require.Contains(t, out, "deadline exceeded", out)
 }

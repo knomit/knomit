@@ -645,6 +645,12 @@ func TestLensFact_UnknownID404MatchesNotFound(t *testing.T) {
 	if kb.Title != "Fact not found" || ub.Title != "Fact not found" {
 		t.Errorf("titles: known=%q unknown=%q, want both %q", kb.Title, ub.Title, "Fact not found")
 	}
+	// Both details echo the path EXACTLY as requested, qualifier included. Had
+	// either echoed the mount-relative path instead, a mounted id would answer
+	// "kb/y/2.md" and an unmounted one "kb://…/kb/y/2.md" — the difference
+	// itself would reveal the mount. Sabotage: echo rel at either 404.
+	require.Equal(t, `no fact at path "kb://`+knownID+`/kb/y/2.md"`, kb.Detail, "known mount, missing fact")
+	require.Equal(t, `no fact at path "kb://`+unknownID+`/kb/y/2.md"`, ub.Detail, "unmounted id")
 }
 
 // A retracted/missing fact on the write repo is a 404 (parity with the repo
