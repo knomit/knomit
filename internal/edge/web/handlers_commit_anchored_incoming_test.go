@@ -31,7 +31,7 @@ func (f *factSubFixture) anchoredURL(branchURL, step, path, sub string) string {
 // The commit-anchored /incoming is the lineage of the version live at the
 // anchor, on the requested branch: at x0 that is kb/t.md v1 (p1, p2), at e14
 // v2 (s1..s4, two retracted). The collection is pinned to the anchor, each
-// item to its own commit, which is never the anchor. Sabotage: drop the anchor
+// item to its own commit. Sabotage: drop the anchor
 // (v2 at x0), read the agent branch (s0 at x0), serve outgoing, link items at
 // the anchor, or reverse them.
 func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
@@ -45,9 +45,36 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 
 	f.requireRefs(t, getRefs(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/t.md", "incoming")), fsOtherURL, inT2...)
 
-	// The same anchor on the agent branch keeps only that branch's source.
-	f.requireRefs(t, getRefs(t, s, f.anchoredURL("agent:test", "x0", "kb/t.md", "incoming")), "agent:test",
+	// v1 read on the agent branch, at a1 (an A commit where kb/t.md is still
+	// v1), keeps only that branch's source: p1 and p2 are E's.
+	f.requireRefs(t, getRefs(t, s, f.anchoredURL("agent:test", "a1", "kb/t.md", "incoming")), "agent:test",
 		wantRef{"kb/s0.md", "Agent source", "insight", "a1", false})
+}
+
+// The gate is evaluated at the ANCHOR, not at the branch's head. kb/r.md is
+// live at x1 and retracted at E's head (e13), so without ?fallback the anchored
+// edges at x1 are a 200 with r's lineage; with ?fallback=before at x0, which
+// predates r, they are a 404 although r existed before E's head. Sabotage:
+// check liveness at the branch head (x1 404s), or check existence at HEAD
+// (x0 answers 200).
+func TestCommitAnchoredSub_GateIsEvaluatedAtTheAnchor(t *testing.T) {
+	f := newFactSubFixture(t, false)
+	s := f.anchoredServer()
+	reads := f.countGraphReads(t, "FactLiveAtCommit", "FactExistsAt", "IncomingAtCommit", "OutgoingAtCommit")
+
+	in := getRefs(t, s, f.anchoredURL(fsOtherURL, "x1", "kb/r.md", "incoming"))
+	f.requireRefs(t, in, fsOtherURL, inR...)
+	out := getRefs(t, s, f.anchoredURL(fsOtherURL, "x1", "kb/r.md", "outgoing"))
+	f.requireRefs(t, out, fsOtherURL, outO12...)
+	require.EqualValues(t, 2, reads["FactLiveAtCommit"].Load())
+	require.EqualValues(t, 0, reads["FactExistsAt"].Load())
+
+	for _, sub := range []string{"incoming", "outgoing"} {
+		f.requireAbsentAtCommit(t, s, f.anchoredURL(fsOtherURL, "x0", "kb/r.md", sub)+"?fallback=before", "kb/r.md", "x0")
+	}
+	require.EqualValues(t, 2, reads["FactExistsAt"].Load())
+	require.EqualValues(t, 1, reads["IncomingAtCommit"].Load(), "only the x1 request reads the edges")
+	require.EqualValues(t, 1, reads["OutgoingAtCommit"].Load(), "only the x1 request reads the edges")
 }
 
 // TestCommitAnchoredIncoming_UnknownRepo returns 404 problem+json.

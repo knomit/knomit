@@ -18,9 +18,11 @@ import (
 )
 
 // The fact sub-resources (/commits, /incoming and /outgoing, at HEAD and at a
-// commit) read a REAL store. Every choice the handlers make has two candidates
-// in the fixtures below that give different answers, so swapping one for the
-// other fails a test:
+// commit) read a REAL store. The choices below each have two candidates in the
+// fixtures that give different answers, so swapping one for the other fails a
+// test. (Three reads ignore their branch argument, so the branch passed to
+// FactLiveAtCommit, FactExistsAt and OutgoingAtCommit has no observable
+// candidate; see the PR's sabotage notes.)
 //
 //   - the branch: requests read agent/elsewhere (E), never the repo's agent
 //     branch agent/test (A). The two fork after g6. A then gets a source s0
@@ -31,11 +33,15 @@ import (
 //     s1..s4), so reading the wrong version returns another set;
 //   - the fallback mode: kb/r.md is retracted at e13, so FactLiveAtCommit and
 //     FactExistsAt disagree after it; kb/never.md never existed;
+//   - the commit the gate checks (anchor vs branch HEAD): kb/r.md is live at
+//     x1 but retracted at E's head, and does not exist yet at x0 although it
+//     existed before E's head, so a gate evaluated at HEAD instead of the
+//     anchor answers the other way at both anchors;
 //   - incoming vs outgoing: the two sets of every version are disjoint;
 //   - per item: every collection the handlers emit has at least two items on
 //     each path of the item loop (live, and retracted with no self link), each
-//     with its own path, title, type and commit, and no item's commit is the
-//     request's anchor.
+//     with its own path, title, type and commit, and on E no item's commit is
+//     the request's anchor.
 const (
 	fsAgentBranch = "agent/test"
 	fsOtherBranch = "agent/elsewhere"
@@ -120,6 +126,9 @@ func newFactSubFixture(t *testing.T, spaced bool) *factSubFixture {
 	write("e10", fsOtherBranch, "kb/r.md", "Retract me", "learn", refsTo(fact.Observation, "kb/o1.md", "kb/o2.md"))
 	write("e11", fsOtherBranch, "kb/q1.md", "Cites r one", "learn", refsTo(fact.Concept, "kb/r.md"))
 	write("e12", fsOtherBranch, "kb/q2.md", "Cites r two", "learn", refsTo(fact.Pattern, "kb/r.md"))
+	// x1 is an anchor at which kb/r.md is still live; it touches nothing the
+	// tests read.
+	write("x1", fsOtherBranch, "kb/x.md", "Unrelated between", "update", nil)
 	retract("e13", fsOtherBranch, "kb/r.md")
 	write("e14", fsOtherBranch, "kb/x.md", "Unrelated two", "update", nil)
 	return f
