@@ -16,12 +16,11 @@ package web
 // visible at its registration site; passing the bundle around would make
 // every handler nominally depend on every seam.
 type storeProviders struct {
-	factReader  FactReader
-	factWriter  FactWriter
-	topicLister TopicLister
-	commits     commitsProvider
-	factSub     factSubProvider
-	origin      originProvider
+	factReader FactReader
+	factWriter FactWriter
+	commits    commitsProvider
+	factSub    factSubProvider
+	origin     originProvider
 }
 
 // withDefaults returns a copy with every nil member replaced by its
@@ -36,9 +35,6 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.factWriter == nil {
 		p.factWriter = defaultFactWriter{}
-	}
-	if p.topicLister == nil {
-		p.topicLister = defaultTopicLister{}
 	}
 	if p.commits == nil {
 		p.commits = defaultCommitsProvider{}

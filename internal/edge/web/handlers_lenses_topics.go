@@ -60,7 +60,7 @@ type lensTopicsResponse struct {
 // dirPath below maps uniformly onto every mount. (The topic skip additionally
 // relies on the root being literally "kb": federate.topicOfPathFilter only
 // recognizes kb/<topic>/… filters.)
-func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFunc {
+func handleHALLensTopics(ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 
@@ -97,7 +97,7 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 		dirSeen := make(map[string]bool)
 		leafLists := make([][]facts.DirEntry, len(targets))
 		for i, t := range targets {
-			entries, err := lister.ListDir(r.Context(), t.RT.RI, t.RT.Branch, dirPath)
+			entries, err := listTopicDir(r.Context(), t.RT.RI, t.RT.Branch, dirPath)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to list topics", t.RT.Branch)
 				return
@@ -152,7 +152,7 @@ func handleHALLensTopics(lister TopicLister, ontologyRoot string) http.HandlerFu
 				}
 				// Enrich with type/title from the owning mount's search index
 				// (best-effort, mirroring the repo topicHandler).
-				if fb, gerr := lister.GetByPath(r.Context(), t.RT.RI, t.RT.Branch, fullPath); gerr == nil && fb != nil {
+				if fb, gerr := topicFactByPath(r.Context(), t.RT.RI, t.RT.Branch, fullPath); gerr == nil && fb != nil {
 					child.Type = fb.Type
 					child.Title = fb.Title
 				}

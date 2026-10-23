@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/engine/store/facts"
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/engine/store"
 )
 
 // TestTopicBrowsersSkipPrivateNamespace pins the same rule
@@ -15,27 +17,27 @@ import (
 // dot-directory, anchored on the concrete case this whole design exists to
 // protect: job state living at .knomit/jobs/x.md (see internal/domain/fact.PrivateRoot).
 //
-// All three sub-tests drive the real handler chain (router → handler →
-// TopicLister stub) rather than asserting on fact.IsPrivatePath directly, so
-// they fail if a handler ever forgets to call the guard, not just if the
-// guard itself breaks.
+// All three sub-tests drive the real handler chain (router → handler → real
+// store) rather than asserting on fact.IsPrivatePath directly, so they fail if
+// a handler ever forgets to call the guard, not just if the guard itself
+// breaks. Each first checks that the store DOES list the private entry, so the
+// guard, not an empty tree, is what hides it.
 func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 	// handlers_topics.go:133 — handleTopicFacts, browsing directly INTO the
 	// private topic (the same "direct navigation" case
 	// TestHandleTopicFacts_HidesPrivateTopic pins for .drafts).
 	t.Run("repo topic facts under .knomit", func(t *testing.T) {
-		lister := &stubTopicLister{
-			dirs: []facts.DirEntry{{Name: "x.md", IsDir: false}},
-		}
-		s := &Server{
-			Manager:      newTestManagerWithRepos(t, "alpha"),
-			OntologyRoot: "kb",
-			providers:    storeProviders{topicLister: lister},
-		}
+		m, svcs := newRealStoreManager(t, "alpha")
+		writeFactsInOneCommit(t, m.Get("alpha"), plainFact("kb/.knomit/jobs/x.md", "Job state", nil))
+		entries, err := svcs["alpha"].Facts().ListDir(t.Context(), "agent/test", "kb/.knomit/jobs")
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "fixture: the store must list the job file")
+		seen := observeListDir(t, map[string]*store.Service{"alpha": svcs["alpha"]})
+		s := &Server{Manager: m, OntologyRoot: "kb"}
 		r := s.NewAPIRouter()
 
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/.knomit/jobs/facts", nil)
+		req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics/.knomit/jobs/facts", nil)
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
@@ -50,24 +52,24 @@ func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 		if body.Count != 0 {
 			t.Fatalf("count: %d, want 0 — job state under .knomit/ must not be listed", body.Count)
 		}
+		require.Equal(t, []string{"kb/.knomit/jobs"}, seen.of("alpha"))
 	})
 
 	// handlers_topics.go:261 — the topic node handler, whose second guard
 	// catches the case where the node PATH itself (not just an entry's name)
 	// already carries the private segment, exactly the .knomit/jobs shape.
 	t.Run("repo topic node under .knomit", func(t *testing.T) {
-		lister := &stubTopicLister{
-			dirs: []facts.DirEntry{{Name: "jobs", IsDir: true}},
-		}
-		s := &Server{
-			Manager:      newTestManagerWithRepos(t, "alpha"),
-			OntologyRoot: "kb",
-			providers:    storeProviders{topicLister: lister},
-		}
+		m, svcs := newRealStoreManager(t, "alpha")
+		writeFactsInOneCommit(t, m.Get("alpha"), plainFact("kb/.knomit/jobs/x.md", "Job state", nil))
+		entries, err := svcs["alpha"].Facts().ListDir(t.Context(), "agent/test", "kb/.knomit")
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "fixture: the store must list the jobs directory")
+		seen := observeListDir(t, map[string]*store.Service{"alpha": svcs["alpha"]})
+		s := &Server{Manager: m, OntologyRoot: "kb"}
 		r := s.NewAPIRouter()
 
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/.knomit", nil)
+		req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics/.knomit", nil)
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
@@ -82,6 +84,7 @@ func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 		if body.Count != 0 {
 			t.Fatalf("count: %d, want 0 — .knomit/jobs must not be listed as a topic child", body.Count)
 		}
+		require.Equal(t, []string{"kb/.knomit"}, seen.of("alpha"))
 	})
 
 	// handlers_lenses_topics.go:113 — the lens union tree is a reader too, and
@@ -99,14 +102,18 @@ func TestTopicBrowsersSkipPrivateNamespace(t *testing.T) {
 	// existing pattern for ".drafts".
 	t.Run("lens topic browser under .knomit", func(t *testing.T) {
 		m, _ := newTestLensManager(t, "alpha")
-		stub := &lensTopicsStub{
-			dirsByRepo: map[string][]facts.DirEntry{
-				"alpha": {{Name: "gotchas", IsDir: true}, {Name: ".knomit", IsDir: true}},
-			},
-		}
-		s := &Server{Manager: m, OntologyRoot: "kb", providers: storeProviders{topicLister: stub}}
+		s := &Server{Manager: m, OntologyRoot: "kb"}
 		r := s.NewAPIRouter()
 		createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[]}`)
+		alpha := m.Get("alpha")
+		writeFactsInOneCommit(t, alpha,
+			plainFact("kb/gotchas/g.md", "G", nil),
+			plainFact("kb/.knomit/jobs/x.md", "Job state", nil),
+		)
+		stores := lensMountStores(t, m, "alpha")
+		entries, err := stores["alpha"].Facts().ListDir(t.Context(), alpha.AgentBranch(), "kb")
+		require.NoError(t, err)
+		require.Len(t, entries, 2, "fixture: the store must list .knomit at the root")
 
 		body := decodeLensTopics(t, getLensFacts(t, r, "/lenses/eng/topics"))
 		if len(body.Children) != 1 || body.Children[0].Name != "gotchas" {
