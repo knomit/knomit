@@ -496,7 +496,7 @@ const MemberEnrolled = "enrolled"
 const maxFleetWalk = 2000
 
 // FleetMemberRow is one row of GET /fleet/members: a member record as
-// readers see it (fleetMembersAtMain), or an enrolled id (a leaf on main, no
+// readers see it (deriveRevoked applied to the records at main), or an enrolled id (a leaf on main, no
 // record: State MemberEnrolled, or revoked when the CRL lists the leaf; Path
 // the leaf's). Since is the committer time of the commit that brought the
 // row's current version (the record, else the leaf) onto main; nil when that
@@ -579,20 +579,10 @@ func (m *Manager) FleetAtMain(ctx context.Context) (fleetrec.Fleet, error) {
 	return m.fleetAtMain(ri)
 }
 
-// fleetMembersAtMain reads the member records at the fleet repository's
-// consensus branch (fleetAtMain), as readers show them: a member whose leaf
-// the CRL at that SAME revision lists is "revoked", whatever its record says
-// (M6: revoked is derived, never written). Only readers get this view
-// (FleetStatus, GET /fleet/members); the judge reads the records as written
-// (FleetAtMain) and refuses a revoked leaf by rule B.
-func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]fleetrec.Member, error) {
-	f, err := m.fleetAtMain(ri)
-	deriveRevoked(f)
-	return f.Members, err
-}
-
 // deriveRevoked sets State revoked on every record of f whose leaf the CRL of
-// the same revision lists (M6).
+// the same revision lists (M6). Only readers get this view (FleetMembers here;
+// FleetStatus derives the same fact through recordStateOf); the judge reads the
+// records as written (FleetAtMain) and refuses a revoked leaf by rule B.
 func deriveRevoked(f fleetrec.Fleet) {
 	for i := range f.Members {
 		if f.PKI.Revoked(f.Members[i].Agent) {

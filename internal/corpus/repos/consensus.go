@@ -14,7 +14,7 @@
 // instance is the fleet's master (isFleetMaster), with or without an origin.
 // Without one (a knomit-hosted fleet) the pushed branches come from
 // receive-pack and main follows through the local reconcile; with one (a
-// forge) they come from the master's fetch-time judge (fleet_master.go),
+// forge) they come from the master's fetch-time judge (fleet_peers.go),
 // which also publishes main. On a member the merger is inert.
 //
 // Shape, like the trigger dispatcher: ri.onCommit (under the writer's branch
