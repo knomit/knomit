@@ -15,8 +15,8 @@ import (
 )
 
 // factSubProvider is the narrow interface for fact sub-resource handlers
-// (commits, incoming, outgoing). Production wires it to commitsProvider +
-// search index; tests inject stubs.
+// (commits, incoming, outgoing). Production wires it to the store's history
+// and graph reads; tests inject stubs.
 type factSubProvider interface {
 	// LogPaginatedForPath returns a paged commit log for a specific fact path.
 	LogPaginatedForPath(ctx context.Context, ri *repos.RepoInstance, branch, path string, limit int, after, from, before string) ([]index.LogEntryWithTags, string, string, error)
