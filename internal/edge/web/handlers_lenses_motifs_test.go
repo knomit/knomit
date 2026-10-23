@@ -252,6 +252,20 @@ func TestLensMotifs_FreshestDefinitionWins(t *testing.T) {
 	def, state = shown()
 	require.Equal(t, "current alpha wording", def, "the current one from the write mount")
 	require.Equal(t, "current", state)
+
+	// Equally fresh on both mounts: the tie goes to the WRITE mount. Asked
+	// through two lenses over the same two stores, so the write mount is first
+	// in binding order once (eng: write alpha) and last once (rev: write beta,
+	// mounts are name-sorted): the winner must follow the write mount, not the
+	// position.
+	defineMotif(t, beta, "config-drift", "current beta wording", false)
+	createLens(t, env.m, env.r, `{"name":"rev","write":"beta","reads":[{"repo":"alpha"}]}`)
+	for lens, want := range map[string]string{"eng": "current alpha wording", "rev": "current beta wording"} {
+		body := decodeMotifs(t, env.get(t, "/lenses/"+lens+"/motifs?q=wording"))
+		require.Len(t, body.Embedded.Motifs, 1, "%s: %+v", lens, body.Embedded.Motifs)
+		require.Equal(t, want, body.Embedded.Motifs[0].Definition, "%s: a tie goes to the write mount", lens)
+		require.Equal(t, "current", body.Embedded.Motifs[0].DefinitionState, lens)
+	}
 }
 
 // Paging is by cluster over the MERGED vocabulary, and `count` is the number of

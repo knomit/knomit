@@ -559,6 +559,24 @@ func TestHandleHALMotifCluster_BySpelling(t *testing.T) {
 	}
 }
 
+// A definition is keyed by the STABLE cluster key, never by the displayed
+// canonical: the canonical flips as usage shifts, and a definition keyed to it
+// would be orphaned by a change that meant nothing. In writeRepoVocabulary the
+// cluster `fallback-silent` is displayed as `silent-fallback`, so a detail that
+// read or looked up its definition by canonical would find none ("missing").
+// Addressed by key and by spelling, the detail serves the stale definition the
+// store holds under the key.
+func TestHandleHALMotifCluster_DefinitionIsKeyedByClusterKey(t *testing.T) {
+	r := vocabularyServer(t)
+	for _, addr := range []string{"fallback-silent", "silent-fallback"} {
+		body := decodeMotifDetail(t, getMotifs(t, r, alphaMotifs+"/"+addr))
+		require.Equal(t, "fallback-silent", body.ClusterKey, addr)
+		require.Equal(t, "silent-fallback", body.Canonical, "%s: fixture: the key differs from the canonical", addr)
+		require.Equal(t, "A component keeps serving after a dependency fails.", body.Definition, addr)
+		require.Equal(t, "stale", body.DefinitionState, addr)
+	}
+}
+
 func TestHandleHALMotifCluster_UnknownIs404(t *testing.T) {
 	r, ri := motifsRepoServer(t)
 	writeCosFact(t, ri, "kb/a.md", "carrier", 0.9, withMotifs("config-drift"))
