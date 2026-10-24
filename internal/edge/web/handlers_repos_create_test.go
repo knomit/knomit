@@ -183,7 +183,12 @@ func TestPostRepos_InitializeEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 	}
 }
 
-// MaxOntologyBytes claims to cap "an ontology accepted by :validate and by
+// maxOntologyBytes is api/manage's cap on an ontology document, restated here
+// because that package keeps it private: the tests below prove the cap through
+// the real router, so if the two drift they fail on the status.
+const maxOntologyBytes = 256 * 1024
+
+// maxOntologyBytes claims to cap "an ontology accepted by :validate and by
 // create". The create path decoded its body with no MaxBytesReader at all, so
 // ontology_yaml was unbounded there and the comment asserted a guard that did
 // not exist.
@@ -191,7 +196,7 @@ func TestPostRepos_OversizeBodyIs413(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 
-	huge := strings.Repeat("x", MaxOntologyBytes+1)
+	huge := strings.Repeat("x", maxOntologyBytes+1)
 	body := `{"name":"kb","mode":"custom","ontology_yaml":"` + huge + `"}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
@@ -226,7 +231,7 @@ func TestPostRepos_BodyUnderTheCapIsNotRejectedAsOversize(t *testing.T) {
 	}
 }
 
-// The two paths have to agree on what MaxOntologyBytes measures. Create used to
+// The two paths have to agree on what maxOntologyBytes measures. Create used to
 // cap the whole JSON ENVELOPE at that number, but ontology_yaml is a JSON
 // string inside it and escaping inflates the YAML — an ontology is mostly
 // newlines, and each costs two bytes encoded. So an ontology comfortably under
@@ -238,17 +243,17 @@ func TestPostRepos_YAMLUnderTheCapWhoseJSONEncodingExceedsItIsAccepted(t *testin
 	r := s.NewAPIRouter()
 
 	// Newline-dense, so the encoded form is ~2x the raw form: raw stays under
-	// MaxOntologyBytes while the escaped body lands well over it.
+	// maxOntologyBytes while the escaped body lands well over it.
 	head := "id: x\nname: X\ntopics:\n  alpha:\n    description: d\n"
-	raw := head + strings.Repeat("# p\n", (MaxOntologyBytes-len(head)-1024)/4)
-	if len(raw) > MaxOntologyBytes {
+	raw := head + strings.Repeat("# p\n", (maxOntologyBytes-len(head)-1024)/4)
+	if len(raw) > maxOntologyBytes {
 		t.Fatalf("test fixture is %d bytes, over the cap it is meant to stay under", len(raw))
 	}
 	encoded, err := json.Marshal(map[string]string{"name": "kb", "mode": "custom", "ontology_yaml": raw})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(encoded) <= MaxOntologyBytes {
+	if len(encoded) <= maxOntologyBytes {
 		t.Fatalf("encoded body is %d bytes, not over the cap — the fixture proves nothing", len(encoded))
 	}
 
@@ -257,7 +262,7 @@ func TestPostRepos_YAMLUnderTheCapWhoseJSONEncodingExceedsItIsAccepted(t *testin
 
 	if rec.Code == http.StatusRequestEntityTooLarge {
 		t.Fatalf("an ontology of %d raw bytes (under the %d cap) was rejected as oversize: %s",
-			len(raw), MaxOntologyBytes, rec.Body.String())
+			len(raw), maxOntologyBytes, rec.Body.String())
 	}
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
@@ -271,7 +276,7 @@ func TestPostRepos_OversizeOntologyYAMLIs413(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	encoded, err := json.Marshal(map[string]string{
-		"name": "kb", "mode": "custom", "ontology_yaml": strings.Repeat("x", MaxOntologyBytes+1),
+		"name": "kb", "mode": "custom", "ontology_yaml": strings.Repeat("x", maxOntologyBytes+1),
 	})
 	if err != nil {
 		t.Fatal(err)

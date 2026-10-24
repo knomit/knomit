@@ -1,4 +1,4 @@
-package web
+package manage
 
 import (
 	"knomit/internal/edge/web/httpx"

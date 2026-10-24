@@ -1,0 +1,189 @@
+CONNECT /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+CONNECT /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+CONNECT /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+CONNECT /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+CONNECT /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+CONNECT /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+CONNECT /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+CONNECT /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+DELETE /archived/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+DELETE /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+DELETE /lenses/{lens}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+DELETE /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+DELETE /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+DELETE /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+DELETE /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+DELETE /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+DELETE /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+DELETE /repo-creates/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+DELETE /repos/{repo}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused
+DELETE /repos/{repo}/branches/{branch}/facts/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+DELETE /repos/{repo}/branches/{branch}/index-rebuilds/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+DELETE /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+DELETE /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+DELETE /repos/{repo}/branches/{branch}/synthesis-runs/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+DELETE /repos/{repo}/experiments/{name}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+DELETE /repos/{repo}/origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+DELETE /repos/{repo}/origin-sessions/{sessionID} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET / | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /archived | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /archived/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /fleet | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /fleet/activity | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /fleet/members | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+GET /lenses | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /lenses/{lens}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /lenses/{lens}/completions | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+GET /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+GET /lenses/{lens}/facts | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/facts/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+GET /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+GET /lenses/{lens}/motifs | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/motifs/{key} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/search | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/stats | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/topics | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /lenses/{lens}/topics/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware
+GET /logs/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+GET /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+GET /ontologies/presets | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /ontologies/presets/{name} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /ontologies/schema | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /openapi.yaml | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /repo-creates | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /repo-creates/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /repo-events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /repos | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /repos/{repo}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/branches | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/branches/{branch}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/activity | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/changes | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/commits | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/commits/{sha} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/commits/{sha}/topics | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/commits/{sha}/topics/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/completions | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/domains | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/domains/{name} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/facts | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/facts/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/index-rebuilds | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/index-rebuilds/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/index-rebuilds/{id}/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+GET /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+GET /repos/{repo}/branches/{branch}/motifs | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/motifs/{key} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/search | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/stats | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/synthesis-runs | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/synthesis-runs/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/synthesis-runs/{id}/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/topics | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/topics/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/branches/{branch}/triggers | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+GET /repos/{repo}/experiments | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/origin-sessions/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/origin-sessions/{sessionID} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/origin-sessions/{sessionID}/preview | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/origin-sessions/{sessionID}/test | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/pushed-branches | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /repos/{repo}/templates | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+GET /sessions | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /sessions/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /templates | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+GET /version | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+HEAD /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+HEAD /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+HEAD /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+HEAD /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+HEAD /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+HEAD /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+HEAD /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+HEAD /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+OPTIONS /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+OPTIONS /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+OPTIONS /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+OPTIONS /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+OPTIONS /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+OPTIONS /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+OPTIONS /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+OPTIONS /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+PATCH /lenses/{lens}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+PATCH /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+PATCH /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+PATCH /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+PATCH /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+PATCH /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+PATCH /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+PATCH /repos/{repo}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+PATCH /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+PATCH /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+PATCH /repos/{repo}/origin/upstream | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /archived/{id}/restore | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /fleet/create | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/decommission | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/drop-commit | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/enroll | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/follow | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/host | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/index-rebuild | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/join | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/join:check | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/leave | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /fleet/revoke | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+POST /lenses | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+POST /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+POST /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+POST /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+POST /lenses/{lens}/rename | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+POST /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+POST /ontologies:validate | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /repo-creates/{id}:cancel | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /repos | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /repos/{repo}/branches/{branch}/facts | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+POST /repos/{repo}/branches/{branch}/index-rebuilds | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+POST /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+POST /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+POST /repos/{repo}/branches/{branch}/merge | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > require
+POST /repos/{repo}/branches/{branch}/synthesis-runs | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+POST /repos/{repo}/experiments | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/experiments/{name}/commit | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/experiments/{name}/rollback | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/experiments/{name}/sync | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/index:cancel | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/origin-sessions/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/origin-sessions/{sessionID}/apply | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/origin-sessions/{sessionID}/commit | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos/{repo}/rename | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+POST /repos:probe-initialized | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+POST /repos:probe-origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate
+PUT /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia
+PUT /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+PUT /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+PUT /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+PUT /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+PUT /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+PUT /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+PUT /repos/{repo}/branches/{branch}/facts/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware
+PUT /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+PUT /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+PUT /repos/{repo}/origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware
+TRACE /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+TRACE /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware
+TRACE /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+TRACE /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > mountExperimentMiddleware
+TRACE /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+TRACE /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware
+TRACE /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware
+TRACE /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > mountExperimentMiddleware

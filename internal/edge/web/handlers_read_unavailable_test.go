@@ -179,15 +179,12 @@ func TestReadHelpers_ReturnAcquireRefusal(t *testing.T) {
 	_, errs["searchRepo"] = searchRepo(ctx, ri, nil, branch, index.SearchOptions{})
 	_, errs["listTopicDir"] = listTopicDir(ctx, ri, branch, "kb")
 	_, errs["topicFactByPath"] = topicFactByPath(ctx, ri, branch, path)
-	_, errs["listRepoBranches"] = listRepoBranches(ctx, ri)
-	_, errs["readBranchRoot"] = readBranchRoot(ctx, ri, branch)
-	_, errs["getOrigin"] = getOrigin(ctx, ri)
 
 	for name, err := range errs {
 		require.ErrorIs(t, err, repos.ErrStoreUnavailable, name)
 	}
 	require.NotErrorIs(t, errs["readFact"], errFactNotFound, "readFact: nothing was looked up, so not a 404")
-	require.Len(t, errs, 26, "every helper is in the table")
+	require.Len(t, errs, 23, "every helper is in the table")
 }
 
 // The lifecycle refusal for a store that is not attached (ErrNotOpen) gets the

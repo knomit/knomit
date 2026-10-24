@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/edge/web/api/jobs"
+	"knomit/internal/edge/web/api/manage"
 	"knomit/internal/edge/web/api/origins"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
@@ -152,265 +153,73 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// Server-wide REPO-LEVEL event stream. A TOP-LEVEL collection, deliberately not
 	// under /repos/: see the no-static-children rule on /repo-creates below.
 	// It is about every repo rather than any one, and the UI holds exactly one.
-	r.Get("/repo-events", handleRepoEvents(s.Manager))
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
-	// F09 fleet membership: a TOP-LEVEL resource (the instance's state, not a
-	// repo's). The three reads are open to any principal the edge admits.
-	r.Get("/fleet", handleGetFleet(b, s.Manager))
-	r.Get("/fleet/members", handleFleetMembers(b, s.Manager))
-	r.Get("/fleet/activity", handleFleetActivity(b, s.Manager))
-	// Every fleet operation uses the fleet ROOT KEY or installs or removes
-	// this instance's trust material, so each is served to the local
-	// authenticated listener only (httpx.RequireLocalVia: the unix socket or named
-	// pipe) — never to a peer over mTLS, and never to a browser page on
-	// loopback TCP (issue #521 opens them remotely later, under one rule).
-	r.Group(func(r chi.Router) {
-		r.Use(httpx.RequireLocalVia)
-		r.Post("/fleet/create", handleCreateFleet(b, s.Manager))
-		r.Post("/fleet/enroll", handleEnrollFleet(s.Manager))
-		r.Post("/fleet/join", handleJoinFleet(b, s.Manager))
-		r.Post("/fleet/join:check", handleCheckFleetJoin(s.Manager))
-		r.Post("/fleet/leave", handleLeaveFleet(b, s.Manager))
-		r.Post("/fleet/revoke", handleRevokeFleet(s.Manager))
-		r.Post("/fleet/decommission", handleDecommissionFleet(b, s.Manager))
-		r.Get("/fleet/root", handleGetFleetRoot(s.Manager))
-		r.Put("/fleet/root", handlePutFleetRoot(s.Manager))
-		r.Delete("/fleet/root", handleDeleteFleetRoot(s.Manager))
-		r.Post("/fleet/host", handleHostFleet(b, s.Manager))
-		r.Post("/fleet/follow", handleFollowFleet(b, s.Manager))
-		r.Post("/fleet/index-rebuild", handleFleetIndexRebuild(b, s.Manager))
-		r.Post("/fleet/drop-commit", handleDropFleetCommit(s.Manager))
-	})
-	r.Get("/archived", handleHALArchived(b, s.Manager))
-	r.Get("/archived/{id}", handleHALArchivedItem(b, s.Manager))
-	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
-	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
-	// Repo collection. These carry no {repo} segment, so they resolve their
-	// own arguments and are never wrapped by RepoMiddleware.
+	// The route skeleton. This router owns every subtree and the middleware
+	// that wraps it, because the KB routes, the MCP mounts and the lifecycle
+	// routes (api/manage) share them: it builds the subrouters, puts each
+	// one's middleware on BEFORE any route is registered on it, and hands
+	// them to manage.Mount.
 	//
-	// By convention, routes with a ':' action suffix (e.g. a future
-	// "/repos:rehydrate") are registered up here, before "/repos/{repo}" —
-	// though chi's radix tree does not actually depend on that order. It
-	// treats only "{...}" and "*" as special, so such a route diverges from
-	// "/repos/..." at the ':' and never enters the {repo} param edge either
-	// way.
-	r.Get("/repos", handleHALRepos(b, s.Manager))
-	r.Post("/repos", handleHALReposCreate(b, s.Manager))
+	// /repos/{repo}: no generic route mutates the FLEET repository
+	// (httpx.FleetRepoRefused), Archive included: it changes only through
+	// /fleet. repo is the group inside it that resolves {repo} exactly once,
+	// in RepoMiddleware; handlers read the instance with repos.RepoFromContext.
+	repoOuter := r.Route("/repos/{repo}", func(chi.Router) {})
+	repoOuter.Use(httpx.FleetRepoRefused(s.Manager))
+	repo := repoOuter.Group(nil)
+	repo.Use(RepoMiddleware(s.Manager))
+	branch := repo.Route("/branches/{branch}", func(chi.Router) {})
+	branch.Use(httpx.BranchMiddleware)
+	lens := r.Route("/lenses/{lens}", func(chi.Router) {})
 
-	// The poll target for the 202 that POST /repos answers with. A SIBLING
-	// collection rather than "/repos/creates/{id}", and the precedent for a
-	// rule this router now holds to: NO STATIC ROUTE SITS BESIDE A {param}
-	// WHOSE VALUE A USER CAN CAUSE TO EXIST.
-	//
-	// Such a segment is also a legal value for that param, so it shadows the
-	// thing named that. SIX subtrees qualify today, and the prohibition covers
-	// all of them:
-	//
-	//   /repos                                    {repo}
-	//   /lenses                                   {lens}
-	//   /repos/{repo}/branches                    {branch}
-	//   /repos/{repo}/branches/{branch}/domains   {name}
-	//   /repos/{repo}/branches/{branch}/motifs    {key}
-	//   /lenses/{lens}/motifs                     {key}
-	//
-	// Repo and lens names share one validator (repos.IsValidName); branch names
-	// are chosen too; domain tags and motif keys are AUTHORED — someone writing
-	// `domain: [stats]` in a fact's frontmatter creates one, so /domains/stats
-	// would shadow it. The test is "can a user cause a value with that name to
-	// exist", not "does a user own it": ownership tracks how bad a collision
-	// would be, not whether it can happen.
-	//
-	// The two /motifs entries are DISTINCT parents, not one — a lens-scoped and
-	// a branch-scoped view, each shadowable in its own scope. Counting by last
-	// segment gives five and silently drops one.
-	//
-	// /ontologies/presets/{name} is deliberately NOT in the set: those are our
-	// shipped preset names, which no user adds to. It shares the {name} spelling
-	// with /domains/{name} and has the opposite answer, which is why the test
-	// classifies by parent prefix rather than by param name.
-	// The cost was measured against the vendored chi rather than assumed — an
-	// earlier version of this comment blamed the absence of backtracking and
-	// was wrong, in a way that mispredicted which static routes are safe:
-	//
-	//   GET    /repos/events           -> the static route   <- shadowed
-	//   DELETE /repos/events           -> {repo}             <- falls through
-	//   GET    /repos/events/branches  -> {repo}             <- falls through
-	//   GET    /repos/creates          -> {repo}             <- works
-	//   GET    /repos/creates/branches -> creates/{id}       <- BROKEN
-	//
-	// chi DOES backtrack to the {repo} param when the static edge has no
-	// handler for the method or no child for the next segment. So a static
-	// LEAF costs exactly one method+path, while a static segment with a PARAM
-	// CHILD costs the whole subtree below it, because the greedy {id} matches
-	// "branches" and wins. Neither is diagnosable by the repo's owner, and the
-	// difference is invisible from "static beats param" alone — which is why
-	// the rule is the blunt one rather than a judgement per route.
-	//
-	// TestRouter_NoStaticSiblingsOfUserNamedParams enforces it, deriving the
-	// guarded prefixes from the route table rather than from a list here.
-	r.Get("/repo-creates/{id}", handleHALRepoCreateStatus(b, s.Manager))
-	// The collection: a client that lost the id from its 202 finds its create
-	// here. DELETE forgets a FINISHED job so a failed row can be dismissed
-	// without waiting out CreateJobTTL.
-	r.Get("/repo-creates", handleHALRepoCreates(b, s.Manager))
-	r.Delete("/repo-creates/{id}", handleHALRepoCreateDismiss(s.Manager))
-	// Cancel is a POST on a colon-suffixed sub-resource, the same spelling as
-	// /repos:probe-origin: it is an ACTION on the job, not a deletion of its
-	// row, and the two must stay distinct because dismiss refuses a running
-	// job while cancel is exactly for one.
-	r.Post("/repo-creates/{id}:cancel", handleHALRepoCreateCancel(b, s.Manager))
+	manage.Mount(r, repoOuter, repo, branch, lens,
+		s.Manager, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays,
+		requireOperator(g, s.authDisabled))
 
-	// Probes an origin before create, so the wizard can classify it (has refs
-	// / empty / unreachable) instead of asking the user to declare that up
-	// front. Collection-level for the same reason as the ontology block below:
-	// it runs BEFORE any repo exists.
-	r.Post("/repos:probe-origin", handleReposProbeOrigin(s.Manager))
+	// The connect-a-remote wizard (api/origins). Inside the
+	// RepoMiddleware group: its handlers read the repo from context.
+	repo.Mount("/origin-sessions", s.originSessionsRouter())
 
-	// The second, per-BRANCH half of that classification: does the chosen
-	// branch already hold a knomit knowledge base? Separate from probe-origin
-	// because the answer differs per branch and the branch is not known when
-	// that probe runs — and because this one actually transfers a commit
-	// (shallow, single-branch, discarded) rather than only listing refs.
-	r.Post("/repos:probe-initialized", handleReposProbeInitialized(s.Manager))
+	branch.Get("/facts", handleHALFactsCollection(b))
+	branch.Post("/facts", handleFactCreate(b, s.OntologyRoot))
+	branch.Get("/facts/*", handleHALFact(b))
+	branch.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot))
+	branch.Delete("/facts/*", handleFactDelete(b))
 
-	// Ontology endpoints. Collection-level and repo-independent: the create
-	// wizard calls them BEFORE any repo exists, so they cannot live under
-	// /repos/{repo}. The ':' action suffix follows the convention noted above.
-	r.Post("/ontologies:validate", handleOntologyValidate())
-	r.Get("/ontologies/presets", handleOntologyPresets())
-	r.Get("/ontologies/presets/{name}", handleOntologyPresetYAML())
-	r.Get("/ontologies/schema", handleOntologySchema())
+	branch.Get("/topics", handleTopics(b, s.OntologyRoot))
+	branch.Get("/topics/*", handleTopicNode(b, s.OntologyRoot))
 
-	// Templates (F24): the create wizard lists them BEFORE any repo exists,
-	// so the all-repos listing is collection-level like the ontology block.
-	r.Get("/templates", handleTemplates(s.Manager))
+	branch.Get("/changes", handleHALChanges(b))
+	branch.Get("/commits", handleHALCommitsList(b, s.OntologyRoot))
+	branch.Get("/commits/{sha}", handleHALCommitDetail(b, s.OntologyRoot))
+	branch.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b))
+	branch.Get("/commits/{sha}/topics", handleCommitAnchoredTopicNode())
+	branch.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
 
-	r.Route("/repos/{repo}", func(r chi.Router) {
-		// No generic route mutates the FLEET repository (fleetRepoRefused),
-		// Archive included: it changes only through /fleet.
-		r.Use(fleetRepoRefused(s.Manager))
-		// Archive deliberately sits OUTSIDE the middleware group: it resolves
-		// through m.Archive, not m.Get, and archiveErrStatus attributes its
-		// own not-found/conflict errors. Wrapping it would replace that
-		// attribution with a generic middleware 404. Registered with the "/"
-		// pattern inside the Route rather than flat alongside it, which would
-		// risk a chi Mount conflict.
-		r.Delete("/", handleHALRepoArchive(b, s.Manager))
+	branch.Get("/search", handleSearch(b, s.Embedder))
+	branch.Get("/activity", handleHALActivity(b))
+	branch.Get("/completions", handleHALCompletions(b))
+	branch.Get("/domains", handleHALDomains(b))
+	branch.Get("/domains/{name}", handleHALDomainFacts(b))
+	branch.Get("/motifs", handleHALMotifs(b))
+	branch.Get("/motifs/{key}", handleHALMotifCluster(b))
+	branch.Get("/stats", handleHALStats(b))
+	branch.Get("/events", handleHALEvents())
+	branch.Get("/triggers", handleHALTriggers(b))
 
-		// Everything below resolves {repo} exactly once, in the middleware.
-		// Handlers read the instance with repos.RepoFromContext.
-		r.Group(func(r chi.Router) {
-			r.Use(RepoMiddleware(s.Manager))
+	// Synthesis-run and index-rebuild jobs (api/jobs).
+	jobs.Mount(branch, s.Manager, s.LLMAdapter)
 
-			r.Get("/", handleHALRepo(b, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
-			r.Patch("/", handleHALRepoPatch(b))
-
-			// Inside the middleware group, unlike Archive: {repo} must exist
-			// for a rename, so the middleware's 404 is the right answer, and
-			// every error this handler raises is about the NEW name, which the
-			// middleware never sees.
-			r.Post("/rename", handleHALRepoRename(b, s.Manager))
-
-			// The templates this repo holds (F24), for a script that knows
-			// the source.
-			r.Get("/templates", handleRepoTemplates(s.Manager))
-
-			r.Get("/origin", handleHALGetOrigin(b))
-			r.Put("/origin", handleHALSetOrigin(b, s.Manager))
-			r.Patch("/origin/upstream", handleHALSetOriginUpstream(b, s.Manager))
-			r.Delete("/origin", handleHALDeleteOrigin(b, s.Manager))
-
-			// Cancels the repo's index job: an ACTION on the repo, a POST on a
-			// colon-suffixed sub-resource like /repo-creates/{id}:cancel. It is
-			// the way out of the 409 "Repo is indexing" that Attach, Detach and
-			// Swap answer while the index job runs.
-			r.Post("/index:cancel", handleCancelIndex(b, s.Manager))
-
-			// The connect-a-remote wizard (api/origins). Inside the
-			// RepoMiddleware group: its handlers read the repo from context.
-			r.Mount("/origin-sessions", s.originSessionsRouter())
-
-			// Branch list carries no {branch} segment, so it stays outside
-			// the httpx.BranchMiddleware subtree.
-			r.Get("/branches", handleHALBranches(b))
-
-			// Branches a peer pushed to this host (F11), and what merging each
-			// would bring. The merge itself is per branch, below.
-			r.Get("/pushed-branches", handleHALPushedBranches(b))
-
-			// Experiments hang off the REPO, not off a branch: an experiment
-			// IS a branch, so nesting it under /branches/{branch} would make
-			// its URL depend on which branch the caller happened to be on.
-			// `{name}` is the bare experiment name — the `exp/` prefix lives
-			// in the branch namespace and would need escaping here.
-			r.Get("/experiments", handleHALExperiments(b, s.ExperimentExpiryDays))
-			r.Post("/experiments", handleExperimentOpen(b, s.ExperimentExpiryDays))
-			r.Route("/experiments/{name}", func(r chi.Router) {
-				// DELETE is rollback: the destructive verb for the
-				// destructive action, so a client that knows REST needs no
-				// table to guess it. The named actions follow the ':' action
-				// convention's spirit as path suffixes because they are
-				// transitions, not resources.
-				r.Delete("/", handleExperimentAction(b, "rollback", s.ExperimentExpiryDays))
-				r.Post("/commit", handleExperimentAction(b, "commit", s.ExperimentExpiryDays))
-				r.Post("/rollback", handleExperimentAction(b, "rollback", s.ExperimentExpiryDays))
-				r.Post("/sync", handleExperimentAction(b, "sync", s.ExperimentExpiryDays))
-			})
-
-			r.Route("/branches/{branch}", func(r chi.Router) {
-				r.Use(httpx.BranchMiddleware)
-
-				r.Get("/", handleHALBranch(b, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
-
-				// Merge THIS pushed branch into the repo's agent branch (F11 UI
-				// merge). The first route that enforces `operator`: the host's
-				// operator, never a peer (a peer's certificate holds read and
-				// push:own only). writeGate adds `write` as for every mutation.
-				r.With(requireOperator(g, s.authDisabled)).Post("/merge", handlePushedMerge())
-
-				r.Get("/facts", handleHALFactsCollection(b))
-				r.Post("/facts", handleFactCreate(b, s.OntologyRoot))
-				r.Get("/facts/*", handleHALFact(b))
-				r.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot))
-				r.Delete("/facts/*", handleFactDelete(b))
-
-				r.Get("/topics", handleTopics(b, s.OntologyRoot))
-				r.Get("/topics/*", handleTopicNode(b, s.OntologyRoot))
-
-				r.Get("/changes", handleHALChanges(b))
-				r.Get("/commits", handleHALCommitsList(b, s.OntologyRoot))
-				r.Get("/commits/{sha}", handleHALCommitDetail(b, s.OntologyRoot))
-				r.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b))
-				r.Get("/commits/{sha}/topics", handleCommitAnchoredTopicNode())
-				r.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
-
-				r.Get("/search", handleSearch(b, s.Embedder))
-				r.Get("/activity", handleHALActivity(b))
-				r.Get("/completions", handleHALCompletions(b))
-				r.Get("/domains", handleHALDomains(b))
-				r.Get("/domains/{name}", handleHALDomainFacts(b))
-				r.Get("/motifs", handleHALMotifs(b))
-				r.Get("/motifs/{key}", handleHALMotifCluster(b))
-				r.Get("/stats", handleHALStats(b))
-				r.Get("/events", handleHALEvents())
-				r.Get("/triggers", handleHALTriggers(b))
-
-				// Synthesis-run and index-rebuild jobs (api/jobs).
-				jobs.Mount(r, s.Manager, s.LLMAdapter)
-
-				// ONLY the MCP mount gets the session's experiment applied.
-				// The REST routes above name their branch in the URL and must
-				// keep meaning exactly that: a GET of
-				// /branches/agent:x/facts is a question about agent:x
-				// whoever asks it.
-				r.Group(func(r chi.Router) {
-					r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
-					r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
-					r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
-				})
-			})
-		})
+	// ONLY the MCP mount gets the session's experiment applied.
+	// The REST routes above name their branch in the URL and must
+	// keep meaning exactly that: a GET of
+	// /branches/agent:x/facts is a question about agent:x
+	// whoever asks it.
+	branch.Group(func(r chi.Router) {
+		r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
+		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
 
 	// Unscoped MCP mount: the session picks its repo/lens through knomit_bind.
@@ -420,53 +229,40 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
 
-	// Lens collection: no {lens} segment, so unwrapped.
-	r.Get("/lenses", handleHALLenses(b, s.Manager))
-	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
-
-	r.Route("/lenses/{lens}", func(r chi.Router) {
-		// The lens CRUD quartet — including rename — resolves through the
-		// registry directly and reports its own errors, so it stays outside
-		// the binding group below.
-		r.Get("/", handleHALLens(b, s.Manager, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
-		r.Patch("/", handleHALLensPatch(b, s.Manager))
-		r.Delete("/", handleHALLensDelete(s.Manager))
-		r.Post("/rename", handleHALLensRename(b, s.Manager))
-
+	// The lens subtree: the CRUD (api/manage) sits outside the binding group.
+	lens.Group(func(r chi.Router) {
+		r.Use(LensMiddleware(s.Manager))
+		r.Get("/facts", handleHALLensFacts(s.Embedder))
+		r.Get("/facts/*", handleHALLensFact(b))
+		r.Get("/search", handleHALLensSearch(s.Embedder))
+		r.Get("/completions", handleHALLensCompletions())
+		r.Get("/motifs", handleHALLensMotifs(b))
+		r.Get("/motifs/{key}", handleHALLensMotifCluster(b))
+		r.Get("/stats", handleHALLensStats())
+		r.Get("/topics", handleHALLensTopics(s.OntologyRoot))
+		r.Get("/topics/*", handleHALLensTopics(s.OntologyRoot))
+		// As on the repo subtree: the session's experiment applies to the
+		// MCP mount only. The HAL reads above federate at each member's
+		// own pinned branch and must keep doing so.
 		r.Group(func(r chi.Router) {
-			r.Use(LensMiddleware(s.Manager))
-			r.Get("/facts", handleHALLensFacts(s.Embedder))
-			r.Get("/facts/*", handleHALLensFact(b))
-			r.Get("/search", handleHALLensSearch(s.Embedder))
-			r.Get("/completions", handleHALLensCompletions())
-			r.Get("/motifs", handleHALLensMotifs(b))
-			r.Get("/motifs/{key}", handleHALLensMotifCluster(b))
-			r.Get("/stats", handleHALLensStats())
-			r.Get("/topics", handleHALLensTopics(s.OntologyRoot))
-			r.Get("/topics/*", handleHALLensTopics(s.OntologyRoot))
-			// As on the repo subtree: the session's experiment applies to the
-			// MCP mount only. The HAL reads above federate at each member's
-			// own pinned branch and must keep doing so.
-			r.Group(func(r chi.Router) {
-				r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
-				r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
-				r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
-			})
-		})
-
-		// The lens twin of /repos/{repo}/branches/exp:<name>/mcp. A lens pins
-		// a branch per member, so it has no single branch segment to carry an
-		// experiment; it gets its own, and only the WRITE member moves.
-		//
-		// MCP only, deliberately. The HAL reads under /lenses/{lens} federate
-		// across members at their own pinned branches, and an experiment
-		// belongs to exactly one of them — there is no coherent whole-lens
-		// read "inside" an experiment to serve here.
-		r.Route("/experiments/{name}", func(r chi.Router) {
-			r.Use(LensExperimentMiddleware(s.Manager))
+			r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
 			r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
 			r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 		})
+	})
+
+	// The lens twin of /repos/{repo}/branches/exp:<name>/mcp. A lens pins
+	// a branch per member, so it has no single branch segment to carry an
+	// experiment; it gets its own, and only the WRITE member moves.
+	//
+	// MCP only, deliberately. The HAL reads under /lenses/{lens} federate
+	// across members at their own pinned branches, and an experiment
+	// belongs to exactly one of them — there is no coherent whole-lens
+	// read "inside" an experiment to serve here.
+	lens.Route("/experiments/{name}", func(r chi.Router) {
+		r.Use(LensExperimentMiddleware(s.Manager))
+		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
 
 	return r
