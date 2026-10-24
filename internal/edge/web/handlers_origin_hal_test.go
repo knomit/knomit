@@ -27,79 +27,76 @@ import (
 	"knomit/internal/testsupport/testsigner"
 )
 
-// stubOriginProvider implements originProvider for tests.
-type stubOriginProvider struct {
-	remote         *remotesync.Remote
-	getErr         error
-	upstreamErr    error
-	upstreamBranch string // captures the branch passed to SetOriginUpstream
+// injectOrigin gives a real store the origin its Manager would inject from
+// control.db at mount (svc.Remote().SetOrigin), so GET /origin and GET /repos
+// read real store state: the injected connection plus the store's own status
+// row.
+func injectOrigin(svc *store.Service, url, branch, authMethod string) {
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: url, Branch: branch, AuthMethod: authMethod, AuthToken: "tok-" + branch})
 }
 
-func (s *stubOriginProvider) GetOrigin(_ context.Context, _ *repos.RepoInstance) (*remotesync.Remote, error) {
-	return s.remote, s.getErr
+// originProblem decodes an application/problem+json body.
+func originProblem(t *testing.T, rec *httptest.ResponseRecorder) hal.Problem {
+	t.Helper()
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"), "body=%s", rec.Body.String())
+	var p hal.Problem
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+	return p
 }
 
-func (s *stubOriginProvider) SetOriginUpstream(_ context.Context, _ *repos.Manager, _ *repos.RepoInstance, branch string) error {
-	s.upstreamBranch = branch
-	return s.upstreamErr
-}
+// noStoreDetail is the detail a storeless repo's origin read or write answers
+// with: acquireFailed wrapping Acquire's ErrStoreUnavailable.
+var noStoreDetail = errOriginNoStore.Error() + ": " + repos.ErrStoreUnavailable.Error()
 
+// GET /repos/{repo}/origin answers the REQUESTED repo's origin, every field
+// read from its store: two repos with distinct origins, the requested one on
+// an upstream branch that is neither "main" nor the agent branch, with a sync
+// error recorded and no push yet.
 func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
-	op := &stubOriginProvider{
-		remote: &remotesync.Remote{
-			Name:       "origin",
-			URL:        "https://github.com/example/repo.git",
-			Branch:     "main",
-			AuthMethod: "token",
-		},
-	}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
-	r := s.NewAPIRouter()
+	m, svcs := newRealStoreManager(t, "alpha", "beta")
+	injectOrigin(svcs["alpha"], "https://x.test/alpha.git", "main", "none")
+	injectOrigin(svcs["beta"], "https://x.test/beta.git", "trunk", "token")
+	require.NoError(t, svcs["beta"].Remote().RecordSyncError("origin", "fetch refused"))
+	require.NotEqual(t, "trunk", m.Get("beta").AgentBranch(), "precondition: upstream is not the agent branch")
+	s := &Server{Manager: m}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
-		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
-	}
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/beta/origin", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, hal.ContentType, rec.Header().Get("Content-Type"))
 
 	var body struct {
-		Name   string      `json:"name"`
-		URL    string      `json:"url"`
-		Branch string      `json:"branch"`
-		Links  hal.LinkMap `json:"_links"`
+		Name           string      `json:"name"`
+		URL            string      `json:"url"`
+		Branch         string      `json:"branch"`
+		AuthMethod     string      `json:"auth_method"`
+		LastStatus     *string     `json:"last_status"`
+		LastError      *string     `json:"last_error"`
+		LastPushStatus *string     `json:"last_push_status"`
+		Links          hal.LinkMap `json:"_links"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if body.URL != "https://github.com/example/repo.git" {
-		t.Errorf("url: %q", body.URL)
-	}
-	if _, ok := body.Links["self"]; !ok {
-		t.Error("missing self link")
-	}
-	if _, ok := body.Links["repo"]; !ok {
-		t.Error("missing repo link")
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "origin", body.Name)
+	require.Equal(t, "https://x.test/beta.git", body.URL)
+	require.Equal(t, "trunk", body.Branch)
+	require.Equal(t, "token", body.AuthMethod)
+	require.NotNil(t, body.LastStatus)
+	require.Equal(t, "error", *body.LastStatus)
+	require.NotNil(t, body.LastError)
+	require.Equal(t, "fetch refused", *body.LastError)
+	require.Nil(t, body.LastPushStatus, "no push has run: null, not a value")
+	require.Equal(t, "/api/v1/repos/beta/origin", body.Links["self"].Href)
+	require.Equal(t, "/api/v1/repos/beta", body.Links["repo"].Href)
+	require.NotContains(t, rec.Body.String(), "tok-trunk", "the view never carries the credential")
 }
 
 // The origin view carries both circuit breakers (F21 S1), always present:
 // closed with no failures and a null open_until before the loop's first
 // round. Sabotage: drop either field from originView → red.
 func TestHandleHALGetOrigin_CarriesBreakers(t *testing.T) {
-	s := &Server{
-		Manager:   newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{origin: &stubOriginProvider{remote: &remotesync.Remote{Name: "origin", URL: "https://x.test/kb.git", Branch: "main"}}},
-	}
+	m, svcs := newRealStoreManager(t, "alpha")
+	injectOrigin(svcs["alpha"], "https://x.test/kb.git", "main", "none")
+	s := &Server{Manager: m}
 	rec := httptest.NewRecorder()
 	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil))
 	if rec.Code != http.StatusOK {
@@ -127,33 +124,34 @@ func TestHandleHALGetOrigin_CarriesBreakers(t *testing.T) {
 	}
 }
 
+// A repo with no injected origin answers 204 with no body, even when another
+// repo has one.
 func TestHandleHALGetOrigin_NoOrigin_Returns204(t *testing.T) {
-	op := &stubOriginProvider{remote: nil}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
-	r := s.NewAPIRouter()
+	m, svcs := newRealStoreManager(t, "alpha", "beta")
+	injectOrigin(svcs["beta"], "https://x.test/beta.git", "main", "none")
+	s := &Server{Manager: m}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil)
-	r.ServeHTTP(rec, req)
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil))
+	require.Equal(t, http.StatusNoContent, rec.Code, "body=%s", rec.Body.String())
+	require.Empty(t, rec.Body.String())
+}
 
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("status: got %d, want 204", rec.Code)
-	}
+// A repo whose store cannot be acquired is a 500 naming the missing store, not
+// a 204: "no origin" must not be read off a store nobody could ask.
+func TestHandleHALGetOrigin_StorelessRepoIs500(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")} // no store behind alpha
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+	p := originProblem(t, rec)
+	require.Equal(t, "Failed to get origin", p.Title)
+	require.Equal(t, noStoreDetail, p.Detail)
+	require.Equal(t, "/repos/alpha/origin", p.Instance)
 }
 
 func TestHandleHALGetOrigin_UnknownRepo_Returns404(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
@@ -199,36 +197,97 @@ func putOrigin(t *testing.T, r http.Handler, repo, body string) *httptest.Respon
 
 // TestHandleHALSetOrigin_LocalOriginGate pins that PUT /origin rejects a local
 // filesystem origin when local origins are disabled (no LocalOriginRoot). The
-// gate lives in the handler (which holds the real Manager), so it fires even
-// though the injected provider is a bare stub — i.e. it cannot be bypassed by a
-// provider constructed without an enforcement hook. Regression for the previous
-// fail-open design where a nil provider field silently disabled enforcement.
+// gate lives in the handler (which holds the real Manager) and runs before
+// the stored origin is read: alpha here has no store at all, and the answer is
+// still the policy's 400, not the 503 a store read would give. Regression for
+// an earlier fail-open design where enforcement lived in a store-access layer
+// that could be constructed without it.
 func TestHandleHALSetOrigin_LocalOriginGate(t *testing.T) {
-	s := &Server{
-		Manager:   newTestManagerWithRepos(t, "alpha"), // Deps{} → no LocalOriginRoot
-		providers: storeProviders{origin: &stubOriginProvider{}},
-	}
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")} // Deps{} → no LocalOriginRoot
 	r := s.NewAPIRouter()
 
-	body := `{"url":"/etc/passwd","auth_method":"none"}`
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	rec := putOrigin(t, r, "alpha", `{"url":"/etc/passwd","auth_method":"none"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, "Origin not allowed", originProblem(t, rec).Title)
+}
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
-	}
+// The stored origin is read before the attach (an empty field keeps what is
+// stored); a repo whose store cannot be acquired is a 503 naming it.
+func TestHandleHALSetOrigin_StorelessRepoIs503(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")} // no store behind alpha
+	rec := putOrigin(t, s.NewAPIRouter(), "alpha", `{"url":"https://x.test/kb.git","auth_method":"none"}`)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, "body=%s", rec.Body.String())
+	p := originProblem(t, rec)
+	require.Equal(t, "No store available", p.Title)
+	require.Equal(t, noStoreDetail, p.Detail)
+	require.Equal(t, "/repos/alpha/origin", p.Instance)
+}
+
+// A PUT that names neither url, auth_method nor token keeps all three from
+// the stored origin getOrigin read: the attach goes to the stored url with the
+// stored credential, and the record is unchanged.
+func TestHandleHALSetOrigin_PartialUpdateKeepsTheStoredOrigin(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	r := s.NewAPIRouter()
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+
+	rec := putOrigin(t, r, "alpha", `{"url":"`+url+`","branch":"main","auth_method":"token","token":"tok-stored"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "first PUT: body=%s", rec.Body.String())
+
+	rec = putOrigin(t, r, "alpha", `{"branch":"main"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "partial PUT: body=%s", rec.Body.String())
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	require.Equal(t, url, o.URL)
+	require.Equal(t, "token", o.AuthMethod)
+	require.Equal(t, "tok-stored", o.AuthToken)
+}
+
+// PUT attaches on the branch it was asked for: the remote has both main and
+// trunk, and trunk (neither main nor the agent branch) is what is recorded.
+func TestHandleHALSetOrigin_AttachesOnTheRequestedBranch(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	bare := filepath.Join(originsRoot, "upstream.git")
+	url := seedBareRemoteForTest(t, bare)
+	runGitForTest(t, bare, "branch", "trunk", "main")
+	require.NotEqual(t, "trunk", ri.AgentBranch(), "precondition")
+
+	rec := putOrigin(t, s.NewAPIRouter(), "alpha", `{"url":"`+url+`","branch":"trunk","auth_method":"none"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	require.Equal(t, url, o.URL)
+	require.Equal(t, "trunk", o.Branch)
+}
+
+// A stored "cert" auth method is knomit's own decision, not an input: a
+// partial PUT does not carry it into the attach (which would refuse it as an
+// input) but lets the attach decide again, and the stored url is still reused.
+func TestHandleHALSetOrigin_PartialUpdateDoesNotCarryACert(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	// The origin as the Manager injects it from a record whose auth was decided
+	// as cert.
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: url, Branch: "main", AuthMethod: "cert"})
+	}))
+
+	rec := putOrigin(t, s.NewAPIRouter(), "alpha", `{"branch":"main"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	require.Equal(t, url, o.URL, "the stored url is reused")
+	require.NotEqual(t, "cert", o.AuthMethod, "a file:// origin is not decided as cert")
 }
 
 func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
 
 	body := `{"url":"https://github.com/example/repo.git"}`
@@ -323,79 +382,159 @@ func TestHandleHALSetOrigin_DuringIndexingIs409WithACancelLink(t *testing.T) {
 	}
 }
 
-func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
-	r := s.NewAPIRouter()
-
+// patchUpstream sends PATCH /repos/{repo}/origin/upstream with a JSON body.
+func patchUpstream(t *testing.T, r http.Handler, repo, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
-		strings.NewReader(`{"branch":"main"}`)))
+	req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/"+repo+"/origin/upstream", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
+	return rec
+}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+// attachedUpstreamServer is newControlDBTestServer with alpha attached to a
+// real local bare remote whose upstream is "main".
+func attachedUpstreamServer(t *testing.T) (http.Handler, *repos.Manager, *repos.RepoInstance) {
+	t.Helper()
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	_, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{URL: url, Branch: "main", AuthMethod: "none"}))
+	require.NoError(t, err)
+	return s.NewAPIRouter(), m, ri
+}
+
+// upstreamState is the stored upstream branch (control.db) and the live fetch
+// refspecs of ri.
+func upstreamState(t *testing.T, m *repos.Manager, ri *repos.RepoInstance) (string, []string) {
+	t.Helper()
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	var refspecs []string
+	require.NoError(t, ri.WithRead(func(svc *store.Service) { refspecs = storetest.FetchRefspecs(svc, "origin") }))
+	return o.Branch, refspecs
+}
+
+// PATCH answers with the branch it was ASKED for, which here is neither the
+// stored upstream ("main") nor the agent branch, and that branch is what was
+// written. A second PATCH to another branch tells the echo from a constant.
+func TestHandleHALSetOriginUpstream_UpdatesBranch(t *testing.T) {
+	r, m, ri := attachedUpstreamServer(t)
+	require.NotEqual(t, "develop", ri.AgentBranch(), "precondition: request branch is not the agent branch")
+	if b, _ := upstreamState(t, m, ri); b != "main" {
+		t.Fatalf("precondition: stored upstream %q, want main", b)
 	}
-	if op.upstreamBranch != "main" {
-		t.Errorf("provider got branch %q, want %q", op.upstreamBranch, "main")
+
+	rec := patchUpstream(t, r, "alpha", `{"branch":"develop"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	var body struct {
+		Status string      `json:"status"`
+		Branch string      `json:"branch"`
+		Links  hal.LinkMap `json:"_links"`
 	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "ok", body.Status)
+	require.Equal(t, "develop", body.Branch)
+	require.Equal(t, "/api/v1/repos/alpha/origin", body.Links["self"].Href)
+	require.Equal(t, "/api/v1/repos/alpha", body.Links["repo"].Href)
+
+	b, _ := upstreamState(t, m, ri)
+	require.Equal(t, "develop", b)
+
+	rec = patchUpstream(t, r, "alpha", `{"branch":"release-2"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "release-2", body.Branch)
+	b, _ = upstreamState(t, m, ri)
+	require.Equal(t, "release-2", b)
+}
+
+// Changing the upstream keeps the credential: the injected origin (what the
+// reconcile loop authenticates with) still carries the stored token and auth
+// method after PATCH, with the new branch.
+func TestHandleHALSetOriginUpstream_KeepsTheCredential(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, ri := newControlDBTestServer(t, originsRoot)
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	_, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
+		URL: url, Branch: "main", AuthMethod: "token", AuthToken: "tok-kept",
+	}))
+	require.NoError(t, err)
+
+	rec := patchUpstream(t, s.NewAPIRouter(), "alpha", `{"branch":"develop"}`)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var remote *remotesync.Remote
+	require.NoError(t, ri.WithRead(func(svc *store.Service) { remote, err = svc.Remote().GetRemote("origin") }))
+	require.NoError(t, err)
+	require.NotNil(t, remote)
+	require.Equal(t, "develop", remote.Branch)
+	require.Equal(t, url, remote.URL)
+	require.Equal(t, "token", remote.AuthMethod)
+	require.Equal(t, "tok-kept", remote.AuthToken)
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, "tok-kept", o.AuthToken)
 }
 
 func TestHandleHALSetOriginUpstream_EmptyBranch_Returns400(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
-	r := s.NewAPIRouter()
+	r, m, ri := attachedUpstreamServer(t)
 
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
-		strings.NewReader(`{"branch":""}`)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400; body=%s", rec.Code, rec.Body.String())
-	}
+	rec := patchUpstream(t, r, "alpha", `{"branch":""}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, "Branch required", originProblem(t, rec).Title)
+	b, _ := upstreamState(t, m, ri)
+	require.Equal(t, "main", b, "a refused PATCH writes nothing")
 }
 
 // TestHandleHALSetOriginUpstream_InvalidBranch_Returns400 pins that a branch
 // name with characters illegal in a git ref is rejected with 400 and never
-// reaches the provider (it would otherwise be woven into the fetch refspec).
+// reaches setOriginUpstream (it would otherwise be woven into the fetch
+// refspec): the stored upstream and the refspecs are unchanged.
 func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
+	r, m, ri := attachedUpstreamServer(t)
+	_, before := upstreamState(t, m, ri)
 	for _, bad := range []string{"has space", "ends/", "-leading", "a..b", "ctrl\tname", "co:lon"} {
-		op := &stubOriginProvider{}
-		s := &Server{
-			Manager: newTestManagerWithRepos(t, "alpha"),
-			providers: storeProviders{
-				origin: op,
-			},
-		}
-		r := s.NewAPIRouter()
-
-		rec := httptest.NewRecorder()
 		body, _ := json.Marshal(map[string]string{"branch": bad})
-		req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
-			strings.NewReader(string(body))))
-		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(rec, req)
-
+		rec := patchUpstream(t, r, "alpha", string(body))
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("branch %q: status got %d, want 400; body=%s", bad, rec.Code, rec.Body.String())
+			continue
 		}
-		if op.upstreamBranch != "" {
-			t.Errorf("branch %q: provider must not be called, got %q", bad, op.upstreamBranch)
-		}
+		require.Equal(t, "Invalid branch name", originProblem(t, rec).Title, "branch %q", bad)
 	}
+	b, after := upstreamState(t, m, ri)
+	require.Equal(t, "main", b, "no invalid branch may be stored")
+	require.ElementsMatch(t, before, after, "no invalid branch may reach the refspec")
+}
+
+// A repo whose store cannot be acquired, on a running manager, answers 500
+// "No store available" and the other repo is untouched.
+func TestHandleHALSetOriginUpstream_StorelessRepoIs500NoStore(t *testing.T) {
+	r, m, ri := attachedUpstreamServer(t)
+	m.Set("ghost", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "ghost", UID: "ghost-uid", AgentBranch: "agent/test"}))
+
+	rec := patchUpstream(t, r, "ghost", `{"branch":"develop"}`)
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+	p := originProblem(t, rec)
+	require.Equal(t, "No store available", p.Title)
+	require.Equal(t, noStoreDetail, p.Detail)
+	require.Equal(t, "/repos/ghost/origin/upstream", p.Instance)
+	b, _ := upstreamState(t, m, ri)
+	require.Equal(t, "main", b, "the failed PATCH on ghost must not touch alpha")
+}
+
+// Any other failure is 500 "Failed to set upstream branch" carrying the error:
+// here a manager that was never started has no control.db tenant.
+func TestHandleHALSetOriginUpstream_StoppedManagerIs500(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")} // never started: Origins() is nil
+	rec := patchUpstream(t, s.NewAPIRouter(), "alpha", `{"branch":"develop"}`)
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+	p := originProblem(t, rec)
+	require.Equal(t, "Failed to set upstream branch", p.Title)
+	require.Equal(t, repos.ErrManagerStopped.Error(), p.Detail)
+	require.Equal(t, "/repos/alpha/origin/upstream", p.Instance)
 }
 
 func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
@@ -412,13 +551,7 @@ func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
 }
 
 func TestHandleHALDeleteOrigin_UnknownRepo_Returns404(t *testing.T) {
-	op := &stubOriginProvider{}
-	s := &Server{
-		Manager: newTestManagerWithRepos(t, "alpha"),
-		providers: storeProviders{
-			origin: op,
-		},
-	}
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
@@ -471,9 +604,9 @@ func seedBareRemoteForTest(t *testing.T, bare string) string {
 }
 
 // newControlDBTestServer boots a REAL Manager — control.db opened via
-// Start(), a repo mounted via the real Create path — and wires the production
-// (non-stub) origin provider, so PUT/DELETE send real lifecycle events and
-// the writes actually land in control.db (and not the repo's own remotes row).
+// Start(), a repo mounted via the real Create path — so PUT/DELETE send real
+// lifecycle events and the writes actually land in control.db (and not the
+// repo's own remotes row).
 //
 // A real agent key is written so credential encryption is available —
 // otherwise Origins.Set would refuse to store the test's token. originsRoot
@@ -615,16 +748,14 @@ func TestPatchOriginUpstream_NoOriginIsRejected(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
-	if rec.Code >= 200 && rec.Code < 300 {
-		t.Fatalf("PATCH with no origin configured must fail; got %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "no origin configured") {
-		t.Errorf("error must say no origin is configured, got: %s", rec.Body.String())
-	}
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+	p := originProblem(t, rec)
+	require.Equal(t, "Failed to set upstream branch", p.Title)
+	require.Equal(t, "SetOriginUpstream: no origin configured", p.Detail)
 }
 
-// TestPatchOriginUpstream_PersistsToControlDB exercises the real (non-stub)
-// SetOriginUpstream against control.db: after PUT establishes an origin, PATCH
+// TestPatchOriginUpstream_PersistsToControlDB exercises setOriginUpstream
+// against control.db: after PUT establishes an origin, PATCH
 // .../origin/upstream must update the stored branch in mgr.Origins() (not just
 // the injected in-memory copy), preserving the refspec-first ordering
 // discipline carried over from the old single-function SetUpstreamBranch.
@@ -677,7 +808,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 
 	// The git FETCH REFSPEC must track the new branch. This is the assertion the
 	// stored-branch checks above cannot make: drop the ConfigureRemote call from
-	// SetOriginUpstream and every check above still passes while the next Sync
+	// setOriginUpstream and every check above still passes while the next Sync
 	// silently fetches the OLD branch. That wrong-branch sync is precisely what
 	// the refspec-first ordering exists to prevent, so it has to be pinned here.
 	got := make(map[string]bool, len(refspecs))
@@ -695,8 +826,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 	}
 }
 
-// TestDeleteOrigin_RemovesFromControlDB exercises the real (non-stub)
-// DeleteOrigin: it must remove the row from control.db AND clear the
+// TestDeleteOrigin_RemovesFromControlDB exercises the real DeleteOrigin: it must remove the row from control.db AND clear the
 // injected origin on the running store, so a GET right after reports none
 // without a restart.
 func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
@@ -778,7 +908,7 @@ func TestDeleteOrigin_UnmountedRepoKeepsTheDurableRecord(t *testing.T) {
 // (ConfigureRemote) goes first in its apply: persisting ahead of it leaves
 // control.db reporting a URL whose refspecs were never rewritten, which the
 // next boot silently adopts — a PUT that answered 500 taking effect on
-// restart. This is the discipline SetOriginUpstream documents.
+// restart. This is the discipline setOriginUpstream documents.
 //
 // The forced failure is a branch carrying a colon, which makes the fetch
 // refspec malformed and CreateRemote refuse it.
@@ -859,7 +989,7 @@ func TestSetOrigin_FailedPersistRestoresTheGitRemote(t *testing.T) {
 	}
 }
 
-// SetOriginUpstream shares that ordering and therefore that window: a refspec
+// setOriginUpstream shares that ordering and therefore that window: a refspec
 // rewritten to the new branch while GetRemote still reports the old one leaves
 // reconcileNow reconciling against a refs/remotes/origin/<old> nothing updates
 // any more. The restore has to put the refspec back.
@@ -882,7 +1012,7 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 		t.Fatalf("Origins().Delete: %v", err)
 	}
 
-	if err := (defaultOriginProvider{}).SetOriginUpstream(context.Background(), m, ri, "develop"); err == nil {
+	if err := setOriginUpstream(context.Background(), m, ri, "develop"); err == nil {
 		t.Fatal("SetBranch against a missing row must fail the call")
 	}
 
@@ -911,20 +1041,19 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 //
 // The stopped manager here is one that was never started, which is the same
 // nil-tenant state Close leaves behind. ri is nil on purpose: the guard has to
-// fire before anything downstream is touched, and a provider that reached
-// ri.WithRead first would panic on it.
+// fire before anything downstream is touched, and a setOriginUpstream that
+// reached ri.WithRead first would panic on it.
 func TestOriginWrites_RefuseAStoppedManager(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
-	p := defaultOriginProvider{}
 	calls := []struct {
 		name string
 		run  func() error
 	}{
-		{"SetOriginUpstream", func() error {
-			return p.SetOriginUpstream(context.Background(), m, nil, "main")
+		{"setOriginUpstream", func() error {
+			return setOriginUpstream(context.Background(), m, nil, "main")
 		}},
 	}
 	for _, c := range calls {
@@ -1065,7 +1194,7 @@ func seedBareRemoteKBForTest(t *testing.T, bare string) string {
 
 // PUT /origin on a subscription must not DEMOTE it. Origins.Set with an empty
 // Mode deletes the subscription row, so SetOrigin has to carry the stored mode
-// through — and only a real provider against a real control.db can show that.
+// through — and only a real Manager against a real control.db can show that.
 func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
 	originsRoot := t.TempDir()
 	s, m, _ := newControlDBTestServer(t, originsRoot)

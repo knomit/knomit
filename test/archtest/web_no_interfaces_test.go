@@ -17,33 +17,45 @@ const webPkg = "knomit/internal/edge/web"
 // declare, with where it goes. The web handlers take the concrete store
 // handles (svc.Search(), svc.Facts(), ...) and tests use real stores, failing
 // a read through the owner's fault hook; a provider interface is a seam that
-// only a stub fills. The refactor deletes them in steps (W0b..W0i), so the
-// list shrinks and never grows: an entry is removed in the PR that deletes the
-// interface, a new interface in web is not added here. A stale entry (the name
-// is no longer an interface) fails, so a deletion cannot leave its entry
-// behind.
-var webInterfaceAllowlist = map[string]string{
-	"originProvider": "provider seam, deleted with the origin handler's rewrite",
+// only a stub fills. The refactor deleted them in steps (W0b..W0i), and the
+// last one (originProvider) went in W0i, so the list is EMPTY. It never grows:
+// a new interface in web is not added here. The stale-entry check below stays
+// for the same reason the list does: an entry whose name is no longer an
+// interface fails, so nothing can be parked here.
+var webInterfaceAllowlist = map[string]string{}
+
+// typeScan is what one pass over a package's files saw: every declared type
+// name with its file (types, interfaces included), and each file's package
+// clause (pkgs). The guard uses both for non-vacuity: with the allowlist empty,
+// "no interface found" is the expected answer, so the pass must prove it read
+// the real package.
+type typeScan struct {
+	types map[string]string
+	pkgs  map[string]string
 }
 
 // declaredInterfaces parses files (name -> nil to read from disk, or the source
 // text) and returns (named) every type declaration whose type is an interface,
-// at any scope, keyed by type name with its file, and (inline) every other
+// at any scope, keyed by type name with its file, (inline) every other
 // interface literal with a non-empty method list ("file:line"): a struct
-// field, parameter, result, variable or alias target. An empty interface{} is
-// not a seam and is never reported inline.
-func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any) (named map[string]string, inline []string) {
+// field, parameter, result, variable or alias target, and (scan) every type
+// name and package clause the same pass saw. An empty interface{} is not a
+// seam and is never reported inline.
+func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any) (named map[string]string, inline []string, scan typeScan) {
 	t.Helper()
 	named = map[string]string{}
+	scan = typeScan{types: map[string]string{}, pkgs: map[string]string{}}
 	for name, src := range files {
 		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
+		scan.pkgs[name] = f.Name.Name
 		declared := map[*ast.InterfaceType]bool{}
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.TypeSpec:
+				scan.types[x.Name.Name] = name
 				if it, ok := x.Type.(*ast.InterfaceType); ok {
 					named[x.Name.Name] = name
 					declared[it] = true
@@ -57,12 +69,22 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 		})
 	}
 	sort.Strings(inline)
-	return named, inline
+	return named, inline, scan
+}
+
+// webKnownTypes are concrete (non-interface) types web declares, each in a
+// different file, with that file. The guard requires the scan to have seen
+// every one where it lives: a scan of the wrong package, of one file only, or
+// of files read as empty fails here instead of passing with nothing found.
+var webKnownTypes = map[string]string{
+	"Server":      "server.go",
+	"originView":  "handlers_origin_hal.go",
+	"repoSummary": "handlers_repos_hal.go",
 }
 
 // TestWeb_DeclaresNoInterfacesBeyondTheAllowlist (guard W): internal/edge/web
-// declares no interface type except the provider seams still awaiting
-// deletion in webInterfaceAllowlist. A stub-only interface in the handlers is
+// declares no interface type except the names in webInterfaceAllowlist, which
+// is empty since W0i. A stub-only interface in the handlers is
 // what the refactor removes: a handler takes the concrete type and a test
 // builds a real store. Build-constrained files are scanned too (go list
 // IgnoredGoFiles); test files are not (a test helper interface is not a seam
@@ -75,9 +97,13 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 // Known gap: a function-typed seam (the former branchesListerFunc shape) is
 // not an interface and is not detected.
 //
-// Non-vacuity: the file list comes from go list, not from a count here; web
-// must be listed with files, and every one of them must have been parsed. The
-// self-test runs the detector on inline source with a flagged and a clean case.
+// Non-vacuity: with the allowlist empty, finding no interface is the expected
+// answer, so the guard proves it read the real package instead: the file list
+// comes from go list (web must be listed with files), every file must parse
+// (fatal in declaredInterfaces) with package clause `web`, and the same pass
+// must have seen each of webKnownTypes in its own file. The detector's own
+// discrimination is pinned by TestWeb_InterfaceDetector_Discriminates on
+// inline source with a flagged and a clean case.
 func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 	var web *goListPackage
 	for _, p := range listModulePackages(t) {
@@ -94,7 +120,20 @@ func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 		files[filepath.Join(web.Dir, f)] = nil
 	}
 	fset := token.NewFileSet()
-	found, inline := declaredInterfaces(t, fset, files)
+	found, inline, scan := declaredInterfaces(t, fset, files)
+	if len(scan.pkgs) != len(web.Files) {
+		t.Fatalf("scanned %d files, go list returned %d", len(scan.pkgs), len(web.Files))
+	}
+	for file, pkg := range scan.pkgs {
+		if pkg != "web" {
+			t.Errorf("%s: package clause %q, want web: the guard is scanning the wrong package", file, pkg)
+		}
+	}
+	for typ, want := range webKnownTypes {
+		if got, ok := scan.types[typ]; !ok || filepath.Base(got) != want {
+			t.Errorf("non-vacuity: type %s not seen in %s (got %q): the scan did not read web's files", typ, want, got)
+		}
+	}
 
 	var bad []string
 	for name, file := range found {
@@ -113,9 +152,6 @@ func TestWeb_DeclaresNoInterfacesBeyondTheAllowlist(t *testing.T) {
 	sort.Strings(bad)
 	for _, b := range bad {
 		t.Error(b)
-	}
-	if len(found) == 0 {
-		t.Error("no interface found in web at all: with the allowlist non-empty the parse is broken")
 	}
 }
 
@@ -138,7 +174,7 @@ type E struct{ X interface{}; Y any }
 func k(a interface{}) {}
 `,
 	}
-	named, inline := declaredInterfaces(t, token.NewFileSet(), src)
+	named, inline, scan := declaredInterfaces(t, token.NewFileSet(), src)
 	for _, want := range []string{"Provider", "alias", "local", "Constraint"} {
 		if named[want] != "flagged.go" {
 			t.Errorf("%s not flagged as named (got %v)", want, named)
@@ -151,5 +187,15 @@ func k(a interface{}) {}
 	want := []string{"flagged.go:6", "flagged.go:7", "flagged.go:8", "flagged.go:9"}
 	if !slices.Equal(inline, want) {
 		t.Errorf("inline %v, want %v", inline, want)
+	}
+	// The scan sees every type, interface or not, in its own file, and each
+	// file's package clause.
+	for typ, file := range map[string]string{"Provider": "flagged.go", "S": "flagged.go", "F": "clean.go", "B": "clean.go", "E": "clean.go"} {
+		if scan.types[typ] != file {
+			t.Errorf("scan.types[%s] = %q, want %q", typ, scan.types[typ], file)
+		}
+	}
+	if scan.pkgs["flagged.go"] != "web" || scan.pkgs["clean.go"] != "web" || len(scan.pkgs) != 2 {
+		t.Errorf("scan.pkgs %v, want both files in package web", scan.pkgs)
 	}
 }

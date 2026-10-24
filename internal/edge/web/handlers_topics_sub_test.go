@@ -129,7 +129,7 @@ func TestHandleTopicStats_ReturnsStatsView(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/ai/stats", nil)
 	r.ServeHTTP(rec, req)
 
-	// With no store the provider returns zero stats — still 200, valid JSON.
+	// With no store the stats read yields zero stats — still 200, valid JSON.
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
 	}
