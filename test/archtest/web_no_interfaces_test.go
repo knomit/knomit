@@ -43,7 +43,9 @@ type typeScan struct {
 // interface literal with a non-empty method list ("file:line"): a struct
 // field, parameter, result, variable or alias target, and (scan) every type
 // name and package clause the same pass saw. An empty interface{} is not a
-// seam and is never reported inline.
+// seam and is never reported inline, and neither, named or inline, is a pure
+// type-set constraint (typeSetOnly): it has no methods, so nothing can fill it
+// with a stub.
 func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any) (named map[string]string, inline []string, scan typeScan) {
 	t.Helper()
 	named = map[string]string{}
@@ -60,11 +62,13 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 			case *ast.TypeSpec:
 				scan.types[x.Name.Name] = name
 				if it, ok := x.Type.(*ast.InterfaceType); ok {
-					named[x.Name.Name] = name
 					declared[it] = true
+					if !typeSetOnly(it) {
+						named[x.Name.Name] = name
+					}
 				}
 			case *ast.InterfaceType:
-				if !declared[x] && x.Methods != nil && len(x.Methods.List) > 0 {
+				if !declared[x] && x.Methods != nil && len(x.Methods.List) > 0 && !typeSetOnly(x) {
 					inline = append(inline, name+":"+strconv.Itoa(fset.Position(x.Pos()).Line))
 				}
 			}
@@ -73,6 +77,52 @@ func declaredInterfaces(t *testing.T, fset *token.FileSet, files map[string]any)
 	}
 	sort.Strings(inline)
 	return named, inline, scan
+}
+
+// typeSetOnly reports whether an interface is a pure type-set constraint:
+// every element is a type term (~T, a union, a predeclared type such as int or
+// comparable, or a composite type literal) and none is a method. Such an
+// interface constrains a type parameter and is not a seam. An embedded named
+// type (`interface{ Reader }`, `interface{ io.Reader }`) is NOT a type term
+// here: without type information it may be an interface carrying methods, so
+// it stays flagged. An interface with no elements is not this case (it is
+// interface{} and handled by the callers).
+func typeSetOnly(it *ast.InterfaceType) bool {
+	if it.Methods == nil || len(it.Methods.List) == 0 {
+		return false
+	}
+	var term func(e ast.Expr) bool
+	term = func(e ast.Expr) bool {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			return term(x.X)
+		case *ast.UnaryExpr:
+			return x.Op == token.TILDE
+		case *ast.BinaryExpr:
+			return x.Op == token.OR && term(x.X) && term(x.Y)
+		case *ast.Ident:
+			return predeclaredTypes[x.Name]
+		case *ast.ArrayType, *ast.MapType, *ast.ChanType, *ast.FuncType, *ast.StructType, *ast.StarExpr:
+			return true
+		}
+		return false
+	}
+	for _, f := range it.Methods.List {
+		if len(f.Names) > 0 || !term(f.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+// predeclaredTypes are Go's predeclared type names that may appear as a type
+// term (any and comparable included: neither carries a method).
+var predeclaredTypes = map[string]bool{
+	"bool": true, "string": true, "byte": true, "rune": true, "error": false,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true, "uintptr": true,
+	"float32": true, "float64": true, "complex64": true, "complex128": true,
+	"any": true, "comparable": true,
 }
 
 // webKnownTypes are, per package of the web family (keyed by import path),
@@ -137,7 +187,9 @@ func webFamily(t *testing.T) []goListPackage {
 //
 // An inline interface literal with methods anywhere else (struct field,
 // parameter, result, variable, alias target, type assertion) is flagged too;
-// the empty interface{} / any is allowed.
+// the empty interface{} / any is allowed, and so is a pure type-set
+// constraint, named or inline (interface{ ~int | ~float64 }: no method, so no
+// seam; see typeSetOnly). A constraint that also lists a method is flagged.
 //
 // Known gap: a function-typed seam (the former branchesListerFunc shape) is
 // not an interface and is not detected.
@@ -223,36 +275,48 @@ func TestWeb_InterfaceDetector_Discriminates(t *testing.T) {
 type Provider interface{ Get() string }
 type alias = interface{ M() }
 func f() { type local interface{ L() } }
-type Constraint interface{ ~int | ~string }
+type Stringish interface{ ~int; String() string }
 type S struct{ I interface{ M() } }
 func g(p interface{ P() }) {}
 func h() (r interface{ R() }) { return }
 var v interface{ V() }
+type Embeds interface{ Provider }
+func gen2[T interface{ ~int; M() }]() {}
+type Errish interface{ error }
 `,
 		"clean.go": `package web
 type F func() error
 type B = S
 type E struct{ X interface{}; Y any }
 func k(a interface{}) {}
+type Number interface{ ~int | ~float64 }
+func gen[T interface{ ~int | ~float64 }]() {}
+type Cmp interface{ comparable }
+type Shapes interface{ []int | map[string]int | *int | ~string }
 `,
 	}
 	named, inline, scan := declaredInterfaces(t, token.NewFileSet(), src)
-	for _, want := range []string{"Provider", "alias", "local", "Constraint"} {
+	// W4 (Stringish, a constraint that also carries a method), an embedded
+	// named interface and the method-carrying predeclared error are flagged;
+	// the pure type-set constraints of clean.go (W2 Number, Cmp, Shapes) are
+	// not.
+	for _, want := range []string{"Provider", "alias", "local", "Stringish", "Embeds", "Errish"} {
 		if named[want] != "flagged.go" {
 			t.Errorf("%s not flagged as named (got %v)", want, named)
 		}
 	}
-	if len(named) != 4 {
-		t.Errorf("named %v, want exactly the four interface declarations", named)
+	if len(named) != 6 {
+		t.Errorf("named %v, want exactly the six interface declarations of flagged.go", named)
 	}
-	// struct field, parameter, result, var: the four inline literals.
-	want := []string{"flagged.go:6", "flagged.go:7", "flagged.go:8", "flagged.go:9"}
+	// struct field, parameter, result, var, and the method-carrying inline
+	// constraint (line 11); the pure inline type set of clean.go (W3) is not.
+	want := []string{"flagged.go:11", "flagged.go:6", "flagged.go:7", "flagged.go:8", "flagged.go:9"}
 	if !slices.Equal(inline, want) {
 		t.Errorf("inline %v, want %v", inline, want)
 	}
 	// The scan sees every type, interface or not, in its own file, and each
 	// file's package clause.
-	for typ, file := range map[string]string{"Provider": "flagged.go", "S": "flagged.go", "F": "clean.go", "B": "clean.go", "E": "clean.go"} {
+	for typ, file := range map[string]string{"Provider": "flagged.go", "S": "flagged.go", "F": "clean.go", "B": "clean.go", "E": "clean.go", "Number": "clean.go"} {
 		if scan.types[typ] != file {
 			t.Errorf("scan.types[%s] = %q, want %q", typ, scan.types[typ], file)
 		}

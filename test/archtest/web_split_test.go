@@ -15,8 +15,9 @@ import (
 
 // Guards that hold the web split (internal/edge/web into httpx, api/kb,
 // api/manage, api/jobs and api/origins beside the existing hal) to the shape
-// the project owner ruled on 2026-10-24: each api/* package exports ONE
-// Mount(r, deps) and keeps its own route table, the parent reaches the api
+// the project owner ruled on 2026-10-24 and in the follow-up on PR #621: each
+// api/* package exports exactly func Mount (positional parameters, no
+// exported Deps type) and keeps its own route table, the parent reaches the api
 // packages only from router.go and server.go, and no web-family package keeps
 // a local one-call shim into another one. They land before any code moves, so
 // each has a detector self-test on synthetic source and a logged state for
@@ -32,8 +33,11 @@ func isWebAPI(p string) bool {
 
 // webAPIImporters are the files of the parent package internal/edge/web that
 // may import an api package: router.go mounts each one (api/x.Mount), and
-// server.go names the field types the ruling lets an api package export
-// (*jobs.JobRegistry, *origins.SessionManager).
+// server.go is the router's other half (Server.Handler mounts the API router).
+// Under the follow-up ruling an api package exports nothing but Mount, so
+// server.go no longer needs one for a field type (Server.SessionManager goes
+// in 12d, the job registry is deleted); it stays listed because the ruling
+// names the pair. Dropping it is a one-entry change once 12d lands.
 var webAPIImporters = map[string]bool{"router.go": true, "server.go": true}
 
 // importScan is what one pass over the parent's files saw: each file's package
@@ -73,7 +77,7 @@ func webAPIImportViolations(t *testing.T, files map[string]any) (bad []string, s
 // TestWeb_OnlyRouterAndServerImportAPI (guard R): inside the parent package
 // internal/edge/web, only router.go and server.go import a package under
 // internal/edge/web/api. The route table of each api package lives in that
-// package and is mounted from router.go; server.go holds the two field types.
+// package and is mounted from router.go (server.go is the one other file allowed).
 // Every other parent file (a handler, a middleware, a helper) reaching into an
 // api package would turn the parent back into the place handlers live. Test
 // files are not scanned (go list's non-test files, build-constrained ones
@@ -110,7 +114,7 @@ func TestWeb_OnlyRouterAndServerImportAPI(t *testing.T) {
 		t.Errorf("non-vacuity: the scan did not record router.go importing github.com/go-chi/chi/v5 (got %v): imports are not being read", scan.imports["router.go"])
 	}
 	for _, b := range bad {
-		t.Errorf("%s: only router.go (Mount) and server.go (the field types) may import an api package; route through them", b)
+		t.Errorf("%s: only router.go (Mount) and server.go may import an api package; route through them", b)
 	}
 }
 
@@ -148,61 +152,110 @@ func TestWeb_APIImportDetector_Discriminates(t *testing.T) {
 	}
 }
 
-// webAPIExportAllowlist is, per api package (keyed by import path relative to
-// internal/edge/web), every exported name it may declare besides Mount, with
-// the reason. The ruling (2026-10-24): an api package exports ONE Mount(r,
-// deps), plus the named types server.go needs as field types, listed here
-// explicitly; there is no free-form allowance. A name is "T" for a type, func,
-// var or const, and "T.M" / "T.F" for a method or an exported field of an
-// exported type T.
+// webAPIExportAllowlist declares the api packages the web split creates, keyed
+// by import path relative to internal/edge/web, and for each one every
+// exported name it may declare besides Mount, with the reason. The rulings
+// (2026-10-24, and the follow-up on PR #621): every api package exports
+// exactly func Mount, which takes positional parameters, so there is no
+// exported Deps type. api/origins' Mount creates and owns the session manager
+// (Server.SessionManager goes away in 12d). api/jobs' registry is deleted:
+// jobs go through TaskHub only. So every list is EMPTY. A future name needs a
+// reviewed entry with a reason. Names are "T" for a type, func, var or const,
+// and "T.M" / "T.F" for a method or field reachable through exported type T,
+// including members reached through an alias or promoted from an embedded
+// type.
 //
-// The entries are declared ahead of the packages, because the ruling fixes
-// them now. An entry whose package go list does not return is PENDING: it
-// allows nothing (there is nothing to allow), and the guard logs it. Once go
-// list returns the package the entry is strict: every listed name must be
-// exported there (a stale name fails), and every api package go list returns
-// must have an entry (an api package the ruling did not name fails until an
-// entry is added in review).
+// The keys are the expected api packages: {kb, manage, jobs, origins}. A key
+// whose package go list does not return is PENDING. It allows nothing,
+// because there is nothing to allow, and it is logged. A pending key cannot be
+// dodged by creating the package somewhere else: webFamilyLayout fails a
+// web-family package outside api/ that it does not list.
 //
-// Methods: none are listed. At 1a860912 no production code outside the jobs
-// and origins handlers calls a JobRegistry or SessionManager method: server.go
-// only names the two types as fields, app.go only constructs the session
-// manager (internal/app/app.go:226 `web.NewSessionManager()`), and the job
-// registry has no production constructor call at all (NewJobRegistry and
-// Register/Complete/SetProgress are called only by web tests). So the methods
-// stay or become unexported in the move, and the tests that call them move
-// into the owning package (or use an export_test.go there). NewSessionManager
-// is the one exported func beyond Mount: app.go builds Server.SessionManager
-// with it, and Mount cannot, because the Server field is set by app.go before
-// the router is built.
+// END STATE: after 12f (the last move), every key is live. The pending Logf
+// in TestWebAPI_ExportsOnlyMount then becomes an Errorf, so a planned package
+// that never lands cannot leave its entry parked here.
 var webAPIExportAllowlist = map[string]map[string]string{
-	"api/kb":     {},
-	"api/manage": {},
-	"api/jobs": {
-		"JobRegistry": "field type of web.Server.JobRegistry (server.go)",
-	},
-	"api/origins": {
-		"SessionManager":    "field type of web.Server.SessionManager (server.go)",
-		"NewSessionManager": "internal/app/app.go constructs Server.SessionManager with it",
-	},
+	"api/kb":      {},
+	"api/manage":  {},
+	"api/jobs":    {},
+	"api/origins": {},
 }
 
-// apiExport is one exported name a package declares.
+// webFamilyLayout lists the non-api packages the web family may contain, keyed
+// by path relative to internal/edge/web ("" is the parent), with the reason.
+// Every other web-family package outside api/ fails. A resource package placed
+// outside api/ (internal/edge/web/jobs, say) therefore cannot escape the api
+// rules by its location. Guard W does not cover this: it only requires a
+// webKnownTypes entry, which any new package can add for itself. httpx is
+// listed before it exists (12b creates it). An entry allows the package to
+// exist but does not require it.
+var webFamilyLayout = map[string]string{
+	"":      "the parent: server, router (mounts the api packages), middleware, static, embed",
+	"hal":   "HAL wire types and writers, stdlib only",
+	"httpx": "the shared HTTP helpers of the web split (12b)",
+}
+
+// apiExport is one exported name a package declares or makes reachable.
 type apiExport struct {
-	Name string // "X", or "T.M" / "T.F" for a method or field of exported type T
-	Kind string // func, type, var, const, method, field
+	Name string // "X", or "T.M" / "T.F" for a method or field reachable through exported type T
+	Kind string // func, type, var, const, method, field; a reached member says how ("method via alias of t", "field promoted from e")
 	File string
 }
 
+// localTypeName unwraps *T, T[A] and T[A, B] and returns T when it is a
+// package-local identifier ("" for a qualified or composite type).
+func localTypeName(e ast.Expr) string {
+	for {
+		switch x := e.(type) {
+		case *ast.StarExpr:
+			e = x.X
+			continue
+		case *ast.IndexExpr:
+			e = x.X
+			continue
+		case *ast.IndexListExpr:
+			e = x.X
+			continue
+		case *ast.ParenExpr:
+			e = x.X
+			continue
+		}
+		break
+	}
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
 // exportedNames parses files (name -> nil to read from disk, or the source
-// text) and returns every exported name they declare: package-level funcs,
-// types, vars and consts, methods of exported types, and exported fields of
-// exported struct types (an embedded field counts by its type name). Methods
-// of unexported types are not reported: no caller outside the package can
-// name the type. It also returns each file's package clause.
+// text) and returns every exported name they declare or make reachable:
+//
+//   - package-level funcs, types, vars and consts;
+//   - for every exported type T, its exported fields and methods (an embedded
+//     field counts by its type name). When T is an alias of a local type
+//     (type T = t), it also gets t's members. It also gets the exported fields
+//     and methods promoted from every local type it embeds, transitively and
+//     whether the embedded type is exported or not. That closes the
+//     `type JobRegistry = jobRegistry` and `type Outer struct{ inner }` routes
+//     to an unexported type's exported members.
+//
+// Methods and fields of an unexported type that no exported type aliases or
+// embeds are not reported: no caller outside the package can reach them (a
+// ServeHTTP on an unexported handler type is fine). It also returns each
+// file's package clause.
 func exportedNames(t *testing.T, files map[string]any) (out []apiExport, pkgs map[string]string) {
 	t.Helper()
+	type typeDecl struct {
+		file   string
+		alias  string   // local target of `type T = t`, "" otherwise
+		embeds []string // local types embedded in T's struct
+		fields []string // T's exported fields (embedded ones by type name)
+	}
+	type member struct{ name, kind, file string }
 	pkgs = map[string]string{}
+	decls := map[string]*typeDecl{}
+	methods := map[string][]member{} // receiver type -> exported methods
 	fset := token.NewFileSet()
 	for name, src := range files {
 		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
@@ -221,58 +274,51 @@ func exportedNames(t *testing.T, files map[string]any) (out []apiExport, pkgs ma
 					out = append(out, apiExport{d.Name.Name, "func", base})
 					continue
 				}
-				if len(d.Recv.List) != 1 {
-					continue
-				}
-				rt := d.Recv.List[0].Type
-				for {
-					switch x := rt.(type) {
-					case *ast.StarExpr:
-						rt = x.X
-						continue
-					case *ast.IndexExpr:
-						rt = x.X
-						continue
-					case *ast.IndexListExpr:
-						rt = x.X
-						continue
+				if len(d.Recv.List) == 1 {
+					if rt := localTypeName(d.Recv.List[0].Type); rt != "" {
+						methods[rt] = append(methods[rt], member{d.Name.Name, "method", base})
 					}
-					break
-				}
-				if id, ok := rt.(*ast.Ident); ok && id.IsExported() {
-					out = append(out, apiExport{id.Name + "." + d.Name.Name, "method", base})
 				}
 			case *ast.GenDecl:
 				for _, sp := range d.Specs {
 					switch s := sp.(type) {
 					case *ast.TypeSpec:
-						if !s.Name.IsExported() {
-							continue
+						td := &typeDecl{file: base}
+						decls[s.Name.Name] = td
+						if s.Assign.IsValid() {
+							td.alias = localTypeName(s.Type)
 						}
-						out = append(out, apiExport{s.Name.Name, "type", base})
-						st, ok := s.Type.(*ast.StructType)
-						if !ok {
-							continue
-						}
-						for _, fl := range st.Fields.List {
-							names := fl.Names
-							if len(names) == 0 { // embedded: the field is named by its type
-								typ := fl.Type
-								if x, ok := typ.(*ast.StarExpr); ok {
-									typ = x.X
+						if st, ok := s.Type.(*ast.StructType); ok {
+							for _, fl := range st.Fields.List {
+								if len(fl.Names) == 0 { // embedded: named by its type
+									typ := fl.Type
+									if x, ok := typ.(*ast.StarExpr); ok {
+										typ = x.X
+									}
+									var n string
+									switch x := typ.(type) {
+									case *ast.SelectorExpr:
+										n = x.Sel.Name
+									default:
+										n = localTypeName(typ)
+										if n != "" {
+											td.embeds = append(td.embeds, n)
+										}
+									}
+									if n != "" && ast.IsExported(n) {
+										td.fields = append(td.fields, n)
+									}
+									continue
 								}
-								switch x := typ.(type) {
-								case *ast.Ident:
-									names = []*ast.Ident{x}
-								case *ast.SelectorExpr:
-									names = []*ast.Ident{x.Sel}
+								for _, n := range fl.Names {
+									if n.IsExported() {
+										td.fields = append(td.fields, n.Name)
+									}
 								}
 							}
-							for _, n := range names {
-								if n.IsExported() {
-									out = append(out, apiExport{s.Name.Name + "." + n.Name, "field", base})
-								}
-							}
+						}
+						if s.Name.IsExported() {
+							out = append(out, apiExport{s.Name.Name, "type", base})
 						}
 					case *ast.ValueSpec:
 						kind := "var"
@@ -289,13 +335,54 @@ func exportedNames(t *testing.T, files map[string]any) (out []apiExport, pkgs ma
 			}
 		}
 	}
+	// The members reachable through local type name: its own fields and
+	// methods, an alias target's, and every embedded type's (promoted),
+	// transitively. how says the route for the report.
+	var reach func(name, how string, seen map[string]bool) []member
+	reach = func(name, how string, seen map[string]bool) []member {
+		if seen[name] {
+			return nil
+		}
+		seen[name] = true
+		td := decls[name]
+		var ms []member
+		for _, m := range methods[name] {
+			ms = append(ms, member{m.name, m.kind + how, m.file})
+		}
+		if td == nil {
+			return ms
+		}
+		for _, f := range td.fields {
+			ms = append(ms, member{f, "field" + how, td.file})
+		}
+		if td.alias != "" {
+			ms = append(ms, reach(td.alias, " via alias of "+td.alias, seen)...)
+		}
+		for _, e := range td.embeds {
+			ms = append(ms, reach(e, " promoted from "+e, seen)...)
+		}
+		return ms
+	}
+	for name := range decls {
+		if !ast.IsExported(name) {
+			continue
+		}
+		done := map[string]bool{}
+		for _, m := range reach(name, "", map[string]bool{}) {
+			if done[m.name] {
+				continue // the shallowest route wins (a field shadows a promoted one)
+			}
+			done[m.name] = true
+			out = append(out, apiExport{name + "." + m.name, m.kind, m.file})
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, pkgs
 }
 
-// apiExportProblems applies the ruling to one api package's exports: Mount
-// must be declared, as a package-level func; every other exported name must
-// be in allow; every name in allow must be exported (a stale entry fails).
+// apiExportProblems applies the ruling to one api package's exports. Mount
+// must be declared, as a package-level func. Every other exported name must
+// be in allow. Every name in allow must be exported (a stale entry fails).
 func apiExportProblems(pkg string, exports []apiExport, allow map[string]string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -303,11 +390,9 @@ func apiExportProblems(pkg string, exports []apiExport, allow map[string]string)
 	for _, e := range exports {
 		seen[e.Name] = true
 		if e.Name == "Mount" {
-			if e.Kind == "func" {
-				mount = true
-			} else {
-				mount = true // reported here, not again as missing
-				out = append(out, fmt.Sprintf("%s: Mount is a %s (%s); it must be the package's func Mount(r, deps)", pkg, e.Kind, e.File))
+			mount = true
+			if e.Kind != "func" {
+				out = append(out, fmt.Sprintf("%s: Mount is a %s (%s); it must be the package's func Mount(r, ...)", pkg, e.Kind, e.File))
 			}
 			continue
 		}
@@ -317,10 +402,10 @@ func apiExportProblems(pkg string, exports []apiExport, allow map[string]string)
 			}
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s: exports %s %s (%s): an api package exports only Mount plus its webAPIExportAllowlist names; unexport it, or move it to httpx if two packages need it", pkg, e.Kind, e.Name, e.File))
+		out = append(out, fmt.Sprintf("%s: exports %s %s (%s): an api package exports only func Mount (positional parameters, no exported Deps type); unexport it, or move it to httpx if two packages need it", pkg, e.Kind, e.Name, e.File))
 	}
 	if !mount {
-		out = append(out, fmt.Sprintf("%s: declares no func Mount: each api package mounts its own routes through one Mount(r, deps)", pkg))
+		out = append(out, fmt.Sprintf("%s: declares no func Mount: each api package mounts its own routes through one Mount", pkg))
 	}
 	for name := range allow {
 		if !seen[name] {
@@ -331,28 +416,59 @@ func apiExportProblems(pkg string, exports []apiExport, allow map[string]string)
 	return out
 }
 
-// TestWebAPI_ExportsOnlyMount (guard M): every package under
-// internal/edge/web/api (as go list returns them) exports only func Mount plus
-// the names its webAPIExportAllowlist entry lists, counting funcs, types,
-// vars, consts, methods of exported types and exported fields of exported
-// struct types. A second exported handler constructor, a shared helper or an
-// exported deps struct fails: a helper two packages need belongs in httpx,
-// and a deps struct named in Mount's signature must be argued into the
-// allowlist in review.
+// webLayoutProblems checks the web family's package paths (relative to
+// internal/edge/web, "" for the parent). An api package must be a key of
+// apis. Any other package must be a key of layout.
+func webLayoutProblems(rels []string, apis map[string]map[string]string, layout map[string]string) []string {
+	var out []string
+	for _, rel := range rels {
+		if isWebAPI(webPkg + "/" + rel) {
+			if _, ok := apis[rel]; !ok {
+				out = append(out, fmt.Sprintf("%s/%s: not one of the planned api packages (webAPIExportAllowlist keys); a new api package needs an entry, an empty one allows only Mount, added in review", webPkg, rel))
+			}
+			continue
+		}
+		if _, ok := layout[rel]; !ok {
+			out = append(out, fmt.Sprintf("%s/%s: the web family holds only the parent, hal, httpx and api/* packages (webFamilyLayout); a resource package goes under api/, anything else needs a reviewed webFamilyLayout entry", webPkg, rel))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestWebAPI_ExportsOnlyMount (guard M) checks two rules.
 //
-// Before the split creates an api package there is nothing to scan; the guard
-// logs that state explicitly, and logs each allowlist entry still pending
-// (declared, but its package does not exist yet). The detector and the policy
-// are pinned by TestWebAPI_ExportDetector_Discriminates on synthetic source
-// either way. Once a package exists: its files come from go list, the scanned
-// count must equal go list's, every package clause must be the last element of
-// its import path, and Mount must be found (so an empty or wrong scan fails).
+// Layout: every package go list returns under internal/edge/web is the parent,
+// a webFamilyLayout child (hal, httpx), or one of the planned api packages
+// (the webAPIExportAllowlist keys).
+//
+// Exports: every package under internal/edge/web/api exports only func Mount,
+// plus its webAPIExportAllowlist names, and those lists are empty. Counted
+// are funcs, types, vars and consts, plus every exported method or field
+// reachable through an exported type, directly or via an alias or an
+// embedded type (see exportedNames). So a second handler constructor, a
+// shared helper, an exported Deps struct or an exported type of any kind
+// fails. A helper two packages need belongs in httpx.
+//
+// Before the split creates an api package there is nothing to scan. The
+// guard logs that state explicitly, and logs each planned package still
+// pending. END STATE: after 12f, the pending Logf becomes an Errorf (see
+// webAPIExportAllowlist). TestWebAPI_ExportDetector_Discriminates pins the
+// detector and both policies on synthetic source either way. Once a package
+// exists, non-vacuity holds: its files come from go list, the scanned count
+// must equal go list's, every package clause must be the last element of the
+// import path, and Mount must be found (so an empty or wrong scan fails).
 func TestWebAPI_ExportsOnlyMount(t *testing.T) {
+	var rels []string
 	var apis []goListPackage
 	for _, p := range webFamily(t) {
+		rels = append(rels, strings.TrimPrefix(strings.TrimPrefix(p.Path, webPkg), "/"))
 		if isWebAPI(p.Path) {
 			apis = append(apis, p)
 		}
+	}
+	for _, b := range webLayoutProblems(rels, webAPIExportAllowlist, webFamilyLayout) {
+		t.Error(b)
 	}
 	live := map[string]bool{}
 	for _, p := range apis {
@@ -360,8 +476,7 @@ func TestWebAPI_ExportsOnlyMount(t *testing.T) {
 		live[rel] = true
 		allow, ok := webAPIExportAllowlist[rel]
 		if !ok {
-			t.Errorf("%s: no webAPIExportAllowlist entry: the ruling names api/kb, api/manage, api/jobs and api/origins; a new api package needs an entry (an empty one allows only Mount) added in review", p.Path)
-			continue
+			continue // reported by webLayoutProblems
 		}
 		if len(p.Files) == 0 {
 			t.Errorf("go list returned %s with no Go files: the guard would examine nothing there", p.Path)
@@ -378,7 +493,7 @@ func TestWebAPI_ExportsOnlyMount(t *testing.T) {
 		clause := p.Path[strings.LastIndex(p.Path, "/")+1:]
 		for file, got := range pkgs {
 			if got != clause {
-				t.Errorf("%s/%s: package clause %q, want %s: the guard is scanning the wrong package", p.Path, file, got, clause)
+				t.Errorf("%s (in %s): package clause %q, want %s: the guard is scanning the wrong package", file, p.Path, got, clause)
 			}
 		}
 		for _, b := range apiExportProblems(p.Path, exports, allow) {
@@ -396,7 +511,8 @@ func TestWebAPI_ExportsOnlyMount(t *testing.T) {
 		t.Logf("no api packages yet: go list returns no package under %s; nothing to scan, the detector is pinned by TestWebAPI_ExportDetector_Discriminates", webAPIPrefix)
 	}
 	if len(pending) > 0 {
-		t.Logf("pending webAPIExportAllowlist entries (package not created yet, so the entry allows nothing): %s", strings.Join(pending, ", "))
+		// END STATE: after 12f this becomes t.Errorf.
+		t.Logf("pending api packages (planned, not created yet; each allows nothing): %s", strings.Join(pending, ", "))
 	}
 }
 
@@ -423,10 +539,14 @@ type Box[T any] struct{}
 func (b *Box[T]) Put() {}
 `,
 	}
-	exports, pkgs := exportedNames(t, src)
-	var names []string
-	for _, e := range exports {
-		names = append(names, e.Kind+" "+e.Name)
+	exportKinds := func(src map[string]any) []string {
+		exports, _ := exportedNames(t, src)
+		var got []string
+		for _, e := range exports {
+			got = append(got, e.Kind+" "+e.Name)
+		}
+		sort.Strings(got)
+		return got
 	}
 	want := []string{
 		"type Box", "method Box.Put", "type Embedded", "var ErrX", "type JobRegistry",
@@ -434,38 +554,88 @@ func (b *Box[T]) Put() {}
 		"const Kind", "func Mount", "func NewJobRegistry",
 	}
 	sort.Strings(want)
-	got := append([]string(nil), names...)
-	sort.Strings(got)
-	if !slices.Equal(got, want) {
+	if got := exportKinds(src); !slices.Equal(got, want) {
 		t.Errorf("exports\n%q\nwant\n%q", got, want)
 	}
-	if pkgs["mount.go"] != "jobs" || pkgs["registry.go"] != "jobs" || len(pkgs) != 2 {
+	if _, pkgs := exportedNames(t, src); pkgs["mount.go"] != "jobs" || pkgs["registry.go"] != "jobs" || len(pkgs) != 2 {
 		t.Errorf("pkgs %v, want both files in package jobs", pkgs)
 	}
 
-	// Policy. Only Mount and the allowed type: clean.
-	clean := []apiExport{{"Mount", "func", "a.go"}, {"JobRegistry", "type", "b.go"}}
-	if p := apiExportProblems("jobs", clean, map[string]string{"JobRegistry": "field type"}); len(p) != 0 {
-		t.Errorf("clean package flagged: %q", p)
+	// M9 (an alias of an unexported type), M10 (an unexported type embedded,
+	// transitively, by pointer and generic), and M19 (methods of an unexported
+	// type that nothing exported reaches, e.g. ServeHTTP).
+	reached := map[string]any{"a.go": `package jobs
+import "net/http"
+func Mount() {}
+type jobRegistry struct{ Public int; hidden int }
+func (j *jobRegistry) Get() {}
+func (j *jobRegistry) get() {}
+type JobRegistry = jobRegistry
+type base struct{ Shared int }
+func (b *base) Do() {}
+type deeper struct{ *base; Own int }
+type Outer struct{ base; mine int }
+type Outer2 struct{ *deeper }
+type gen[T any] struct{ G T }
+func (g gen[T]) Gen() {}
+type Outer3 struct{ gen[int] }
+type Shadow struct{ base; Shared string }
+type handler struct{ Field int }
+func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {}
+func (h *handler) Exported() {}
+`}
+	wantReached := []string{
+		"func Mount",
+		"type JobRegistry", "field via alias of jobRegistry JobRegistry.Public", "method via alias of jobRegistry JobRegistry.Get",
+		"type Outer", "field promoted from base Outer.Shared", "method promoted from base Outer.Do",
+		"type Outer2", "field promoted from deeper Outer2.Own", "field promoted from base Outer2.Shared", "method promoted from base Outer2.Do",
+		"type Outer3", "field promoted from gen Outer3.G", "method promoted from gen Outer3.Gen",
+		"type Shadow", "field Shadow.Shared", "method promoted from base Shadow.Do",
+	}
+	sort.Strings(wantReached)
+	if got := exportKinds(reached); !slices.Equal(got, wantReached) {
+		t.Errorf("reached exports\n%q\nwant\n%q", got, wantReached)
+	}
+
+	// Policy, with the ruled empty lists.
+	if p := apiExportProblems("jobs", []apiExport{{"Mount", "func", "a.go"}}, map[string]string{}); len(p) != 0 {
+		t.Errorf("Mount only, empty list: flagged %q", p)
 	}
 	cases := map[string]struct {
 		exports []apiExport
 		allow   map[string]string
 		want    string
 	}{
-		"second func":         {[]apiExport{{"Mount", "func", "a.go"}, {"HandleList", "func", "a.go"}}, nil, "exports func HandleList"},
-		"method of allowed":   {[]apiExport{{"Mount", "func", "a.go"}, {"JobRegistry", "type", "b.go"}, {"JobRegistry.Get", "method", "b.go"}}, map[string]string{"JobRegistry": "field type"}, "exports method JobRegistry.Get"},
-		"field of allowed":    {[]apiExport{{"Mount", "func", "a.go"}, {"JobRegistry", "type", "b.go"}, {"JobRegistry.Public", "field", "b.go"}}, map[string]string{"JobRegistry": "field type"}, "exports field JobRegistry.Public"},
-		"exported deps":       {[]apiExport{{"Mount", "func", "a.go"}, {"Deps", "type", "a.go"}}, nil, "exports type Deps"},
-		"no Mount":            {[]apiExport{{"JobRegistry", "type", "b.go"}}, map[string]string{"JobRegistry": "field type"}, "declares no func Mount"},
-		"Mount is a var":      {[]apiExport{{"Mount", "var", "a.go"}}, nil, "Mount is a var"},
-		"stale allow entry":   {[]apiExport{{"Mount", "func", "a.go"}}, map[string]string{"JobRegistry": "field type"}, "lists JobRegistry but the package does not export it"},
-		"allow with no reson": {[]apiExport{{"Mount", "func", "a.go"}, {"JobRegistry", "type", "b.go"}}, map[string]string{"JobRegistry": " "}, "entry JobRegistry has no reason"},
+		"second func":                {[]apiExport{{"Mount", "func", "a.go"}, {"HandleList", "func", "a.go"}}, map[string]string{}, "exports func HandleList"},
+		"exported deps (M13)":        {[]apiExport{{"Mount", "func", "a.go"}, {"Deps", "type", "a.go"}}, map[string]string{}, "exports type Deps"},
+		"exported registry type":     {[]apiExport{{"Mount", "func", "a.go"}, {"JobRegistry", "type", "b.go"}}, map[string]string{}, "exports type JobRegistry"},
+		"no Mount":                   {[]apiExport{}, map[string]string{}, "declares no func Mount"},
+		"Mount is a var":             {[]apiExport{{"Mount", "var", "a.go"}}, map[string]string{}, "Mount is a var"},
+		"reviewed entry, its method": {[]apiExport{{"Mount", "func", "a.go"}, {"T", "type", "b.go"}, {"T.Get", "method via alias of t", "b.go"}}, map[string]string{"T": "reviewed"}, "exports method via alias of t T.Get"},
+		"stale entry":                {[]apiExport{{"Mount", "func", "a.go"}}, map[string]string{"T": "reviewed"}, "lists T but the package does not export it"},
+		"entry with no reason":       {[]apiExport{{"Mount", "func", "a.go"}, {"T", "type", "b.go"}}, map[string]string{"T": " "}, "entry T has no reason"},
 	}
 	for name, c := range cases {
 		p := apiExportProblems("jobs", c.exports, c.allow)
 		if len(p) != 1 || !strings.Contains(p[0], c.want) {
 			t.Errorf("%s: problems %q, want exactly one containing %q", name, p, c.want)
+		}
+	}
+
+	// Layout (M15: a resource package outside api/).
+	layout := webLayoutProblems([]string{"", "hal", "httpx", "api/kb", "api/jobs"}, webAPIExportAllowlist, webFamilyLayout)
+	if len(layout) != 0 {
+		t.Errorf("planned layout flagged: %q", layout)
+	}
+	for rel, want := range map[string]string{
+		"jobs":       "a resource package goes under api/",
+		"api/zz":     "not one of the planned api packages",
+		"api":        "not one of the planned api packages",
+		"httpx/deep": "a resource package goes under api/",
+	} {
+		p := webLayoutProblems([]string{"", rel}, webAPIExportAllowlist, webFamilyLayout)
+		if len(p) != 1 || !strings.Contains(p[0], want) {
+			t.Errorf("layout %s: problems %q, want exactly one containing %q", rel, p, want)
 		}
 	}
 	// isWebAPI: the api tree only.
@@ -481,7 +651,9 @@ func (b *Box[T]) Put() {}
 // another package of the family: a type alias, a var or const that is only
 // the other package's name, or a func or method, EXPORTED OR NOT, whose body
 // is one call into the other package with the parameters passed through (the
-// guard P shapes, forwardsInto with unexported set). The case it closes is
+// guard P shapes, forwardsInto with strict set). A method expression of
+// another family package's type counts as its name (`var repos =
+// hal.URLBuilder.Repos`, `return hal.URLBuilder.Repos(b, r)`). The case it closes is
 // guard P's unexported gap, the shim a split leaves behind:
 //
 //	func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
@@ -499,6 +671,15 @@ func (b *Box[T]) Put() {}
 // split plan has reviewed, and a red there is a production-code change outside
 // this PR's scope. A local helper that does work (adds or computes an
 // argument, reorders, branches) is not a forward and is not matched.
+//
+// Known gaps, the shape check's and not closed here (each needs data flow):
+// a parameter copied into a local before the call (`x := a; return
+// httpx.F(x)`); a forward through a closure or a func-typed var (`var f =
+// func(a int) error { return httpx.F(a) }`, the closure gap guard P's fact
+// ba1210d3 already names); method values (`f := b.Repos; return f(r)`); named
+// results assigned from the call; and calls whose arguments are wrapped or
+// computed. A green run is therefore not proof that no shim exists; the
+// reviewer still reads new helpers.
 //
 // Non-vacuity: the packages come from go list with the parent among them;
 // each package's file map must hold go list's file count, its package clause,
@@ -577,6 +758,8 @@ func TestWebFamily_ForwardDetector_Discriminates(t *testing.T) {
 		"unexported alias":         {imp + "type problem = hal.Problem\n", "problem"},
 		"unexported var":           {imp + "var writeProblem = hal.WriteProblem\n", "writeProblem"},
 		"unexported const":         {imp + "const apiBase = httpx.APIBase\n", "apiBase"},
+		"method expression call":   {imp + "func repos(b hal.URLBuilder, r string) string { return hal.URLBuilder.Repos(b, r) }\n", "repos"},
+		"method expression var":    {imp + "var repos = hal.URLBuilder.Repos\n", "repos"},
 	}
 	for name, c := range flagged {
 		got := run(c.src)
@@ -591,6 +774,8 @@ func TestWebFamily_ForwardDetector_Discriminates(t *testing.T) {
 		"outside the family": imp + "func f(a int) error { return mcp.F(a) }\n",
 		"stdlib":             imp + "func f(w http.ResponseWriter, c int) { w.WriteHeader(c) }\n",
 		"own package call":   imp + "func f(a int) error { return g(a) }\nfunc g(a int) error { return nil }\n",
+		"method expr, adds":  imp + "func repos(b hal.URLBuilder) string { return hal.URLBuilder.Repos(b, \"x\") }\n",
+		"method expr, other": imp + "func f(a int) error { return mcp.T.F(a) }\n",
 	}
 	for name, src := range clean {
 		if got := run(src); len(got) != 0 {

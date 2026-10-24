@@ -459,12 +459,13 @@ func serviceForwards(t *testing.T, fset *token.FileSet, name string, src any, fi
 
 // fwdCfg configures methodForwards.
 type fwdCfg struct {
-	recvType   string            // receiver type to inspect; "" inspects package-level functions
-	imps       map[string]string // local import name -> path, child packages only
-	fields     map[string]string // receiver field -> child path (field typed by a child's type)
-	helpers    map[string]string // receiver method -> child path (returns a child's type)
-	unexported bool              // also inspect unexported functions and methods (the web-family guard); false: exported ones only
-	anyPkgArgs bool              // a package-qualified call is a forward whatever its arguments (A2); false: only when its arguments are the function's parameters in order, interleaved with receiver state, and the callee is not a New*/Open* constructor (forwardsWithState)
+	recvType    string            // receiver type to inspect; "" inspects package-level functions
+	imps        map[string]string // local import name -> path, child packages only
+	fields      map[string]string // receiver field -> child path (field typed by a child's type)
+	helpers     map[string]string // receiver method -> child path (returns a child's type)
+	unexported  bool              // also inspect unexported functions and methods (the web-family guard); false: exported ones only
+	methodExprs bool              // also match a call of a child type's method expression, pkg.T.M(params) (the web-family guard)
+	anyPkgArgs  bool              // a package-qualified call is a forward whatever its arguments (A2); false: only when its arguments are the function's parameters in order, interleaved with receiver state, and the callee is not a New*/Open* constructor (forwardsWithState)
 }
 
 // methodForwards is the shape detector behind A2 and the generic parent guard
@@ -608,6 +609,17 @@ func methodForwards(f *ast.File, cfg fwdCfg) (hits []string, methods int) {
 			if _, local := locals[id.Name]; !local {
 				if p, ok := imps[id.Name]; ok && (cfg.anyPkgArgs || forwardsWithState(fd, call, recv, fun.Sel.Name)) {
 					hits = append(hits, fd.Name.Name+" -> "+id.Name+"."+fun.Sel.Name+" ("+p+")")
+				}
+			}
+		}
+		if cfg.methodExprs { // pkg.T.M(...): a method expression of a child type
+			if sel, ok := fun.X.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok {
+					if _, local := locals[id.Name]; !local {
+						if p, ok := imps[id.Name]; ok && forwardsWithState(fd, call, recv, fun.Sel.Name) {
+							hits = append(hits, fd.Name.Name+" -> "+id.Name+"."+sel.Sel.Name+"."+fun.Sel.Name+" ("+p+")")
+						}
+					}
 				}
 			}
 		}
