@@ -1427,10 +1427,11 @@ paths:
       operationId: deleteSynthesisRun
       description: |
         Cancels the running synthesis run. The task's context is cancelled
-        and 202 answers the job, still `running`; it ends — the review stops
-        at its next LLM call or step — in state `error` with the reviewer's
-        error (wrapping "context canceled"), and its events stream then ends
-        with that terminal. There is no queue: a start while one runs is 409,
+        and 202 answers the job, still `running`. The run stops at its next
+        model call and usually ends in `error` with a cancellation message
+        (the reviewer's error, wrapping "context canceled"); a run that was
+        already finishing may end `done`. Its events stream ends with
+        whichever terminal it reaches. There is no queue: a start while one runs is 409,
         so the running job is the only one DELETE can act on. 409 "Job
         already finished" for a finished job; 404 for a job the server does
         not hold or one of the other kind. Nothing is deleted from the list:

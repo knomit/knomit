@@ -198,9 +198,10 @@ func handleGetJob(kind string) http.HandlerFunc {
 // it CANCELS the job. There is no queue to take a job out of — a synthesis
 // start while one runs is 409, a rebuild replaces or absorbs the running one
 // — so the only job DELETE can act on is the kind's running one:
-//   - synthesis-run: TaskHub.Cancel cancels the task's context; the task
-//     ends in error once the reviewer sees it. 202 with the job, still
-//     running.
+//   - synthesis-run: TaskHub.Cancel cancels the task's context. 202 with
+//     the job, still running. The run stops at its next model call and
+//     usually ends in error with a cancellation message; a run that was
+//     already finishing (its last item in flight) may end done.
 //   - index-rebuild: the lifecycle machine owns the rebuild, so this is the
 //     same CancelIndex that POST /repos/{repo}/index:cancel sends; it drains,
 //     and the job ends in error "indexing cancelled". 202 with the job.
