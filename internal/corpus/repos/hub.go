@@ -107,14 +107,21 @@ func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEv
 		}
 		termMu.Unlock()
 
-		h.emit(ev)
-
+		// A terminal is recorded BEFORE it is published (publishTask's
+		// order): a Subscribe in between then finds it in lastDone. Published
+		// first, a Subscribe in that window saw the task still running and
+		// never received its end, so a per-job stream hung (PR #623 F1).
 		if isTerminal {
 			h.mu.Lock()
 			delete(h.active, op)
 			delete(h.cancels, id)
 			h.lastDone[op] = ev
 			h.mu.Unlock()
+		}
+
+		h.emit(ev)
+
+		if isTerminal {
 			taskCancel()
 		}
 	}
@@ -315,6 +322,31 @@ func (h *TaskHub) Tasks(op string) []TaskEvent {
 		out = append(out, ev)
 	}
 	return out
+}
+
+// Cancel cancels task id's context when id is its op's RUNNING task and the
+// hub started it (Start keeps its cancel func), and answers that task's
+// latest event. ok is false for any other id: a finished task, an unknown
+// one, and a task the hub only records (publishTask: the lifecycle
+// machine's rebuild, which is cancelled through CancelIndex instead). The
+// task is still running when Cancel returns; its own terminal event, which
+// fn emits once it sees the cancelled context, ends it.
+func (h *TaskHub) Cancel(id string) (TaskEvent, bool) {
+	h.mu.Lock()
+	cancel, started := h.cancels[id]
+	var ev TaskEvent
+	running := false
+	for _, a := range h.active {
+		if a.ID == id {
+			ev, running = a, true
+		}
+	}
+	h.mu.Unlock()
+	if !started || !running {
+		return TaskEvent{}, false
+	}
+	cancel()
+	return ev, true
 }
 
 // publishTask records and broadcasts a task event for work the hub did not

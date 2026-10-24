@@ -403,13 +403,13 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Post("/synthesis-runs", handleStartSynthesis(s.LLMAdapter))
 				r.Get("/synthesis-runs", handleListJobs("synthesis-run"))
 				r.Get("/synthesis-runs/{id}", handleGetJob("synthesis-run"))
-				r.Delete("/synthesis-runs/{id}", handleDeleteJob("synthesis-run"))
+				r.Delete("/synthesis-runs/{id}", handleDeleteJob(b, s.Manager, "synthesis-run"))
 				r.Get("/synthesis-runs/{id}/events", handleJobEvents("synthesis-run"))
 
 				r.Post("/index-rebuilds", handleStartRebuild(b, s.Manager))
 				r.Get("/index-rebuilds", handleListJobs("index-rebuild"))
 				r.Get("/index-rebuilds/{id}", handleGetJob("index-rebuild"))
-				r.Delete("/index-rebuilds/{id}", handleDeleteJob("index-rebuild"))
+				r.Delete("/index-rebuilds/{id}", handleDeleteJob(b, s.Manager, "index-rebuild"))
 				r.Get("/index-rebuilds/{id}/events", handleJobEvents("index-rebuild"))
 
 				// ONLY the MCP mount gets the session's experiment applied.

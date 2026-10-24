@@ -21,10 +21,11 @@ import (
 type jobsFixture struct {
 	r       http.Handler
 	hub     *repos.TaskHub
-	release func()
-	done    string // the finished synthesis task
-	failed  string // the failed rebuild-op task
-	running string // the held synthesis task
+	release func()               // the held task ends done
+	fail    func(message string) // the held task ends in error
+	done    string               // the finished synthesis task
+	failed  string               // the failed rebuild-op task
+	running string               // the held synthesis task
 }
 
 const failedRebuildMsg = "rebuild exploded: disk full"
@@ -46,6 +47,7 @@ func newJobsFixture(t *testing.T) jobsFixture {
 	f.failed = runToEnd(t, hub, "rebuild", repos.TaskEvent{Status: "error", Message: failedRebuildMsg})
 
 	gate := make(chan struct{})
+	failWith := make(chan string, 1)
 	started := make(chan struct{})
 	id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 		emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting"})
@@ -53,6 +55,8 @@ func newJobsFixture(t *testing.T) jobsFixture {
 		select {
 		case <-gate:
 			emit(repos.TaskEvent{Status: "done", Message: "review complete"})
+		case msg := <-failWith:
+			emit(repos.TaskEvent{Status: "error", Message: msg})
 		case <-ctx.Done():
 			emit(repos.TaskEvent{Status: "error", Message: ctx.Err().Error()})
 		}
@@ -69,6 +73,7 @@ func newJobsFixture(t *testing.T) jobsFixture {
 			close(gate)
 		}
 	}
+	f.fail = func(msg string) { failWith <- msg }
 	t.Cleanup(f.release)
 	if f.done == f.running || f.done == f.failed {
 		t.Fatalf("fixture ids collide: %s %s %s", f.done, f.failed, f.running)
@@ -227,28 +232,64 @@ func TestJobs_GetReadsTheHubByIDAndKind(t *testing.T) {
 		http.StatusNotFound, "Job not found", "job "+f.done+" not found")
 }
 
-// DELETE deletes nothing — the hub can neither cancel a job by id nor forget
-// a finished one — so it answers 404 for an unknown job and 409 for a known
-// one, and the job is still there afterwards.
-func TestJobs_DeleteIs404Or409AndDeletesNothing(t *testing.T) {
+// waitJob polls GET path until the job's state is want, and returns it.
+func waitJob(t *testing.T, f jobsFixture, path, want string) jobEnvelope {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := f.do(t, http.MethodGet, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d (%s)", path, rec.Code, rec.Body.String())
+		}
+		got := jobOf(t, rec)
+		if got.State == want {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s = %+v, never reached %s", path, got, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// DELETE CANCELS the kind's running job — 202 with the job, still running —
+// and the job then ends in error; the list shows it finished, not running.
+// A finished job is 409, an unknown or other-kind id 404, and none of those
+// touches anything.
+func TestJobs_DeleteCancelsTheRunningJob(t *testing.T) {
 	f := newJobsFixture(t)
 
 	requireJobProblem(t, f.do(t, http.MethodDelete, alphaSynth+"/synth-99"),
 		http.StatusNotFound, "Job not found", "job synth-99 not found")
-	requireJobProblem(t, f.do(t, http.MethodDelete, alphaRebuild+"/"+f.done),
-		http.StatusNotFound, "Job not found", "job "+f.done+" not found")
-	requireJobProblem(t, f.do(t, http.MethodDelete, alphaSynth+"/"+f.running),
-		http.StatusConflict, "Job is running", "job "+f.running+" is still running; cancellation is not supported")
+	requireJobProblem(t, f.do(t, http.MethodDelete, alphaRebuild+"/"+f.running),
+		http.StatusNotFound, "Job not found", "job "+f.running+" not found")
 	requireJobProblem(t, f.do(t, http.MethodDelete, alphaRebuild+"/"+f.failed),
-		http.StatusConflict, "Job cannot be deleted",
-		"job "+f.failed+" has finished; the server keeps the last finished job until the next one finishes")
+		http.StatusConflict, "Job already finished", "job "+f.failed+" has already finished; there is nothing to cancel")
+	requireJobProblem(t, f.do(t, http.MethodDelete, alphaSynth+"/"+f.done),
+		http.StatusConflict, "Job already finished", "job "+f.done+" has already finished; there is nothing to cancel")
+	if got := waitJob(t, f, alphaSynth+"/"+f.running, "running"); got.ID != f.running {
+		t.Fatalf("refused DELETEs must not touch the running job: %+v", got)
+	}
 
-	if got := listJobs(t, f, alphaSynth); got.Count != 2 {
-		t.Fatalf("after DELETE the synthesis list = %+v, want both jobs still held", got)
+	rec := f.do(t, http.MethodDelete, alphaSynth+"/"+f.running)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("DELETE running = %d, want 202 (%s)", rec.Code, rec.Body.String())
 	}
-	if rec := f.do(t, http.MethodGet, alphaRebuild+"/"+f.failed); rec.Code != http.StatusOK {
-		t.Fatalf("the failed rebuild must survive DELETE: %d", rec.Code)
+	requireContentType(t, rec, "application/hal+json")
+	if got := jobOf(t, rec); got != (jobEnvelope{ID: f.running, Kind: "synthesis-run", State: "running"}) {
+		t.Fatalf("202 body = %+v, want the job, still running", got)
 	}
+
+	cancelled := waitJob(t, f, alphaSynth+"/"+f.running, "error")
+	if cancelled.Error != context.Canceled.Error() {
+		t.Fatalf("cancelled job = %+v, want error %q", cancelled, context.Canceled.Error())
+	}
+	list := listJobs(t, f, alphaSynth)
+	if len(list.Embedded.Jobs) != 1 || list.Embedded.Jobs[0] != cancelled {
+		t.Fatalf("list after cancel = %+v, want only the cancelled job, finished", list.Embedded.Jobs)
+	}
+	requireJobProblem(t, f.do(t, http.MethodDelete, alphaSynth+"/"+f.running),
+		http.StatusConflict, "Job already finished", "job "+f.running+" has already finished; there is nothing to cancel")
 }
 
 // serveWithin runs one request on a stream recorder and fails the test if the
@@ -347,6 +388,66 @@ func TestJobs_EventsForARunningJobEndsWithItsTerminal(t *testing.T) {
 	}
 }
 
+// openJobStream opens path's events stream and waits for the running frame.
+func openJobStream(t *testing.T, r http.Handler, path string) (*streamRecorder, <-chan struct{}, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	rec := newStreamRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx))
+	}()
+	rec.waitFor(t, "the running frame", func(b string) bool { return strings.Contains(b, `"status":"running"`) })
+	return rec, done, func() { cancel(); <-done }
+}
+
+func requireStreamEnds(t *testing.T, rec *streamRecorder, done <-chan struct{}, id, status, message string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("the stream did not end after the job's %s; body:\n%s", status, rec.body())
+	}
+	frames := taskFrames(t, rec.body())
+	last := frames[len(frames)-1]
+	if frames[0].Status != "running" || last.ID != id || last.Status != status || last.Message != message {
+		t.Fatalf("frames = %+v, want running … %s %q", frames, status, message)
+	}
+}
+
+// A RUNNING job that ends in ERROR ends its stream too, not only done.
+func TestJobs_EventsForARunningJobEndsOnAnErrorTerminal(t *testing.T) {
+	f := newJobsFixture(t)
+	rec, done, stop := openJobStream(t, f.r, alphaSynth+"/"+f.running+"/events")
+	defer stop()
+	f.fail("review failed: model refused")
+	requireStreamEnds(t, rec, done, f.running, "error", "review failed: model refused")
+}
+
+// A job CANCELLED by DELETE ends its open stream with the cancel's terminal.
+func TestJobs_EventsForACancelledJobEnd(t *testing.T) {
+	f := newJobsFixture(t)
+	rec, done, stop := openJobStream(t, f.r, alphaSynth+"/"+f.running+"/events")
+	defer stop()
+	if del := f.do(t, http.MethodDelete, alphaSynth+"/"+f.running); del.Code != http.StatusAccepted {
+		t.Fatalf("DELETE = %d (%s)", del.Code, del.Body.String())
+	}
+	requireStreamEnds(t, rec, done, f.running, "error", context.Canceled.Error())
+}
+
+// A finished job whose op has RUN AGAIN is still the hub's last terminal of
+// the op, though the Subscribe snapshot no longer shows it (it holds the
+// running one): its stream is its terminal frame and ends.
+func TestJobs_EventsForAFinishedJobWhileItsOpRunsAgain(t *testing.T) {
+	f := newJobsFixture(t) // synth-1 done, synth-3 running
+	rec := serveWithin(t, f.r, alphaSynth+"/"+f.done+"/events", 2*time.Second)
+	frames := taskFrames(t, rec.body())
+	if rec.Code != http.StatusOK || len(frames) != 1 || frames[0].ID != f.done || frames[0].Status != "done" {
+		t.Fatalf("status %d frames %+v, want the one done frame of %s", rec.Code, frames, f.done)
+	}
+}
+
 // THE PRODUCTION PATH: a rebuild started through POST is recorded by the
 // lifecycle machine in the hub, and the list, get and delete routes see it
 // while it runs — no registry is involved.
@@ -365,8 +466,6 @@ func TestJobs_ALifecycleRebuildIsListedAndReadWhileItRuns(t *testing.T) {
 	if got := jobOf(t, rec); rec.Code != http.StatusOK || got.ID != id || got.State != "running" {
 		t.Fatalf("GET %s = %d %+v", id, rec.Code, got)
 	}
-	requireJobProblem(t, f.do(t, http.MethodDelete, base+"/"+id),
-		http.StatusConflict, "Job is running", "job "+id+" is still running; cancellation is not supported")
 	if synth := listJobs(t, f, "/repos/alpha/branches/machine:test/synthesis-runs"); synth.Count != 0 {
 		t.Fatalf("a rebuild must not list as a synthesis run: %+v", synth)
 	}
@@ -383,4 +482,40 @@ func TestJobs_ALifecycleRebuildIsListedAndReadWhileItRuns(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// DELETE OF A RUNNING REBUILD is CancelIndex, the lifecycle machine's own
+// cancel (the one POST /repos/{repo}/index:cancel sends): 202 once it has
+// drained, the job then error "indexing cancelled", its stream one terminal
+// frame, the list showing it finished, a second DELETE 409.
+func TestJobs_DeleteCancelsALifecycleRebuild(t *testing.T) {
+	r, _, _ := heldIndexServer(t) // the rebuild stays held: only the cancel can end it
+	f := jobsFixture{r: r}
+	const base = "/repos/alpha/branches/machine:test/index-rebuilds"
+	list := listJobs(t, f, base)
+	if len(list.Embedded.Jobs) == 0 || list.Embedded.Jobs[0].State != "running" {
+		t.Fatalf("index-rebuilds = %+v, want the held rebuild running", list.Embedded.Jobs)
+	}
+	id := list.Embedded.Jobs[0].ID
+
+	rec := f.do(t, http.MethodDelete, base+"/"+id)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("DELETE running rebuild = %d, want 202 (%s)", rec.Code, rec.Body.String())
+	}
+	want := jobEnvelope{ID: id, Kind: "index-rebuild", State: "error", Error: repos.ErrIndexCancelled.Error()}
+	if got := jobOf(t, rec); got != want {
+		t.Fatalf("202 body = %+v, want %+v", got, want)
+	}
+	if got := waitJob(t, f, base+"/"+id, "error"); got != want {
+		t.Fatalf("GET after cancel = %+v, want %+v", got, want)
+	}
+	if got := listJobs(t, f, base); len(got.Embedded.Jobs) != 1 || got.Embedded.Jobs[0] != want {
+		t.Fatalf("list after cancel = %+v, want [%+v]", got.Embedded.Jobs, want)
+	}
+	ev := serveWithin(t, r, base+"/"+id+"/events", 2*time.Second)
+	if frames := taskFrames(t, ev.body()); len(frames) != 1 || frames[0].Status != "error" {
+		t.Fatalf("events after cancel = %+v, want one error frame", frames)
+	}
+	requireJobProblem(t, f.do(t, http.MethodDelete, base+"/"+id),
+		http.StatusConflict, "Job already finished", "job "+id+" has already finished; there is nothing to cancel")
 }

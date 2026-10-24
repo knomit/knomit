@@ -2655,7 +2655,9 @@ export const api = {
   status: (repo: string, branch: string): Promise<Status> =>
     fetchJSON<BranchRootBody>(`${branchBase(repo, branch)}`).then(data => statusFromBranchBody(data, branch)),
 
-  synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+  // synthesize answers 201 with the job envelope the server sends for every
+  // job route: {id, kind, state} (state running | done | error).
+  synthesize: (repo: string, branch: string, recipe = ''): Promise<{ id: string; kind: 'synthesis-run'; state: 'running' | 'done' | 'error'; error?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }),
 
   // rebuild answers 201 with a new job, or 200 with the SAME envelope when an

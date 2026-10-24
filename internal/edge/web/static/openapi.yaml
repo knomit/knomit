@@ -1376,7 +1376,10 @@ paths:
         first, then the last finished one. That is at most two; the server
         keeps no older history, so an earlier job is not listed (and its id
         is 404). Empty before the first run. In memory only: a restart
-        forgets every job.
+        forgets every job. There is no pending or queued state: jobs of a
+        kind are single-flight (a synthesis start while one runs is 409; a
+        rebuild replaces or absorbs the running one). A job being cancelled
+        stays `running` until it stops, then lists as `error`.
       responses:
         "200":
           description: Collection of jobs
@@ -1420,14 +1423,24 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [jobs]
-      summary: Delete synthesis run (always refused)
+      summary: Cancel the running synthesis run
       operationId: deleteSynthesisRun
       description: |
-        Nothing can be deleted: the server has no cancel by job id and keeps
-        the last finished job until the next one of its kind finishes. 404
-        for a job it does not hold; 409 "Job is running" for a running job;
-        409 "Job cannot be deleted" for a finished one.
+        Cancels the running synthesis run. The task's context is cancelled
+        and 202 answers the job, still `running`; it ends — the review stops
+        at its next LLM call or step — in state `error` with the reviewer's
+        error (wrapping "context canceled"), and its events stream then ends
+        with that terminal. There is no queue: a start while one runs is 409,
+        so the running job is the only one DELETE can act on. 409 "Job
+        already finished" for a finished job; 404 for a job the server does
+        not hold or one of the other kind. Nothing is deleted from the list:
+        the cancelled job stays as the last finished one.
       responses:
+        "202":
+          description: Cancellation requested; the job, still running
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
@@ -1467,7 +1480,10 @@ paths:
         first, then the last finished one. That is at most two; the server
         keeps no older history, so an earlier job is not listed (and its id
         is 404). Empty before the first run. In memory only: a restart
-        forgets every job.
+        forgets every job. There is no pending or queued state: jobs of a
+        kind are single-flight (a synthesis start while one runs is 409; a
+        rebuild replaces or absorbs the running one). A job being cancelled
+        stays `running` until it stops, then lists as `error`.
       responses:
         "200":
           description: Collection of jobs
@@ -1545,16 +1561,28 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [jobs]
-      summary: Delete index rebuild (always refused)
+      summary: Cancel the running index rebuild
       operationId: deleteIndexRebuild
       description: |
-        Nothing can be deleted: the server has no cancel by job id and keeps
-        the last finished job until the next one of its kind finishes. 404
-        for a job it does not hold; 409 "Job is running" for a running job;
-        409 "Job cannot be deleted" for a finished one.
+        Cancels the running index rebuild: the same CancelIndex as
+        `POST /repos/{repo}/index:cancel`. It lands after the in-flight
+        embedding batch and the reply waits for the drain, so 202 answers the
+        job already ended: state `error`, error "indexing cancelled" (the
+        repo's `index_state` is `error` with that reason). There is no queue:
+        a rebuild replaces or absorbs the running one, so the running job is
+        the only one DELETE can act on. 409 "Job already finished" for a
+        finished job; 404 for a job the server does not hold or one of the
+        other kind. On the fleet repository it is 409 `fleet_repository`, like
+        every generic mutation of it.
       responses:
+        "202":
+          description: Cancelled; the job, ended in error "indexing cancelled"
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/index-rebuilds/{id}/events:
     parameters:
@@ -5543,7 +5571,9 @@ components:
       type: object
       description: |
         A job as the repo's task hub holds it. No timestamps or progress
-        counters: progress is on the branch events stream.
+        counters: progress is on the branch events stream. There is no
+        pending or cancelled state: a cancelled job ends in `error`, its
+        `error` saying so.
       required: [id, kind, state]
       properties:
         id:    { type: string }

@@ -194,37 +194,84 @@ func handleGetJob(kind string) http.HandlerFunc {
 	}
 }
 
-// handleDeleteJob serves DELETE .../synthesis-runs/{id} or .../index-rebuilds/{id}.
-// Nothing is ever deleted: the TaskHub has no cancel by job id and no way to
-// forget a finished task (it drops one only when the op's next task
-// finishes). An unknown job is 404; a running one 409 "Job is running"; a
-// finished one 409 "Job cannot be deleted".
-func handleDeleteJob(kind string) http.HandlerFunc {
+// handleDeleteJob serves DELETE .../synthesis-runs/{id} or .../index-rebuilds/{id}:
+// it CANCELS the job. There is no queue to take a job out of — a synthesis
+// start while one runs is 409, a rebuild replaces or absorbs the running one
+// — so the only job DELETE can act on is the kind's running one:
+//   - synthesis-run: TaskHub.Cancel cancels the task's context; the task
+//     ends in error once the reviewer sees it. 202 with the job, still
+//     running.
+//   - index-rebuild: the lifecycle machine owns the rebuild, so this is the
+//     same CancelIndex that POST /repos/{repo}/index:cancel sends; it drains,
+//     and the job ends in error "indexing cancelled". 202 with the job.
+//
+// A finished job is 409 "Job already finished", an unknown or other-kind id
+// 404. DELETE never answers success without cancelling the job it names.
+func handleDeleteJob(b hal.URLBuilder, m *repos.Manager, kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		ev, ok := hubTask(repos.RepoFromContext(r.Context()), id, kind)
+		ri := repos.RepoFromContext(r.Context())
+		ev, ok := hubTask(ri, id, kind)
 		if !ok {
 			writeJobNotFound(w, r, id)
 			return
 		}
-		if !terminalTask(ev.Status) {
-			hal.WriteProblem(w, http.StatusConflict, "Job is running",
-				"job "+id+" is still running; cancellation is not supported", r.URL.Path)
+		if terminalTask(ev.Status) {
+			writeJobFinished(w, r, id)
 			return
 		}
-		hal.WriteProblem(w, http.StatusConflict, "Job cannot be deleted",
-			"job "+id+" has finished; the server keeps the last finished job until the next one finishes", r.URL.Path)
+		switch kind {
+		case "synthesis-run":
+			running, cancelled := ri.TaskHub().Cancel(id)
+			if !cancelled { // it finished between the lookup and the cancel
+				writeJobFinished(w, r, id)
+				return
+			}
+			hal.WriteHAL(w, http.StatusAccepted, jobOfTask(running, kind))
+		default:
+			// CancelIndex cancels whatever index job runs, and the lookup
+			// above said it is this rebuild. The reply waits for the drain,
+			// so the hub then holds the rebuild's terminal: "indexing
+			// cancelled" when this cancel ended it; anything else means it
+			// ended on its own first.
+			if _, err := m.Send(r.Context(), ri, repos.CancelIndex()); err != nil {
+				httpx.WriteLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
+				return
+			}
+			after, held := hubTask(ri, id, kind)
+			if !held || (terminalTask(after.Status) && after.Message != repos.ErrIndexCancelled.Error()) {
+				writeJobFinished(w, r, id)
+				return
+			}
+			hal.WriteHAL(w, http.StatusAccepted, jobOfTask(after, kind))
+		}
 	}
 }
 
+func writeJobFinished(w http.ResponseWriter, r *http.Request, id string) {
+	hal.WriteProblem(w, http.StatusConflict, "Job already finished",
+		"job "+id+" has already finished; there is nothing to cancel", r.URL.Path)
+}
+
 // handleJobEvents serves GET .../synthesis-runs/{id}/events or .../index-rebuilds/{id}/events.
-// An id the TaskHub does not hold is 404 before any stream opens. Otherwise
-// the stream carries the job's task events and ENDS with its terminal one,
-// at once for a job that has already finished.
+//
+// It subscribes FIRST and only then reads the job from the hub. The hub
+// records a terminal before it publishes it (TaskHub.Start's emit and
+// publishTask), so the read either already sees the terminal — the frame is
+// written and the stream ends — or sees the job running, and then the
+// terminal is published after the subscription and arrives on it. One
+// mechanism, no window. An id the hub does not hold is 404 before any stream
+// opens; a running frame can repeat once (read, then delivered), which is
+// harmless.
 func handleJobEvents(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		ri := repos.RepoFromContext(r.Context())
+		if ri == nil || ri.TaskHub() == nil {
+			writeJobNotFound(w, r, id)
+			return
+		}
+		events, _ := ri.TaskHub().Subscribe(r.Context())
 		ev, ok := hubTask(ri, id, kind)
 		if !ok {
 			writeJobNotFound(w, r, id)
@@ -239,30 +286,7 @@ func handleJobEvents(kind string) http.HandlerFunc {
 			data, _ := json.Marshal(ev)
 			return stream.Write("event: task\ndata: %s\n\n", data)
 		}
-		if terminalTask(ev.Status) {
-			write(ev)
-			return
-		}
-
-		events, snapshot := ri.TaskHub().Subscribe(r.Context())
-		found := false
-		for _, s := range snapshot {
-			if s.ID != id {
-				continue
-			}
-			found = true
-			if !write(s) || terminalTask(s.Status) {
-				return
-			}
-		}
-		if !found {
-			// The job finished between the lookup and the subscription and
-			// the snapshot no longer shows it (a newer task of the op runs):
-			// its terminal event, while the hub still holds it, ends the
-			// stream.
-			if last, held := hubTask(ri, id, kind); held {
-				write(last)
-			}
+		if !write(ev) || terminalTask(ev.Status) {
 			return
 		}
 
