@@ -29,21 +29,37 @@ func writerGate(ri *repos.RepoInstance, branch string) refs.Gate {
 	}).WithFiles(systemFileResolver(ri, branch))
 }
 
+// writeGateProblem answers a writerGate refusal for POST and PUT alike: 422
+// for refs that do not resolve, 503 when a resolver could not reach the store
+// at all (the gate wraps the resolver's error, %w). One spelling, because PUT
+// reaches the gate only after priorRefs has read the same store — its copy of
+// this branch would be reachable only in a teardown race, and untestable.
+func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
+	if storeUnavailable(gerr) {
+		writeStoreUnavailable(w, r)
+		return
+	}
+	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
+		gerr.Error(), r.URL.Path)
+}
+
 // systemFileResolver resolves a ref to a .knomit/ file in ri at the tip of
 // branch — the same branch and moment the fact resolver uses.
+//
+// A store that cannot be reached is WithRead's error, returned as-is: the gate
+// wraps it (%w), and the handlers answer it with 503 (storeUnavailable), never
+// with the 422 for a ref that does not resolve.
 func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc {
 	return func(ctx context.Context, path string) (bool, error) {
 		var (
 			ok  bool
 			err error
 		)
-		ri.WithRead(func(svc *store.Service) {
-			if svc == nil {
-				err = errFactNotFound
-				return
-			}
+		if aerr := ri.WithRead(func(svc *store.Service) {
 			ok, err = refs.FromSystemFiles(svc.FactsRepo(), branch)(ctx, path)
-		})
+		}); aerr != nil {
+			return false, aerr
+		}
 		return ok, err
 	}
 }
@@ -54,24 +70,22 @@ func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc 
 // and the reader must ask one question: a narrower "is it live right now"
 // check would reject writes whose refs the UI renders as live links.
 //
-// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
-// has no store (Acquire fails: unavailable, populating, closed) WithRead does
-// not run the closure, so this returns zero values and a nil error; the
-// svc == nil branch inside never runs.
+// When the repo's store cannot be reached (Acquire refuses: unavailable,
+// populating, closed) WithRead runs nothing and its error is returned as-is.
+// The gate wraps it, and the handlers answer 503 for it — never the 422 for a
+// broken ref, which would blame the client's refs for the server's state.
 func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path string) (bool, error) {
 	var (
 		ok  bool
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errFactNotFound
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		// Empty commit = at the branch head, which is the commit this write is
 		// about to become the parent of: the referrer's own commit.
 		ok, err = svc.FactQuery().FactExistsAt(ctx, branch, path, "")
-	})
+	}); aerr != nil {
+		return false, aerr
+	}
 	return ok, err
 }
 
@@ -81,20 +95,15 @@ func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path stri
 // are never re-judged — see the refs gate's temporal contract. Any other read
 // error is returned.
 //
-// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
-// has no store (Acquire fails: unavailable, populating, closed) WithRead does
-// not run the closure, so this returns zero values and a nil error; the
-// svc == nil branch inside never runs.
+// A store that cannot be reached is WithRead's error, returned as-is — NOT
+// "no prior version": a nil prior would make the gate re-judge every ref the
+// stored fact carries. handleFactUpdate answers it with 503.
 func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
 	var (
 		refs []string
 		err  error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errFactNotFound
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		res, rerr := svc.Facts().ReadFact(ctx, branch, path, nil)
 		if rerr != nil {
 			// No prior version (a create, or a PUT to a fresh path) means
@@ -113,57 +122,45 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 			return
 		}
 		refs = f.Refs
-	})
+	}); aerr != nil {
+		return nil, aerr
+	}
 	return refs, err
 }
 
 // writeFact commits content at path on branch with message and returns the
-// commit hash. A store error is returned unchanged.
-//
-// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
-// has no store (Acquire fails: unavailable, populating, closed) WithRead does
-// not run the closure, so this returns zero values and a nil error; the
-// svc == nil branch inside never runs. A write to such a repo
-// therefore reports success and writes nothing.
+// commit hash. A store error is returned unchanged, and so is WithRead's when
+// the store cannot be reached: nothing is written, and the handlers answer 503
+// through writeStoreError.
 func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
 	var (
 		commitHash string
 		err        error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errFactNotFound
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		res, werr := svc.Facts().WriteFact(ctx, branch, path, content, message, "update")
 		if werr != nil {
 			err = werr
 			return
 		}
 		commitHash = res.CommitHash
-	})
+	}); aerr != nil {
+		return "", aerr
+	}
 	return commitHash, err
 }
 
 // deleteFact retracts path on branch with message and returns the commit hash.
 // A path that is not there answers errFactNotFound; any other store error is
-// returned unchanged.
-//
-// KNOWN DEFECT (pre-existing): ri.WithRead's error is ignored. When the repo
-// has no store (Acquire fails: unavailable, populating, closed) WithRead does
-// not run the closure, so this returns zero values and a nil error; the
-// svc == nil branch inside never runs. A delete on such a repo
-// therefore reports success and deletes nothing.
+// returned unchanged, and so is WithRead's when the store cannot be reached:
+// nothing is deleted, and handleFactDelete answers 503 through writeStoreError
+// — not the 404 of errFactNotFound, since nothing was looked up.
 func deleteFact(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
 	var (
 		commitHash string
 		err        error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errFactNotFound
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		h, derr := svc.Facts().DeleteFact(ctx, branch, path, message)
 		if derr != nil {
 			// DeleteFact wraps model.ErrPathNotFound for a path that is not
@@ -179,7 +176,9 @@ func deleteFact(ctx context.Context, ri *repos.RepoInstance, branch, path, messa
 			return
 		}
 		commitHash = h
-	})
+	}); aerr != nil {
+		return "", aerr
+	}
 	return commitHash, err
 }
 
@@ -329,8 +328,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		}
 		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)
 		if gerr != nil {
-			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
-				gerr.Error(), r.URL.Path)
+			writeGateProblem(w, r, gerr)
 			return
 		}
 

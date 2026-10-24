@@ -400,10 +400,9 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				case errors.Is(err, repos.ErrAgentBranchUnset):
 					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 						"the repo has no agent branch yet", r.URL.Path)
-				case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
+				case storeUnavailable(err):
 					log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md: store not available")
-					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
-						"the repo's store is not available; try again", r.URL.Path)
+					writeStoreUnavailable(w, r)
 				default:
 					log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md failed")
 					hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
@@ -430,10 +429,9 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				case errors.Is(err, repos.ErrAgentBranchUnset):
 					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 						"the repo has no agent branch yet", r.URL.Path)
-				case errors.Is(err, repos.ErrRepoClosed), errors.Is(err, repos.ErrStoreUnavailable):
+				case storeUnavailable(err):
 					log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write LICENSE: store not available")
-					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
-						"the repo's store is not available; try again", r.URL.Path)
+					writeStoreUnavailable(w, r)
 				default:
 					log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write LICENSE failed")
 					hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
