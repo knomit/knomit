@@ -149,6 +149,11 @@ var webKnownTypes = map[string]map[string]string{
 		"Link":           "link.go",
 		"Problem":        "problem.go",
 	},
+	// httpx declares one type (12b, PR #622); the file count and package
+	// clause checks cover its other files.
+	webPkg + "/httpx": {
+		"sseStream": "sse.go",
+	},
 }
 
 // isWebFamily reports whether an import path is internal/edge/web or a
