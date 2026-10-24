@@ -2712,7 +2712,7 @@ export const api = {
 
   // NOTE: there is deliberately no `setOrigin` here. PUT /repos/{repo}/origin
   // is driven entirely by the connect wizard's session flow
-  // (handlers_origin_session.go), and the dead client wrapper that used to sit
+  // (internal/edge/web/api/origins/handlers.go), and the dead client wrapper that used to sit
   // here carried an OriginSetResponse with `branch` and `head` fields the
   // handler has never returned — a shape nobody could have relied on without
   // finding out the hard way.

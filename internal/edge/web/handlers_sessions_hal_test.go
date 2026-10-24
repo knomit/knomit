@@ -17,10 +17,11 @@ func newServerWithSessions(t *testing.T, repoNames ...string) *Server {
 	return &Server{Manager: newTestManagerWithRepos(t, repoNames...)}
 }
 
-// isolateOriginSessionTemp points os.TempDir() at a directory of t's own. The
-// origin-session manager origins.Mount creates has no Shutdown, so the
-// knomit-origin-* dir each session allocates under os.TempDir() goes with the
-// test's TempDir instead. It sets the environment, so the test must not be
+// isolateOriginSessionTemp points os.TempDir() at a directory of t's own. A
+// test Server sets neither Lifetime nor OriginSessionsDir, so the
+// origin-session manager origins.Mount creates lives forever and keeps its
+// session folders in a private knomit-origin-sessions-* dir under
+// os.TempDir(); that dir goes with the test's TempDir instead. It sets the environment, so the test must not be
 // parallel.
 func isolateOriginSessionTemp(t *testing.T) {
 	t.Helper()

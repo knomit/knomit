@@ -5,6 +5,8 @@
 package origins
 
 import (
+	"context"
+
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
@@ -17,13 +19,22 @@ import (
 // reads the repo with repos.RepoFromContext. rm is the repo manager the test
 // and commit steps act through, and agentBranch the instance's agent branch.
 //
-// Mount creates the session manager its routes share and owns it (see the
-// LIFETIME note on sessionManager). Two Mount calls make two managers that
-// know nothing of each other's sessions, so a caller that serves the routes
-// from more than one router mounts ONE r in all of them (web's router does,
-// for its plain and OAuth listeners).
-func Mount(r chi.Router, rm *repos.Manager, agentBranch string) {
-	routes(r, rm, agentBranch, newSessionManager())
+// Mount creates the session manager its routes share and owns it, for as
+// long as ctx lives: when ctx ends, every session and its folder is removed
+// (the LIFETIME note on sessionManager). sessionsDir is the directory the
+// manager keeps its run, and its session folders, in. Several processes may
+// share one (two servers on one home): each manager's run is guarded by an OS
+// lock it holds for its life, and Mount starts a background sweep that removes
+// only the runs whose lock is free, i.e. whose process has exited (FOLDERS on
+// sessionManager). "" gives the manager a private directory under
+// os.TempDir() instead.
+//
+// Two Mount calls make two managers that know nothing of each other's
+// sessions, so a caller that serves the routes from more than one router
+// mounts ONE r in all of them (web's router does, for its plain and OAuth
+// listeners).
+func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string) {
+	routes(r, rm, agentBranch, newSessionManager(ctx, sessionsDir))
 }
 
 // routes is Mount's route table, over a given manager so the package's tests

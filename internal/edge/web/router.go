@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
@@ -509,10 +510,27 @@ func (m *mcpStatusRecorder) Flush() {
 // one-session-per-repo rule would hold per listener only. chi's Route is Mount
 // of a fresh router, so mounting this shared one leaves the route tree and
 // its middleware exactly as an inline r.Route would.
+//
+// One coupling the sharing adds: when a parent mounts a subrouter, chi
+// (v5 Mux.Mount) copies the parent's NotFound and MethodNotAllowed handlers
+// into it unless the subrouter already has its own. The copy comes from the
+// first parent to mount this router (Handler's apiRouter, or OAuthHandler's if
+// that is built first); the second mount finds handlers already set and
+// leaves them. That is harmless only while every apiRouter installs the SAME
+// NotFound and MethodNotAllowed (the problem+json ones at the top of
+// apiRouter): a per-listener handler would answer the second listener's
+// unmatched origin-session paths with the first listener's.
+//
+// The manager lives as long as s.Lifetime (nil: forever) and keeps its
+// session folders in s.OriginSessionsDir (see those fields).
 func (s *Server) originSessionsRouter() chi.Router {
 	s.originSessionsOnce.Do(func() {
+		ctx := s.Lifetime
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		r := chi.NewRouter()
-		origins.Mount(r, s.Manager, s.AgentBranch)
+		origins.Mount(ctx, r, s.Manager, s.AgentBranch, s.OriginSessionsDir)
 		s.originSessions = r
 	})
 	return s.originSessions
