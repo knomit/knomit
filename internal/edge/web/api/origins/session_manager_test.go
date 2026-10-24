@@ -730,3 +730,36 @@ func TestHandleTestConnectivity_RerunLeavesNoStoreOpen(t *testing.T) {
 		t.Fatal("deleting the session left the first /test's store open or its folder on disk")
 	}
 }
+
+// The four steps that touch a session's store or folder (test, preview,
+// apply, commit) take the session's use: while another holder has it, a step
+// waits, and a step whose request ends while waiting answers 404 without
+// running. A step that did not take the use would run, and answer from its
+// state check instead (a 409 for this fresh session) or start streaming.
+//
+// SABOTAGE: switch any of the four handlers back to sm.Get -> red.
+func TestHandlers_StoreStepsTakeTheSessionsUse(t *testing.T) {
+	f := newCommitFixture(t, "", nil)
+	sess, err := f.sm.Create("alpha", f.remoteURL, authConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unuse, ok := f.sm.Use(context.Background(), "alpha", sess.ID)
+	if !ok {
+		t.Fatal("Use failed")
+	}
+	defer unuse()
+	for _, step := range []struct{ method, path string }{
+		{"GET", "/test"}, {"GET", "/preview"}, {"POST", "/apply"}, {"POST", "/commit"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		req := httptest.NewRequest(step.method, "/repos/alpha/origin-sessions/"+sess.ID+step.path, nil).WithContext(ctx)
+		rec := newStreamRecorder()
+		f.s.ServeHTTP(rec, req)
+		cancel()
+		if rec.Code != 404 {
+			t.Errorf("%s %s with the use held elsewhere: status %d, want 404 (it ran without the use); body %s",
+				step.method, step.path, rec.Code, rec.body())
+		}
+	}
+}
