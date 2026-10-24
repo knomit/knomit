@@ -25,7 +25,14 @@ var (
 func mwFingerprint(name string) string {
 	name = mwPkgPrefix.ReplaceAllString(name, "")
 	name = mwFuncSuffix.ReplaceAllString(name, "")
-	if i := strings.Index(name, "."); i >= 0 {
+	if strings.HasSuffix(name, "-fm") {
+		// method value: keep Receiver.Method-fm, drop only the package
+		if i := strings.Index(name, "."); i >= 0 {
+			name = name[i+1:]
+		}
+	} else if i := strings.LastIndex(name, "."); i >= 0 {
+		// plain func/closure: Go 1.26 may prepend the inlining chain
+		// (outer.func10.inner); the function's own name is the last segment
 		name = name[i+1:]
 	}
 	if name != "" {
