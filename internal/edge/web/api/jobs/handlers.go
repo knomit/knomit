@@ -1,12 +1,13 @@
-// Async job POST handlers for branch-scoped long-running operations.
-// Clients start jobs via POST and observe progress through the branch events
-// SSE stream at /repos/{repo}/branches/{branch}/events.
-package web
+// Package jobs serves the branch-scoped job routes: the synthesis-run and
+// index-rebuild jobs under /repos/{repo}/branches/{branch}. Clients start a
+// job via POST and observe progress through the branch events SSE stream at
+// /repos/{repo}/branches/{branch}/events or the job's own events stream.
+// Its only export is Mount.
+package jobs
 
 import (
 	"context"
 	"encoding/json"
-	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/corpus/synthesize"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/llm"
 )
 

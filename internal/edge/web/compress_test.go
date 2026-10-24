@@ -257,7 +257,7 @@ func TestCompressor_MatchesYAMLWithCharsetParameter(t *testing.T) {
 // ONE STREAM PER HANDLER FAMILY — not every stream the server exposes. There
 // are ten SSE entry points; the four below reach handlers_client_sessions.go,
 // handlers_events.go, handlers_repo_events.go and handlers_logs.go. The job
-// streams (handlers_jobs.go, two routes) and the four origin-session streams
+// streams (api/jobs/handlers.go, two routes) and the four origin-session streams
 // (api/origins/handlers.go) are NOT exercised here, because each needs a
 // live job or origin session to produce a frame.
 //

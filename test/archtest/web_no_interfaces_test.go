@@ -154,6 +154,10 @@ var webKnownTypes = map[string]map[string]string{
 	webPkg + "/httpx": {
 		"sseStream": "sse.go",
 	},
+	// api/jobs (12c): the job response body; mount.go declares no type.
+	webPkg + "/api/jobs": {
+		"jobEnvelope": "handlers.go",
+	},
 	// api/origins (12d): the session manager and a handler's request body,
 	// each in its own file; mount.go declares no type.
 	webPkg + "/api/origins": {

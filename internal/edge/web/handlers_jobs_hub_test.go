@@ -18,6 +18,15 @@ import (
 // the test releases it. Two kinds, three states, and ids that differ, so a
 // route answering the wrong job, the wrong kind or an invented one fails.
 
+// jobEnvelope is the job body these tests decode: the wire shape api/jobs
+// writes, declared here because api/jobs exports nothing but Mount.
+type jobEnvelope struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
+}
+
 type jobsFixture struct {
 	r       http.Handler
 	hub     *repos.TaskHub
@@ -416,22 +425,8 @@ func requireStreamEnds(t *testing.T, rec *streamRecorder, done <-chan struct{}, 
 	}
 }
 
-// An IDLE job stream writes the shared keepalive comment frame, so a proxy
-// does not drop a job that is quiet while it waits on the model.
-func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
-	old := jobEventsKeepalive
-	jobEventsKeepalive = 20 * time.Millisecond
-	t.Cleanup(func() { jobEventsKeepalive = old })
-
-	f := newJobsFixture(t)
-	rec, _, stop := openJobStream(t, f.r, alphaSynth+"/"+f.running+"/events")
-	defer stop()
-	// The job emits nothing more; the only thing that can arrive is a keepalive.
-	rec.waitFor(t, "a keepalive frame", func(b string) bool { return strings.Contains(b, ": keepalive\n\n") })
-	if frames := taskFrames(t, rec.body()); len(frames) != 1 || frames[0].Status != "running" {
-		t.Fatalf("frames = %+v, want only the initial running frame", frames)
-	}
-}
+// The idle-stream keepalive test lives with the keepalive interval, in
+// api/jobs (its var is private to that package).
 
 // A RUNNING job that ends in ERROR ends its stream too, not only done.
 func TestJobs_EventsForARunningJobEndsOnAnErrorTerminal(t *testing.T) {

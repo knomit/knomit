@@ -8,7 +8,7 @@
 // and the review-specific behaviour in review_strategy.go.
 //
 // The facade is not vestigial: it is the review tool's stable public surface.
-// internal/edge/mcp/review.go and internal/edge/web/handlers_jobs.go both construct a
+// internal/edge/mcp/review.go and internal/edge/web/api/jobs/handlers.go both construct a
 // Reviewer, and the wire types are what MCP clients see.
 package synthesize
 
