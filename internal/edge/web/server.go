@@ -38,6 +38,18 @@ type Server struct {
 	// OAuth API routers share one origin-session manager.
 	originSessionsOnce sync.Once
 	originSessions     chi.Router
+	// Lifetime is how long the server's own state lives: when it ends, the
+	// origin-session manager removes every session and its folder. nil means
+	// a lifetime that never ends (tests, a server built in-process).
+	// internal/app sets it and ends it first in App.Close. Read once, when
+	// the first router is built.
+	Lifetime context.Context
+	// OriginSessionsDir is the directory the origin-session manager keeps its
+	// session folders in, and clears of a previous run's at the first router
+	// build; it must belong to this instance alone. "" gives the manager a
+	// private directory under os.TempDir(). internal/app sets
+	// <home>/origin-sessions.
+	OriginSessionsDir string
 	// ClientSessions records every MCP request's session (control.db
 	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
 	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start

@@ -55,8 +55,7 @@ func newCommitFixture(t *testing.T, keyPath string, hook func(repos.StageID, str
 	}
 	f.ri = ri
 
-	f.sm = newSessionManager()
-	t.Cleanup(f.sm.drain)
+	f.sm = newTestSessionManager(t)
 	f.sess, err = f.sm.Create("alpha", f.remoteURL, authConfig{Method: "token", Token: "tok"})
 	if err != nil {
 		t.Fatalf("create session: %v", err)

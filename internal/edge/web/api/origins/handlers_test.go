@@ -97,8 +97,7 @@ func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
 	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "sub", UID: "sub-uid", Subscribed: true, ReadBranch: "main",
 	}))
-	sm := newSessionManager()
-	t.Cleanup(sm.drain)
+	sm := newTestSessionManager(t)
 	r := newTestServer(m, "machine/test", sm)
 
 	rec := httptest.NewRecorder()

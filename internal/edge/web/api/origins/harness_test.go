@@ -1,6 +1,7 @@
 package origins
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,15 +56,14 @@ func repoFromURL(m *repos.Manager) func(http.Handler) http.Handler {
 	}
 }
 
-// drain removes every session and its temp dir, for t.Cleanup: the manager
-// has no Shutdown (see the LIFETIME note on sessionManager), and a test's
-// sessions would otherwise leave knomit-origin-* dirs under os.TempDir().
-func (sm *sessionManager) drain() {
-	sm.sessions.Range(func(k, v any) bool {
-		sm.sessions.Delete(k)
-		removeTempDir(v.(*originSession).TempDir)
-		return true
-	})
+// newTestSessionManager is a session manager over a root of t's own whose
+// lifetime ends when t does (close at t.Cleanup), so a test's sessions and
+// their folders go with it.
+func newTestSessionManager(t *testing.T) *sessionManager {
+	t.Helper()
+	sm := newSessionManager(context.Background(), t.TempDir())
+	t.Cleanup(sm.close)
+	return sm
 }
 
 // newJSONRequest is httptest.NewRequest with the JSON Content-Type

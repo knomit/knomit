@@ -42,6 +42,8 @@ type App struct {
 	agentHost   string // host label persisted with the identity
 
 	closers []func()
+	// endLifetime ends server.Lifetime; Close calls it first.
+	endLifetime context.CancelFunc
 }
 
 func (a *App) Manager() *repos.Manager { return a.manager }
@@ -217,7 +219,17 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	webAuth := cfg.Auth
 	webAuth.LoopbackHosts = cfg.Auth.EffectiveLoopbackHosts(cfg.Host)
 
+	// The server's lifetime: ended first in Close, which `knomit serve` runs
+	// after its listeners have shut down, so no request is still using an
+	// origin session when the manager removes them and their folders. Not
+	// derived from ctx: a signal cancels ctx BEFORE the graceful shutdown
+	// drains in-flight requests, and an origin-session commit may be one.
+	lifetime, endLifetime := context.WithCancel(context.Background())
+	a.endLifetime = endLifetime
+
 	a.server = &web.Server{
+		Lifetime:          lifetime,
+		OriginSessionsDir: filepath.Join(cfg.Home, "origin-sessions"),
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
 		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.
@@ -403,6 +415,9 @@ func (a *App) OAuthHandler() http.Handler { return a.server.OAuthHandler() }
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
+	if a.endLifetime != nil {
+		a.endLifetime()
+	}
 	if err := a.manager.Close(); err != nil {
 		log.Warn().Err(err).Msg("app: manager close failed")
 	}
