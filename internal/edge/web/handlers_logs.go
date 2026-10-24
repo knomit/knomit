@@ -76,7 +76,7 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 
 		// send is the only thing this handler adds to sseStream.Write: the
 		// marshal, and the decision that a payload we cannot encode is skipped
-		// rather than fatal. The bound itself lives in sse.go — and it matters
+		// rather than fatal. The bound itself lives in httpx/sse.go — and it matters
 		// most here, because the log is the highest-rate stream this server
 		// has, so a client that stops draining backs up fastest.
 		send := func(event string, payload any) bool {

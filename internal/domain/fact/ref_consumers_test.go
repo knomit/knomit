@@ -56,7 +56,7 @@ func TestRefClassification_HasNoSecondImplementation(t *testing.T) {
 		filepath.Join("internal", "engine", "store", "internal", "vcs", "factpath.go"): "index membership by location under the ontology root",
 		filepath.Join("internal", "engine", "store", "facts", "fact_read.go"):          "fact file naming",
 		filepath.Join("internal", "engine", "store", "git", "commitlog.go"):            "selects fact files when indexing a commit",
-		filepath.Join("internal", "corpus", "repos", "origin_method.go"):               "checks a remote URL's scheme against the auth method (MethodMismatch, shared with web validateURLAuth), not a ref",
+		filepath.Join("internal", "corpus", "repos", "origin_method.go"):               "checks a remote URL's scheme against the auth method (MethodMismatch, shared with web httpx.ValidateURLAuth), not a ref",
 		filepath.Join("internal", "edge", "mcp", "lens_endtoend_test.go"):              "asserts the kb:// WIRE PATH form of a result row",
 		filepath.Join("internal", "edge", "mcp", "query_federation_test.go"):           "asserts the kb:// WIRE PATH form of a result row",
 	}

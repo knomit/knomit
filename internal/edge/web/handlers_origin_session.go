@@ -749,7 +749,7 @@ func extractRefsFromFrontmatter(content string) []string {
 // Returns nil, false if streaming is not supported.
 //
 // Backed by sseStream, so all four flows that use it — test, preview, apply
-// and commit — get the bounded, error-checked write described in sse.go.
+// and commit — get the bounded, error-checked write described in httpx/sse.go.
 //
 // sendEvent stays `func(v any)` with no result, deliberately. These handlers
 // thread it through long procedures (commitSharedHistory and friends) whose

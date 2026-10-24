@@ -72,7 +72,7 @@ func TestValidateLocalOrigin(t *testing.T) {
 		// server cwd via filepath.Abs, so they must be gated, never waved through
 		// as "network". With no root they are disabled; with a root they resolve
 		// (relative to cwd) outside it and are rejected. Regression for the
-		// create-path bypass where the handler never called isGitURL.
+		// create-path bypass where the handler never called httpx.IsGitURL.
 		{"relative disabled", "../../etc", "", false},
 		{"relative bare disabled", "some/repo", "", false},
 		{"relative outside root", "../../etc", kb, false},

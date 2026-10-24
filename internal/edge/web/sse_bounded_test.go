@@ -22,7 +22,7 @@ import (
 // bounds a write, and the hubs never block on a slow subscriber.
 //
 // These are the contract tests for the streams that were unbounded until the
-// shared sse.go helper landed. The sessions and logs streams have their own
+// shared httpx/sse.go helper landed. The sessions and logs streams have their own
 // equivalents beside their handlers.
 
 // brokenStream runs one SSE request against a recorder that fails every write

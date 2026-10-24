@@ -111,7 +111,7 @@ func IsJSONMediaType(contentType string) bool {
 func decodeBodyInto(w http.ResponseWriter, r *http.Request, body io.Reader, v any, maxBytes int64) bool {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		panic("DecodeJSON: v must be a non-nil pointer")
+		panic("decodeJSON: v must be a non-nil pointer")
 	}
 	if body == nil {
 		// A request built by hand can carry a nil Body; the server never

@@ -179,7 +179,7 @@ func TestResolveAuth_CertIsTransportLevel(t *testing.T) {
 
 // cert is never a caller's input, whatever the URL: ResolveOrigin refuses it
 // by name before classifying, so no layer behind the edge stores a cert
-// origin knomit did not decide (the edge's validateURLAuth refuses it first;
+// origin knomit did not decide (the edge's httpx.ValidateURLAuth refuses it first;
 // this pins the repos layer on its own).
 func TestResolveOrigin_CertIsNotAnInput(t *testing.T) {
 	m := New(context.Background(), Deps{Cfg: config.Config{}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})

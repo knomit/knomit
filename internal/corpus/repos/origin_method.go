@@ -11,7 +11,7 @@ import (
 // deliberate force-anonymous override and is not refused). It classifies a
 // remote URL for an auth method, not a fact reference, which is why this
 // file alone is exempt from TestRefClassification_HasNoSecondImplementation.
-// The REST edge (web validateURLAuth) and the fleet follow
+// The REST edge (web httpx.ValidateURLAuth) and the fleet follow
 // (refuseMethodForURL) both call it; the wizard's urlAuthMismatch
 // (web/src/originAuth.ts) says the same in the same words.
 func MethodMismatch(u, method string) error {

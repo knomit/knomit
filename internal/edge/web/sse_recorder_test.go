@@ -8,7 +8,7 @@ import (
 )
 
 // Shared SSE test double. Every stream handler in this package is exercised
-// through it, so the deadline-and-checked-error contract in sse.go is asserted
+// through it, so the deadline-and-checked-error contract in httpx/sse.go is asserted
 // the same way everywhere rather than once per handler's own recorder.
 
 // streamRecorder is the flusher recorder from handlers_events_test.go with a
