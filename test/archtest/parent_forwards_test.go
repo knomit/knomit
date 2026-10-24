@@ -66,7 +66,21 @@ func childPackages(parent string) func(string) bool {
 // value from private state; it is a constructor, not a pass-through.
 func parentForwards(t *testing.T, fset *token.FileSet, parent string, files map[string]any) []parentFwd {
 	t.Helper()
-	isChild := childPackages(parent)
+	return forwardsInto(t, fset, childPackages(parent), files, false)
+}
+
+// forwardsInto is parentForwards for any set of target packages (isChild
+// reports whether an import path is a target). With strict set (the
+// web-family guard F), the function and method shapes are matched on
+// unexported names too (the declaration shapes always are), so a local
+// one-call shim such as `func writeStoreError(w, r, err) {
+// httpx.WriteStoreError(w, r, err) }` is a forward; and a method expression
+// of a target's type counts as a target name: `var repos =
+// hal.URLBuilder.Repos` and `func repos(b hal.URLBuilder, r string) string {
+// return hal.URLBuilder.Repos(b, r) }`. Guard P passes strict=false and is
+// unchanged.
+func forwardsInto(t *testing.T, fset *token.FileSet, isChild func(string) bool, files map[string]any, strict bool) []parentFwd {
+	t.Helper()
 	type parsed struct {
 		name string
 		f    *ast.File
@@ -115,6 +129,12 @@ func parentForwards(t *testing.T, fset *token.FileSet, parent string, files map[
 				return "", false
 			}
 			id, ok := sel.X.(*ast.Ident)
+			if !ok && strict {
+				// pkg.Type.Method: a method expression of a target's type.
+				if inner, isSel := sel.X.(*ast.SelectorExpr); isSel {
+					id, ok = inner.X.(*ast.Ident)
+				}
+			}
 			if !ok {
 				return "", false
 			}
@@ -206,7 +226,7 @@ func parentForwards(t *testing.T, fset *token.FileSet, parent string, files map[
 			if len(p.imps) == 0 {
 				continue
 			}
-			hits, _ := methodForwards(p.f, fwdCfg{recvType: rtype, imps: p.imps, fields: fields, helpers: helpers})
+			hits, _ := methodForwards(p.f, fwdCfg{recvType: rtype, imps: p.imps, fields: fields, helpers: helpers, unexported: strict, methodExprs: strict})
 			for _, h := range hits {
 				name, detail, _ := strings.Cut(h, " -> ")
 				kind := "func"
