@@ -184,6 +184,22 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 			return
 		}
 
+		// /test runs once per session. A tested session already has its clone
+		// in its folder, so a re-run would open a second handle on clone.db and
+		// its CloneFrom would fail ("repository already exists"), moving a good
+		// session to stateError. Refuse before touching anything, so the
+		// session and its state stay exactly as they were; a fresh test is a
+		// new session (POST origin-sessions replaces this one).
+		sess.mu.Lock()
+		tested := sess.RemoteStore != nil || sess.State == stateTested || sess.State == statePreviewed ||
+			sess.State == stateApplied || sess.State == stateCommitted
+		sess.mu.Unlock()
+		if tested {
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
+				"session has already been tested; create a new session to test again", r.URL.Path)
+			return
+		}
+
 		ri := repos.RepoFromContext(r.Context())
 		// Acquire pins the local store for this whole SSE flow so a concurrent
 		// SwapStore/Archive drains it instead of closing the service mid-use;
@@ -346,11 +362,9 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 		sendEvent(map[string]any{"phase": "done", "result": result})
 
 		// Update session state.
-		// sess.RemoteStore is nil here: a session whose earlier /test
-		// succeeded already has a clone in its folder, so a re-run's CloneFrom
-		// fails ("repository already exists") above and never reaches this.
-		// The earlier run's store stays the session's, and finalize closes it
-		// when the session is dropped.
+		// sess.RemoteStore is nil here: a re-run on a tested session is
+		// refused with a 409 at the top. The store is the session's from now
+		// on, and finalize closes it when the session is dropped.
 		sess.mu.Lock()
 		sess.State = stateTested
 		sess.TestResult = result

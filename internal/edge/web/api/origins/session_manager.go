@@ -106,13 +106,14 @@ type originSession struct {
 	ApplyResult   any // cached result from apply step
 	mu            sync.Mutex
 
-	runDir    string        // the run directory TempDir is in; immutable
-	busy      chan struct{} // the use's semaphore, room for one
-	gone      chan struct{} // closed by the first retire, so a waiting acquire gives up
-	onFinal   func()        // called once, after finalize; immutable
-	inUse     bool          // a handler holds the use; guarded by mu
-	dropped   bool          // the session has left the manager; guarded by mu
-	finalized bool          // finalize has been claimed; guarded by mu
+	runDir    string           // the run directory TempDir is in; immutable
+	busy      chan struct{}    // the use's semaphore, room for one
+	gone      chan struct{}    // closed by the first retire, so a waiting acquire gives up
+	onFinal   func()           // called once, after finalize; immutable
+	now       func() time.Time // the manager's clock, for release's touch; immutable
+	inUse     bool             // a handler holds the use; guarded by mu
+	dropped   bool             // the session has left the manager; guarded by mu
+	finalized bool             // finalize has been claimed; guarded by mu
 }
 
 // acquire takes the session's use, waiting for another holder as long as
@@ -147,6 +148,10 @@ func (s *originSession) acquire(ctx context.Context) (release func(), ok bool) {
 func (s *originSession) release() {
 	s.mu.Lock()
 	s.inUse = false
+	// The idle clock restarts when the step ENDS: runCleanup skips a session
+	// in use, so a step longer than sessionExpiry is not evicted under its
+	// handler, and the 10 minutes count from here.
+	s.LastAccess = s.now()
 	final := s.dropped && !s.finalized
 	if final {
 		s.finalized = true
@@ -298,16 +303,40 @@ func reclaimDeadRuns(base string) {
 		if e.IsDir() || !strings.HasPrefix(name, runPrefix) || !strings.HasSuffix(name, runLockSuffix) {
 			continue
 		}
-		reclaimRun(base, filepath.Join(base, name))
+		reclaimRun(base, filepath.Join(base, name), nil)
 	}
 }
 
+// runHooks are test hooks at the steps of the claim/reclaim race
+// (TestReclaimRun_NeverStripsANewRunOfItsLock). Production passes nil. They
+// are a parameter, not package variables, so the background sweeps other
+// tests start can never call them.
+type runHooks struct {
+	reclaimLocked   func(lockPath string) // reclaimRun holds the lock
+	reclaimUnlocked func(lockPath string) // reclaimRun has just released it
+	claimCreated    func(lockPath string) // claimRun has created the file, not yet locked it
+}
+
+// fire calls f(lockPath) when the hooks are set and f is one of them.
+func (h *runHooks) fire(f func(*runHooks) func(string), lockPath string) {
+	if h == nil {
+		return
+	}
+	if fn := f(h); fn != nil {
+		fn(lockPath)
+	}
+}
+
+func hookReclaimLocked(h *runHooks) func(string)   { return h.reclaimLocked }
+func hookReclaimUnlocked(h *runHooks) func(string) { return h.reclaimUnlocked }
+func hookClaimCreated(h *runHooks) func(string)    { return h.claimCreated }
+
 // reclaimRun removes the run whose lock file is lockPath if, and only if, it
-// can take that lock. It removes the run directory while holding the lock,
-// and the lock file only after releasing it (Windows cannot remove an open
-// file). A creator racing this on a brand-new lock file sees it vanish and
-// starts over (claimRun).
-func reclaimRun(base, lockPath string) {
+// can take that lock. It removes the run directory, and unlinks the lock file,
+// while holding the lock (on Windows the unlink waits for the close; see
+// below). A claimer racing this on a brand-new lock file then finds its lock
+// on an unlinked file and starts over (claimRun).
+func reclaimRun(base, lockPath string, h *runHooks) {
 	if !isChild(base, lockPath, runPrefix, runLockSuffix) {
 		return
 	}
@@ -322,24 +351,50 @@ func reclaimRun(base, lockPath string) {
 		_ = f.Close() // held: the owner is alive
 		return
 	}
+	h.fire(hookReclaimLocked, lockPath)
 	dir := strings.TrimSuffix(lockPath, runLockSuffix)
 	removed := removeChild(base, dir, runPrefix, "")
-	_ = pki.UnlockFile(f)
-	_ = f.Close()
+	// Unlink the lock file WHILE HOLDING its lock. Unlinking after the unlock
+	// would race a claimer that created this file a moment ago (claimRun): it
+	// can take the lock in the gap, pass its sameFileAt check and make its run
+	// directory, and the late unlink would then strip a live run of its lock
+	// file. Unlinked while held, the claimer's lock lands on an unlinked file,
+	// its sameFileAt check fails, and it starts over.
+	//
+	// Windows refuses to remove a file that has an open handle (Go opens files
+	// without FILE_SHARE_DELETE), including this one, so there the unlink
+	// waits until after the close. That is safe on Windows: a claimer holds
+	// its handle open from CreateTemp for the run's whole life, so the
+	// removal fails while any claimer has the file, and succeeds only once
+	// nobody does.
+	//
+	// A run whose directory could not be removed keeps its lock file, so the
+	// next start retries it.
+	unlinked := false
 	if removed {
-		removeChild(base, lockPath, runPrefix, runLockSuffix)
+		unlinked = os.Remove(lockPath) == nil // isChild-checked above
+	}
+	_ = pki.UnlockFile(f)
+	h.fire(hookReclaimUnlocked, lockPath)
+	_ = f.Close()
+	if removed && !unlinked {
+		_ = os.Remove(lockPath) // Windows; see above. Fails while a claimer has it open.
+	}
+	if removed {
 		log.Info().Str("run", filepath.Base(dir)).Msg("origin sessions: removed the session folders of a run whose process has exited")
 	}
 }
 
 // claimRun makes a new run under base: its lock file first, locked, and only
 // then its directory, so a sweeper never sees a live run without a held lock.
-func claimRun(base string) (*os.File, string, error) {
+// h is nil outside tests (runHooks).
+func claimRun(base string, h *runHooks) (*os.File, string, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		f, err := os.CreateTemp(base, runPrefix+"*"+runLockSuffix)
 		if err != nil {
 			return nil, "", fmt.Errorf("create origin sessions run lock: %w", err)
 		}
+		h.fire(hookClaimCreated, f.Name())
 		ctx, cancel := context.WithTimeout(context.Background(), runLockWait)
 		err = pki.LockFile(ctx, f)
 		cancel()
@@ -393,7 +448,7 @@ func (sm *sessionManager) runDir() (string, error) {
 	} else if err := os.MkdirAll(sm.base, 0o700); err != nil {
 		return "", fmt.Errorf("create origin sessions dir: %w", err)
 	}
-	lock, dir, err := claimRun(sm.base)
+	lock, dir, err := claimRun(sm.base, nil)
 	if err != nil {
 		return "", err
 	}
@@ -434,6 +489,7 @@ func (sm *sessionManager) Create(repo, url string, auth authConfig) (*originSess
 		busy:       make(chan struct{}, 1),
 		gone:       make(chan struct{}),
 		onFinal:    sm.live.Done,
+		now:        sm.now,
 	}
 	sm.live.Add(1)
 	old := sm.sessions[repo]
@@ -568,7 +624,7 @@ func (sm *sessionManager) runCleanup() {
 	sm.mu.Lock()
 	for repo, s := range sm.sessions {
 		s.mu.Lock()
-		idle := s.LastAccess.Before(deadline)
+		idle := !s.inUse && s.LastAccess.Before(deadline) // a step in progress is not idle
 		s.mu.Unlock()
 		if idle {
 			delete(sm.sessions, repo)

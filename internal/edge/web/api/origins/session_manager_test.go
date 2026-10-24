@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -379,6 +380,81 @@ func TestSessionManager_StartupSweepReclaimsADeadRun(t *testing.T) {
 	}
 }
 
+// The claim/reclaim race, forced step by step with the test hooks: a claimer
+// creates its lock file; a sweeper locks it first (taking it for a dead run's)
+// and removes the (absent) run directory; the claimer waits on the lock; the
+// sweeper releases it; the claimer then takes it, checks it and makes its run
+// directory, all before the sweeper goes on. Whatever the sweeper does after
+// that, the claimer's run must end up with its lock file in place, held by
+// the claimer. The sweeper used to unlink the file only after releasing the
+// lock, which here strips the new live run of its lock file.
+//
+// Unix only in effect: on Windows the claimer's open handle makes any unlink
+// fail, which the test then also passes.
+//
+// SABOTAGE: move reclaimRun's unlink after pki.UnlockFile -> red.
+func TestReclaimRun_NeverStripsANewRunOfItsLock(t *testing.T) {
+	base := t.TempDir()
+	sweeperLocked := make(chan struct{})
+	claimerDone := make(chan struct{})
+	sweeperDone := make(chan struct{})
+	sweeper := &runHooks{
+		reclaimLocked:   func(string) { close(sweeperLocked) },
+		reclaimUnlocked: func(string) { <-claimerDone }, // the claimer finishes its whole claim in the gap
+	}
+	var once sync.Once
+	var firstLock string
+	claimer := &runHooks{claimCreated: func(lockPath string) {
+		once.Do(func() {
+			firstLock = lockPath
+			go func() {
+				defer close(sweeperDone)
+				reclaimRun(base, lockPath, sweeper) // the sweeper, probing the brand-new file
+			}()
+			<-sweeperLocked // the sweeper holds the lock before the claimer tries it
+		})
+	}}
+
+	var lock *os.File
+	var dir string
+	var claimErr error
+	go func() {
+		lock, dir, claimErr = claimRun(base, claimer)
+		close(claimerDone)
+	}()
+	<-sweeperDone
+	<-claimerDone
+	if claimErr != nil {
+		t.Fatalf("claimRun: %v", claimErr)
+	}
+	defer func() {
+		_ = pki.UnlockFile(lock)
+		_ = lock.Close()
+	}()
+
+	fi, err := lock.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(t, dir) {
+		t.Fatalf("the claimed run's directory %s is missing", dir)
+	}
+	if !sameFileAt(fi, lock.Name()) {
+		t.Fatalf("the live run %s lost its lock file to the sweeper", filepath.Base(dir))
+	}
+	// The race really ran: on Unix the sweeper unlinked the first file under
+	// its lock, so the claimer had to start over on a new one. (On Windows the
+	// claimer's open handle blocks that unlink, and it keeps the first.)
+	if runtime.GOOS != "windows" && lock.Name() == firstLock {
+		t.Fatalf("the claimer kept its first lock file %s: the sweeper never unlinked it under the lock", filepath.Base(firstLock))
+	}
+	// And the next sweep sees it as alive.
+	reclaimDeadRuns(base)
+	if !exists(t, dir) || !sameFileAt(fi, lock.Name()) {
+		t.Fatal("a later sweep removed the live run")
+	}
+}
+
 // removeChild refuses every path that is not the layout's.
 func TestSessionManager_RemovalStaysInsideTheLayout(t *testing.T) {
 	base := t.TempDir()
@@ -467,13 +543,56 @@ func TestSessionManager_DroppingASessionClosesItsStore(t *testing.T) {
 	}
 }
 
+// S6, in use: a session whose use is held is not idle, however long the
+// step takes, so the sweeper leaves it alone; and the idle clock restarts
+// when the step ends, so the 10 minutes count from the release.
+//
+// SABOTAGE: drop the !s.inUse skip from runCleanup -> red (evicted mid-step);
+// drop the LastAccess touch from release -> red (evicted right after the
+// release, 30 minutes after the step began).
+func TestSessionManager_S6_InUseSessionIsNotIdle(t *testing.T) {
+	clk := newFakeClock()
+	sm := newTestSessionManager(t)
+	sm.now = clk.now
+	sm.interval = time.Hour
+	s, err := sm.Create("alpha", "u", authConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := openTestStore(t, s)
+	_, unuse, ok := sm.Use(context.Background(), "alpha", s.ID)
+	if !ok {
+		t.Fatal("Use failed")
+	}
+	defer unuse()
+
+	clk.advance(3 * sessionExpiry) // a 30-minute step
+	sm.runCleanup()
+	if len(sm.ListByRepo("alpha")) != 1 || isClosed(st) || !exists(t, s.TempDir) {
+		t.Fatal("a session was idle-expired while a handler held its use")
+	}
+
+	unuse() // the step ends: the idle clock restarts here
+	clk.advance(sessionExpiry - time.Second)
+	sm.runCleanup()
+	if len(sm.ListByRepo("alpha")) != 1 {
+		t.Fatal("evicted 9m59s after its step ended: release did not restart the idle clock")
+	}
+	clk.advance(2 * time.Second)
+	sm.runCleanup()
+	if len(sm.ListByRepo("alpha")) != 0 || !isClosed(st) || exists(t, s.TempDir) {
+		t.Fatal("not evicted (store closed, folder removed) 10m01s after its step ended")
+	}
+}
+
 // A handler holding a session's use keeps its store open and its folder in
-// place through a Delete, an expiry or the lifetime's end; the drop takes
-// effect when the handler releases. A new Use of a dropped session fails.
+// place through a Delete or the lifetime's end; the drop takes effect when the
+// handler releases. A new Use of a dropped session fails. (Expiry skips a
+// session in use: TestSessionManager_S6_InUseSessionIsNotIdle.)
 //
 // SABOTAGE: make retire finalize regardless of inUse -> red.
 func TestSessionManager_DropWaitsForTheHandlerUsingTheSession(t *testing.T) {
-	for _, path := range []string{"delete", "expiry", "lifetime end"} {
+	for _, path := range []string{"delete", "lifetime end"} {
 		t.Run(path, func(t *testing.T) {
 			clk := newFakeClock()
 			ctx, cancel := context.WithCancel(context.Background())
@@ -495,9 +614,6 @@ func TestSessionManager_DropWaitsForTheHandlerUsingTheSession(t *testing.T) {
 			switch path {
 			case "delete":
 				sm.Delete("alpha", s.ID)
-			case "expiry":
-				clk.advance(sessionExpiry + time.Second)
-				sm.runCleanup()
 			case "lifetime end":
 				cancel()
 			}
@@ -689,42 +805,58 @@ func TestSessionManager_ConcurrentLifecycleLeavesNoOrphanFolder(t *testing.T) {
 	})
 }
 
-// /test run twice on one session: the second cannot replace the first's
-// store, because the first's clone is already in the session's folder (the
-// re-run's clone fails, "repository already exists": pinned here so a change
-// that makes re-runs succeed revisits who closes the replaced store). The
-// first store stays the session's, open, and the session's drop closes it.
+// /test runs once per session: a second /test on a tested session is refused
+// with a 409 problem document before it touches anything, so the session's
+// state and store are exactly as the first /test left them and /apply still
+// works. (Before the refusal, the re-run opened a second handle on clone.db,
+// its clone failed on the existing one, and the session went to stateError,
+// which /apply and /commit refuse.) The session's drop then closes the store.
 //
-// SABOTAGE: drop the store Close from finalize -> red.
-func TestHandleTestConnectivity_RerunLeavesNoStoreOpen(t *testing.T) {
+// SABOTAGE: drop the refusal at the top of handleTestConnectivity -> red
+// (the re-run streams and the session ends in stateError); drop the store
+// Close from finalize -> red.
+func TestHandleTestConnectivity_RerunIsRefusedAndLeavesTheSessionGood(t *testing.T) {
 	f := newCommitFixture(t, "", nil)
 	sess, err := f.sm.Create("alpha", f.remoteURL, authConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runTest := func() string {
+	runTest := func() *streamRecorder {
 		rec := newStreamRecorder()
 		f.s.ServeHTTP(rec, httptest.NewRequest("GET", "/repos/alpha/origin-sessions/"+sess.ID+"/test", nil))
-		return rec.body()
+		return rec
 	}
-	if body := runTest(); !strings.Contains(body, `"phase":"done"`) {
-		t.Fatalf("first /test did not complete: %s", body)
-	}
-	sess.mu.Lock()
-	first := sess.RemoteStore
-	sess.mu.Unlock()
-	if first == nil || isClosed(first) {
-		t.Fatal("first /test left no open store")
-	}
-	if body := runTest(); !strings.Contains(body, `"phase":"error"`) || strings.Contains(body, `"phase":"done"`) {
-		t.Fatalf("second /test: want the clone to fail on the existing clone (see the comment); got %s", body)
+	if rec := runTest(); !strings.Contains(rec.body(), `"phase":"done"`) {
+		t.Fatalf("first /test did not complete: %s", rec.body())
 	}
 	sess.mu.Lock()
-	still := sess.RemoteStore
+	first, stateBefore := sess.RemoteStore, sess.State
 	sess.mu.Unlock()
-	if still != first || isClosed(first) {
-		t.Fatal("the failed re-run replaced or closed the first run's store")
+	if first == nil || isClosed(first) || stateBefore != stateTested {
+		t.Fatalf("first /test left store=%v state=%q, want an open store and %q", first, stateBefore, stateTested)
 	}
+
+	rec := runTest()
+	if rec.Code != 409 || !strings.Contains(rec.Header().Get("Content-Type"), "problem+json") {
+		t.Fatalf("second /test: status %d, content type %q, want a 409 problem document; body %s",
+			rec.Code, rec.Header().Get("Content-Type"), rec.body())
+	}
+	sess.mu.Lock()
+	still, stateAfter := sess.RemoteStore, sess.State
+	sess.mu.Unlock()
+	if still != first || isClosed(first) || stateAfter != stateBefore {
+		t.Fatalf("the refused re-run changed the session: store replaced or closed=%v, state %q -> %q",
+			still != first || isClosed(first), stateBefore, stateAfter)
+	}
+
+	// /apply still works on the session the refusal left alone.
+	apply := newStreamRecorder()
+	f.s.ServeHTTP(apply, newJSONRequest("POST", "/repos/alpha/origin-sessions/"+sess.ID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"local_wins"}`)))
+	if apply.Code != 200 || !strings.Contains(apply.body(), `"phase":"done"`) {
+		t.Fatalf("/apply after the refused re-run: status %d, body %s", apply.Code, apply.body())
+	}
+
 	f.sm.Delete("alpha", sess.ID)
 	if !isClosed(first) || exists(t, sess.TempDir) {
 		t.Fatal("deleting the session left the first /test's store open or its folder on disk")
