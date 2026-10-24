@@ -220,10 +220,13 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	webAuth.LoopbackHosts = cfg.Auth.EffectiveLoopbackHosts(cfg.Host)
 
 	// The server's lifetime: ended first in Close, which `knomit serve` runs
-	// after its listeners have shut down, so no request is still using an
-	// origin session when the manager removes them and their folders. Not
-	// derived from ctx: a signal cancels ctx BEFORE the graceful shutdown
-	// drains in-flight requests, and an origin-session commit may be one.
+	// after serveUntil's Shutdown has returned. Shutdown gives in-flight
+	// requests a 5s grace only, so a slow origin-session step (a commit's
+	// swap, say) can still be running when Close ends the lifetime. The
+	// manager does not pull a session out from under it: a session a
+	// handler is using is closed and removed when that handler returns (USE
+	// in api/origins), and only then is the run removed. Not derived from
+	// ctx: a signal cancels ctx BEFORE the graceful shutdown even starts.
 	lifetime, endLifetime := context.WithCancel(context.Background())
 	a.endLifetime = endLifetime
 

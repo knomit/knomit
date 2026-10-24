@@ -171,7 +171,13 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
-		sess, ok := sm.Get(repo, sessionID)
+		// The use pins the session's store and folder for this whole step
+		// (USE on originSession): a Delete, expiry or shutdown meanwhile
+		// finalizes it only when this handler returns.
+		sess, unuse, ok := sm.Use(r.Context(), repo, sessionID)
+		if ok {
+			defer unuse()
+		}
 		if !ok {
 			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
 				"session not found", r.URL.Path)
@@ -340,6 +346,11 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 		sendEvent(map[string]any{"phase": "done", "result": result})
 
 		// Update session state.
+		// sess.RemoteStore is nil here: a session whose earlier /test
+		// succeeded already has a clone in its folder, so a re-run's CloneFrom
+		// fails ("repository already exists") above and never reaches this.
+		// The earlier run's store stays the session's, and finalize closes it
+		// when the session is dropped.
 		sess.mu.Lock()
 		sess.State = stateTested
 		sess.TestResult = result
@@ -364,7 +375,13 @@ func handlePreview(sm *sessionManager, agentBranch string) http.HandlerFunc {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
-		sess, ok := sm.Get(repo, sessionID)
+		// The use pins the session's store and folder for this whole step
+		// (USE on originSession): a Delete, expiry or shutdown meanwhile
+		// finalizes it only when this handler returns.
+		sess, unuse, ok := sm.Use(r.Context(), repo, sessionID)
+		if ok {
+			defer unuse()
+		}
 		if !ok {
 			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
 				"session not found", r.URL.Path)
@@ -553,7 +570,13 @@ func handleApply(sm *sessionManager, agentBranch string) http.HandlerFunc {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
-		sess, ok := sm.Get(repo, sessionID)
+		// The use pins the session's store and folder for this whole step
+		// (USE on originSession): a Delete, expiry or shutdown meanwhile
+		// finalizes it only when this handler returns.
+		sess, unuse, ok := sm.Use(r.Context(), repo, sessionID)
+		if ok {
+			defer unuse()
+		}
 		if !ok {
 			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
 				"session not found", r.URL.Path)
@@ -835,7 +858,13 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) htt
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
-		sess, ok := sm.Get(repo, sessionID)
+		// The use pins the session's store and folder for this whole step
+		// (USE on originSession): a Delete, expiry or shutdown meanwhile
+		// finalizes it only when this handler returns.
+		sess, unuse, ok := sm.Use(r.Context(), repo, sessionID)
+		if ok {
+			defer unuse()
+		}
 		if !ok {
 			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
 				"session not found", r.URL.Path)

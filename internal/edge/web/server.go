@@ -45,9 +45,10 @@ type Server struct {
 	// the first router is built.
 	Lifetime context.Context
 	// OriginSessionsDir is the directory the origin-session manager keeps its
-	// session folders in, and clears of a previous run's at the first router
-	// build; it must belong to this instance alone. "" gives the manager a
-	// private directory under os.TempDir(). internal/app sets
+	// run (its session folders) in. Processes sharing a home share it safely:
+	// each run is held by an OS lock, and the sweep the first router build
+	// starts removes only runs whose process has exited. "" gives the manager
+	// a private directory under os.TempDir(). internal/app sets
 	// <home>/origin-sessions.
 	OriginSessionsDir string
 	// ClientSessions records every MCP request's session (control.db

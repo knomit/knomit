@@ -13,7 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+
 	"knomit/internal/engine/store"
+	"knomit/internal/foundation/pki"
 )
 
 // authConfig holds authentication credentials for a remote connection attempt.
@@ -42,19 +44,46 @@ const sessionExpiry = 10 * time.Minute
 // cleanupInterval is how often the sweeper checks for expired sessions.
 const cleanupInterval = 60 * time.Second
 
-// sessionDirPrefix names every per-session folder the manager makes under its
-// root. Removal refuses any path that is not a direct child of the root with
-// this prefix, so neither a stale-folder sweep nor a session cleanup can
-// delete anything the manager did not create.
-const sessionDirPrefix = "session-"
+// The on-disk layout under a manager's base directory (see FOLDERS on
+// sessionManager):
+//
+//	<base>/run-<id>.lock        the run's liveness lock, held for the manager's life
+//	<base>/run-<id>/            the run directory
+//	<base>/run-<id>/session-*   one folder per session
+//
+// Every removal checks the path against this layout (isChild), so nothing
+// outside it can be deleted.
+const (
+	runPrefix        = "run-"
+	runLockSuffix    = ".lock"
+	sessionDirPrefix = "session-"
+)
 
-// privateRootPattern is the os.MkdirTemp pattern of the root a manager makes
+// privateRootPattern is the os.MkdirTemp pattern of the base a manager makes
 // for itself when it is given none (see newSessionManager).
 const privateRootPattern = "knomit-origin-sessions-"
+
+// runLockWait bounds how long claimRun waits for its own new lock file, which
+// only a sweeper probing it at that instant can hold (for one RemoveAll of a
+// directory that does not exist yet). A latency bound, not a measured property.
+const runLockWait = 5 * time.Second
+
+// runProbeWait is how long the stale sweep tries a run's lock before deciding
+// its owner is alive. Any live owner holds its lock for its whole life, so
+// one try decides; the wait only covers pki.LockFile's polling.
+const runProbeWait = 50 * time.Millisecond
 
 // originSession holds ephemeral state for a single remote connection workflow.
 // It is owned by the sessionManager and must not be shared across goroutines
 // without holding mu.
+//
+// USE. RemoteStore and the folder TempDir are touched only by a handler that
+// holds the session's use (sessionManager.Use: test, preview, apply, commit),
+// or by finalize. Use is exclusive (busy has room for one), so two steps of
+// one session never run at once. When the session is dropped (Delete, replace,
+// expiry, lifetime end), retire finalizes it at once if no handler holds the
+// use, and otherwise leaves that to the handler's release: so a store is never
+// closed, and a folder never removed, under a handler using it.
 type originSession struct {
 	ID            string
 	Repo          string
@@ -76,6 +105,95 @@ type originSession struct {
 	PreviewResult any // cached result from preview step
 	ApplyResult   any // cached result from apply step
 	mu            sync.Mutex
+
+	runDir    string        // the run directory TempDir is in; immutable
+	busy      chan struct{} // the use's semaphore, room for one
+	gone      chan struct{} // closed by the first retire, so a waiting acquire gives up
+	onFinal   func()        // called once, after finalize; immutable
+	inUse     bool          // a handler holds the use; guarded by mu
+	dropped   bool          // the session has left the manager; guarded by mu
+	finalized bool          // finalize has been claimed; guarded by mu
+}
+
+// acquire takes the session's use, waiting for another holder as long as
+// ctx allows. It reports false, holding nothing, when ctx ends first or the
+// session has been dropped (before or while it waits).
+func (s *originSession) acquire(ctx context.Context) (release func(), ok bool) {
+	select {
+	case <-s.gone:
+		return nil, false
+	default:
+	}
+	select {
+	case s.busy <- struct{}{}:
+	case <-s.gone:
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
+	}
+	s.mu.Lock()
+	if s.dropped {
+		s.mu.Unlock()
+		<-s.busy
+		return nil, false
+	}
+	s.inUse = true
+	s.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(s.release) }, true
+}
+
+// release ends a use, finalizing the session if it was dropped meanwhile.
+func (s *originSession) release() {
+	s.mu.Lock()
+	s.inUse = false
+	final := s.dropped && !s.finalized
+	if final {
+		s.finalized = true
+	}
+	s.mu.Unlock()
+	<-s.busy
+	if final {
+		s.finalize()
+	}
+}
+
+// retire marks the session dropped and finalizes it now unless a handler
+// holds its use (USE). Callers have already removed it from the manager's map
+// and hold no manager lock: finalize does IO.
+func (s *originSession) retire() {
+	s.mu.Lock()
+	if !s.dropped {
+		close(s.gone)
+	}
+	s.dropped = true
+	final := !s.inUse && !s.finalized
+	if final {
+		s.finalized = true
+	}
+	s.mu.Unlock()
+	if final {
+		s.finalize()
+	}
+}
+
+// finalize closes the session's RemoteStore, THEN removes its folder: an
+// open store holds files in it, which Windows cannot remove. It runs once,
+// claimed through finalized.
+func (s *originSession) finalize() {
+	s.mu.Lock()
+	st := s.RemoteStore
+	s.RemoteStore = nil
+	s.mu.Unlock()
+	if st != nil {
+		if err := st.Close(); err != nil {
+			log.Warn().Err(err).Str("repo", s.Repo).Str("session_id", s.ID).Msg("origin session: closing the cloned store failed")
+		}
+	}
+	removeChild(s.runDir, s.TempDir, sessionDirPrefix, "")
+	if s.onFinal != nil {
+		s.onFinal()
+	}
 }
 
 // errSessionsClosed is Create's answer once the manager's lifetime has ended.
@@ -91,26 +209,30 @@ var errSessionsClosed = errors.New("origin sessions have shut down")
 // evicts what it found expired in the same section that found it. So no
 // session can be stored behind a concurrent replace (and leak its folder),
 // and an eviction can never take out a newer session that reused the repo
-// key. A folder is removed only after its session has left the map, outside
-// mu: folder names are unique (os.MkdirTemp), so nothing in the map can
-// refer to a folder being removed. Lock order is mu, then a session's mu.
+// key. No IO happens under mu: folders are made before it is taken, and a
+// dropped session is retired (its store closed, its folder removed) after it
+// is released. Lock order is mu, then a session's mu; runMu is never held
+// with either.
 //
-// FOLDERS. Every session's folder is a direct child of root named
-// sessionDirPrefix*, and removal refuses any other path (isSessionDir).
-// root is a directory the manager owns: Mount's caller passes one per
-// instance (web's Server puts it under the instance's home), and at
-// construction the manager removes the session folders a previous run left
-// there. Given no root, the manager makes a private one under os.TempDir()
-// on its first Create and removes it when its lifetime ends; there is no
-// previous run's to sweep.
+// FOLDERS. The manager keeps its session folders in a run directory of its
+// own under base, and holds an OS file lock (pki.LockFile: flock, or
+// LockFileEx on Windows) on the run's lock file for its whole life. Two
+// processes may share one home, and so one base (a `knomit serve` beside the
+// desktop's), so liveness is that lock, never a pid: the kernel drops it when
+// its holder dies. At construction the manager starts a background sweep that
+// removes the runs of dead owners, i.e. those whose lock it can take, and
+// never one whose lock is held. Every removal checks the path is the
+// layout's (isChild). Given no base, the manager makes a private one under
+// os.TempDir() on its first Create and removes it when its lifetime ends.
 //
 // LIFETIME. The manager lives as long as the ctx it was built with. When ctx
-// ends it removes every session and its folder, refuses further Creates, and
-// its sweeper exits. The removal runs on its own goroutine (context.AfterFunc)
-// and nothing waits for it, so a process that exits right after cancelling
-// can leave folders behind; with a root, the next run's construction removes
-// them. The idle-expiry sweeper is not a goroutine for the life of the
-// manager: it runs only while the manager holds at least one session (Create
+// ends it refuses further Creates and retires every session (a session in use
+// finalizes when its handler releases it), then, once every session has
+// finalized, removes its run directory and releases its lock. That runs on
+// its own goroutine (context.AfterFunc) and nothing waits for it, so a process
+// that exits right after can leave its run behind; the next manager over the
+// same base reclaims it, since the lock died with the process. The idle-expiry
+// sweeper runs only while the manager holds at least one session (Create
 // starts it when none is running, and it exits on the first tick that finds
 // the map empty), so a manager with no sessions owns no goroutine.
 type sessionManager struct {
@@ -118,66 +240,185 @@ type sessionManager struct {
 	interval time.Duration    // the sweeper's tick; cleanupInterval outside tests
 	done     <-chan struct{}  // the manager's lifetime; nil never ends
 
-	mu        sync.Mutex
-	root      string                    // see FOLDERS; guarded by mu
-	rootOwned bool                      // root is the private one this manager made
-	sessions  map[string]*originSession // by repo name
-	sweeping  bool                      // a sweeper goroutine is running
-	closed    bool                      // the lifetime has ended
+	// staleDone is closed when the startup sweep of dead runs has finished
+	// (at once when there is no base to sweep), for tests.
+	staleDone chan struct{}
+
+	mu       sync.Mutex
+	sessions map[string]*originSession // by repo name
+	sweeping bool                      // a sweeper goroutine is running
+	closed   bool                      // the lifetime has ended
+	live     sync.WaitGroup            // sessions not yet finalized; Add under mu while !closed
+
+	runMu     sync.Mutex
+	base      string   // see FOLDERS
+	baseOwned bool     // base is the private one this manager made
+	run       string   // the run directory, "" until the first Create
+	runLock   *os.File // the run's lock file, locked while run != ""
+	runClosed bool     // the lifetime has ended: no run may be made
 }
 
-// newSessionManager creates an empty sessionManager over root ("" for a
-// private one, see FOLDERS) that lives as long as ctx. It removes the session
-// folders a previous run left in root, and starts no goroutine: the first
-// Create does (see LIFETIME).
-func newSessionManager(ctx context.Context, root string) *sessionManager {
+// newSessionManager creates an empty sessionManager over base ("" for a
+// private one, see FOLDERS) that lives as long as ctx. It starts the
+// background sweep of dead runs in base, and no other goroutine: the first
+// Create starts the sweeper (see LIFETIME).
+func newSessionManager(ctx context.Context, base string) *sessionManager {
 	sm := &sessionManager{
-		now:      time.Now,
-		interval: cleanupInterval,
-		done:     ctx.Done(),
-		root:     root,
-		sessions: map[string]*originSession{},
+		now:       time.Now,
+		interval:  cleanupInterval,
+		done:      ctx.Done(),
+		staleDone: make(chan struct{}),
+		base:      base,
+		sessions:  map[string]*originSession{},
 	}
-	if root != "" {
-		removeStale(root)
+	if base != "" {
+		go func() {
+			defer close(sm.staleDone)
+			reclaimDeadRuns(base)
+		}()
+	} else {
+		close(sm.staleDone)
 	}
 	context.AfterFunc(ctx, sm.close)
 	return sm
 }
 
-// removeStale removes the session folders a previous run left in root. It
-// runs from newSessionManager, before the manager can hold a session, so
-// every session folder in root belongs to a run that is over.
-func removeStale(root string) {
-	entries, err := os.ReadDir(root)
+// reclaimDeadRuns removes every run in base whose owner is dead: whose lock
+// file it can lock. A run whose lock is held is left alone, whoever holds it.
+func reclaimDeadRuns(base string) {
+	entries, err := os.ReadDir(base)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			log.Warn().Err(err).Str("dir", root).Msg("origin sessions: cannot list stale session folders")
+			log.Warn().Err(err).Str("dir", base).Msg("origin sessions: cannot list previous runs")
 		}
 		return
 	}
 	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), sessionDirPrefix) {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, runPrefix) || !strings.HasSuffix(name, runLockSuffix) {
 			continue
 		}
-		removeSessionDir(root, filepath.Join(root, e.Name()))
-		log.Info().Str("dir", e.Name()).Msg("origin sessions: removed a session folder left by a previous run")
+		reclaimRun(base, filepath.Join(base, name))
 	}
+}
+
+// reclaimRun removes the run whose lock file is lockPath if, and only if, it
+// can take that lock. It removes the run directory while holding the lock,
+// and the lock file only after releasing it (Windows cannot remove an open
+// file). A creator racing this on a brand-new lock file sees it vanish and
+// starts over (claimRun).
+func reclaimRun(base, lockPath string) {
+	if !isChild(base, lockPath, runPrefix, runLockSuffix) {
+		return
+	}
+	f, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runProbeWait)
+	err = pki.LockFile(ctx, f)
+	cancel()
+	if err != nil {
+		_ = f.Close() // held: the owner is alive
+		return
+	}
+	dir := strings.TrimSuffix(lockPath, runLockSuffix)
+	removed := removeChild(base, dir, runPrefix, "")
+	_ = pki.UnlockFile(f)
+	_ = f.Close()
+	if removed {
+		removeChild(base, lockPath, runPrefix, runLockSuffix)
+		log.Info().Str("run", filepath.Base(dir)).Msg("origin sessions: removed the session folders of a run whose process has exited")
+	}
+}
+
+// claimRun makes a new run under base: its lock file first, locked, and only
+// then its directory, so a sweeper never sees a live run without a held lock.
+func claimRun(base string) (*os.File, string, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		f, err := os.CreateTemp(base, runPrefix+"*"+runLockSuffix)
+		if err != nil {
+			return nil, "", fmt.Errorf("create origin sessions run lock: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), runLockWait)
+		err = pki.LockFile(ctx, f)
+		cancel()
+		if err != nil {
+			_ = f.Close()
+			return nil, "", fmt.Errorf("lock origin sessions run %s: %w", f.Name(), err)
+		}
+		// A sweeper that probed the new file before it was locked took it for
+		// a dead run's and removed it: the lock is then on an unlinked file.
+		if fi, serr := f.Stat(); serr != nil || !sameFileAt(fi, f.Name()) {
+			_ = pki.UnlockFile(f)
+			_ = f.Close()
+			continue
+		}
+		dir := strings.TrimSuffix(f.Name(), runLockSuffix)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			_ = pki.UnlockFile(f)
+			_ = f.Close()
+			removeChild(base, f.Name(), runPrefix, runLockSuffix)
+			return nil, "", fmt.Errorf("create origin sessions run dir: %w", err)
+		}
+		return f, dir, nil
+	}
+	return nil, "", errors.New("create origin sessions run: lost the new lock file to a concurrent sweep three times")
+}
+
+// sameFileAt reports whether path still names the file fi describes.
+func sameFileAt(fi os.FileInfo, path string) bool {
+	at, err := os.Stat(path)
+	return err == nil && os.SameFile(fi, at)
+}
+
+// runDir returns the manager's run directory, claiming it (and making a
+// private base, when the manager has none) on first use. It does its IO under
+// runMu only, never under mu.
+func (sm *sessionManager) runDir() (string, error) {
+	sm.runMu.Lock()
+	defer sm.runMu.Unlock()
+	if sm.runClosed {
+		return "", errSessionsClosed
+	}
+	if sm.run != "" {
+		return sm.run, nil
+	}
+	if sm.base == "" {
+		b, err := os.MkdirTemp("", privateRootPattern)
+		if err != nil {
+			return "", fmt.Errorf("create origin sessions dir: %w", err)
+		}
+		sm.base, sm.baseOwned = b, true
+	} else if err := os.MkdirAll(sm.base, 0o700); err != nil {
+		return "", fmt.Errorf("create origin sessions dir: %w", err)
+	}
+	lock, dir, err := claimRun(sm.base)
+	if err != nil {
+		return "", err
+	}
+	sm.run, sm.runLock = dir, lock
+	return dir, nil
 }
 
 // Create makes a new originSession for repo, allocating its folder. Any
 // existing session for the same repo is replaced (one per repo) in the same
-// critical section, and its folder removed.
+// critical section, and retired.
 func (sm *sessionManager) Create(repo, url string, auth authConfig) (*originSession, error) {
+	run, err := sm.runDir()
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(run, sessionDirPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("create session temp dir: %w", err)
+	}
+
 	sm.mu.Lock()
 	if sm.closed {
 		sm.mu.Unlock()
+		removeChild(run, dir, sessionDirPrefix, "")
 		return nil, errSessionsClosed
-	}
-	dir, err := sm.makeSessionDirLocked()
-	if err != nil {
-		sm.mu.Unlock()
-		return nil, err
 	}
 	now := sm.now()
 	s := &originSession{
@@ -189,44 +430,30 @@ func (sm *sessionManager) Create(repo, url string, auth authConfig) (*originSess
 		State:      stateCreated,
 		CreatedAt:  now,
 		LastAccess: now,
+		runDir:     run,
+		busy:       make(chan struct{}, 1),
+		gone:       make(chan struct{}),
+		onFinal:    sm.live.Done,
 	}
+	sm.live.Add(1)
 	old := sm.sessions[repo]
 	sm.sessions[repo] = s
-	root := sm.root
 	sm.ensureSweeperLocked()
 	sm.mu.Unlock()
 
 	if old != nil {
-		removeSessionDir(root, old.TempDir)
+		old.retire()
 		log.Debug().Str("repo", repo).Str("session_id", old.ID).Msg("origin session replaced")
 	}
 	log.Debug().Str("repo", repo).Str("session_id", s.ID).Str("tmp_dir", dir).Msg("origin session created")
 	return s, nil
 }
 
-// makeSessionDirLocked makes a new session folder under root, making root
-// first (a private one if the manager has none). Callers hold mu.
-func (sm *sessionManager) makeSessionDirLocked() (string, error) {
-	if sm.root == "" {
-		root, err := os.MkdirTemp("", privateRootPattern)
-		if err != nil {
-			return "", fmt.Errorf("create origin sessions dir: %w", err)
-		}
-		sm.root, sm.rootOwned = root, true
-	} else if err := os.MkdirAll(sm.root, 0o700); err != nil {
-		return "", fmt.Errorf("create origin sessions dir: %w", err)
-	}
-	dir, err := os.MkdirTemp(sm.root, sessionDirPrefix)
-	if err != nil {
-		return "", fmt.Errorf("create session temp dir: %w", err)
-	}
-	return dir, nil
-}
-
 // Get retrieves the session for repo and verifies the ID matches.
 // It touches LastAccess on a successful lookup, under mu, so a sweep either
 // sees the touch or has already evicted the session and Get misses it.
 // Returns (nil, false) if the repo has no session or the ID does not match.
+// A caller that touches RemoteStore or TempDir uses Use instead.
 func (sm *sessionManager) Get(repo, id string) (*originSession, bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -240,7 +467,23 @@ func (sm *sessionManager) Get(repo, id string) (*originSession, bool) {
 	return s, true
 }
 
-// Delete removes the session for repo if its ID matches, and its folder.
+// Use is Get plus the session's use (USE on originSession), waiting for
+// another holder as long as ctx allows. The caller must call release when it
+// no longer touches the session's store or folder. It reports false when there
+// is no such session, it was dropped while waiting, or ctx ended.
+func (sm *sessionManager) Use(ctx context.Context, repo, id string) (s *originSession, release func(), ok bool) {
+	s, ok = sm.Get(repo, id)
+	if !ok {
+		return nil, nil, false
+	}
+	release, ok = s.acquire(ctx)
+	if !ok {
+		return nil, nil, false
+	}
+	return s, release, true
+}
+
+// Delete removes the session for repo if its ID matches, and retires it.
 func (sm *sessionManager) Delete(repo, id string) {
 	sm.mu.Lock()
 	s := sm.sessions[repo]
@@ -249,10 +492,9 @@ func (sm *sessionManager) Delete(repo, id string) {
 		return
 	}
 	delete(sm.sessions, repo)
-	root := sm.root
 	sm.mu.Unlock()
 
-	removeSessionDir(root, s.TempDir)
+	s.retire()
 	log.Debug().Str("repo", repo).Str("session_id", id).Msg("origin session deleted")
 }
 
@@ -318,7 +560,8 @@ func (sm *sessionManager) stopIfEmpty() bool {
 
 // runCleanup evicts the sessions idle longer than sessionExpiry. It decides
 // and evicts under mu, so what it removes is exactly the session instance it
-// found expired, never a newer one that has since taken the repo's key.
+// found expired, never a newer one that has since taken the repo's key; it
+// retires them after releasing mu.
 func (sm *sessionManager) runCleanup() {
 	deadline := sm.now().Add(-sessionExpiry)
 	var expired []*originSession
@@ -332,33 +575,45 @@ func (sm *sessionManager) runCleanup() {
 			expired = append(expired, s)
 		}
 	}
-	root := sm.root
 	sm.mu.Unlock()
 
 	for _, s := range expired {
-		removeSessionDir(root, s.TempDir)
+		s.retire()
 		log.Debug().Str("repo", s.Repo).Str("session_id", s.ID).Msg("origin session expired")
 	}
 }
 
-// close ends the manager's lifetime: it removes every session and its
-// folder, the private root if the manager made one, and refuses further
-// Creates. newSessionManager arranges for it to run when ctx ends; it is
-// idempotent.
+// close ends the manager's lifetime (LIFETIME). newSessionManager arranges
+// for it to run when ctx ends; it is idempotent. It blocks until every
+// session has finalized, which a handler still using one delays.
 func (sm *sessionManager) close() {
 	sm.mu.Lock()
 	sm.closed = true
 	all := sm.sessions
 	sm.sessions = map[string]*originSession{}
-	root, owned := sm.root, sm.rootOwned
 	sm.mu.Unlock()
 
 	for _, s := range all {
-		removeSessionDir(root, s.TempDir)
+		s.retire()
 	}
-	if owned && strings.HasPrefix(filepath.Base(root), privateRootPattern) {
-		if err := os.RemoveAll(root); err != nil {
-			log.Warn().Err(err).Str("dir", root).Msg("origin sessions: failed to remove the sessions dir")
+	sm.live.Wait()
+
+	sm.runMu.Lock()
+	sm.runClosed = true
+	base, owned, run, lock := sm.base, sm.baseOwned, sm.run, sm.runLock
+	sm.run, sm.runLock = "", nil
+	sm.runMu.Unlock()
+
+	if run != "" {
+		removeChild(base, run, runPrefix, "")
+		lockPath := lock.Name()
+		_ = pki.UnlockFile(lock)
+		_ = lock.Close()
+		removeChild(base, lockPath, runPrefix, runLockSuffix)
+	}
+	if owned && strings.HasPrefix(filepath.Base(base), privateRootPattern) {
+		if err := os.RemoveAll(base); err != nil {
+			log.Warn().Err(err).Str("dir", base).Msg("origin sessions: failed to remove the sessions dir")
 		}
 	}
 	if len(all) > 0 {
@@ -366,24 +621,29 @@ func (sm *sessionManager) close() {
 	}
 }
 
-// isSessionDir reports whether dir is a session folder of root: a direct
-// child of it whose name has sessionDirPrefix.
-func isSessionDir(root, dir string) bool {
-	if root == "" || dir == "" {
+// isChild reports whether p is a direct child of parent whose name starts
+// with prefix and ends with suffix: the only shape removeChild removes.
+func isChild(parent, p, prefix, suffix string) bool {
+	if parent == "" || p == "" {
 		return false
 	}
-	dir = filepath.Clean(dir)
-	return filepath.Dir(dir) == filepath.Clean(root) && strings.HasPrefix(filepath.Base(dir), sessionDirPrefix)
+	p = filepath.Clean(p)
+	name := filepath.Base(p)
+	return filepath.Dir(p) == filepath.Clean(parent) &&
+		strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) &&
+		len(name) > len(prefix)+len(suffix)
 }
 
-// removeSessionDir removes the session folder dir of root, logging any error.
-// It refuses, and logs, any dir that is not a session folder of root.
-func removeSessionDir(root, dir string) {
-	if !isSessionDir(root, dir) {
-		log.Warn().Str("dir", dir).Str("root", root).Msg("origin sessions: refusing to remove a path that is not a session folder")
-		return
+// removeChild removes p, and everything in it, if isChild(parent, p, prefix,
+// suffix); it refuses, and logs, anything else. It reports whether p is gone.
+func removeChild(parent, p, prefix, suffix string) bool {
+	if !isChild(parent, p, prefix, suffix) {
+		log.Warn().Str("path", p).Str("parent", parent).Msg("origin sessions: refusing to remove a path outside the session layout")
+		return false
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		log.Warn().Err(err).Str("dir", dir).Msg("failed to remove session temp dir")
+	if err := os.RemoveAll(p); err != nil {
+		log.Warn().Err(err).Str("path", p).Msg("origin sessions: removal failed")
+		return false
 	}
+	return true
 }
