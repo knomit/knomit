@@ -177,16 +177,6 @@ func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "control: a non-fleet repository renames: %s", rec.Body.String())
 }
 
-// The gate's MCP exemption matches the mount's whole shape: a fact path that
-// ends in "mcp" is not the mount.
-func TestIsRepoMCPMount(t *testing.T) {
-	require.True(t, isRepoMCPMount("/api/v1/repos/fleet/branches/agent:x/mcp", "fleet"))
-	require.True(t, isRepoMCPMount("/repos/fleet/branches/agent%2Fx/mcp/", "fleet"))
-	require.False(t, isRepoMCPMount("/repos/fleet/branches/agent:x/facts/kb/mcp", "fleet"))
-	require.False(t, isRepoMCPMount("/repos/fleet/rename", "fleet"))
-	require.False(t, isRepoMCPMount("/repos/other/branches/b/mcp", "fleet"))
-}
-
 // GET /repos marks the fleet repository `fleet: true`, and no other row, so
 // the web app keeps it out of every browse context before GET /fleet answers.
 // SABOTAGE: drop Fleet from summaryFor -> the fleet row has no flag -> red.

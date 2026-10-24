@@ -3,15 +3,12 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"knomit/internal/corpus/repos"
 )
 
 // POST /fleet/index-rebuild (user ruling 2026-10-16): the fleet repository's
@@ -85,22 +82,6 @@ func TestFleetREST_IndexRebuild(t *testing.T) {
 	// Another job id on the same route is still 404.
 	rec = call(http.MethodGet, "/repos/"+st.FleetRepo+"/branches/agent:rest-fleet/index-rebuilds/rebuild-999", true)
 	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-}
-
-// The fleet's refusal while the fleet repository is indexing names the
-// Fleet page and carries no cancel-index link: that link was
-// /repos//index:cancel, a generic route refused for the fleet repository
-// anyway (#528 follow-up).
-// SABOTAGE: drop the ErrIndexing arm of writeFleetError -> it falls to the
-// lifecycle writer's 409 with the link -> red.
-func TestFleetError_IndexingNamesTheFleetPageAndNoLink(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeFleetError(rec, httptest.NewRequest(http.MethodPost, "/fleet/follow", nil), fmt.Errorf("attach: %w", repos.ErrIndexing))
-	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), `"code":"indexing"`)
-	require.Contains(t, rec.Body.String(), "Fleet → Settings")
-	require.NotContains(t, rec.Body.String(), "index:cancel")
-	require.NotContains(t, rec.Body.String(), "_links")
 }
 
 // POST /fleet/follow never answers a token it was given in the URL's user

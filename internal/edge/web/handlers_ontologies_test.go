@@ -130,7 +130,7 @@ func TestValidateOntology_OversizeRejected(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/ontologies:validate",
-		strings.NewReader(strings.Repeat("x", MaxOntologyBytes+1))))
+		strings.NewReader(strings.Repeat("x", maxOntologyBytes+1))))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {

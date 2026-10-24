@@ -135,13 +135,11 @@ var predeclaredTypes = map[string]bool{
 // entry (a new child of web, such as httpx or api/kb in the web split, adds
 // its own in the PR that creates it), and an entry for a package go list does
 // not return fails as stale. Moving one of these types to another package
-// (repoSummary and originView are planned to move to api/manage) means moving
-// its entry, NOT deleting the check.
+// (repoSummary and originView moved to api/manage in 12e) means moving its
+// entry, NOT deleting the check.
 var webKnownTypes = map[string]map[string]string{
 	webPkg: {
-		"Server":      "server.go",
-		"originView":  "handlers_origin_hal.go",
-		"repoSummary": "handlers_repos_hal.go",
+		"Server": "server.go",
 	},
 	webPkg + "/hal": {
 		"Anchor":         "anchor.go",
@@ -157,6 +155,12 @@ var webKnownTypes = map[string]map[string]string{
 	// api/jobs (12c): the job response body; mount.go declares no type.
 	webPkg + "/api/jobs": {
 		"jobEnvelope": "handlers.go",
+	},
+	// api/manage (12e): the repo list row and the origin view, each in its own
+	// file; mount.go declares no type.
+	webPkg + "/api/manage": {
+		"originView":  "handlers_origin_hal.go",
+		"repoSummary": "handlers_repos_hal.go",
 	},
 	// api/origins (12d): the session manager and a handler's request body,
 	// each in its own file; mount.go declares no type.

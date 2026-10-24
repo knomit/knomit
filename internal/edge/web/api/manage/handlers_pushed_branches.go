@@ -1,4 +1,4 @@
-package web
+package manage
 
 // Pushed branches (F11 UI merge): a peer pushes its own agent branch to this
 // host over /git (F11); here the host's operator lists those branches and
