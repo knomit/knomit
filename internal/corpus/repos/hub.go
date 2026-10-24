@@ -283,8 +283,8 @@ func (h *TaskHub) broadcastPushError(remote, errMsg string) {
 // Task is the latest event of task id as the hub holds it: its op's running
 // task, or its op's last terminal event. ok is false when the hub holds
 // neither (an older task of the op, or one it never saw). It is what the job
-// routes read for a task the web job registry never registered: the
-// lifecycle machine's rebuild, whose id POST /fleet/index-rebuild links.
+// routes (GET/DELETE .../synthesis-runs/{id}, .../index-rebuilds/{id} and
+// their /events) read: the hub is the only record of a job.
 func (h *TaskHub) Task(id string) (TaskEvent, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -299,6 +299,22 @@ func (h *TaskHub) Task(id string) (TaskEvent, bool) {
 		}
 	}
 	return TaskEvent{}, false
+}
+
+// Tasks is every task of op the hub holds: its running task first, then its
+// last terminal one. That is at most two — the hub keeps no older history —
+// and none when op has never run. It is what the job list routes answer.
+func (h *TaskHub) Tasks(op string) []TaskEvent {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []TaskEvent
+	if ev, ok := h.active[op]; ok {
+		out = append(out, ev)
+	}
+	if ev, ok := h.lastDone[op]; ok {
+		out = append(out, ev)
+	}
+	return out
 }
 
 // publishTask records and broadcasts a task event for work the hub did not
