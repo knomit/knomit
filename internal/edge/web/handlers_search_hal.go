@@ -48,12 +48,11 @@ func searchRepo(ctx context.Context, ri *repos.RepoInstance, emb model.Embedder,
 		out []index.SearchResult
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.FactQuery().Search(ctx, branch, q)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 

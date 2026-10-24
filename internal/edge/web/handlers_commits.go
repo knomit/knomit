@@ -26,8 +26,8 @@ type commitFileView struct {
 }
 
 // logPaginated returns a paged branch-wide commit log of ri's store. Use an
-// empty path for all commits on the branch. A repo with no live store yields
-// no entries and a nil error.
+// empty path for all commits on the branch. A store that cannot be reached is
+// WithRead's error, returned as-is (writeStoreError answers it 503).
 func logPaginated(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
@@ -38,12 +38,11 @@ func logPaginated(
 		prev    string
 		err     error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		entries, next, prev, err = svc.HistoryQuery().LogPaginated(ctx, branch, path, limit, after, from, before)
-	})
+	}); aerr != nil {
+		return entries, next, prev, aerr
+	}
 	return entries, next, prev, err
 }
 
@@ -58,14 +57,14 @@ func commitDetail(
 	// must outlive a single closure. Copying the handles out of a WithRead
 	// closure would let a concurrent SwapStore/Archive close the DB mid-loop
 	// — see RepoInstance.Acquire's doc-comment.
+	//
+	// Acquire's refusal (storeUnavailable) is returned as-is, and the handler
+	// answers it 503 rather than the 404 of a commit that is not there.
 	svc, release, err := ri.Acquire()
 	if err != nil {
 		return nil, nil, err
 	}
 	defer release()
-	if svc == nil {
-		return nil, nil, errors.New("commit not found")
-	}
 
 	gs := svc.Facts()
 	idx := svc.FactQuery()
@@ -197,6 +196,10 @@ func handleHALCommitDetail(b hal.URLBuilder, ontologyRoot string) http.HandlerFu
 		}
 
 		detail, files, err := commitDetail(r.Context(), ri, branch, sha, ontologyRoot)
+		if storeUnavailable(err) {
+			writeStoreUnavailable(w, r)
+			return
+		}
 		if err != nil {
 			hal.WriteProblem(w, http.StatusNotFound, "Commit not found",
 				err.Error(), r.URL.Path)

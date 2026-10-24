@@ -27,7 +27,11 @@ func handleHALEvents() http.HandlerFunc {
 		// Subscribe and obtain snapshot atomically before sending the initial status.
 		events, snapshot := ri.TaskHub().Subscribe(r.Context())
 
-		// Snapshot the initial head commit.
+		// Snapshot the initial head commit. Best-effort, deliberately (user
+		// ruling 2026-10-24: the SSE stream is the one read that does not
+		// answer 503): WithRead's error is dropped, so a store that cannot be
+		// reached opens the stream with head "" rather than refusing it. The
+		// stream has already started, so there is no status left to answer.
 		var headCommit func(ctx context.Context, branch string) (string, error)
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {

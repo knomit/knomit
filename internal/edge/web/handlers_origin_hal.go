@@ -20,25 +20,9 @@ import (
 )
 
 var (
-	errOriginNoStore     = errors.New("no store available")
 	errOriginURLRequired = errors.New("url is required")
 	errOriginInvalidURL  = errors.New("invalid url")
 )
-
-// acquireFailed wraps a WithRead failure as errOriginNoStore.
-//
-// ri.WithRead returns Acquire's error WITHOUT invoking the closure — that is
-// its documented contract — so every caller in this file must ASSIGN that
-// return. Discarding it makes a detached store (a swap in flight, a failed
-// recovery reopen) look like a successful no-op, which is how DeleteOrigin
-// came to answer 204 having done nothing but destroy the record.
-//
-// Acquire never yields a nil service with a nil error, so the `svc == nil`
-// branches these functions used to carry were unreachable; this is the real
-// no-store signal, and it is now the only one.
-func acquireFailed(err error) error {
-	return fmt.Errorf("%w: %v", errOriginNoStore, err)
-}
 
 // originsOf returns the manager's control.db origin tenant, refusing rather
 // than handing back nil.
@@ -112,6 +96,15 @@ func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *remot
 // It is threaded anyway so that giving Remote a ctx (a small store-layer
 // follow-up) needs no second signature change here.
 //
+// Both return WithRead's error AS-IS when the store cannot be reached
+// (storeUnavailable), and every handler answers it with writeStoreUnavailable:
+// 503 "Repo not ready", the one answer the web layer gives for that state.
+// ri.WithRead returns Acquire's error WITHOUT invoking the closure — that is
+// its documented contract — so every caller in this file must ASSIGN that
+// return. Discarding it makes a detached store (a swap in flight, a failed
+// recovery reopen) look like a successful no-op, which is how DeleteOrigin
+// came to answer 204 having done nothing but destroy the record.
+//
 // setOriginUpstream takes the Manager because it writes through it: connection
 // identity (url/branch/auth) is control.db's now (via Manager.Origins()), not
 // the repo's own store, so a lost .db can be re-cloned from the record that
@@ -125,7 +118,7 @@ func getOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, e
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		remote, err = svc.Remote().GetRemote("origin")
 	}); aerr != nil {
-		return nil, acquireFailed(aerr)
+		return nil, aerr
 	}
 	return remote, err
 }
@@ -176,7 +169,7 @@ func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstan
 			AuthToken:  existing.AuthToken,
 		})
 	}); aerr != nil {
-		return acquireFailed(aerr)
+		return aerr
 	}
 	return err
 }
@@ -218,6 +211,10 @@ func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		remote, err := getOrigin(r.Context(), ri)
+		if storeUnavailable(err) {
+			writeStoreUnavailable(w, r)
+			return
+		}
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to get origin",
 				err.Error(), r.URL.Path)
@@ -289,8 +286,12 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 
 		existing, err := getOrigin(r.Context(), ri)
+		if storeUnavailable(err) {
+			writeStoreUnavailable(w, r)
+			return
+		}
 		if err != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "No store available", err.Error(), r.URL.Path)
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to get origin", err.Error(), r.URL.Path)
 			return
 		}
 		u := req.URL
@@ -420,9 +421,8 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 			return
 		}
 		if err := setOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
-			if errors.Is(err, errOriginNoStore) {
-				hal.WriteProblem(w, http.StatusInternalServerError, "No store available",
-					err.Error(), r.URL.Path)
+			if storeUnavailable(err) {
+				writeStoreUnavailable(w, r)
 				return
 			}
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set upstream branch",

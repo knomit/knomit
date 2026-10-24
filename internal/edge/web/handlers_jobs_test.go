@@ -89,7 +89,8 @@ func TestHandleStartRebuild_Returns201WithJobEnvelope(t *testing.T) {
 		"/repos/alpha/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
-	// No store is wired — expects 503 (service unavailable) because svc == nil.
+	// No machine is wired, so the rebuild event is refused with ErrNotOpen:
+	// 503, the store-unavailable answer (TestStoreUnavailableAnswers_AreOne).
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status: got %d, want 503 (no store)", rec.Code)
 	}

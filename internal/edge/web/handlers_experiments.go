@@ -97,8 +97,7 @@ func handleHALExperiments(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			list, err = svc.Merge().ListExperiments(r.Context())
 		}); aerr != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable",
-				aerr.Error(), r.URL.Path)
+			writeStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -167,7 +166,7 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			exp, err = svc.Merge().OpenExperiment(r.Context(), req.Name, req.Description, ri.AgentBranch())
 		}); aerr != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+			writeStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -245,7 +244,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 				err = svc.Merge().RollbackExperiment(r.Context(), name)
 			}
 		}); aerr != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+			writeStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -376,6 +375,9 @@ func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, 
 		return
 	}
 	switch {
+	case storeUnavailable(err):
+		// experimentForResolutions returns WithRead's refusal as-is.
+		writeStoreUnavailable(w, r)
 	case errors.Is(err, merge.ErrNoSuchExperiment):
 		hal.WriteProblem(w, http.StatusNotFound, "Experiment not found", err.Error(), r.URL.Path)
 	case errors.Is(err, merge.ErrInvalidExperimentName):

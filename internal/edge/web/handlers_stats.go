@@ -13,19 +13,18 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// loadStats reads one repo's aggregate stats. A repo whose store is not live
-// yields the zero StatsResult and a nil error.
+// loadStats reads one repo's aggregate stats. A store that cannot be reached
+// is WithRead's error, returned as-is (writeStoreError answers it 503).
 func loadStats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error) {
 	var (
 		result index.StatsResult
 		err    error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		result, err = svc.FactQuery().Stats(ctx, branch, pathPrefix, axis)
-	})
+	}); aerr != nil {
+		return result, aerr
+	}
 	return result, err
 }
 
@@ -38,12 +37,11 @@ func loadHighlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPre
 		fallback bool
 		err      error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, fallback, err = svc.FactQuery().Highlights(ctx, branch, pathPrefix, axis)
-	})
+	}); aerr != nil {
+		return out, fallback, aerr
+	}
 	return out, fallback, err
 }
 

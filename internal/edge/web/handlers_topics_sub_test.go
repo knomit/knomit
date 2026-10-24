@@ -118,18 +118,15 @@ func TestHandleTopicStats_UnknownRepo_Returns404(t *testing.T) {
 }
 
 func TestHandleTopicStats_ReturnsStatsView(t *testing.T) {
-	// With no real store, Stats returns zero values — just verify the shape.
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "ontology",
-	}
+	// An empty real store: zero stats — just verify the shape. (A store that
+	// is not live answers 503: TestReads_NoStore_Answer503.)
+	_, _, s := topicsRepo(t)
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/ai/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics/ai/stats", nil)
 	r.ServeHTTP(rec, req)
 
-	// With no store the stats read yields zero stats — still 200, valid JSON.
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -151,24 +148,19 @@ func TestHandleTopicStats_ReturnsStatsView(t *testing.T) {
 
 // TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull regresses
 // handleTopicStats specifically (not handleHALStats): handleTopicStats calls
-// loadStats directly and shares statsView, but has its own
-// nil-guard block for types/highlights/default_axis. With no real store
-// backing this test's RepoInstance, ri.WithRead never runs the callback that
-// would populate result, so Stats returns a zero-value StatsResult{} (nil
-// Types map, nil Highlights slice) with a nil error — exactly the "store
-// briefly unavailable" shape the guard exists for. Mirrors
+// loadStats directly and shares statsView, but has its own nil-guard block for
+// types/highlights/default_axis. An empty real store under the topic is the
+// shape it renders: no types, no highlights. (A store that is not live is no
+// longer a zero StatsResult but the store-unavailable 503.) Mirrors
 // TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull's exact-string
 // assertion style so this proves array/object serialization, not mere
 // non-nullness.
 func TestHandleTopicStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
-	s := &Server{
-		Manager:      newTestManagerWithRepos(t, "alpha"),
-		OntologyRoot: "ontology",
-	}
+	_, _, s := topicsRepo(t)
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/main/topics/ai/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/topics/ai/stats", nil)
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

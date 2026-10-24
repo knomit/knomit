@@ -21,12 +21,11 @@ func explainFact(ctx context.Context, ri *repos.RepoInstance, branch, path strin
 		result index.ExplainResult
 		err    error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		result, err = svc.GraphStore().ExplainFact(ctx, branch, path)
-	})
+	}); aerr != nil {
+		return result, aerr
+	}
 	return result, err
 }
 
@@ -38,12 +37,11 @@ func incomingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path,
 		out []index.RefSummary
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.GraphStore().IncomingAtCommit(ctx, branch, path, commitHash)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -54,12 +52,11 @@ func outgoingAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path,
 		out []index.RefSummary
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.GraphStore().OutgoingAtCommit(ctx, branch, path, commitHash)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -73,12 +70,11 @@ func factLiveAtCommit(ctx context.Context, ri *repos.RepoInstance, branch, path,
 		live bool
 		err  error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		live, err = svc.FactQuery().FactLiveAtCommit(ctx, branch, path, commit)
-	})
+	}); aerr != nil {
+		return live, aerr
+	}
 	return live, err
 }
 
@@ -92,12 +88,11 @@ func factExistsAt(ctx context.Context, ri *repos.RepoInstance, branch, path, com
 		exists bool
 		err    error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		exists, err = svc.FactQuery().FactExistsAt(ctx, branch, path, commit)
-	})
+	}); aerr != nil {
+		return exists, aerr
+	}
 	return exists, err
 }
 

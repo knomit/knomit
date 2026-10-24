@@ -543,7 +543,9 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // An unmounted id12 returns 404 with the SAME "Fact not found" shape as a
 // genuinely-missing fact — a caller must not be able to tell an unknown mount
 // from an absent fact (no mount-topology leak). A missing/retracted fact is a
-// 404 in parity with the repo handler; a real backend error surfaces as 500.
+// 404 in parity with the repo handler, and so is a mount whose store cannot be
+// reached (lensFactHidden: the repo route answers that 503, the lens must not);
+// a real backend error surfaces as 500.
 //
 // It is ALSO the lens twin of handleHALFact's sub-resource dispatch: /commits,
 // /incoming and /outgoing are served here against the mount this handler
@@ -639,7 +641,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		// That needs a mounted id to reach at all, so it is not an oracle.)
 		if sub != "" {
 			if _, _, err := readFact(r.Context(), ri, hal.Anchor{Branch: branch}, rel, false); err != nil {
-				if errors.Is(err, errFactNotFound) {
+				if lensFactHidden(err) {
 					lensFactNotFound(w, r, requested)
 					return
 				}
@@ -654,7 +656,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		a := hal.Anchor{Branch: branch}
 		f, head, err := readFact(r.Context(), ri, a, rel, false)
 		if err != nil {
-			if errors.Is(err, errFactNotFound) {
+			if lensFactHidden(err) {
 				lensFactNotFound(w, r, requested)
 				return
 			}
@@ -695,6 +697,18 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 func lensFactNotFound(w http.ResponseWriter, r *http.Request, wirePath string) {
 	hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
 		`no fact at path "`+wirePath+`"`, r.URL.Path)
+}
+
+// lensFactHidden reports whether a lens single-fact read error must answer the
+// uniform lensFactNotFound 404: a fact that is not there (errFactNotFound), or
+// a mount whose store cannot be reached (storeUnavailable). The second is NOT
+// the 503 the repo's own route answers (user ruling 2026-10-24): a 503 here
+// would be a mount-topology oracle, since an unmounted id12 answers 404, so a
+// caller iterating candidate ids would read "mounted, store down" off the
+// status. The write mount (a bare path) gets the same 404, so the answer does
+// not depend on which mount the path addressed either.
+func lensFactHidden(err error) bool {
+	return errors.Is(err, errFactNotFound) || storeUnavailable(err)
 }
 
 // lensWirePath renders a union row's path as addressed on the wire: bare for the

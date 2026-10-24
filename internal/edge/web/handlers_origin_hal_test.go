@@ -44,10 +44,6 @@ func originProblem(t *testing.T, rec *httptest.ResponseRecorder) hal.Problem {
 	return p
 }
 
-// noStoreDetail is the detail a storeless repo's origin read or write answers
-// with: acquireFailed wrapping Acquire's ErrStoreUnavailable.
-var noStoreDetail = errOriginNoStore.Error() + ": " + repos.ErrStoreUnavailable.Error()
-
 // GET /repos/{repo}/origin answers the REQUESTED repo's origin, every field
 // read from its store: two repos with distinct origins, the requested one on
 // an upstream branch that is neither "main" nor the agent branch, with a sync
@@ -137,17 +133,14 @@ func TestHandleHALGetOrigin_NoOrigin_Returns204(t *testing.T) {
 	require.Empty(t, rec.Body.String())
 }
 
-// A repo whose store cannot be acquired is a 500 naming the missing store, not
-// a 204: "no origin" must not be read off a store nobody could ask.
-func TestHandleHALGetOrigin_StorelessRepoIs500(t *testing.T) {
+// A repo whose store cannot be acquired is the one store-unavailable 503, not a
+// 204: "no origin" must not be read off a store nobody could ask. (It was a 500
+// "Failed to get origin" carrying the error text before the 2026-10-24 ruling.)
+func TestHandleHALGetOrigin_StorelessRepoIs503(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")} // no store behind alpha
 	rec := httptest.NewRecorder()
 	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
-	p := originProblem(t, rec)
-	require.Equal(t, "Failed to get origin", p.Title)
-	require.Equal(t, noStoreDetail, p.Detail)
-	require.Equal(t, "/repos/alpha/origin", p.Instance)
+	requireUnavailableProblem(t, rec, "/repos/alpha/origin")
 }
 
 func TestHandleHALGetOrigin_UnknownRepo_Returns404(t *testing.T) {
@@ -212,15 +205,12 @@ func TestHandleHALSetOrigin_LocalOriginGate(t *testing.T) {
 }
 
 // The stored origin is read before the attach (an empty field keeps what is
-// stored); a repo whose store cannot be acquired is a 503 naming it.
+// stored); a repo whose store cannot be acquired is the one store-unavailable
+// 503 (it was 503 "No store available" with the error text as detail).
 func TestHandleHALSetOrigin_StorelessRepoIs503(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")} // no store behind alpha
 	rec := putOrigin(t, s.NewAPIRouter(), "alpha", `{"url":"https://x.test/kb.git","auth_method":"none"}`)
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code, "body=%s", rec.Body.String())
-	p := originProblem(t, rec)
-	require.Equal(t, "No store available", p.Title)
-	require.Equal(t, noStoreDetail, p.Detail)
-	require.Equal(t, "/repos/alpha/origin", p.Instance)
+	requireUnavailableProblem(t, rec, "/repos/alpha/origin")
 }
 
 // A PUT that names neither url, auth_method nor token keeps all three from
@@ -509,18 +499,15 @@ func TestHandleHALSetOriginUpstream_InvalidBranch_Returns400(t *testing.T) {
 	require.ElementsMatch(t, before, after, "no invalid branch may reach the refspec")
 }
 
-// A repo whose store cannot be acquired, on a running manager, answers 500
-// "No store available" and the other repo is untouched.
-func TestHandleHALSetOriginUpstream_StorelessRepoIs500NoStore(t *testing.T) {
+// A repo whose store cannot be acquired, on a running manager, answers the one
+// store-unavailable 503 (it was 500 "No store available") and the other repo
+// is untouched.
+func TestHandleHALSetOriginUpstream_StorelessRepoIs503(t *testing.T) {
 	r, m, ri := attachedUpstreamServer(t)
 	m.Set("ghost", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "ghost", UID: "ghost-uid", AgentBranch: "agent/test"}))
 
 	rec := patchUpstream(t, r, "ghost", `{"branch":"develop"}`)
-	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
-	p := originProblem(t, rec)
-	require.Equal(t, "No store available", p.Title)
-	require.Equal(t, noStoreDetail, p.Detail)
-	require.Equal(t, "/repos/ghost/origin/upstream", p.Instance)
+	requireUnavailableProblem(t, rec, "/repos/ghost/origin/upstream")
 	b, _ := upstreamState(t, m, ri)
 	require.Equal(t, "main", b, "the failed PATCH on ghost must not touch alpha")
 }

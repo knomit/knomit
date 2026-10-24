@@ -103,7 +103,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			res, err = svc.Facts().ChangesUnder(r.Context(), branch, q)
 		}); aerr != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+			writeStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {

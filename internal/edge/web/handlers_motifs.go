@@ -19,9 +19,9 @@ import (
 )
 
 // The motif vocabulary reads the handlers make. Each passes straight through
-// to the repo's vocab.MotifIndex under the repo's read lock: a nil store
-// answers the zero value and a nil error, and a store error comes back
-// unchanged. A test that needs one to fail installs
+// to the repo's vocab.MotifIndex under the repo's read lock. A store that
+// cannot be reached is WithRead's error, returned as-is (writeStoreError
+// answers it 503), and a store error comes back unchanged. A test that needs one to fail installs
 // vocab.MotifIndex.SetReadFaultForTest on the real store.
 
 func motifClusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]vocab.MotifCluster, error) {
@@ -29,12 +29,11 @@ func motifClusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPref
 		out []vocab.MotifCluster
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.Motifs().ClustersUnder(ctx, branch, pathPrefix)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -43,12 +42,11 @@ func motifDefinitions(ctx context.Context, ri *repos.RepoInstance, branch string
 		out map[string]vocab.MotifDefinitionStatus
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.Motifs().Definitions(ctx, branch, keys)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -57,12 +55,11 @@ func motifVocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, 
 		out vocab.MotifVocabularyHealth
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.Motifs().VocabularyHealthUnder(ctx, branch, pathPrefix)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -71,12 +68,11 @@ func motifAliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) 
 		out map[string]vocab.AliasRow
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.Motifs().AliasRows(ctx, branch)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -85,12 +81,11 @@ func motifClusterKey(ctx context.Context, ri *repos.RepoInstance, branch, motif 
 		out string
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.Motifs().ClusterKey(ctx, branch, motif)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 

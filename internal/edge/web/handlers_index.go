@@ -41,8 +41,13 @@ func handleCancelIndex(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 //
 //   - ErrIndexing → 409 "Repo is indexing", with a cancel-index link: the
 //     caller waits, or cancels indexing and retries.
-//   - ErrNotOpen → 503: the store is not attached (a repo still being created,
-//     or one whose store is being reopened). Transient.
+//   - ErrNotOpen → 503 "Repo not ready" with the fixed detail
+//     (writeStoreUnavailable): the store is not attached (a repo still being
+//     created, or one whose store is being reopened). Transient. It is the
+//     machine's name for the state Acquire refuses with ErrStoreUnavailable,
+//     so the client gets the one answer the web layer gives for it. (A bare
+//     test instance has no machine and answers ErrNotOpen whatever its store;
+//     every instance a running Manager builds has one.)
 //   - ErrClosed / ErrUnavailable → 503: the repo is going away or could not be
 //     built; the repo row says why.
 //   - the request's own cancellation → 503 as well: nothing was decided.
@@ -57,7 +62,7 @@ func writeLifecycleProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuil
 				"cancel-index": map[string]string{"href": cancelIndexURL(b, repo), "method": http.MethodPost},
 			}})
 	case errors.Is(err, repos.ErrNotOpen):
-		hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not open", err.Error()+"; try again", r.URL.Path)
+		writeStoreUnavailable(w, r)
 	case errors.Is(err, repos.ErrClosed), errors.Is(err, repos.ErrUnavailable):
 		hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo unavailable", err.Error(), r.URL.Path)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

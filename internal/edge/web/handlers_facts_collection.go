@@ -23,7 +23,8 @@ import (
 const factsTopicPrefix = "kb/"
 
 // recentFacts reads one repo's recency-ordered (or, with Text, relevance
-// ordered) fact page and its total. A nil store yields no rows and a nil error.
+// ordered) fact page and its total. A store that cannot be reached is
+// WithRead's error, returned as-is (writeStoreError answers it 503).
 // The repo facts collection, the motif cluster carriers and every mount of the
 // lens facts fan-out read through it.
 func recentFacts(
@@ -35,12 +36,11 @@ func recentFacts(
 		total int
 		err   error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, total, err = svc.FactQuery().RecentFacts(ctx, branch, opts)
-	})
+	}); aerr != nil {
+		return out, total, aerr
+	}
 	return out, total, err
 }
 
@@ -266,7 +266,7 @@ func experimentChangedPaths(w http.ResponseWriter, r *http.Request, ri *repos.Re
 		added, modified, deleted, err = svc.Facts().DiffFiles(r.Context(), branch, exp.ForkCommit)
 		paths = append(append(append(paths, added...), modified...), deleted...)
 	}); aerr != nil {
-		hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+		writeStoreUnavailable(w, r)
 		return nil, false
 	}
 	if err != nil {

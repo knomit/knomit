@@ -14,24 +14,24 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// domainStats returns the domain histogram for a branch; an unopened store
-// yields nil, nil.
+// domainStats returns the domain histogram for a branch. A store that cannot
+// be reached is WithRead's error, returned as-is (writeStoreError answers it
+// 503).
 func domainStats(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]int, error) {
 	var (
 		result map[string]int
 		err    error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		stats, serr := svc.FactQuery().Stats(ctx, branch, "", "")
 		if serr != nil {
 			err = serr
 			return
 		}
 		result = stats.Domains
-	})
+	}); aerr != nil {
+		return result, aerr
+	}
 	return result, err
 }
 
@@ -41,15 +41,14 @@ func domainFacts(ctx context.Context, ri *repos.RepoInstance, branch, domain str
 		out []index.SearchResult
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.FactQuery().Search(ctx, branch, index.SearchOptions{
 			Domain: []string{domain},
 			Limit:  500,
 		})
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 

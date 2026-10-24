@@ -41,7 +41,7 @@ func serveSystemFileRead(w http.ResponseWriter, r *http.Request, ri *repos.RepoI
 	if !fact.IsSystemFilePath(path) {
 		return false
 	}
-	writeSystemFile(w, r, ri, branch, commit, path, func() {
+	writeSystemFile(w, r, ri, branch, commit, path, false, func() {
 		at := `on branch "` + branch + `"`
 		if commit != "" {
 			at = `at commit ` + commit + ` on branch "` + branch + `"`
@@ -56,8 +56,9 @@ func serveSystemFileRead(w http.ResponseWriter, r *http.Request, ri *repos.RepoI
 // rule across REST, decision 2): the decoded path, bare (the write mount at
 // its read branch) or kb://<id12>/.knomit/<path> (that mount), names a system
 // file. Reports false when it does not, so refusePrivateRead still decides
-// every other dot path. An unmounted id and a missing file both get the
-// lens's one "Fact not found" 404 — no mount-topology oracle.
+// every other dot path. An unmounted id, a missing file and a mount whose
+// store cannot be reached all get the lens's one "Fact not found" 404 — no
+// mount-topology oracle (lensFactHidden says why the last is not a 503).
 func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos.Binding, requested string) bool {
 	id, rel, qualified, err := federate.ParseQualifiedPath(requested)
 	if err != nil || !fact.IsSystemFilePath(rel) {
@@ -72,27 +73,32 @@ func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos
 		}
 		ri, branch = rt.RI, rt.Branch
 	}
-	writeSystemFile(w, r, ri, branch, "", rel, func() { lensFactNotFound(w, r, requested) })
+	writeSystemFile(w, r, ri, branch, "", rel, true, func() { lensFactNotFound(w, r, requested) })
 	return true
 }
 
 // writeSystemFile reads path (a fact.IsSystemFilePath) in ri at commit (or the
 // tip of branch) and writes the raw response; notFound writes the 404, so each
 // route answers an absent file in its own shape.
-func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch, commit, path string, notFound func()) {
+//
+// A store that cannot be reached is WithRead's error: the repo route answers it
+// 503 through writeStoreError; with unavailableIsNotFound (the lens route) it
+// is notFound's 404 instead, so a mounted id whose store is down answers what
+// an unmounted one does.
+func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch, commit, path string, unavailableIsNotFound bool, notFound func()) {
 	var (
 		sf    facts.SystemFile
 		found bool
 		err   error
 	)
-	if werr := ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errFactNotFound
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		sf, found, err = svc.FactsRepo().SystemFileAt(r.Context(), branch, commit, path, systemFileReadMax)
-	}); werr != nil && err == nil {
-		err = werr
+	}); aerr != nil {
+		err = aerr
+	}
+	if unavailableIsNotFound && storeUnavailable(err) {
+		notFound()
+		return
 	}
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to read system file", branch)
