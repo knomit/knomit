@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -18,29 +17,15 @@ import (
 	"knomit/internal/engine/llm"
 )
 
-// jobEnvelope is the response body returned by job POST handlers.
+// jobEnvelope is the response body of every job route: a job as the repo's
+// TaskHub holds it. The hub is the only record of a job; it keeps an op's
+// running task and its last terminal one, nothing older, and no timestamps
+// or progress counters (progress is on the branch events stream).
 type jobEnvelope struct {
-	ID        string       `json:"id"`
-	Kind      string       `json:"kind"`
-	State     string       `json:"state"`
-	CreatedAt time.Time    `json:"created_at,omitempty"`
-	UpdatedAt time.Time    `json:"updated_at,omitempty"`
-	Progress  *JobProgress `json:"progress,omitempty"`
-	Error     string       `json:"error,omitempty"`
-	Links     hal.LinkMap  `json:"_links,omitempty"`
-}
-
-// jobEnvelopeFromEntry converts a registry entry to a jobEnvelope.
-func jobEnvelopeFromEntry(e *JobEntry) jobEnvelope {
-	return jobEnvelope{
-		ID:        e.ID,
-		Kind:      e.Kind,
-		State:     e.State,
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: e.UpdatedAt,
-		Progress:  e.Progress,
-		Error:     e.Error,
-	}
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	State string `json:"state"` // the task status: running, done or error
+	Error string `json:"error,omitempty"`
 }
 
 // handleStartSynthesis handles POST /api/v1/repos/{repo}/branches/{branch}/synthesis-runs.
@@ -140,117 +125,157 @@ func handleStartRebuild(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// handleListJobs serves GET .../synthesis-runs or .../index-rebuilds.
-func handleListJobs(jr *JobRegistry, kind string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if jr == nil {
-			hal.WriteHAL(w, http.StatusOK, hal.CollectionView[jobEnvelope]{
-				Count:    0,
-				Links:    hal.LinkMap{"self": {Href: r.URL.Path}},
-				Embedded: map[string][]jobEnvelope{"jobs": {}},
-			})
-			return
-		}
-		entries := jr.List(kind)
-		items := make([]jobEnvelope, 0, len(entries))
-		for _, e := range entries {
-			items = append(items, jobEnvelopeFromEntry(e))
-		}
-		view := hal.CollectionView[jobEnvelope]{
-			Count:    len(items),
-			Links:    hal.LinkMap{"self": {Href: r.URL.Path}},
-			Embedded: map[string][]jobEnvelope{"jobs": items},
-		}
-		hal.WriteHAL(w, http.StatusOK, view)
-	}
-}
-
-// handleGetJob serves GET .../synthesis-runs/{id} or .../index-rebuilds/{id}.
-// A job the registry does not hold is read from the repo's TaskHub, where
-// the lifecycle machine records its rebuilds (publishRebuildTask): that is
-// the job POST /fleet/index-rebuild links (#529 S1). The hub holds an op's
-// running task and its last terminal one, so an older job is 404.
-func handleGetJob(jr *JobRegistry, kind string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
-		if jr != nil {
-			if e := jr.Get(id); e != nil {
-				hal.WriteHAL(w, http.StatusOK, jobEnvelopeFromEntry(e))
-				return
-			}
-		}
-		if env, ok := hubJob(repos.RepoFromContext(r.Context()), id, kind); ok {
-			hal.WriteHAL(w, http.StatusOK, env)
-			return
-		}
-		hal.WriteProblem(w, http.StatusNotFound, "Job not found", "job "+id+" not found", r.URL.Path)
-	}
-}
-
 // hubOps is the TaskHub op of each job kind.
 var hubOps = map[string]string{"index-rebuild": "rebuild", "synthesis-run": "synth"}
 
-// hubJob is the job id of kind as ri's TaskHub holds it.
-func hubJob(ri *repos.RepoInstance, id, kind string) (jobEnvelope, bool) {
-	if ri == nil || ri.TaskHub() == nil {
-		return jobEnvelope{}, false
-	}
-	ev, ok := ri.TaskHub().Task(id)
-	if !ok || ev.Op != hubOps[kind] {
-		return jobEnvelope{}, false
-	}
+// jobOfTask is the envelope of task ev as a job of kind.
+func jobOfTask(ev repos.TaskEvent, kind string) jobEnvelope {
 	env := jobEnvelope{ID: ev.ID, Kind: kind, State: ev.Status}
 	if ev.Status == "error" {
 		env.Error = ev.Message
 	}
-	return env, true
+	return env
 }
 
-// handleDeleteJob serves DELETE .../synthesis-runs/{id} or .../index-rebuilds/{id}.
-// If the job is still running, returns 409 Conflict (cancel not supported via TaskHub).
-func handleDeleteJob(jr *JobRegistry) http.HandlerFunc {
+// terminalTask reports whether a task status is final.
+func terminalTask(status string) bool { return status == "done" || status == "error" }
+
+// hubTask is job id of kind as ri's TaskHub holds it: ok is false for an id
+// the hub does not hold (never seen, or older than the op's last terminal
+// task) and for an id of the other kind's op.
+func hubTask(ri *repos.RepoInstance, id, kind string) (repos.TaskEvent, bool) {
+	if ri == nil || ri.TaskHub() == nil {
+		return repos.TaskEvent{}, false
+	}
+	ev, ok := ri.TaskHub().Task(id)
+	if !ok || ev.Op != hubOps[kind] {
+		return repos.TaskEvent{}, false
+	}
+	return ev, true
+}
+
+func writeJobNotFound(w http.ResponseWriter, r *http.Request, id string) {
+	hal.WriteProblem(w, http.StatusNotFound, "Job not found", "job "+id+" not found", r.URL.Path)
+}
+
+// handleListJobs serves GET .../synthesis-runs or .../index-rebuilds: the
+// jobs of kind the repo's TaskHub holds - its running job first, then its
+// last finished one; at most two, none before the first run.
+func handleListJobs(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
-		if jr == nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
+		items := []jobEnvelope{}
+		if ri := repos.RepoFromContext(r.Context()); ri != nil && ri.TaskHub() != nil {
+			for _, ev := range ri.TaskHub().Tasks(hubOps[kind]) {
+				items = append(items, jobOfTask(ev, kind))
+			}
 		}
-		e := jr.Get(id)
-		if e == nil {
-			w.WriteHeader(http.StatusNoContent) // idempotent
-			return
-		}
-		if e.State == "running" {
-			hal.WriteProblem(w, http.StatusConflict, "Job is running",
-				"job "+id+" is still running; cancellation is not supported", r.URL.Path)
-			return
-		}
-		jr.Delete(id)
-		w.WriteHeader(http.StatusNoContent)
+		hal.WriteHAL(w, http.StatusOK, hal.CollectionView[jobEnvelope]{
+			Count:    len(items),
+			Links:    hal.LinkMap{"self": {Href: r.URL.Path}},
+			Embedded: map[string][]jobEnvelope{"jobs": items},
+		})
 	}
 }
 
-// handleJobEvents serves GET .../synthesis-runs/{id}/events or .../index-rebuilds/{id}/events.
-// Streams SSE events from the TaskHub filtered to the given job ID.
-func handleJobEvents(jr *JobRegistry, kind string) http.HandlerFunc {
+// handleGetJob serves GET .../synthesis-runs/{id} or .../index-rebuilds/{id}
+// from the repo's TaskHub, where both the synthesis task and the lifecycle
+// machine's rebuild (publishRebuildTask) are recorded; the latter is the job
+// POST /fleet/index-rebuild links (#529 S1). The hub holds an op's running
+// task and its last terminal one, so an older job is 404.
+func handleGetJob(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
+		ev, ok := hubTask(repos.RepoFromContext(r.Context()), id, kind)
+		if !ok {
+			writeJobNotFound(w, r, id)
+			return
+		}
+		hal.WriteHAL(w, http.StatusOK, jobOfTask(ev, kind))
+	}
+}
 
+// handleDeleteJob serves DELETE .../synthesis-runs/{id} or .../index-rebuilds/{id}:
+// it CANCELS the job. There is no queue to take a job out of — a synthesis
+// start while one runs is 409, a rebuild replaces or absorbs the running one
+// — so the only job DELETE can act on is the kind's running one:
+//   - synthesis-run: TaskHub.Cancel cancels the task's context. 202 with
+//     the job, still running. The run stops at its next model call and
+//     usually ends in error with a cancellation message; a run that was
+//     already finishing (its last item in flight) may end done.
+//   - index-rebuild: the lifecycle machine owns the rebuild, so this is the
+//     same CancelIndex that POST /repos/{repo}/index:cancel sends; it drains,
+//     and the job ends in error "indexing cancelled". 202 with the job.
+//
+// A finished job is 409 "Job already finished", an unknown or other-kind id
+// 404. DELETE never answers success without cancelling the job it names.
+func handleDeleteJob(b hal.URLBuilder, m *repos.Manager, kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
 		ri := repos.RepoFromContext(r.Context())
-
-		// If no registry, return 404 for unknown jobs.
-		if jr != nil && jr.Get(id) == nil {
-			if _, onHub := hubJob(ri, id, kind); !onHub {
-				hal.WriteProblem(w, http.StatusNotFound, "Job not found",
-					"job "+id+" not found", r.URL.Path)
+		ev, ok := hubTask(ri, id, kind)
+		if !ok {
+			writeJobNotFound(w, r, id)
+			return
+		}
+		if terminalTask(ev.Status) {
+			writeJobFinished(w, r, id)
+			return
+		}
+		switch kind {
+		case "synthesis-run":
+			running, cancelled := ri.TaskHub().Cancel(id)
+			if !cancelled { // it finished between the lookup and the cancel
+				writeJobFinished(w, r, id)
 				return
 			}
+			hal.WriteHAL(w, http.StatusAccepted, jobOfTask(running, kind))
+		default:
+			// CancelIndex cancels whatever index job runs, and the lookup
+			// above said it is this rebuild. The reply waits for the drain,
+			// so the hub then holds the rebuild's terminal: "indexing
+			// cancelled" when this cancel ended it; anything else means it
+			// ended on its own first.
+			if _, err := m.Send(r.Context(), ri, repos.CancelIndex()); err != nil {
+				httpx.WriteLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
+				return
+			}
+			after, held := hubTask(ri, id, kind)
+			if !held || (terminalTask(after.Status) && after.Message != repos.ErrIndexCancelled.Error()) {
+				writeJobFinished(w, r, id)
+				return
+			}
+			hal.WriteHAL(w, http.StatusAccepted, jobOfTask(after, kind))
 		}
+	}
+}
 
-		hub := ri.TaskHub()
-		if hub == nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Task hub unavailable",
-				"task hub not initialised for this repo", r.URL.Path)
+func writeJobFinished(w http.ResponseWriter, r *http.Request, id string) {
+	hal.WriteProblem(w, http.StatusConflict, "Job already finished",
+		"job "+id+" has already finished; there is nothing to cancel", r.URL.Path)
+}
+
+// handleJobEvents serves GET .../synthesis-runs/{id}/events or .../index-rebuilds/{id}/events.
+//
+// It subscribes FIRST and only then reads the job from the hub. The hub
+// records a terminal before it publishes it (TaskHub.Start's emit and
+// publishTask), so the read either already sees the terminal — the frame is
+// written and the stream ends — or sees the job running, and then the
+// terminal is published after the subscription and arrives on it. One
+// mechanism, no window. An id the hub does not hold is 404 before any stream
+// opens; a running frame can repeat once (read, then delivered), which is
+// harmless.
+func handleJobEvents(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		ri := repos.RepoFromContext(r.Context())
+		if ri == nil || ri.TaskHub() == nil {
+			writeJobNotFound(w, r, id)
+			return
+		}
+		events, _ := ri.TaskHub().Subscribe(r.Context())
+		ev, ok := hubTask(ri, id, kind)
+		if !ok {
+			writeJobNotFound(w, r, id)
 			return
 		}
 
@@ -258,17 +283,12 @@ func handleJobEvents(jr *JobRegistry, kind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
-
-		events, snapshot := hub.Subscribe(r.Context())
-
-		// Replay snapshot events matching this job ID.
-		for _, ev := range snapshot {
-			if ev.ID == id {
-				data, _ := json.Marshal(ev)
-				if !stream.Write("event: task\ndata: %s\n\n", data) {
-					return
-				}
-			}
+		write := func(ev repos.TaskEvent) bool {
+			data, _ := json.Marshal(ev)
+			return stream.Write("event: task\ndata: %s\n\n", data)
+		}
+		if !write(ev) || terminalTask(ev.Status) {
+			return
 		}
 
 		for {
@@ -280,13 +300,12 @@ func handleJobEvents(jr *JobRegistry, kind string) http.HandlerFunc {
 					return
 				}
 				if ev, isTask := e.(repos.TaskEvent); isTask && ev.ID == id {
-					data, _ := json.Marshal(ev)
-					if !stream.Write("event: task\ndata: %s\n\n", data) {
+					if !write(ev) {
 						return
 					}
-					// Unchanged: this stream is for ONE job, so its terminal
-					// event is the end of the stream, not just of the event.
-					if ev.Status == "done" || ev.Status == "error" {
+					// This stream is for ONE job, so its terminal event is
+					// the end of the stream, not just of the event.
+					if terminalTask(ev.Status) {
 						return
 					}
 				}

@@ -103,8 +103,6 @@ type Server struct {
 
 	mcpHandler http.Handler // single MCP server; profile is a per-repo setting
 
-	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
-
 	// staticFS overrides the embedded web UI. nil — the production zero
 	// value — means embeddedStaticFS(). Tests set it to an fstest.MapFS
 	// because web/dist holds only .gitkeep until `make web` has run, and the

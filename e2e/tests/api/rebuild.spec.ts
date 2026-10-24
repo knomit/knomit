@@ -5,7 +5,11 @@ test.describe('API: Rebuild', () => {
     const res = await freshKnomit.api.post(
       `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/index-rebuilds`,
     );
-    // 201: job started, 409: already running
-    expect([201, 409]).toContain(res.status());
+    // 201: job started (a running heal is replaced); 200: an identical
+    // rebuild was already running and absorbed this one. There is no 409.
+    expect([200, 201]).toContain(res.status());
+    const job = await res.json();
+    expect(job.kind).toBe('index-rebuild');
+    expect(job.state).toBe('running');
   });
 });
