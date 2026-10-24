@@ -35,7 +35,8 @@ func mwFingerprint(name string) string {
 }
 
 // The API router's route table - every method+pattern, with the middleware
-// chain that runs before its handler, outermost first - is byte-identical to
+// chain that runs before its handler, outermost first, and the handler's own
+// function name (the handler constructor, so a swapped handler is a diff) - is byte-identical to
 // the golden file generated from the router before the route registrations
 // moved out of router.go into api/manage (origin/dev 97ae7c19). Chains come
 // from walkFull, not chi.Walk, which drops the middleware of a group a
@@ -53,7 +54,7 @@ func TestRouter_RouteTableMatchesGolden(t *testing.T) {
 		for i, m := range rc.mws {
 			mws[i] = mwFingerprint(m)
 		}
-		lines = append(lines, rc.route+" | "+strings.Join(mws, " > "))
+		lines = append(lines, rc.route+" | "+strings.Join(mws, " > ")+" | "+mwFingerprint(rc.endpoint))
 	}
 	sort.Strings(lines)
 	got := strings.Join(lines, "\n") + "\n"

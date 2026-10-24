@@ -15,7 +15,7 @@ import (
 	"knomit/internal/edge/web/httpx"
 )
 
-// Mount registers the lifecycle routes into four subrouters the caller owns
+// Mount registers the lifecycle routes into five subrouters the caller owns
 // and has already put the middleware on. The caller builds the route
 // skeleton, and every middleware it carries, because the KB routes and the
 // MCP mounts share these same subtrees and must keep their nesting.

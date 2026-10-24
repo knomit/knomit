@@ -1,3 +1,5 @@
+package manage
+
 // REST for the experiment lifecycle: the UI's and any HTTP client's route to
 // the same store operations knomit_experiment drives over MCP.
 //
@@ -5,7 +7,6 @@
 // call the merge child's experiment lifecycle (Service.Merge) directly, so neither can drift into a different
 // notion of what "commit" means — the shape the two surfaces must share is the
 // STORE's, not a wrapper's.
-package manage
 
 import (
 	"context"

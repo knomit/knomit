@@ -188,8 +188,8 @@ func TestPostRepos_InitializeEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 // the real router, so if the two drift they fail on the status.
 const maxOntologyBytes = 256 * 1024
 
-// maxOntologyBytes claims to cap "an ontology accepted by :validate and by
-// create". The create path decoded its body with no MaxBytesReader at all, so
+// api/manage documents its ontology cap as covering "an ontology accepted by
+// :validate and by create". The create path decoded its body with no MaxBytesReader at all, so
 // ontology_yaml was unbounded there and the comment asserted a guard that did
 // not exist.
 func TestPostRepos_OversizeBodyIs413(t *testing.T) {

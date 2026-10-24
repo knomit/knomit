@@ -150,9 +150,6 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/sessions", handleHALClientSessions(b, s.Manager, s.ClientSessions, s.ReadOnly))
 	r.Get("/sessions/events", handleHALClientSessionEvents(s.ClientSessions))
-	// Server-wide REPO-LEVEL event stream. A TOP-LEVEL collection, deliberately not
-	// under /repos/: see the no-static-children rule on /repo-creates below.
-	// It is about every repo rather than any one, and the UI holds exactly one.
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
 
 	// The route skeleton. This router owns every subtree and the middleware
