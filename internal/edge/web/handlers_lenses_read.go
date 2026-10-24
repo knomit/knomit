@@ -543,9 +543,10 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // An unmounted id12 returns 404 with the SAME "Fact not found" shape as a
 // genuinely-missing fact — a caller must not be able to tell an unknown mount
 // from an absent fact (no mount-topology leak). A missing/retracted fact is a
-// 404 in parity with the repo handler, and so is a mount whose store cannot be
-// reached (lensFactHidden: the repo route answers that 503, the lens must not);
-// a real backend error surfaces as 500.
+// 404 in parity with the repo handler, and so is a READ mount whose store
+// cannot be reached; the WRITE mount's unreachable store is the 503 every
+// other route answers (lensFactMount says why the roles differ). A real
+// backend error surfaces as 500.
 //
 // It is ALSO the lens twin of handleHALFact's sub-resource dispatch: /commits,
 // /incoming and /outgoing are served here against the mount this handler
@@ -595,29 +596,19 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		}
 
 		// Resolve the target mount + repo-relative path from the addressing.
+		// A malformed kb:// path or an unmounted id is indistinguishable, on
+		// the wire, from a fact that simply isn't there — same 404.
 		id, rel, qualified, err := federate.ParseQualifiedPath(wire)
-		var (
-			ri     *repos.RepoInstance
-			branch string
-		)
-		if qualified {
-			// A malformed kb:// path or an unmounted id is indistinguishable, on
-			// the wire, from a fact that simply isn't there — same 404.
-			if err != nil {
-				lensFactNotFound(w, r, requested)
-				return
-			}
-			rt, ok := bind.ByID(id)
-			if !ok {
-				lensFactNotFound(w, r, requested)
-				return
-			}
-			ri, branch = rt.RI, rt.Branch
-		} else {
-			// Bare path: the write repo at its read-mount branch. No fan-out.
-			// rel is already the bare path from ParseQualifiedPath.
-			ri, branch = bind.Write(), bind.WriteMountBranch()
+		if err != nil {
+			lensFactNotFound(w, r, requested)
+			return
 		}
+		mount, ok := resolveLensFactMount(bind, id, qualified)
+		if !ok {
+			lensFactNotFound(w, r, requested)
+			return
+		}
+		ri, branch := mount.ri, mount.branch
 
 		// The mount is resolved, so a sub-resource can be served against it —
 		// with the mount-relative path, which is what the store indexes. The
@@ -641,7 +632,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		// That needs a mounted id to reach at all, so it is not an oracle.)
 		if sub != "" {
 			if _, _, err := readFact(r.Context(), ri, hal.Anchor{Branch: branch}, rel, false); err != nil {
-				if lensFactHidden(err) {
+				if mount.answersNotFound(err) {
 					lensFactNotFound(w, r, requested)
 					return
 				}
@@ -656,7 +647,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		a := hal.Anchor{Branch: branch}
 		f, head, err := readFact(r.Context(), ri, a, rel, false)
 		if err != nil {
-			if lensFactHidden(err) {
+			if mount.answersNotFound(err) {
 				lensFactNotFound(w, r, requested)
 				return
 			}
@@ -699,16 +690,47 @@ func lensFactNotFound(w http.ResponseWriter, r *http.Request, wirePath string) {
 		`no fact at path "`+wirePath+`"`, r.URL.Path)
 }
 
-// lensFactHidden reports whether a lens single-fact read error must answer the
-// uniform lensFactNotFound 404: a fact that is not there (errFactNotFound), or
-// a mount whose store cannot be reached (storeUnavailable). The second is NOT
-// the 503 the repo's own route answers (user ruling 2026-10-24): a 503 here
-// would be a mount-topology oracle, since an unmounted id12 answers 404, so a
-// caller iterating candidate ids would read "mounted, store down" off the
-// status. The write mount (a bare path) gets the same 404, so the answer does
-// not depend on which mount the path addressed either.
-func lensFactHidden(err error) bool {
-	return errors.Is(err, errFactNotFound) || storeUnavailable(err)
+// lensFactMount is the mount a lens single-fact path resolved to: the repo and
+// branch to read, and its ROLE in the binding, which decides how an
+// unreachable store is answered (user rulings 2026-10-24).
+//
+//   - The WRITE mount (a bare path, or a kb://<id12>/ path naming the write
+//     repo) answers the store-unavailable 503 every other route answers. Every
+//     lens has a write mount, so saying it is down reveals no topology.
+//   - A READ mount answers the lens's missing-fact 404 instead. A 503 there
+//     would be a mount-topology oracle: an unmounted id12 answers 404, so a
+//     caller iterating candidate ids would read "mounted, store down" off the
+//     status (kb/gotchas/web/lens-fact-404).
+//
+// The role is decided ONCE, here, from the resolved instance, and every
+// not-found exit (the read, the sub-resource gate, the .knomit/ read) asks the
+// mount instead of re-deriving it.
+type lensFactMount struct {
+	ri     *repos.RepoInstance
+	branch string
+	// readMount: the path resolved to a mount other than the write repo.
+	readMount bool
+}
+
+// resolveLensFactMount resolves a parsed lens path (federate.ParseQualifiedPath
+// succeeded) to its mount: bare is the write repo at its read-mount branch,
+// kb://<id12>/ the mount with that id. It reports false for an unmounted id.
+func resolveLensFactMount(bind *repos.Binding, id string, qualified bool) (lensFactMount, bool) {
+	if !qualified {
+		return lensFactMount{ri: bind.Write(), branch: bind.WriteMountBranch()}, true
+	}
+	rt, ok := bind.ByID(id)
+	if !ok {
+		return lensFactMount{}, false
+	}
+	return lensFactMount{ri: rt.RI, branch: rt.Branch, readMount: rt.RI != bind.Write()}, true
+}
+
+// answersNotFound reports whether a read error on this mount must answer the
+// uniform lensFactNotFound 404: a fact that is not there (errFactNotFound), on
+// any mount, or a store that cannot be reached, on a READ mount only.
+func (m lensFactMount) answersNotFound(err error) bool {
+	return errors.Is(err, errFactNotFound) || (m.readMount && storeUnavailable(err))
 }
 
 // lensWirePath renders a union row's path as addressed on the wire: bare for the

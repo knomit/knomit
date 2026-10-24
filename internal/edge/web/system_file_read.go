@@ -56,24 +56,21 @@ func serveSystemFileRead(w http.ResponseWriter, r *http.Request, ri *repos.RepoI
 // rule across REST, decision 2): the decoded path, bare (the write mount at
 // its read branch) or kb://<id12>/.knomit/<path> (that mount), names a system
 // file. Reports false when it does not, so refusePrivateRead still decides
-// every other dot path. An unmounted id, a missing file and a mount whose
+// every other dot path. An unmounted id, a missing file and a READ mount whose
 // store cannot be reached all get the lens's one "Fact not found" 404 — no
-// mount-topology oracle (lensFactHidden says why the last is not a 503).
+// mount-topology oracle; the WRITE mount's unreachable store is the 503
+// (lensFactMount says why the roles differ).
 func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos.Binding, requested string) bool {
 	id, rel, qualified, err := federate.ParseQualifiedPath(requested)
 	if err != nil || !fact.IsSystemFilePath(rel) {
 		return false
 	}
-	ri, branch := bind.Write(), bind.WriteMountBranch()
-	if qualified {
-		rt, ok := bind.ByID(id)
-		if !ok {
-			lensFactNotFound(w, r, requested)
-			return true
-		}
-		ri, branch = rt.RI, rt.Branch
+	mount, ok := resolveLensFactMount(bind, id, qualified)
+	if !ok {
+		lensFactNotFound(w, r, requested)
+		return true
 	}
-	writeSystemFile(w, r, ri, branch, "", rel, true, func() { lensFactNotFound(w, r, requested) })
+	writeSystemFile(w, r, mount.ri, mount.branch, "", rel, mount.readMount, func() { lensFactNotFound(w, r, requested) })
 	return true
 }
 
@@ -81,11 +78,11 @@ func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos
 // tip of branch) and writes the raw response; notFound writes the 404, so each
 // route answers an absent file in its own shape.
 //
-// A store that cannot be reached is WithRead's error: the repo route answers it
-// 503 through writeStoreError; with unavailableIsNotFound (the lens route) it
-// is notFound's 404 instead, so a mounted id whose store is down answers what
+// A store that cannot be reached is WithRead's error: writeStoreError answers
+// it 503, unless hideUnavailable (the lens, for a READ mount: lensFactMount),
+// when it is notFound's 404, so a mounted id whose store is down answers what
 // an unmounted one does.
-func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch, commit, path string, unavailableIsNotFound bool, notFound func()) {
+func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch, commit, path string, hideUnavailable bool, notFound func()) {
 	var (
 		sf    facts.SystemFile
 		found bool
@@ -96,7 +93,7 @@ func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInsta
 	}); aerr != nil {
 		err = aerr
 	}
-	if unavailableIsNotFound && storeUnavailable(err) {
+	if hideUnavailable && storeUnavailable(err) {
 		notFound()
 		return
 	}

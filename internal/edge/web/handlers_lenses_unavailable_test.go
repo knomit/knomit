@@ -1,12 +1,15 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
 )
 
@@ -23,61 +26,133 @@ func closeMounted(t *testing.T, m *repos.Manager, name string) {
 	m.Set(name, ri)
 }
 
-// The lens single-fact route answers a mount whose store cannot be reached
-// with the SAME 404 it answers a missing fact (user ruling 2026-10-24): same
-// status, same headers, byte-identical body echoing the REQUESTED path. The
-// repo's own route answers that state 503 (TestReads_*); a 503 here would let
-// a caller read "mounted, store down" off the status, which
-// kb/gotchas/web/lens-fact-404 forbids.
-//
-// The mount is the lens's write member, addressed by bare path: a closed
-// read mount loses its id with its identity (Identify's exit clears it), so a
-// kb://<id12>/ path to it already resolves as unmounted before any read. The
-// sub-resource and system-file paths are the ones where requested differs
-// from the mount-relative path the read uses, so echoing the wrong one fails.
-func TestLensFact_MountStoreUnavailableIsTheMissingFact404(t *testing.T) {
+// A lens single-fact read that resolves to the lens's WRITE mount answers the
+// store-unavailable 503 every other route answers, while that store is down
+// (user ruling 2026-10-24): every lens has a write mount, so saying it is down
+// reveals no topology. The read, the sub-resource gate and the .knomit/ read
+// all do; each answered 404 for the same path with every store open, so the
+// 503 is the store and not the path.
+func TestLensFact_WriteMountStoreUnavailableAnswers503(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
-	missing := []struct{ name, url, detail string }{
-		{"fact", "/lenses/eng/facts/kb/y/2.md", `no fact at path "kb/y/2.md"`},
-		{"sub-resource (requested != rel)", "/lenses/eng/facts/kb/y/2.md/incoming", `no fact at path "kb/y/2.md/incoming"`},
-		{"system file", "/lenses/eng/facts/.knomit/missing.yaml", `no fact at path ".knomit/missing.yaml"`},
+	paths := []string{
+		"/lenses/eng/facts/kb/y/2.md",
+		"/lenses/eng/facts/kb/y/2.md/incoming",
+		"/lenses/eng/facts/.knomit/missing.yaml",
 	}
-	before := make([]*httptest.ResponseRecorder, len(missing))
-	for i, tc := range missing {
-		before[i] = getLensFacts(t, r, tc.url)
-		requireLensProblem(t, before[i], http.StatusNotFound, "Fact not found", tc.detail)
+	for _, p := range paths {
+		require.Equal(t, http.StatusNotFound, getLensFacts(t, r, p).Code, "%s with every store open", p)
 	}
-	// A system file that IS there, so the 404 after the teardown is the store,
-	// not the file.
 	const present = "/lenses/eng/facts/.knomit/ontology.yaml"
 	require.Equal(t, http.StatusOK, getLensFacts(t, r, present).Code)
 
 	closeMounted(t, m, "alpha")
 
+	for _, p := range append(paths, present) {
+		t.Run(p, func(t *testing.T) {
+			requireUnavailableProblem(t, getLensFacts(t, r, p), p)
+		})
+	}
+}
+
+// A lens single-fact read addressed to a READ mount whose store is down
+// answers the lens's missing-fact 404, byte-identical to the 404 the same
+// requested path got when the store was open and the fact simply was not
+// there — never a 503, which would be a mount-topology oracle.
+//
+// REACHABILITY: the store-down branch for a read mount (lensFactMount's
+// readMount) is not reachable over HTTP without a fault hook. A read mount's
+// id comes from its store and Identify's exit clears it BEFORE Open detaches
+// the store, so once the store is gone the kb://<id12>/ path no longer
+// resolves and answers through the unmounted-id exit. That reachable
+// equivalent is what is pinned here (requested != rel throughout); the
+// branch itself is pinned by TestLensFactMount_RoleDecidesTheUnavailableAnswer.
+func TestLensFact_ReadMountStoreUnavailableIsTheMissingFact404(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+	id := federate.ID12(m.Get("beta").ID())
+
+	missing := []struct{ name, wire string }{
+		{"fact", "kb://" + id + "/kb/y/2.md"},
+		{"sub-resource", "kb://" + id + "/kb/y/2.md/incoming"},
+		{"system file", "kb://" + id + "/.knomit/missing.yaml"},
+	}
+	before := make([]*httptest.ResponseRecorder, len(missing))
+	for i, tc := range missing {
+		before[i] = getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape(tc.wire))
+		requireLensProblem(t, before[i], http.StatusNotFound, "Fact not found", `no fact at path "`+tc.wire+`"`)
+	}
+
+	closeMounted(t, m, "beta")
+
 	for i, tc := range missing {
 		t.Run(tc.name, func(t *testing.T) {
-			after := getLensFacts(t, r, tc.url)
+			after := getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape(tc.wire))
 			require.Equal(t, before[i].Code, after.Code, after.Body.String())
 			require.Equal(t, before[i].Header(), after.Header())
 			require.Equal(t, before[i].Body.String(), after.Body.String(), "byte-identical to the missing-fact 404")
 		})
 	}
-	t.Run("present system file", func(t *testing.T) {
-		requireLensProblem(t, getLensFacts(t, r, present), http.StatusNotFound,
-			"Fact not found", `no fact at path ".knomit/ontology.yaml"`)
-	})
+}
+
+// The role is decided once, from the RESOLVED instance: bare and a kb:// path
+// naming the write repo are the write mount; a kb:// path naming another mount
+// is a read mount. answersNotFound then hides an unreachable store behind the
+// 404 on a read mount only, and a missing fact on either.
+func TestLensFactMount_RoleDecidesTheUnavailableAnswer(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	bind := repos.NewBindingForTest(alpha,
+		repos.ReadTarget{RI: alpha, Branch: alpha.ReadBranch()},
+		repos.ReadTarget{RI: beta, Branch: beta.ReadBranch()})
+
+	for _, tc := range []struct {
+		name      string
+		id        string
+		qualified bool
+		want      *repos.RepoInstance
+		readMount bool
+	}{
+		{"bare", "", false, alpha, false},
+		{"kb:// naming the write repo", federate.ID12(alpha.ID()), true, alpha, false},
+		{"kb:// naming a read mount", federate.ID12(beta.ID()), true, beta, true},
+	} {
+		mount, ok := resolveLensFactMount(bind, tc.id, tc.qualified)
+		require.True(t, ok, tc.name)
+		require.Same(t, tc.want, mount.ri, tc.name)
+		require.Equal(t, tc.want.ReadBranch(), mount.branch, tc.name)
+		require.Equal(t, tc.readMount, mount.readMount, tc.name)
+	}
+	_, ok := resolveLensFactMount(bind, "0123456789ab", true)
+	require.False(t, ok, "an unmounted id")
+
+	read, write := lensFactMount{readMount: true}, lensFactMount{}
+	for _, err := range []error{repos.ErrStoreUnavailable, repos.ErrRepoClosed} {
+		require.True(t, read.answersNotFound(err), "read mount hides %v", err)
+		require.False(t, write.answersNotFound(err), "write mount answers %v with the 503", err)
+	}
+	require.True(t, read.answersNotFound(errFactNotFound))
+	require.True(t, write.answersNotFound(errFactNotFound))
+	require.False(t, read.answersNotFound(errors.New("disk on fire")), "a real error is not a 404")
 }
 
 // The lens union reads fan out over every mount and fail the whole request on
-// any mount's error (RFC §9.1: a lens never silently shrinks its read set).
-// A mount whose store cannot be reached is now that error, answered with the
-// one store-unavailable 503 — before, the mount's helpers returned zero values
-// and the union quietly dropped it. The 503 names no mount: its detail is
-// fixed, and which mounts a lens has is already on GET /lenses/{lens}.
+// any mount's error (RFC §9.1: a lens never silently shrinks its read set;
+// user ruling 2026-10-24 keeps this). A mount whose store cannot be reached is
+// now that error, answered with the one store-unavailable 503 — before, the
+// mount's helpers returned zero values and the union quietly dropped it. The
+// 503 names no mount: its detail is fixed, and which mounts a lens has is
+// already on GET /lenses/{lens}.
+//
+// stats has two legs: the aggregates for every mount, then — only when no axis
+// was given and the mounts' default axes disagree, which a closed mount's
+// empty default makes true — a highlights re-fetch. The explicit-axis row
+// skips the second leg, so its 503 can only come from the first.
 func TestLensUnionReads_MountStoreUnavailableAnswer503(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m}
@@ -95,7 +170,8 @@ func TestLensUnionReads_MountStoreUnavailableAnswer503(t *testing.T) {
 		{"completions (readCompletions)", "/lenses/eng/completions", "?category=domain", http.StatusOK},
 		{"motifs (motifClusters)", "/lenses/eng/motifs", "", http.StatusOK},
 		{"motif cluster (motifClusters)", "/lenses/eng/motifs/some-motif", "", http.StatusNotFound},
-		{"stats (loadStats)", "/lenses/eng/stats", "", http.StatusOK},
+		{"stats (loadStats, both legs)", "/lenses/eng/stats", "", http.StatusOK},
+		{"stats, explicit axis (aggregates leg only)", "/lenses/eng/stats", "?axis=confidence", http.StatusOK},
 		{"topics (listTopicDir)", "/lenses/eng/topics", "", http.StatusOK},
 	}
 	for _, tc := range routes {
