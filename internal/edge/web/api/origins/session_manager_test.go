@@ -319,7 +319,8 @@ func TestSessionManager_ConcurrentLifecycleLeavesNoOrphanFolder(t *testing.T) {
 	sm.interval = time.Hour
 
 	repos := []string{"alpha", "beta"}
-	var wg sync.WaitGroup
+	var wg, sweepers sync.WaitGroup
+	stop := make(chan struct{})
 	for w := 0; w < 8; w++ {
 		wg.Add(1)
 		go func(w int) {
@@ -338,17 +339,32 @@ func TestSessionManager_ConcurrentLifecycleLeavesNoOrphanFolder(t *testing.T) {
 			}
 		}(w)
 	}
+	// The sweepers run for as long as the workers do, so every Create and
+	// Delete overlaps sweeps.
+	var sweeps atomic.Int64
 	for w := 0; w < 2; w++ {
-		wg.Add(1)
+		sweepers.Add(1)
 		go func() {
-			defer wg.Done()
-			for i := 0; i < 80; i++ {
+			defer sweepers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
 				clk.advance(sessionExpiry + time.Second)
 				sm.runCleanup()
+				sweeps.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
+	close(stop)
+	sweepers.Wait()
+	t.Logf("sweeps=%d", sweeps.Load())
+	if sweeps.Load() == 0 {
+		t.Fatal("no sweep ran: the test raced nothing")
+	}
 
 	sm.mu.Lock()
 	var held []string
