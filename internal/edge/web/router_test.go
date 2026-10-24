@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +28,7 @@ func TestServerHandler_MountsAPIRouter(t *testing.T) {
 	h := s.Handler()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, APIBase+"/repos/missing", nil)
+	req := httptest.NewRequest(http.MethodGet, httpx.APIBase+"/repos/missing", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {

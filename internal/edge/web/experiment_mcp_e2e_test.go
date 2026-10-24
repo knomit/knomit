@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -57,16 +58,16 @@ func experimentServer(t *testing.T) (http.Handler, *repos.Manager) {
 	return s.NewAPIRouter(), m
 }
 
-// apiPath strips the APIBase prefix from a client-facing URL.
+// apiPath strips the httpx.APIBase prefix from a client-facing URL.
 //
 // These tests drive s.NewAPIRouter() directly, and the real server mounts
-// that router UNDER APIBase (server.go: r.Mount(APIBase, s.NewAPIRouter())).
+// that router UNDER httpx.APIBase (server.go: r.Mount(httpx.APIBase, s.NewAPIRouter())).
 // So a path a client would use — which is what knomit_experiment returns in
 // reconnect_url — carries a /api/v1 prefix the bare router does not expect.
 // Asserting the full client form and then calling the stripped one keeps both
 // halves honest: the string the agent is handed, and that it resolves.
 func apiPath(clientURL string) string {
-	return strings.TrimPrefix(clientURL, APIBase)
+	return strings.TrimPrefix(clientURL, httpx.APIBase)
 }
 
 // initExperimentSession performs the initialize handshake and returns the

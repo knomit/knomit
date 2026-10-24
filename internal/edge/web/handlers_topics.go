@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
 
@@ -18,7 +19,7 @@ import (
 )
 
 // listTopicDir lists path on branch of ri's store through ri.WithRead. A store
-// that cannot be reached is WithRead's error, returned as-is (writeStoreError
+// that cannot be reached is WithRead's error, returned as-is (httpx.WriteStoreError
 // answers it 503).
 func listTopicDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error) {
 	var (
@@ -94,13 +95,13 @@ func handleTopicFacts(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		dirPath := ontologyRoot + "/" + topicPath
 		entries, err := listTopicDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to list topic facts", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to list topic facts", branch)
 			return
 		}
 
@@ -156,14 +157,14 @@ func handleTopicStats(b hal.URLBuilder, ontologyRoot string, topicPath string) h
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		pathPrefix := ontologyRoot + "/" + topicPath
 
 		result, err := loadStats(r.Context(), ri, branch, pathPrefix, "")
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load stats", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load stats", branch)
 			return
 		}
 
@@ -212,7 +213,7 @@ func topicHandler(b hal.URLBuilder, ontologyRoot string, node bool) http.Handler
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		// Determine the directory path to list and the URL node path for links.
@@ -228,7 +229,7 @@ func topicHandler(b hal.URLBuilder, ontologyRoot string, node bool) http.Handler
 		entries, err := listTopicDir(r.Context(), ri, branch, dirPath)
 		if err != nil {
 			log.Error().Err(err).Str("branch", branch).Str("path", dirPath).Msg("ListDir failed")
-			writeStoreError(w, r, err, "Failed to list topics", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to list topics", branch)
 			return
 		}
 

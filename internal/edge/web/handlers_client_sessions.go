@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strconv"
 	"strings"
@@ -287,7 +288,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *clientse
 				Limit: clientsessions.ResolveListLimit(limit), MaxLimit: clientsessions.MaxListLimit,
 			},
 			Links: hal.LinkMap{
-				"self": {Href: selfWithQuery(b.Sessions(), r)},
+				"self": {Href: httpx.SelfWithQuery(b.Sessions(), r)},
 				// The change stream for this collection. A client that follows
 				// it re-reads THIS url; the stream itself carries no rows.
 				"events": {Href: b.Sessions() + "/events"},
@@ -320,7 +321,7 @@ func handleHALClientSessionEvents(store *clientsessions.Store) http.HandlerFunc 
 				"the client session registry is not open on this server", r.URL.Path)
 			return
 		}
-		stream, ok := startSSE(w)
+		stream, ok := httpx.StartSSE(w)
 		if !ok {
 			return
 		}

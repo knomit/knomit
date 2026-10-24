@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 	"time"
@@ -31,7 +32,7 @@ func handleHALBranches(
 		ri := repos.RepoFromContext(r.Context())
 		branches, err := listRepoBranches(r.Context(), ri)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to list branches", "")
+			httpx.WriteStoreError(w, r, err, "Failed to list branches", "")
 			return
 		}
 
@@ -92,10 +93,10 @@ func handleHALBranch(
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		info, err := readBranchRoot(r.Context(), ri, branch)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to read branch", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to read branch", branch)
 			return
 		}
 		hal.WriteHAL(w, http.StatusOK, branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled, experimentExpiryDays))

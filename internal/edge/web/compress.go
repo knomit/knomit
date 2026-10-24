@@ -32,7 +32,7 @@ import (
 //     shorten the list. A compressor buffers, and a buffered SSE stream is a
 //     stream that never arrives: measured at 10 bytes in 20 s through an
 //     intermediary that gzipped one, where the same URL without
-//     Accept-Encoding delivered 39 frames in 6 s. internal/edge/web/sse.go sets
+//     Accept-Encoding delivered 39 frames in 6 s. internal/edge/web/httpx/sse.go sets
 //     no-transform to fend off intermediaries; this list is what fends off
 //     our own compressor. TestSSE_IsNeverCompressed guards it.
 //     See kb/gotchas/web/sse/proxy-compression-stalls-streams/a762359e.md.
@@ -57,7 +57,7 @@ var compressibleTypes = []string{
 //
 // Exactly one of these may wrap any given request. Two would gzip the body
 // twice — unreadable by every client — and would also put a second writer
-// between sse.go's http.NewResponseController and the real connection.
+// between httpx/sse.go's http.NewResponseController and the real connection.
 //
 // Level 5 is chi's suggested default: most of the ratio, little of the cost.
 func compressor() func(http.Handler) http.Handler {

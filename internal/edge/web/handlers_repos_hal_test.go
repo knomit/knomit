@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -233,7 +234,7 @@ func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 			t.Errorf("missing link %q", rel)
 		}
 	}
-	if got := body.Links["branches"].Href; got != APIBase+"/repos/alpha/branches" {
+	if got := body.Links["branches"].Href; got != httpx.APIBase+"/repos/alpha/branches" {
 		t.Errorf("branches link: %q", got)
 	}
 }

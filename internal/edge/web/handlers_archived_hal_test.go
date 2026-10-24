@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -54,7 +55,7 @@ func awaitCreate(t *testing.T, r http.Handler, accepted *httptest.ResponseRecord
 	if self == "" {
 		t.Fatalf("202 carries no Location header: %s", accepted.Body.String())
 	}
-	self = strings.TrimPrefix(self, APIBase)
+	self = strings.TrimPrefix(self, httpx.APIBase)
 	if id, _ := body["create_id"].(string); id == "" {
 		t.Fatalf("202 body carries no create_id: %s", accepted.Body.String())
 	}

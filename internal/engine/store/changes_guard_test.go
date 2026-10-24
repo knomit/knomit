@@ -63,12 +63,12 @@ var changesAllowedCalls = map[string][]string{
 		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
 	},
 	"internal/edge/web/handlers_changes.go": {
-		"repos.RepoFromContext", "BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
+		"repos.RepoFromContext", "httpx.BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
-		"b.Branch", "selfWithQuery", "hal.WriteHAL", "hal.WriteProblem", "writeChangesError", "writeStoreError",
+		"b.Branch", "httpx.SelfWithQuery", "hal.WriteHAL", "hal.WriteProblem", "writeChangesError", "httpx.WriteStoreError",
 		// the store-unavailable 503: a fixed problem document, no store call
-		"writeStoreUnavailable",
+		"httpx.WriteStoreUnavailable",
 		"err.Error", "errors.Is", "len",
 		// the repo's id for cursor and bookmark scope (a git read, cached)
 		"ri.ID", "federate.ID12", "model.ParseChangesSince", "strconv.Quote",

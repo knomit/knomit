@@ -44,7 +44,7 @@ func openRESTExperiment(t *testing.T, svc *store.Service, name string) {
 
 // TestHandleFactCreate_AcceptsOwnExperimentBranch: the REST fact handlers
 // needed no change for experiments — they already gate on
-// refuseUnwritableBranch, which consults RepoInstance.WritableBranch, so
+// httpx.RefuseUnwritableBranch, which consults RepoInstance.WritableBranch, so
 // widening the classification reaches them for free. That is a CLAIM, and
 // this test is what makes it checkable rather than asserted.
 func TestHandleFactCreate_AcceptsOwnExperimentBranch(t *testing.T) {

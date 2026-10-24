@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,7 +37,7 @@ func TestHandleAPIRoot_LinksToReposAndSpec(t *testing.T) {
 			t.Errorf("missing link %q: %+v", rel, body.Links)
 		}
 	}
-	if got := body.Links["repos"].Href; got != APIBase+"/repos" {
+	if got := body.Links["repos"].Href; got != httpx.APIBase+"/repos" {
 		t.Errorf("repos link: got %q", got)
 	}
 }

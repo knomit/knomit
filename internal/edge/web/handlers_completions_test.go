@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -113,7 +114,7 @@ func TestHandleHALCompletions_ReturnsHAL(t *testing.T) {
 		t.Error("missing self link")
 	}
 	// Self link must include query params.
-	wantSelf := APIBase + "/repos/alpha/branches/agent:test/completions?category=domain&prefix=ai"
+	wantSelf := httpx.APIBase + "/repos/alpha/branches/agent:test/completions?category=domain&prefix=ai"
 	if got := body.Links["self"].Href; got != wantSelf {
 		t.Errorf("self: got %q, want %q", got, wantSelf)
 	}

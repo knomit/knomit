@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -527,7 +528,7 @@ func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
 
 	// The preview can never disagree with the listing it links to: the facts
 	// link, followed, lists exactly the carriers the detail previewed.
-	rec := getMotifs(t, r, strings.TrimPrefix(body.Links.Facts.Href, APIBase))
+	rec := getMotifs(t, r, strings.TrimPrefix(body.Links.Facts.Href, httpx.APIBase))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var linked factsWire
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &linked))

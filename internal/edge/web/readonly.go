@@ -2,12 +2,11 @@ package web
 
 import (
 	"context"
-	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"regexp"
 	"strings"
 
-	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
@@ -28,12 +27,12 @@ import (
 // bound, and therefore nothing read. Read-only-ness there is enforced where it
 // is for the other two mounts: by tool filtering in mcp.NewServer.
 //
-// The gate runs on r.URL.Path, which retains the full APIBase prefix even
-// though the handler is inside a chi sub-router mounted at APIBase. Each
+// The gate runs on r.URL.Path, which retains the full httpx.APIBase prefix even
+// though the handler is inside a chi sub-router mounted at httpx.APIBase. Each
 // alternative is anchored (the mcp segment is followed by / or end-of-string)
 // so that arbitrary …/facts/* paths that happen to contain a /branches/X/mcp or
 // /lenses/X/mcp segment cannot bypass the gate.
-var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(APIBase) +
+var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
 	`(?:/repos/[^/]+/branches/[^/]+/mcp|/lenses/[^/]+/mcp|/mcp)(/|$)`)
 
 // isMutatingRequest reports whether a request would mutate state and therefore
@@ -112,31 +111,6 @@ func writeGate(g auth.Grants, disabled bool) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// refuseUnwritableBranch answers 403 when facts may not be authored on branch
-// through ri — the REST twin of the MCP write tools' WriteOK check. It
-// consults the same classification (RepoInstance.WritableBranch), so a
-// subscription, the consensus branch, and a foreign agent branch are all
-// refused here with a named reason rather than by the store's read-only flag.
-//
-// The store's flag is the structural guarantee and stays the backstop; this is
-// what turns "the store refused" into an answer a client can act on.
-func refuseUnwritableBranch(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch string) bool {
-	if ri.WritableBranch(branch) {
-		return false
-	}
-	// The detail has to differ, because the advice does. Pointing a
-	// subscription's client at "the repo's own agent branch" names a branch
-	// that does not exist — and which repoView deliberately omits from the DTO
-	// for exactly that reason.
-	detail := fmt.Sprintf("facts cannot be written to branch %q of repo %q; only the repo's own agent branch accepts writes", branch, ri.Name())
-	switch {
-	case ri.Subscribed():
-		detail = fmt.Sprintf("repo %q is a subscription: it follows a remote branch read-only and accepts no fact writes on any branch, including %q", ri.Name(), branch)
-	}
-	hal.WriteProblem(w, http.StatusForbidden, "Read-only branch", detail, r.URL.Path)
-	return true
 }
 
 type pushOwnKey struct{}

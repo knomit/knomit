@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -50,7 +51,7 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 
 		logN := 0
 		if v := r.URL.Query().Get("log"); v != "" {
@@ -77,7 +78,7 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 			// following one run has no use for and which buried its rows.
 			fires, err := ri.TriggerFiresByRun(r.Context(), runID)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to read triggers", branch)
+				httpx.WriteStoreError(w, r, err, "Failed to read triggers", branch)
 				return
 			}
 			hal.WriteHAL(w, http.StatusOK, triggerRunView{
@@ -85,7 +86,7 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 				Run:    runID,
 				Fires:  fires,
 				Links: hal.LinkMap{
-					"self":     {Href: selfWithQuery(self, r)},
+					"self":     {Href: httpx.SelfWithQuery(self, r)},
 					"triggers": {Href: self},
 				},
 			})
@@ -94,7 +95,7 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 
 		rep, err := ri.TriggerReport(r.Context(), logN)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to read triggers", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to read triggers", branch)
 			return
 		}
 		hal.WriteHAL(w, http.StatusOK, triggersView{
@@ -107,7 +108,7 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 			Triggers: rep.Triggers,
 			Fires:    rep.Fires,
 			Links: hal.LinkMap{
-				"self":   {Href: selfWithQuery(self, r)},
+				"self":   {Href: httpx.SelfWithQuery(self, r)},
 				"events": {Href: b.Branch(repoName, hal.Anchor{Branch: branch}) + "/events"},
 			},
 		})

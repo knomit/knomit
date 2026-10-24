@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -17,9 +18,9 @@ import (
 func handleHALEvents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 
-		stream, ok := startSSE(w)
+		stream, ok := httpx.StartSSE(w)
 		if !ok {
 			return
 		}

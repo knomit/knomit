@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 	"strings"
@@ -138,7 +139,7 @@ func TestLensMotifs_LinksAddressTheLens(t *testing.T) {
 		if !strings.HasSuffix(e.Links.Self.Href, want) {
 			t.Errorf("entry self: got %q, want a href ending %q", e.Links.Self.Href, want)
 		}
-		decodeMotifDetail(t, env.get(t, strings.TrimPrefix(e.Links.Self.Href, APIBase)))
+		decodeMotifDetail(t, env.get(t, strings.TrimPrefix(e.Links.Self.Href, httpx.APIBase)))
 	}
 }
 

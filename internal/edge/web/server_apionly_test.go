@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,7 +29,7 @@ func TestAPIOnly_NoSPA_AndCORS(t *testing.T) {
 	}
 
 	// CORS preflight from the Wails origin is allowed.
-	req := httptest.NewRequest(http.MethodOptions, APIBase+"/repos", nil)
+	req := httptest.NewRequest(http.MethodOptions, httpx.APIBase+"/repos", nil)
 	req.Header.Set("Origin", "wails://localhost")
 	req.Header.Set("Access-Control-Request-Method", "GET")
 	rec = httptest.NewRecorder()
@@ -55,7 +56,7 @@ func TestServeUI_DefaultMode_NoCORS_SPARoutes(t *testing.T) {
 	}
 
 	// No Origin reflection when no CORS origins are configured.
-	req := httptest.NewRequest(http.MethodGet, APIBase+"/repos/missing", nil)
+	req := httptest.NewRequest(http.MethodGet, httpx.APIBase+"/repos/missing", nil)
 	req.Header.Set("Origin", "wails://localhost")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

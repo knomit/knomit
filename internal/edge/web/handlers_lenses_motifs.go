@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
 	"strings"
@@ -100,13 +101,13 @@ func gatherLensMotifs(
 	for i, t := range targets {
 		clusters, err := motifClusters(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
 			return nil, nil, pooled, false
 		}
 		if withDefs {
 			defs, err := motifDefinitions(r.Context(), t.RT.RI, t.RT.Branch, motifClusterKeys(clusters))
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
+				httpx.WriteStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
 				return nil, nil, pooled, false
 			}
 			defsByMount[i] = defs
@@ -114,7 +115,7 @@ func gatherLensMotifs(
 		if withHealth {
 			h, err := motifVocabularyHealth(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
+				httpx.WriteStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
 				return nil, nil, pooled, false
 			}
 			// POOLED counts. The two ratios are derived from the pooled totals
@@ -158,7 +159,7 @@ func expandLensMotifs(
 	}
 	out, err := federate.ExpandMotifTerms(r.Context(), bind, read, terms)
 	if err != nil {
-		// The failing mount's branch, not "": writeStoreError renders
+		// The failing mount's branch, not "": httpx.WriteStoreError renders
 		// store.ErrBranchNotFound as `no branch named "<branch>"`, and this is
 		// the fan-out where a mount pinned to a deleted branch actually shows
 		// up. An empty branch there would print the message with the one word
@@ -168,7 +169,7 @@ func expandLensMotifs(
 		if errors.As(err, &readErr) {
 			branch = readErr.Branch
 		}
-		writeStoreError(w, r, err, "Failed to resolve motif filter", branch)
+		httpx.WriteStoreError(w, r, err, "Failed to resolve motif filter", branch)
 		return nil, false
 	}
 	return out, true
@@ -305,7 +306,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 				Limit:      carrierLimit,
 			})
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to load motif carriers", t.RT.Branch)
+				httpx.WriteStoreError(w, r, err, "Failed to load motif carriers", t.RT.Branch)
 				return
 			}
 			lists[i] = entries
@@ -387,7 +388,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 				}
 				rows, err := motifAliasRows(r.Context(), t.RT.RI, t.RT.Branch)
 				if err != nil {
-					writeStoreError(w, r, err, "Failed to load motif cluster", t.RT.Branch)
+					httpx.WriteStoreError(w, r, err, "Failed to load motif cluster", t.RT.Branch)
 					return
 				}
 				for _, m := range members {

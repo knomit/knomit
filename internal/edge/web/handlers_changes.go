@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strconv"
 
@@ -39,7 +40,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		qp := r.URL.Query()
 
 		limit := changesPageSize
@@ -103,7 +104,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			res, err = svc.Facts().ChangesUnder(r.Context(), branch, q)
 		}); aerr != nil {
-			writeStoreUnavailable(w, r)
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -112,7 +113,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		}
 
 		base := b.Branch(repoName, hal.Anchor{Branch: branch}) + "/changes"
-		links := hal.LinkMap{"self": {Href: selfWithQuery(base, r)}}
+		links := hal.LinkMap{"self": {Href: httpx.SelfWithQuery(base, r)}}
 		if res.HasMore {
 			next := model.EncodeChangesCursor(model.ChangesScope{Repo: repo12, Branch: branch}, q.Since, res.Head, q.Prefix, res.Changes[len(res.Changes)-1].Path)
 			nq := r.URL.Query()
@@ -144,6 +145,6 @@ func writeChangesError(w http.ResponseWriter, r *http.Request, err error, branch
 	case errors.Is(err, model.ErrInvalidChangesCursor):
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid cursor", err.Error(), r.URL.Path)
 	default:
-		writeStoreError(w, r, err, "Failed to compute changes", branch)
+		httpx.WriteStoreError(w, r, err, "Failed to compute changes", branch)
 	}
 }

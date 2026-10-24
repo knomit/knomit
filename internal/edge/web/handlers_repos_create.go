@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -73,7 +74,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		// all (see maxCreateBodyBytes), and the check after it enforces the
 		// ontology limit on the ontology itself.
 		var req createRepoRequest
-		if !decodeJSON(w, r, &req, maxCreateBodyBytes) {
+		if !httpx.DecodeJSON(w, r, &req, maxCreateBodyBytes) {
 			return
 		}
 		// The ontology limit, measured on the same bytes :validate measures, so
@@ -96,7 +97,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		if req.Origin != nil {
 			spec.Origin = &repos.OriginSpec{
-				URL:        trimOriginURL(req.Origin.URL),
+				URL:        httpx.TrimOriginURL(req.Origin.URL),
 				Branch:     req.Origin.Branch,
 				AuthMethod: req.Origin.AuthMethod,
 				AuthToken:  req.Origin.AuthToken,
@@ -105,7 +106,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		// The same URL/auth compatibility check PUT /origin and the origin
 		// sessions run, in the same words, before any job starts.
 		if spec.Origin != nil {
-			if err := validateURLAuth(spec.Origin.URL, spec.Origin.AuthMethod); err != nil {
+			if err := httpx.ValidateURLAuth(spec.Origin.URL, spec.Origin.AuthMethod); err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
 				return
 			}

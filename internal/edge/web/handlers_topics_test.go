@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -116,7 +117,7 @@ func TestHandleTopics_ReturnsCollection(t *testing.T) {
 	body := decodeTopics(t, getAPI(t, s, "/repos/alpha/branches/agent:test/topics"))
 
 	require.Equal(t, []string{"ontology"}, seen.of("alpha"), "the root listing lists the ontology root, once")
-	branchURL := APIBase + "/repos/alpha/branches/agent:test"
+	branchURL := httpx.APIBase + "/repos/alpha/branches/agent:test"
 	require.Equal(t, branchURL+"/topics", body.Links["self"].Href)
 	require.Equal(t, 2, body.Count)
 	require.Len(t, body.Embedded.Topics, 2)
@@ -151,7 +152,7 @@ func TestHandleTopicNode_ReturnsChildren(t *testing.T) {
 	body := decodeTopics(t, getAPI(t, s, "/repos/alpha/branches/agent:test/topics/ai"))
 
 	require.Equal(t, []string{"ontology/ai"}, seen.of("alpha"))
-	branchURL := APIBase + "/repos/alpha/branches/agent:test"
+	branchURL := httpx.APIBase + "/repos/alpha/branches/agent:test"
 	require.Equal(t, branchURL+"/topics/ai", body.Links["self"].Href)
 	require.Equal(t, 2, body.Count)
 	require.Len(t, body.Embedded.Topics, 2)
@@ -289,7 +290,7 @@ func TestHandleTopics_EnrichesAtTheRequestedBranch(t *testing.T) {
 	require.Len(t, node.Embedded.Topics, 1)
 	require.Equal(t, "Elsewhere copy", node.Embedded.Topics[0].Title)
 	require.Equal(t, "hypothesis", node.Embedded.Topics[0].Type)
-	require.Equal(t, APIBase+"/repos/alpha/branches/agent:elsewhere/facts/ontology/ai/x.md",
+	require.Equal(t, httpx.APIBase+"/repos/alpha/branches/agent:elsewhere/facts/ontology/ai/x.md",
 		node.Embedded.Topics[0].Links["self"].Href)
 
 	facts := decodeTopicFacts(t, getAPI(t, s, "/repos/alpha/branches/agent:elsewhere/topics/ai/facts"))

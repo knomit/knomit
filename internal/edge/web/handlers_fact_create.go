@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
 
@@ -52,13 +53,13 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
-		if refuseUnwritableBranch(w, r, ri, branch) {
+		branch := httpx.BranchFromContext(r.Context())
+		if httpx.RefuseUnwritableBranch(w, r, ri, branch) {
 			return
 		}
 
 		var req factCreateRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		if len(req.Context) > 0 {
@@ -158,7 +159,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		msg := "create: " + req.Title + " via API"
 
 		if _, err := writeFact(r.Context(), ri, branch, path, content, msg); err != nil {
-			writeStoreError(w, r, err, "Failed to write fact", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
 

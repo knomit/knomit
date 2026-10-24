@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -98,7 +99,7 @@ func TestHandleSearch_ReturnsHALCollection(t *testing.T) {
 	require.Equal(t, []string{"ai", "ml"}, item.Domain)
 	require.Equal(t, []string{"transformer"}, item.Entities)
 	require.Nil(t, item.Body, "body must be omitted from collection items")
-	wantSelf := APIBase + "/repos/alpha/branches/agent:test/facts/kb/ai/ml/abc123.md"
+	wantSelf := httpx.APIBase + "/repos/alpha/branches/agent:test/facts/kb/ai/ml/abc123.md"
 	require.Equal(t, wantSelf, item.Links["self"].Href)
 
 	// The query text reached the embedder, and limit reached the store.

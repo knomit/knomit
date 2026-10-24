@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,7 +54,7 @@ func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 	for _, br := range body.Embedded.Branches {
 		if br.Name == "agent/test" {
 			found = true
-			want := APIBase + "/repos/alpha/branches/agent:test"
+			want := httpx.APIBase + "/repos/alpha/branches/agent:test"
 			if got := br.Links["self"].Href; got != want {
 				t.Errorf("self: got %q, want %q", got, want)
 			}
@@ -125,7 +126,7 @@ func TestHandleHALBranch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 		}
 	}
 	// self must be branch-anchored, no commit.
-	wantSelf := APIBase + "/repos/alpha/branches/agent:test"
+	wantSelf := httpx.APIBase + "/repos/alpha/branches/agent:test"
 	if got := body.Links["self"].Href; got != wantSelf {
 		t.Errorf("self: got %q, want %q", got, wantSelf)
 	}

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/corpus/repos"
@@ -25,12 +26,12 @@ type probeOriginRequest struct {
 func handleReposProbeOrigin(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req probeOriginRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		// Before the emptiness check, so a url of only spaces is "required",
 		// not a probe of a whitespace URL.
-		req.URL = trimOriginURL(req.URL)
+		req.URL = httpx.TrimOriginURL(req.URL)
 		if req.URL == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", "url is required", r.URL.Path)
 			return

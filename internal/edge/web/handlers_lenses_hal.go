@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 	"time"
@@ -40,7 +41,7 @@ func (lm *lensMember) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		return fmt.Errorf("lens members are identified by uid, not by name (got %q): "+
-			"send {\"uid\": …} using the uid from GET %s/repos", name, APIBase)
+			"send {\"uid\": …} using the uid from GET %s/repos", name, httpx.APIBase)
 	}
 	// Alias sheds the method set, so this decode does not recurse.
 	type plain lensMember
@@ -241,7 +242,7 @@ func checkLensMembers(reg *control.Registry, write string, reads []lensReadDTO) 
 		if !ok {
 			return "Unknown repo uid", fmt.Sprintf(
 				"no registered repo has uid %q; identify lens members by the uid from GET %s/repos",
-				uid, APIBase), nil
+				uid, httpx.APIBase), nil
 		}
 		if rec.State != control.StateActive {
 			return "Archived repo", fmt.Sprintf(
@@ -259,7 +260,7 @@ func checkLensMembers(reg *control.Registry, write string, reads []lensReadDTO) 
 		if rd.UID == "" {
 			return "Missing repo uid", fmt.Sprintf(
 				`reads[%d] has no "uid"; identify lens members by the uid from GET %s/repos`,
-				i, APIBase), nil
+				i, httpx.APIBase), nil
 		}
 		if title, detail, err := known(rd.UID); detail != "" || err != nil {
 			return title, detail, err
@@ -388,7 +389,7 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 			return
 		}
 		var req createLensRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		if rejectUnknownMembers(w, r, m.Repos(), req.Write.UID, req.Reads) {
@@ -450,7 +451,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			return
 		}
 		var req patchLensRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 

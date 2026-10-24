@@ -49,7 +49,7 @@ func seedFactRepo(t *testing.T, ri *repos.RepoInstance, path, title string) stri
 }
 
 // urlBranch renders an agent branch for a {branch} path segment: the router
-// takes the colon form ("machine:test") and BranchFromContext hands the handler
+// takes the colon form ("machine:test") and httpx.BranchFromContext hands the handler
 // back the slash form ("machine/test").
 func urlBranch(b string) string { return strings.ReplaceAll(b, "/", ":") }
 

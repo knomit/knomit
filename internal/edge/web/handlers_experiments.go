@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -97,7 +98,7 @@ func handleHALExperiments(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			list, err = svc.Merge().ListExperiments(r.Context())
 		}); aerr != nil {
-			writeStoreUnavailable(w, r)
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -140,7 +141,7 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		var req experimentCreateRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		// The refusals that are ABOUT THE REPO come first and name the repo's
@@ -166,7 +167,7 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			exp, err = svc.Merge().OpenExperiment(r.Context(), req.Name, req.Description, ri.AgentBranch())
 		}); aerr != nil {
-			writeStoreUnavailable(w, r)
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -244,7 +245,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 				err = svc.Merge().RollbackExperiment(r.Context(), name)
 			}
 		}); aerr != nil {
-			writeStoreUnavailable(w, r)
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -318,7 +319,7 @@ func decodeResolutions(w http.ResponseWriter, r *http.Request) (map[string]merge
 		Resolutions map[string]json.RawMessage `json:"resolutions"`
 	}
 	// Optional: no body at all is an ordinary commit.
-	if !decodeOptionalJSON(w, r, &body, 0) {
+	if !httpx.DecodeOptionalJSON(w, r, &body, 0) {
 		return nil, false
 	}
 	out, err := parseResolutions(body.Resolutions)
@@ -375,9 +376,9 @@ func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, 
 		return
 	}
 	switch {
-	case storeUnavailable(err):
+	case httpx.StoreUnavailable(err):
 		// experimentForResolutions returns WithRead's refusal as-is.
-		writeStoreUnavailable(w, r)
+		httpx.WriteStoreUnavailable(w, r)
 	case errors.Is(err, merge.ErrNoSuchExperiment):
 		hal.WriteProblem(w, http.StatusNotFound, "Experiment not found", err.Error(), r.URL.Path)
 	case errors.Is(err, merge.ErrInvalidExperimentName):

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -68,7 +69,7 @@ func handleRepoEvents(m *repos.Manager) http.HandlerFunc {
 				"the repository manager is not open on this server", r.URL.Path)
 			return
 		}
-		stream, ok := startSSE(w)
+		stream, ok := httpx.StartSSE(w)
 		if !ok {
 			return
 		}

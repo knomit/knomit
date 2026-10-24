@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -382,7 +383,7 @@ func TestLensCompletions_DomainMergesWithoutDuplicates(t *testing.T) {
 }
 
 // An unknown category is the SAME error the repo handler gives: the store-shaped
-// error flows through writeStoreError → 500 problem+json.
+// error flows through httpx.WriteStoreError → 500 problem+json.
 func TestLensCompletions_UnknownCategory500(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	s := &Server{Manager: m}
@@ -559,7 +560,7 @@ func TestLensFact_BarePathReadsWriteRepo(t *testing.T) {
 	require.Equal(t, betaPinnedBranch, body.Source.Branch)
 	require.Equal(t, betaPinnedBranch, body.AsOf.Branch)
 	require.Equal(t, head, body.AsOf.Commit, "as_of is the pinned branch's head")
-	require.Equal(t, APIBase+"/repos/zulu/branches/"+hal.EncodeBranch(betaPinnedBranch)+"/facts/kb/x/1.md",
+	require.Equal(t, httpx.APIBase+"/repos/zulu/branches/"+hal.EncodeBranch(betaPinnedBranch)+"/facts/kb/x/1.md",
 		body.Links["self"].Href)
 	requireRefKinds(t, body.factViewBody, wantLensFactRefs("kb/x")...)
 	// No dedupe scan on a bare path: the read mount is NEVER read — only the
@@ -600,7 +601,7 @@ func TestLensFact_QualifiedPathHitsMount(t *testing.T) {
 	require.Equal(t, betaPinnedBranch, body.Source.Branch)
 	require.Equal(t, betaPinnedBranch, body.AsOf.Branch)
 	require.Equal(t, head, body.AsOf.Commit)
-	require.Equal(t, APIBase+"/repos/beta/branches/"+hal.EncodeBranch(betaPinnedBranch)+"/facts/kb/y/2.md",
+	require.Equal(t, httpx.APIBase+"/repos/beta/branches/"+hal.EncodeBranch(betaPinnedBranch)+"/facts/kb/y/2.md",
 		body.Links["self"].Href)
 	requireRefKinds(t, body.factViewBody, wantLensFactRefs("kb/y")...)
 	require.Equal(t, []string{"head kb/y/2.md"}, betaReads.all())
@@ -883,7 +884,7 @@ func TestLensFactIncoming_BarePathReadsWriteRepo(t *testing.T) {
 	body := decodeRefs(t, getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md/incoming"))
 	// The _links stay repo-scoped: they name the resolved mount, its branch
 	// and the stripped fact path.
-	zuluBranch := APIBase + "/repos/zulu/branches/" + hal.EncodeBranch(betaPinnedBranch)
+	zuluBranch := httpx.APIBase + "/repos/zulu/branches/" + hal.EncodeBranch(betaPinnedBranch)
 	require.Equal(t, zuluBranch+"/facts/kb/x/1.md/incoming", body.Links["self"].Href)
 	requireRefs(t, body, c, zuluBranch,
 		wantRef{"kb/x/2.md", "Cites it", "principle", "w2", false},
@@ -918,7 +919,7 @@ func TestLensFactOutgoing_QualifiedPathHitsMount(t *testing.T) {
 
 	id := federate.ID12(beta.ID())
 	body := decodeRefs(t, getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape("kb://"+id+"/kb/y/2.md")+"/outgoing"))
-	betaBranch := APIBase + "/repos/beta/branches/" + hal.EncodeBranch(betaPinnedBranch)
+	betaBranch := httpx.APIBase + "/repos/beta/branches/" + hal.EncodeBranch(betaPinnedBranch)
 	require.Equal(t, betaBranch+"/facts/kb/y/2.md/outgoing", body.Links["self"].Href)
 	requireRefs(t, body, c, betaBranch,
 		wantRef{"kb/y/9.md", "Derived from", "principle", "b1", false},
@@ -950,7 +951,7 @@ func TestLensFactSub_UnknownID404(t *testing.T) {
 // like an unmounted id: 404, naming nothing about the mount.
 //
 // Registering the dispatch reopened the topology oracle the read path closes.
-// The sub-resource handlers report failure through writeStoreError, not
+// The sub-resource handlers report failure through httpx.WriteStoreError, not
 // lensFactNotFound, and handleFactCommits does not fail at all for a path with
 // no commits — it returns an empty 200 whose _links.self carries the mount's
 // real repo name and branch. So a caller could iterate candidate id12s and read

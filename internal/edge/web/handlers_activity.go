@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/engine/store/index"
@@ -14,7 +15,7 @@ import (
 )
 
 // loadActivity reads one repo's commit activity. A store that cannot be
-// reached is WithRead's error, returned as-is (writeStoreError answers it
+// reached is WithRead's error, returned as-is (httpx.WriteStoreError answers it
 // 503).
 func loadActivity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error) {
 	var (
@@ -45,17 +46,17 @@ func handleHALActivity(b hal.URLBuilder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 		path := r.URL.Query().Get("path")
 
 		result, err := loadActivity(r.Context(), ri, branch, path)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load activity", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load activity", branch)
 			return
 		}
 
-		selfURL := selfWithQuery(b.Branch(repoName, a)+"/activity", r)
+		selfURL := httpx.SelfWithQuery(b.Branch(repoName, a)+"/activity", r)
 
 		view := activityView{
 			LastCommit: result.LastCommit,

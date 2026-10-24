@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strconv"
 
@@ -87,7 +88,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		qp := r.URL.Query()
@@ -206,11 +207,11 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			Msg("hal search")
 		if err != nil {
 			log.Debug().Err(err).Msg("hal search failed")
-			writeStoreError(w, r, err, "Search failed", branch)
+			httpx.WriteStoreError(w, r, err, "Search failed", branch)
 			return
 		}
 
-		selfURL := selfWithQuery(b.Branch(repoName, a)+"/search", r)
+		selfURL := httpx.SelfWithQuery(b.Branch(repoName, a)+"/search", r)
 
 		items := make([]searchResultItem, 0, len(results))
 		for _, res := range results {

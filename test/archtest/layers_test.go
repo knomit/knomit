@@ -221,6 +221,9 @@ var sameLayerEdges = map[string]bool{
 	// edge
 	"edge/web -> edge/mcp":   true,
 	"edge/web -> edge/oauth": true,
+	// httpx is a sibling of hal under edge/web, not a subpackage of it: every
+	// problem document it writes goes through hal.WriteProblem.
+	"edge/web/httpx -> edge/web/hal": true,
 }
 
 // layerOf returns the layer rank of a knomit/internal/... package. exempt is
