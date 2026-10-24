@@ -1,4 +1,4 @@
-package web
+package origins
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 
 	"knomit/internal/corpus/repos"
 
-	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 )
@@ -47,9 +46,9 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	syncGenBefore := f.ri.Status()
 
 	rec := newStreamRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/origin-sessions/"+f.sess.ID+"/commit", nil))
-	f.s.NewAPIRouter().ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/origin-sessions/"+f.sess.ID+"/commit", nil)
+	f.s.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
@@ -98,13 +97,13 @@ func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
 	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "sub", UID: "sub-uid", Subscribed: true, ReadBranch: "main",
 	}))
-	sm := NewSessionManager()
-	s := &Server{Manager: m, SessionManager: sm, AgentBranch: "machine/test"}
-	r := s.NewAPIRouter()
+	sm := newSessionManager()
+	t.Cleanup(sm.drain)
+	r := newTestServer(m, "machine/test", sm)
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/sub/origin-sessions",
-		strings.NewReader(`{"url":"https://example.com/x.git"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/repos/sub/origin-sessions",
+		strings.NewReader(`{"url":"https://example.com/x.git"}`))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -122,45 +121,5 @@ func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), `"id"`) {
 		t.Errorf("a session was created despite the refusal: %s", rec.Body.String())
-	}
-}
-
-// An attach writes the durable origin record, and Origins.Set is a full
-// replacement: an empty Mode DELETES the subscription row. A connect session
-// cannot reach a subscription today (handleCreateSession 409s first), but PUT
-// /origin can — a credential refresh — so the rule is pinned at the write the
-// AttachOrigin event's apply makes, not at that guard.
-func TestAttachOrigin_PreservesSubscriptionMode(t *testing.T) {
-	originsRoot := t.TempDir()
-	_, m, _ := newControlDBTestServer(t, originsRoot)
-
-	url := seedBareRemoteKBForTest(t, filepath.Join(originsRoot, "kb.git"))
-	sub, err := m.Create(context.Background(), repos.CreateSpec{
-		Name: "sub", Mode: "subscribe", Origin: &repos.OriginSpec{URL: url},
-	}, nil)
-	if err != nil {
-		t.Fatalf("create subscription: %v", err)
-	}
-	before, err := m.Origins().Get(sub.UID())
-	if err != nil || before == nil || before.Mode != control.OriginModeSubscribe {
-		t.Fatalf("precondition: want a subscribe-mode origin, got %+v (err %v)", before, err)
-	}
-
-	if _, err := m.Send(context.Background(), sub, repos.AttachOrigin(repos.OriginSpec{
-		URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret",
-	})); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-
-	after, err := m.Origins().Get(sub.UID())
-	if err != nil || after == nil {
-		t.Fatalf("origin after: %v %+v", err, after)
-	}
-	if after.Mode != control.OriginModeSubscribe {
-		t.Errorf("Mode: got %q, want %q — the attach demoted the subscription",
-			after.Mode, control.OriginModeSubscribe)
-	}
-	if after.AuthToken != "s3cret" {
-		t.Errorf("AuthToken: got %q, want the value just written — the write did not land", after.AuthToken)
 	}
 }

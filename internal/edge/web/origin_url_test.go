@@ -211,11 +211,8 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 		const clean = "https://example.invalid/kb.git"
 		for name, pad := range whitespaceForms {
 			t.Run(name, func(t *testing.T) {
-				s := &Server{
-					Manager:        newTestManagerWithRepos(t, "alpha"),
-					SessionManager: NewSessionManager(),
-				}
-				t.Cleanup(s.SessionManager.Shutdown)
+				isolateOriginSessionTemp(t)
+				s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 				r := s.NewAPIRouter()
 
 				rec := httptest.NewRecorder()

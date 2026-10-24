@@ -8,13 +8,25 @@ import (
 	"testing"
 )
 
-// newServerWithSessions returns a Server wired with a real SessionManager and
-// the given registered repo names, ready for origin-sessions route tests.
+// newServerWithSessions returns a Server with the given registered repo names,
+// ready for origin-sessions route tests (the routes and their session manager
+// are api/origins', mounted by the router).
 func newServerWithSessions(t *testing.T, repoNames ...string) *Server {
 	t.Helper()
-	return &Server{
-		Manager:        newTestManagerWithRepos(t, repoNames...),
-		SessionManager: NewSessionManager(),
+	isolateOriginSessionTemp(t)
+	return &Server{Manager: newTestManagerWithRepos(t, repoNames...)}
+}
+
+// isolateOriginSessionTemp points os.TempDir() at a directory of t's own. The
+// origin-session manager origins.Mount creates has no Shutdown, so the
+// knomit-origin-* dir each session allocates under os.TempDir() goes with the
+// test's TempDir instead. It sets the environment, so the test must not be
+// parallel.
+func isolateOriginSessionTemp(t *testing.T) {
+	t.Helper()
+	d := t.TempDir()
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(k, d)
 	}
 }
 

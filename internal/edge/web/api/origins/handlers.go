@@ -1,4 +1,4 @@
-package web
+package origins
 
 import (
 	"context"
@@ -35,7 +35,7 @@ type createSessionRequest struct {
 	Password   string `json:"password"`
 }
 
-func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
+func handleCreateSession(b hal.URLBuilder, sm *sessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
@@ -84,7 +84,7 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 			return
 		}
 
-		auth := AuthConfig{
+		auth := authConfig{
 			Method:   req.AuthMethod,
 			Token:    req.Token,
 			User:     req.User,
@@ -107,7 +107,7 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 	}
 }
 
-func handleGetSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
+func handleGetSession(b hal.URLBuilder, sm *sessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -144,7 +144,7 @@ func handleGetSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
 	}
 }
 
-func handleDeleteSession(sm *SessionManager) http.HandlerFunc {
+func handleDeleteSession(sm *sessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -166,7 +166,7 @@ type connectivityResult struct {
 }
 
 // handleTestConnectivity handles GET /api/v1/{repo}/origin/session/{sessionID}/test
-func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
+func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -253,7 +253,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			log.Warn().Err(cloneErr).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")
 			sendEvent(map[string]string{"phase": "error", "message": msg})
 			sess.mu.Lock()
-			sess.State = StateError
+			sess.State = stateError
 			sess.mu.Unlock()
 			return
 		}
@@ -276,7 +276,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// were committed by the "connecting" event above, before the clone
 		// this check needs even existed. Every other post-clone failure here
 		// (auth, clone) reports the same way. The session is moved to
-		// StateError so /apply and /commit refuse it outright.
+		// stateError so /apply and /commit refuse it outright.
 		if rootCommit, rcErr := remoteSvc.RootCommit(r.Context(), defaultBranch); rcErr == nil && rootCommit != "" {
 			holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
 			if hErr != nil || holder != "" {
@@ -292,7 +292,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 				remoteSvc.Close()
 				sendEvent(map[string]string{"phase": "error", "message": msg})
 				sess.mu.Lock()
-				sess.State = StateError
+				sess.State = stateError
 				sess.mu.Unlock()
 				return
 			}
@@ -341,7 +341,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 
 		// Update session state.
 		sess.mu.Lock()
-		sess.State = StateTested
+		sess.State = stateTested
 		sess.TestResult = result
 		sess.RemoteStore = remoteSvc
 		sess.mu.Unlock()
@@ -359,7 +359,7 @@ type previewResult struct {
 }
 
 // handlePreview handles GET /api/v1/{repo}/origin/session/{sessionID}/preview
-func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
+func handlePreview(sm *sessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -377,7 +377,7 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		testResult, _ := sess.TestResult.(connectivityResult)
 		sess.mu.Unlock()
 
-		if state != StateTested && state != StatePreviewed && state != StateApplied {
+		if state != stateTested && state != statePreviewed && state != stateApplied {
 			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
 				"session must be in tested state or later", r.URL.Path)
 			return
@@ -520,7 +520,7 @@ func handlePreview(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		sendEvent(map[string]any{"phase": "done", "result": result})
 
 		sess.mu.Lock()
-		sess.State = StatePreviewed
+		sess.State = statePreviewed
 		sess.PreviewResult = result
 		sess.mu.Unlock()
 
@@ -548,7 +548,7 @@ type applyResult struct {
 }
 
 // handleApply handles POST /api/v1/{repo}/origin/session/{sessionID}/apply
-func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
+func handleApply(sm *sessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -566,7 +566,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		testResult := sess.TestResult
 		sess.mu.Unlock()
 
-		if state != StateTested && state != StatePreviewed && state != StateApplied {
+		if state != stateTested && state != statePreviewed && state != stateApplied {
 			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
 				"session must be tested before applying", r.URL.Path)
 			return
@@ -660,7 +660,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
 				sess.mu.Lock()
-				sess.State = StateError
+				sess.State = stateError
 				sess.mu.Unlock()
 				return
 			}
@@ -677,7 +677,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 			sendEvent(map[string]any{"phase": "done", "result": result})
 
 			sess.mu.Lock()
-			sess.State = StateApplied
+			sess.State = stateApplied
 			sess.ApplyResult = result
 			sess.AppliedBranch = replayAgentBranch
 			sess.RemoteBranch = remoteBranch
@@ -708,7 +708,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 			}
 
 			sess.mu.Lock()
-			sess.State = StateApplied
+			sess.State = stateApplied
 			sess.ApplyResult = result
 			sess.AppliedBranch = sharedAppliedBranch
 			sess.RemoteBranch = remoteBranch
@@ -774,7 +774,7 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 
 // handleListSessions serves GET /repos/{repo}/origin-sessions.
 // Returns a JSON array of active sessions for the given repo.
-func handleListSessions(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc {
+func handleListSessions(b hal.URLBuilder, sm *sessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessions := sm.ListByRepo(repo)
@@ -830,7 +830,7 @@ type commitRequest struct {
 // before the machine changed anything (a different knowledge base, a remote
 // already held by another repo) is still a plain HTTP problem: the stream
 // opens only once the event is under way.
-func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
+func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -857,7 +857,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		testResult, _ := sess.TestResult.(connectivityResult)
 		sess.mu.Unlock()
 
-		if state != StateApplied {
+		if state != stateApplied {
 			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
 				"session must be in applied state", r.URL.Path)
 			return
@@ -973,7 +973,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		sess.mu.Lock()
-		sess.State = StateCommitted
+		sess.State = stateCommitted
 		sess.mu.Unlock()
 		sm.Delete(repo, sessionID)
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).

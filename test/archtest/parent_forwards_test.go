@@ -77,7 +77,8 @@ func parentForwards(t *testing.T, fset *token.FileSet, parent string, files map[
 // httpx.WriteStoreError(w, r, err) }` is a forward; and a method expression
 // of a target's type counts as a target name: `var repos =
 // hal.URLBuilder.Repos` and `func repos(b hal.URLBuilder, r string) string {
-// return hal.URLBuilder.Repos(b, r) }`. Guard P passes strict=false and is
+// return hal.URLBuilder.Repos(b, r) }`, and the pointer-receiver forms
+// `(*hal.URLBuilder).Repos` the same way. Guard P passes strict=false and is
 // unchanged.
 func forwardsInto(t *testing.T, fset *token.FileSet, isChild func(string) bool, files map[string]any, strict bool) []parentFwd {
 	t.Helper()
@@ -130,8 +131,9 @@ func forwardsInto(t *testing.T, fset *token.FileSet, isChild func(string) bool, 
 			}
 			id, ok := sel.X.(*ast.Ident)
 			if !ok && strict {
-				// pkg.Type.Method: a method expression of a target's type.
-				if inner, isSel := sel.X.(*ast.SelectorExpr); isSel {
+				// pkg.Type.Method, or (*pkg.Type).Method: a method
+				// expression of a target's type.
+				if inner, isSel := unwrapParenStar(sel.X).(*ast.SelectorExpr); isSel {
 					id, ok = inner.X.(*ast.Ident)
 				}
 			}

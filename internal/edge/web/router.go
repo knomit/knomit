@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/edge/web/api/origins"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
@@ -324,16 +325,9 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			// Swap answer while the index job runs.
 			r.Post("/index:cancel", handleCancelIndex(b, s.Manager))
 
-			r.Route("/origin-sessions", func(r chi.Router) {
-				r.Get("/", handleListSessions(b, s.SessionManager))
-				r.Post("/", handleCreateSession(b, s.SessionManager))
-				r.Get("/{sessionID}", handleGetSession(b, s.SessionManager))
-				r.Delete("/{sessionID}", handleDeleteSession(s.SessionManager))
-				r.Get("/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
-				r.Get("/{sessionID}/preview", handlePreview(s.SessionManager, s.AgentBranch))
-				r.Post("/{sessionID}/apply", handleApply(s.SessionManager, s.AgentBranch))
-				r.Post("/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
-			})
+			// The connect-a-remote wizard (api/origins). Inside the
+			// RepoMiddleware group: its handlers read the repo from context.
+			r.Mount("/origin-sessions", s.originSessionsRouter())
 
 			// Branch list carries no {branch} segment, so it stays outside
 			// the httpx.BranchMiddleware subtree.
@@ -513,4 +507,21 @@ func (m *mcpStatusRecorder) Flush() {
 	if f, ok := m.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// originSessionsRouter returns the origin-session subtree, built by
+// origins.Mount ONCE per Server. Mount creates the session manager its routes
+// use, and apiRouter runs once for Handler and again for OAuthHandler, so a
+// Mount per apiRouter would give each listener its own manager: a session
+// created on one listener would be unknown on the other, and the
+// one-session-per-repo rule would hold per listener only. chi's Route is Mount
+// of a fresh router, so mounting this shared one leaves the route tree and
+// its middleware exactly as an inline r.Route would.
+func (s *Server) originSessionsRouter() chi.Router {
+	s.originSessionsOnce.Do(func() {
+		r := chi.NewRouter()
+		origins.Mount(r, s.Manager, s.AgentBranch)
+		s.originSessions = r
+	})
+	return s.originSessions
 }

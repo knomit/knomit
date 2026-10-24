@@ -154,6 +154,12 @@ var webKnownTypes = map[string]map[string]string{
 	webPkg + "/httpx": {
 		"sseStream": "sse.go",
 	},
+	// api/origins (12d): the session manager and a handler's request body,
+	// each in its own file; mount.go declares no type.
+	webPkg + "/api/origins": {
+		"sessionManager":       "session_manager.go",
+		"createSessionRequest": "handlers.go",
+	},
 }
 
 // isWebFamily reports whether an import path is internal/edge/web or a

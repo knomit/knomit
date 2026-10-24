@@ -99,8 +99,8 @@ func gitOutputForTest(t *testing.T, dir string, args ...string) string {
 }
 
 // newIdentitySessionServer boots a REAL Manager (control.db opened by Start,
-// repos created through the production Create path) plus a SessionManager, and
-// returns the server together with the directory bare remotes must be seeded
+// repos created through the production Create path) behind a Server whose
+// router mounts api/origins' origin-session routes, and returns the server together with the directory bare remotes must be seeded
 // under — it is the manager's LocalOriginRoot, so file:// origins beneath it
 // clear the local-origin policy the clone boundary enforces.
 func newIdentitySessionServer(t *testing.T) (*Server, *repos.Manager, string) {
@@ -130,10 +130,8 @@ func newIdentitySessionServer(t *testing.T) (*Server, *repos.Manager, string) {
 		t.Fatalf("start manager: %v", err)
 	}
 
-	sm := NewSessionManager()
-	t.Cleanup(sm.Shutdown)
-
-	return &Server{Manager: m, SessionManager: sm, AgentBranch: "agent/test"}, m, remotesRoot
+	isolateOriginSessionTemp(t)
+	return &Server{Manager: m, AgentBranch: "agent/test"}, m, remotesRoot
 }
 
 func createLocalRepo(t *testing.T, m *repos.Manager, name string) *repos.RepoInstance {
@@ -320,14 +318,19 @@ func TestConnect_AlreadyRegisteredRemoteRejectedAtTest(t *testing.T) {
 
 	// Nothing was applied: the session never reached a state /apply or
 	// /commit will act on, and beta still holds its own knowledge base.
-	sess, ok := s.SessionManager.Get("beta", sessID)
-	if !ok {
-		t.Fatal("session vanished")
+	// The session's state, read through GET /origin-sessions/{id}.
+	got := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/repos/beta/origin-sessions/"+sessID, nil))
+	if got.Code != http.StatusOK {
+		t.Fatalf("session vanished: GET %d %s", got.Code, got.Body.String())
 	}
-	sess.mu.Lock()
-	state := sess.State
-	sess.mu.Unlock()
-	if state == StateTested || state == StatePreviewed || state == StateApplied {
+	var sess struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	if state := sess.State; state == "tested" || state == "previewed" || state == "applied" {
 		t.Errorf("session state after a refused /test: got %q, want a state /apply refuses", state)
 	}
 

@@ -224,6 +224,11 @@ var sameLayerEdges = map[string]bool{
 	// httpx is a sibling of hal under edge/web, not a subpackage of it: every
 	// problem document it writes goes through hal.WriteProblem.
 	"edge/web/httpx -> edge/web/hal": true,
+	// api/origins (12d) is a sibling of httpx and hal under edge/web: it
+	// writes problems and HAL through hal and reaches the shared helpers
+	// (APIBase, DecodeJSON, StartSSE, ...) through httpx.
+	"edge/web/api/origins -> edge/web/hal":   true,
+	"edge/web/api/origins -> edge/web/httpx": true,
 }
 
 // layerOf returns the layer rank of a knomit/internal/... package. exempt is

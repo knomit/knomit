@@ -42,9 +42,8 @@ func TestConnect_DisjointReplaySignsWithTheInstanceKey(t *testing.T) {
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
 	}
-	sm := NewSessionManager()
-	t.Cleanup(sm.Shutdown)
-	s := &Server{Manager: m, SessionManager: sm, AgentBranch: "agent/test"}
+	isolateOriginSessionTemp(t)
+	s := &Server{Manager: m, AgentBranch: "agent/test"}
 
 	local := createLocalRepo(t, m, "core")
 	// A local fact, so the disjoint replay has something to copy.
