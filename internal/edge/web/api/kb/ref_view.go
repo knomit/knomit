@@ -1,0 +1,111 @@
+package kb
+
+import (
+	"knomit/internal/domain/fact"
+	"knomit/internal/edge/web/hal"
+)
+
+// refView is the on-wire shape for a single entry in a fact's refs array.
+//
+// Kind is one of:
+//   - "fact"        a fact in THIS repo, present at the caller's anchor. The
+//     only kind carrying _links.target.
+//   - "broken"      a fact in this repo, absent at the caller's anchor.
+//   - "foreign"     a fact in ANOTHER knomit repo (kb://<other-id>/…). NOT
+//     broken — merely not ours to resolve. Linking it is the
+//     cross-mount hop gap named in
+//     kb/gotchas/lens/browsing-ui-accepted-gaps/595c0c7b.md.
+//   - "source_code" a src:// citation. Terminal: knomit's object database
+//     holds fact blobs only, never source, so this never
+//     resolves here. Named "source_code" and not "source"
+//     because facts already carry a `sources` field.
+//   - "system_file" a file under .knomit/ (this repo or another), not a fact.
+//     No link; Path is its exact repo-relative path.
+//   - "url"         http(s)://, file://, or any other scheme.
+//
+// Path is the repo-relative fact path, set for the "fact" and "broken" kinds
+// (and the exact file path for "system_file") — the two the client acts on. It exists so the client never has to
+// recover a path from Raw: a canonical kb://<own-id>/<path> ref and its bare
+// equivalent name the same fact, and deciding that is ClassifyRef's job, not a
+// regex in the browser. Omitted for foreign, source_code and url, where no path
+// in THIS repo is meaningful.
+type refView struct {
+	Raw   string      `json:"raw"`
+	Kind  string      `json:"kind"`
+	Path  string      `json:"path,omitempty"`
+	Links hal.LinkMap `json:"_links,omitempty"`
+}
+
+// buildRefViews transforms a fact's raw refs into structured refView entries.
+//
+// KIND comes from fact.ClassifyRef — the single ref-classification authority —
+// so this surface cannot drift from the edge builder, replay, knomit_explain,
+// or the web client. The local heuristic it replaced ("external if http(s) OR
+// not .md") mislabelled two whole categories: a cross-repo kb://<other>/z.md
+// ref ends in .md, so it fell through to the resolver, which looked for a local
+// fact literally named "kb://<other>/z.md", found nothing, and reported the ref
+// as BROKEN; and a src:// citation does not end in .md, so it was reported as a
+// "url" the client then rendered as a clickable anchor for a scheme no browser
+// can open.
+//
+// RESOLUTION stays commit-anchored: resolver is the readerRefResolver the
+// handler built with the caller's anchor (ri, branch, commit), so Exists asks
+// the store (FactQuery.FactExistsAt) "did this fact exist at the version being
+// viewed", not "does it exist now". That is why the fact/broken split
+// lives here and not in ClassifyRef, which is pure and has no anchor.
+//
+// The anchor also shapes _links.target: branch-anchored at HEAD,
+// commit-anchored under a /commits/{sha}/ prefix, so following a ref stays at
+// the same temporal anchor.
+//
+// localRepoID is the viewing repo's 12-hex id, used only to tell a
+// self-referential kb:// ref from a foreign one. Empty means every kb:// ref
+// reads as foreign — under-reporting rather than inventing local links.
+func buildRefViews(
+	b hal.URLBuilder,
+	repo string,
+	a hal.Anchor,
+	raw []string,
+	resolver readerRefResolver,
+	localRepoID string,
+) []refView {
+	out := make([]refView, 0, len(raw))
+	for _, r := range raw {
+		c := fact.ClassifyRef(r, localRepoID)
+
+		switch c.Kind {
+		case fact.RefLocalFact:
+			// Ask the resolver for the REPO-RELATIVE path. Handing it the raw
+			// kb://<id>/… string is what made canonical-form refs unresolvable.
+			if !resolver.Exists(c.Path) {
+				out = append(out, refView{Raw: r, Kind: "broken", Path: c.Path})
+				continue
+			}
+			out = append(out, refView{
+				Raw:   r,
+				Kind:  "fact",
+				Path:  c.Path,
+				Links: hal.LinkMap{"target": {Href: b.Fact(repo, a, c.Path)}},
+			})
+
+		case fact.RefForeignFact:
+			out = append(out, refView{Raw: r, Kind: "foreign"})
+
+		case fact.RefLocalSystemFile, fact.RefForeignSystemFile:
+			// A file under .knomit/, not a fact: no fact link. Path is the
+			// exact repo-relative file path (case kept); the raw file is
+			// GET …/facts/<path> on its own repo.
+			out = append(out, refView{Raw: r, Kind: "system_file", Path: c.Path})
+
+		case fact.RefSourceCode:
+			out = append(out, refView{Raw: r, Kind: "source_code"})
+
+		default:
+			// RefExternalURL, and RefMalformed. Malformed maps to "url" rather
+			// than gaining a sixth kind: ParseFact and SerializeFact both
+			// reject malformed refs, so only a hand-edited file reaches here.
+			out = append(out, refView{Raw: r, Kind: "url"})
+		}
+	}
+	return out
+}

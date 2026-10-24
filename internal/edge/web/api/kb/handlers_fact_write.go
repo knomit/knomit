@@ -1,0 +1,435 @@
+package kb
+
+import (
+	"context"
+	"errors"
+	"knomit/internal/edge/web/httpx"
+	"net/http"
+	pathpkg "path"
+	"slices"
+	"strings"
+
+	"knomit/internal/engine/store/model"
+
+	"github.com/go-chi/chi/v5"
+
+	"knomit/internal/corpus/refs"
+	"knomit/internal/corpus/repos"
+	knomitfact "knomit/internal/domain/fact"
+	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+)
+
+// writerGate builds the one Gate the REST write handlers use. Both POST and PUT
+// call this rather than assembling a gate each, so "check then canonicalize" has
+// a single spelling here exactly as it does in internal/edge/mcp.
+func writerGate(ri *repos.RepoInstance, branch string) refs.Gate {
+	return refs.New(knomitfact.ID12(ri.ID()), func(ctx context.Context, path string) (bool, error) {
+		return factResolves(ctx, ri, branch, path)
+	}).WithFiles(systemFileResolver(ri, branch))
+}
+
+// writeGateProblem answers a writerGate refusal for POST and PUT alike: 422
+// for refs that do not resolve, 503 when a resolver could not reach the store
+// at all (the gate wraps the resolver's error, %w). One spelling, because PUT
+// reaches the gate only after priorRefs has read the same store — its copy of
+// this branch would be reachable only in a teardown race, and untestable.
+func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
+	if httpx.StoreUnavailable(gerr) {
+		httpx.WriteStoreUnavailable(w, r)
+		return
+	}
+	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
+		gerr.Error(), r.URL.Path)
+}
+
+// systemFileResolver resolves a ref to a .knomit/ file in ri at the tip of
+// branch — the same branch and moment the fact resolver uses.
+//
+// A store that cannot be reached is WithRead's error, returned as-is: the gate
+// wraps it (%w), and the handlers answer it with 503 (httpx.StoreUnavailable), never
+// with the 422 for a ref that does not resolve.
+func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc {
+	return func(ctx context.Context, path string) (bool, error) {
+		var (
+			ok  bool
+			err error
+		)
+		if aerr := ri.WithRead(func(svc *store.Service) {
+			ok, err = refs.FromSystemFiles(svc.FactsRepo(), branch)(ctx, path)
+		}); aerr != nil {
+			return false, aerr
+		}
+		return ok, err
+	}
+}
+
+// factResolves backs the ref gate every REST write runs through (writerGate).
+// It is FactExistsAt at the head of branch — the SAME predicate the read path
+// uses to decide `fact` vs `broken`, walking back past retractions. The gate
+// and the reader must ask one question: a narrower "is it live right now"
+// check would reject writes whose refs the UI renders as live links.
+//
+// When the repo's store cannot be reached (Acquire refuses: unavailable,
+// populating, closed) WithRead runs nothing and its error is returned as-is.
+// The gate wraps it, and the handlers answer 503 for it — never the 422 for a
+// broken ref, which would blame the client's refs for the server's state.
+func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path string) (bool, error) {
+	var (
+		ok  bool
+		err error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		// Empty commit = at the branch head, which is the commit this write is
+		// about to become the parent of: the referrer's own commit.
+		ok, err = svc.FactQuery().FactExistsAt(ctx, branch, path, "")
+	}); aerr != nil {
+		return false, aerr
+	}
+	return ok, err
+}
+
+// priorRefs returns the refs the fact at path on branch already carries, or nil
+// when there is no such fact (a create, or a PUT to a fresh path) or its stored
+// version does not parse. Those refs resolved at the commit that wrote them and
+// are never re-judged — see the refs gate's temporal contract. Any other read
+// error is returned.
+//
+// A store that cannot be reached is WithRead's error, returned as-is — NOT
+// "no prior version": a nil prior would make the gate re-judge every ref the
+// stored fact carries. handleFactUpdate answers it with 503.
+func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
+	var (
+		refs []string
+		err  error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		res, rerr := svc.Facts().ReadFact(ctx, branch, path, nil)
+		if rerr != nil {
+			// No prior version (a create, or a PUT to a fresh path) means
+			// nothing is carried forward — not an error.
+			if errors.Is(rerr, model.ErrPathNotFound) {
+				return
+			}
+			err = rerr
+			return
+		}
+		f, perr := knomitfact.ParseFact(path, res.Content)
+		if perr != nil {
+			// An unparseable prior version cannot tell us what it carried.
+			// Exempting nothing is the safe direction — the write is checked
+			// in full rather than waved through.
+			return
+		}
+		refs = f.Refs
+	}); aerr != nil {
+		return nil, aerr
+	}
+	return refs, err
+}
+
+// writeFact commits content at path on branch with message and returns the
+// commit hash. A store error is returned unchanged, and so is WithRead's when
+// the store cannot be reached: nothing is written, and the handlers answer 503
+// through httpx.WriteStoreError.
+func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
+	var (
+		commitHash string
+		err        error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		res, werr := svc.Facts().WriteFact(ctx, branch, path, content, message, "update")
+		if werr != nil {
+			err = werr
+			return
+		}
+		commitHash = res.CommitHash
+	}); aerr != nil {
+		return "", aerr
+	}
+	return commitHash, err
+}
+
+// deleteFact retracts path on branch with message and returns the commit hash.
+// A path that is not there answers errFactNotFound; any other store error is
+// returned unchanged, and so is WithRead's when the store cannot be reached:
+// nothing is deleted, and handleFactDelete answers 503 through httpx.WriteStoreError
+// — not the 404 of errFactNotFound, since nothing was looked up.
+func deleteFact(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
+	var (
+		commitHash string
+		err        error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		h, derr := svc.Facts().DeleteFact(ctx, branch, path, message)
+		if derr != nil {
+			// DeleteFact wraps model.ErrPathNotFound for a path that is not
+			// there to delete (deleteFile's own existence check, inside the
+			// branch lock). Mapped to the same sentinel the read path uses,
+			// so handleFactDelete answers 404 exactly as a GET of the same
+			// missing path does — any other error still propagates to 500.
+			if errors.Is(derr, model.ErrPathNotFound) {
+				err = errFactNotFound
+				return
+			}
+			err = derr
+			return
+		}
+		commitHash = h
+	}); aerr != nil {
+		return "", aerr
+	}
+	return commitHash, err
+}
+
+// refuseNonFactPath writes the 400 and reports true when path may not be
+// written or deleted through the fact endpoints. PUT and DELETE share it
+// verbatim: they are twins over the same verbatim caller-supplied path, and a
+// rule spelled out twice is a rule that gets fixed once.
+//
+// Two separate reasons, deliberately not merged into one predicate:
+//
+//   - PRIVATE: a dot segment means the file is machinery, skipped by every
+//     discovery walker, so a fact written there would be committed to git and
+//     visible to nobody — or it is the system itself (.knomit/: ontology,
+//     triggers, recipes, skills), which changes only through git. No
+//     exception (F25). Agents' working files live under artifacts/.
+//   - ARTIFACTS: a path under artifacts/ (judged CASE-INSENSITIVELY, because
+//     the store lowercases the whole path when it writes) must be a valid
+//     artifact path, or it would land as a malformed one.
+//   - SERVER-OWNED: knomit's own files are not facts and have their own write
+//     paths (WriteReadme's size cap and exact-case door; for LICENSE, no write
+//     path at all). Most carry no dot, so the private rule cannot cover them —
+//     see repos.IsServerOwnedPath.
+func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool {
+	switch {
+	case knomitfact.IsPrivatePath(path):
+		writePrivatePathProblem(w, r, path)
+		return true
+	case knomitfact.IsUnderArtifactsRoot(path) && !knomitfact.IsArtifactPath(strings.ToLower(path)):
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid artifact path",
+			path+": a path under "+knomitfact.ArtifactsRoot+"/ must be "+knomitfact.ArtifactsRoot+
+				"/<area>/<name>, at least one folder deep, with no empty segment, no segment beginning with '.', and no \"..\"",
+			r.URL.Path)
+		return true
+	case repos.IsServerOwnedPath(path):
+		hal.WriteProblem(w, http.StatusBadRequest, "Server-owned path",
+			path+": this file belongs to knomit, not to the knowledge base, and is not"+
+				" writable through the fact endpoints", r.URL.Path)
+		return true
+	}
+	return false
+}
+
+// handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
+// Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
+// Returns HAL factView with 200 OK.
+func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoName := chi.URLParam(r, "repo")
+		ri := repos.RepoFromContext(r.Context())
+
+		branch := httpx.BranchFromContext(r.Context())
+		if httpx.RefuseUnwritableBranch(w, r, ri, branch) {
+			return
+		}
+
+		path := chi.URLParam(r, "*")
+		if path == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
+				"fact path is required", r.URL.Path)
+			return
+		}
+
+		// Unlike the create paths, which derive their target from topic/category
+		// and guard the path they construct, this handler receives the path
+		// verbatim from the caller — it is also how a fresh path gets created
+		// (priorRefs returns nil for one), so a private segment here would be
+		// indexed nowhere but still committed to git, permanently invisible.
+		// Same rule as knomit_update — this endpoint is its REST twin, with a
+		// fully caller-supplied path. knomit_update is spared the server-owned
+		// half only because NormalizePath forces its paths under the ontology
+		// root; nothing does that here.
+		if refuseNonFactPath(w, r, path) {
+			return
+		}
+
+		var body struct {
+			Content string `json:"content"`
+		}
+		if !httpx.DecodeJSON(w, r, &body, 0) {
+			return
+		}
+
+		// Parse BEFORE writing. The store performs no content validation, so
+		// committing first would make an unparseable blob the branch HEAD for
+		// this path while the client is handed a 422 saying the write failed —
+		// and every later read of the path would then fail or drop it.
+		f, err := knomitfact.ParseFact(path, body.Content)
+		if err != nil {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity,
+				"Failed to parse fact", err.Error(), r.URL.Path)
+			return
+		}
+		// ParseFact is lenient about a malformed expires (it drops it, so an
+		// old file stays readable). A WRITE is strict everywhere else, and this
+		// path commits the client's bytes verbatim, so refuse here rather than
+		// store a value every reader will ignore.
+		if len(f.ExpiresWarnings) > 0 {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity,
+				"Invalid expires", strings.Join(f.ExpiresWarnings, "; "), r.URL.Path)
+			return
+		}
+		// F22 context, the same two rules for the same reason: ParseFact drops a
+		// malformed map (lenient read), and this path commits the client's
+		// bytes, so a newline or a list value would land on disk. Then the
+		// typed gate: "undeclared keys are refused on write" holds on every
+		// write path, this one included — it runs the context part of the
+		// ontology check (not the JS rules, which this endpoint has never run).
+		if len(f.ContextWarnings) > 0 {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity,
+				"Invalid context", strings.Join(f.ContextWarnings, "; "), r.URL.Path)
+			return
+		}
+		// An artifact has no ontology placement (F25): nothing declares a
+		// context key there, so a context is refused outright — the same
+		// answer knomit_learn and knomit_update give — instead of being judged
+		// against the made-up topic "artifacts/<area>".
+		ctxOntology := ri.Ontology()
+		if knomitfact.IsUnderArtifactsRoot(path) {
+			ctxOntology = nil
+		}
+		ctxTopic := pathpkg.Dir(strings.TrimPrefix(path, ontologyRoot+"/"))
+		normContext := knomitfact.NormalizeContext(ctxOntology, ctxTopic, knomitfact.CopyContext(f.Context))
+		if err := knomitfact.ValidateContext(ctxOntology, ctxTopic, normContext); err != nil {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid context", err.Error(), r.URL.Path)
+			return
+		}
+		contextChanged := !knomitfact.EqualContext(normContext, f.Context)
+		f.Context = normContext
+
+		// Same gate as knomit_learn / knomit_update / POST. A PUT replaces the
+		// ref list wholesale, so only the refs it ADDS are checked — whatever
+		// the stored version already carried resolved at its own commit and is
+		// not re-judged, or editing a title would be refused over a citation
+		// written months ago.
+		prior, perr := priorRefs(r.Context(), ri, branch, path)
+		if perr != nil {
+			// The prior-version read is the first thing to touch the path, so
+			// go-git's refusal of a path it will not look up surfaces here,
+			// before the store's write-side refusal would. Same answer: the
+			// path is the client's mistake (#384).
+			if facts.IsInvalidPath(perr) {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", perr.Error(), r.URL.Path)
+				return
+			}
+			httpx.WriteStoreError(w, r, perr, "Failed to read fact", branch)
+			return
+		}
+		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)
+		if gerr != nil {
+			writeGateProblem(w, r, gerr)
+			return
+		}
+
+		// The motif gate. This path is the ONE write path that does not reach
+		// SerializeFact on its own — it commits the client's bytes — so without
+		// this, a subject-restating motif typed into the raw editor lands on
+		// disk, in fact_motifs and in TokenDF, having passed no gate at all.
+		//
+		// Two things can make the gate non-trivial, and both must be caught:
+		// the subject strip removing a motif, and ParseFact having already
+		// dropped a malformed or over-cap one — the parsed fact is clean in
+		// that second case while body.Content still carries the offender,
+		// which is exactly what MotifWarnings exists to report.
+		gatedMotifs := knomitfact.StripSubjectMotifs(f)
+		motifsChanged := len(f.MotifWarnings) > 0 || !slices.Equal(gatedMotifs, f.Motifs)
+
+		// The expires gate, for the same reason: all times are UTC (maintainer
+		// ruling 2026-09-28), and SerializeFact normalises an offset to the
+		// same instant with an explicit Z — but this path commits the client's
+		// bytes, so a `+02:00` typed into the raw editor would land on disk
+		// unless the rewrite is forced here.
+		normExpires, _ := knomitfact.NormalizeExpires(f.Expires) // validated above: no error possible
+		expiresChanged := normExpires != f.Expires
+		f.Expires = normExpires
+
+		// The client's bytes are stored verbatim unless a gate actually changed
+		// something — a PUT that needs no rewriting must not be silently
+		// reformatted by a round trip through SerializeFact.
+		content := body.Content
+		if changed || motifsChanged || expiresChanged || contextChanged {
+			f.Refs = canonRefs
+			// SerializeFact strips again on its way out; assigning here keeps
+			// the fact handed to buildFactView below telling the same story as
+			// the bytes committed.
+			f.Motifs = gatedMotifs
+			serialized, serr := knomitfact.SerializeFact(f)
+			if serr != nil {
+				hal.WriteProblem(w, http.StatusUnprocessableEntity,
+					"Failed to serialize fact", serr.Error(), r.URL.Path)
+				return
+			}
+			content = serialized
+		}
+
+		msg := "edit: update " + path + " via API"
+		if _, err := writeFact(r.Context(), ri, branch, path, content, msg); err != nil {
+			httpx.WriteStoreError(w, r, err, "Failed to write fact", branch)
+			return
+		}
+
+		a := hal.Anchor{Branch: branch}
+		// Resolver anchored at HEAD (commit:""): the just-written content is
+		// now the active state of the branch, so HEAD walk-back correctly
+		// classifies the fact's outgoing refs.
+		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: ""}
+		view := buildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
+		hal.WriteHAL(w, http.StatusOK, view)
+	}
+}
+
+// handleFactDelete serves DELETE /repos/{repo}/branches/{branch}/facts/{path...}.
+// Returns 204 No Content on success.
+func handleFactDelete(b hal.URLBuilder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := repos.RepoFromContext(r.Context())
+
+		branch := httpx.BranchFromContext(r.Context())
+		if httpx.RefuseUnwritableBranch(w, r, ri, branch) {
+			return
+		}
+
+		path := chi.URLParam(r, "*")
+		if path == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
+				"fact path is required", r.URL.Path)
+			return
+		}
+
+		// A DELETE is a write, and this endpoint is the REST twin of
+		// knomit_retract — which obeys the same rule. The path arrives verbatim
+		// and DeleteFact performs no fact-shape check, so without this the
+		// endpoint removes anything named: kb/.drafts/x.md, .github/ config,
+		// or .knomit/ontology.yaml itself. Exactly the rule handleFactUpdate
+		// applies, in one shared spelling, with no exception for .knomit/
+		// (F25); a job drops its own state under artifacts/ instead.
+		if refuseNonFactPath(w, r, path) {
+			return
+		}
+
+		msg := "manual-review: retract " + path
+		if _, err := deleteFact(r.Context(), ri, branch, path, msg); err != nil {
+			if errors.Is(err, errFactNotFound) {
+				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
+					`no fact at path "`+path+`" on branch "`+branch+`"`, r.URL.Path)
+				return
+			}
+			httpx.WriteStoreError(w, r, err, "Failed to delete fact", branch)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

@@ -102,12 +102,19 @@ func newFactReadFixture(t *testing.T) *factReadFixture {
 	return f
 }
 
+// asOfBody is a fact view's as_of object on the wire (api/kb's asOf).
+type asOfBody struct {
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+	Date   string `json:"date"`
+}
+
 // factViewBody is the fact view's wire shape, as far as these tests read it.
 type factViewBody struct {
-	Path  string `json:"path"`
-	Title string `json:"title"`
-	Body  string `json:"body"`
-	AsOf  AsOf   `json:"as_of"`
+	Path  string   `json:"path"`
+	Title string   `json:"title"`
+	Body  string   `json:"body"`
+	AsOf  asOfBody `json:"as_of"`
 	Refs  []struct {
 		Raw  string `json:"raw"`
 		Kind string `json:"kind"`

@@ -3,7 +3,7 @@ import { api, type OntologyDiagnostic, type OntologyPreset, type OntologyValidat
 import type { WizardAction, WizardState } from './wizardState';
 import { OntologyEditor } from './OntologyEditor';
 
-// Mirrors internal/edge/web/handlers_ontologies.go's MaxOntologyBytes. The server
+// Mirrors internal/edge/web/api/manage/handlers_ontologies.go's maxOntologyBytes. The server
 // enforces this regardless (413 Request Entity Too Large); this client-side
 // check exists only so an oversize upload gets a clear message instead of a
 // round trip that ends in a generic HTTP error.

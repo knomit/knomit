@@ -369,7 +369,7 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 // neither.
 export interface LensDirChild extends DirChild { path?: string; source?: { repo: string; id: string } }
 export interface LensBrowseResponse { path: string; children: LensDirChild[] }
-// FactRef mirrors internal/edge/web/ref_view.go's RefView. `kind` is decided
+// FactRef mirrors internal/edge/web/api/kb/ref_view.go's refView. `kind` is decided
 // server-side by fact.ClassifyRef; for a fact in this repo, "fact" vs "broken"
 // additionally reflects existence AT THE VIEWED COMMIT, which only the server
 // can know. Never re-derive any of this from `raw` in the client.
@@ -1790,7 +1790,7 @@ export interface MotifCluster extends MotifEntry {
 }
 
 /** The server caps `limit` at 200 and 400s anything larger rather than clamping
- *  silently (internal/edge/web/params.go). Clamping here keeps a caller's optimism
+ *  silently (internal/edge/web/api/kb/params.go). Clamping here keeps a caller's optimism
  *  from becoming a failed request. */
 const MOTIFS_MAX_LIMIT = 200;
 

@@ -62,7 +62,7 @@ var changesAllowedCalls = map[string][]string{
 		"model.ParseChangesSince", "model.ChangesBookmark",
 		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
 	},
-	"internal/edge/web/handlers_changes.go": {
+	"internal/edge/web/api/kb/handlers_changes.go": {
 		"repos.RepoFromContext", "httpx.BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
