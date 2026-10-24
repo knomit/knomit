@@ -1,6 +1,6 @@
 package web
 
-// decodeJSON's Content-Type rule, reached the way a browser reaches it: over a
+// httpx.DecodeJSON's Content-Type rule, reached the way a browser reaches it: over a
 // real 127.0.0.1 listener, through Server.Handler with every edge and gate in
 // place. The helper's own table test proves the rule; these prove nothing in
 // front of the handlers answers first, and that the route whose body is

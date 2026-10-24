@@ -13,16 +13,16 @@ import (
 )
 
 // bodyReadAllowed lists the only places under internal/edge/web that may read a
-// request body without decodeJSON, each with the reason. A new entry needs a
+// request body without httpx.DecodeJSON, each with the reason. A new entry needs a
 // reason as good as these; "it was quicker" is how the Content-Type rule
 // quietly stops covering a handler.
 var bodyReadAllowed = map[string]string{
 	"handlers_ontologies.go": "ontologies:validate reads YAML, not JSON",
-	"oauth_pending_api.go":   "OAuth approve: browserProof already requires application/json from a browser, and it shares isJSONMediaType",
+	"oauth_pending_api.go":   "OAuth approve: browserProof already requires application/json from a browser, and it shares httpx.IsJSONMediaType",
 }
 
 // TestNoHandlerDecodesARequestBodyOutsideDecodeJSON keeps every JSON request
-// body behind decodeJSON's Content-Type rule. It flags, in any non-test file
+// body behind httpx.DecodeJSON's Content-Type rule. It flags, in any non-test file
 // under internal/edge/web, a json.NewDecoder or io.ReadAll call whose arguments
 // reach a `.Body` field (r.Body, req.Body, through http.MaxBytesReader or
 // not). A body passed through a variable first is not seen; this is a guard
@@ -73,7 +73,7 @@ func TestNoHandlerDecodesARequestBodyOutsideDecodeJSON(t *testing.T) {
 	sort.Strings(bad)
 	if len(bad) > 0 {
 		t.Fatalf("a handler reads a request body directly:\n  %s\n"+
-			"read a JSON body with decodeJSON (or decodeOptionalJSON when it may be absent), "+
+			"read a JSON body with httpx.DecodeJSON (or httpx.DecodeOptionalJSON when it may be absent), "+
 			"which refuses a non-JSON Content-Type with 415; if this is not a JSON request body "+
 			"(a response body, YAML), add the file to bodyReadAllowed with the reason",
 			strings.Join(bad, "\n  "))

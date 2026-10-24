@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -101,7 +102,7 @@ func handleHALRepoRename(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		oldName := chi.URLParam(r, "repo")
 
 		var req renameRepoRequest
-		if !decodeJSON(w, r, &req, maxRenameBodyBytes) {
+		if !httpx.DecodeJSON(w, r, &req, maxRenameBodyBytes) {
 			return
 		}
 		if req.Name == "" {

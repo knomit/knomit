@@ -6,6 +6,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -58,7 +59,7 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 		// The reviewer writes on the repo's agent branch whatever branch the
 		// URL names, so that is the branch that must accept authored writes
 		// (the fleet repository and a subscription accept none).
-		if refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
+		if httpx.RefuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
 			return
 		}
 
@@ -77,7 +78,7 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 		// never be told to stop.
 		unpin, err := ri.Pin()
 		if err != nil {
-			writeStoreUnavailable(w, r)
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 
@@ -121,10 +122,10 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 func handleStartRebuild(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		rep, err := m.Send(r.Context(), ri, repos.Rebuild(branch))
 		if err != nil {
-			writeLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
+			httpx.WriteLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
 			return
 		}
 		status := http.StatusCreated
@@ -253,7 +254,7 @@ func handleJobEvents(jr *JobRegistry, kind string) http.HandlerFunc {
 			return
 		}
 
-		stream, ok := startSSE(w)
+		stream, ok := httpx.StartSSE(w)
 		if !ok {
 			return
 		}

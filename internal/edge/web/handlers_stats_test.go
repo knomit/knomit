@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -83,7 +84,7 @@ func TestHandleHALStats_ReturnsHAL(t *testing.T) {
 	require.Equal(t, 0.85, body.AvgConfidence)
 	require.Equal(t, map[string]int{"ai": 2, "go": 1}, body.Domains)
 	require.Equal(t, map[string]int{"transformer": 1}, body.Entities)
-	require.Equal(t, APIBase+statsURL, body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+statsURL, body.Links["self"].Href)
 }
 
 func TestHandleHALStats_UnknownRepo_Returns404(t *testing.T) {

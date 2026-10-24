@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ const factsTopicPrefix = "kb/"
 
 // recentFacts reads one repo's recency-ordered (or, with Text, relevance
 // ordered) fact page and its total. A store that cannot be reached is
-// WithRead's error, returned as-is (writeStoreError answers it 503).
+// WithRead's error, returned as-is (httpx.WriteStoreError answers it 503).
 // The repo facts collection, the motif cluster carriers and every mount of the
 // lens facts fan-out read through it.
 func recentFacts(
@@ -68,7 +69,7 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 		qp := r.URL.Query()
 
@@ -166,7 +167,7 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 		if !empty {
 			entries, total, err = recentFacts(r.Context(), ri, branch, opts)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to list facts", branch)
+				httpx.WriteStoreError(w, r, err, "Failed to list facts", branch)
 				return
 			}
 		}
@@ -175,7 +176,7 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 		}
 
 		factsBase := b.Branch(repoName, a) + "/facts"
-		selfURL := selfWithQuery(factsBase, r)
+		selfURL := httpx.SelfWithQuery(factsBase, r)
 
 		links := hal.LinkMap{"self": {Href: selfURL}}
 		// Add next/prev pagination links when applicable.
@@ -266,7 +267,7 @@ func experimentChangedPaths(w http.ResponseWriter, r *http.Request, ri *repos.Re
 		added, modified, deleted, err = svc.Facts().DiffFiles(r.Context(), branch, exp.ForkCommit)
 		paths = append(append(append(paths, added...), modified...), deleted...)
 	}); aerr != nil {
-		writeStoreUnavailable(w, r)
+		httpx.WriteStoreUnavailable(w, r)
 		return nil, false
 	}
 	if err != nil {

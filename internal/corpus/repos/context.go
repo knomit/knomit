@@ -35,7 +35,7 @@ func RepoFromContextOpt(ctx context.Context) (*RepoInstance, bool) {
 }
 
 // branchCtxKey is the private context key for the branch a request is bound
-// to. web.BranchMiddleware stores the decoded {branch} URL segment here so
+// to. httpx.BranchMiddleware stores the decoded {branch} URL segment here so
 // packages that cannot import internal/edge/web (e.g. internal/edge/mcp) can read it.
 type branchCtxKey struct{}
 

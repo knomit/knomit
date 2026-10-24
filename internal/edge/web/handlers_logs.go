@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -63,7 +64,7 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 				"this server was built without a log tap", r.URL.Path)
 			return
 		}
-		stream, ok := startSSE(w)
+		stream, ok := httpx.StartSSE(w)
 		if !ok {
 			return
 		}
@@ -75,7 +76,7 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 
 		// send is the only thing this handler adds to sseStream.Write: the
 		// marshal, and the decision that a payload we cannot encode is skipped
-		// rather than fatal. The bound itself lives in sse.go — and it matters
+		// rather than fatal. The bound itself lives in httpx/sse.go — and it matters
 		// most here, because the log is the highest-rate stream this server
 		// has, so a client that stops draining backs up fastest.
 		send := func(event string, payload any) bool {

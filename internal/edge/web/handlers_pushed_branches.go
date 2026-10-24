@@ -8,6 +8,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -55,7 +56,7 @@ func handleHALPushedBranches(
 		if !ri.Subscribed() && ri.AgentBranch() != "" {
 			branches, err := listRepoBranches(r.Context(), ri)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to list branches", "")
+				httpx.WriteStoreError(w, r, err, "Failed to list branches", "")
 				return
 			}
 			var names []string
@@ -74,7 +75,7 @@ func handleHALPushedBranches(
 				if aerr := ri.WithRead(func(svc *store.Service) {
 					infos, err2 = svc.Merge().PushedBranches(r.Context(), names, ri.AgentBranch(), ri.OntologyRoot())
 				}); aerr != nil {
-					writeStoreUnavailable(w, r)
+					httpx.WriteStoreUnavailable(w, r)
 					return
 				}
 				if err2 != nil {
@@ -134,10 +135,10 @@ type mergeRequest struct {
 func handlePushedMerge() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 
 		var req mergeRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		if !fullHash.MatchString(req.ExpectedTip) {
@@ -164,7 +165,7 @@ func handlePushedMerge() http.HandlerFunc {
 				"repo "+ri.Name()+" is a subscription: it has no agent branch to merge into", r.URL.Path)
 			return
 		}
-		if refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
+		if httpx.RefuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
 			return
 		}
 
@@ -186,7 +187,7 @@ func handlePushedMerge() http.HandlerFunc {
 			}
 			res, err = svc.MergePushed(r.Context(), branch, ri.AgentBranch(), plumbing.NewHash(req.ExpectedTip), side)
 		}); aerr != nil {
-			writeStoreUnavailable(w, r)
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if !exists {

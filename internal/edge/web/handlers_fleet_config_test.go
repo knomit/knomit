@@ -19,7 +19,7 @@ import (
 // local listener it starts the rebuild of the agent branch and links the
 // job, which the generic job route (a read) serves; over TCP it is 403; the
 // generic route stays 409 fleet_repository.
-// SABOTAGE: move the route out of the RequireLocalVia group -> the TCP call
+// SABOTAGE: move the route out of the httpx.RequireLocalVia group -> the TCP call
 // is 201 -> red; rebuild the upstream instead of the agent branch -> red.
 func TestFleetREST_IndexRebuild(t *testing.T) {
 	ctx := context.Background()

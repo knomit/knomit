@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -53,7 +54,7 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 
 	url := f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "incoming")
 	body := getRefs(t, s, url)
-	require.Equal(t, APIBase+url, body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+url, body.Links["self"].Href)
 	f.requireRefs(t, body, fsOtherURL, inT1...)
 
 	f.requireRefs(t, getRefs(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/t.md", "incoming")), fsOtherURL, inT2...)
@@ -169,7 +170,7 @@ func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing
 	url := f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming") + "?fallback=before"
 	body := getRefs(t, s, url)
 	f.requireRefs(t, body, fsOtherURL, inR...)
-	require.Equal(t, APIBase+f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming"), body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "incoming"), body.Links["self"].Href)
 
 	out := getRefs(t, s, f.anchoredURL(fsOtherURL, "e14", "kb/r.md", "outgoing")+"?fallback=before")
 	f.requireRefs(t, out, fsOtherURL, outO12...)

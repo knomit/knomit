@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 
@@ -169,7 +170,7 @@ func handleHALLensStats() http.HandlerFunc {
 			return "", nil
 		}); f != nil {
 			// Any mount error fails the whole request (RFC §9.1).
-			writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+			httpx.WriteStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
 			return
 		}
 
@@ -288,7 +289,7 @@ func handleHALLensStats() http.HandlerFunc {
 				highlights[i], fallback[i] = hs, fb
 				return "", nil
 			}); f != nil {
-				writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+				httpx.WriteStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
 				return
 			}
 		}

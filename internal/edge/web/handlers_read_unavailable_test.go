@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -196,7 +197,7 @@ func TestReadHelpers_ReturnAcquireRefusal(t *testing.T) {
 func TestWriteLifecycleProblem_NotOpenIsTheStoreUnavailableAnswer(t *testing.T) {
 	serve := func(err error) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		writeLifecycleProblem(rec, httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil),
+		httpx.WriteLifecycleProblem(rec, httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil),
 			hal.URLBuilder{}, "alpha", err)
 		return rec
 	}

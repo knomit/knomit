@@ -64,19 +64,19 @@ func postFleetCreate(s *Server, body string, local bool) *httptest.ResponseRecor
 // is served over the LOCAL listener only: loopback TCP (which a browser page
 // can reach, and whose anonymous principal holds admin) is 403 and creates
 // nothing; over the socket it creates the fleet, 201, registered.
-// Sabotage: mount the route without RequireLocalVia -> the TCP request
+// Sabotage: mount the route without httpx.RequireLocalVia -> the TCP request
 // creates the fleet -> red.
 func TestFleetCreate_LocalListenerOnly(t *testing.T) {
 	s, home := fleetCreateServer(t, "127.0.0.1:0")
 	rec := postFleetCreate(s, `{}`, false)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "only available over the local authenticated listener", "refused by RequireLocalVia, not the write gate")
+	require.Contains(t, rec.Body.String(), "only available over the local authenticated listener", "refused by httpx.RequireLocalVia, not the write gate")
 	require.Empty(t, s.Manager.Names(), "a refused create writes nothing")
 	_, err := os.Stat(filepath.Join(home, pki.FleetRootDirName))
 	require.ErrorIs(t, err, os.ErrNotExist, "no root was minted")
 
 	// An mTLS peer (another instance of the fleet, the threat knomit#256
-	// names), granted write so that only RequireLocalVia can refuse it.
+	// names), granted write so that only httpx.RequireLocalVia can refuse it.
 	f := pkitest.New(t)
 	peer := f.Enroll(t, "peer@agents.knomit.io")
 	s.Grants.(auth.StaticGrants)[auth.InstancePrincipal(peer.Fingerprint()).String()] = auth.Set{auth.Read: {}, auth.Write: {}}
@@ -88,7 +88,7 @@ func TestFleetCreate_LocalListenerOnly(t *testing.T) {
 	rec = httptest.NewRecorder()
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "instance:"+peer.Fingerprint()+"@cert", "refused by RequireLocalVia, naming the peer")
+	require.Contains(t, rec.Body.String(), "instance:"+peer.Fingerprint()+"@cert", "refused by httpx.RequireLocalVia, naming the peer")
 	require.Empty(t, s.Manager.Names(), "a refused create writes nothing")
 
 	rec = postFleetCreate(s, `{"name":"crew"}`, true)

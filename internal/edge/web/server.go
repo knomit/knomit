@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"io/fs"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/engine/store/model"
@@ -72,7 +73,7 @@ type Server struct {
 	// the two sanctioned auth test fixes: for a test that must drive
 	// non-loopback addresses (because it asserts on them) or that calls
 	// NewAPIRouter directly, where r.URL.Path carries no /api/v1 prefix and
-	// mcpRoutePattern -- which is anchored on APIBase -- therefore cannot
+	// mcpRoutePattern -- which is anchored on httpx.APIBase -- therefore cannot
 	// exempt the MCP routes it was written to exempt.
 	//
 	// UNEXPORTED and set only from _test.go, via withoutAuthForTests. It is
@@ -231,7 +232,7 @@ func (s *Server) Handler() http.Handler {
 	docsRoute.Method(http.MethodHead, "/docs", docs)
 
 	// Mount the API router.
-	r.Mount(APIBase, s.NewAPIRouter())
+	r.Mount(httpx.APIBase, s.NewAPIRouter())
 
 	if s.APIOnly {
 		// Pure API server (desktop build serves the UI in-process via Wails).
@@ -280,7 +281,7 @@ func (s *Server) Handler() http.Handler {
 
 // listRepoBranches reads the branch list from a repo's store via WithRead. A
 // store that cannot be reached (e.g. the repo is still opening) is WithRead's
-// error, returned as-is: the handlers answer it 503 through writeStoreError,
+// error, returned as-is: the handlers answer it 503 through httpx.WriteStoreError,
 // not an empty list that reads as "this repo has no branches".
 func listRepoBranches(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error) {
 	var (

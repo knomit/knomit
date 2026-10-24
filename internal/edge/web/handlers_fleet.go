@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,13 +17,13 @@ import (
 )
 
 // fleetView is a FleetStatus as HAL, with `local`: the request came in over
-// the local authenticated listener (isLocalVia, the test RequireLocalVia
+// the local authenticated listener (httpx.IsLocalVia, the test httpx.RequireLocalVia
 // makes), so the fleet's mutations are reachable from where the caller runs.
 // host.listener (the [tls].addr bind) is shown only to a local caller; any
 // other principal the edge admits sees host.listener_on, whether there is
 // one, and not where it is bound.
 func fleetView(b hal.URLBuilder, r *http.Request, st repos.FleetStatus) map[string]any {
-	local := isLocalVia(r)
+	local := httpx.IsLocalVia(r)
 	raw, _ := json.Marshal(st)
 	out := map[string]any{}
 	_ = json.Unmarshal(raw, &out)
@@ -63,8 +64,8 @@ func writeFleetError(w http.ResponseWriter, r *http.Request, err error) {
 			map[string]any{"code": "indexing"})
 		return
 	}
-	if isLifecycleRefusal(err) {
-		writeLifecycleProblem(w, r, hal.URLBuilder{}, "", err)
+	if httpx.IsLifecycleRefusal(err) {
+		httpx.WriteLifecycleProblem(w, r, hal.URLBuilder{}, "", err)
 		return
 	}
 	hal.WriteProblem(w, http.StatusInternalServerError, "Fleet operation failed", err.Error(), r.URL.Path)
@@ -111,7 +112,7 @@ func createdFleetStatus(st repos.FleetStatus) int {
 func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createFleetRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		spec := repos.FleetCreateSpec{Name: req.Name}

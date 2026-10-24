@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 
@@ -345,7 +346,7 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		var req patchRepoRequest
-		if !decodeJSON(w, r, &req, maxRepoPatchBodyBytes) {
+		if !httpx.DecodeJSON(w, r, &req, maxRepoPatchBodyBytes) {
 			return
 		}
 		// Nothing to do — an empty patch is a successful no-op, not an error.
@@ -356,7 +357,7 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 		// Both files are committed on the agent branch: the same refusal as
 		// the fact routes when it accepts no authored write (the fleet
 		// repository, a subscription).
-		if refuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
+		if httpx.RefuseUnwritableBranch(w, r, ri, ri.AgentBranch()) {
 			return
 		}
 
@@ -400,9 +401,9 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				case errors.Is(err, repos.ErrAgentBranchUnset):
 					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 						"the repo has no agent branch yet", r.URL.Path)
-				case storeUnavailable(err):
+				case httpx.StoreUnavailable(err):
 					log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md: store not available")
-					writeStoreUnavailable(w, r)
+					httpx.WriteStoreUnavailable(w, r)
 				default:
 					log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write README.md failed")
 					hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",
@@ -429,9 +430,9 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 				case errors.Is(err, repos.ErrAgentBranchUnset):
 					hal.WriteProblem(w, http.StatusServiceUnavailable, "Repo not ready",
 						"the repo has no agent branch yet", r.URL.Path)
-				case storeUnavailable(err):
+				case httpx.StoreUnavailable(err):
 					log.Warn().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write LICENSE: store not available")
-					writeStoreUnavailable(w, r)
+					httpx.WriteStoreUnavailable(w, r)
 				default:
 					log.Error().Err(err).Str("path", r.URL.Path).Str("repo", name).Msg("write LICENSE failed")
 					hal.WriteProblem(w, http.StatusInternalServerError, "Update failed",

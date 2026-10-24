@@ -1,8 +1,8 @@
-package web
+package httpx
 
 import "strings"
 
-// trimOriginURL strips surrounding whitespace from a user-supplied origin URL.
+// TrimOriginURL strips surrounding whitespace from a user-supplied origin URL.
 //
 // People paste. A URL copied out of a browser, a chat message or a terminal
 // routinely carries a leading or trailing space, a tab, or a newline, and none
@@ -28,4 +28,4 @@ import "strings"
 // is named, and a create keyed on the result would silently point somewhere
 // else. Tolerating the suffix and the trailing slash is the git ROUTE's job
 // (gitremote.go), on the serving side, where no identity is being recorded.
-func trimOriginURL(u string) string { return strings.TrimSpace(u) }
+func TrimOriginURL(u string) string { return strings.TrimSpace(u) }

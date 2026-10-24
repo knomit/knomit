@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -53,7 +54,7 @@ func TestHandleHALActivity_ReturnsHAL(t *testing.T) {
 	require.Equal(t, base.Changes30d+3, body.Changes30d)
 	require.Equal(t, base.Changes90d+3, body.Changes90d)
 	require.Regexp(t, `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`, body.LastCommit)
-	require.Equal(t, APIBase+activityURL, body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+activityURL, body.Links["self"].Href)
 }
 
 // path= both narrows the activity to the subtree and is echoed in the self
@@ -74,7 +75,7 @@ func TestHandleHALActivity_WithPath_NarrowsAndIncludesQueryInSelf(t *testing.T) 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := decodeActivity(t, rec.Body.Bytes())
 	require.Equal(t, 2, body.Total)
-	require.Equal(t, APIBase+activityURL+"?path=kb/know/ai", body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+activityURL+"?path=kb/know/ai", body.Links["self"].Href)
 }
 
 func TestHandleHALActivity_UnknownRepo_Returns404(t *testing.T) {

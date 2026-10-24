@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -158,7 +159,7 @@ func (b commitsListBody) hashes() []string {
 // ontology root (c8 appears), reverse the items, or swap next and prev.
 func TestHandleCommitsList_ReturnsTheRequestedBranchUnderTheRoot(t *testing.T) {
 	f := newSpacedCommitsFixture(t)
-	base := APIBase + "/repos/alpha/branches/" + commitsOtherURL + "/commits"
+	base := httpx.APIBase + "/repos/alpha/branches/" + commitsOtherURL + "/commits"
 
 	body := getCommitsList(t, f.s, "/repos/alpha/branches/"+commitsOtherURL+"/commits?limit=3")
 	require.Equal(t, []string{f.c7, f.c6, f.c5}, body.hashes())
@@ -214,7 +215,7 @@ func TestHandleCommitsList_ReturnsTheRequestedBranchUnderTheRoot(t *testing.T) {
 // cursors do not. Sabotage: pass any cursor in another's place.
 func TestHandleCommitsList_FromAndBeforeCursors(t *testing.T) {
 	f := newCommitsFixture(t)
-	base := APIBase + "/repos/alpha/branches/" + commitsOtherURL + "/commits"
+	base := httpx.APIBase + "/repos/alpha/branches/" + commitsOtherURL + "/commits"
 	list := "/repos/alpha/branches/" + commitsOtherURL + "/commits"
 
 	from := getCommitsList(t, f.s, list+"?from="+f.c5+"&limit=2")
@@ -274,7 +275,7 @@ func getCommitDetail(t *testing.T, s *Server, branchURL, sha string) commitDetai
 // "A agent two").
 func TestHandleCommitDetail_LiveFileTakesTheRequestedBranchTitle(t *testing.T) {
 	f := newCommitsFixture(t)
-	branchURL := APIBase + "/repos/alpha/branches/" + commitsOtherURL
+	branchURL := httpx.APIBase + "/repos/alpha/branches/" + commitsOtherURL
 
 	body := getCommitDetail(t, f.s, commitsOtherURL, f.c1)
 	require.Equal(t, f.c1, body.Commit)
@@ -338,7 +339,7 @@ func TestHandleCommitDetail_DeletedFileTakesItsTitleBeforeTheCommit(t *testing.T
 func TestHandleCommitDetail_ListsOnlyFilesUnderTheRoot(t *testing.T) {
 	f := newCommitsFixture(t)
 
-	branchURL := APIBase + "/repos/alpha/branches/" + commitsOtherURL
+	branchURL := httpx.APIBase + "/repos/alpha/branches/" + commitsOtherURL
 	body := getCommitDetail(t, f.s, commitsOtherURL, f.c7)
 	require.Len(t, body.Files, 2, "%+v", body.Files)
 	for i, want := range []struct{ path, title string }{

@@ -55,7 +55,7 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 	store := newClientSessionsStore(t)
 	// Form B: this test asserts the recorded RemoteAddr is 192.0.2.9, so it
 	// cannot use a loopback address, and it drives NewAPIRouter() directly so
-	// the MCP route exemption (anchored on APIBase) does not match its paths.
+	// the MCP route exemption (anchored on httpx.APIBase) does not match its paths.
 	s := withoutAuthForTests(t, &Server{
 		Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(200),
 	})

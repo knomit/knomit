@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 
@@ -99,7 +100,7 @@ func handleHALLensTopics(ontologyRoot string) http.HandlerFunc {
 		for i, t := range targets {
 			entries, err := listTopicDir(r.Context(), t.RT.RI, t.RT.Branch, dirPath)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to list topics", t.RT.Branch)
+				httpx.WriteStoreError(w, r, err, "Failed to list topics", t.RT.Branch)
 				return
 			}
 			var leafEntries []facts.DirEntry

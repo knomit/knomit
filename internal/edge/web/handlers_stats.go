@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/engine/store/index"
@@ -14,7 +15,7 @@ import (
 )
 
 // loadStats reads one repo's aggregate stats. A store that cannot be reached
-// is WithRead's error, returned as-is (writeStoreError answers it 503).
+// is WithRead's error, returned as-is (httpx.WriteStoreError answers it 503).
 func loadStats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (index.StatsResult, error) {
 	var (
 		result index.StatsResult
@@ -63,14 +64,14 @@ func handleHALStats(b hal.URLBuilder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		pathPrefix := r.URL.Query().Get("path")
 		axisParam := r.URL.Query().Get("axis")
 		result, err := loadStats(r.Context(), ri, branch, pathPrefix, axisParam)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load stats", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load stats", branch)
 			return
 		}
 

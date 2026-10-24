@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -202,7 +203,7 @@ func requireRefs(t *testing.T, body refsBody, commits map[string]string, branchP
 // requireRefs is the package requireRefs over the fixture's repo alpha.
 func (f *factSubFixture) requireRefs(t *testing.T, body refsBody, branchURL string, want ...wantRef) {
 	t.Helper()
-	requireRefs(t, body, f.c, APIBase+"/repos/alpha/branches/"+branchURL, want...)
+	requireRefs(t, body, f.c, httpx.APIBase+"/repos/alpha/branches/"+branchURL, want...)
 }
 
 // The fixture's graph sets, by version.
@@ -276,7 +277,7 @@ func TestHandleFactIncoming_ReadsTheRequestedBranchAtHead(t *testing.T) {
 	url := "/repos/alpha/branches/" + fsOtherURL + "/facts/kb/t.md/incoming"
 
 	body := getRefs(t, f.s, url)
-	require.Equal(t, APIBase+url, body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+url, body.Links["self"].Href)
 	f.requireRefs(t, body, fsOtherURL, inT2...)
 	// s1 was committed a second before s2: each item carries its own time.
 	require.Less(t, body.Embedded.Refs[0].CommittedAt, body.Embedded.Refs[1].CommittedAt)
@@ -293,7 +294,7 @@ func TestHandleFactOutgoing_ReadsTheRequestedBranchAtHead(t *testing.T) {
 	url := "/repos/alpha/branches/" + fsOtherURL + "/facts/kb/t.md/outgoing"
 
 	body := getRefs(t, f.s, url)
-	require.Equal(t, APIBase+url, body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+url, body.Links["self"].Href)
 	f.requireRefs(t, body, fsOtherURL, outT2...)
 
 	agent := getRefs(t, f.s, "/repos/alpha/branches/agent:test/facts/kb/t.md/outgoing")
@@ -460,13 +461,13 @@ func (b factCommitsBody) hashes() []string {
 func TestHandleFactCommits_ReturnsTheRequestedBranchsLogOfThePath(t *testing.T) {
 	f := newFactCommitsFixture(t)
 	list := "/repos/alpha/branches/" + fsOtherURL + "/facts/kb/a.md/commits"
-	branch := APIBase + "/repos/alpha/branches/" + fsOtherURL
+	branch := httpx.APIBase + "/repos/alpha/branches/" + fsOtherURL
 
 	body := getFactCommits(t, f.s, list+"?limit=3")
 	require.Equal(t, []string{f.c6, f.c5, f.c3}, body.hashes())
 	require.Equal(t, 3, body.Count)
-	require.Equal(t, APIBase+list+"?limit=3", body.Links["self"].Href)
-	require.Equal(t, APIBase+list+"?after="+f.c3+"&limit=3", body.Links["next"].Href)
+	require.Equal(t, httpx.APIBase+list+"?limit=3", body.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+list+"?after="+f.c3+"&limit=3", body.Links["next"].Href)
 	require.NotContains(t, body.Links, "prev", "an `after` page has no prev cursor")
 
 	c6, c5, c3 := body.Embedded.Commits[0], body.Embedded.Commits[1], body.Embedded.Commits[2]
@@ -507,12 +508,12 @@ func TestHandleFactCommits_FromAndBeforeCursors(t *testing.T) {
 
 	from := getFactCommits(t, f.s, list+"?from="+f.c5+"&limit=2")
 	require.Equal(t, []string{f.c5, f.c3}, from.hashes())
-	require.Equal(t, APIBase+list+"?after="+f.c5+"&from="+f.c5+"&limit=2", from.Links["prev"].Href)
-	require.Equal(t, APIBase+list+"?after="+f.c3+"&from="+f.c5+"&limit=2", from.Links["next"].Href)
+	require.Equal(t, httpx.APIBase+list+"?after="+f.c5+"&from="+f.c5+"&limit=2", from.Links["prev"].Href)
+	require.Equal(t, httpx.APIBase+list+"?after="+f.c3+"&from="+f.c5+"&limit=2", from.Links["next"].Href)
 
 	before := getFactCommits(t, f.s, list+"?before="+f.c1+"&limit=2")
 	require.Equal(t, []string{f.c6, f.c5}, before.hashes())
-	require.Equal(t, APIBase+list+"?after="+f.c6+"&before="+f.c1+"&limit=2", before.Links["prev"].Href)
+	require.Equal(t, httpx.APIBase+list+"?after="+f.c6+"&before="+f.c1+"&limit=2", before.Links["prev"].Href)
 	require.NotContains(t, before.Links, "next")
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -177,7 +178,7 @@ func TestServerHandler_APIIsCompressedExactlyOnce(t *testing.T) {
 	h := s.Handler()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, APIBase+"/version", nil)
+	req := httptest.NewRequest(http.MethodGet, httpx.APIBase+"/version", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	h.ServeHTTP(rec, req)
 
@@ -281,10 +282,10 @@ func TestSSE_IsNeverCompressedThroughServerHandler(t *testing.T) {
 	h := s.Handler()
 
 	for _, path := range []string{
-		APIBase + "/repo-events",
-		APIBase + "/sessions/events",
-		APIBase + "/logs/events",
-		APIBase + "/repos/beta/branches/agent:test/events",
+		httpx.APIBase + "/repo-events",
+		httpx.APIBase + "/sessions/events",
+		httpx.APIBase + "/logs/events",
+		httpx.APIBase + "/repos/beta/branches/agent:test/events",
 	} {
 		t.Run(path, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())

@@ -24,12 +24,12 @@ import (
 
 // Every fleet operation is served on the local listener only: over loopback
 // TCP (a browser page; its anonymous principal holds write and admin) and over
-// mTLS (an enrolled peer granted write) each one is 403 from RequireLocalVia,
+// mTLS (an enrolled peer granted write) each one is 403 from httpx.RequireLocalVia,
 // and its handler never runs: the instance is the master of a fleet created
 // over the socket, and after every refused request that fleet, its root key
 // and its installed certificate are all still here. Over the socket the
 // same GET /fleet/root answers 200 (control).
-// SABOTAGE: mount any one of the routes outside the RequireLocalVia group ->
+// SABOTAGE: mount any one of the routes outside the httpx.RequireLocalVia group ->
 // its row is not 403 (and decommission, stand down or the root GET run) ->
 // red.
 func TestFleetMembership_EveryOperationIsLocalOnly(t *testing.T) {
@@ -67,7 +67,7 @@ func TestFleetMembership_EveryOperationIsLocalOnly(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.NewAPIRouter().ServeHTTP(rec, req)
 			require.Equal(t, http.StatusForbidden, rec.Code, "%s %s over %s: %s", rt.method, rt.path, via, rec.Body.String())
-			require.Contains(t, rec.Body.String(), "only available over the local authenticated listener", "%s %s over %s: refused by RequireLocalVia", rt.method, rt.path, via)
+			require.Contains(t, rec.Body.String(), "only available over the local authenticated listener", "%s %s over %s: refused by httpx.RequireLocalVia", rt.method, rt.path, via)
 			require.NotContains(t, rec.Body.String(), "BEGIN OPENSSH PRIVATE KEY", "%s %s over %s", rt.method, rt.path, via)
 		}
 	}
@@ -115,7 +115,7 @@ func TestFleetREST_MasterAndHosting(t *testing.T) {
 //
 // And it accepts this copy's own forge with no url and a new credential (the
 // forge copy's credential change, PR7c), stored as PUT origin assembles it.
-// Over loopback TCP both routes are 403 (RequireLocalVia).
+// Over loopback TCP both routes are 403 (httpx.RequireLocalVia).
 // SABOTAGE: drop refuseFleetOrigin from followFleetHost -> the http URL is
 // probed and refused as not_this_fleet or unreachable instead -> red; treat
 // another root as a match in followForge -> the other forge is attached ->

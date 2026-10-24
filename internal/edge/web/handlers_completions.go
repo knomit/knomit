@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,7 +13,7 @@ import (
 )
 
 // readCompletions reads the completion values for one repo and branch. A store
-// that cannot be reached is WithRead's error, returned as-is (writeStoreError
+// that cannot be reached is WithRead's error, returned as-is (httpx.WriteStoreError
 // answers it 503).
 func readCompletions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error) {
 	var (
@@ -39,7 +40,7 @@ func handleHALCompletions(b hal.URLBuilder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		category := r.URL.Query().Get("category")
@@ -47,14 +48,14 @@ func handleHALCompletions(b hal.URLBuilder) http.HandlerFunc {
 
 		values, err := readCompletions(r.Context(), ri, branch, category, prefix, 20)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load completions", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load completions", branch)
 			return
 		}
 		if values == nil {
 			values = []string{}
 		}
 
-		selfURL := selfWithQuery(b.Branch(repoName, a)+"/completions", r)
+		selfURL := httpx.SelfWithQuery(b.Branch(repoName, a)+"/completions", r)
 
 		view := completionsView{
 			Values: values,

@@ -123,17 +123,6 @@ func TestSplitCSV(t *testing.T) {
 	}
 }
 
-func TestSelfWithQuery(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/x?a=1&b=2", nil)
-	if got := selfWithQuery("/base", r); got != "/base?a=1&b=2" {
-		t.Errorf("got %q", got)
-	}
-	bare := httptest.NewRequest(http.MethodGet, "/x", nil)
-	if got := selfWithQuery("/base", bare); got != "/base" {
-		t.Errorf("got %q", got)
-	}
-}
-
 func TestMotifParams(t *testing.T) {
 	cases := []struct {
 		name       string

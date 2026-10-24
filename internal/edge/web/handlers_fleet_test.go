@@ -171,7 +171,7 @@ func TestFleetREST_AddressesAndRecord(t *testing.T) {
 }
 
 // GET /fleet's `local` is the edge's verdict on how the request came in, the
-// same test RequireLocalVia makes: true over the local listener, false over
+// same test httpx.RequireLocalVia makes: true over the local listener, false over
 // loopback TCP however the client dresses the request up.
 // SABOTAGE: set local from a request header -> the spoofed row is true ->
 // red; set it true always -> the TCP row is true -> red.

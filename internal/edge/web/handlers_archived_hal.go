@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
 
@@ -49,30 +50,13 @@ type archiveReasonView struct {
 // maxArchiveNoteBytes caps the user's note: a sentence, not a document.
 const maxArchiveNoteBytes = 500
 
-// archiveSummary is the one-line wording of an archive reason.
-func archiveSummary(why *control.ArchiveReason) string {
-	if why == nil {
-		return "No reason recorded"
-	}
-	if why.Source == control.ArchiveBySystem {
-		if why.Reason == "" {
-			return "Archived automatically"
-		}
-		return "Archived automatically: " + why.Reason
-	}
-	if why.Note != "" {
-		return "Archived by the user: " + why.Note
-	}
-	return "Archived by the user"
-}
-
 func archiveReasonViewOf(why *control.ArchiveReason) *archiveReasonView {
 	if why == nil {
 		return nil
 	}
 	return &archiveReasonView{
 		Source: string(why.Source), Reason: why.Reason, Note: why.Note,
-		Condition: why.Condition, Summary: archiveSummary(why),
+		Condition: why.Condition, Summary: httpx.ArchiveSummary(why),
 	}
 }
 
@@ -100,7 +84,7 @@ func handleHALRepoArchive(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		var req archiveRequest
-		if !decodeOptionalJSON(w, r, &req, 4096) {
+		if !httpx.DecodeOptionalJSON(w, r, &req, 4096) {
 			return
 		}
 		note := strings.TrimSpace(req.Note)
@@ -170,7 +154,7 @@ func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager) http.HandlerFu
 		uid := chi.URLParam(r, "id")
 		var req restoreRequest
 		// Optional: an empty body restores under the original name.
-		if !decodeOptionalJSON(w, r, &req, 0) {
+		if !httpx.DecodeOptionalJSON(w, r, &req, 0) {
 			return
 		}
 		ri, err := m.Restore(uid, req.NewName)

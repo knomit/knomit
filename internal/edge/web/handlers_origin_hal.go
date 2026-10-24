@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
 
@@ -97,7 +98,7 @@ func restoreRemoteConfig(svc *store.Service, ri *repos.RepoInstance, prev *remot
 // follow-up) needs no second signature change here.
 //
 // Both return WithRead's error AS-IS when the store cannot be reached
-// (storeUnavailable), and every handler answers it with writeStoreUnavailable:
+// (httpx.StoreUnavailable), and every handler answers it with httpx.WriteStoreUnavailable:
 // 503 "Repo not ready", the one answer the web layer gives for that state.
 // ri.WithRead returns Acquire's error WITHOUT invoking the closure — that is
 // its documented contract — so every caller in this file must ASSIGN that
@@ -211,8 +212,8 @@ func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		remote, err := getOrigin(r.Context(), ri)
-		if storeUnavailable(err) {
-			writeStoreUnavailable(w, r)
+		if httpx.StoreUnavailable(err) {
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -266,13 +267,13 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		var req setOriginRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		// Before every read of req.URL below, so the policy gate, the probe
 		// and the write all see the same string. A url of only spaces stays
 		// the partial-update case (reuse what is stored).
-		req.URL = trimOriginURL(req.URL)
+		req.URL = httpx.TrimOriginURL(req.URL)
 
 		// The local-origin policy at the write edge, before anything else
 		// reads req.URL (the attach guard re-asserts it). A partial update
@@ -286,8 +287,8 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 
 		existing, err := getOrigin(r.Context(), ri)
-		if storeUnavailable(err) {
-			writeStoreUnavailable(w, r)
+		if httpx.StoreUnavailable(err) {
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {
@@ -302,7 +303,7 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, http.StatusBadRequest, "URL required", errOriginURLRequired.Error(), r.URL.Path)
 			return
 		}
-		if req.URL != "" && !isGitURL(req.URL) {
+		if req.URL != "" && !httpx.IsGitURL(req.URL) {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid URL", errOriginInvalidURL.Error(), r.URL.Path)
 			return
 		}
@@ -312,11 +313,11 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		if authMethod == "" && existing != nil && existing.AuthMethod != "cert" {
 			authMethod = existing.AuthMethod
 		}
-		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
+		authToken := httpx.AssembleAuthToken(authMethod, req.Token, req.User, req.Password)
 		if authToken == "" && existing != nil {
 			authToken = existing.AuthToken
 		}
-		if verr := validateURLAuth(u, authMethod); verr != nil {
+		if verr := httpx.ValidateURLAuth(u, authMethod); verr != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", verr.Error(), r.URL.Path)
 			return
 		}
@@ -329,8 +330,8 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}))
 		switch {
 		case err == nil:
-		case isLifecycleRefusal(err):
-			writeLifecycleProblem(w, r, b, repoName, err)
+		case httpx.IsLifecycleRefusal(err):
+			httpx.WriteLifecycleProblem(w, r, b, repoName, err)
 			return
 		case errors.Is(err, repos.ErrLocalOriginDenied):
 			hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
@@ -407,7 +408,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 		ri := repos.RepoFromContext(r.Context())
 
 		var req upstreamRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		if req.Branch == "" {
@@ -421,8 +422,8 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 			return
 		}
 		if err := setOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
-			if storeUnavailable(err) {
-				writeStoreUnavailable(w, r)
+			if httpx.StoreUnavailable(err) {
+				httpx.WriteStoreUnavailable(w, r)
 				return
 			}
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set upstream branch",
@@ -460,8 +461,8 @@ func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
 				"this repo follows its origin read-only and has no content of its own; archive it instead of detaching the origin",
 				r.URL.Path)
-		case isLifecycleRefusal(err):
-			writeLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
+		case httpx.IsLifecycleRefusal(err):
+			httpx.WriteLifecycleProblem(w, r, b, chi.URLParam(r, "repo"), err)
 		default:
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin",
 				err.Error(), r.URL.Path)

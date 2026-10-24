@@ -406,7 +406,7 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 // as a GET of the same missing path does, instead of 500. Against the REAL
 // store: the bug was in deleteFile's own existence check
 // (internal/engine/store/fact_write.go), which returned a bare error string
-// writeStoreError's switch could not recognise, so EVERY missing-path delete —
+// httpx.WriteStoreError's switch could not recognise, so EVERY missing-path delete —
 // encoded or not — fell through to the default 500 case. The path exists on
 // the agent branch, so a delete there would succeed.
 // Sabotage: drop the wrapped store.ErrPathNotFound from deleteFile's

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -17,7 +18,7 @@ import (
 //   - the public OAuth surface (both discovery documents, /oauth/authorize,
 //     /oauth/authorize/{id}/wait, /oauth/token, /oauth/revoke) with no
 //     authentication at all, so [auth].require cannot hide it;
-//   - the API and MCP tree under APIBase, behind BearerMiddleware and
+//   - the API and MCP tree under httpx.APIBase, behind BearerMiddleware and
 //     Require(read) (R6) and NEVER AuthMiddleware (see apiRouter);
 //   - nothing else. /git, /docs, the web UI and the approval endpoints are
 //     not here; an unknown path is a 404 after authentication, so an
@@ -45,7 +46,7 @@ func (s *Server) OAuthHandler() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Handle("/.well-known/*", public)
 	r.Handle("/oauth/*", public)
-	r.Mount(APIBase, s.apiRouter(edge, g))
+	r.Mount(httpx.APIBase, s.apiRouter(edge, g))
 	r.NotFound(edge(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no resource at "+req.URL.Path, req.URL.Path)
 	})).ServeHTTP)

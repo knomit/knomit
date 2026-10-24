@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	pathpkg "path"
 	"slices"
@@ -35,8 +36,8 @@ func writerGate(ri *repos.RepoInstance, branch string) refs.Gate {
 // reaches the gate only after priorRefs has read the same store — its copy of
 // this branch would be reachable only in a teardown race, and untestable.
 func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
-	if storeUnavailable(gerr) {
-		writeStoreUnavailable(w, r)
+	if httpx.StoreUnavailable(gerr) {
+		httpx.WriteStoreUnavailable(w, r)
 		return
 	}
 	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unresolvable fact references",
@@ -47,7 +48,7 @@ func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
 // branch — the same branch and moment the fact resolver uses.
 //
 // A store that cannot be reached is WithRead's error, returned as-is: the gate
-// wraps it (%w), and the handlers answer it with 503 (storeUnavailable), never
+// wraps it (%w), and the handlers answer it with 503 (httpx.StoreUnavailable), never
 // with the 422 for a ref that does not resolve.
 func systemFileResolver(ri *repos.RepoInstance, branch string) refs.ResolveFunc {
 	return func(ctx context.Context, path string) (bool, error) {
@@ -131,7 +132,7 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 // writeFact commits content at path on branch with message and returns the
 // commit hash. A store error is returned unchanged, and so is WithRead's when
 // the store cannot be reached: nothing is written, and the handlers answer 503
-// through writeStoreError.
+// through httpx.WriteStoreError.
 func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
 	var (
 		commitHash string
@@ -153,7 +154,7 @@ func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, conten
 // deleteFact retracts path on branch with message and returns the commit hash.
 // A path that is not there answers errFactNotFound; any other store error is
 // returned unchanged, and so is WithRead's when the store cannot be reached:
-// nothing is deleted, and handleFactDelete answers 503 through writeStoreError
+// nothing is deleted, and handleFactDelete answers 503 through httpx.WriteStoreError
 // — not the 404 of errFactNotFound, since nothing was looked up.
 func deleteFact(ctx context.Context, ri *repos.RepoInstance, branch, path, message string) (string, error) {
 	var (
@@ -229,8 +230,8 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
-		if refuseUnwritableBranch(w, r, ri, branch) {
+		branch := httpx.BranchFromContext(r.Context())
+		if httpx.RefuseUnwritableBranch(w, r, ri, branch) {
 			return
 		}
 
@@ -257,7 +258,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		var body struct {
 			Content string `json:"content"`
 		}
-		if !decodeJSON(w, r, &body, 0) {
+		if !httpx.DecodeJSON(w, r, &body, 0) {
 			return
 		}
 
@@ -323,7 +324,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", perr.Error(), r.URL.Path)
 				return
 			}
-			writeStoreError(w, r, perr, "Failed to read fact", branch)
+			httpx.WriteStoreError(w, r, perr, "Failed to read fact", branch)
 			return
 		}
 		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)
@@ -375,7 +376,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 
 		msg := "edit: update " + path + " via API"
 		if _, err := writeFact(r.Context(), ri, branch, path, content, msg); err != nil {
-			writeStoreError(w, r, err, "Failed to write fact", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
 
@@ -395,8 +396,8 @@ func handleFactDelete(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
-		if refuseUnwritableBranch(w, r, ri, branch) {
+		branch := httpx.BranchFromContext(r.Context())
+		if httpx.RefuseUnwritableBranch(w, r, ri, branch) {
 			return
 		}
 
@@ -425,7 +426,7 @@ func handleFactDelete(b hal.URLBuilder) http.HandlerFunc {
 					`no fact at path "`+path+`" on branch "`+branch+`"`, r.URL.Path)
 				return
 			}
-			writeStoreError(w, r, err, "Failed to delete fact", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to delete fact", branch)
 			return
 		}
 

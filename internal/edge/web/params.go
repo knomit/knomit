@@ -94,16 +94,6 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// selfWithQuery returns base plus the request's raw query string, for the
-// _links.self of a filterable collection: the self link of a filtered view
-// must reproduce the filter, or following it lands somewhere else.
-func selfWithQuery(base string, r *http.Request) string {
-	if r.URL.RawQuery != "" {
-		return base + "?" + r.URL.RawQuery
-	}
-	return base
-}
-
 // motifParams parses the motifs / motif_match query parameters shared by the
 // repo and lens search + facts collections.
 //

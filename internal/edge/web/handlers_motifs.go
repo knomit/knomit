@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
 	"sort"
@@ -20,7 +21,7 @@ import (
 
 // The motif vocabulary reads the handlers make. Each passes straight through
 // to the repo's vocab.MotifIndex under the repo's read lock. A store that
-// cannot be reached is WithRead's error, returned as-is (writeStoreError
+// cannot be reached is WithRead's error, returned as-is (httpx.WriteStoreError
 // answers it 503), and a store error comes back unchanged. A test that needs one to fail installs
 // vocab.MotifIndex.SetReadFaultForTest on the real store.
 
@@ -307,7 +308,7 @@ func renderMotifCollection(
 		end = start + p.limit
 	}
 
-	links := hal.LinkMap{"self": {Href: selfWithQuery(base, r)}}
+	links := hal.LinkMap{"self": {Href: httpx.SelfWithQuery(base, r)}}
 	if end < total {
 		nextQ := r.URL.Query()
 		nextQ.Set("offset", strconv.Itoa(end))
@@ -360,7 +361,7 @@ func handleHALMotifs(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		p, ok := motifCollectionQuery(w, r)
@@ -370,12 +371,12 @@ func handleHALMotifs(b hal.URLBuilder) http.HandlerFunc {
 
 		clusters, err := motifClusters(r.Context(), ri, branch, p.path)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
 		health, err := motifVocabularyHealth(r.Context(), ri, branch, p.path)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
 
@@ -383,7 +384,7 @@ func handleHALMotifs(b hal.URLBuilder) http.HandlerFunc {
 		// narrowing because ?q= matches definition text too.
 		defs, err := motifDefinitions(r.Context(), ri, branch, motifClusterKeys(clusters))
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
 
@@ -482,7 +483,7 @@ func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 		rawKey := chi.URLParam(r, "key")
 
@@ -496,7 +497,7 @@ func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 		// happened to be standing when they picked it.
 		clusters, err := motifClusters(r.Context(), ri, branch, "")
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
 		}
 		byKey := make(map[string]vocab.MotifCluster, len(clusters))
@@ -509,7 +510,7 @@ func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 			// Not a cluster key — treat it as a spelling and resolve.
 			key, kerr := motifClusterKey(r.Context(), ri, branch, rawKey)
 			if kerr != nil {
-				writeStoreError(w, r, kerr, "Failed to load motif cluster", branch)
+				httpx.WriteStoreError(w, r, kerr, "Failed to load motif cluster", branch)
 				return
 			}
 			cluster, found = byKey[key]
@@ -522,7 +523,7 @@ func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 
 		defs, err := motifDefinitions(r.Context(), ri, branch, []string{cluster.ClusterKey})
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
 		}
 		st, defined := defs[cluster.ClusterKey]
@@ -538,7 +539,7 @@ func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 			Limit:      carrierLimit,
 		})
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif carriers", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif carriers", branch)
 			return
 		}
 		carriers := make([]motifCarrierItem, 0, len(entries))
@@ -557,7 +558,7 @@ func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 
 		aliasRows, err := motifAliasRows(r.Context(), ri, branch)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
 		}
 		aliases := make([]motifAliasItem, 0, len(cluster.Members))

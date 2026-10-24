@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,8 +16,8 @@ func TestHandleVersion_ReturnsBuildVersion(t *testing.T) {
 	t.Cleanup(func() { version.Version, version.Commit = orig, origCommit })
 	version.Version, version.Commit = "0.5.0", "2a7ae9d"
 
-	b := hal.URLBuilder{Base: APIBase}
-	req := httptest.NewRequest(http.MethodGet, APIBase+"/version", nil)
+	b := hal.URLBuilder{Base: httpx.APIBase}
+	req := httptest.NewRequest(http.MethodGet, httpx.APIBase+"/version", nil)
 	rec := httptest.NewRecorder()
 
 	handleVersion(b, false).ServeHTTP(rec, req)
@@ -46,8 +47,8 @@ func TestHandleVersion_ReturnsBuildVersion(t *testing.T) {
 		t.Fatalf("_links missing or wrong type: %v", body["_links"])
 	}
 	self, ok := links["self"].(map[string]any)
-	if !ok || self["href"] != APIBase+"/version" {
-		t.Errorf("self link = %v, want href %s", links["self"], APIBase+"/version")
+	if !ok || self["href"] != httpx.APIBase+"/version" {
+		t.Errorf("self link = %v, want href %s", links["self"], httpx.APIBase+"/version")
 	}
 }
 

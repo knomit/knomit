@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -310,7 +311,7 @@ func TestHandleHALLensesCreate_Created(t *testing.T) {
 	if len(body.Reads) != 2 {
 		t.Fatalf("reads: got %d, want 2 (write repo folded in); body=%s", len(body.Reads), rec.Body.String())
 	}
-	if body.Links["self"].Href != APIBase+"/lenses/eng" {
+	if body.Links["self"].Href != httpx.APIBase+"/lenses/eng" {
 		t.Errorf("self link: got %q", body.Links["self"].Href)
 	}
 
@@ -643,7 +644,7 @@ func TestHandleHALLenses_ListShowsCreated(t *testing.T) {
 	if body.Embedded.Lenses[0].Name != "eng" {
 		t.Errorf("lens name: got %q", body.Embedded.Lenses[0].Name)
 	}
-	if body.Links["self"].Href != APIBase+"/lenses" {
+	if body.Links["self"].Href != httpx.APIBase+"/lenses" {
 		t.Errorf("self link: got %q", body.Links["self"].Href)
 	}
 }
@@ -696,7 +697,7 @@ func TestHandleHALLens_GetAndNotFound(t *testing.T) {
 	if body.Name != "eng" {
 		t.Errorf("name: got %q", body.Name)
 	}
-	if body.Links["self"].Href != APIBase+"/lenses/eng" {
+	if body.Links["self"].Href != httpx.APIBase+"/lenses/eng" {
 		t.Errorf("self link: got %q", body.Links["self"].Href)
 	}
 

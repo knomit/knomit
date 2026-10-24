@@ -1,4 +1,4 @@
-package web
+package httpx
 
 import (
 	"encoding/json"
@@ -155,9 +155,9 @@ func TestDecodeJSON(t *testing.T) {
 			v := decodeTarget{Name: "untouched", Count: -1}
 			var ok bool
 			if tc.optional {
-				ok = decodeOptionalJSON(rec, r, &v, tc.maxBytes)
+				ok = DecodeOptionalJSON(rec, r, &v, tc.maxBytes)
 			} else {
-				ok = decodeJSON(rec, r, &v, tc.maxBytes)
+				ok = DecodeJSON(rec, r, &v, tc.maxBytes)
 			}
 
 			title, detail := decodeProblem(t, rec)
@@ -193,7 +193,7 @@ func TestDecodeJSON(t *testing.T) {
 	}
 }
 
-// decodeJSON on a request whose Body is nil answers the empty-body 400, not a
+// DecodeJSON on a request whose Body is nil answers the empty-body 400, not a
 // panic.
 func TestDecodeJSON_NilBody(t *testing.T) {
 	r, _ := http.NewRequest(http.MethodPost, "/x", nil)
@@ -201,7 +201,7 @@ func TestDecodeJSON_NilBody(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	var v decodeTarget
-	if decodeJSON(rec, r, &v, 0) {
+	if DecodeJSON(rec, r, &v, 0) {
 		t.Fatal("a nil body was accepted")
 	}
 	title, detail := decodeProblem(t, rec)
@@ -216,14 +216,14 @@ func TestDecodeOptionalJSON_NilBody(t *testing.T) {
 	r, _ := http.NewRequest(http.MethodPost, "/x", nil)
 	r.Body = nil
 	var v decodeTarget
-	if !decodeOptionalJSON(httptest.NewRecorder(), r, &v, 0) {
+	if !DecodeOptionalJSON(httptest.NewRecorder(), r, &v, 0) {
 		t.Fatal("a nil body was refused")
 	}
 }
 
 // newJSONRequest is httptest.NewRequest with the Content-Type every JSON API
 // body is sent with. Fixtures that post a body to a handler reading it with
-// decodeJSON build their request here; a test about the Content-Type rule
+// DecodeJSON build their request here; a test about the Content-Type rule
 // itself sets or deletes the header afterwards.
 func newJSONRequest(method, target string, body io.Reader) *http.Request {
 	r := httptest.NewRequest(method, target, body)
