@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 
@@ -15,7 +16,7 @@ import (
 )
 
 // domainStats returns the domain histogram for a branch. A store that cannot
-// be reached is WithRead's error, returned as-is (writeStoreError answers it
+// be reached is WithRead's error, returned as-is (httpx.WriteStoreError answers it
 // 503).
 func domainStats(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]int, error) {
 	var (
@@ -77,12 +78,12 @@ func handleHALDomains(b hal.URLBuilder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		domains, err := domainStats(r.Context(), ri, branch)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load domains", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load domains", branch)
 			return
 		}
 		if domains == nil {
@@ -126,13 +127,13 @@ func handleHALDomainFacts(b hal.URLBuilder) http.HandlerFunc {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 		domainName := chi.URLParam(r, "name")
 
 		results, err := domainFacts(r.Context(), ri, branch, domainName)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to load domain facts", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to load domain facts", branch)
 			return
 		}
 		if results == nil {

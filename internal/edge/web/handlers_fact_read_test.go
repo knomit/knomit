@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync"
 	"testing"
@@ -208,7 +209,7 @@ func (f *factReadFixture) before(step, path string) string {
 func TestHandleHALFact_ReadsTheRequestedBranchAtHead(t *testing.T) {
 	f := newFactReadFixture(t)
 	reads := hookReadFact(t, f.svc, "", nil)
-	branch := APIBase + "/repos/alpha/branches/" + fsOtherURL
+	branch := httpx.APIBase + "/repos/alpha/branches/" + fsOtherURL
 
 	body := getFactView(t, f.s, "/repos/alpha/branches/"+fsOtherURL+"/facts/kb/f.md")
 	require.Equal(t, "kb/f.md", body.Path)

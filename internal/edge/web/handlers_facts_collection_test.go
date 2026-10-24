@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 	"sync/atomic"
@@ -99,7 +100,7 @@ func TestHandleHALFactsCollection_ReturnsHALCollection(t *testing.T) {
 	require.Equal(t, "Fact B", b.Title)
 	require.Equal(t, "hypothesis", b.Type)
 	require.Equal(t, "update", b.Operation)
-	require.Equal(t, APIBase+"/repos/alpha/branches/agent:test/facts/kb/know/a.md", a.Links["self"].Href)
+	require.Equal(t, httpx.APIBase+"/repos/alpha/branches/agent:test/facts/kb/know/a.md", a.Links["self"].Href)
 }
 
 // limit and offset reach the store: one commit holds three facts (listed by

@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
 
@@ -23,7 +24,7 @@ import (
 func handleCommitAnchoredFact(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		sha := chi.URLParam(r, "sha")
 		path := chi.URLParam(r, "*")
 
@@ -73,7 +74,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder) http.HandlerFunc {
 				return
 			}
 			log.Error().Err(err).Str("path", path).Str("branch", branch).Str("sha", sha).Msg("commit-anchored fact read failed")
-			writeStoreError(w, r, err, "Failed to read fact", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to read fact", branch)
 			return
 		}
 
@@ -113,7 +114,7 @@ func handleCommitAnchoredOutgoing(
 
 	refs, err := outgoingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to load outgoing refs", a.Branch)
+		httpx.WriteStoreError(w, r, err, "Failed to load outgoing refs", a.Branch)
 		return
 	}
 

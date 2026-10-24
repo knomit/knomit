@@ -40,7 +40,7 @@ func restPrinciple(t *testing.T, body string, designer bool) string {
 // before any rule ran) without fixing it is refused the same way; fixing it
 // is accepted. The repository is on the code preset.
 //
-// SABOTAGE: drop the FactInvalidError arm from writeStoreError -> the three
+// SABOTAGE: drop the FactInvalidError arm from httpx.WriteStoreError -> the three
 // refusals answer 500 -> red; drop validateWrite from writeFileExact -> they
 // answer 200/201 and land -> red.
 func TestFactWrite_RESTRefusesAFactThatFailsTheOntology(t *testing.T) {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
 
@@ -126,7 +127,7 @@ func factPresentAtCommitOr404(
 		present, err = factLiveAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	}
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to resolve fact", a.Branch)
+		httpx.WriteStoreError(w, r, err, "Failed to resolve fact", a.Branch)
 		return false
 	}
 	if !present {
@@ -176,7 +177,7 @@ func handleFactCommits(b hal.URLBuilder, ri *repos.RepoInstance, repoName, branc
 
 	entries, next, prev, err := logPaginated(r.Context(), ri, branch, factPath, limit, after, from, before)
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to list commits", branch)
+		httpx.WriteStoreError(w, r, err, "Failed to list commits", branch)
 		return
 	}
 	if entries == nil {
@@ -185,7 +186,7 @@ func handleFactCommits(b hal.URLBuilder, ri *repos.RepoInstance, repoName, branc
 
 	a := hal.Anchor{Branch: branch}
 	commitsURL := b.FactCommits(repoName, a, factPath)
-	selfURL := selfWithQuery(commitsURL, r)
+	selfURL := httpx.SelfWithQuery(commitsURL, r)
 
 	links := hal.LinkMap{"self": {Href: selfURL}}
 	if next != "" {
@@ -225,7 +226,7 @@ func handleFactCommits(b hal.URLBuilder, ri *repos.RepoInstance, repoName, branc
 func handleFactIncoming(b hal.URLBuilder, ri *repos.RepoInstance, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
 	result, err := explainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to load incoming refs", branch)
+		httpx.WriteStoreError(w, r, err, "Failed to load incoming refs", branch)
 		return
 	}
 
@@ -247,7 +248,7 @@ func handleFactIncoming(b hal.URLBuilder, ri *repos.RepoInstance, repoName, bran
 func handleFactOutgoing(b hal.URLBuilder, ri *repos.RepoInstance, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
 	result, err := explainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to load outgoing refs", branch)
+		httpx.WriteStoreError(w, r, err, "Failed to load outgoing refs", branch)
 		return
 	}
 

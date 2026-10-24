@@ -235,7 +235,7 @@ func (fi *Index) deleteFile(ctx context.Context, branch, path, message, operatio
 		// DELETE handler) can tell "nothing there" from a real backend
 		// failure and answer 404, exactly as a GET of the same missing path
 		// already does, instead of a bare error string that falls through
-		// writeStoreError's default 500.
+		// httpx.WriteStoreError's default 500.
 		return "", fmt.Errorf("DeleteFile: %q: %w", path, model.ErrPathNotFound)
 	}
 

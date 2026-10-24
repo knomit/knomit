@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -356,7 +357,7 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 				q.Diag = &diags[i]
 				entries, n, err := recentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
 				if err != nil {
-					writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
+					httpx.WriteStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
 					return
 				}
 				lists[i] = entries
@@ -616,7 +617,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		//
 		// GATED ON THE FACT BEING READABLE THROUGH THE LENS, and that gate is
 		// what keeps this route from becoming a mount-topology oracle. The
-		// sub-resource handlers report failure through writeStoreError, whose
+		// sub-resource handlers report failure through httpx.WriteStoreError, whose
 		// detail names the branch, and handleFactCommits does not fail at all
 		// for a path with no commits — it answers an empty 200 whose
 		// _links.self carries the mount's repo name and branch. Either one lets
@@ -636,7 +637,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 					lensFactNotFound(w, r, requested)
 					return
 				}
-				writeStoreError(w, r, err, "Failed to read fact", branch)
+				httpx.WriteStoreError(w, r, err, "Failed to read fact", branch)
 				return
 			}
 			if dispatchResolvedFactSubResource(b, ri, ri.Name(), branch, rel, sub, w, r) {
@@ -651,7 +652,7 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 				lensFactNotFound(w, r, requested)
 				return
 			}
-			writeStoreError(w, r, err, "Failed to read fact", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to read fact", branch)
 			return
 		}
 
@@ -730,7 +731,7 @@ func resolveLensFactMount(bind *repos.Binding, id string, qualified bool) (lensF
 // uniform lensFactNotFound 404: a fact that is not there (errFactNotFound), on
 // any mount, or a store that cannot be reached, on a READ mount only.
 func (m lensFactMount) answersNotFound(err error) bool {
-	return errors.Is(err, errFactNotFound) || (m.readMount && storeUnavailable(err))
+	return errors.Is(err, errFactNotFound) || (m.readMount && httpx.StoreUnavailable(err))
 }
 
 // lensWirePath renders a union row's path as addressed on the wire: bare for the
@@ -979,7 +980,7 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 			lists[i] = res
 			return "", nil
 		}); f != nil {
-			writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+			httpx.WriteStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
 			return
 		}
 
@@ -1062,7 +1063,7 @@ type lensCompletionsResponse struct {
 // category set, the SAME readCompletions read, the SAME case-insensitive
 // prefix matching, the SAME per-category value ordering, and — critically — the
 // SAME unknown-category error, since a bad category is forwarded to the store
-// per mount and its error flows through writeStoreError exactly as the repo
+// per mount and its error flows through httpx.WriteStoreError exactly as the repo
 // handler's does (500 problem+json).
 //
 // For the existing categories it fans out over federate.ReadTargetsFor and
@@ -1104,7 +1105,7 @@ func handleHALLensCompletions() http.HandlerFunc {
 			// limit); the union below dedupes across mounts.
 			vals, err := readCompletions(r.Context(), t.RT.RI, t.RT.Branch, category, prefix, 20)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to load completions", t.RT.Branch)
+				httpx.WriteStoreError(w, r, err, "Failed to load completions", t.RT.Branch)
 				return
 			}
 			for _, v := range vals {

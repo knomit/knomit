@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/corpus/repos"
@@ -29,7 +30,7 @@ func handleCommitAnchoredIncoming(
 
 	refs, err := incomingAtCommit(r.Context(), ri, a.Branch, factPath, a.Commit)
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to load incoming refs", a.Branch)
+		httpx.WriteStoreError(w, r, err, "Failed to load incoming refs", a.Branch)
 		return
 	}
 

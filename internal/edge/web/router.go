@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -12,12 +13,9 @@ import (
 	"knomit/internal/foundation/auth"
 )
 
-// APIBase is the URL prefix for the API router.
-const APIBase = "/api/v1"
-
 // NewAPIRouter constructs the HAL chi router for this Server. The router
-// is rooted at "/" — the caller mounts it under APIBase via chi.Mount.
-// Everything below this router assumes APIBase as the Server-level prefix.
+// is rooted at "/" — the caller mounts it under httpx.APIBase via chi.Mount.
+// Everything below this router assumes httpx.APIBase as the Server-level prefix.
 //
 // Middleware order:
 //  1. Recoverer — catch panics, return 500 problem+json
@@ -26,7 +24,7 @@ const APIBase = "/api/v1"
 //     bare middleware.Compress(5) that stood here compressed nothing at all.
 //  3. NotFound / MethodNotAllowed handlers — return problem+json
 //
-// Per-route middleware (BranchMiddleware, RepoMiddleware) is attached at
+// Per-route middleware (httpx.BranchMiddleware, RepoMiddleware) is attached at
 // the route-group level where branches/repos appear in the path, not at
 // the router root.
 func (s *Server) NewAPIRouter() chi.Router {
@@ -86,7 +84,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
 	})
 
-	b := hal.URLBuilder{Base: APIBase}
+	b := hal.URLBuilder{Base: httpx.APIBase}
 
 	// mcpDispatch is shared by the repo-scoped and lens-scoped MCP mounts.
 	// Defined before the route tree because both subtrees close over it.
@@ -160,11 +158,11 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	r.Get("/fleet/activity", handleFleetActivity(b, s.Manager))
 	// Every fleet operation uses the fleet ROOT KEY or installs or removes
 	// this instance's trust material, so each is served to the local
-	// authenticated listener only (RequireLocalVia: the unix socket or named
+	// authenticated listener only (httpx.RequireLocalVia: the unix socket or named
 	// pipe) — never to a peer over mTLS, and never to a browser page on
 	// loopback TCP (issue #521 opens them remotely later, under one rule).
 	r.Group(func(r chi.Router) {
-		r.Use(RequireLocalVia)
+		r.Use(httpx.RequireLocalVia)
 		r.Post("/fleet/create", handleCreateFleet(b, s.Manager))
 		r.Post("/fleet/enroll", handleEnrollFleet(s.Manager))
 		r.Post("/fleet/join", handleJoinFleet(b, s.Manager))
@@ -338,7 +336,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			})
 
 			// Branch list carries no {branch} segment, so it stays outside
-			// the BranchMiddleware subtree.
+			// the httpx.BranchMiddleware subtree.
 			r.Get("/branches", handleHALBranches(b))
 
 			// Branches a peer pushed to this host (F11), and what merging each
@@ -365,7 +363,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			})
 
 			r.Route("/branches/{branch}", func(r chi.Router) {
-				r.Use(BranchMiddleware)
+				r.Use(httpx.BranchMiddleware)
 
 				r.Get("/", handleHALBranch(b, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 

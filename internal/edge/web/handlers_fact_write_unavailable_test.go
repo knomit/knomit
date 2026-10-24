@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,12 +29,12 @@ import (
 // store down (which the eligibility gate refuses first — see that test). The
 // populating refusal is not reachable from this package
 // without one (it needs a create held mid-populate, which only package repos'
-// machine fixtures can do); it wraps ErrStoreUnavailable, so storeUnavailable
+// machine fixtures can do); it wraps ErrStoreUnavailable, so httpx.StoreUnavailable
 // answers it by the same errors.Is — TestStoreUnavailable_MatchesEveryAcquireRefusal.
 //
 // The request branch is the agent branch here, deliberately and unavoidably:
 // an experiment branch's writability is read from the store, which is the
-// thing missing, so refuseUnwritableBranch refuses it (403) before any of the
+// thing missing, so httpx.RefuseUnwritableBranch refuses it (403) before any of the
 // helpers under test run.
 
 const (
@@ -102,12 +103,12 @@ func TestFactWrite_NoStore_Answers503(t *testing.T) {
 // that resolved it before teardown. Teardown exits the Identify stage before
 // it detaches the store, and Identify's exit forgets the ontology, so
 // WritableBranch refuses EVERY branch first: the write is a 403 from
-// refuseUnwritableBranch, before any helper runs. What matters is that it is
+// httpx.RefuseUnwritableBranch, before any helper runs. What matters is that it is
 // not a success and nothing reaches git: afterwards the repo's database holds
 // the seeded fact unchanged and no commit was added on the branch.
 //
 // The helpers themselves, on this same closed instance, return ErrRepoClosed,
-// and writeStoreError answers it 503 — the answer a write gets when teardown
+// and httpx.WriteStoreError answers it 503 — the answer a write gets when teardown
 // starts after the eligibility check has passed.
 func TestFactWrite_ClosedRepo_RefusedAndWritesNothing(t *testing.T) {
 	home := t.TempDir()
@@ -152,7 +153,7 @@ func TestFactWrite_ClosedRepo_RefusedAndWritesNothing(t *testing.T) {
 		require.ErrorIs(t, err, repos.ErrRepoClosed, "systemFileResolver")
 
 		rec := httptest.NewRecorder()
-		writeStoreError(rec, httptest.NewRequest(http.MethodPut, "/x", nil), err, "Failed to write fact", branch)
+		httpx.WriteStoreError(rec, httptest.NewRequest(http.MethodPut, "/x", nil), err, "Failed to write fact", branch)
 		requireStoreUnavailable(t, rec)
 	})
 
@@ -202,23 +203,23 @@ func TestFactWriteHelpers_ReturnAcquireRefusal(t *testing.T) {
 	require.Empty(t, h)
 }
 
-// storeUnavailable is exactly Acquire's refusals, however wrapped — including
+// httpx.StoreUnavailable is exactly Acquire's refusals, however wrapped — including
 // the populating one, which wraps ErrStoreUnavailable — and nothing else.
 func TestStoreUnavailable_MatchesEveryAcquireRefusal(t *testing.T) {
-	require.True(t, storeUnavailable(repos.ErrStoreUnavailable))
-	require.True(t, storeUnavailable(repos.ErrRepoClosed))
+	require.True(t, httpx.StoreUnavailable(repos.ErrStoreUnavailable))
+	require.True(t, httpx.StoreUnavailable(repos.ErrRepoClosed))
 	// The populating refusal's shape (repos' errPopulating) and the gate's
 	// wrapping of a resolver error.
-	require.True(t, storeUnavailable(fmt.Errorf("%w: repo is populating", repos.ErrStoreUnavailable)))
-	require.True(t, storeUnavailable(fmt.Errorf("ref gate: resolve(kb/x.md): %w", repos.ErrRepoClosed)))
-	require.False(t, storeUnavailable(errors.New(repos.ErrStoreUnavailable.Error())),
+	require.True(t, httpx.StoreUnavailable(fmt.Errorf("%w: repo is populating", repos.ErrStoreUnavailable)))
+	require.True(t, httpx.StoreUnavailable(fmt.Errorf("ref gate: resolve(kb/x.md): %w", repos.ErrRepoClosed)))
+	require.False(t, httpx.StoreUnavailable(errors.New(repos.ErrStoreUnavailable.Error())),
 		"matched by identity, not by text")
-	require.False(t, storeUnavailable(model.ErrPathNotFound))
-	require.False(t, storeUnavailable(errFactNotFound))
+	require.False(t, httpx.StoreUnavailable(model.ErrPathNotFound))
+	require.False(t, httpx.StoreUnavailable(errFactNotFound))
 }
 
 // The repo PATCH (README.md / LICENSE) answers the same refusal with the same
-// problem: one spelling, writeStoreUnavailable, for every write that finds the
+// problem: one spelling, httpx.WriteStoreUnavailable, for every write that finds the
 // store gone.
 func TestRepoPatch_NoStore_Answers503(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -39,26 +40,26 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 		repo := chi.URLParam(r, "repo")
 
 		var req createSessionRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
-		// Before isGitURL below, and before the URL is carried on the session
+		// Before httpx.IsGitURL below, and before the URL is carried on the session
 		// into the origin it eventually persists.
 		//
-		// isGitURL does NOT reject every padded URL, which is the whole
+		// httpx.IsGitURL does NOT reject every padded URL, which is the whole
 		// trouble: url.Parse tolerates a TRAILING space, so the reported
 		// defect — a URL pasted with trailing spaces — sails through and is
 		// carried padded. Only a leading space, a tab or a newline make
 		// url.Parse fail. So the trim is here to make the accepted form clean,
 		// not merely to spare the rejected forms.
-		req.URL = trimOriginURL(req.URL)
+		req.URL = httpx.TrimOriginURL(req.URL)
 
 		if req.URL == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
 				"url is required", r.URL.Path)
 			return
 		}
-		if !isGitURL(req.URL) {
+		if !httpx.IsGitURL(req.URL) {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
 				"invalid url", r.URL.Path)
 			return
@@ -77,7 +78,7 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 		// Auth, invoked when the session is tested), so it isn't re-checked here.
 
 		// Validate URL/auth compatibility.
-		if err := validateURLAuth(req.URL, req.AuthMethod); err != nil {
+		if err := httpx.ValidateURLAuth(req.URL, req.AuthMethod); err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
 				err.Error(), r.URL.Path)
 			return
@@ -206,7 +207,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// fleet transport); the commit's attach or swap decides again from
 		// the same input.
 		decided, err := rm.ResolveOrigin(r.Context(), repos.OriginSpec{URL: sess.URL, AuthMethod: sess.Auth.Method,
-			AuthToken: assembleAuthToken(sess.Auth.Method, sess.Auth.Token, sess.Auth.User, sess.Auth.Password)})
+			AuthToken: httpx.AssembleAuthToken(sess.Auth.Method, sess.Auth.Token, sess.Auth.User, sess.Auth.Password)})
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("origin refused: %v", err)})
 			return
@@ -577,7 +578,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		}
 
 		var req applyRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 
@@ -761,7 +762,7 @@ func extractRefsFromFrontmatter(content string) []string {
 // That is the ONE place in this package where a write result is not turned
 // into a return; everywhere else, `if !s.Write(...) { return }`.
 func beginSSE(w http.ResponseWriter) (func(v any), bool) {
-	stream, ok := startSSE(w)
+	stream, ok := httpx.StartSSE(w)
 	if !ok {
 		return nil, false
 	}
@@ -842,7 +843,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		var body commitRequest
-		if !decodeOptionalJSON(w, r, &body, 0) {
+		if !httpx.DecodeOptionalJSON(w, r, &body, 0) {
 			return
 		}
 
@@ -868,12 +869,12 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		b := hal.URLBuilder{Base: APIBase}
+		b := hal.URLBuilder{Base: httpx.APIBase}
 
 		// Exclusive with indexing, checked before the session's clone is
 		// closed, so a refused commit can be retried with cancel_indexing.
 		if ri.Status().IndexRunning() && !body.CancelIndexing {
-			writeLifecycleProblem(w, r, b, repo, repos.ErrIndexing)
+			httpx.WriteLifecycleProblem(w, r, b, repo, repos.ErrIndexing)
 			return
 		}
 
@@ -888,7 +889,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			URL:        remoteURL,
 			Branch:     upstreamMain,
 			AuthMethod: authCfg.Method,
-			AuthToken:  assembleAuthToken(authCfg.Method, authCfg.Token, authCfg.User, authCfg.Password),
+			AuthToken:  httpx.AssembleAuthToken(authCfg.Method, authCfg.Token, authCfg.User, authCfg.Password),
 		}
 
 		var e repos.MachineEvent
@@ -1095,7 +1096,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 // isCommitRefusal reports whether err is a refusal that changed nothing: the
 // machine's own checks, or an event guard's verdict.
 func isCommitRefusal(err error) bool {
-	return isLifecycleRefusal(err) ||
+	return httpx.IsLifecycleRefusal(err) ||
 		errors.Is(err, repos.ErrOriginOntologyConflict) ||
 		errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal) ||
 		errors.Is(err, repos.ErrFleetOntologyReserved) ||
@@ -1107,8 +1108,8 @@ func isCommitRefusal(err error) bool {
 // writeCommitProblem maps a commit refused before anything changed.
 func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, repo string, err error) {
 	switch {
-	case isLifecycleRefusal(err):
-		writeLifecycleProblem(w, r, b, repo, err)
+	case httpx.IsLifecycleRefusal(err):
+		httpx.WriteLifecycleProblem(w, r, b, repo, err)
 	case errors.Is(err, repos.ErrOriginOntologyConflict):
 		hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):

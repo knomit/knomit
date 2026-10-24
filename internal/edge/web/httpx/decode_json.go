@@ -1,4 +1,4 @@
-package web
+package httpx
 
 import (
 	"bufio"
@@ -14,7 +14,7 @@ import (
 	"knomit/internal/edge/web/hal"
 )
 
-// decodeJSON is how an API handler reads a JSON request body. It refuses,
+// DecodeJSON is how an API handler reads a JSON request body. It refuses,
 // writing the problem document itself, and returns false when:
 //
 //   - the Content-Type is absent or is not application/json (parameters such
@@ -38,20 +38,20 @@ import (
 // and a field the body omits ends up zero, not kept. Unknown fields are accepted, as they always
 // were; rejecting them is not a CSRF control and would break a client for
 // sending more than the server reads.
-func decodeJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
+func DecodeJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
 	if !requireJSONContentType(w, r) {
 		return false
 	}
 	return decodeBodyInto(w, r, r.Body, v, maxBytes)
 }
 
-// decodeOptionalJSON is decodeJSON for a route whose body may be absent: a
+// DecodeOptionalJSON is DecodeJSON for a route whose body may be absent: a
 // body that is empty or only JSON whitespace passes, whatever its
 // Content-Type, and leaves v untouched (curl -d ' ' sends a single space as a
-// form). A body with anything else in it is held to decodeJSON's rules. The
+// form). A body with anything else in it is held to DecodeJSON's rules. The
 // leading whitespace is read to find out, whatever the declared length, and
 // counts toward maxBytes.
-func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
+func DecodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
 		return true
 	}
@@ -86,7 +86,7 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes 
 // application/json.
 func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 	ct := r.Header.Get("Content-Type")
-	if isJSONMediaType(ct) {
+	if IsJSONMediaType(ct) {
 		return true
 	}
 	got := "none"
@@ -98,12 +98,12 @@ func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// isJSONMediaType reports whether a Content-Type header value declares
+// IsJSONMediaType reports whether a Content-Type header value declares
 // application/json: parameters such as charset, and letter case, are
 // tolerated, and a +json type is not application/json. It is the ONE
 // predicate for "this request says it is JSON"; browserProof uses it too, so
 // the two gates cannot come to disagree about what counts.
-func isJSONMediaType(contentType string) bool {
+func IsJSONMediaType(contentType string) bool {
 	mt, _, err := mime.ParseMediaType(contentType)
 	return err == nil && mt == "application/json"
 }
@@ -111,7 +111,7 @@ func isJSONMediaType(contentType string) bool {
 func decodeBodyInto(w http.ResponseWriter, r *http.Request, body io.Reader, v any, maxBytes int64) bool {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		panic("decodeJSON: v must be a non-nil pointer")
+		panic("DecodeJSON: v must be a non-nil pointer")
 	}
 	if body == nil {
 		// A request built by hand can carry a nil Body; the server never

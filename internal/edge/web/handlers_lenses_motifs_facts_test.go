@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
 	"strings"
@@ -48,7 +49,7 @@ func TestLensMotifCluster_PivotLinkCarriesTheMergedMembers(t *testing.T) {
 	}, carriers)
 	require.Equal(t, 8, body.CarrierCount)
 	// And the preview cannot disagree with the listing the link opens.
-	linked := decodeLensFacts(t, env.get(t, strings.TrimPrefix(href, APIBase)))
+	linked := decodeLensFacts(t, env.get(t, strings.TrimPrefix(href, httpx.APIBase)))
 	require.Equal(t, carriers, linked.sortedTitles())
 }
 
@@ -386,7 +387,7 @@ func TestLensFacts_MotifsOnTheWire(t *testing.T) {
 }
 
 // The widening reads every mount, so a mount pinned to a deleted branch fails
-// there — and the 404 it produces has to NAME that branch. writeStoreError
+// there — and the 404 it produces has to NAME that branch. httpx.WriteStoreError
 // renders model.ErrBranchNotFound as `no branch named "<branch>"`, so a
 // fan-out that dropped the branch on its way out would print the message with
 // the one word it exists to carry missing.

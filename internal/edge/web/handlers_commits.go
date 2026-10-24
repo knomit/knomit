@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/engine/store/index"
@@ -27,7 +28,7 @@ type commitFileView struct {
 
 // logPaginated returns a paged branch-wide commit log of ri's store. Use an
 // empty path for all commits on the branch. A store that cannot be reached is
-// WithRead's error, returned as-is (writeStoreError answers it 503).
+// WithRead's error, returned as-is (httpx.WriteStoreError answers it 503).
 func logPaginated(
 	ctx context.Context,
 	ri *repos.RepoInstance, branch, path string, limit int, after, from, before string,
@@ -58,7 +59,7 @@ func commitDetail(
 	// closure would let a concurrent SwapStore/Archive close the DB mid-loop
 	// — see RepoInstance.Acquire's doc-comment.
 	//
-	// Acquire's refusal (storeUnavailable) is returned as-is, and the handler
+	// Acquire's refusal (httpx.StoreUnavailable) is returned as-is, and the handler
 	// answers it 503 rather than the 404 of a commit that is not there.
 	svc, release, err := ri.Acquire()
 	if err != nil {
@@ -122,7 +123,7 @@ func handleHALCommitsList(b hal.URLBuilder, ontologyRoot string) http.HandlerFun
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
 		limit, ok := limitParam(w, r)
@@ -136,7 +137,7 @@ func handleHALCommitsList(b hal.URLBuilder, ontologyRoot string) http.HandlerFun
 
 		entries, next, prev, err := logPaginated(r.Context(), ri, branch, ontologyRoot, limit, after, from, before)
 		if err != nil {
-			writeStoreError(w, r, err, "Failed to list commits", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to list commits", branch)
 			return
 		}
 		if entries == nil {
@@ -145,7 +146,7 @@ func handleHALCommitsList(b hal.URLBuilder, ontologyRoot string) http.HandlerFun
 
 		branchURL := b.Branch(repoName, a)
 		commitsBase := branchURL + "/commits"
-		selfURL := selfWithQuery(commitsBase, r)
+		selfURL := httpx.SelfWithQuery(commitsBase, r)
 
 		links := hal.LinkMap{"self": {Href: selfURL}}
 		if next != "" {
@@ -187,7 +188,7 @@ func handleHALCommitDetail(b hal.URLBuilder, ontologyRoot string) http.HandlerFu
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 		sha := chi.URLParam(r, "sha")
 		if sha == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing commit SHA",
@@ -196,8 +197,8 @@ func handleHALCommitDetail(b hal.URLBuilder, ontologyRoot string) http.HandlerFu
 		}
 
 		detail, files, err := commitDetail(r.Context(), ri, branch, sha, ontologyRoot)
-		if storeUnavailable(err) {
-			writeStoreUnavailable(w, r)
+		if httpx.StoreUnavailable(err) {
+			httpx.WriteStoreUnavailable(w, r)
 			return
 		}
 		if err != nil {

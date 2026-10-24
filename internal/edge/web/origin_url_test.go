@@ -17,29 +17,6 @@ import (
 	"knomit/internal/engine/store"
 )
 
-func TestTrimOriginURL(t *testing.T) {
-	for _, tc := range []struct{ name, in, want string }{
-		{"leading spaces", "  https://h/r", "https://h/r"},
-		{"trailing spaces", "https://h/r  ", "https://h/r"},
-		{"both, with a tab", " \thttps://h/r \t", "https://h/r"},
-		{"newline from a paste", "https://h/r\n", "https://h/r"},
-		{"CRLF from a paste", "https://h/r\r\n", "https://h/r"},
-		{"only whitespace is empty", " \t\n ", ""},
-		{"clean is untouched", "https://h/r", "https://h/r"},
-		// Everything below CHANGES which repository is named, so none of it is
-		// this helper's business — the git route tolerates the suffix and the
-		// slash on the serving side instead.
-		{"inner spaces are not touched", "https://h/a b", "https://h/a b"},
-		{"trailing slash is kept", "https://h/r/", "https://h/r/"},
-		{"dot-git suffix is kept", "https://h/r.git", "https://h/r.git"},
-		{"case is kept", "https://H/R", "https://H/R"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, trimOriginURL(tc.in))
-		})
-	}
-}
-
 // recordingRemote serves a real knomit store and records every path it is
 // asked for, so a test can see the URL that actually left the handler rather
 // than only whether the call happened to work.
@@ -92,7 +69,7 @@ func recordingRemote(t *testing.T) (url string, paths func() []string, reset fun
 // THE WIDENING IS DELIBERATE. Before this change the four whitespace forms
 // behaved differently from each other: only a TRAILING space survived
 // url.Parse and reached the remote as a mangled path, while a leading space, a
-// tab and a newline were rejected outright by isGitURL at the two endpoints
+// tab and a newline were rejected outright by httpx.IsGitURL at the two endpoints
 // that validate, and went unvalidated at the other three. After the trim all
 // four are accepted everywhere, as the same clean URL. Each form is fed
 // separately here rather than as one mixed string, so the table cannot pass on
@@ -149,7 +126,7 @@ var whitespaceForms = map[string]func(string) string{
 
 // THE WIRING, not the helper. The three entry points below carry the trim but
 // had no assertion: the reviewer removed the call from all three at once and
-// internal/edge/web stayed green. Neutering trimOriginURL fails loudly and proves
+// internal/edge/web stayed green. Neutering httpx.TrimOriginURL fails loudly and proves
 // nothing about its callers, and "one helper applied at every entry point"
 // makes the CALLERS the invariant — they are what a future refactor of any one
 // handler would drop.
@@ -210,10 +187,10 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 				// the message has to say which or a reader debugs the wrong
 				// thing. A bare "expected not nil" across four rows reads like
 				// a broken fixture rather than a result:
-				//   trailing space       isGitURL ACCEPTS it (url.Parse does),
+				//   trailing space       httpx.IsGitURL ACCEPTS it (url.Parse does),
 				//                        so the padded URL is PERSISTED — the
 				//                        originally reported bug.
-				//   leading space/tab/\n isGitURL REJECTS them, so the handler
+				//   leading space/tab/\n httpx.IsGitURL REJECTS them, so the handler
 				//                        400s and NOTHING is persisted.
 				require.NotNil(t, origin,
 					"a URL padded with %s was REJECTED before persisting (status %d, %s) — "+
@@ -228,7 +205,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 	// POST /repos/{repo}/origin-sessions opens without touching the network —
 	// the fetch is the later /test step — so the observable is the URL the
 	// session STORED, which every later step of the flow uses. The list
-	// endpoint reports it. isGitURL guards this endpoint too, so the same
+	// endpoint reports it. httpx.IsGitURL guards this endpoint too, so the same
 	// two-way split applies without the trim.
 	t.Run("POST /repos/{repo}/origin-sessions", func(t *testing.T) {
 		const clean = "https://example.invalid/kb.git"

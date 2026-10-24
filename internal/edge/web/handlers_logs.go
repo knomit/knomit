@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
 
@@ -63,7 +64,7 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 				"this server was built without a log tap", r.URL.Path)
 			return
 		}
-		stream, ok := startSSE(w)
+		stream, ok := httpx.StartSSE(w)
 		if !ok {
 			return
 		}

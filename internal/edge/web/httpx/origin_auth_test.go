@@ -1,4 +1,4 @@
-package web
+package httpx
 
 import (
 	"knomit/internal/corpus/repos"
@@ -15,7 +15,7 @@ import (
 // URLs, SCP-style, local file:// URLs, and bare absolute filesystem paths.
 // Relative paths are rejected — they would resolve against the server's cwd.
 func TestIsGitURL(t *testing.T) {
-	// "Absolute" is a per-OS question and isGitURL asks filepath.IsAbs, so the
+	// "Absolute" is a per-OS question and IsGitURL asks filepath.IsAbs, so the
 	// fixtures have to be absolute ON THIS HOST. "/srv/kb" is absolute on Unix
 	// but merely rooted on Windows — relative to the current drive — and
 	// IsAbs says false, so these two rows failed there while testing nothing
@@ -45,8 +45,8 @@ func TestIsGitURL(t *testing.T) {
 		{"", false},                // empty
 	}
 	for _, c := range cases {
-		if got := isGitURL(c.url); got != c.want {
-			t.Errorf("isGitURL(%q) = %v, want %v", c.url, got, c.want)
+		if got := IsGitURL(c.url); got != c.want {
+			t.Errorf("IsGitURL(%q) = %v, want %v", c.url, got, c.want)
 		}
 	}
 }
@@ -93,13 +93,13 @@ func TestValidateURLAuth_FleetPeersAreDecidedNotTyped(t *testing.T) {
 		}
 	}
 	for _, tc := range rows {
-		err := validateURLAuth(tc.url, tc.method)
+		err := ValidateURLAuth(tc.url, tc.method)
 		got := ""
 		if err != nil {
 			got = err.Error()
 		}
 		if got != tc.want {
-			t.Errorf("validateURLAuth(%q, %q) = %q, want %q", tc.url, tc.method, got, tc.want)
+			t.Errorf("ValidateURLAuth(%q, %q) = %q, want %q", tc.url, tc.method, got, tc.want)
 		}
 	}
 }

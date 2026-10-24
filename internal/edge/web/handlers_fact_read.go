@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/engine/store/model"
@@ -78,7 +79,7 @@ func (r readerRefResolver) Exists(path string) bool {
 // It returns errFactNotFound when the path does not exist; other store errors
 // are returned as-is for the handler to surface as 500. A store that cannot be
 // reached is WithRead's error, returned as-is (never errFactNotFound: nothing
-// was looked up), which writeStoreError answers 503. The returned head is
+// was looked up), which httpx.WriteStoreError answers 503. The returned head is
 // the resolved commit to stamp into the view's as_of: the branch's head commit
 // when the anchor is HEAD, or the pinned sha unchanged when commit-anchored.
 //
@@ -165,7 +166,7 @@ func readFact(
 func handleHALFact(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
-		branch := BranchFromContext(r.Context())
+		branch := httpx.BranchFromContext(r.Context())
 
 		ri := repos.RepoFromContext(r.Context())
 
@@ -203,7 +204,7 @@ func handleHALFact(b hal.URLBuilder) http.HandlerFunc {
 					`no fact at path "`+path+`" on branch "`+branch+`"`, r.URL.Path)
 				return
 			}
-			writeStoreError(w, r, err, "Failed to read fact", branch)
+			httpx.WriteStoreError(w, r, err, "Failed to read fact", branch)
 			return
 		}
 

@@ -74,7 +74,7 @@ func TestWriteGate_DefaultLoopbackMayMutate(t *testing.T) {
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
 	// The EXACT status the handler gives a request with no JSON body (415
-	// from decodeJSON), not merely "not 403": since #281 a request refused
+	// from httpx.DecodeJSON), not merely "not 403": since #281 a request refused
 	// earlier (421, wrong Host) is also "not 403", and this test must not
 	// pass on it.
 	if rr.Code != http.StatusUnsupportedMediaType || !bytes.Contains(rr.Body.Bytes(), []byte("Unsupported Media Type")) {

@@ -1,4 +1,4 @@
-package web
+package httpx
 
 import (
 	"fmt"
@@ -47,10 +47,10 @@ type sseStream struct {
 	dead bool
 }
 
-// startSSE sets the SSE headers and returns the stream. ok is false when it has
+// StartSSE sets the SSE headers and returns the stream. ok is false when it has
 // already written the error response, which is the same 500 the handlers wrote
 // individually before.
-func startSSE(w http.ResponseWriter) (*sseStream, bool) {
+func StartSSE(w http.ResponseWriter) (*sseStream, bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)

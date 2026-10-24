@@ -1,4 +1,4 @@
-package web
+package httpx
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ func TestWriteStoreError_BranchNotFound_Returns404(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/repos/r/branches/x/topics", nil)
 	err := fmt.Errorf("ListDir: ref: %w", model.ErrBranchNotFound)
 
-	writeStoreError(w, r, err, "Failed to list topics", "x")
+	WriteStoreError(w, r, err, "Failed to list topics", "x")
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
@@ -35,7 +35,7 @@ func TestWriteStoreError_GenericError_Returns500(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/repos/r/branches/x/topics", nil)
 	err := errors.New("boom")
 
-	writeStoreError(w, r, err, "Failed to list topics", "x")
+	WriteStoreError(w, r, err, "Failed to list topics", "x")
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)

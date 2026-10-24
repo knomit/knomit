@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/corpus/repos"
@@ -42,12 +43,12 @@ func handleReposProbeInitialized(m *repos.Manager) http.HandlerFunc {
 		// credential and nothing else, so anything approaching the cap is not a
 		// request this handler can serve — and an unbounded decode on a public
 		// endpoint is a hole regardless of what the fields mean.
-		if !decodeJSON(w, r, &req, maxCreateBodyBytes) {
+		if !httpx.DecodeJSON(w, r, &req, maxCreateBodyBytes) {
 			return
 		}
 		// Before the emptiness check, so a url of only spaces is "required",
 		// not a probe of a whitespace URL.
-		req.URL = trimOriginURL(req.URL)
+		req.URL = httpx.TrimOriginURL(req.URL)
 		if req.URL == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", "url is required", r.URL.Path)
 			return

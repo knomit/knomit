@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"knomit/internal/corpus/repos"
@@ -10,7 +11,7 @@ import (
 )
 
 // The fleet membership routes (repos.Manager's fleet_enroll.go, fleet_join.go,
-// fleet_leave.go, fleet_revoke.go and fleet_root.go). Every one is mounted behind RequireLocalVia (router): it uses the fleet root key,
+// fleet_leave.go, fleet_revoke.go and fleet_root.go). Every one is mounted behind httpx.RequireLocalVia (router): it uses the fleet root key,
 // or installs or removes this instance's trust material.
 
 // handleEnrollFleet: POST /api/v1/fleet/enroll {agent_id, public_key,
@@ -23,7 +24,7 @@ func handleEnrollFleet(m *repos.Manager) http.HandlerFunc {
 			PublicKey string `json:"public_key"`
 			Address   string `json:"address,omitempty"`
 		}
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		out, err := m.EnrollFleetMember(r.Context(), req.AgentID, req.PublicKey, req.Address)
@@ -68,7 +69,7 @@ type joinRequest struct {
 // A bundle that does not parse is left to JoinFleet's bundle_invalid.
 func decodeJoinRequest(w http.ResponseWriter, r *http.Request) (joinRequest, bool) {
 	var req joinRequest
-	if !decodeJSON(w, r, &req, 0) {
+	if !httpx.DecodeJSON(w, r, &req, 0) {
 		return req, false
 	}
 	if req.Bundle == "" {
@@ -77,7 +78,7 @@ func decodeJoinRequest(w http.ResponseWriter, r *http.Request) (joinRequest, boo
 		return req, false
 	}
 	if bundle, err := pki.SplitBundle([]byte(req.Bundle)); err == nil && bundle.FleetURL != "" {
-		if verr := validateURLAuth(bundle.FleetURL, req.AuthMethod); verr != nil {
+		if verr := httpx.ValidateURLAuth(bundle.FleetURL, req.AuthMethod); verr != nil {
 			hal.WriteProblemWithExtra(w, http.StatusUnprocessableEntity, "Invalid origin auth",
 				verr.Error(), r.URL.Path, map[string]any{"code": "auth_invalid"})
 			return req, false
@@ -134,7 +135,7 @@ func handleRevokeFleet(m *repos.Manager) http.HandlerFunc {
 			AgentID string `json:"agent_id"`
 			Reason  string `json:"reason,omitempty"`
 		}
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		out, err := m.RevokeFleetMember(r.Context(), req.AgentID, req.Reason)
@@ -180,7 +181,7 @@ func handlePutFleetRoot(m *repos.Manager) http.HandlerFunc {
 		var req struct {
 			Files map[string]string `json:"files"`
 		}
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		out, err := m.InstallFleetRoot(req.Files)
@@ -218,7 +219,7 @@ func handleHostFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		var req struct {
 			ConfirmLoss bool `json:"confirm_loss"`
 		}
-		if !decodeOptionalJSON(w, r, &req, 0) {
+		if !httpx.DecodeOptionalJSON(w, r, &req, 0) {
 			return
 		}
 		st, err := m.HostFleetHere(r.Context(), repos.FleetHostSpec{ConfirmLoss: req.ConfirmLoss})
@@ -247,16 +248,16 @@ type followRequest struct {
 func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req followRequest
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
-		req.URL = trimOriginURL(req.URL)
+		req.URL = httpx.TrimOriginURL(req.URL)
 		// The credential as PUT origin assembles it (basic: user:password).
 		// An empty url is a credential change on a forge copy: the stored URL
 		// stays, and repos refuses it (url_required) on any other copy.
-		token := assembleAuthToken(req.AuthMethod, req.AuthToken, req.User, req.Password)
+		token := httpx.AssembleAuthToken(req.AuthMethod, req.AuthToken, req.User, req.Password)
 		if req.URL != "" {
-			if verr := validateURLAuth(req.URL, req.AuthMethod); verr != nil {
+			if verr := httpx.ValidateURLAuth(req.URL, req.AuthMethod); verr != nil {
 				hal.WriteProblemWithExtra(w, http.StatusUnprocessableEntity, "Invalid origin", verr.Error(), r.URL.Path, map[string]any{"code": "auth_invalid"})
 				return
 			}
@@ -324,7 +325,7 @@ func handleDropFleetCommit(m *repos.Manager) http.HandlerFunc {
 			LeaveOutMerge bool     `json:"leave_out_merge"`
 			LeftOut       []string `json:"left_out"`
 		}
-		if !decodeJSON(w, r, &req, 0) {
+		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
 		var out repos.FleetDropResult

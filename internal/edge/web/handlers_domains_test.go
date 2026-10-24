@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -62,7 +63,7 @@ func TestHandleHALDomains_ReturnsCollection(t *testing.T) {
 		t.Errorf("second domain: %+v, want go x2", body.Embedded.Domains[1])
 	}
 	// Each domain should have a self link to /domains/{name}.
-	wantSelf := APIBase + "/repos/alpha/branches/agent:test/domains/ai"
+	wantSelf := httpx.APIBase + "/repos/alpha/branches/agent:test/domains/ai"
 	if got := body.Embedded.Domains[0].Links["self"].Href; got != wantSelf {
 		t.Errorf("domain self: got %q, want %q", got, wantSelf)
 	}
@@ -134,7 +135,7 @@ func TestHandleHALDomainFacts_ReturnsCollection(t *testing.T) {
 		paths[f.Path] = f.Links["self"].Href
 	}
 	// Each fact should have a self link to the fact URL.
-	wantFactSelf := APIBase + "/repos/alpha/branches/agent:test/facts/kb/ai/a.md"
+	wantFactSelf := httpx.APIBase + "/repos/alpha/branches/agent:test/facts/kb/ai/a.md"
 	if got := paths["kb/ai/a.md"]; got != wantFactSelf {
 		t.Errorf("fact self: got %q, want %q (paths=%v)", got, wantFactSelf, paths)
 	}

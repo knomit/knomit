@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,7 +23,7 @@ func (f *factReadFixture) anchoredFactURL(step, path string) string {
 // commit, with a live link to the HEAD view.
 func (f *factReadFixture) requireAnchoredLinks(t *testing.T, body factViewBody, step, path string) {
 	t.Helper()
-	branch := APIBase + "/repos/alpha/branches/" + fsOtherURL
+	branch := httpx.APIBase + "/repos/alpha/branches/" + fsOtherURL
 	got := hrefs(body.Links)
 	require.ElementsMatch(t, []string{"self", "incoming", "outgoing", "commits", "live", "commit", "parent", "branch"},
 		keys(got))
@@ -156,7 +157,7 @@ func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 
 	url := f.anchoredURL(fsOtherURL, "x0", "kb/t.md", "outgoing")
 	body := getRefs(t, s, url)
-	if got, want := body.Links["self"].Href, APIBase+url; got != want {
+	if got, want := body.Links["self"].Href, httpx.APIBase+url; got != want {
 		t.Errorf("self: got %q, want %q", got, want)
 	}
 	f.requireRefs(t, body, fsOtherURL, outO12...)

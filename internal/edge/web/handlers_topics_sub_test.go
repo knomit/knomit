@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,7 +55,7 @@ func TestHandleTopicFacts_ReturnsOnlyFiles(t *testing.T) {
 	body := decodeTopicFacts(t, getAPI(t, s, "/repos/alpha/branches/agent:test/topics/ai/facts"))
 
 	require.Equal(t, []string{"ontology/ai"}, seen.of("alpha"))
-	branchURL := APIBase + "/repos/alpha/branches/agent:test"
+	branchURL := httpx.APIBase + "/repos/alpha/branches/agent:test"
 	require.Equal(t, branchURL+"/topics/ai/facts", body.Links["self"].Href)
 	require.Equal(t, 2, body.Count, "the directory is excluded")
 	require.Len(t, body.Embedded.Facts, 2)
@@ -212,7 +213,7 @@ func TestHandleTopicNode_StillWorksAfterDispatch(t *testing.T) {
 }
 
 // /topics/<node>/facts on a branch the store does not have is the same 404 as
-// the topic listing (writeStoreError maps ErrBranchNotFound), not a 500.
+// the topic listing (httpx.WriteStoreError maps ErrBranchNotFound), not a 500.
 func TestHandleTopicFacts_MissingBranch_Returns404(t *testing.T) {
 	_, svc, s := topicsRepo(t)
 	seen := observeListDir(t, map[string]*store.Service{"alpha": svc})

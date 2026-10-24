@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"knomit/internal/edge/web/httpx"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,36 +15,6 @@ import (
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
-
-// RequireLocalVia admits only a principal the local authenticated listener
-// vouched for — a unix-socket uid, or a named-pipe SID on Windows
-// (auth.LocalVia) — and refuses everyone else with 403, whatever they hold.
-// The OAuth approval endpoints use it instead of Require(admin) (R5): the
-// anonymous loopback principal holds admin by default, and a browser can
-// reach loopback TCP but not the socket, so "admin" would let any page the
-// operator visits approve a request.
-func RequireLocalVia(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLocalVia(r) {
-			p, _ := auth.FromContext(r.Context())
-			hal.WriteProblem(w, http.StatusForbidden, "Permission denied",
-				"this operation is only available over the local authenticated listener (the unix socket, or the named pipe on Windows); principal "+p.String()+" did not arrive over it",
-				r.URL.Path)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// isLocalVia is RequireLocalVia's test: the request's principal came in over
-// the local authenticated listener (auth.LocalVia), as the edge vouched for
-// it. Nothing the client sends (a header, a query) can make it true. GET
-// /fleet reports it as `local`, so a page knows whether the mutations
-// RequireLocalVia guards are reachable from where it runs.
-func isLocalVia(r *http.Request) bool {
-	p, _ := auth.FromContext(r.Context())
-	return p.Via == auth.LocalVia
-}
 
 // mountOAuthPending adds the operator's side of consent path 1 to the PLAIN
 // API router (never the OAuth listener's): list, approve, deny. `knomit
@@ -63,7 +34,7 @@ func (s *Server) mountOAuthPending(r chi.Router) {
 				out = append(out, viewPending(p))
 			}
 			hal.WriteHAL(w, http.StatusOK, map[string]any{
-				"_links":  map[string]any{"self": map[string]string{"href": APIBase + "/oauth/pending"}},
+				"_links":  map[string]any{"self": map[string]string{"href": httpx.APIBase + "/oauth/pending"}},
 				"pending": out,
 			})
 		})
@@ -122,8 +93,8 @@ func viewPending(p oauth.Pending) pendingView {
 	}
 	return pendingView{
 		Links: map[string]any{
-			"approve": map[string]string{"href": APIBase + "/oauth/pending/" + p.ID + "/approve"},
-			"deny":    map[string]string{"href": APIBase + "/oauth/pending/" + p.ID + "/deny"},
+			"approve": map[string]string{"href": httpx.APIBase + "/oauth/pending/" + p.ID + "/approve"},
+			"deny":    map[string]string{"href": httpx.APIBase + "/oauth/pending/" + p.ID + "/deny"},
 		},
 		ID: p.ID, ClientID: p.ClientID, ClientName: p.ClientName, RedirectURI: p.RedirectURI,
 		Scopes: scopes, Resource: p.Resource, RemoteAddr: p.RemoteAddr, UserAgent: p.UserAgent,
@@ -158,7 +129,7 @@ const (
 // requireLocalOrSameOriginAdmin gates the approval endpoints (F19 phase 3b,
 // Task 1; rulings R2, R3 and the master's own-origin correction). It admits
 //
-//   - a local-listener principal (socket or pipe), exactly as RequireLocalVia
+//   - a local-listener principal (socket or pipe), exactly as httpx.RequireLocalVia
 //     did in 3a, with no further proof; or
 //   - the anonymous loopback principal (anonymous@none from a loopback peer,
 //     never on the TLS listener) that holds admin, AND whose request carries
@@ -240,7 +211,7 @@ func browserProof(r *http.Request) string {
 		return "the Origin " + strconv.Quote(r.Header.Get("Origin")) + " is not this listener's own origin http://" + host
 	}
 	if mutation {
-		if !isJSONMediaType(r.Header.Get("Content-Type")) {
+		if !httpx.IsJSONMediaType(r.Header.Get("Content-Type")) {
 			return "the Content-Type " + strconv.Quote(r.Header.Get("Content-Type")) + " is not application/json"
 		}
 	}

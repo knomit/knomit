@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -78,7 +79,7 @@ func serveLensSystemFileRead(w http.ResponseWriter, r *http.Request, bind *repos
 // tip of branch) and writes the raw response; notFound writes the 404, so each
 // route answers an absent file in its own shape.
 //
-// A store that cannot be reached is WithRead's error: writeStoreError answers
+// A store that cannot be reached is WithRead's error: httpx.WriteStoreError answers
 // it 503, unless hideUnavailable (the lens, for a READ mount: lensFactMount),
 // when it is notFound's 404, so a mounted id whose store is down answers what
 // an unmounted one does.
@@ -93,12 +94,12 @@ func writeSystemFile(w http.ResponseWriter, r *http.Request, ri *repos.RepoInsta
 	}); aerr != nil {
 		err = aerr
 	}
-	if hideUnavailable && storeUnavailable(err) {
+	if hideUnavailable && httpx.StoreUnavailable(err) {
 		notFound()
 		return
 	}
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to read system file", branch)
+		httpx.WriteStoreError(w, r, err, "Failed to read system file", branch)
 		return
 	}
 	if !found {

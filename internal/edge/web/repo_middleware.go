@@ -1,6 +1,7 @@
 package web
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -13,7 +14,7 @@ import (
 // and stores the RepoInstance in the request context for downstream handlers
 // to read with repos.RepoFromContext.
 //
-// This lives in web rather than repos for the same reason BranchMiddleware
+// This lives in web rather than repos for the same reason httpx.BranchMiddleware
 // does: it is HTTP code. Its only job beyond a map lookup is rendering a 404,
 // and that response must be problem+json like every other API error — which
 // would force internal/corpus/repos to import internal/edge/web/hal, violating the
@@ -50,7 +51,7 @@ func RepoMiddleware(m *repos.Manager) func(http.Handler) http.Handler {
 				// Only when a reason was recorded — a legacy archive keeps
 				// the plain body.
 				if a, ok := m.LatestArchivedNamed(name); ok && a.Reason != nil {
-					detail += ". " + archiveSummary(a.Reason)
+					detail += ". " + httpx.ArchiveSummary(a.Reason)
 				}
 				hal.WriteProblem(w, http.StatusNotFound, "Repo not found", detail, r.URL.Path)
 				return
