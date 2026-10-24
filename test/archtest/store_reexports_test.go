@@ -612,8 +612,8 @@ func methodForwards(f *ast.File, cfg fwdCfg) (hits []string, methods int) {
 				}
 			}
 		}
-		if cfg.methodExprs { // pkg.T.M(...): a method expression of a child type
-			if sel, ok := fun.X.(*ast.SelectorExpr); ok {
+		if cfg.methodExprs { // pkg.T.M(...) or (*pkg.T).M(...): a method expression of a child type
+			if sel, ok := unwrapParenStar(fun.X).(*ast.SelectorExpr); ok {
 				if id, ok := sel.X.(*ast.Ident); ok {
 					if _, local := locals[id.Name]; !local {
 						if p, ok := imps[id.Name]; ok && forwardsWithState(fd, call, recv, fun.Sel.Name) {
@@ -625,6 +625,21 @@ func methodForwards(f *ast.File, cfg fwdCfg) (hits []string, methods int) {
 		}
 	}
 	return hits, methods
+}
+
+// unwrapParenStar strips parentheses and pointer stars, so the receiver of a
+// pointer method expression, (*pkg.T).M, reads as pkg.T.
+func unwrapParenStar(e ast.Expr) ast.Expr {
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.StarExpr:
+			e = x.X
+		default:
+			return e
+		}
+	}
 }
 
 // forwardsWithState reports whether a package-qualified child call is a

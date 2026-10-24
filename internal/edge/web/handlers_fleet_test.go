@@ -20,7 +20,6 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
-	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
@@ -284,19 +283,14 @@ func TestFleetMemberRows_LastRefusal(t *testing.T) {
 	require.Equal(t, map[string]any{"branch": "agent/d", "tip": "def", "agent": "d", "reason": "no-cert", "at": "2026-10-15T12:01:00Z"}, got[3]["last_refusal"])
 }
 
-// A restore or a connect refused for the reserved fleet id is a 422 the
-// client can read, never the 500 of an unmapped error: Identify refuses a
-// restored fleet repository, guardSwap a connect.
-// SABOTAGE: drop either ErrFleetOntologyReserved arm -> 500 -> red.
-func TestFleetReserved_RestoreAndConnectStatuses(t *testing.T) {
+// A restore refused for the reserved fleet id is a 422 the client can read,
+// never the 500 of an unmapped error: Identify refuses a restored fleet
+// repository. (The connect half, guardSwap's refusal, is api/origins'
+// TestFleetReserved_ConnectStatus.)
+// SABOTAGE: drop the ErrFleetOntologyReserved arm -> 500 -> red.
+func TestFleetReserved_RestoreStatus(t *testing.T) {
 	err := fmt.Errorf("register repo: %w", repos.ErrFleetOntologyReserved)
 	status, title := archiveErrStatus(err)
 	require.Equal(t, http.StatusUnprocessableEntity, status)
 	require.Equal(t, "Fleet ontology reserved", title)
-
-	require.True(t, isCommitRefusal(err), "a connect refused before anything changed")
-	rec := httptest.NewRecorder()
-	writeCommitProblem(rec, httptest.NewRequest(http.MethodPost, "/repos/kb/origin-sessions/x/commit", nil), hal.URLBuilder{}, "kb", err)
-	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "Fleet ontology reserved")
 }

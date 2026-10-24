@@ -1,4 +1,4 @@
-package web
+package origins
 
 import (
 	"fmt"
@@ -11,42 +11,42 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// AuthConfig holds authentication credentials for a remote connection attempt.
-type AuthConfig struct {
+// authConfig holds authentication credentials for a remote connection attempt.
+type authConfig struct {
 	Method   string // "token", "basic", "ssh"
 	Token    string
 	User     string
 	Password string
 }
 
-// SessionState represents the lifecycle stage of an OriginSession.
-type SessionState string
+// sessionState represents the lifecycle stage of an originSession.
+type sessionState string
 
 const (
-	StateCreated   SessionState = "created"
-	StateTested    SessionState = "tested"
-	StatePreviewed SessionState = "previewed"
-	StateApplied   SessionState = "applied"
-	StateCommitted SessionState = "committed"
-	StateError     SessionState = "error"
+	stateCreated   sessionState = "created"
+	stateTested    sessionState = "tested"
+	statePreviewed sessionState = "previewed"
+	stateApplied   sessionState = "applied"
+	stateCommitted sessionState = "committed"
+	stateError     sessionState = "error"
 )
 
 // sessionExpiry is the idle duration after which a session is eligible for cleanup.
 const sessionExpiry = 10 * time.Minute
 
-// cleanupInterval is how often the background goroutine checks for expired sessions.
+// cleanupInterval is how often the sweeper checks for expired sessions.
 const cleanupInterval = 60 * time.Second
 
-// OriginSession holds ephemeral state for a single remote connection workflow.
-// It is owned by the SessionManager and must not be shared across goroutines
+// originSession holds ephemeral state for a single remote connection workflow.
+// It is owned by the sessionManager and must not be shared across goroutines
 // without holding mu.
-type OriginSession struct {
+type originSession struct {
 	ID            string
 	Repo          string
 	URL           string
-	Auth          AuthConfig
+	Auth          authConfig
 	TempDir       string
-	State         SessionState
+	State         sessionState
 	CreatedAt     time.Time
 	LastAccess    time.Time
 	RemoteStore   *store.Service // cloned remote store, set by test handler
@@ -63,26 +63,34 @@ type OriginSession struct {
 	mu            sync.Mutex
 }
 
-// SessionManager manages one ephemeral OriginSession per repo.
-// Sessions are stored in a sync.Map keyed by repo name.
-type SessionManager struct {
-	sessions sync.Map // map[repoName]*OriginSession
-	done     chan struct{}
+// sessionManager manages one ephemeral originSession per repo.
+// Sessions are stored in a sync.Map keyed by repo name. Mount creates the one
+// manager its routes share; nothing outside this package can reach it.
+//
+// LIFETIME. The idle-expiry sweeper is not a goroutine for the life of the
+// manager. It runs only while the manager holds at least one session: Create
+// starts it when none is running, and it exits on the first tick that finds
+// the map empty. A manager with no sessions therefore owns no goroutine, so
+// one that is dropped (a test's router, a rebuilt handler) leaks nothing, and
+// there is no Shutdown for anyone to forget to call. A session still held
+// when the process exits keeps its temp dir under os.TempDir(), exactly as
+// before: nothing in production ever called the old Shutdown.
+type sessionManager struct {
+	sessions sync.Map // map[repoName]*originSession
+
+	sweepMu  sync.Mutex
+	sweeping bool // a sweeper goroutine is running; guarded by sweepMu
 }
 
-// NewSessionManager creates a SessionManager and starts the background
-// cleanup goroutine.
-func NewSessionManager() *SessionManager {
-	sm := &SessionManager{
-		done: make(chan struct{}),
-	}
-	go sm.cleanupLoop()
-	return sm
+// newSessionManager creates an empty sessionManager. It starts no goroutine:
+// the first Create does (see the LIFETIME note on sessionManager).
+func newSessionManager() *sessionManager {
+	return &sessionManager{}
 }
 
-// Create makes a new OriginSession for repo, allocating a temp directory.
+// Create makes a new originSession for repo, allocating a temp directory.
 // Any existing session for the same repo is cleaned up first (one per repo).
-func (sm *SessionManager) Create(repo, url string, auth AuthConfig) (*OriginSession, error) {
+func (sm *sessionManager) Create(repo, url string, auth authConfig) (*originSession, error) {
 	// Remove any existing session for this repo.
 	sm.deleteByRepo(repo)
 
@@ -92,18 +100,19 @@ func (sm *SessionManager) Create(repo, url string, auth AuthConfig) (*OriginSess
 	}
 
 	now := time.Now()
-	s := &OriginSession{
+	s := &originSession{
 		ID:         uuid.New().String(),
 		Repo:       repo,
 		URL:        url,
 		Auth:       auth,
 		TempDir:    tmpDir,
-		State:      StateCreated,
+		State:      stateCreated,
 		CreatedAt:  now,
 		LastAccess: now,
 	}
 
 	sm.sessions.Store(repo, s)
+	sm.ensureSweeper()
 	log.Debug().Str("repo", repo).Str("session_id", s.ID).Str("tmp_dir", tmpDir).Msg("origin session created")
 	return s, nil
 }
@@ -111,12 +120,12 @@ func (sm *SessionManager) Create(repo, url string, auth AuthConfig) (*OriginSess
 // Get retrieves the session for repo and verifies the ID matches.
 // It touches LastAccess on a successful lookup.
 // Returns (nil, false) if the repo has no session or the ID does not match.
-func (sm *SessionManager) Get(repo, id string) (*OriginSession, bool) {
+func (sm *sessionManager) Get(repo, id string) (*originSession, bool) {
 	v, ok := sm.sessions.Load(repo)
 	if !ok {
 		return nil, false
 	}
-	s := v.(*OriginSession)
+	s := v.(*originSession)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ID != id {
@@ -127,12 +136,12 @@ func (sm *SessionManager) Get(repo, id string) (*OriginSession, bool) {
 }
 
 // Delete removes the session for repo if its ID matches and cleans up the temp dir.
-func (sm *SessionManager) Delete(repo, id string) {
+func (sm *sessionManager) Delete(repo, id string) {
 	v, ok := sm.sessions.Load(repo)
 	if !ok {
 		return
 	}
-	s := v.(*OriginSession)
+	s := v.(*originSession)
 	s.mu.Lock()
 	if s.ID != id {
 		s.mu.Unlock()
@@ -146,59 +155,78 @@ func (sm *SessionManager) Delete(repo, id string) {
 	log.Debug().Str("repo", repo).Str("session_id", id).Msg("origin session deleted")
 }
 
-// Shutdown stops the cleanup goroutine and removes all active sessions.
-func (sm *SessionManager) Shutdown() {
-	close(sm.done)
-	sm.sessions.Range(func(k, v any) bool {
-		s := v.(*OriginSession)
-		sm.sessions.Delete(k)
-		removeTempDir(s.TempDir)
-		return true
-	})
-	log.Debug().Msg("session manager shut down")
-}
-
 // ListByRepo returns all active sessions for the given repo name.
 // The current model stores at most one session per repo, but the return type
 // is a slice so callers don't need to know the storage layout.
-func (sm *SessionManager) ListByRepo(repo string) []*OriginSession {
+func (sm *sessionManager) ListByRepo(repo string) []*originSession {
 	v, ok := sm.sessions.Load(repo)
 	if !ok {
 		return nil
 	}
-	return []*OriginSession{v.(*OriginSession)}
+	return []*originSession{v.(*originSession)}
 }
 
 // deleteByRepo removes the session for repo unconditionally (no ID check).
-func (sm *SessionManager) deleteByRepo(repo string) {
+func (sm *sessionManager) deleteByRepo(repo string) {
 	v, ok := sm.sessions.LoadAndDelete(repo)
 	if !ok {
 		return
 	}
-	s := v.(*OriginSession)
+	s := v.(*originSession)
 	removeTempDir(s.TempDir)
 	log.Debug().Str("repo", repo).Str("session_id", s.ID).Msg("origin session replaced")
 }
 
-// cleanupLoop ticks every cleanupInterval and removes sessions idle longer than sessionExpiry.
-func (sm *SessionManager) cleanupLoop() {
+// ensureSweeper starts the sweeper unless one is running. Create calls it
+// AFTER storing its session, and the sweeper decides to exit under the same
+// lock, so a session stored concurrently with that exit is always swept: the
+// sweeper either sees it and keeps running, or has already cleared sweeping
+// and this call starts a new one.
+func (sm *sessionManager) ensureSweeper() {
+	sm.sweepMu.Lock()
+	defer sm.sweepMu.Unlock()
+	if sm.sweeping {
+		return
+	}
+	sm.sweeping = true
+	go sm.cleanupLoop()
+}
+
+// cleanupLoop ticks every cleanupInterval and removes sessions idle longer
+// than sessionExpiry. It returns on the first tick after which no session is
+// left (see the LIFETIME note on sessionManager).
+func (sm *sessionManager) cleanupLoop() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-sm.done:
+	for range ticker.C {
+		sm.runCleanup()
+		if sm.stopIfEmpty() {
 			return
-		case <-ticker.C:
-			sm.runCleanup()
 		}
 	}
 }
 
+// stopIfEmpty clears sweeping and reports true when the manager holds no
+// session; the check and the clear happen under sweepMu (see ensureSweeper).
+func (sm *sessionManager) stopIfEmpty() bool {
+	sm.sweepMu.Lock()
+	defer sm.sweepMu.Unlock()
+	empty := true
+	sm.sessions.Range(func(any, any) bool {
+		empty = false
+		return false
+	})
+	if empty {
+		sm.sweeping = false
+	}
+	return empty
+}
+
 // runCleanup iterates all sessions and evicts those that have been idle too long.
-func (sm *SessionManager) runCleanup() {
+func (sm *sessionManager) runCleanup() {
 	deadline := time.Now().Add(-sessionExpiry)
 	sm.sessions.Range(func(k, v any) bool {
-		s := v.(*OriginSession)
+		s := v.(*originSession)
 		s.mu.Lock()
 		expired := s.LastAccess.Before(deadline)
 		tmpDir := s.TempDir

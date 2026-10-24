@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
+	"sync"
 
 	"knomit/internal/engine/store/model"
 
@@ -32,7 +33,11 @@ type Server struct {
 	EmbeddingsEnabled bool
 	OntologyRoot      string
 	AgentBranch       string
-	SessionManager    *SessionManager
+	// originSessionsOnce builds originSessions, the api/origins subtree,
+	// once per Server (router.go's originSessionsRouter), so the plain and
+	// OAuth API routers share one origin-session manager.
+	originSessionsOnce sync.Once
+	originSessions     chi.Router
 	// ClientSessions records every MCP request's session (control.db
 	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
 	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start

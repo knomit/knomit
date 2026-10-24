@@ -1,4 +1,4 @@
-package web
+package origins
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 
 	"knomit/internal/corpus/repos"
 
-	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
@@ -22,11 +21,11 @@ import (
 // disjoint-history origin session whose clone is an independent knowledge
 // base at <TempDir>/clone.db — the exact shape handleCommit's swap consumes.
 type commitFixture struct {
-	s         *Server
+	s         *testServer
 	m         *repos.Manager
 	ri        *repos.RepoInstance
-	sm        *SessionManager
-	sess      *OriginSession
+	sm        *sessionManager
+	sess      *originSession
 	remoteURL string
 	root      string
 }
@@ -56,9 +55,9 @@ func newCommitFixture(t *testing.T, keyPath string, hook func(repos.StageID, str
 	}
 	f.ri = ri
 
-	f.sm = NewSessionManager()
-	t.Cleanup(f.sm.Shutdown)
-	f.sess, err = f.sm.Create("alpha", f.remoteURL, AuthConfig{Method: "token", Token: "tok"})
+	f.sm = newSessionManager()
+	t.Cleanup(f.sm.drain)
+	f.sess, err = f.sm.Create("alpha", f.remoteURL, authConfig{Method: "token", Token: "tok"})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -74,63 +73,37 @@ func newCommitFixture(t *testing.T, keyPath string, hook func(repos.StageID, str
 	// handleCommit closes remoteSvc; don't double-close it here.
 
 	f.sess.mu.Lock()
-	f.sess.State = StateApplied
+	f.sess.State = stateApplied
 	f.sess.RemoteStore = remoteSvc
 	f.sess.TestResult = connectivityResult{History: "disjoint", DefaultBranch: "main"}
 	f.sess.RemoteBranch = "main"
 	f.sess.AppliedBranch = "machine/test"
 	f.sess.mu.Unlock()
 
-	f.s = &Server{Manager: f.m, SessionManager: f.sm, AgentBranch: "machine/test"}
+	f.s = newTestServer(f.m, "machine/test", f.sm)
 	return f
 }
 
 // newDisjointSession is newCommitFixture's original shape, kept for the tests
 // that only need the server, the instance, the session manager and the
 // session.
-func newDisjointSession(t *testing.T, keyPath string) (*Server, *repos.RepoInstance, *SessionManager, *OriginSession, string) {
+func newDisjointSession(t *testing.T, keyPath string) (*testServer, *repos.RepoInstance, *sessionManager, *originSession, string) {
 	t.Helper()
 	f := newCommitFixture(t, keyPath, nil)
 	return f.s, f.ri, f.sm, f.sess, f.remoteURL
-}
-
-// newRegisteredManager starts a Manager against a fresh control.db and inserts
-// one ACTIVE registry row for (name, uid) — the row a test's hand-built
-// RepoInstance stands in for. keyPath (may be "") is the agent key: present
-// means credential encryption is available and Origins.Set can store a token;
-// absent means it refuses, which is the production shape of "config failed".
-func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manager {
-	t.Helper()
-	m := repos.New(context.Background(), repos.Deps{
-		Cfg:     config.Config{Home: t.TempDir()},
-		AgentID: testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
-		KeyPath: keyPath,
-		Machine: repos.Options{Synchronous: true},
-	})
-	t.Cleanup(func() { _ = m.Close() })
-	if err := m.Start(); err != nil {
-		t.Fatalf("start manager: %v", err)
-	}
-	if err := m.Repos().Insert(control.RepoRecord{
-		UID: uid, Name: name, State: control.StateActive,
-		Profile: control.ProfileCode, CreatedAt: 1,
-	}); err != nil {
-		t.Fatalf("register %q: %v", name, err)
-	}
-	return m
 }
 
 // Returns the shared SSE recorder: /commit streams, and an SSE handler here
 // needs SetWriteDeadline as well as Flush — a bare ResponseRecorder has only
 // the latter, which sends the stream down its refuse-to-start path and reads
 // as an empty body rather than as an incomplete double.
-func postCommit(t *testing.T, s *Server, sessID string) *streamRecorder {
+func postCommit(t *testing.T, s *testServer, sessID string) *streamRecorder {
 	t.Helper()
 	return postCommitBody(t, s, sessID, "")
 }
 
 // postCommitBody is postCommit with a JSON body ("" for none).
-func postCommitBody(t *testing.T, s *Server, sessID, body string) *streamRecorder {
+func postCommitBody(t *testing.T, s *testServer, sessID, body string) *streamRecorder {
 	t.Helper()
 	rec := newStreamRecorder()
 	var req *http.Request
@@ -139,7 +112,7 @@ func postCommitBody(t *testing.T, s *Server, sessID, body string) *streamRecorde
 	} else {
 		req = newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions/"+sessID+"/commit", strings.NewReader(body))
 	}
-	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(req))
+	s.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -217,5 +190,46 @@ func TestHandleCommit_Disjoint_HappyPathSavesOrigin(t *testing.T) {
 
 	if _, ok := sm.Get("alpha", sess.ID); ok {
 		t.Error("session must be deleted after a completed commit")
+	}
+}
+
+// The session commit, with neither a chosen branch nor a remote default,
+// records NO origin rather than one tracking a branch called main. Both commit
+// arms: shared history completes without an origin and the config warning
+// says why; disjoint history is refused (400) before anything changes, since
+// a store swap must install its origin with it.
+//
+// SABOTAGE: restore the `upstreamMain = "main"` fallback at either arm → an
+// origin tracking main is stored → red.
+func TestHandleCommit_NoBranchKnownStoresNoInventedBranch(t *testing.T) {
+	for _, history := range []string{"disjoint", "shared"} {
+		t.Run(history, func(t *testing.T) {
+			keyPath := filepath.Join(t.TempDir(), "agent.key")
+			if err := os.WriteFile(keyPath, []byte("agent-key-material-for-hkdf"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s, ri, _, sess, _ := newDisjointSession(t, keyPath)
+			sess.mu.Lock()
+			sess.TestResult = connectivityResult{History: history, DefaultBranch: ""}
+			sess.RemoteBranch = ""
+			sess.mu.Unlock()
+
+			rec := postCommit(t, s, sess.ID)
+			body := rec.Body.String()
+			if history == "disjoint" {
+				if rec.Code != http.StatusBadRequest || !strings.Contains(body, "save remote config") {
+					t.Fatalf("want 400 naming the missing consensus branch; code=%d body=%s", rec.Code, body)
+				}
+			} else if !strings.Contains(body, `"phase":"done"`) || !strings.Contains(body, "save remote config") {
+				t.Fatalf("want done with a config warning; body=%s", body)
+			}
+			o, err := s.Manager.Origins().Get(ri.UID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if o != nil {
+				t.Fatalf("an origin was stored with an invented branch: %+v", o)
+			}
+		})
 	}
 }

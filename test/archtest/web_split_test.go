@@ -35,9 +35,11 @@ func isWebAPI(p string) bool {
 // may import an api package: router.go mounts each one (api/x.Mount), and
 // server.go is the router's other half (Server.Handler mounts the API router).
 // Under the follow-up ruling an api package exports nothing but Mount, so
-// server.go no longer needs one for a field type (Server.SessionManager goes
-// in 12d, the job registry is deleted); it stays listed because the ruling
-// names the pair. Dropping it is a one-entry change once 12d lands.
+// server.go no longer needs one for a field type: 12d removed
+// Server.SessionManager (api/origins' Mount owns its manager, and router.go is
+// the one importer of api/origins), and the job registry is deleted. It stays
+// listed because the ruling names the pair; dropping it is a one-entry change
+// once api/jobs lands without a server.go import.
 var webAPIImporters = map[string]bool{"router.go": true, "server.go": true}
 
 // importScan is what one pass over the parent's files saw: each file's package
@@ -157,8 +159,8 @@ func TestWeb_APIImportDetector_Discriminates(t *testing.T) {
 // exported name it may declare besides Mount, with the reason. The rulings
 // (2026-10-24, and the follow-up on PR #621): every api package exports
 // exactly func Mount, which takes positional parameters, so there is no
-// exported Deps type. api/origins' Mount creates and owns the session manager
-// (Server.SessionManager goes away in 12d). api/jobs' registry is deleted:
+// exported Deps type, and returns nothing. api/origins' Mount creates and owns
+// the session manager (12d removed Server.SessionManager). api/jobs' registry is deleted:
 // jobs go through TaskHub only. So every list is EMPTY. A future name needs a
 // reviewed entry with a reason. Names are "T" for a type, func, var or const,
 // and "T.M" / "T.F" for a method or field reachable through exported type T,
@@ -198,7 +200,7 @@ var webFamilyLayout = map[string]string{
 // apiExport is one exported name a package declares or makes reachable.
 type apiExport struct {
 	Name string // "X", or "T.M" / "T.F" for a method or field reachable through exported type T
-	Kind string // func, type, var, const, method, field; a reached member says how ("method via alias of t", "field promoted from e")
+	Kind string // func ("func returning N" when it has results), type, var, const, method, field; a reached member says how ("method via alias of t", "field promoted from e")
 	File string
 }
 
@@ -271,7 +273,11 @@ func exportedNames(t *testing.T, files map[string]any) (out []apiExport, pkgs ma
 					continue
 				}
 				if d.Recv == nil {
-					out = append(out, apiExport{d.Name.Name, "func", base})
+					kind := "func"
+					if n := d.Type.Results.NumFields(); n > 0 {
+						kind = fmt.Sprintf("func returning %d", n)
+					}
+					out = append(out, apiExport{d.Name.Name, kind, base})
 					continue
 				}
 				if len(d.Recv.List) == 1 {
@@ -381,8 +387,10 @@ func exportedNames(t *testing.T, files map[string]any) (out []apiExport, pkgs ma
 }
 
 // apiExportProblems applies the ruling to one api package's exports. Mount
-// must be declared, as a package-level func. Every other exported name must
-// be in allow. Every name in allow must be exported (a stale entry fails).
+// must be declared, as a package-level func with no results: it registers
+// routes on the router it is given, so a returned handler, router, closer or
+// error would be a second export by another name. Every other exported name
+// must be in allow. Every name in allow must be exported (a stale entry fails).
 func apiExportProblems(pkg string, exports []apiExport, allow map[string]string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -391,7 +399,10 @@ func apiExportProblems(pkg string, exports []apiExport, allow map[string]string)
 		seen[e.Name] = true
 		if e.Name == "Mount" {
 			mount = true
-			if e.Kind != "func" {
+			switch {
+			case strings.HasPrefix(e.Kind, "func returning "):
+				out = append(out, fmt.Sprintf("%s: Mount is a %s (%s); Mount registers its routes on r and returns nothing", pkg, e.Kind, e.File))
+			case e.Kind != "func":
 				out = append(out, fmt.Sprintf("%s: Mount is a %s (%s); it must be the package's func Mount(r, ...)", pkg, e.Kind, e.File))
 			}
 			continue
@@ -443,7 +454,8 @@ func webLayoutProblems(rels []string, apis map[string]map[string]string, layout 
 // (the webAPIExportAllowlist keys).
 //
 // Exports: every package under internal/edge/web/api exports only func Mount,
-// plus its webAPIExportAllowlist names, and those lists are empty. Counted
+// which has no results, plus its webAPIExportAllowlist names, and those lists
+// are empty. Counted
 // are funcs, types, vars and consts, plus every exported method or field
 // reachable through an exported type, directly or via an alias or an
 // embedded type (see exportedNames). So a second handler constructor, a
@@ -551,7 +563,7 @@ func (b *Box[T]) Put() {}
 	want := []string{
 		"type Box", "method Box.Put", "type Embedded", "var ErrX", "type JobRegistry",
 		"field JobRegistry.Embedded", "method JobRegistry.Get", "field JobRegistry.Public",
-		"const Kind", "func Mount", "func NewJobRegistry",
+		"const Kind", "func Mount", "func returning 1 NewJobRegistry",
 	}
 	sort.Strings(want)
 	if got := exportKinds(src); !slices.Equal(got, want) {
@@ -559,6 +571,19 @@ func (b *Box[T]) Put() {}
 	}
 	if _, pkgs := exportedNames(t, src); pkgs["mount.go"] != "jobs" || pkgs["registry.go"] != "jobs" || len(pkgs) != 2 {
 		t.Errorf("pkgs %v, want both files in package jobs", pkgs)
+	}
+
+	// A Mount with results is told apart from one without, by count, named
+	// results included; a method named Mount is not the package's func.
+	for src, want := range map[string]string{
+		"package o\nfunc Mount(r Router) {}\n":                                               "func Mount",
+		"package o\nimport \"net/http\"\nfunc Mount(r Router) http.Handler { return nil }\n": "func returning 1 Mount",
+		"package o\nfunc Mount(r Router) (h Handler, err error) { return }\n":                "func returning 2 Mount",
+		"package o\nfunc Mount(r Router) (a, b, c int) { return }\n":                         "func returning 3 Mount",
+	} {
+		if got := exportKinds(map[string]any{"m.go": src}); !slices.Equal(got, []string{want}) {
+			t.Errorf("%q: exports %q, want [%q]", src, got, want)
+		}
 	}
 
 	// M9 (an alias of an unexported type), M10 (an unexported type embedded,
@@ -611,6 +636,8 @@ func (h *handler) Exported() {}
 		"exported registry type":     {[]apiExport{{"Mount", "func", "a.go"}, {"JobRegistry", "type", "b.go"}}, map[string]string{}, "exports type JobRegistry"},
 		"no Mount":                   {[]apiExport{}, map[string]string{}, "declares no func Mount"},
 		"Mount is a var":             {[]apiExport{{"Mount", "var", "a.go"}}, map[string]string{}, "Mount is a var"},
+		"Mount returns a value":      {[]apiExport{{"Mount", "func returning 1", "a.go"}}, map[string]string{}, "Mount is a func returning 1 (a.go); Mount registers its routes on r and returns nothing"},
+		"Mount returns two values":   {[]apiExport{{"Mount", "func returning 2", "a.go"}}, map[string]string{}, "returns nothing"},
 		"reviewed entry, its method": {[]apiExport{{"Mount", "func", "a.go"}, {"T", "type", "b.go"}, {"T.Get", "method via alias of t", "b.go"}}, map[string]string{"T": "reviewed"}, "exports method via alias of t T.Get"},
 		"stale entry":                {[]apiExport{{"Mount", "func", "a.go"}}, map[string]string{"T": "reviewed"}, "lists T but the package does not export it"},
 		"entry with no reason":       {[]apiExport{{"Mount", "func", "a.go"}, {"T", "type", "b.go"}}, map[string]string{"T": " "}, "entry T has no reason"},
@@ -653,7 +680,9 @@ func (h *handler) Exported() {}
 // is one call into the other package with the parameters passed through (the
 // guard P shapes, forwardsInto with strict set). A method expression of
 // another family package's type counts as its name (`var repos =
-// hal.URLBuilder.Repos`, `return hal.URLBuilder.Repos(b, r)`). The case it closes is
+// hal.URLBuilder.Repos`, `return hal.URLBuilder.Repos(b, r)`), the pointer
+// form included (`var repos = (*hal.URLBuilder).Repos`, `return
+// (*hal.URLBuilder).Repos(b, r)`). The case it closes is
 // guard P's unexported gap, the shim a split leaves behind:
 //
 //	func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
@@ -760,6 +789,8 @@ func TestWebFamily_ForwardDetector_Discriminates(t *testing.T) {
 		"unexported const":         {imp + "const apiBase = httpx.APIBase\n", "apiBase"},
 		"method expression call":   {imp + "func repos(b hal.URLBuilder, r string) string { return hal.URLBuilder.Repos(b, r) }\n", "repos"},
 		"method expression var":    {imp + "var repos = hal.URLBuilder.Repos\n", "repos"},
+		"pointer method expr call": {imp + "func repos(b *hal.URLBuilder, r string) string { return (*hal.URLBuilder).Repos(b, r) }\n", "repos"},
+		"pointer method expr var":  {imp + "var repos = (*hal.URLBuilder).Repos\n", "repos"},
 	}
 	for name, c := range flagged {
 		got := run(c.src)
@@ -768,14 +799,16 @@ func TestWebFamily_ForwardDetector_Discriminates(t *testing.T) {
 		}
 	}
 	clean := map[string]string{
-		"adds an argument":   imp + "func writeNotFound(w http.ResponseWriter) { hal.WriteProblem(w, 404, \"not found\", \"\", \"\") }\n",
-		"reorders":           imp + "func f(a, b int) { httpx.F(b, a) }\n",
-		"does work":          imp + "func f(a int) error { if a < 0 { return nil }; return httpx.F(a) }\n",
-		"outside the family": imp + "func f(a int) error { return mcp.F(a) }\n",
-		"stdlib":             imp + "func f(w http.ResponseWriter, c int) { w.WriteHeader(c) }\n",
-		"own package call":   imp + "func f(a int) error { return g(a) }\nfunc g(a int) error { return nil }\n",
-		"method expr, adds":  imp + "func repos(b hal.URLBuilder) string { return hal.URLBuilder.Repos(b, \"x\") }\n",
-		"method expr, other": imp + "func f(a int) error { return mcp.T.F(a) }\n",
+		"adds an argument":       imp + "func writeNotFound(w http.ResponseWriter) { hal.WriteProblem(w, 404, \"not found\", \"\", \"\") }\n",
+		"reorders":               imp + "func f(a, b int) { httpx.F(b, a) }\n",
+		"does work":              imp + "func f(a int) error { if a < 0 { return nil }; return httpx.F(a) }\n",
+		"outside the family":     imp + "func f(a int) error { return mcp.F(a) }\n",
+		"stdlib":                 imp + "func f(w http.ResponseWriter, c int) { w.WriteHeader(c) }\n",
+		"own package call":       imp + "func f(a int) error { return g(a) }\nfunc g(a int) error { return nil }\n",
+		"method expr, adds":      imp + "func repos(b hal.URLBuilder) string { return hal.URLBuilder.Repos(b, \"x\") }\n",
+		"method expr, other":     imp + "func f(a int) error { return mcp.T.F(a) }\n",
+		"ptr method expr, adds":  imp + "func repos(b *hal.URLBuilder) string { return (*hal.URLBuilder).Repos(b, \"x\") }\n",
+		"ptr method expr, other": imp + "func f(a *mcp.T) error { return (*mcp.T).F(a) }\n",
 	}
 	for name, src := range clean {
 		if got := run(src); len(got) != 0 {

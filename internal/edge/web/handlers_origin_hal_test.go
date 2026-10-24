@@ -1216,3 +1216,43 @@ func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
 		"a credential update must not demote the subscription to sync")
 	require.Equal(t, "s3cret", after.AuthToken, "the write actually landed")
 }
+
+// An attach writes the durable origin record, and Origins.Set is a full
+// replacement: an empty Mode DELETES the subscription row. A connect session
+// cannot reach a subscription today (handleCreateSession 409s first), but PUT
+// /origin can — a credential refresh — so the rule is pinned at the write the
+// AttachOrigin event's apply makes, not at that guard.
+func TestAttachOrigin_PreservesSubscriptionMode(t *testing.T) {
+	originsRoot := t.TempDir()
+	_, m, _ := newControlDBTestServer(t, originsRoot)
+
+	url := seedBareRemoteKBForTest(t, filepath.Join(originsRoot, "kb.git"))
+	sub, err := m.Create(context.Background(), repos.CreateSpec{
+		Name: "sub", Mode: "subscribe", Origin: &repos.OriginSpec{URL: url},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	before, err := m.Origins().Get(sub.UID())
+	if err != nil || before == nil || before.Mode != control.OriginModeSubscribe {
+		t.Fatalf("precondition: want a subscribe-mode origin, got %+v (err %v)", before, err)
+	}
+
+	if _, err := m.Send(context.Background(), sub, repos.AttachOrigin(repos.OriginSpec{
+		URL: url, Branch: "main", AuthMethod: "token", AuthToken: "s3cret",
+	})); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	after, err := m.Origins().Get(sub.UID())
+	if err != nil || after == nil {
+		t.Fatalf("origin after: %v %+v", err, after)
+	}
+	if after.Mode != control.OriginModeSubscribe {
+		t.Errorf("Mode: got %q, want %q — the attach demoted the subscription",
+			after.Mode, control.OriginModeSubscribe)
+	}
+	if after.AuthToken != "s3cret" {
+		t.Errorf("AuthToken: got %q, want the value just written — the write did not land", after.AuthToken)
+	}
+}

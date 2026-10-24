@@ -223,7 +223,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.
 		OntologyRoot:      cfg.OntologyRoot,
 		AgentBranch:       a.agentBranch,
-		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
 		APIOnly:           opts.APIOnly,

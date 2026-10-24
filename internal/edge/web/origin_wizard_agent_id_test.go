@@ -16,14 +16,14 @@ import (
 	"knomit/internal/testsupport/testsigner"
 )
 
-// D18/P1b review F2: the origin wizard's replay store (handlers_origin_session
+// D18/P1b review F2: the origin wizard's replay store (api/origins/handlers.go:
 // /test opens it, /apply replays this instance's facts into it, /commit swaps
 // it in) authors as the PERSISTED agent id, Deps.AgentID. The id differs from
 // what the test fallback derives from "agent/test" ("test"), so a wizard that
 // forgot SetAgentID authors the replay as "test" and is caught.
 //
 // SABOTAGE: drop remoteSvc.SetAgentID(rm.AgentID()) in
-// handlers_origin_session.go → the replay commit is authored "test+…" → red.
+// api/origins/handlers.go → the replay commit is authored "test+…" → red.
 func TestConnect_ReplayAuthorsAsThePersistedAgentID(t *testing.T) {
 	const agentID = "opaque-web"
 	if testsigner.FixtureAgentID("agent/test") == agentID {
@@ -49,9 +49,8 @@ func TestConnect_ReplayAuthorsAsThePersistedAgentID(t *testing.T) {
 	if err := m.Start(); err != nil {
 		t.Fatal(err)
 	}
-	sm := NewSessionManager()
-	t.Cleanup(sm.Shutdown)
-	s := &Server{Manager: m, SessionManager: sm, AgentBranch: "agent/test"}
+	isolateOriginSessionTemp(t)
+	s := &Server{Manager: m, AgentBranch: "agent/test"}
 
 	ri := createLocalRepo(t, m, "core")
 	// A local fact for /apply to replay onto the remote's history.
