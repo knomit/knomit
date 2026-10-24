@@ -19,7 +19,7 @@ import (
 // Paging exists because ONE MCP tool result cannot carry a large work item. It
 // is a property of that transport and of nothing else. RunAll is the other
 // consumer of the same engine — the in-process synthesis job in
-// internal/edge/web/handlers_jobs.go, driving a local LLM adapter — and it receives
+// internal/edge/web/api/jobs/handlers.go, driving a local LLM adapter — and it receives
 // the item whole, in a Go value, with no size limit and no pages.
 //
 // So the accumulate-then-respond guard must not fire for it. When it did, every

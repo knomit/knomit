@@ -229,6 +229,10 @@ var sameLayerEdges = map[string]bool{
 	// (APIBase, DecodeJSON, StartSSE, ...) through httpx.
 	"edge/web/api/origins -> edge/web/hal":   true,
 	"edge/web/api/origins -> edge/web/httpx": true,
+	// api/jobs (12c) is the same: problems and HAL through hal, the shared
+	// helpers (APIBase, StartSSE, RefuseUnwritableBranch, ...) through httpx.
+	"edge/web/api/jobs -> edge/web/hal":   true,
+	"edge/web/api/jobs -> edge/web/httpx": true,
 }
 
 // layerOf returns the layer rank of a knomit/internal/... package. exempt is

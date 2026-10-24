@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/edge/web/api/jobs"
 	"knomit/internal/edge/web/api/origins"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
@@ -394,17 +395,8 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Get("/events", handleHALEvents())
 				r.Get("/triggers", handleHALTriggers(b))
 
-				r.Post("/synthesis-runs", handleStartSynthesis(s.LLMAdapter))
-				r.Get("/synthesis-runs", handleListJobs("synthesis-run"))
-				r.Get("/synthesis-runs/{id}", handleGetJob("synthesis-run"))
-				r.Delete("/synthesis-runs/{id}", handleDeleteJob(b, s.Manager, "synthesis-run"))
-				r.Get("/synthesis-runs/{id}/events", handleJobEvents("synthesis-run"))
-
-				r.Post("/index-rebuilds", handleStartRebuild(b, s.Manager))
-				r.Get("/index-rebuilds", handleListJobs("index-rebuild"))
-				r.Get("/index-rebuilds/{id}", handleGetJob("index-rebuild"))
-				r.Delete("/index-rebuilds/{id}", handleDeleteJob(b, s.Manager, "index-rebuild"))
-				r.Get("/index-rebuilds/{id}/events", handleJobEvents("index-rebuild"))
+				// Synthesis-run and index-rebuild jobs (api/jobs).
+				jobs.Mount(r, s.Manager, s.LLMAdapter)
 
 				// ONLY the MCP mount gets the session's experiment applied.
 				// The REST routes above name their branch in the URL and must
