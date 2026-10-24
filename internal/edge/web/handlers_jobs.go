@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -254,6 +255,10 @@ func writeJobFinished(w http.ResponseWriter, r *http.Request, id string) {
 		"job "+id+" has already finished; there is nothing to cancel", r.URL.Path)
 }
 
+// jobEventsKeepalive is how long a job stream may sit idle before it writes
+// the shared `: keepalive` comment frame. A var so a test can shorten it.
+var jobEventsKeepalive = 30 * time.Second
+
 // handleJobEvents serves GET .../synthesis-runs/{id}/events or .../index-rebuilds/{id}/events.
 //
 // It subscribes FIRST and only then reads the job from the hub. The hub
@@ -291,10 +296,18 @@ func handleJobEvents(kind string) http.HandlerFunc {
 			return
 		}
 
+		// A synthesis waiting on the model can emit nothing for minutes;
+		// keepalive stops a proxy or browser dropping the idle stream.
+		keepalive := time.NewTicker(jobEventsKeepalive)
+		defer keepalive.Stop()
 		for {
 			select {
 			case <-r.Context().Done():
 				return
+			case <-keepalive.C:
+				if !stream.Keepalive() {
+					return
+				}
 			case e, ok := <-events:
 				if !ok {
 					return
