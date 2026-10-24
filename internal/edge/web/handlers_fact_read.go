@@ -76,7 +76,9 @@ func (r readerRefResolver) Exists(path string) bool {
 
 // readFact loads the fact at (ri, anchor, path) through the store's ReadFact.
 // It returns errFactNotFound when the path does not exist; other store errors
-// are returned as-is for the handler to surface as 500. The returned head is
+// are returned as-is for the handler to surface as 500. A store that cannot be
+// reached is WithRead's error, returned as-is (never errFactNotFound: nothing
+// was looked up), which writeStoreError answers 503. The returned head is
 // the resolved commit to stamp into the view's as_of: the branch's head commit
 // when the anchor is HEAD, or the pinned sha unchanged when commit-anchored.
 //
@@ -95,11 +97,7 @@ func readFact(
 		head string
 		err  error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			err = errFactNotFound
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		opts := &facts.ReadFactOpts{WithHash: false}
 		if !a.IsHEAD() {
 			opts.AtCommit = a.Commit
@@ -156,7 +154,9 @@ func readFact(
 		} else {
 			head = a.Commit
 		}
-	})
+	}); aerr != nil {
+		return knomitfact.Fact{}, "", aerr
+	}
 	return f, head, err
 }
 

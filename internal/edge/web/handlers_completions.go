@@ -11,19 +11,19 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// readCompletions reads the completion values for one repo and branch; an
-// unopened store yields nil, nil.
+// readCompletions reads the completion values for one repo and branch. A store
+// that cannot be reached is WithRead's error, returned as-is (writeStoreError
+// answers it 503).
 func readCompletions(ctx context.Context, ri *repos.RepoInstance, branch, category, prefix string, limit int) ([]string, error) {
 	var (
 		out []string
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.FactQuery().Completions(ctx, branch, category, prefix, limit)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 

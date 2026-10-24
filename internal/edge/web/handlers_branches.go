@@ -31,8 +31,7 @@ func handleHALBranches(
 		ri := repos.RepoFromContext(r.Context())
 		branches, err := listRepoBranches(r.Context(), ri)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to list branches", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to list branches", "")
 			return
 		}
 
@@ -201,17 +200,14 @@ func embedBranchRoot(
 	if ri == nil || branch == "" {
 		return nil
 	}
+	// Best-effort: the embed exists to save a round trip to a KNOWN branch.
+	// A store that cannot be reached is readBranchRoot's error (WithRead's,
+	// returned as-is), and any error, like a head that did not resolve, means
+	// there is nothing worth embedding: the client should ask, and the
+	// omission tells it to. Embedding a zero branchRootInfo would advertise a
+	// branch root whose head is "" as though it were known.
 	info, err := readBranchRoot(ctx, ri, branch)
-	if err != nil {
-		return nil
-	}
-	// An unopened store is NOT an error from readBranchRoot: WithRead
-	// simply never runs its callback and the zero branchRootInfo comes back
-	// with a nil error. Embedding that would advertise a branch root whose
-	// head is "" as though it were known. The embed exists to save a round
-	// trip to a KNOWN branch, so with no head resolved there is nothing worth
-	// embedding and the client should ask — which the omission tells it to do.
-	if info.Head == "" {
+	if err != nil || info.Head == "" {
 		return nil
 	}
 	return branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled, experimentExpiryDays)

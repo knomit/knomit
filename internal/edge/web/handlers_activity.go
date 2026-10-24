@@ -13,19 +13,19 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// loadActivity reads one repo's commit activity. A repo whose store is not
-// live yields the zero ActivityResult and a nil error.
+// loadActivity reads one repo's commit activity. A store that cannot be
+// reached is WithRead's error, returned as-is (writeStoreError answers it
+// 503).
 func loadActivity(ctx context.Context, ri *repos.RepoInstance, branch, path string) (index.ActivityResult, error) {
 	var (
 		result index.ActivityResult
 		err    error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		result, err = svc.HistoryQuery().Activity(ctx, branch, path)
-	})
+	}); aerr != nil {
+		return result, aerr
+	}
 	return result, err
 }
 

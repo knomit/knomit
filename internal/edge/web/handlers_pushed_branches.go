@@ -55,7 +55,7 @@ func handleHALPushedBranches(
 		if !ri.Subscribed() && ri.AgentBranch() != "" {
 			branches, err := listRepoBranches(r.Context(), ri)
 			if err != nil {
-				hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list branches", err.Error(), r.URL.Path)
+				writeStoreError(w, r, err, "Failed to list branches", "")
 				return
 			}
 			var names []string
@@ -74,7 +74,7 @@ func handleHALPushedBranches(
 				if aerr := ri.WithRead(func(svc *store.Service) {
 					infos, err2 = svc.Merge().PushedBranches(r.Context(), names, ri.AgentBranch(), ri.OntologyRoot())
 				}); aerr != nil {
-					hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+					writeStoreUnavailable(w, r)
 					return
 				}
 				if err2 != nil {
@@ -186,7 +186,7 @@ func handlePushedMerge() http.HandlerFunc {
 			}
 			res, err = svc.MergePushed(r.Context(), branch, ri.AgentBranch(), plumbing.NewHash(req.ExpectedTip), side)
 		}); aerr != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+			writeStoreUnavailable(w, r)
 			return
 		}
 		if !exists {

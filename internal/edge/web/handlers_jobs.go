@@ -77,8 +77,7 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 		// never be told to stop.
 		unpin, err := ri.Pin()
 		if err != nil {
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable",
-				"store not available for this repo", r.URL.Path)
+			writeStoreUnavailable(w, r)
 			return
 		}
 

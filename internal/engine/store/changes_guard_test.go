@@ -67,7 +67,9 @@ var changesAllowedCalls = map[string][]string{
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
 		"b.Branch", "selfWithQuery", "hal.WriteHAL", "hal.WriteProblem", "writeChangesError", "writeStoreError",
-		"aerr.Error", "err.Error", "errors.Is", "len",
+		// the store-unavailable 503: a fixed problem document, no store call
+		"writeStoreUnavailable",
+		"err.Error", "errors.Is", "len",
 		// the repo's id for cursor and bookmark scope (a git read, cached)
 		"ri.ID", "federate.ID12", "model.ParseChangesSince", "strconv.Quote",
 	},

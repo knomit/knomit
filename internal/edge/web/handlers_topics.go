@@ -17,36 +17,36 @@ import (
 	"knomit/internal/engine/store/facts"
 )
 
-// listTopicDir lists path on branch of ri's store through ri.WithRead. A nil
-// store (the repo is not open) yields no entries and a nil error.
+// listTopicDir lists path on branch of ri's store through ri.WithRead. A store
+// that cannot be reached is WithRead's error, returned as-is (writeStoreError
+// answers it 503).
 func listTopicDir(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]facts.DirEntry, error) {
 	var (
 		out []facts.DirEntry
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.Facts().ListDir(ctx, branch, path)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
 // topicFactByPath reads the indexed fact at path on branch of ri's store
-// through ri.WithRead, for a topic listing's type/title enrichment. A nil store
-// yields a nil fact and a nil error.
+// through ri.WithRead, for a topic listing's type/title enrichment. A store
+// that cannot be reached is WithRead's error, returned as-is; the enrichment
+// callers are best-effort and skip a child on any error.
 func topicFactByPath(ctx context.Context, ri *repos.RepoInstance, branch, path string) (*facts.FactWithBody, error) {
 	var (
 		out *facts.FactWithBody
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.FactQuery().GetByPath(ctx, branch, path)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 

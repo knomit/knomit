@@ -166,23 +166,16 @@ func TestHandleHALStats_EmitsHighlightsTypesAndAxis(t *testing.T) {
 }
 
 // An empty highlights list and an empty type map serialize as [] and {}, never
-// null — both for a repo whose store is empty and for one whose store is not
-// live (the zero StatsResult, with nil maps, which the handler's own guards
-// must still render as [] / {}).
+// null, for a repo whose store is empty. (A store that is not live is no
+// longer a zero StatsResult but the store-unavailable 503:
+// TestReads_NoStore_Answer503.)
 func TestHandleHALStats_EmptyHighlightsSerializeAsArrayNotNull(t *testing.T) {
-	realEmpty, _ := newRealStoreManager(t, "alpha")
-	for name, m := range map[string]*repos.Manager{
-		"empty real store": realEmpty,
-		"store not live":   newTestManagerWithRepos(t, "alpha"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			rec := getAPI(t, &Server{Manager: m}, statsURL)
+	m, _ := newRealStoreManager(t, "alpha")
+	rec := getAPI(t, &Server{Manager: m}, statsURL)
 
-			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-			require.Contains(t, rec.Body.String(), `"highlights":[]`)
-			require.Contains(t, rec.Body.String(), `"types":{}`)
-		})
-	}
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"highlights":[]`)
+	require.Contains(t, rec.Body.String(), `"types":{}`)
 }
 
 // axis= reaches the store and re-ranks the highlights: with impact as the

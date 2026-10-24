@@ -9,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store/index"
 )
@@ -366,22 +365,17 @@ func TestHandleCommitDetail_UnknownCommitIs404(t *testing.T) {
 	require.Equal(t, "CommitDetail: commit not found in history index: "+sha, detail)
 }
 
-// A repo with no live store lists no commits (an empty array, not null) and
-// serves no commit detail: the detail's 404 carries the reason the store
-// could not be acquired.
+// A repo with no live store answers the one store-unavailable 503 for both
+// the commit list and a commit's detail: not an empty list that reads as "no
+// commits", and not the detail's 404 "Commit not found" (user ruling
+// 2026-10-24).
 func TestHandleCommits_RepoWithoutAStore(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), OntologyRoot: commitsRoot}
 
-	rec := getAPI(t, s, "/repos/alpha/branches/agent:test/commits")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), `"commits":[]`)
-	require.Contains(t, rec.Body.String(), `"count":0`)
-
-	rec = getAPI(t, s, "/repos/alpha/branches/agent:test/commits/0123456789abcdef0123456789abcdef01234567")
-	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-	title, detail := decodeProblem(t, rec)
-	require.Equal(t, "Commit not found", title)
-	require.Equal(t, repos.ErrStoreUnavailable.Error(), detail)
+	requireUnavailableProblem(t, getAPI(t, s, "/repos/alpha/branches/agent:test/commits"),
+		"/repos/alpha/branches/agent:test/commits")
+	const detail = "/repos/alpha/branches/agent:test/commits/0123456789abcdef0123456789abcdef01234567"
+	requireUnavailableProblem(t, getAPI(t, s, detail), detail)
 }
 
 func TestHandleCommits_UnknownRepo_Returns404(t *testing.T) {

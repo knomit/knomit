@@ -278,20 +278,20 @@ func (s *Server) Handler() http.Handler {
 	return r
 }
 
-// listRepoBranches reads the branch list from a repo's store via
-// WithRead. Returns nil, nil if the store is unavailable (e.g. the repo is
-// still opening) so handlers can distinguish "no data yet" from "error".
+// listRepoBranches reads the branch list from a repo's store via WithRead. A
+// store that cannot be reached (e.g. the repo is still opening) is WithRead's
+// error, returned as-is: the handlers answer it 503 through writeStoreError,
+// not an empty list that reads as "this repo has no branches".
 func listRepoBranches(ctx context.Context, ri *repos.RepoInstance) ([]model.Branch, error) {
 	var (
 		out []model.Branch
 		err error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		out, err = svc.ListBranches(ctx)
-	})
+	}); aerr != nil {
+		return out, aerr
+	}
 	return out, err
 }
 
@@ -303,10 +303,7 @@ func readBranchRoot(ctx context.Context, ri *repos.RepoInstance, branch string) 
 		info branchRootInfo
 		err  error
 	)
-	ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
-		}
+	if aerr := ri.WithRead(func(svc *store.Service) {
 		head, herr := svc.HeadCommit(ctx, branch)
 		if herr != nil {
 			err = herr
@@ -317,6 +314,8 @@ func readBranchRoot(ctx context.Context, ri *repos.RepoInstance, branch string) 
 		if ierr == nil {
 			info.IndexCommit = idx
 		}
-	})
+	}); aerr != nil {
+		return info, aerr
+	}
 	return info, err
 }
