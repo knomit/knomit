@@ -1,4 +1,4 @@
-package web
+package manage
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 	"knomit/internal/edge/web/hal"
 )
 
-// MaxOntologyBytes caps an ontology document accepted by :validate (whose
+// maxOntologyBytes caps an ontology document accepted by :validate (whose
 // whole body is the YAML) and by create (whose body carries it as the JSON
 // string ontology_yaml). Both answer 413, and both measure the RAW YAML — a
 // create that instead capped its whole body would reject, as "too large",
@@ -19,7 +19,7 @@ import (
 // the document (see maxCreateBodyBytes in handlers_repos_create.go). Neither
 // path may read an ontology without a cap. Sits alongside
 // MaxRepoDescriptionBytes as a request-size guard.
-const MaxOntologyBytes = 256 * 1024
+const maxOntologyBytes = 256 * 1024
 
 // presetNames is the ordered preset list. "default" leads because it is the
 // wizard's initial selection.
@@ -42,7 +42,7 @@ type ontologyValidateResponse struct {
 // typed a bad key" with "your request was malformed".
 func handleOntologyValidate() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxOntologyBytes))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOntologyBytes))
 		if err != nil {
 			hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Ontology too large",
 				"ontology exceeds the maximum accepted size", r.URL.Path)

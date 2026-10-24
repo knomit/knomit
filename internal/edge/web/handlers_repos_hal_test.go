@@ -978,7 +978,7 @@ func TestHandleHALRepoPatch_BothFieldsApplyTogether(t *testing.T) {
 // before it is buffered, as a 413 rather than a decode error.
 func TestHandleHALRepoPatch_RejectsOversizeBody(t *testing.T) {
 	r := newRepoPatchServer(t)
-	body := mustJSON(t, map[string]any{"description": strings.Repeat("x", maxRepoPatchBodyBytes+1)})
+	body := mustJSON(t, map[string]any{"description": strings.Repeat("x", 8*repos.MaxRepoDescriptionBytes+1)})
 	if rec := patchRepo(t, r, "work", body); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status: got %d, want 413; body=%s", rec.Code, rec.Body.String())
 	}

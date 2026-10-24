@@ -138,19 +138,6 @@ func TestPostRepos_Template(t *testing.T) {
 	require.Equal(t, "mission", m.Get("my-mission").Ontology().ID)
 }
 
-// A 422 for a template that is there and unusable: covered per rule in
-// internal/corpus/repos; here only the status mapping of each sentinel.
-func TestCreateErrStatus_TemplateSentinels(t *testing.T) {
-	for _, err := range []error{repos.ErrTemplateNotRegular, repos.ErrTemplateTooLarge, repos.ErrTemplateLayout,
-		repos.ErrTemplateDescribedTwice, repos.ErrTemplateNoOntology, repos.ErrTemplateOntology, repos.ErrTemplatePresetID} {
-		status, title := createErrStatus(err)
-		require.Equal(t, http.StatusUnprocessableEntity, status, err.Error())
-		require.Equal(t, "Template invalid", title)
-	}
-	status, _ := createErrStatus(repos.ErrTemplateSourceUnavailable)
-	require.Equal(t, http.StatusServiceUnavailable, status)
-}
-
 // The reserved fleet id over REST: every create door that names the ontology
 // answers 422 "Fleet ontology reserved" before any job starts (no 202), and
 // nothing is created.

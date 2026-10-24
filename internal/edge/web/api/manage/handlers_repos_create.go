@@ -1,4 +1,4 @@
-package web
+package manage
 
 import (
 	"encoding/json"
@@ -35,7 +35,7 @@ type createRepoRequest struct {
 }
 
 // maxCreateBodyBytes bounds the whole create envelope, and is deliberately NOT
-// MaxOntologyBytes. ontology_yaml rides here as a JSON STRING, and encoding
+// maxOntologyBytes. ontology_yaml rides here as a JSON STRING, and encoding
 // inflates it: every newline costs two bytes, every quote and backslash two,
 // every other control character six (\u00XX). An ontology is newline-dense by
 // construction, so a document :validate accepted at 250 KiB of raw YAML can
@@ -46,7 +46,7 @@ type createRepoRequest struct {
 // So the body cap only has to bound memory (6x covers the all-control-character
 // worst case, plus room for the name/mode/origin fields), and the real limit is
 // enforced on the DECODED ontology below, where it means what it says.
-const maxCreateBodyBytes = 6*MaxOntologyBytes + 4*1024
+const maxCreateBodyBytes = 6*maxOntologyBytes + 4*1024
 
 // handleHALReposCreate serves POST /api/v1/repos. It pre-validates (returning
 // problem+json on rejection), then starts the create DETACHED and answers
@@ -67,7 +67,7 @@ const maxCreateBodyBytes = 6*MaxOntologyBytes + 4*1024
 func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ontology_yaml rides in this body for modes "custom" and "initialize", so the
-		// cap MaxOntologyBytes names has to be applied here too — :validate
+		// cap maxOntologyBytes names has to be applied here too — :validate
 		// alone leaves the create path unbounded, and nothing forces a client
 		// to visit :validate first. Two guards, because they answer two
 		// different questions: the reader below bounds how much we will read at
@@ -79,7 +79,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		// The ontology limit, measured on the same bytes :validate measures, so
 		// the two paths agree about what "256 KiB" means.
-		if len(req.OntologyYAML) > MaxOntologyBytes {
+		if len(req.OntologyYAML) > maxOntologyBytes {
 			hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Ontology too large",
 				"ontology exceeds the maximum accepted size", r.URL.Path)
 			return

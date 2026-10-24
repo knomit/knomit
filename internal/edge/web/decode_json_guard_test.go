@@ -17,8 +17,8 @@ import (
 // reason as good as these; "it was quicker" is how the Content-Type rule
 // quietly stops covering a handler.
 var bodyReadAllowed = map[string]string{
-	"handlers_ontologies.go": "ontologies:validate reads YAML, not JSON",
-	"oauth_pending_api.go":   "OAuth approve: browserProof already requires application/json from a browser, and it shares httpx.IsJSONMediaType",
+	"api/manage/handlers_ontologies.go": "ontologies:validate reads YAML, not JSON",
+	"oauth_pending_api.go":              "OAuth approve: browserProof already requires application/json from a browser, and it shares httpx.IsJSONMediaType",
 }
 
 // TestNoHandlerDecodesARequestBodyOutsideDecodeJSON keeps every JSON request

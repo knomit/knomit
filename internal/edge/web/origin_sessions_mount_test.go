@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -19,6 +20,8 @@ import (
 type routeChain struct {
 	route string
 	mws   []string
+	// endpoint is the runtime name of the handler at the end of the chain.
+	endpoint string
 }
 
 // walkFull is chi.Walk plus the group middleware chi.Walk drops. A subrouter
@@ -27,7 +30,12 @@ type routeChain struct {
 // and ignores that chain, so it would report the origin-session routes
 // without RepoMiddleware even though every request runs it.
 func walkFull(r chi.Routes, prefix string, parent []string, out *[]routeChain) {
-	name := func(f any) string { return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name() }
+	name := func(f any) string {
+		if v := reflect.ValueOf(f); v.Kind() == reflect.Func {
+			return runtime.FuncForPC(v.Pointer()).Name()
+		}
+		return fmt.Sprintf("%T", f)
+	}
 	mws := slices.Clone(parent)
 	for _, m := range r.Middlewares() {
 		mws = append(mws, name(m))
@@ -53,7 +61,11 @@ func walkFull(r chi.Routes, prefix string, parent []string, out *[]routeChain) {
 		}
 		for method, h := range rt.Handlers {
 			if method != "*" {
-				*out = append(*out, routeChain{method + " " + prefix + rt.Pattern, chainOf(h)})
+				end := h
+				if c, ok := h.(*chi.ChainHandler); ok {
+					end = c.Endpoint
+				}
+				*out = append(*out, routeChain{method + " " + prefix + rt.Pattern, chainOf(h), name(end)})
 			}
 		}
 	}
