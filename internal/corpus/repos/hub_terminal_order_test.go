@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/ysmood/goob"
 )
 
 // A TERMINAL IS RECORDED BEFORE IT IS PUBLISHED (PR #623 F1). A Subscribe
@@ -15,7 +17,7 @@ import (
 // window, so this is a bounded stress loop: the old order failed it within a
 // few hundred iterations.
 func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
-	const iterations = 3000
+	const iterations = 2000
 	for i := 0; i < iterations; i++ {
 		hub := NewTaskHub(context.Background())
 		gate := make(chan struct{})
@@ -33,21 +35,24 @@ func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
 			}
 		}
 
+		// Subscribe over and over while the terminal is emitted, until a
+		// snapshot shows it: every subscription whose snapshot still showed
+		// the task running must then receive the terminal.
 		ctx, cancel := context.WithCancel(context.Background())
-		go close(gate)
-		events, snapshot := hub.Subscribe(ctx)
-		sawRunning := false
-		for _, ev := range snapshot {
-			if ev.ID != id {
-				continue
+		var sawRunning []goob.Events
+		close(gate)
+		for ended := false; !ended; {
+			events, snapshot := hub.Subscribe(ctx)
+			for _, ev := range snapshot {
+				if ev.ID == id && ev.Status == "running" {
+					sawRunning = append(sawRunning, events)
+				}
+				if ev.ID == id && ev.Status == "done" {
+					ended = true
+				}
 			}
-			if ev.Status == "done" {
-				sawRunning = false
-				break
-			}
-			sawRunning = true
 		}
-		if sawRunning {
+		for n, events := range sawRunning {
 			deadline := time.After(time.Second)
 		wait:
 			for {
@@ -59,7 +64,7 @@ func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
 				case <-deadline:
 					cancel()
 					hub.Shutdown()
-					t.Fatalf("iteration %d: the snapshot showed %s running and its terminal never arrived", i, id)
+					t.Fatalf("iteration %d: subscription %d saw %s running and its terminal never arrived", i, n, id)
 				}
 			}
 		}
