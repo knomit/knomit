@@ -416,6 +416,23 @@ func requireStreamEnds(t *testing.T, rec *streamRecorder, done <-chan struct{}, 
 	}
 }
 
+// An IDLE job stream writes the shared keepalive comment frame, so a proxy
+// does not drop a job that is quiet while it waits on the model.
+func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
+	old := jobEventsKeepalive
+	jobEventsKeepalive = 20 * time.Millisecond
+	t.Cleanup(func() { jobEventsKeepalive = old })
+
+	f := newJobsFixture(t)
+	rec, _, stop := openJobStream(t, f.r, alphaSynth+"/"+f.running+"/events")
+	defer stop()
+	// The job emits nothing more; the only thing that can arrive is a keepalive.
+	rec.waitFor(t, "a keepalive frame", func(b string) bool { return strings.Contains(b, ": keepalive\n\n") })
+	if frames := taskFrames(t, rec.body()); len(frames) != 1 || frames[0].Status != "running" {
+		t.Fatalf("frames = %+v, want only the initial running frame", frames)
+	}
+}
+
 // A RUNNING job that ends in ERROR ends its stream too, not only done.
 func TestJobs_EventsForARunningJobEndsOnAnErrorTerminal(t *testing.T) {
 	f := newJobsFixture(t)
