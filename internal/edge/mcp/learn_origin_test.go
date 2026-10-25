@@ -124,10 +124,6 @@ func TestLearnHandler_OriginDefaultsAuthored(t *testing.T) {
 		"type":  "observation", "confidence": 0.7, "sources": 1,
 		"domain": []any{"ai"}, "entities": []any{"x"},
 		"refs": []any{sourcePath},
-		// The test embedder places both facts above the Dedup floor, and a
-		// different statement there is refused (nearDuplicateRefusal), so the
-		// caller says it is a different fact — as the refusal tells it to.
-		"distinct_from": []any{sourcePath},
 		// origin omitted
 	}))
 	require.NoError(t, err)

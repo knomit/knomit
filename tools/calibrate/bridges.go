@@ -273,7 +273,7 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	// M-5: resolve the CORPUS's own model thresholds. This command opens the
 	// store without an embedder — correct, the scoring path needs none — but
 	// OverDedup is measured against a cosine, and the default is nomic's while
-	// every corpus in this campaign is embeddinggemma (0.82 vs 0.92). An
+	// every corpus in this campaign is embeddinggemma (0.905 vs 0.95). An
 	// unknown model yields "not computed", never a default.
 	dedup, dedupKnown := corpusDedupThreshold(dbPath)
 	cfg.OverDedupAt, cfg.OverDedupKnown = dedup, dedupKnown

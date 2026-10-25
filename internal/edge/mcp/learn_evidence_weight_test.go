@@ -21,8 +21,7 @@ import (
 // Three preconditions must all hold, and the fixture asserts each rather than
 // arranging them silently:
 //   1. the existing fact carries a stored evidence_weight;
-//   2. the incoming fact is the same statement (only those merge; a different
-//      one is refused, nearDuplicateRefusal) and WINS newFactWins (higher
+//   2. the incoming fact WINS incomingIdentityWins (the same statement, higher
 //      confidence);
 //   3. the incoming fact OMITS origin — which the learn schema tells agents to
 //      do — so the merged Origin is empty and computeEvidenceWeights, which
@@ -72,8 +71,8 @@ func TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight(t *testing.T) {
 	require.Contains(t, stored.Content, "evidence_weight: 0.8",
 		"fixture: the existing fact must carry a stored weight, or this test measures nothing")
 
-	// The incoming fact: the SAME statement (only an exact restatement merges,
-	// see sameStatement), HIGHER confidence so it wins newFactWins, and no
+	// The incoming fact: the SAME statement (an incoming identity wins only
+	// then, see incomingIdentityWins), HIGHER confidence so it wins, and no
 	// origin key at all.
 	incomingTitle := existingTitle
 	incomingBody := existingBody

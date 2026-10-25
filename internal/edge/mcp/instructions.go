@@ -232,7 +232,7 @@ Each fact has YAML frontmatter with:
 
 ## Tools
 
-- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication within the same category: a fact that restates an existing one word for word is merged into it automatically, and a near-duplicate that states something different is refused with the existing path named (nothing is written). A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed. After either refusal, update the existing fact, or resubmit with distinct_from naming the paths you have checked. distinct_from also keeps the dedup stage from merging or refusing a fact against a path it names: use it for a counter-hypothesis, a competing claim or a sibling decision written next to a near-identical fact. Leave origin unset for facts you write directly (defaults to authored). When you persist a proposal from a discover or distill work-item, set the origin that work-item's prompt specifies (discovered for a cross-cluster bridge, distilled for a regular cluster) — origin reflects how the candidate group was formed, not whether you previewed it.
+- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication automatically within the same category. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. distinct_from also keeps the automatic merge from folding a fact into a path it names: use it for a counter-hypothesis or a competing claim written next to a near-identical fact. Leave origin unset for facts you write directly (defaults to authored). When you persist a proposal from a discover or distill work-item, set the origin that work-item's prompt specifies (discovered for a cross-cluster bridge, distilled for a regular cluster) — origin reflects how the candidate group was formed, not whether you previewed it.
 - **knomit_query**: search existing knowledge. Filters:
   - text: semantic search across all facts
   - entities: filter to facts mentioning specific entities (all must match)
@@ -273,7 +273,7 @@ Call this tool to generate hypotheses from synthesis facts. Works the same way a
 3. Use knomit_explain on the synthesis fact to trace its provenance
 4. Gather additional evidence as needed
 5. If a hypothesis is warranted, call knomit_learn with type: hypothesis
-6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent. If either knomit_learn call answers "near-duplicate of <path>", nothing was written: read <path>, skip the fact if it already says this, or resubmit with distinct_from: ["<path>"] if it says something different.
+6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent.
 7. Call knomit_hypothesize with session_id to get the next synthesis fact
 8. Repeat until done
 

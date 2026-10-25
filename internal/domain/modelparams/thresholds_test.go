@@ -12,7 +12,7 @@ func TestDefaults(t *testing.T) {
 		got  float64
 		want float64
 	}{
-		{"Dedup", d.Dedup, 0.92},
+		{"Dedup", d.Dedup, 0.95}, // re-derived for #638, see thresholds.go
 		{"ReflectNovelty", d.ReflectNovelty, 0.85},
 		{"SimilarTo", d.SimilarTo, 0.60},
 		{"SearchFloor", d.SearchFloor, 0.40},

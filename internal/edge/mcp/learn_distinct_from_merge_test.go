@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -93,32 +94,50 @@ func TestLearnHandler_DistinctFromKeepsCounterHypothesisSeparate(t *testing.T) {
 	}
 }
 
-// (b) WITHOUT distinct_from the counter is REFUSED: it states a different
-// prediction, and the dedup stage only absorbs an exact restatement
-// (nearDuplicateRefusal). Nothing is written, so the original prediction keeps
-// its text and its confidence whichever side is more confident. Before #638
-// the counter merged and one of the two predictions was dropped (a kept/DROPPED
-// note); the more confident one could overwrite the original at its path.
+// (b) WITHOUT distinct_from the counter still merges (the merge stage is not
+// switched off), and the response says which prediction was kept and which
+// DROPPED, in notes and in summary. The counter is a DIFFERENT prediction, so
+// even when it is the more confident the original is kept at the seed path and
+// the counter is the one dropped: a merge never overwrites an existing
+// statement with another (incomingIdentityWins). Before that rule the
+// conf=0.7 row dropped the ORIGINAL and the seed path held the counter.
 //
-// SABOTAGE: drop the refusal → the counter merges → red.
-func TestLearnHandler_CounterHypothesisWithoutDistinctFromIsRefused(t *testing.T) {
+// SABOTAGE S5c (the generic note instead of kept/dropped) → red.
+func TestLearnHandler_HypothesisMergeSaysWhatWasDropped(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
-		for _, conf := range []float64{0.33, 0.7} {
-			t.Run(fmt.Sprintf("%s/conf=%g", ts.name, conf), func(t *testing.T) {
+		for _, tc := range []struct {
+			conf                 float64
+			kept, dropped        string
+			keptTitle, dropTitle string
+		}{
+			{0.33, "existing", "incoming", "October", "November"},
+			{0.7, "existing", "incoming", "October", "November"},
+		} {
+			t.Run(fmt.Sprintf("%s/conf=%g", ts.name, tc.conf), func(t *testing.T) {
 				svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, ts.th.Dedup+(1-ts.th.Dedup)*0.5)
 				seed := dfSeed(t, ctx, emb, "hypothesis")
-				seedBefore := dfRead(t, svc, seed)
 				before := liveFactCount(t, svc)
 
 				r := dfLearn(t, ctx, emb, dfFact("hypothesis",
 					"Anthropic IPO launch happens in November 2026",
-					"A "+probeMarker+" counter: the launch slips to November.", conf, nil))
-				require.True(t, r.IsError, resultText(t, r))
-				msg := resultText(t, r)
-				require.Contains(t, msg, "near-duplicate of "+seed)
-				require.Contains(t, msg, "distinct_from")
+					"A "+probeMarker+" counter: the launch slips to November.", tc.conf, nil))
+				require.False(t, r.IsError, resultText(t, r))
+				require.Equal(t, seed, mergedFactPath(t, r), "without distinct_from it still merges")
 				require.Equal(t, before, liveFactCount(t, svc))
-				require.Equal(t, seedBefore, dfRead(t, svc, seed), "the original prediction is untouched")
+
+				var res struct {
+					Notes   []string `json:"notes"`
+					Summary string   `json:"summary"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(resultText(t, r)), &res))
+				require.Len(t, res.Notes, 1)
+				note := res.Notes[0]
+				require.Contains(t, note, "merged into existing hypothesis "+seed)
+				require.Contains(t, note, "kept the "+tc.kept+" prediction \"Anthropic IPO launch happens in "+tc.keptTitle)
+				require.Contains(t, note, "DROPPED the "+tc.dropped+" prediction \"Anthropic IPO launch happens in "+tc.dropTitle)
+				require.Contains(t, note, "distinct_from")
+				require.Contains(t, res.Summary, note, "the summary carries the note too")
+				require.Contains(t, dfRead(t, svc, seed), "# Anthropic IPO launch happens in "+tc.keptTitle)
 			})
 		}
 	}
@@ -138,10 +157,9 @@ func TestLearnHandler_DistinctFromDeclinesOnlyTheNamedPath(t *testing.T) {
 			other := mergedFactPath(t, dfLearn(t, ctx, emb, sameSubjectFact("gotchas", "unrelated/area",
 				"Something else entirely", "Nothing to do with the launch.", []any{"Elsewhere"})))
 
-			// An EXACT restatement of the seed (only those merge).
 			r := dfLearn(t, ctx, emb, dfFact("observation",
 				"Anthropic IPO launch happens in October 2026",
-				"The "+seedMarker+" predicts an October launch.", 0.6, []any{other}))
+				"A "+probeMarker+" restatement.", 0.6, []any{other}))
 			require.False(t, r.IsError, resultText(t, r))
 			require.Equal(t, seed, mergedFactPath(t, r), "naming a different path does not stop the merge")
 
@@ -185,11 +203,9 @@ func TestLearnHandler_DistinctFromMissingPathStillRefusedOnAMerge(t *testing.T) 
 			seed := dfSeed(t, ctx, emb, "observation")
 			seedBefore := dfRead(t, svc, seed)
 			before := liveFactCount(t, svc)
-			// An EXACT restatement, so the merge stage folds it; a different
-			// statement would be refused there before this validation runs.
 			r := dfLearn(t, ctx, emb, dfFact("observation",
 				"Anthropic IPO launch happens in October 2026",
-				"The "+seedMarker+" predicts an October launch.", 0.9,
+				"A "+probeMarker+" restatement.", 0.9,
 				[]any{"kb/decisions/" + dfCategory + "/nope.md"}))
 			require.True(t, r.IsError)
 			require.True(t, strings.Contains(resultText(t, r), "does not exist on this branch"), resultText(t, r))

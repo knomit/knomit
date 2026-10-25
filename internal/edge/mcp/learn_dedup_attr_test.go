@@ -169,7 +169,7 @@ func TestApplyDedupMerge_LearnDedupOffSkipsSearchKeepsDonation(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 	vecs := dedupEmbed(ctx, emb, facts)
-	embByPath, _, _, touched, _, err := applyDedupMerge(ctx, s, "agent/test", ont, "kb", emb, vecs, facts, tcs, paths, files, "x", nil, nil)
+	embByPath, _, _, touched, _, _, err := applyDedupMerge(ctx, s, "agent/test", ont, "kb", emb, vecs, facts, tcs, paths, files, "x", nil, nil)
 	require.NoError(t, err)
 
 	// Flagged: not touched, path unchanged, donation kept under its own path.
@@ -311,7 +311,7 @@ func TestApplyDedupMerge_NeverMergesIntoAFlaggedCandidate(t *testing.T) {
 	require.Equal(t, childPath, res[0].Path)
 
 	minted := paths[0]
-	_, _, _, touched, _, err := applyDedupMerge(ctx, s, "agent/test", ont, "kb", emb, dedupEmbed(ctx, emb, facts), facts, tcs, paths, files, "x", nil, nil)
+	_, _, _, touched, _, _, err := applyDedupMerge(ctx, s, "agent/test", ont, "kb", emb, dedupEmbed(ctx, emb, facts), facts, tcs, paths, files, "x", nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, touched, "an unflagged incoming fact must not merge into a flagged candidate")
 	require.Equal(t, minted, paths[0])

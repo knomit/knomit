@@ -61,8 +61,17 @@ var modelThresholds = map[string]Thresholds{
 	// The historical nomic-era values, and the fallback when no embedder is
 	// configured (embeddings disabled) — behaviour identical to before
 	// thresholds became model-dependent.
+	//
+	// Dedup re-derived for #638 (see DefaultModelID below for the method): the
+	// highest genuinely DISTINCT pair inside learn's merge scope on the
+	// 1,647-fact knomit corpus is 0.9377 (the ontology guide's hub fact and
+	// its topics-and-presets page), and seven distinct pairs sat above the old
+	// 0.92; synthetic true near-duplicates sit at p01 0.966, p05 0.975. The
+	// midpoint, 0.952, floored to 0.005: 0.95, which still catches 99.88% of
+	// the synthetic near-duplicates. The 2026-10-23 incident pair (W0g1/W0g2)
+	// scores 0.839 here.
 	NomicModelID: {
-		Dedup:          0.92,
+		Dedup:          0.95,
 		ReflectNovelty: 0.85,
 		SimilarTo:      0.60,
 		SearchFloor:    0.40,
@@ -72,12 +81,36 @@ var modelThresholds = map[string]Thresholds{
 	// Calibrated against the real knomit corpus (712 facts, tools/calibrate).
 	// EmbeddingGemma's cosine distribution runs markedly cooler than nomic's
 	// (distinct same-category pairs: mean 0.48 vs 0.75), so every cutoff is
-	// ported DOWN by preserving the percentile it occupied on nomic. Dedup
-	// 0.82 sits in the validated safety gap (distinct p99 0.77 < 0.82 < true
-	// near-dup p05 0.96). SearchFloor's pure port was ~0, clamped to 0.05 to
-	// drop only anti-correlated noise.
+	// ported DOWN by preserving the percentile it occupied on nomic.
+	// SearchFloor's pure port was ~0, clamped to 0.05 to drop only
+	// anti-correlated noise.
+	//
+	// DEDUP IS NOT A PORT: it was re-derived for #638 from the corpus's own
+	// two populations, because the ported 0.82 stopped sitting in a gap. It was
+	// set against distinct same-category p99 0.77 on 712 facts; on 1,647 facts
+	// the corpus holds families of sibling facts (one decision per step of a
+	// plan, a guide's hub fact and its pages), distinct same-directory p99 is
+	// 0.874, and 21 pairs inside learn's merge scope (a category directory
+	// PREFIX) sat above 0.82. One of them is the 2026-10-23 incident: the W0g2
+	// decision matched its sibling W0g1 decision at 0.8616, was merged into
+	// it, and overwrote it.
+	//
+	// Method, so the next re-sweep can repeat it rather than pick a number:
+	// take the highest pair in learn's merge scope that is genuinely DISTINCT
+	// (read, not assumed: on this corpus the W0g2 and W0g3 decisions, 0.8915;
+	// the two pairs above it, 0.910 and 0.909, state the same claim and are
+	// meant to merge), and the p01 of the synthetic true near-duplicates
+	// (tools/calibrate nearDup: same title, every third sentence dropped;
+	// p01 0.9214, p05 0.9456, p50 0.9798). Dedup is their midpoint, 0.9065,
+	// floored to 0.005: 0.905. It catches 99.64% of the synthetic
+	// near-duplicates, leaving no distinct pair above it.
+	//
+	// WHAT THIS DOES NOT MEAN: 0.905 is not a property of EmbeddingGemma. It is
+	// this corpus's gap, measured once; a corpus with denser sibling families
+	// can close it again, and the merge's sameStatement rule (learn.go) is the
+	// backstop for the text, not for the metadata a false match pools.
 	DefaultModelID: {
-		Dedup:          0.82,
+		Dedup:          0.905,
 		ReflectNovelty: 0.69,
 		SimilarTo:      0.18,
 		SearchFloor:    0.05,

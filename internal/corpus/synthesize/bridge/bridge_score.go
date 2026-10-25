@@ -43,7 +43,7 @@ type NoveltySignals struct {
 	// principle as VectorsRead, applied to the other input the signal needs.
 	// A silently-defaulted threshold would be worse than no number: the
 	// defaults are nomic's and every corpus in this campaign is embeddinggemma,
-	// whose Dedup is 0.82 against the default 0.92.
+	// whose Dedup is 0.905 against the default 0.95.
 	DedupKnown bool
 	// OverDedup is the fraction of member pairs at or above the dedup
 	// threshold.

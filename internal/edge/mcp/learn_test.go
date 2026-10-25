@@ -261,24 +261,16 @@ func TestLearnHandler_DedupMergePreservesKind(t *testing.T) {
 	require.Equal(t, 1, merged.Sources, "a ref-less merge does not count (#361)")
 }
 
-// TestLearnHandler_DedupMergeChainsARepeatedRestatement regresses the
+// TestLearnHandler_DedupMergeOneExistingFactAbsorbsOneIncoming regresses the
 // collision the handler's duplicate-path guard cannot see. That guard runs over
 // the freshly-minted paths; applyDedupMerge retargets paths[i] onto an existing
 // fact's path AFTERWARDS, so two inputs in one category that both match the
 // SAME existing fact used to land on one path — one file written, one body
 // silently gone, two commit entries emitted, and a summary asserting both were
-// written.
-//
-// The second matcher was then SKIPPED and written at its own path, which
-// appended an exact duplicate (principles/philosophy/dedup-not-append). A merge
-// now only absorbs the same statement, so the second input CHAINS onto the
-// first's merge: both bodies are the same text and nothing is lost, the
-// commits list both inputs at the one file, the summary counts ONE fact, and a
-// note says why two inputs share it.
-//
-// SABOTAGE: skip a merged path again (the old `consumed` decline) → two files
-// → red.
-func TestLearnHandler_DedupMergeChainsARepeatedRestatement(t *testing.T) {
+// written. An existing fact now absorbs at most one incoming fact per call; the
+// second is written at its own path, so nothing the caller sent disappears and
+// the reported count is a count that happened.
+func TestLearnHandler_DedupMergeOneExistingFactAbsorbsOneIncoming(t *testing.T) {
 	svc, ctx, emb := newPrinciplesTestRepo(t)
 
 	r1, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
@@ -294,31 +286,34 @@ func TestLearnHandler_DedupMergeChainsARepeatedRestatement(t *testing.T) {
 
 	r2, err := LearnHandler(emb)(ctx, req)
 	require.NoError(t, err)
-	require.False(t, r2.IsError, "a repeated restatement must not fail the call: %s", resultText(t, r2))
+	require.False(t, r2.IsError, "colliding dedup matches must not fail the call: %s", resultText(t, r2))
 
 	var parsed struct {
 		Commits []struct {
 			File string `json:"file"`
 		} `json:"commits"`
-		Summary string   `json:"summary"`
-		Notes   []string `json:"notes"`
+		Summary string `json:"summary"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, r2)), &parsed))
 	require.Len(t, parsed.Commits, 2, "both inputs are accounted for")
-	for _, c := range parsed.Commits {
-		require.Equal(t, seedPath, c.File, "both inputs merged into the existing fact; nothing appended")
-	}
-	require.Contains(t, parsed.Summary, "1 fact",
-		"the summary must count what was actually written; got %q", parsed.Summary)
-	require.NotContains(t, parsed.Summary, "2 facts")
-	require.Contains(t, parsed.Notes,
-		"fact 1: the same statement as fact 0; both merged into existing fact "+seedPath+", one fact written.")
 
-	res, rerr := svc.Facts().ReadFact(context.Background(), "agent/test", seedPath, nil)
-	require.NoError(t, rerr)
-	merged, perr := fact.ParseFact(seedPath, res.Content)
-	require.NoError(t, perr)
-	require.Equal(t, 0.9, merged.Confidence, "the merge took the higher confidence")
+	distinct := map[string]bool{}
+	for _, c := range parsed.Commits {
+		distinct[c.File] = true
+	}
+	require.Len(t, distinct, 2,
+		"two inputs collapsed onto one file while the response reported two: %v", parsed.Commits)
+	require.Contains(t, parsed.Summary, "2 facts",
+		"the summary must count what was actually written; got %q", parsed.Summary)
+
+	// One input merged into the seed; the other kept its own freshly-minted
+	// path. Every file the response names must actually carry a body.
+	require.True(t, distinct[seedPath], "one input must still have merged into the existing fact")
+	for file := range distinct {
+		res, rerr := svc.Facts().ReadFact(context.Background(), "agent/test", file, nil)
+		require.NoError(t, rerr, "response named %s but it is not on disk", file)
+		require.NotEmpty(t, res.Content, "%s was written empty", file)
+	}
 }
 
 // TestLearnHandler_DedupMergeReValidates regresses the re-validate step: a
