@@ -45,7 +45,8 @@ func mwFingerprint(name string) string {
 // chain that runs before its handler, outermost first, and the handler's own
 // function name (the handler constructor, so a swapped handler is a diff) - is byte-identical to
 // the golden file generated from the router before the route registrations
-// moved out of router.go into api/manage (origin/dev 97ae7c19). Chains come
+// moved out of router.go into api/manage (origin/dev 97ae7c19); the move into
+// api/kb (12f) left it byte-identical. Chains come
 // from walkFull, not chi.Walk, which drops the middleware of a group a
 // subrouter is mounted in (kb gotcha chi-walk-group-middleware).
 //

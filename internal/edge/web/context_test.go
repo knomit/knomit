@@ -217,3 +217,14 @@ func TestREST_PostRefusesContext(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), "context")
 }
+
+// getExpiryJSON GETs url and decodes the JSON body (a copy of api/kb's, whose
+// expiry tests moved there).
+func getExpiryJSON(t *testing.T, r http.Handler, url string) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	return rec, body
+}

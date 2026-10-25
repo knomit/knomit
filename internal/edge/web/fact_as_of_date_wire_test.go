@@ -70,7 +70,7 @@ func decodeAsOfDate(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	var body struct {
-		AsOf AsOf `json:"as_of"`
+		AsOf asOfBody `json:"as_of"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "body=%s", rec.Body.String())
 	return body.AsOf.Date
@@ -140,8 +140,8 @@ func TestFactAsOfDate_LensReadMountFact(t *testing.T) {
 	// test would be asserting about the write repo (or a 404) without saying so.
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	var body struct {
-		Path   string `json:"path"`
-		AsOf   AsOf   `json:"as_of"`
+		Path   string   `json:"path"`
+		AsOf   asOfBody `json:"as_of"`
 		Source struct {
 			Repo string `json:"repo"`
 		} `json:"source"`

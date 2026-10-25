@@ -156,6 +156,12 @@ var webKnownTypes = map[string]map[string]string{
 	webPkg + "/api/jobs": {
 		"jobEnvelope": "handlers.go",
 	},
+	// api/kb (12f): the single-fact view and a ref's view, each in its own
+	// file; mount.go declares no type.
+	webPkg + "/api/kb": {
+		"factView": "fact_view.go",
+		"refView":  "ref_view.go",
+	},
 	// api/manage (12e): the repo list row and the origin view, each in its own
 	// file; mount.go declares no type.
 	webPkg + "/api/manage": {

@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/edge/web/api/jobs"
+	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/api/manage"
 	"knomit/internal/edge/web/api/origins"
 	"knomit/internal/edge/web/hal"
@@ -156,7 +157,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// that wraps it, because the KB routes, the MCP mounts and the lifecycle
 	// routes (api/manage) share them: it builds the subrouters, puts each
 	// one's middleware on BEFORE any route is registered on it, and hands
-	// them to manage.Mount.
+	// them to manage.Mount, kb.Mount and jobs.Mount.
 	//
 	// /repos/{repo}: no generic route mutates the FLEET repository
 	// (httpx.FleetRepoRefused), Archive included: it changes only through
@@ -178,32 +179,15 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// RepoMiddleware group: its handlers read the repo from context.
 	repo.Mount("/origin-sessions", s.originSessionsRouter())
 
-	branch.Get("/facts", handleHALFactsCollection(b))
-	branch.Post("/facts", handleFactCreate(b, s.OntologyRoot))
-	branch.Get("/facts/*", handleHALFact(b))
-	branch.Put("/facts/*", handleFactUpdate(b, s.OntologyRoot))
-	branch.Delete("/facts/*", handleFactDelete(b))
+	// The lens subtree INSIDE LensMiddleware: the KB's federated reads and
+	// the lens MCP mount below. The CRUD (api/manage) sits outside it, on
+	// lens itself, because it resolves {lens} through the registry.
+	lensBound := lens.Group(nil)
+	lensBound.Use(LensMiddleware(s.Manager))
 
-	branch.Get("/topics", handleTopics(b, s.OntologyRoot))
-	branch.Get("/topics/*", handleTopicNode(b, s.OntologyRoot))
-
-	branch.Get("/changes", handleHALChanges(b))
-	branch.Get("/commits", handleHALCommitsList(b, s.OntologyRoot))
-	branch.Get("/commits/{sha}", handleHALCommitDetail(b, s.OntologyRoot))
-	branch.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b))
-	branch.Get("/commits/{sha}/topics", handleCommitAnchoredTopicNode())
-	branch.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
-
-	branch.Get("/search", handleSearch(b, s.Embedder))
-	branch.Get("/activity", handleHALActivity(b))
-	branch.Get("/completions", handleHALCompletions(b))
-	branch.Get("/domains", handleHALDomains(b))
-	branch.Get("/domains/{name}", handleHALDomainFacts(b))
-	branch.Get("/motifs", handleHALMotifs(b))
-	branch.Get("/motifs/{key}", handleHALMotifCluster(b))
-	branch.Get("/stats", handleHALStats(b))
-	branch.Get("/events", handleHALEvents())
-	branch.Get("/triggers", handleHALTriggers(b))
+	// The KB surface (api/kb): a branch's facts, topics, commits, search and
+	// the other reads, and a lens's federated reads.
+	kb.Mount(branch, lensBound, s.OntologyRoot, s.Embedder)
 
 	// Synthesis-run and index-rebuild jobs (api/jobs).
 	jobs.Mount(branch, s.Manager, s.LLMAdapter)
@@ -226,26 +210,13 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
 
-	// The lens subtree: the CRUD (api/manage) sits outside the binding group.
-	lens.Group(func(r chi.Router) {
-		r.Use(LensMiddleware(s.Manager))
-		r.Get("/facts", handleHALLensFacts(s.Embedder))
-		r.Get("/facts/*", handleHALLensFact(b))
-		r.Get("/search", handleHALLensSearch(s.Embedder))
-		r.Get("/completions", handleHALLensCompletions())
-		r.Get("/motifs", handleHALLensMotifs(b))
-		r.Get("/motifs/{key}", handleHALLensMotifCluster(b))
-		r.Get("/stats", handleHALLensStats())
-		r.Get("/topics", handleHALLensTopics(s.OntologyRoot))
-		r.Get("/topics/*", handleHALLensTopics(s.OntologyRoot))
-		// As on the repo subtree: the session's experiment applies to the
-		// MCP mount only. The HAL reads above federate at each member's
-		// own pinned branch and must keep doing so.
-		r.Group(func(r chi.Router) {
-			r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
-			r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
-			r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
-		})
+	// As on the repo subtree: the session's experiment applies to the lens
+	// MCP mount only. The KB's lens reads (kb.Mount above) federate at each
+	// member's own pinned branch and must keep doing so.
+	lensBound.Group(func(r chi.Router) {
+		r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
+		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
 
 	// The lens twin of /repos/{repo}/branches/exp:<name>/mcp. A lens pins

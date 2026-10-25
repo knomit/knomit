@@ -178,7 +178,10 @@ func newWriteRefsServer(t *testing.T) *Server {
 func requireWrittenRefKinds(t *testing.T, rec *httptest.ResponseRecorder, want ...[2]string) {
 	t.Helper()
 	var view struct {
-		Refs []RefView `json:"refs"`
+		Refs []struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		} `json:"refs"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view), rec.Body.String())
 	got := make([][2]string, 0, len(view.Refs))

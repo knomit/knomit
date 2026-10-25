@@ -19,9 +19,9 @@ import (
 // api/* package exports exactly func Mount (positional parameters, no
 // exported Deps type) and keeps its own route table, the parent reaches the api
 // packages only from router.go and server.go, and no web-family package keeps
-// a local one-call shim into another one. They land before any code moves, so
-// each has a detector self-test on synthetic source and a logged state for
-// "the packages do not exist yet".
+// a local one-call shim into another one. They landed before any code moved,
+// so each has a detector self-test on synthetic source. Since 12f every planned
+// api package exists, and guard M fails when one of them is missing.
 
 const webAPIPrefix = webPkg + "/api"
 
@@ -167,15 +167,12 @@ func TestWeb_APIImportDetector_Discriminates(t *testing.T) {
 // including members reached through an alias or promoted from an embedded
 // type.
 //
-// The keys are the expected api packages: {kb, manage, jobs, origins}. A key
-// whose package go list does not return is PENDING. It allows nothing,
-// because there is nothing to allow, and it is logged. A pending key cannot be
-// dodged by creating the package somewhere else: webFamilyLayout fails a
-// web-family package outside api/ that it does not list.
-//
-// END STATE: after 12f (the last move), every key is live. The pending Logf
-// in TestWebAPI_ExportsOnlyMount then becomes an Errorf, so a planned package
-// that never lands cannot leave its entry parked here.
+// The keys are the api packages: {kb, manage, jobs, origins}, all created by
+// 12f. A key whose package go list does not return fails
+// TestWebAPI_ExportsOnlyMount, so a removed or renamed package cannot leave its
+// entry parked here, and a package created somewhere else instead is caught by
+// webFamilyLayout, which fails a web-family package outside api/ that it does
+// not list.
 var webAPIExportAllowlist = map[string]map[string]string{
 	"api/kb":      {},
 	"api/manage":  {},
@@ -462,14 +459,13 @@ func webLayoutProblems(rels []string, apis map[string]map[string]string, layout 
 // shared helper, an exported Deps struct or an exported type of any kind
 // fails. A helper two packages need belongs in httpx.
 //
-// Before the split creates an api package there is nothing to scan. The
-// guard logs that state explicitly, and logs each planned package still
-// pending. END STATE: after 12f, the pending Logf becomes an Errorf (see
-// webAPIExportAllowlist). TestWebAPI_ExportDetector_Discriminates pins the
-// detector and both policies on synthetic source either way. Once a package
-// exists, non-vacuity holds: its files come from go list, the scanned count
-// must equal go list's, every package clause must be the last element of the
-// import path, and Mount must be found (so an empty or wrong scan fails).
+// Every webAPIExportAllowlist key must be a package go list returns; a missing
+// one fails (since 12f, the last move, there is no pending state).
+// TestWebAPI_ExportDetector_Discriminates pins the detector and both policies
+// on synthetic source. For every package, non-vacuity holds: its files come
+// from go list, the scanned count must equal go list's, every package clause
+// must be the last element of the import path, and Mount must be found (so an
+// empty or wrong scan fails).
 func TestWebAPI_ExportsOnlyMount(t *testing.T) {
 	var rels []string
 	var apis []goListPackage
@@ -512,19 +508,15 @@ func TestWebAPI_ExportsOnlyMount(t *testing.T) {
 			t.Error(b)
 		}
 	}
-	var pending []string
+	var missing []string
 	for rel := range webAPIExportAllowlist {
 		if !live[rel] {
-			pending = append(pending, rel)
+			missing = append(missing, rel)
 		}
 	}
-	sort.Strings(pending)
-	if len(apis) == 0 {
-		t.Logf("no api packages yet: go list returns no package under %s; nothing to scan, the detector is pinned by TestWebAPI_ExportDetector_Discriminates", webAPIPrefix)
-	}
-	if len(pending) > 0 {
-		// END STATE: after 12f this becomes t.Errorf.
-		t.Logf("pending api packages (planned, not created yet; each allows nothing): %s", strings.Join(pending, ", "))
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("webAPIExportAllowlist names api packages go list does not return: %s; a removed or renamed package takes its entry with it", strings.Join(missing, ", "))
 	}
 }
 
