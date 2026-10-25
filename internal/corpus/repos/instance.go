@@ -669,7 +669,9 @@ func (ri *RepoInstance) DiscoveryWGap() float64 { return ri.discoveryWGap }
 // Default 1.0 (from config.Defaults).
 func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 
-// TaskHub returns the hub for broadcasting task status events.
+// TaskHub returns the repo's task hub: the consumer side, which subscribes,
+// reads, starts and cancels tasks but cannot publish (the publisher stays in
+// the instance).
 func (ri *RepoInstance) TaskHub() *events.TaskHub { return ri.hub }
 
 // Verify runs the integrity check against the current store while holding a

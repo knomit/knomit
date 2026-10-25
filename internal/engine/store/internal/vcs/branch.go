@@ -64,7 +64,7 @@ type Repo struct {
 	cache  *branchCache
 	onDrop func(context.Context) error
 	gits   *storegit.Storer
-	repo   *gogit.Repository          // nil until OpenRepo/InitRepo/Clone called
+	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer atomic.Pointer[ssh.Signer] // SSH signer for commit signing (shared); nil pointer = none
 
 	// onDropBranchRows deletes the per-branch rows higher clusters keep in
