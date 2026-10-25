@@ -416,6 +416,18 @@ func triggerDoc(cond string) []byte {
 	return ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - name: c\n        on: learn\n        do: emit\n        if: \"" + cond + "\"\n")
 }
 
+// mustEvalIf evaluates tr's condition and fails on an EvalIf error, so a
+// ruleEvalTimeout that fires on a loaded machine reports as that timeout and
+// not as a wrong boolean.
+func mustEvalIf(t *testing.T, tr *CompiledTrigger, globals map[string]any) bool {
+	t.Helper()
+	ok, err := tr.EvalIf(globals, time.Now())
+	if err != nil {
+		t.Fatalf("EvalIf errored: %v", err)
+	}
+	return ok
+}
+
 func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 	var c TriggerCache
 	signal := map[string]any{"fact": map[string]any{"type": "signal"}}
@@ -425,7 +437,7 @@ func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := activeNamed(setA, "c").EvalIf(signal, time.Now()); !ok {
+	if !mustEvalIf(t, activeNamed(setA, "c"), signal) {
 		t.Fatal("blob A: signal should match")
 	}
 	setB, err := c.Get("blobB", triggerDoc("fact.type === 'task'"), testIdentity)
@@ -436,10 +448,10 @@ func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 		t.Fatal("a changed blob returned the old set")
 	}
 	trB := activeNamed(setB, "c")
-	if ok, _ := trB.EvalIf(signal, time.Now()); ok {
+	if mustEvalIf(t, trB, signal) {
 		t.Error("blob B still runs the OLD program (signal matched)")
 	}
-	if ok, _ := trB.EvalIf(task, time.Now()); !ok {
+	if !mustEvalIf(t, trB, task) {
 		t.Error("blob B does not run the new program (task did not match)")
 	}
 	// Single entry: going back to A recompiles; A's old set is not kept.
