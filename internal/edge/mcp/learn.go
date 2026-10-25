@@ -620,11 +620,11 @@ func (e *nearDuplicateRefusal) Error() string {
 	b.WriteString("refused: ")
 	b.WriteString(pluralFacts(len(e.refused)))
 	if len(e.refused) == 1 {
-		b.WriteString(" in this call is a near-duplicate")
+		b.WriteString(" in this call is a near-duplicate of an existing fact but states")
 	} else {
-		b.WriteString(" in this call are near-duplicates")
+		b.WriteString(" in this call are near-duplicates of existing facts but state")
 	}
-	b.WriteString(" of an existing fact but state something different, so nothing was merged and nothing was written.\n")
+	b.WriteString(" something different, so nothing was merged and nothing was written.\n")
 	for _, r := range e.refused {
 		fmt.Fprintf(&b, "\nfact %d: %q\n  near-duplicate of %s — %s\n", r.Index, r.Title, r.Match, r.MatchTitle)
 	}
