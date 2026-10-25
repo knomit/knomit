@@ -883,8 +883,8 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 
 // NoStoreHeldDuringIf [M1]: while a run is inside slow `if`s, SwapStore
 // completes without waiting for it, and teardown stops the run within one
-// evaluation. Sabotage: drop the ctx check per evaluation (red: the restart
-// waits for all 30 slow ifs). It does NOT catch a lease held across phase B:
+// evaluation. Sabotage: drop phase B's ctx check per evaluation (red: the
+// swap waits behind the slow ifs). It does NOT catch a lease held across phase B:
 // a swap cancels the Serve life (and so the run) before it drains the leases,
 // so the swap is fast either way. PhaseBHoldsNoLease pins that.
 func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
