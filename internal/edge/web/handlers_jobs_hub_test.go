@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 )
 
 // The job routes read the repo's TaskHub and nothing else. These fixtures run
@@ -29,7 +30,7 @@ type jobEnvelope struct {
 
 type jobsFixture struct {
 	r       http.Handler
-	hub     *repos.TaskHub
+	hub     *events.TaskHub
 	release func()               // the held task ends done
 	fail    func(message string) // the held task ends in error
 	done    string               // the finished synthesis task
@@ -41,33 +42,33 @@ const failedRebuildMsg = "rebuild exploded: disk full"
 
 func newJobsFixture(t *testing.T) jobsFixture {
 	t.Helper()
-	hub := repos.NewTaskHub(context.Background())
-	t.Cleanup(hub.Shutdown)
+	hub, pub := events.NewTaskHub(context.Background())
+	t.Cleanup(pub.Shutdown)
 	m := newTestManagerWithRepos(t, "empty") // a repo whose hub is nil
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", AgentBranch: "agent/test", Hub: hub,
 	}))
 	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name: "beta", AgentBranch: "agent/test", Hub: repos.NewTaskHub(context.Background()),
+		Name: "beta", AgentBranch: "agent/test", Hub: testHub(),
 	}))
 
 	f := jobsFixture{r: (&Server{Manager: m}).NewAPIRouter(), hub: hub}
-	f.done = runToEnd(t, hub, "synth", repos.TaskEvent{Status: "done", Message: "review complete"})
-	f.failed = runToEnd(t, hub, "rebuild", repos.TaskEvent{Status: "error", Message: failedRebuildMsg})
+	f.done = runToEnd(t, hub, "synth", events.TaskEvent{Status: "done", Message: "review complete"})
+	f.failed = runToEnd(t, hub, "rebuild", events.TaskEvent{Status: "error", Message: failedRebuildMsg})
 
 	gate := make(chan struct{})
 	failWith := make(chan string, 1)
 	started := make(chan struct{})
-	id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
-		emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting"})
+	id, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
+		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "review starting"})
 		close(started)
 		select {
 		case <-gate:
-			emit(repos.TaskEvent{Status: "done", Message: "review complete"})
+			emit(events.TaskEvent{Status: "done", Message: "review complete"})
 		case msg := <-failWith:
-			emit(repos.TaskEvent{Status: "error", Message: msg})
+			emit(events.TaskEvent{Status: "error", Message: msg})
 		case <-ctx.Done():
-			emit(repos.TaskEvent{Status: "error", Message: ctx.Err().Error()})
+			emit(events.TaskEvent{Status: "error", Message: ctx.Err().Error()})
 		}
 	})
 	if err != nil {
@@ -92,9 +93,9 @@ func newJobsFixture(t *testing.T) jobsFixture {
 
 // runToEnd runs one hub task of op that emits final at once, and waits until
 // the hub records it as op's last terminal task.
-func runToEnd(t *testing.T, hub *repos.TaskHub, op string, final repos.TaskEvent) string {
+func runToEnd(t *testing.T, hub *events.TaskHub, op string, final events.TaskEvent) string {
 	t.Helper()
-	id, err := hub.Start(op, func(_ context.Context, emit func(repos.TaskEvent)) { emit(final) })
+	id, err := hub.Start(op, func(_ context.Context, emit func(events.TaskEvent)) { emit(final) })
 	if err != nil {
 		t.Fatalf("start %s: %v", op, err)
 	}
@@ -325,14 +326,14 @@ func serveWithin(t *testing.T, r http.Handler, path string, limit time.Duration)
 	}
 }
 
-func taskFrames(t *testing.T, body string) []repos.TaskEvent {
+func taskFrames(t *testing.T, body string) []events.TaskEvent {
 	t.Helper()
-	var out []repos.TaskEvent
+	var out []events.TaskEvent
 	for _, frame := range strings.Split(body, "\n\n") {
 		if !strings.HasPrefix(frame, "event: task\ndata: ") {
 			continue
 		}
-		var ev repos.TaskEvent
+		var ev events.TaskEvent
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(frame, "event: task\ndata: ")), &ev); err != nil {
 			t.Fatalf("task frame %q: %v", frame, err)
 		}
@@ -530,4 +531,10 @@ func TestJobs_DeleteCancelsALifecycleRebuild(t *testing.T) {
 	}
 	requireJobProblem(t, f.do(t, http.MethodDelete, base+"/"+id),
 		http.StatusConflict, "Job already finished", "job "+id+" has already finished; there is nothing to cancel")
+}
+
+// testHub is a task hub whose publisher the test does not need.
+func testHub() *events.TaskHub {
+	h, _ := events.NewTaskHub(context.Background())
+	return h
 }

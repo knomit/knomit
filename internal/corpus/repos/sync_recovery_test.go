@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
 )
 
 func TestRemoteStatusIsError(t *testing.T) {
-	if remoteStatusIsError(RemoteStatusValue(nil)) {
+	if remoteStatusIsError(events.RemoteStatusValue(nil)) {
 		t.Fatal("a NULL status is 'never attempted', not a failure")
 	}
 	if remoteStatusIsError("ok") {

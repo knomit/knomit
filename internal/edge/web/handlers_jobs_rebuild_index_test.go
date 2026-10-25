@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -90,7 +91,7 @@ func TestRebuild_MarksIndexingThenReady(t *testing.T) {
 		return false
 	})
 
-	var mine []repos.IndexEvent
+	var mine []events.IndexEvent
 	for _, e := range indexFrames(t, body) {
 		if e.Repo == "alpha" {
 			mine = append(mine, e)

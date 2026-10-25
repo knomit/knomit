@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/corpus/synthesize"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"
@@ -73,14 +74,14 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 		reviewer := synthesize.NewReviewer(ri, nil)
 		repo := ri.Name()
 
-		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
+		id, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
 			defer unpin()
-			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
+			emit(events.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
 			if err := reviewer.RunAll(ctx, llmAdapter); err != nil {
-				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
+				emit(events.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
-			emit(repos.TaskEvent{Status: "done", Message: "review complete", Repo: repo})
+			emit(events.TaskEvent{Status: "done", Message: "review complete", Repo: repo})
 		})
 		if err != nil {
 			unpin()
@@ -132,7 +133,7 @@ func handleStartRebuild(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 var hubOps = map[string]string{"index-rebuild": "rebuild", "synthesis-run": "synth"}
 
 // jobOfTask is the envelope of task ev as a job of kind.
-func jobOfTask(ev repos.TaskEvent, kind string) jobEnvelope {
+func jobOfTask(ev events.TaskEvent, kind string) jobEnvelope {
 	env := jobEnvelope{ID: ev.ID, Kind: kind, State: ev.Status}
 	if ev.Status == "error" {
 		env.Error = ev.Message
@@ -146,13 +147,13 @@ func terminalTask(status string) bool { return status == "done" || status == "er
 // hubTask is job id of kind as ri's TaskHub holds it: ok is false for an id
 // the hub does not hold (never seen, or older than the op's last terminal
 // task) and for an id of the other kind's op.
-func hubTask(ri *repos.RepoInstance, id, kind string) (repos.TaskEvent, bool) {
+func hubTask(ri *repos.RepoInstance, id, kind string) (events.TaskEvent, bool) {
 	if ri == nil || ri.TaskHub() == nil {
-		return repos.TaskEvent{}, false
+		return events.TaskEvent{}, false
 	}
 	ev, ok := ri.TaskHub().Task(id)
 	if !ok || ev.Op != hubOps[kind] {
-		return repos.TaskEvent{}, false
+		return events.TaskEvent{}, false
 	}
 	return ev, true
 }
@@ -279,7 +280,7 @@ func handleJobEvents(kind string) http.HandlerFunc {
 			writeJobNotFound(w, r, id)
 			return
 		}
-		events, _ := ri.TaskHub().Subscribe(r.Context())
+		updates, _ := ri.TaskHub().Subscribe(r.Context())
 		ev, ok := hubTask(ri, id, kind)
 		if !ok {
 			writeJobNotFound(w, r, id)
@@ -290,7 +291,7 @@ func handleJobEvents(kind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		write := func(ev repos.TaskEvent) bool {
+		write := func(ev events.TaskEvent) bool {
 			data, _ := json.Marshal(ev)
 			return stream.Write("event: task\ndata: %s\n\n", data)
 		}
@@ -310,11 +311,11 @@ func handleJobEvents(kind string) http.HandlerFunc {
 				if !stream.Keepalive() {
 					return
 				}
-			case e, ok := <-events:
+			case e, ok := <-updates:
 				if !ok {
 					return
 				}
-				if ev, isTask := e.(repos.TaskEvent); isTask && ev.ID == id {
+				if ev, isTask := e.(events.TaskEvent); isTask && ev.ID == id {
 					if !write(ev) {
 						return
 					}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -227,7 +228,7 @@ func commitsAfter(t *testing.T, ri *RepoInstance, stop string) []string {
 	return out
 }
 
-// payloads collects the TriggerEvent payloads of one trigger seen on the hub
+// payloads collects the events.TriggerEvent payloads of one trigger seen on the hub
 // since the subscription.
 type payloadSink struct {
 	mu   sync.Mutex
@@ -238,7 +239,7 @@ type payloadSink struct {
 func subscribePayloads(t *testing.T, ri *RepoInstance, trigger string) *payloadSink {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	events, _ := ri.TaskHub().Subscribe(ctx)
+	stream, _ := ri.TaskHub().Subscribe(ctx)
 	s := &payloadSink{stop: cancel}
 	t.Cleanup(cancel)
 	go func() {
@@ -246,8 +247,8 @@ func subscribePayloads(t *testing.T, ri *RepoInstance, trigger string) *payloadS
 			select {
 			case <-ctx.Done():
 				return
-			case e := <-events:
-				if ev, ok := e.(TriggerEvent); ok && ev.Trigger == trigger && ev.Payload != nil {
+			case e := <-stream:
+				if ev, ok := e.(events.TriggerEvent); ok && ev.Trigger == trigger && ev.Payload != nil {
 					s.mu.Lock()
 					s.got = append(s.got, ev.Payload)
 					s.mu.Unlock()

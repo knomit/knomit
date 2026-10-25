@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"github.com/stretchr/testify/require"
 )
@@ -21,31 +22,31 @@ const testCrashBackoff = 10 * time.Millisecond
 // waitIndexSettled waits, through Watch, until ri's index has left
 // "indexing", and returns the status it settled in. It replaces the old
 // open→index-ready contract: the index job always runs in the background.
-func waitIndexSettled(t *testing.T, ri *RepoInstance) Status {
+func waitIndexSettled(t *testing.T, ri *RepoInstance) snapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for tr := range ri.Watch(ctx) {
-		if tr.Status.Index.State != IndexStateIndexing {
-			return tr.Status
+		if tr.Status.Index.State != events.IndexStateIndexing {
+			return tr.snapshot
 		}
 	}
 	t.Fatalf("index of %s did not settle; last status %+v", ri.Name(), ri.Status())
-	return Status{}
+	return snapshot{}
 }
 
 // waitStatus waits, through Watch, until pred holds for ri's status.
-func waitStatus(t *testing.T, ri *RepoInstance, msg string, pred func(Status) bool) Status {
+func waitStatus(t *testing.T, ri *RepoInstance, msg string, pred func(snapshot) bool) snapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for tr := range ri.Watch(ctx) {
-		if pred(tr.Status) {
-			return tr.Status
+		if pred(tr.snapshot) {
+			return tr.snapshot
 		}
 	}
 	t.Fatalf("%s: status never matched; last %+v", msg, ri.Status())
-	return Status{}
+	return snapshot{}
 }
 
 // restartServe restarts ri's Serve stage through the machine's own crash path
@@ -56,10 +57,10 @@ func waitStatus(t *testing.T, ri *RepoInstance, msg string, pred func(Status) bo
 // hand.
 func restartServe(t *testing.T, ri *RepoInstance) {
 	t.Helper()
-	gen := ri.Status().gens[StageServe]
+	gen := ri.snap().gens[StageServe]
 	require.NotZero(t, gen, "Serve is not entered")
 	ri.machine.post(crashed{stage: StageServe, gen: gen})
-	waitStatus(t, ri, "Serve re-entered", func(s Status) bool {
+	waitStatus(t, ri, "Serve re-entered", func(s snapshot) bool {
 		return s.gens[StageServe] != 0 && s.gens[StageServe] != gen && s.Serve.Running
 	})
 }

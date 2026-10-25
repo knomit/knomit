@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 )
@@ -41,7 +42,8 @@ func TestReconcileLoop_UnreadableRemoteIsLoggedAndSkipped(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runReconcileLoop(ctx, svc, NewTaskHub(ctx), remoteEdgeSink{}, "beta", "agent/x", nil, "", false, nil, nil, nil, nil, nil, nil, false)
+		_, taskPub := events.NewTaskHub(ctx)
+		runReconcileLoop(ctx, svc, taskPub, remoteEdgeSink{}, "beta", "agent/x", nil, "", false, nil, nil, nil, nil, nil, nil, false)
 	}()
 
 	require.Eventually(t, func() bool {

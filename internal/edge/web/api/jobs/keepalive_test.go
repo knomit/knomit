@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"
 )
@@ -75,8 +76,8 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 	jobEventsKeepalive = 20 * time.Millisecond
 	t.Cleanup(func() { jobEventsKeepalive = old })
 
-	hub := repos.NewTaskHub(context.Background())
-	t.Cleanup(hub.Shutdown)
+	hub, pub := events.NewTaskHub(context.Background())
+	t.Cleanup(pub.Shutdown)
 	m := repos.New(context.Background(), repos.Deps{})
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", AgentBranch: "agent/test", Hub: hub,
@@ -84,8 +85,8 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 
 	gate := make(chan struct{})
 	started := make(chan struct{})
-	id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
-		emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting"})
+	id, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
+		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "review starting"})
 		close(started)
 		select {
 		case <-gate:
@@ -117,10 +118,10 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	var frames []repos.TaskEvent
+	var frames []events.TaskEvent
 	for _, frame := range strings.Split(rec.body(), "\n\n") {
 		if data, ok := strings.CutPrefix(frame, "event: task\ndata: "); ok {
-			var ev repos.TaskEvent
+			var ev events.TaskEvent
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				t.Fatalf("task frame is not JSON: %v (%q)", err, data)
 			}

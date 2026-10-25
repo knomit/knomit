@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/fsck"
@@ -206,10 +207,14 @@ type RepoInstance struct {
 	// users before closing the underlying service.
 	handle *storeHandle
 	closed bool
-	hub    *TaskHub
+	hub    *events.TaskHub
+	// pub is the publishing half of hub (see events.TaskPublisher); never
+	// handed out. nil where hub is nil.
+	pub *events.TaskPublisher
 	// repoEventHub is the server-wide repo-event stream; nil in tests and in
 	// any Manager built without one, which publishIndex handles.
-	repoEventHub *RepoEventHub
+	repoEventHub *events.RepoEventHub
+	repoEventPub *events.RepoEventPublisher
 
 	// machine drives this repo's lifecycle; nil for a bare test instance.
 	machine *Machine
@@ -235,11 +240,20 @@ type RepoInstance struct {
 
 // Status is the repo's lifecycle status, derived by its machine. A bare test
 // instance (no machine) reads as open, ready and indexed.
-func (ri *RepoInstance) Status() Status {
+func (ri *RepoInstance) Status() events.Status {
 	if ri.machine == nil {
-		return Status{Stage: "ready", Index: IndexStatus{State: IndexStateReady}, open: true}
+		return events.Status{Stage: "ready", Index: events.IndexStatus{State: events.IndexStateReady}}
 	}
 	return ri.machine.Status()
+}
+
+// snap is the repo's machine snapshot, bookkeeping included. A bare test
+// instance (no machine) has only the projection Status reports.
+func (ri *RepoInstance) snap() snapshot {
+	if ri.machine == nil {
+		return snapshot{Status: ri.Status()}
+	}
+	return ri.machine.snap()
 }
 
 // Watch streams the repo's status transitions until ctx ends (see
@@ -247,7 +261,7 @@ func (ri *RepoInstance) Status() Status {
 func (ri *RepoInstance) Watch(ctx context.Context) <-chan Transition {
 	if ri.machine == nil {
 		ch := make(chan Transition, 1)
-		ch <- Transition{Status: ri.Status()}
+		ch <- Transition{ri.snap()}
 		close(ch)
 		return ch
 	}
@@ -655,8 +669,10 @@ func (ri *RepoInstance) DiscoveryWGap() float64 { return ri.discoveryWGap }
 // Default 1.0 (from config.Defaults).
 func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 
-// TaskHub returns the hub for broadcasting task status events.
-func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
+// TaskHub returns the repo's task hub: the consumer side, which subscribes,
+// reads, starts and cancels tasks but cannot publish (the publisher stays in
+// the instance).
+func (ri *RepoInstance) TaskHub() *events.TaskHub { return ri.hub }
 
 // Verify runs the integrity check against the current store while holding a
 // store reference (Acquire), so a concurrent SwapStore/Archive drains this
@@ -724,7 +740,7 @@ type TestInstanceConfig struct {
 	Subscribed          bool
 	Svc                 *store.Service
 	Ontology            *fact.Ontology
-	Hub                 *TaskHub
+	Hub                 *events.TaskHub
 	Embedder            model.BatchEmbedder
 	OntologyRoot        string
 	MethodologyMinScore float64

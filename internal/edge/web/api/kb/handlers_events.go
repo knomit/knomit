@@ -5,6 +5,7 @@ package kb
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
@@ -26,7 +27,7 @@ func handleHALEvents() http.HandlerFunc {
 		}
 
 		// Subscribe and obtain snapshot atomically before sending the initial status.
-		events, snapshot := ri.TaskHub().Subscribe(r.Context())
+		updates, snapshot := ri.TaskHub().Subscribe(r.Context())
 
 		// Snapshot the initial head commit. Best-effort, deliberately (user
 		// ruling 2026-10-24: the SSE stream is the one read that does not
@@ -62,31 +63,31 @@ func handleHALEvents() http.HandlerFunc {
 			select {
 			case <-r.Context().Done():
 				return
-			case e, ok := <-events:
+			case e, ok := <-updates:
 				if !ok {
 					return
 				}
 				sent := true
 				switch ev := e.(type) {
-				case repos.TaskEvent:
+				case events.TaskEvent:
 					data, _ := json.Marshal(ev)
 					sent = stream.Write("event: task\ndata: %s\n\n", data)
-				case repos.StatusEvent:
+				case events.StatusEvent:
 					sent = stream.Write("event: status\ndata: {\"head\":\"%s\"}\n\n", ev.Head)
-				case repos.IndexEvent:
+				case events.IndexEvent:
 					// The index state changes with no commit behind it, so the
 					// `status` event above never fires for it. A client watching
 					// one repo gets it here; the fleet-wide chip uses
 					// GET /api/v1/repo-events instead.
 					data, _ := json.Marshal(ev)
 					sent = stream.Write("event: index\ndata: %s\n\n", data)
-				case repos.SyncEvent:
+				case events.SyncEvent:
 					data, _ := json.Marshal(ev)
 					sent = stream.Write("event: %s\ndata: %s\n\n", ev.Status, data)
-				case repos.PushEvent:
+				case events.PushEvent:
 					data, _ := json.Marshal(ev)
 					sent = stream.Write("event: %s\ndata: %s\n\n", ev.Status, data)
-				case repos.TriggerEvent:
+				case events.TriggerEvent:
 					// The hub is per repo, so every branch stream receives
 					// every fire; a fire belongs to the agent branch it
 					// happened on and goes ONLY to that branch's stream.

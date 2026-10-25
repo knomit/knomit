@@ -76,15 +76,6 @@ const (
 	PhaseDone     = "done"
 )
 
-// The index states a create job can report, mirroring RepoInstance.IndexStatus.
-// Empty means the job never reached indexing (it failed earlier, or is still
-// before it).
-const (
-	IndexStateIndexing = "indexing"
-	IndexStateReady    = "ready"
-	IndexStateError    = "error"
-)
-
 // CreateState is the lifecycle state of a detached create.
 //
 // Terminal states are CreateDone and CreateFailed. There is no separate

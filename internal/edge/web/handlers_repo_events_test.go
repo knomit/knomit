@@ -13,14 +13,15 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )
 
 // remoteFrames pulls every `event: remote` payload out of an SSE body, in order.
-func remoteFrames(t *testing.T, body string) []repos.RemoteEvent {
+func remoteFrames(t *testing.T, body string) []events.RemoteEvent {
 	t.Helper()
-	var out []repos.RemoteEvent
+	var out []events.RemoteEvent
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
 		if l != "event: remote" || i+1 >= len(lines) {
@@ -30,7 +31,7 @@ func remoteFrames(t *testing.T, body string) []repos.RemoteEvent {
 		if !ok {
 			continue
 		}
-		var ev repos.RemoteEvent
+		var ev events.RemoteEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			t.Fatalf("remote frame %q: %v", data, err)
 		}
@@ -128,7 +129,7 @@ func TestRepoRemoteEvents_EdgesOnly(t *testing.T) {
 	// ok → error on the sync half: exactly one frame, the whole row.
 	attachAlphaOrigin(t, r, url, "nope")
 	body = settleRepoEvents(t, r, rec)
-	want := []repos.RemoteEvent{{Repo: "alpha", Sync: "error", Push: "ok"}}
+	want := []events.RemoteEvent{{Repo: "alpha", Sync: "error", Push: "ok"}}
 	if got := remoteFrames(t, body); !equalRemote(got, want) {
 		t.Fatalf("after a failing fetch: remote frames = %+v, want %+v", got, want)
 	}
@@ -136,7 +137,7 @@ func TestRepoRemoteEvents_EdgesOnly(t *testing.T) {
 	// error → ok: the recovery edge, one more frame.
 	attachAlphaOrigin(t, r, url, "main")
 	body = settleRepoEvents(t, r, rec)
-	want = append(want, repos.RemoteEvent{Repo: "alpha", Sync: "ok", Push: "ok"})
+	want = append(want, events.RemoteEvent{Repo: "alpha", Sync: "ok", Push: "ok"})
 	if got := remoteFrames(t, body); !equalRemote(got, want) {
 		t.Fatalf("after recovery: remote frames = %+v, want %+v", got, want)
 	}
@@ -149,7 +150,7 @@ func TestRepoRemoteEvents_EdgesOnly(t *testing.T) {
 	}
 }
 
-func equalRemote(a, b []repos.RemoteEvent) bool {
+func equalRemote(a, b []events.RemoteEvent) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -162,9 +163,9 @@ func equalRemote(a, b []repos.RemoteEvent) bool {
 }
 
 // indexFrames pulls every `event: index` payload out of an SSE body, in order.
-func indexFrames(t *testing.T, body string) []repos.IndexEvent {
+func indexFrames(t *testing.T, body string) []events.IndexEvent {
 	t.Helper()
-	var out []repos.IndexEvent
+	var out []events.IndexEvent
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
 		if l != "event: index" {
@@ -177,7 +178,7 @@ func indexFrames(t *testing.T, body string) []repos.IndexEvent {
 		if !ok {
 			continue
 		}
-		var ev repos.IndexEvent
+		var ev events.IndexEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			t.Fatalf("index frame %q: %v", data, err)
 		}
@@ -188,7 +189,7 @@ func indexFrames(t *testing.T, body string) []repos.IndexEvent {
 
 // states reduces a frame list to its state sequence with consecutive
 // duplicates collapsed, which is what the UI actually reacts to.
-func states(evs []repos.IndexEvent) []string {
+func states(evs []events.IndexEvent) []string {
 	var out []string
 	for _, e := range evs {
 		if len(out) == 0 || out[len(out)-1] != e.State {
@@ -249,7 +250,7 @@ func TestRepoIndexEvents_StartupHealEmitsIndexingThenReady(t *testing.T) {
 		return false
 	})
 
-	var mine []repos.IndexEvent
+	var mine []events.IndexEvent
 	for _, e := range indexFrames(t, body) {
 		if e.Repo == "alpha" {
 			mine = append(mine, e)

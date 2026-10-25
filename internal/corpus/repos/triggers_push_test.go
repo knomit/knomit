@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
@@ -181,7 +182,7 @@ func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.hub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, l.mode, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, l.mode, nil, false)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -444,7 +445,7 @@ func TestPush_StatisticsAndLog(t *testing.T) {
 	_, ri := newTriggerRepo(t, pushTrig("fast", "learn", "", "change.path !== 'kb/tasks/skip.md'"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	events, _ := ri.TaskHub().Subscribe(ctx)
+	stream, _ := ri.TaskHub().Subscribe(ctx)
 
 	write(t, ri, "kb/tasks/a.md")
 	write(t, ri, "kb/tasks/skip.md")
@@ -465,8 +466,8 @@ func TestPush_StatisticsAndLog(t *testing.T) {
 	deadline := time.After(pushQuiet)
 	for {
 		select {
-		case e := <-events:
-			if ev, ok := e.(TriggerEvent); ok {
+		case e := <-stream:
+			if ev, ok := e.(events.TriggerEvent); ok {
 				t.Fatalf("a push fire must not emit an SSE trigger event, got %+v", ev)
 			}
 		case <-deadline:
@@ -533,7 +534,7 @@ func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.hub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, nil, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, nil, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks

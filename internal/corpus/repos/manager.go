@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"knomit/internal/engine/store/model"
 
@@ -109,7 +110,9 @@ type Manager struct {
 	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
 	// for every repo it lists. Created by New so it is available before Start.
-	repoEventHub *RepoEventHub
+	repoEventHub *events.RepoEventHub
+	// repoEventPub is its publishing half, never handed out.
+	repoEventPub *events.RepoEventPublisher
 
 	// registry is the lens registry (first tenant of <home>/control.db).
 	// Opened by Start, closed by Close; nil before Start.
@@ -226,7 +229,7 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (string, 
 // New returns an uninitialised Manager. Call Boot to open repos.
 func New(ctx context.Context, deps Deps) *Manager {
 	createsCtx, createsCancel := context.WithCancel(ctx)
-	return &Manager{
+	m := &Manager{
 		createsCtx:      createsCtx,
 		createsCancel:   createsCancel,
 		repos:           make(map[string]*RepoInstance),
@@ -238,16 +241,15 @@ func New(ctx context.Context, deps Deps) *Manager {
 		creatingOrigins: make(map[string]struct{}),
 		// Created here rather than in Start: a repo can be mounted before
 		// Start on some paths, and a nil hub would silently drop its events.
-		repoEventHub: NewRepoEventHub(goob.New(ctx)),
 	}
+	m.repoEventHub, m.repoEventPub = events.NewRepoEventHub(goob.New(ctx))
+	return m
 }
 
-// RepoEvents subscribes to the server-wide repo-event stream until ctx ends.
-// One stream for every repo — see RepoEventHub for why the per-repo TaskHub cannot
-// serve the fleet-wide chip.
-func (m *Manager) RepoEvents(ctx context.Context) goob.Events {
-	return m.repoEventHub.Subscribe(ctx)
-}
+// RepoEventHub is the server-wide repo-event stream: one for every repo — see
+// events.RepoEventHub for why the per-repo events.TaskHub cannot serve the
+// fleet-wide chip. Callers Subscribe on it.
+func (m *Manager) RepoEventHub() *events.RepoEventHub { return m.repoEventHub }
 
 // ErrReplicaInLens rejects a lens mounting two replicas (same root-commit ID)
 // of one repo: duplicated results, version confusion, ambiguous ID routing
@@ -849,6 +851,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 	if subscribed {
 		agentBranch = ""
 	}
+	hub, pub := events.NewTaskHub(m.ctx)
 	ri := &RepoInstance{
 		uid:                           uid,
 		dbPath:                        m.RepoPath(uid),
@@ -871,10 +874,12 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 		discoveryWCoh:                 cfg.Discovery.WCoh,
 		discoveryWGap:                 cfg.Discovery.WGap,
 		discoveryWSpec:                cfg.Discovery.WSpec,
-		hub:                           NewTaskHub(m.ctx),
+		hub:                           hub,
+		pub:                           pub,
 		syncWake:                      make(chan struct{}, 1),
 		breakers:                      &syncBreakers{},
 		repoEventHub:                  m.repoEventHub,
+		repoEventPub:                  m.repoEventPub,
 		env: stageEnv{
 			m:        m,
 			cfg:      cfg,

@@ -227,8 +227,8 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 		if serr := cur.IndexManager().SyncLocked(context.Background(), r.ReadBranch()); serr != nil {
 			log.Warn().Err(serr).Str("repo", r.Name()).Msg("observer sync failed")
 		}
-		if r.hub != nil {
-			r.hub.broadcastStatus(hash)
+		if r.pub != nil {
+			r.pub.BroadcastStatus(hash)
 		}
 	}))
 	svc.SetOnCommit(r.onCommit)
@@ -240,9 +240,9 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 		os.Remove(bak)
 		r.machine.pendingBak = ""
 	}
-	if r.hub != nil {
+	if r.pub != nil {
 		if head, herr := svc.HeadCommit(context.Background(), read); herr == nil {
-			r.hub.broadcastStatus(head)
+			r.pub.BroadcastStatus(head)
 		}
 	}
 	return nil
@@ -255,8 +255,8 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 // instance is marked closed, so later Acquires fail with ErrRepoClosed rather
 // than ErrStoreUnavailable.
 func (openStage) Exit(r *RepoInstance) {
-	if r.hub != nil {
-		r.hub.cancelTasks()
+	if r.pub != nil {
+		r.pub.CancelTasks()
 	}
 	if obs := r.observer.Swap(nil); obs != nil {
 		obs.Stop()
@@ -811,7 +811,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 		authFn := makeRemoteAuthFn(cfg.Remote, env.keyPath)
 		name = "reconcile"
 		run = func(ctx context.Context) {
-			runReconcileLoop(ctx, svc, r.hub, r.remoteEdgeSink(), r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
+			runReconcileLoop(ctx, svc, r.pub, r.remoteEdgeSink(), r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
 				env.onPush, r.triggerKick, r.syncWake, r.breakers, mode(), r.peers, once)
 		}
 	}

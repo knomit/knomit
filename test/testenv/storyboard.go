@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/fsck"
@@ -670,7 +671,7 @@ func (r *RepoHandle) Restart() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	for tr := range ri.Watch(ctx) {
-		if tr.Status.Index.State != repos.IndexStateIndexing {
+		if tr.Status.Index.State != events.IndexStateIndexing {
 			return
 		}
 	}

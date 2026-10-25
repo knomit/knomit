@@ -58,6 +58,7 @@ import (
 	"sync"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/verify"
@@ -217,7 +218,7 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, identity f
 		repo:       repo,
 		branch:     agentBranch,
 		identity:   identity,
-		indexReady: func() bool { return ri.Status().Index.State == IndexStateReady },
+		indexReady: func() bool { return ri.Status().Index.State == events.IndexStateReady },
 		slow:       time.Duration(slowMS) * time.Millisecond,
 		kick:       make(chan struct{}, 1),
 		stats:      newTriggerStats(),
@@ -1420,8 +1421,8 @@ func (d *triggerDispatcher) emit(p pendingFire, payload json.RawMessage) {
 		ev = ev.Str("payload", capForLog(string(payload)))
 	}
 	ev.Msg("trigger fired")
-	if hub := d.ri.hub; hub != nil {
-		hub.broadcastTrigger(TriggerEvent{
+	if pub := d.ri.pub; pub != nil {
+		pub.BroadcastTrigger(events.TriggerEvent{
 			Branch: d.branch, Trigger: p.trig.Name, Path: p.repoPath, Episode: p.episode,
 			Source: p.source, Commit: p.commit, Trace: p.trace, Payload: payload,
 		})

@@ -181,7 +181,7 @@ func TestWriteLifecycleProblem_NotOpenIsTheStoreUnavailableAnswer(t *testing.T) 
 func TestStoreUnavailableAnswers_AreOne(t *testing.T) {
 	m := newTestManagerWithRepos(t)
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name: "alpha", AgentBranch: "agent/test", Hub: repos.NewTaskHub(context.Background()),
+		Name: "alpha", AgentBranch: "agent/test", Hub: testHub(),
 	}))
 	s := &Server{Manager: m, OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}
 	const tip = "0123456789abcdef0123456789abcdef01234567"

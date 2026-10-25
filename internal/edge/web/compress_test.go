@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/http/httptest"
@@ -271,7 +272,7 @@ func TestSSE_IsNeverCompressedThroughServerHandler(t *testing.T) {
 	defer tapCancel()
 
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	hub := repos.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", Hub: hub}))
 
 	s := &Server{

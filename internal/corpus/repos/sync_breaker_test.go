@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -171,7 +172,7 @@ func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre fun
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.hub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	l.waitRounds(t, 1)
@@ -207,8 +208,8 @@ func newFailingOriginRepo(t *testing.T) *RepoInstance {
 
 type syncEvents struct {
 	mu   sync.Mutex
-	sync []SyncEvent
-	push []PushEvent
+	sync []events.SyncEvent
+	push []events.PushEvent
 }
 
 func (s *syncEvents) counts() (syncN, pushN int) {
@@ -234,19 +235,19 @@ func subscribeSyncEvents(t *testing.T, ri *RepoInstance) *syncEvents {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	events, _ := ri.TaskHub().Subscribe(ctx)
+	stream, _ := ri.TaskHub().Subscribe(ctx)
 	s := &syncEvents{}
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case e := <-events:
+			case e := <-stream:
 				s.mu.Lock()
 				switch ev := e.(type) {
-				case SyncEvent:
+				case events.SyncEvent:
 					s.sync = append(s.sync, ev)
-				case PushEvent:
+				case events.PushEvent:
 					s.push = append(s.push, ev)
 				}
 				s.mu.Unlock()
@@ -454,7 +455,7 @@ func TestSyncBreaker_AuthFailureWhileFetchOpenIsNotAPushFailure(t *testing.T) {
 	require.Equal(t, breakerClosed, push.State)
 	time.Sleep(pushQuiet)
 	ev.mu.Lock()
-	pushEvents := append([]PushEvent(nil), ev.push...)
+	pushEvents := append([]events.PushEvent(nil), ev.push...)
 	ev.mu.Unlock()
 	for _, e := range pushEvents {
 		require.NotEqual(t, "push_error", e.Status, "a push banner was raised by an auth failure: %+v", pushEvents)

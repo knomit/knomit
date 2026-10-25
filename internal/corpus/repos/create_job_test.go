@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -168,7 +169,7 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	require.Error(t, ctx.Err(), "the create context must be cancelled by now")
 
 	// The property: that cancellation is harmless.
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, ri).Index.State,
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, ri).Index.State,
 		"the create's cancelled context must not stop the index job")
 	require.Equal(t, 1, g.count(), "the index job passed the hook exactly once")
 }

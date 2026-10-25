@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/llm"
 )
 
@@ -73,7 +74,7 @@ func TestHandleStartRebuild_UnknownRepo_Returns404(t *testing.T) {
 }
 
 func TestHandleStartRebuild_Returns201WithJobEnvelope(t *testing.T) {
-	hub := repos.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha",
 		Hub:  hub,
@@ -104,7 +105,7 @@ type jobBody struct {
 }
 
 func TestHandleStartRebuild_WithStub_Returns201(t *testing.T) {
-	hub := repos.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	// Use a real in-memory store isn't feasible in a unit test; instead
 	// we verify 503 when the store is nil (covered above) and separately
 	// verify the JSON shape via a router_test integration path if available.

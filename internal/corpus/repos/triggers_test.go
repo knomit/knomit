@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
@@ -858,11 +859,11 @@ func TestDispatch_SurvivesSyncRestart(t *testing.T) {
 	t.Parallel()
 	m, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	write(t, ri, "kb/tasks/before.md")
-	serveGen, syncGen := ri.Status().gens[StageServe], ri.Status().gens[StageSync]
+	serveGen, syncGen := ri.snap().gens[StageServe], ri.snap().gens[StageSync]
 	_, err := m.Send(context.Background(), ri, DetachOrigin())
 	require.NoError(t, err)
-	require.Equal(t, serveGen, ri.Status().gens[StageServe], "Serve was not touched")
-	require.NotEqual(t, syncGen, ri.Status().gens[StageSync], "Sync was restarted")
+	require.Equal(t, serveGen, ri.snap().gens[StageServe], "Serve was not touched")
+	require.NotEqual(t, syncGen, ri.snap().gens[StageSync], "Sync was restarted")
 	write(t, ri, "kb/tasks/after.md")
 	require.Equal(t, []string{"kb/tasks/after.md", "kb/tasks/before.md"}, pathsOf(firesOf(t, ri, "all")))
 }
@@ -992,7 +993,7 @@ func TestDispatch_EmitReachesStreamWithoutDebounce(t *testing.T) {
 	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	events, _ := ri.TaskHub().Subscribe(ctx)
+	stream, _ := ri.TaskHub().Subscribe(ctx)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -1014,8 +1015,8 @@ func TestDispatch_EmitReachesStreamWithoutDebounce(t *testing.T) {
 	deadline := time.After(500 * time.Millisecond)
 	for {
 		select {
-		case e := <-events:
-			if ev, ok := e.(TriggerEvent); ok && ev.Path == "kb/tasks/match.md" {
+		case e := <-stream:
+			if ev, ok := e.(events.TriggerEvent); ok && ev.Path == "kb/tasks/match.md" {
 				require.Equal(t, trigAgent, ev.Branch)
 				require.Equal(t, "all", ev.Trigger)
 				require.Equal(t, "learn", ev.Episode)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/platform/logging"
 )
 
@@ -53,9 +54,9 @@ func waitReturn(done <-chan struct{}) bool {
 	}
 }
 
-func branchEventsServer(t *testing.T) (*Server, *repos.TaskHub) {
+func branchEventsServer(t *testing.T) (*Server, *events.TaskHub) {
 	t.Helper()
-	hub := repos.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "alpha", Hub: hub})
 	m := newTestManagerWithRepos(t)
 	m.Set("alpha", ri)
@@ -86,8 +87,8 @@ func TestBranchEvents_BoundsItsWrites(t *testing.T) {
 	}
 
 	rec.failWrites(errors.New("connection reset by peer"))
-	if _, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
-		emit(repos.TaskEvent{Status: "done"})
+	if _, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
+		emit(events.TaskEvent{Status: "done"})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,11 +107,11 @@ func TestJobEvents_BoundsItsWrites(t *testing.T) {
 	// nothing: this handler filters by job id, so it would never attempt a
 	// write at all.
 	fire := make(chan struct{})
-	id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
-		emit(repos.TaskEvent{Status: "running"})
+	id, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
+		emit(events.TaskEvent{Status: "running"})
 		select {
 		case <-fire:
-			emit(repos.TaskEvent{Status: "running", Message: "after the break"})
+			emit(events.TaskEvent{Status: "running", Message: "after the break"})
 		case <-ctx.Done():
 			return
 		}
@@ -197,8 +198,8 @@ func TestBranchEvents_WorksThroughTheRealMiddlewareChain(t *testing.T) {
 	}
 
 	want("the initial status frame", func(l string) bool { return l == "event: status" })
-	if _, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
-		emit(repos.TaskEvent{Status: "running", Message: "through the chain"})
+	if _, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
+		emit(events.TaskEvent{Status: "running", Message: "through the chain"})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestSSE_HeadersSurviveACompressingProxy(t *testing.T) {
 	defer tapCancel()
 
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	hub := repos.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", Hub: hub}))
 
 	s := &Server{

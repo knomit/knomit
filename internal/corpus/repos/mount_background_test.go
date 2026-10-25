@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
 	"knomit/internal/engine/store"
@@ -145,11 +146,11 @@ func TestMount_BackgroundsHeavyIndex(t *testing.T) {
 	require.NotNil(t, ri)
 	st := ri.Status()
 	require.Equal(t, "ready", st.Stage, "the walk reached Ready before the index job reported")
-	require.Equal(t, IndexStateIndexing, st.Index.State, "repo must report 'indexing' while the rebuild runs")
+	require.Equal(t, events.IndexStateIndexing, st.Index.State, "repo must report 'indexing' while the rebuild runs")
 
 	// Unblock; it must reach ready.
 	releaseOnce()
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, ri).Index.State,
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, ri).Index.State,
 		"repo must reach 'ready' after the rebuild completes")
 }
 
@@ -231,7 +232,7 @@ func TestMount_FailedBackgroundIndexReportsError(t *testing.T) {
 	m.Set("kb", ri)
 
 	st := waitIndexSettled(t, ri)
-	require.Equal(t, IndexStateError, st.Index.State, "a failed rebuild must report 'error', not 'ready'")
+	require.Equal(t, events.IndexStateError, st.Index.State, "a failed rebuild must report 'error', not 'ready'")
 	require.NotEmpty(t, st.Index.Reason, "and say why")
 }
 
