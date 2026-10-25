@@ -23,7 +23,7 @@ func configureChild(cmd *exec.Cmd) {
 
 // startChild starts cmd and puts it in a Job Object with
 // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, the pattern of
-// internal/corpus/repos/trigger_recipe_exec_windows.go (kb gotcha
+// internal/corpus/repos/trigger/trigger_recipe_exec_windows.go (kb gotcha
 // repos/triggers/recipes/process-groups, 116de6c4). The desktop holds the only
 // handle; when the desktop dies, however it dies, the kernel closes it and
 // kills the server and everything in its job. The server's own recipe children

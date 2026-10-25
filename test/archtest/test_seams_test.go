@@ -325,6 +325,100 @@ func TestFaultHookSettersDeclaredInTestseams(t *testing.T) {
 	}
 }
 
+// triggerSeams are the doors the repos parent's tests use into the trigger
+// child (internal/corpus/repos/trigger, step 14c): the dispatcher's test hooks,
+// its run bookkeeping and its configuration. recv is "" for a function. Each
+// must be declared in the child's testseams.go and start with mustBeTest, so a
+// production caller panics and B2 (the walk above, which matches the *ForTest
+// names) keeps production source from naming it.
+var triggerSeams = []faultHook{
+	{"trigger", "", "SetTestHooksForTest"},
+	{"trigger", "", "HooksForTest"},
+	{"trigger", "", "SetRecipeAfterStartForTest"},
+	{"trigger", "", "SetRecipeServerAddrWaitForTest"},
+	{"trigger", "", "RecipeMCPForTest"},
+	{"trigger", "Dispatcher", "RunSequenceForTest"},
+	{"trigger", "Dispatcher", "FlushedForTest"},
+	{"trigger", "Dispatcher", "StatsViewForTest"},
+	{"trigger", "Dispatcher", "RunStatsForTest"},
+	{"trigger", "Dispatcher", "RunOnceForTest"},
+	{"trigger", "Dispatcher", "FlushForTest"},
+	{"trigger", "Dispatcher", "IndexIsReadyForTest"},
+	{"trigger", "Dispatcher", "ScriptCompilesForTest"},
+	{"trigger", "Dispatcher", "HomeForTest"},
+	{"trigger", "Dispatcher", "SlowForTest"},
+	{"trigger", "Dispatcher", "IdentityForTest"},
+}
+
+// TestTriggerSeamsDeclaredInTestseams: every door in triggerSeams is declared
+// exactly once, on its receiver, in internal/corpus/repos/trigger/testseams.go,
+// and starts with mustBeTest(name); a declaration of a listed name in any other
+// non-test file under internal/corpus/repos/** fails (moving a door out of
+// testseams.go would take its mustBeTest with it), and so does a *ForTest
+// function or method in the child's testseams.go that is not listed (a new
+// door must be listed here to be checked).
+func TestTriggerSeamsDeclaredInTestseams(t *testing.T) {
+	root := moduleRoot(t)
+	reposDir := filepath.Join(root, "internal", "corpus", "repos")
+	names := map[string]bool{}
+	for _, h := range triggerSeams {
+		names[h.name] = true
+		if !testSeamName.MatchString(h.name) {
+			t.Errorf("%s does not match the seam pattern, so B2 would not flag a production use", h.name)
+		}
+	}
+	found := map[faultHook]int{}
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(reposDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return perr
+		}
+		rel, _ := filepath.Rel(reposDir, path)
+		rel = filepath.ToSlash(rel)
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			inSeams := rel == "trigger/testseams.go"
+			if !names[fn.Name.Name] {
+				if inSeams && testSeamName.MatchString(fn.Name.Name) {
+					t.Errorf("%s declares %s, which triggerSeams does not list: list it so its mustBeTest is checked", rel, fn.Name.Name)
+				}
+				continue
+			}
+			h := faultHook{pkg: filepath.ToSlash(filepath.Dir(rel)), recv: recvTypeName(fn), name: fn.Name.Name}
+			listed := false
+			for _, want := range triggerSeams {
+				if want == h {
+					listed = true
+				}
+			}
+			if !listed || !inSeams {
+				t.Errorf("%s declares %s.%s(%s): a trigger seam must be a listed (package, receiver, name) declared in trigger/testseams.go", rel, h.pkg, h.recv, h.name)
+				continue
+			}
+			found[h]++
+			if !startsWithMustBeTest(fn.Body, h.name) {
+				t.Errorf("%s: %s must start with mustBeTest(%q)", rel, h.name, h.name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range triggerSeams {
+		if found[h] != 1 {
+			t.Errorf("%s.%s.%s is declared %d times in internal/corpus/repos/trigger/testseams.go, want exactly 1: it moved, was renamed, or its receiver changed", h.pkg, h.recv, h.name, found[h])
+		}
+	}
+}
+
 // TestTestSeamsGuard_Discriminates runs the guard's detector on inline source:
 // every shape it must flag is flagged, and every shape it must leave alone is
 // left alone. Without it a pattern that matched nothing would pass the walk
@@ -348,6 +442,15 @@ func TestTestSeamsGuard_Discriminates(t *testing.T) {
 	// read that fails on demand.
 	for _, h := range faultHookSetters {
 		flagged["fault hook "+h.pkg+"."+h.recv+"."+h.name] = src("func f(s S) { _ = s.X()." + h.name + "(nil) }\n")
+	}
+	// The trigger child's doors: production naming one reaches the
+	// dispatcher's test hooks or its internals.
+	for _, h := range triggerSeams {
+		if h.recv == "" {
+			flagged["trigger seam "+h.name] = src("func f() { trigger." + h.name + "(nil) }\n")
+		} else {
+			flagged["trigger seam "+h.recv+"."+h.name] = src("func f(ri R) { _ = ri.Triggers()." + h.name + "() }\n")
+		}
 	}
 	for name, s := range flagged {
 		if got := seamUses(t, token.NewFileSet(), name+".go", s); len(got) == 0 {

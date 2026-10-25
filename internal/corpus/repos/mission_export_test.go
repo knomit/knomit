@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/corpus/repos/trigger"
 )
 
 // PushWakeWindowForTest is the push countdown (pushWakeWindow): the delay
@@ -26,7 +28,7 @@ const PushWakeWindowForTest = pushWakeWindow
 // the sandbox's Date) for the rest of the test.
 func SetTriggerClockForTest(t *testing.T, now func() time.Time) {
 	t.Helper()
-	setHooks(t, triggerHooks{now: now})
+	setHooks(t, trigger.TestHooks{Now: now})
 }
 
 // QuiesceTriggersForTest waits until the dispatcher's last completed run
@@ -40,8 +42,8 @@ func (ri *RepoInstance) QuiesceTriggersForTest(t *testing.T) {
 	require.NotNil(t, ri.triggers, "the repo must have a dispatcher")
 	require.Eventually(t, func() bool {
 		head := ri.agentHeadForTest(t)
-		got, _ := ri.triggers.runSequence()
-		return got == head && ri.triggers.flushed() && ri.agentHeadForTest(t) == head
+		got, _ := ri.triggers.RunSequenceForTest()
+		return got == head && ri.triggers.FlushedForTest() && ri.agentHeadForTest(t) == head
 	}, 30*time.Second, 10*time.Millisecond, "the triggers of %s never went quiet", ri.agentBranch)
 }
 

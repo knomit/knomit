@@ -39,7 +39,7 @@
 // fire's phase C is flushed leaves the bookmark behind, so the range re-fires
 // on restart and the recipe runs once more [M2]. The window is the flush
 // grace plus the flush; it is named, not closed.
-package repos
+package trigger
 
 import (
 	"context"
@@ -116,7 +116,7 @@ func newRecipeState() recipeState {
 // resolveRecipe finds the recipe name names (see the file comment). found is
 // false when neither tier has it (unbound). A returned recipe with err set is
 // a broken one: the caller records `recipe-error` and does NOT fall back.
-func (d *triggerDispatcher) resolveRecipe(ctx context.Context, name string) (cr *compiledRecipe, found bool) {
+func (d *Dispatcher) resolveRecipe(ctx context.Context, name string) (cr *compiledRecipe, found bool) {
 	if cr, found := d.mainRecipe(ctx, name); found {
 		return cr, true
 	}
@@ -124,8 +124,8 @@ func (d *triggerDispatcher) resolveRecipe(ctx context.Context, name string) (cr 
 }
 
 // mainRecipe is the repo tier: the file at the tip of the consensus branch.
-func (d *triggerDispatcher) mainRecipe(ctx context.Context, name string) (*compiledRecipe, bool) {
-	svc, release, err := d.ri.Acquire()
+func (d *Dispatcher) mainRecipe(ctx context.Context, name string) (*compiledRecipe, bool) {
+	svc, release, err := d.acquire()
 	if err != nil {
 		// Mid-swap or closed: whether main has the recipe is unknown, and
 		// running the local one could run the wrong program. Say so.
@@ -162,7 +162,7 @@ func (d *triggerDispatcher) mainRecipe(ctx context.Context, name string) (*compi
 }
 
 // localRecipe is the machine tier: <home>/recipes/<name>.js.
-func (d *triggerDispatcher) localRecipe(name string) (*compiledRecipe, bool) {
+func (d *Dispatcher) localRecipe(name string) (*compiledRecipe, bool) {
 	if d.home == "" {
 		return nil, false
 	}
@@ -204,7 +204,7 @@ func (d *triggerDispatcher) localRecipe(name string) (*compiledRecipe, bool) {
 
 // compileRecipe compiles one recipe version, logging a broken one at ERROR
 // once per (name, rev).
-func (d *triggerDispatcher) compileRecipe(name, source, rev string, data []byte) *compiledRecipe {
+func (d *Dispatcher) compileRecipe(name, source, rev string, data []byte) *compiledRecipe {
 	cr := &compiledRecipe{name: name, source: source, rev: rev}
 	var err error
 	cr.prog, cr.limits, err = fact.CompileRecipe(name, string(data))
@@ -283,7 +283,7 @@ type recipeJob struct {
 // name, take a slot, mint the id, start the goroutine. It never blocks on the
 // recipe. p is the fire (trigger, path, change); globals its fact/agent/change;
 // rangeFrom/rangeTo the range the fire belongs to (copied onto the late row).
-func (d *triggerDispatcher) startRecipe(p pendingFire, name string, payload any, globals map[string]any, rangeFrom, rangeTo string) runStart {
+func (d *Dispatcher) startRecipe(p pendingFire, name string, payload any, globals map[string]any, rangeFrom, rangeTo string) runStart {
 	ctx := d.runCtx
 	if ctx == nil {
 		ctx = context.Background()
@@ -318,7 +318,7 @@ func (d *triggerDispatcher) startRecipe(p pendingFire, name string, payload any,
 
 // runJob is one recipe run, on its own goroutine: the jitter, the recipe, the
 // slot back, the result row into the late inbox, a kick.
-func (d *triggerDispatcher) runJob(ctx context.Context, j recipeJob) {
+func (d *Dispatcher) runJob(ctx context.Context, j recipeJob) {
 	defer d.rc.wg.Done()
 	t0 := time.Now()
 	outcome, msg := d.execRecipe(ctx, j)
@@ -341,7 +341,7 @@ func (d *triggerDispatcher) runJob(ctx context.Context, j recipeJob) {
 
 // execRecipe runs the recipe and maps what happened to the result row's
 // outcome and error text.
-func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcome, msg string) {
+func (d *Dispatcher) execRecipe(ctx context.Context, j recipeJob) (outcome, msg string) {
 	defer func() {
 		if r := recover(); r != nil {
 			outcome, msg = facts.TriggerOutcomeRecipeError, fmt.Sprintf("recipe %s: panic: %v", j.cr.name, r)
@@ -360,7 +360,7 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 	}
 	budget, cancel := context.WithTimeout(ctx, j.cr.limits.Timeout)
 	defer cancel()
-	hostCtx := WithBinding(budget, NewBindingOfRepo(d.ri, d.branch))
+	hostCtx := d.bind(budget)
 	// The recipe's own writes also carry its run id (#349, decision 4), so
 	// one `--grep='^Knomit-Run: <id>'` finds everything a run did.
 	hostCtx = model.WithTrailers(hostCtx, model.Trailers{Trace: j.p.trace, Cause: j.p.commit, Trigger: j.p.trig.Name, Run: j.id})
@@ -396,7 +396,7 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 // the core never puts it into argv), task_path (the firing fact's repo path,
 // from the fire itself: a script cannot choose it), this instance's MCP
 // configuration, and run = {id}.
-func (d *triggerDispatcher) recipeGlobals(j recipeJob) map[string]any {
+func (d *Dispatcher) recipeGlobals(j recipeJob) map[string]any {
 	g := map[string]any{}
 	for k, v := range j.globals {
 		g[k] = v
@@ -442,7 +442,7 @@ func recipeMCP(repo string) map[string]any {
 // by ctx, the recipe's budget and knomit's stop) and, if the address is still
 // unknown, returns an error: exec throws it, the child is not started, and an
 // uncaught throw ends the run as recipe-error naming the cause.
-func (d *triggerDispatcher) recipeEnv(ctx context.Context, j recipeJob) ([]string, error) {
+func (d *Dispatcher) recipeEnv(ctx context.Context, j recipeJob) ([]string, error) {
 	addr, err := d.waitServerAddr(ctx)
 	if err != nil {
 		return nil, err
@@ -467,7 +467,7 @@ const recipeServerAddrPoll = 50 * time.Millisecond
 
 // waitServerAddr returns this server's own address, waiting for it (see
 // recipeEnv) up to recipeServerAddrWait or until ctx ends.
-func (d *triggerDispatcher) waitServerAddr(ctx context.Context) (string, error) {
+func (d *Dispatcher) waitServerAddr(ctx context.Context) (string, error) {
 	if addr := d.serverAddr(); addr != "" {
 		return addr, nil
 	}
@@ -502,16 +502,16 @@ func recipeHostFunctions(h *scriptHost, x *recipeExec) fact.ScriptHost {
 
 // addLate hands one row to the dispatcher (the late inbox) and kicks it. Any
 // goroutine; never touches d.pending.
-func (d *triggerDispatcher) addLate(row facts.TriggerFire) {
+func (d *Dispatcher) addLate(row facts.TriggerFire) {
 	d.lateMu.Lock()
 	d.lateIn = append(d.lateIn, row)
 	d.lateMu.Unlock()
-	d.triggerKick()
+	d.Kick()
 }
 
 // drainLate moves the late inbox into phase C's buffer for store generation
 // svc. Dispatcher goroutine only.
-func (d *triggerDispatcher) drainLate(svc *store.Service) {
+func (d *Dispatcher) drainLate(svc *store.Service) {
 	d.lateMu.Lock()
 	rows := d.lateIn
 	d.lateIn = nil

@@ -395,3 +395,13 @@ func (m *consensusMerger) refuse(branch string, tip plumbing.Hash, msg string) {
 	m.mu.Unlock()
 	m.warnOnce("refused:"+branch+"@"+tip.String(), msg)
 }
+
+// shortHash is a commit id's first 8 characters, for logs and refusal texts.
+// The trigger dispatcher keeps its own copy (internal/corpus/repos/trigger):
+// a 5-line formatter is not worth a cross-package door.
+func shortHash(h string) string {
+	if len(h) > 8 {
+		return h[:8]
+	}
+	return h
+}

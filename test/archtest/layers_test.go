@@ -189,6 +189,11 @@ var sameLayerEdges = map[string]bool{
 	"corpus/resolutions -> corpus/refs":  true,
 	"corpus/resolutions -> corpus/repos": true,
 	"corpus/synthesize -> corpus/repos":  true,
+	// The trigger child (the F07 dispatcher, 14c) is a sibling of events
+	// under corpus/repos: its emit publishes the `trigger` event
+	// (events.TriggerEvent) through the *events.TaskPublisher the parent hands
+	// it. (Not a parent edge: the parent imports trigger, never the reverse.)
+	"corpus/repos/trigger -> corpus/repos/events": true,
 	// The step child holds the vocabulary the synthesize engine and its
 	// strategies share: Deps carries the repo instance, and the write gate
 	// builds a ref gate.

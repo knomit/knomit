@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
@@ -609,7 +610,7 @@ func TestWalkthrough_CancelIndex(t *testing.T) {
 	require.Equal(t, events.IndexStateError, rep.Status.Index.State)
 	require.Equal(t, "indexing cancelled", rep.Status.Index.Reason)
 	require.False(t, rep.Status.IndexRunning)
-	require.False(t, f.ri.triggers.indexIsReady(), "the due sweep stays gated after a cancel")
+	require.False(t, f.ri.triggers.IndexIsReadyForTest(), "the due sweep stays gated after a cancel")
 
 	f.emb.armed.Store(false)
 	_, err = send(f.m, f.ri, Rebuild(f.ri.AgentBranch()))
@@ -777,8 +778,8 @@ func TestWalkthrough_ArchiveMidIndexWithAParkedSyncRound(t *testing.T) {
 func TestMachine_NoStageSends(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
-	for _, file := range []string{"stages.go", "sync.go", "triggers.go", "consensus.go", "experiment_sweep.go",
-		"trigger_script.go", "trigger_recipe.go", "sync_mode.go"} {
+	for _, file := range []string{"stages.go", "sync.go", "trigger/triggers.go", "consensus.go", "experiment_sweep.go",
+		"trigger/trigger_script.go", "trigger/trigger_recipe.go", "sync_mode.go"} {
 		f, err := parser.ParseFile(fset, file, nil, 0)
 		require.NoError(t, err, file)
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -833,7 +834,7 @@ func TestMachine_NoStageSends(t *testing.T) {
 // indexing.
 func TestDispatcher_DueSweepGatedOnIndexReady(t *testing.T) {
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	g := newGate(StageIndex, "index-job")
 	var armed atomic.Bool
 	m := newTestManager(t)

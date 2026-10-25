@@ -1,4 +1,4 @@
-package repos
+package trigger
 
 import (
 	"sort"
@@ -21,7 +21,7 @@ type triggerStats struct {
 	mu       sync.Mutex
 	triggers map[string]*triggerStat
 	runs     int64
-	last     *TriggerLastRun
+	last     *LastRun
 }
 
 // triggerStat is one trigger's counters. Durations are the trigger's OWN work
@@ -45,8 +45,8 @@ type triggerStat struct {
 	recentPos                                                                                 int
 }
 
-// TriggerLastRun is the last dispatcher run's numbers.
-type TriggerLastRun struct {
+// LastRun is the last dispatcher run's numbers.
+type LastRun struct {
 	RangeFrom  string `json:"range_from"`
 	RangeTo    string `json:"range_to"`
 	Nonlinear  bool   `json:"nonlinear,omitempty"`
@@ -58,15 +58,15 @@ type TriggerLastRun struct {
 	ChangeMS   int64  `json:"change_ms"`
 }
 
-// TriggerRunStats is the run-level part of the report.
-type TriggerRunStats struct {
-	Runs int64           `json:"runs"`
-	Last *TriggerLastRun `json:"last,omitempty"`
+// RunStats is the run-level part of the report.
+type RunStats struct {
+	Runs int64    `json:"runs"`
+	Last *LastRun `json:"last,omitempty"`
 }
 
-// TriggerDurationStats is a trigger's `if`+action duration: count, min and
+// DurationStats is a trigger's `if`+action duration: count, min and
 // max exact since start; p95 over the most recent p95_window evaluations.
-type TriggerDurationStats struct {
+type DurationStats struct {
 	Count       int64   `json:"count"`
 	MinMS       float64 `json:"min_ms"`
 	MaxMS       float64 `json:"max_ms"`
@@ -74,8 +74,8 @@ type TriggerDurationStats struct {
 	P95Window   int     `json:"p95_window"`
 }
 
-// TriggerStatsView is one trigger's statistics as the endpoint shows them.
-type TriggerStatsView struct {
+// StatsView is one trigger's statistics as the endpoint shows them.
+type StatsView struct {
 	Evaluations int64 `json:"evaluations"`
 	Fires       int64 `json:"fires"`
 	IfFalse     int64 `json:"if_false"`
@@ -94,17 +94,17 @@ type TriggerStatsView struct {
 	// knomit.run starts), Busy (dropped at the `concurrent` limit), Unbound
 	// (no recipe on main or on this machine: a counted no-op), RecipeError
 	// and RecipeTimeout, and the recipes' reported results.
-	Started       int64                `json:"started"`
-	Busy          int64                `json:"busy"`
-	Unbound       int64                `json:"unbound"`
-	RecipeError   int64                `json:"recipe_error"`
-	RecipeTimeout int64                `json:"recipe_timeout"`
-	Done          int64                `json:"done"`
-	Spawned       int64                `json:"spawned"`
-	Delivered     int64                `json:"delivered"`
-	Unreachable   int64                `json:"unreachable"`
-	Slow          int64                `json:"slow"`
-	Duration      TriggerDurationStats `json:"duration"`
+	Started       int64         `json:"started"`
+	Busy          int64         `json:"busy"`
+	Unbound       int64         `json:"unbound"`
+	RecipeError   int64         `json:"recipe_error"`
+	RecipeTimeout int64         `json:"recipe_timeout"`
+	Done          int64         `json:"done"`
+	Spawned       int64         `json:"spawned"`
+	Delivered     int64         `json:"delivered"`
+	Unreachable   int64         `json:"unreachable"`
+	Slow          int64         `json:"slow"`
+	Duration      DurationStats `json:"duration"`
 }
 
 func newTriggerStats() *triggerStats {
@@ -214,7 +214,7 @@ func (s *triggerStats) recordSelfCaused(name string) {
 }
 
 // recordRun records one completed dispatcher run.
-func (s *triggerStats) recordRun(last TriggerLastRun) {
+func (s *triggerStats) recordRun(last LastRun) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs++
@@ -231,20 +231,20 @@ func (s *triggerStats) runCount() int64 {
 
 // view copies one trigger's statistics; a trigger never evaluated reads all
 // zeros (the zeros are shown on purpose).
-func (s *triggerStats) view(name string) TriggerStatsView {
+func (s *triggerStats) view(name string) StatsView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.triggers[name]
 	if st == nil {
-		return TriggerStatsView{Duration: TriggerDurationStats{P95Window: triggerP95Window}}
+		return StatsView{Duration: DurationStats{P95Window: triggerP95Window}}
 	}
-	return TriggerStatsView{
+	return StatsView{
 		Evaluations: st.evaluations, Fires: st.fires, IfFalse: st.ifFalse, IfError: st.ifError,
 		IfTimeout: st.ifTimeout, Unparseable: st.unparseable, Slow: st.slow,
 		ScriptError: st.scriptError, ScriptTimeout: st.scriptTimeout, RateLimited: st.rateLimited, SelfCaused: st.selfCaused,
 		Started: st.started, Busy: st.busy, Unbound: st.unbound, RecipeError: st.recipeError, RecipeTimeout: st.recipeTimeout,
 		Done: st.done, Spawned: st.spawned, Delivered: st.delivered, Unreachable: st.unreachable,
-		Duration: TriggerDurationStats{
+		Duration: DurationStats{
 			Count:       st.count,
 			MinMS:       ms(st.min),
 			MaxMS:       ms(st.max),
@@ -255,10 +255,10 @@ func (s *triggerStats) view(name string) TriggerStatsView {
 }
 
 // runView copies the run-level statistics.
-func (s *triggerStats) runView() TriggerRunStats {
+func (s *triggerStats) runView() RunStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := TriggerRunStats{Runs: s.runs}
+	out := RunStats{Runs: s.runs}
 	if s.last != nil {
 		l := *s.last
 		out.Last = &l

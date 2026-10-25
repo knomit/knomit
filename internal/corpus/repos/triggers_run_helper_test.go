@@ -7,12 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/corpus/repos/trigger"
 )
 
 // ---- The recipe helper process (F07 PR 5)
@@ -222,22 +225,25 @@ func jsString(s string) string {
 // is in its kill group [R2-1], for the test's duration.
 func installGoSignal(t *testing.T, dir string) {
 	t.Helper()
-	recipeExecHooksMu.Lock()
-	recipeExecHooks.afterStart = func(pid int) {
+	trigger.SetRecipeAfterStartForTest(func(pid int) {
 		_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("go-%d", pid)), []byte{1}, 0o600)
-	}
-	recipeExecHooksMu.Unlock()
-	t.Cleanup(func() {
-		recipeExecHooksMu.Lock()
-		recipeExecHooks.afterStart = nil
-		recipeExecHooksMu.Unlock()
 	})
+	t.Cleanup(func() { trigger.SetRecipeAfterStartForTest(nil) })
+}
+
+// helperEnvKey compares environment names the way the OS does (and the
+// recipe exec does): case-insensitively on Windows.
+func helperEnvKey(k string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToUpper(k)
+	}
+	return k
 }
 
 // envOf reads one variable out of a helper's recorded environment.
 func envOf(env []string, key string) (string, bool) {
 	for _, kv := range env {
-		if k, v, ok := strings.Cut(kv, "="); ok && envKey(k) == envKey(key) {
+		if k, v, ok := strings.Cut(kv, "="); ok && helperEnvKey(k) == helperEnvKey(key) {
 			return v, true
 		}
 	}

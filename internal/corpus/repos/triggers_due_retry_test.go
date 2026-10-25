@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/engine/store/facts"
 )
 
@@ -61,7 +62,7 @@ func outcomesByPath(t *testing.T, ri *RepoInstance, name string) map[string]map[
 // red; drop the mark on every outcome → the fact that ran runs again → red.
 func TestDue_RateLimitedRetriedNextSweep(t *testing.T) {
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	_, ri, _ := newScriptRepo(t, 1, scriptTrig("exp", "due", "tasks/due/**", "noop"))
 	putScript(t, ri, "noop", `knomit.emit({p: change.path});`)
 	settle(t, ri)
@@ -99,7 +100,7 @@ func TestDue_RateLimitedRetriedNextSweep(t *testing.T) {
 // keep the mark on busy → the second fact never starts → red.
 func TestDue_BusyRecipeRetried(t *testing.T) {
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	ri, home := newRunRepo(t, runTrig("w", "due", "tasks/due/**", "worker"))
 	dir := t.TempDir()
 	block := filepath.Join(t.TempDir(), "release")
@@ -145,7 +146,7 @@ var r = knomit.exec([%s], {env: %s});
 // unmark errors and timeouts too → a new row every sweep → red.
 func TestDue_ScriptErrorNotRetried(t *testing.T) {
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{scriptBudget: 50 * time.Millisecond})
+	dueHooks(t, clock, trigger.TestHooks{ScriptBudget: 50 * time.Millisecond})
 	_, ri, _ := newScriptRepo(t, 0,
 		scriptTrig("throws", "due", "tasks/due/**", "throws"),
 		scriptTrig("loops", "due", "tasks/due/**", "loops"))

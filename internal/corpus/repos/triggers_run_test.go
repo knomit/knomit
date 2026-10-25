@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/storetest"
@@ -51,7 +52,7 @@ func runTrig(name, on, match, recipe string) string {
 func newRunRepo(t *testing.T, entries ...string) (*RepoInstance, string) {
 	t.Helper()
 	_, ri, _ := newScriptRepo(t, 0, entries...)
-	return ri, ri.triggers.home
+	return ri, ri.triggers.HomeForTest()
 }
 
 func putLocalRecipe(t *testing.T, home, name, src string) string {
@@ -113,7 +114,7 @@ func TestRun_UnboundIsCountedNoOp(t *testing.T) {
 	ri, _ := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	h := write(t, ri, "kb/tasks/in/a.md")
 	require.Empty(t, firesOf(t, ri, "w"), "unbound writes no row")
-	st := ri.triggers.stats.view("w")
+	st := ri.triggers.StatsViewForTest("w")
 	require.Equal(t, int64(1), st.Unbound)
 	require.Equal(t, int64(1), st.Evaluations)
 	require.Equal(t, int64(0), st.Fires, "an unbound fire started nothing")
@@ -186,7 +187,7 @@ func TestRun_AgentBranchRecipeNeverRuns(t *testing.T) {
 
 	write(t, ri, "kb/tasks/in/unbound.md")
 	require.Empty(t, firesOf(t, ri, "w"), "a recipe on the agent branch only is not a recipe: unbound")
-	require.Equal(t, int64(1), ri.triggers.stats.view("w").Unbound)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("w").Unbound)
 
 	putLocalRecipe(t, home, "worker", `({status: "done", message: "local"});`)
 	write(t, ri, "kb/tasks/in/local.md")
@@ -239,7 +240,7 @@ func TestScript_NoExecInSandbox(t *testing.T) {
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("s", "learn", "tasks/in/**", "probe"),
 		runTrig("r", "learn", "tasks/rec/**", "probe"))
 	putScript(t, ri, "probe", `knomit.emit({t: [typeof knomit.exec, typeof exec, typeof globalThis.exec]});`)
-	putLocalRecipe(t, ri.triggers.home, "probe", `({status: "done", message: [typeof knomit.exec, typeof exec].join(",")});`)
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "probe", `({status: "done", message: [typeof knomit.exec, typeof exec].join(",")});`)
 	sink := subscribePayloads(t, ri, "s")
 	write(t, ri, "kb/tasks/in/a.md")
 	require.Equal(t, []any{"undefined", "undefined", "undefined"}, sink.wait(t, 1)[0]["t"])
@@ -249,8 +250,9 @@ func TestScript_NoExecInSandbox(t *testing.T) {
 }
 
 // OSExecOnlyInExecFile [F2 (a)]: os/exec is imported by no non-test file of
-// internal/corpus/repos except the exec file and its OS twins. Sabotage: import
-// os/exec in trigger_script.go (red).
+// internal/corpus/repos (its child packages included) except the exec file and
+// its OS twins in the trigger child. Sabotage: import os/exec in
+// trigger/trigger_script.go, or in a top-level file (red).
 func TestRecipe_OSExecOnlyInExecFile(t *testing.T) {
 	// WALKED, not globbed: a child package of internal/corpus/repos must not be able
 	// to import os/exec unnoticed. Keys are slash paths relative to this
@@ -279,7 +281,7 @@ func TestRecipe_OSExecOnlyInExecFile(t *testing.T) {
 	}))
 	require.Greater(t, walked, 20, "the guard must actually have walked the package")
 	sort.Strings(importers)
-	require.Equal(t, []string{"trigger_recipe_exec.go", "trigger_recipe_exec_unix.go", "trigger_recipe_exec_windows.go"}, importers)
+	require.Equal(t, []string{"trigger/trigger_recipe_exec.go", "trigger/trigger_recipe_exec_unix.go", "trigger/trigger_recipe_exec_windows.go"}, importers)
 }
 
 // ---- T7, T7b: process groups
@@ -287,7 +289,7 @@ func TestRecipe_OSExecOnlyInExecFile(t *testing.T) {
 // TimeoutKillsProcessGroup [H5] [M3]: the child forks a grandchild that holds
 // the stdout pipe — ONLY after the go-signal (the exec hook, called once the
 // child is in its kill group) [R2-1] — and sleeps; exec's timeout_ms ends it:
-// exec throws "timed out" well within timeout + recipeWaitDelay, and the
+// exec throws "timed out" well within timeout + trigger.RecipeWaitDelayForTest, and the
 // grandchild is dead. Runs on every OS (windows-2025 included). Sabotage:
 // drop the group kill (Setpgid/Cancel, or the job object) — the grandchild
 // survives (red).
@@ -308,7 +310,7 @@ func TestRun_TimeoutKillsProcessGroup(t *testing.T) {
 	require.Equal(t, facts.TriggerOutcomeUnreachable, rows[1].Outcome)
 	require.Contains(t, rows[1].Error, "timed out after 3000 ms")
 	require.Empty(t, rows[1].Message, "F5: unreachable is a failure, its text stays in error")
-	require.Less(t, rows[1].DurationMS, int64(3000+recipeWaitDelay.Milliseconds()+5000),
+	require.Less(t, rows[1].DurationMS, int64(3000+trigger.RecipeWaitDelayForTest.Milliseconds()+5000),
 		"exec returned within its timeout, the wait delay and a margin: the pipes did not keep it alive")
 	require.Eventually(t, func() bool { return !processAlive(gc.Pid) }, 10*time.Second, 20*time.Millisecond,
 		"the grandchild (pid %d) survived the timeout: the process group / job was not killed", gc.Pid)
@@ -370,7 +372,7 @@ var r = knomit.exec([%s], {env: %s});
 	waitHelperReports(t, dir, "child", 2)
 	rows = waitRows(t, ri, "w", 5)
 	require.Equal(t, facts.TriggerOutcomeStarted, rows[3].Outcome, "the slot is free again")
-	require.Equal(t, int64(1), ri.triggers.stats.view("w").Busy)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("w").Busy)
 }
 
 // ---- T9: the dispatcher never waits
@@ -413,7 +415,7 @@ func TestRun_ScriptGetsStartedAndResultIsLogged(t *testing.T) {
 	t.Cleanup(func() { _ = os.WriteFile(block, nil, 0o600) })
 	// The recipe's program blocks until the fire's own phase C is FLUSHED, so
 	// its result row cannot ride that flush: it must be flushed on its own.
-	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s});
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s});
 ({status: "delivered", message: "k=" + payload.k + " path=" + task_path});`, jsString(helperExe(t)), helperEnv(dir, "HELPER_BLOCK_FILE", block)))
 	putScript(t, ri, "caller", `knomit.emit(knomit.run("worker", {k: 1}));`)
 	sink := subscribePayloads(t, ri, "s")
@@ -450,7 +452,7 @@ func TestRun_RunIDCorrelates(t *testing.T) {
 		scriptTrig("ta", "learn", "tasks/in/**", "caller"), scriptTrig("tb", "learn", "tasks/in/**", "caller"),
 		runTrig("direct", "learn", "tasks/in/**", "worker"))
 	dir := t.TempDir()
-	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`// knomit: {"concurrent": 3}
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "worker", fmt.Sprintf(`// knomit: {"concurrent": 3}
 var r = knomit.exec([%s, run.id], {env: %s});
 ({status: "done", message: run.id});`, jsString(helperExe(t)), helperEnv(dir)))
 	putScript(t, ri, "caller", `knomit.run("worker");`)
@@ -473,7 +475,7 @@ var r = knomit.exec([%s, run.id], {env: %s});
 		id := start.RunID
 		require.Regexp(t, `^run-[0-9a-f]{32}$`, id)
 		ids = append(ids, id)
-		byRun, err := ri.TriggerFiresByRun(context.Background(), id)
+		byRun, err := ri.triggers.FiresByRun(context.Background(), id)
 		require.NoError(t, err)
 		require.Len(t, byRun, 2, "%s: exactly the started row and the result row", name)
 		require.Equal(t, []string{facts.TriggerOutcomeStarted, facts.TriggerOutcomeDone}, outcomesOf(byRun))
@@ -521,7 +523,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 
 	t0 := time.Now()
 	restartServe(t, ri)
-	require.Less(t, time.Since(t0), recipeWaitDelay+5*time.Second, "stop() waits for the killed recipe, not for its program")
+	require.Less(t, time.Since(t0), trigger.RecipeWaitDelayForTest+5*time.Second, "stop() waits for the killed recipe, not for its program")
 	require.Eventually(t, func() bool { return !processAlive(child.Pid) }, 10*time.Second, 20*time.Millisecond, "the program survived stop()")
 	rows := rowsOf(t, ri, "w")
 	require.Equal(t, []string{facts.TriggerOutcomeStarted, facts.TriggerOutcomeRecipeError}, outcomesOf(rows), "the stopped row is in the TABLE after stop()")
@@ -560,7 +562,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 			putLocalRecipe(t, home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
 				jsString(helperExe(t)), helperEnv(dir)))
 			if crash {
-				setHooks(t, triggerHooks{flushGrace: time.Hour, skipFlushOnStop: true})
+				setHooks(t, trigger.TestHooks{FlushGrace: time.Hour, SkipFlushOnStop: true})
 			}
 			h := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 			waitHelperReports(t, dir, "child", 1)
@@ -568,11 +570,11 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 				waitTriggerHead(t, ri, h)
 				waitRows(t, ri, "w", 2)
 			} else {
-				require.Eventually(t, func() bool { got, _ := ri.triggers.runSequence(); return got == h }, 20*time.Second, 10*time.Millisecond)
+				require.Eventually(t, func() bool { got, _ := ri.triggers.RunSequenceForTest(); return got == h }, 20*time.Second, 10*time.Millisecond)
 				require.NotEqual(t, h, watermarks(t, ri)["w"], "the fire's phase C is still pending (not flushed)")
 			}
 			require.NoError(t, m.Close())
-			setHooks(t, triggerHooks{})
+			setHooks(t, trigger.TestHooks{})
 
 			m2 := New(context.Background(), deps)
 			m2.SetServerAddress(testServerAddr)
@@ -628,7 +630,7 @@ func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 	require.NoError(t, err)
 
 	rep := waitHelperReports(t, dir, "child", 1)[0]
-	mcp := recipeMCP(testRepoName)
+	mcp := trigger.RecipeMCPForTest(testRepoName)
 	key := serverkey.ServerKey(testRepoName, "")
 	require.Len(t, rep.Args, 9, "%q", rep.Args)
 	require.Equal(t, []string{"claude", "--model", "sonnet", "--mcp-config", mcp["config"].(string), "--allowedTools", "mcp__" + key, "-p"}, rep.Args[:8])
@@ -698,8 +700,8 @@ func promptTrace(t *testing.T, prompt string) map[string]string {
 func TestRun_RecipeNameValidatedAtCall(t *testing.T) {
 	t.Parallel()
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("s", "learn", "tasks/in/**", "caller"))
-	putLocalRecipe(t, ri.triggers.home, "x", `({status: "done"});`)
-	require.NoError(t, os.WriteFile(filepath.Join(ri.triggers.home, "x.js"), []byte(`({status: "done"});`), 0o600))
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "x", `({status: "done"});`)
+	require.NoError(t, os.WriteFile(filepath.Join(ri.triggers.HomeForTest(), "x.js"), []byte(`({status: "done"});`), 0o600))
 	putScript(t, ri, "caller", `knomit.run("../x");`)
 	write(t, ri, "kb/tasks/in/a.md")
 	rows := rowsOf(t, ri, "s")
@@ -722,7 +724,7 @@ func TestRun_NotOnReadOnlyOrSubscribed(t *testing.T) {
 	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
 	require.Nil(t, ri.triggers, "a read-only server runs no dispatcher and so no recipe")
-	rows, err := ri.TriggerFiresByRun(context.Background(), "run-00000000000000000000000000000000")
+	rows, err := ri.triggers.FiresByRun(context.Background(), "run-00000000000000000000000000000000")
 	require.NoError(t, err)
 	require.Empty(t, rows)
 
@@ -798,7 +800,7 @@ func runEnvChild(t *testing.T, addr string, extra ...string) []string {
 	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
 	m.SetServerAddress(addr)
 	dir := t.TempDir()
-	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
 		jsString(helperExe(t)), helperEnv(dir, extra...)))
 	write(t, ri, "kb/tasks/in/a.md")
 	_ = waitRows(t, ri, "w", 2)
@@ -842,14 +844,12 @@ const testServerAddr = "http://127.0.0.1:1"
 // substitute. Sabotage: start the child anyway when the address is missing
 // (red: a child report, outcome done).
 func TestRun_ExecBeforeTheAddressIsSetStartsNothing(t *testing.T) {
-	old := recipeServerAddrWait
-	recipeServerAddrWait = 300 * time.Millisecond
-	t.Cleanup(func() { recipeServerAddrWait = old })
+	t.Cleanup(trigger.SetRecipeServerAddrWaitForTest(300 * time.Millisecond))
 	t.Setenv("KNOMIT_SERVER", "http://inherited.invalid:1")
 	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
 	m.SetServerAddress("") // the boot window: not recorded yet
 	dir := t.TempDir()
-	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
 		jsString(helperExe(t)), helperEnv(dir)))
 	write(t, ri, "kb/tasks/in/a.md")
 	rows := waitRows(t, ri, "w", 2)
@@ -865,7 +865,7 @@ func TestRun_ExecWaitsForTheAddress(t *testing.T) {
 	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
 	m.SetServerAddress("")
 	dir := t.TempDir()
-	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+	putLocalRecipe(t, ri.triggers.HomeForTest(), "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
 		jsString(helperExe(t)), helperEnv(dir)))
 	write(t, ri, "kb/tasks/in/a.md")
 	_ = waitRows(t, ri, "w", 1) // started, now waiting in exec
@@ -902,7 +902,7 @@ func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
 	require.Equal(t, model.Trailers{Trace: rows[0].Trace, Cause: fired, Trigger: "w", Run: rows[0].RunID}, tr)
 	require.True(t, strings.HasSuffix(commitMessage(t, ri, commits[0]), "\nKnomit-Trigger: w\nKnomit-Run: "+rows[0].RunID+"\n"),
 		"Knomit-Run is the last line, after Knomit-Trigger")
-	require.Equal(t, int64(1), ri.triggers.stats.view("w").SelfCaused, "its own write does not re-fire it")
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("w").SelfCaused, "its own write does not re-fire it")
 	require.Len(t, rowsOf(t, ri, "w"), 2, "no second start")
 }
 
@@ -943,7 +943,7 @@ func TestRun_OutputCap(t *testing.T) {
 	write(t, ri, "kb/tasks/in/a.md")
 	rows := waitRows(t, ri, "w", 2)
 	require.Equal(t, facts.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
-	require.Equal(t, fmt.Sprintf("%d:true:0", recipeOutputCap), rows[1].Message)
+	require.Equal(t, fmt.Sprintf("%d:true:0", trigger.RecipeOutputCapForTest), rows[1].Message)
 }
 
 // ---- Result shapes

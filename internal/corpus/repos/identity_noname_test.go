@@ -37,7 +37,7 @@ func TestTriggerIdentity_ComesFromThePersistedIdentity(t *testing.T) {
 
 	ri := m.newInstance("r", "uid-r", false)
 	require.NotNil(t, ri.triggers, "fixture: a writable repo with an agent branch has a dispatcher")
-	require.Equal(t, fact.TriggerIdentity{Agent: "opaque-1", Host: "ci-0badcafe"}, ri.triggers.identity)
+	require.Equal(t, fact.TriggerIdentity{Agent: "opaque-1", Host: "ci-0badcafe"}, ri.triggers.IdentityForTest())
 	require.Equal(t, "opaque-1", m.AgentID(), "the fleet code's own id is the persisted one")
 	require.Equal(t, "opaque-1", m.advertised().Agent, "the member record names the persisted id")
 	require.Equal(t, "opaque-1", ri.env.agentID, "the store the stages open authors as the persisted id")

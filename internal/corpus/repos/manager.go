@@ -23,6 +23,7 @@ import (
 	"github.com/ysmood/goob"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/clientsessions"
@@ -47,7 +48,7 @@ type Deps struct {
 	// host calls (F07 PR 3). Injected — internal/edge/mcp imports this package —
 	// by internal/app as mcp.NewScriptTools(embedder). Nil means every host
 	// call throws "no script tools"; the dispatcher still runs scripts.
-	ScriptTools ScriptTools
+	ScriptTools trigger.ScriptTools
 	KeyPath     string
 	// Machine configures every repo's lifecycle machine. Production leaves it
 	// zero. Tests set Machine.Synchronous (no sync loop, no experiment sweep:
@@ -895,9 +896,12 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 	// F07 / F08: built for a writable repo with an agent branch on a
 	// writable server; nil otherwise, and the kicks below are nil checks.
 	if agentBranch != "" && !cfg.ReadOnly {
-		ri.triggers = newTriggerDispatcher(ri, name, agentBranch,
+		ri.triggers, ri.runTriggers = trigger.New(name, agentBranch, ri.ontologyRoot,
 			fact.TriggerIdentity{Agent: m.AgentID(), Host: m.deps.AgentHost}, cfg.Log.SlowTriggerMS,
-			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress)
+			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress, ri.pub,
+			ri.Acquire, ri.wakeSync,
+			func() bool { return ri.Status().Index.State == events.IndexStateReady },
+			func(ctx context.Context) context.Context { return WithBinding(ctx, NewBindingOfRepo(ri, agentBranch)) })
 		ri.consensus = newConsensusMerger(ri, name, agentBranch)
 		ri.peers = newFleetPeers(ri.actsAsFleetMaster, ri.publishesFleetMain)
 		ri.peers.claim = ri.fleetMasterClaimRound
@@ -922,7 +926,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 			obs.Notify(hash)
 		}
 		if branch == agentBranch {
-			ri.triggerKick()
+			ri.triggers.Kick()
 			if ri.realtimePush.Load() {
 				ri.wakeSync()
 			}

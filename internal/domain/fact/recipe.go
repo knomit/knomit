@@ -14,7 +14,7 @@ import (
 // A recipe (F07 PR 5) is the TRUSTED tier: JavaScript that may start
 // programs. It runs in the same sandbox VM as a script (no process, no
 // require, `Date` pinned) with a DIFFERENT host map — the script's plus
-// `exec`, built by the dispatcher (internal/corpus/repos/trigger_recipe.go) — and
+// `exec`, built by the dispatcher (internal/corpus/repos/trigger/trigger_recipe.go) — and
 // where it comes from is what makes it trusted: `.knomit/recipes/<name>.js`
 // at the tip of the repo's main branch, else `<home>/recipes/<name>.js` on
 // this machine (user ruling D1: "recipes run only from main. No enforcement

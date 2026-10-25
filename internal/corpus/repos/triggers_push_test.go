@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos/events"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
@@ -182,7 +183,7 @@ func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, l.mode, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, "", false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, l.mode, nil, false)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -457,7 +458,7 @@ func TestPush_StatisticsAndLog(t *testing.T) {
 	for _, r := range rows {
 		require.Empty(t, r.Error)
 	}
-	st := ri.triggers.stats.view("fast")
+	st := ri.triggers.StatsViewForTest("fast")
 	require.Equal(t, int64(3), st.Evaluations)
 	require.Equal(t, int64(2), st.Fires, "a kicked fire is a fire")
 	require.Equal(t, int64(1), st.IfFalse)
@@ -534,7 +535,7 @@ func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, nil, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, nil, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
@@ -601,8 +602,8 @@ func TestPush_TickDispatcherCycleSettles(t *testing.T) {
 	require.Eventually(t, func() bool { return bareRef(t, bare, "refs/heads/"+trigAgent) == head(t, ri) },
 		20*time.Second, 10*time.Millisecond, "the first tick pushes the agent branch")
 	initial := ticks.Load()
-	h := currentTriggerHooks()
-	h.flushGrace = time.Hour
+	h := trigger.HooksForTest()
+	h.FlushGrace = time.Hour
 	setHooks(t, h)
 
 	// (1) a peer's fact lands on origin main.
@@ -617,7 +618,7 @@ func TestPush_TickDispatcherCycleSettles(t *testing.T) {
 	// (2) one local write.
 	writeOn(t, ri, trigAgent, "kb/tasks/local.md")
 
-	stats := func() int64 { return ri.triggers.stats.view("fast").Fires }
+	stats := func() int64 { return ri.triggers.StatsViewForTest("fast").Fires }
 	require.Eventually(t, func() bool {
 		return stats() == 2 && bareRef(t, bare, "refs/heads/"+trigAgent) == head(t, ri)
 	}, 20*time.Second, 10*time.Millisecond, "the local fire and the merged-path fire, and the merge pushed")

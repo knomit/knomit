@@ -16,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
@@ -64,9 +65,9 @@ func (c *fakeClock) set(t time.Time) {
 }
 
 // dueHooks installs the fake clock (and any extra hooks) for the test.
-func dueHooks(t *testing.T, clock *fakeClock, extra triggerHooks) {
+func dueHooks(t *testing.T, clock *fakeClock, extra trigger.TestHooks) {
 	t.Helper()
-	extra.now = clock.now
+	extra.Now = clock.now
 	setHooks(t, extra)
 }
 
@@ -74,7 +75,7 @@ func dueHooks(t *testing.T, clock *fakeClock, extra triggerHooks) {
 func newDueRepo(t *testing.T, entries ...string) (*Manager, *RepoInstance, *fakeClock) {
 	t.Helper()
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	m, ri := newTriggerRepo(t, entries...)
 	return m, ri, clock
 }
@@ -105,11 +106,11 @@ func writeDatedAndWait(t *testing.T, ri *RepoInstance, path string, expires time
 // and waits for a run to complete AND flush.
 func kickAndWait(t *testing.T, ri *RepoInstance) {
 	t.Helper()
-	_, seq := ri.triggers.runSequence()
-	ri.triggers.triggerKick()
+	_, seq := ri.triggers.RunSequenceForTest()
+	ri.triggers.Kick()
 	require.Eventually(t, func() bool {
-		_, s := ri.triggers.runSequence()
-		return s > seq && ri.triggers.flushed()
+		_, s := ri.triggers.RunSequenceForTest()
+		return s > seq && ri.triggers.FlushedForTest()
 	}, 20*time.Second, 10*time.Millisecond, "no run completed and flushed after the kick")
 }
 
@@ -237,7 +238,7 @@ func TestDue_RemovedBeforeItsDateNeverFires(t *testing.T) {
 			_, ri, clock := newDueRepo(t, trig("due", "due", "", ""))
 			due := clock.now().Add(time.Hour)
 			// Every run is also fed the removed version as a STALE candidate.
-			dueHooks(t, clock, triggerHooks{dueCandidates: func(c []facts.DueCandidate) []facts.DueCandidate {
+			dueHooks(t, clock, trigger.TestHooks{DueCandidates: func(c []facts.DueCandidate) []facts.DueCandidate {
 				return append(c, facts.DueCandidate{Path: path, ExpiresAt: due.Unix()})
 			}})
 			base := head(t, ri)
@@ -289,17 +290,17 @@ func TestDue_FiresOnceAcrossTicks(t *testing.T) {
 	// Park run 1 between its kick and its ref read; queue run 2 meanwhile.
 	gate := make(chan struct{})
 	var parked sync.Once
-	dueHooks(t, clock, triggerHooks{afterKick: func() {
+	dueHooks(t, clock, trigger.TestHooks{AfterKick: func() {
 		parked.Do(func() { <-gate })
 	}})
-	_, seq := ri.triggers.runSequence()
-	ri.triggers.triggerKick()
+	_, seq := ri.triggers.RunSequenceForTest()
+	ri.triggers.Kick()
 	time.Sleep(50 * time.Millisecond) // run 1 is parked; this kick is pending behind it
-	ri.triggers.triggerKick()
+	ri.triggers.Kick()
 	close(gate)
 	require.Eventually(t, func() bool {
-		_, s := ri.triggers.runSequence()
-		return s >= seq+2 && ri.triggers.flushed()
+		_, s := ri.triggers.RunSequenceForTest()
+		return s >= seq+2 && ri.triggers.FlushedForTest()
 	}, 20*time.Second, 10*time.Millisecond, "runs 1 and 2 must complete and flush")
 	require.Len(t, dueFiresOf(t, ri, "due"), 1, "run 2 (inside the flush window) must not re-fire")
 
@@ -315,7 +316,7 @@ func TestDue_FiresOnceAcrossTicks(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, n, "the endpoint shows one due row")
-	require.EqualValues(t, 1, ri.triggers.stats.view("due").Fires)
+	require.EqualValues(t, 1, ri.triggers.StatsViewForTest("due").Fires)
 }
 
 // ---- T8, T9 Re-arm and body edits.
@@ -381,14 +382,14 @@ func TestDue_CrashBeforeMarkRefiresAndLogsBoth(t *testing.T) {
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentID: testsigner.FixtureAgentID(trigAgent), AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}}
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	m := New(context.Background(), deps)
 	ri := bootRepo(t, m)
 	setOntology(t, ri, triggerOntology("", trig("due", "due", "", "")))
 	writeDatedAndWait(t, ri, "kb/tasks/x.md", clock.now().Add(time.Hour))
 	clock.add(2 * time.Hour)
 	var once sync.Once
-	dueHooks(t, clock, triggerHooks{beforeTx2: func() {
+	dueHooks(t, clock, trigger.TestHooks{BeforeTx2: func() {
 		once.Do(func() { panic("crash between tx1 and tx2") })
 	}})
 	kickAndWait(t, ri)
@@ -417,7 +418,7 @@ func TestDue_CrashBeforeMarkRefiresAndLogsBoth(t *testing.T) {
 func TestDue_SweepRunsOnReconcileTick(t *testing.T) {
 	home := t.TempDir()
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{Home: home, OntologyRoot: "kb",
 			Git: config.GitConfig{LocalReconcileInterval: 100 * time.Millisecond}},
@@ -435,9 +436,9 @@ func TestDue_SweepRunsOnReconcileTick(t *testing.T) {
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "the tick must kick the sweep")
 
-	runs := ri.triggers.stats.runView().Runs
+	runs := ri.triggers.RunStatsForTest().Runs
 	time.Sleep(600 * time.Millisecond) // ~6 idle ticks
-	require.Equal(t, runs, ri.triggers.stats.runView().Runs, "an idle tick evaluates nothing and is not a run")
+	require.Equal(t, runs, ri.triggers.RunStatsForTest().Runs, "an idle tick evaluates nothing and is not a run")
 	require.Len(t, dueFiresOf(t, ri, "due"), 1)
 }
 
@@ -458,7 +459,7 @@ func TestDue_SweepRunsOnReconcileTick_FailedLocalTick(t *testing.T) {
 		runLocalReconcile(ctx, "repo", trigAgent, 20*time.Millisecond, nil, false,
 			func() (bool, error) { return false, nil },
 			func() error { advances.Add(1); return errors.New("advance fails every tick") },
-			ri.triggers.triggerKick, nil)
+			ri.triggers.Kick, nil)
 	}()
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "a failing advance must not silence the sweep")
@@ -488,7 +489,7 @@ func TestDue_SweepRunsOnReconcileTick_FailedRemoteTick(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.triggerKick, nil, nil, nil, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.Kick, nil, nil, nil, nil, false)
 	}()
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "a tick that fails before Sync must still kick the sweep")
@@ -534,8 +535,8 @@ func TestDue_ClockReadOncePerRun(t *testing.T) {
 // DueCandidates from fact_write.go, or from a file in internal/edge/web.
 func TestDue_SweepNotReachableFromWritePath(t *testing.T) {
 	allowed := map[string]bool{
-		"internal/engine/store/facts/triggers.go": true,
-		"internal/corpus/repos/triggers.go":       true,
+		"internal/engine/store/facts/triggers.go":   true,
+		"internal/corpus/repos/trigger/triggers.go": true,
 	}
 	root := modroot.Dir(t)
 	var offenders []string
@@ -645,7 +646,7 @@ func TestDue_ActivationAlreadyOverdue(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	writeDated(t, ri, trigAgent, "kb/tasks/old-a.md", clock.now().Add(-2*time.Hour))
 	writeDated(t, ri, trigAgent, "kb/tasks/old-b.md", clock.now().Add(-time.Hour))
 	writeOn(t, ri, trigAgent, "kb/tasks/old-undated.md")
@@ -752,7 +753,7 @@ func TestDue_ChangeContext(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	svc := testService(t, ri)
 	due := clock.now().Add(time.Hour)
 	r, err := svc.Facts().WriteFact(context.Background(), trigAgent, "kb/tasks/x.md",
@@ -776,8 +777,8 @@ func TestDue_ChangeContext(t *testing.T) {
 	require.Equal(t, h, probe[0].RangeFrom)
 	require.Equal(t, h, probe[0].RangeTo)
 	require.False(t, probe[0].Nonlinear)
-	require.EqualValues(t, 1, ri.triggers.stats.view("probe").Fires)
-	require.EqualValues(t, 0, ri.triggers.stats.view("probe").IfFalse)
+	require.EqualValues(t, 1, ri.triggers.StatsViewForTest("probe").Fires)
+	require.EqualValues(t, 0, ri.triggers.StatsViewForTest("probe").IfFalse)
 }
 
 // ---- T21 [M1] Processed and unmatched candidates cost nothing.
@@ -803,16 +804,16 @@ func TestDue_MarkedCandidatesCostNothing(t *testing.T) {
 	require.Len(t, dueMarks(t, ri), n)
 
 	var blobReads atomic.Int64
-	dueHooks(t, clock, triggerHooks{trees: func(inner facts.TriggerTrees) facts.TriggerTrees {
+	dueHooks(t, clock, trigger.TestHooks{Trees: func(inner facts.TriggerTrees) facts.TriggerTrees {
 		return countingTrees{inner: inner, reads: &blobReads}
 	}})
-	before := ri.triggers.stats.runView()
+	before := ri.triggers.RunStatsForTest()
 	runsBefore := len(runRows(t, ri))
 	kickAndWait(t, ri)
 	kickAndWait(t, ri)
 	require.Zero(t, blobReads.Load(), "processed and unmatched candidates never reach the tree")
 	require.Len(t, runRows(t, ri), runsBefore, "a run that evaluated nothing writes no run row")
-	require.Equal(t, before, ri.triggers.stats.runView(), "runs.last unchanged")
+	require.Equal(t, before, ri.triggers.RunStatsForTest(), "runs.last unchanged")
 	require.Len(t, dueFiresOf(t, ri, "due"), n)
 }
 
@@ -841,7 +842,7 @@ func TestDue_IfFalseEvaluatedOnce(t *testing.T) {
 	writeDatedAndWait(t, ri, "kb/tasks/x.md", clock.now().Add(-time.Hour))
 	kickAndWait(t, ri)
 	kickAndWait(t, ri)
-	st := ri.triggers.stats.view("never")
+	st := ri.triggers.StatsViewForTest("never")
 	require.EqualValues(t, 1, st.Evaluations, "processed once, whatever `if` said")
 	require.EqualValues(t, 1, st.IfFalse)
 	require.EqualValues(t, 0, st.Fires)

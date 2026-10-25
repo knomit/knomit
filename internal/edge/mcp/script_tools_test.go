@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 )
 
@@ -28,7 +29,7 @@ func scriptCtx(t *testing.T, ri *repos.RepoInstance, tr model.Trailers) context.
 	return model.WithTrailers(ctx, tr)
 }
 
-func callScript(t *testing.T, tools repos.ScriptTools, ctx context.Context, tool string, args map[string]any) (map[string]any, string, bool) {
+func callScript(t *testing.T, tools trigger.ScriptTools, ctx context.Context, tool string, args map[string]any) (map[string]any, string, bool) {
 	t.Helper()
 	text, isErr, err := tools.Call(ctx, tool, args)
 	require.NoError(t, err)
