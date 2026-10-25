@@ -202,7 +202,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 		if tested || failed {
 			msg := "session has already been tested; create a new session to test again"
 			if failed {
-				msg = "session's test failed and left a partial clone; create a new session to test again"
+				msg = "this session failed; create a new session to test again"
 			}
 			hal.WriteProblem(w, http.StatusConflict, "Session state conflict", msg, r.URL.Path)
 			return
