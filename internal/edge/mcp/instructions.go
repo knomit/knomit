@@ -273,7 +273,7 @@ Call this tool to generate hypotheses from synthesis facts. Works the same way a
 3. Use knomit_explain on the synthesis fact to trace its provenance
 4. Gather additional evidence as needed
 5. If a hypothesis is warranted, call knomit_learn with type: hypothesis
-6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent.
+6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent. If either knomit_learn call answers "near-duplicate of <path>", nothing was written: read <path>, skip the fact if it already says this, or resubmit with distinct_from: ["<path>"] if it says something different.
 7. Call knomit_hypothesize with session_id to get the next synthesis fact
 8. Repeat until done
 

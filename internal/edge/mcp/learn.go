@@ -746,15 +746,26 @@ func applyDedupMerge(
 	// entries, one body silently gone, and a summary that reports both as
 	// written. It also double-lists a subsumed hypothesis in retract.
 	//
-	// A second matcher is SKIPPED rather than chained onto the in-progress
-	// merge — the same choice applyGreedyMerges makes with its `consumed` set
-	// ("each fact index participates in at most one merge"). Skipping writes
-	// the fact at its own freshly-minted path: two near-duplicates land instead
-	// of one, which a later review prune collapses. Chaining would instead pick
-	// a tiebreak winner among three bodies and drop two, silently, inside a
-	// call the caller thinks wrote everything it sent. A redundant fact is
-	// recoverable; a discarded one is not.
+	// A path consumed by hypothesis SUBSUMPTION is still skipped: the second
+	// matcher is written at its own path, as before.
+	//
+	// A path consumed by a MERGE is judged again, against the merged fact
+	// (mergedInto): a later matcher in the same call is held to the same rule
+	// as a single learn. Skipping it, as this set once did for every consumed
+	// path, let a DIFFERENT statement land next to its near-duplicate with no
+	// refusal and no distinct_from — the only route left around
+	// nearDuplicateRefusal — and appended an exact duplicate, which
+	// principles/philosophy/dedup-not-append forbids. Now a different statement
+	// is refused, and an exact restatement CHAINS onto the in-progress merge.
+	// Chaining used to be the wrong call because the tiebreak picked one body
+	// among several and dropped the others silently; since only an exact
+	// restatement merges, every body in the chain is the same text, so nothing
+	// is dropped. Each chained index ends at the one path with the same merged
+	// fact, so the commit writes one file and lists every input at it.
 	consumed := make(map[string]bool)
+	// mergedInto[path] is every input index merged into the existing fact at
+	// path so far in this call; facts[k] for each is the current merged fact.
+	mergedInto := make(map[string][]int)
 
 	for i, f := range facts {
 		// Private-state facts are not knowledge and have no category
@@ -856,8 +867,10 @@ func applyDedupMerge(
 		if ontology.LearnDedupOff(topicPathOf(ontologyRoot, match.Path)) {
 			continue
 		}
-		if consumed[match.Path] {
-			// Already absorbed an earlier fact in this call — see `consumed`.
+		chain := mergedInto[match.Path]
+		if consumed[match.Path] && len(chain) == 0 {
+			// Already taken by a hypothesis subsumption in this call — see
+			// `consumed`. A merged path is judged again below instead.
 			continue
 		}
 		// F04: the call retracts the match. Folding the incoming fact into it
@@ -888,21 +901,31 @@ func applyDedupMerge(
 		if i < len(distinctFrom) && namedIn(distinctFrom[i], match.Path) {
 			continue
 		}
-		// Read existing fact to get its full metadata (refs, etc.)
-		readResult, readErr := s.facts.ReadFact(ctx, writeBranch, match.Path, nil)
-		if readErr != nil {
-			continue
-		}
-		existingFact, parseErr := fact.ParseFact(match.Path, readResult.Content)
-		if parseErr != nil {
-			continue
+		// The fact this input is judged and merged against: the in-progress
+		// merge when an earlier input in this call already merged into the
+		// path (see `consumed`), else the stored fact, read for its full
+		// metadata (refs, etc.).
+		var existingFact fact.Fact
+		if len(chain) > 0 {
+			existingFact = facts[chain[len(chain)-1]]
+		} else {
+			readResult, readErr := s.facts.ReadFact(ctx, writeBranch, match.Path, nil)
+			if readErr != nil {
+				continue
+			}
+			var parseErr error
+			existingFact, parseErr = fact.ParseFact(match.Path, readResult.Content)
+			if parseErr != nil {
+				continue
+			}
 		}
 
 		// Type-aware dedup: if the existing fact is a hypothesis and the new
 		// fact is not, the observation subsumes the hypothesis. The
 		// observation is written at its OWN path — it is a new fact, not a
-		// revision of the prediction it settles.
-		if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
+		// revision of the prediction it settles. Not for a chained match: the
+		// path is being WRITTEN by this call, so it cannot also be retracted.
+		if len(chain) == 0 && existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
 			consumed[match.Path] = true
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
@@ -970,11 +993,23 @@ func applyDedupMerge(
 		consumed[match.Path] = true
 		delete(files, paths[i])
 		paths[i] = match.Path
-		priorRefs[match.Path] = existingFact.Refs
+		// priorRefs is the STORED fact's refs, set once. A chained merge must
+		// not overwrite it with the in-progress merge's refs: those include an
+		// earlier input's NEW refs, which the ref gate still has to judge.
+		if len(chain) == 0 {
+			priorRefs[match.Path] = existingFact.Refs
+		}
 		if err := reserialize(files, match.Path, merged); err != nil {
 			return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
+		// Every input in the chain now stands for the same merged fact at the
+		// same path, so later stages that re-serialize facts[k] at paths[k]
+		// (computeEvidenceWeights) write the final content whichever k they see.
+		for _, k := range chain {
+			facts[k] = merged
+		}
 		facts[i] = merged
+		mergedInto[match.Path] = append(chain, i)
 		touched[i] = true
 	}
 	if len(refused) > 0 {
@@ -1279,7 +1314,10 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		dest := describeWriteDestination(b)
-		what := pluralFacts(len(parsed))
+		// Count FILES, not inputs: an exact restatement repeated in one call
+		// chains onto one merge (applyDedupMerge), so two inputs can stand for
+		// one written fact, and the summary must count what happened.
+		what := pluralFacts(distinctPaths(parsed))
 		switch {
 		case len(retractPaths) > 0 && len(parsed) == 0:
 			what = pluralRetractions(len(retractPaths))
@@ -1299,6 +1337,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		notes := expiresNotAppliedNotes(factInputs, parsed)
 		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
 		notes = append(notes, uncountedMergeNotes(uncounted, parsed)...)
+		notes = append(notes, chainedMergeNotes(parsed)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
@@ -1332,6 +1371,35 @@ func uncountedMergeNotes(uncounted map[int]string, facts []fact.Fact) []string {
 		}
 		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
 			i, facts[i].Path(), uncounted[i]))
+	}
+	return notes
+}
+
+// distinctPaths is how many files facts will be written to.
+func distinctPaths(facts []fact.Fact) int {
+	seen := make(map[string]bool, len(facts))
+	for _, f := range facts {
+		seen[f.Path()] = true
+	}
+	return len(seen)
+}
+
+// chainedMergeNotes names every input that landed on the same path as an
+// EARLIER input in the call: the same statement repeated, chained onto one
+// merge by applyDedupMerge. Without it the commits list shows two entries at
+// one file and a reader has to work out why.
+func chainedMergeNotes(facts []fact.Fact) []string {
+	var notes []string
+	first := make(map[string]int, len(facts))
+	for i, f := range facts {
+		p := f.Path()
+		j, dup := first[p]
+		if !dup {
+			first[p] = i
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: the same statement as fact %d; both merged into existing fact %s, one fact written.", i, j, p))
 	}
 	return notes
 }

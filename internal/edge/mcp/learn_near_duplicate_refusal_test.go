@@ -96,6 +96,8 @@ func TestLearnHandler_DistinctSiblingIsRefusedNotMerged(t *testing.T) {
 // same as the same-subject refusal: writing the innocent fact alone would
 // report success for a batch that only half landed.
 //
+// Two offenders are both listed, so one round trip reports all of them.
+//
 // SABOTAGE C: return the refusal only for index 0 (or drop collected
 // refusals after the first fact) → the batch partly writes → red.
 func TestLearnHandler_NearDuplicateRefusesTheWholeBatch(t *testing.T) {
@@ -106,14 +108,74 @@ func TestLearnHandler_NearDuplicateRefusesTheWholeBatch(t *testing.T) {
 
 	innocent := siblingDecision("An unrelated decision", "Nothing like the others.", 0.8, []any{}, nil)
 	innocent["category"] = "unrelated/area"
+	w0g3 := "Step W0g3 deletes the reader fallback"
 	r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("batch",
-		innocent, siblingDecision(w0g2Title, w0g2Body(), 0.95, []any{}, nil)))
+		innocent,
+		siblingDecision(w0g2Title, w0g2Body(), 0.95, []any{}, nil),
+		siblingDecision(w0g3, "A "+probeMarker+" decision for W0g3: the fallback goes.", 0.9, []any{}, nil)))
 	require.NoError(t, err)
 	require.True(t, r.IsError, resultText(t, r))
-	require.Contains(t, resultText(t, r), "fact 1: ")
-	require.Contains(t, resultText(t, r), "near-duplicate of "+seed)
-	require.NotContains(t, resultText(t, r), "fact 0: ")
+	msg := resultText(t, r)
+	require.Contains(t, msg, "refused: 2 facts in this call are near-duplicates")
+	require.Contains(t, msg, fmt.Sprintf("fact 1: %q\n  near-duplicate of %s", w0g2Title, seed))
+	require.Contains(t, msg, fmt.Sprintf("fact 2: %q\n  near-duplicate of %s", w0g3, seed))
+	require.NotContains(t, msg, "fact 0: ")
 	require.Equal(t, before, liveFactCount(t, svc), "the innocent fact is not written either")
+}
+
+// The reviewer's batch shape (#638 round 2, LOW-1): an EXACT restatement of
+// W0g1 and the DISTINCT W0g2 in one call. Fact 0 merges into W0g1 and marks it
+// consumed; fact 1 used to hit that consumed decline, skip the refusal, and be
+// written next to W0g1 with no refusal and no distinct_from. It is now judged
+// against the in-progress merge and refused like a single learn, so the whole
+// call writes nothing and W0g1 is byte-identical.
+//
+// SABOTAGE F: skip a merged path again (the old `consumed` decline) → the
+// call succeeds and writes W0g2 → red.
+func TestLearnHandler_NearDuplicateAfterAnInBatchMergeIsRefused(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, ts.th.Dedup+(1-ts.th.Dedup)*0.5)
+			seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(w0g1Title, w0g1Body(), 0.85,
+				[]any{"https://github.com/knomit/knomit/pull/615"}, nil)))
+			seedBefore := dfRead(t, svc, seed)
+			before := liveFactCount(t, svc)
+
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("batch",
+				siblingDecision(w0g1Title, w0g1Body(), 0.9, []any{"https://github.com/knomit/knomit/pull/616"}, nil),
+				siblingDecision(w0g2Title, w0g2Body(), 0.95, []any{"https://github.com/knomit/knomit/pull/614"}, nil)))
+			require.NoError(t, err)
+			require.True(t, r.IsError, "the distinct sibling must be refused even after an in-batch merge: %s", resultText(t, r))
+			msg := resultText(t, r)
+			require.Contains(t, msg, fmt.Sprintf("fact 1: %q\n  near-duplicate of %s", w0g2Title, seed))
+			require.NotContains(t, msg, "fact 0: ", "the exact restatement is not an offender")
+			require.Equal(t, before, liveFactCount(t, svc))
+			require.Equal(t, seedBefore, dfRead(t, svc, seed), "nothing written: W0g1 is byte-identical")
+		})
+	}
+}
+
+// The same TITLE with a different BODY is a different statement: refused. A
+// sameStatement that compared titles alone would merge it.
+//
+// SABOTAGE G: sameStatement compares titles only → merged → red (and
+// TestLearnHandler_AutoMergeStillWinsAboveDedup goes red with it).
+func TestLearnHandler_SameTitleDifferentBodyIsRefused(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, ts.th.Dedup+(1-ts.th.Dedup)*0.5)
+			seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(w0g1Title, w0g1Body(), 0.85, []any{}, nil)))
+			seedBefore := dfRead(t, svc, seed)
+			before := liveFactCount(t, svc)
+
+			r := dfLearn(t, ctx, emb, siblingDecision(w0g1Title,
+				"A "+probeMarker+" decision for W0g1, now saying the reader stays.", 0.95, []any{}, nil))
+			require.True(t, r.IsError, resultText(t, r))
+			require.Contains(t, resultText(t, r), "near-duplicate of "+seed)
+			require.Equal(t, before, liveFactCount(t, svc))
+			require.Equal(t, seedBefore, dfRead(t, svc, seed))
+		})
+	}
 }
 
 // dedup-not-append still holds for a TRUE duplicate: the same statement

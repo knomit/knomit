@@ -437,6 +437,7 @@ const hypothesizeWorkflowPlain = `WORKFLOW (do not skip steps):
    If any condition fails, skip — proceed directly to step 6. Skipping is the expected outcome for most synth facts.
 4. If you decided yes in step 3: call knomit_learn with type: hypothesis. The refs array MUST include the synthesis fact's path AND every source fact you cite as evidence. An empty refs array indicates you did not engage with the inputs — do not submit.
 5. If you wrote a hypothesis in step 4: call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process you used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+   If knomit_learn answers "near-duplicate of <path>", NOTHING was written. Read <path>: if it already captures this lesson (or this prediction), skip it; if it is a different one, resubmit the same call with distinct_from: ["<path>"].
 6. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 
 // hypothesizeWorkflowMethodology is the WORKFLOW after a methodology section.
@@ -457,6 +458,7 @@ const hypothesizeWorkflowMethodology = `WORKFLOW (do not skip steps):
    - every methodology from step 2 that shaped your reasoning
    An empty refs array indicates you did not engage with the inputs — do not submit.
 6. If you wrote a hypothesis in step 5: only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future params. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+   If knomit_learn answers "near-duplicate of <path>", NOTHING was written. Read <path>: if it already captures this lesson (or this prediction), skip it; if it is a different one, resubmit the same call with distinct_from: ["<path>"].
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 
 // hypothesizeMethodologySection queries the branch's methodology for the given

@@ -627,39 +627,52 @@ func TestLearnHandler_SameCategoryAboveDedupStillMerges(t *testing.T) {
 // TestLearnHandler_SameCategoryAboveDedupStillMerges does not pin the cap:
 // applyDedupMerge folds that fact, sets touched[i], and the gate skips it
 // before the cap is ever consulted — delete the cap and that test still passes.
-// What makes this case different is the merge's own Limit: 1 plus its
-// `consumed` set (learn.go): an existing fact absorbs at most ONE incoming fact
-// per call, and a second matcher is SKIPPED rather than chained. So the second
-// fact arrives at the gate NOT touched, matching the same existing fact above
-// Dedup, and the cap is the only thing standing between it and a refusal.
+// What makes this case different is that the merge DECLINES its top-1 match
+// and so leaves the fact untouched: here because the call retracts that match
+// (F04). The fact then reaches the gate NOT touched, while a SECOND existing
+// fact in the same directory sits above Dedup, and the cap is the only thing
+// standing between it and a refusal.
 //
-// Expected: the first merges, the second is written at its own path, and
-// NOTHING is refused — a redundant fact that a later prune collapses, which is
-// the outcome the merge's skip-don't-chain rule already chose.
+// It used to reach that state through the merge's `consumed` set: a second
+// exact duplicate in one call was SKIPPED and written at its own path, an
+// append principles/philosophy/dedup-not-append forbids. That second duplicate
+// now chains onto the first merge (TestLearnHandler_DedupMergeChainsARepeatedRestatement)
+// and is touched, so this test reaches the cap through the retract decline
+// instead.
+//
+// Expected: nothing is refused; the incoming fact is written at its own path
+// in the same commit that retracts its old copy.
 func TestLearnHandler_TwoSameCategoryDupsSecondIsWrittenNotRefused(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
 			aboveDedup := ts.th.Dedup + (1-ts.th.Dedup)*0.5
 			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, aboveDedup)
-			seedRampFact(t, ctx, emb)
-			before := liveFactCount(t, svc) // the seed alone
+			seed := seedRampFact(t, ctx, emb)
+			// A second fact in the seed's directory, above Dedup to it.
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
+				"neighbour", "decisions", "accepted/ramp/ai-index",
+				"Ramp AI Index neighbour note",
+				"A "+probeMarker+" note on Ramp spend.",
+				[]any{"Ramp", "AI Index"}, []any{seed}))
+			require.NoError(t, err)
+			require.False(t, r.IsError, "fixture: %s", resultText(t, r))
+			before := liveFactCount(t, svc) // seed + neighbour
 
-			// Both in the SEED's category, both EXACT restatements of it (only
-			// those merge). Only one can be absorbed; the other is skipped by
-			// `consumed` and reaches the gate untouched.
-			restate := func() map[string]any {
-				return sameSubjectFact("decisions", "accepted/ramp/ai-index",
-					"Ramp AI Index shows adoption flat",
-					"The "+seedMarker+" records Ramp's spend data on paid AI adoption.", []any{"Ramp", "AI Index"})
-			}
-			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two-dups", restate(), restate()))
+			// The seed's own statement, moved: the call retracts the seed, so
+			// the merge declines it and the fact reaches the gate untouched,
+			// with the neighbour above Dedup in the same directory.
+			req := sameSubjectLearnReqMulti("move", sameSubjectFact("decisions", "accepted/ramp/ai-index",
+				"Ramp AI Index shows adoption flat",
+				"The "+seedMarker+" records Ramp's spend data on paid AI adoption.", []any{"Ramp", "AI Index"}))
+			req.Params.Arguments.(map[string]any)["retract"] = []any{seed}
+			r, err = LearnHandler(emb)(ctx, req)
 			require.NoError(t, err)
 
 			require.False(t, r.IsError,
-				"the second same-category duplicate must NOT be refused — the cap is what prevents it: %s",
+				"a same-category fact above Dedup must NOT be refused — the cap is what prevents it: %s",
 				resultText(t, r))
-			require.Equal(t, before+1, liveFactCount(t, svc),
-				"one fact merged into the seed, the other written at its own path")
+			require.NotEqual(t, seed, mergedFactPath(t, r), "written at its own path")
+			require.Equal(t, before, liveFactCount(t, svc), "one written, one retracted")
 		})
 	}
 }
