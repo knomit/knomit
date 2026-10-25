@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -208,7 +209,7 @@ func parkDispatcher(t *testing.T, ri *RepoInstance) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
 	var once sync.Once
-	prev := trigger.TestHooksForTest()
+	prev := trigger.HooksForTest()
 	parked := prev
 	parked.AfterKick = func() {
 		<-gate
@@ -229,7 +230,7 @@ func parkDispatcher(t *testing.T, ri *RepoInstance) (release func()) {
 // shrinks under CPU contention; a sleep inside the timed section does not.
 func slowIf(t *testing.T, trig string, ms int, match func(path string) bool) {
 	t.Helper()
-	h := trigger.TestHooksForTest()
+	h := trigger.HooksForTest()
 	h.EvalDelay = func(name, path string) time.Duration {
 		if name == trig && (match == nil || match(path)) {
 			return time.Duration(ms) * time.Millisecond
@@ -882,7 +883,10 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 
 // NoStoreHeldDuringIf [M1]: while a run is inside slow `if`s, SwapStore
 // completes without waiting for it, and teardown stops the run within one
-// evaluation. Sabotage: hold Acquire across phase B.
+// evaluation. Sabotage: drop the ctx check per evaluation (red: the restart
+// waits for all 30 slow ifs). It does NOT catch a lease held across phase B:
+// a swap cancels the Serve life (and so the run) before it drains the leases,
+// so the swap is fast either way. PhaseBHoldsNoLease pins that.
 func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 	m, ri := newTriggerRepo(t, trig("slow", "learn", "", ""))
 	write(t, ri, "kb/tasks/warm.md")
@@ -904,6 +908,60 @@ func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 	started = time.Now()
 	restartServe(t, ri)
 	require.Less(t, time.Since(started), 500*time.Millisecond, "cancel stops the run within one evaluation")
+}
+
+// PhaseBHoldsNoLease [M1]: no store lease is outstanding while phase B
+// evaluates a trigger. A second dispatcher on the same repo is built with a
+// counting wrapper around ri.Acquire (the real one is parked, so it does not
+// run), and every evaluation records how many leases are out; one pass
+// (phases A and B, phase C only buffered) must evaluate and see 0 each time.
+// Sabotage: defer the release to the end of runOnce (red: 1 per evaluation).
+func TestDispatch_PhaseBHoldsNoLease(t *testing.T) {
+	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
+	write(t, ri, "kb/tasks/warm.md")
+	require.Eventually(t, ri.triggers.FlushedForTest, 5*time.Second, 5*time.Millisecond, "the warm run's watermark is stored")
+	release := parkDispatcher(t, ri)
+	defer release()
+	for i := 0; i < 2; i++ {
+		writeOn(t, ri, trigAgent, fmt.Sprintf("kb/tasks/l%d.md", i))
+	}
+
+	var held atomic.Int64
+	counting := func() (*store.Service, func(), error) {
+		svc, rel, err := ri.Acquire()
+		if err != nil {
+			return nil, nil, err
+		}
+		held.Add(1)
+		var once sync.Once
+		return svc, func() { once.Do(func() { held.Add(-1); rel() }) }, nil
+	}
+	var mu sync.Mutex
+	var seen []int64
+	var recording atomic.Bool
+	recording.Store(true)
+	h := trigger.HooksForTest()
+	h.EvalDelay = func(name, path string) time.Duration {
+		if recording.Load() {
+			mu.Lock()
+			seen = append(seen, held.Load())
+			mu.Unlock()
+		}
+		return 0
+	}
+	setHooks(t, h)
+	d2, _ := trigger.New(ri.Name(), trigAgent, "kb", fact.TriggerIdentity{}, 0, 0, nil, t.TempDir(), nil, nil,
+		counting, func() {}, func() bool { return true }, func(c context.Context) context.Context { return c })
+	d2.RunOnceForTest(context.Background())
+	recording.Store(false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, seen, "the pass must evaluate the new paths, or this test checks nothing")
+	for i, n := range seen {
+		require.Zerof(t, n, "evaluation %d ran with %d store lease(s) held", i, n)
+	}
+	require.Zero(t, held.Load(), "the pass returned every lease")
 }
 
 // NotStartedReadOnlyOrSubscribed: no dispatcher on a read-only server and none

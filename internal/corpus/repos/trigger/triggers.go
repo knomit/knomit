@@ -236,14 +236,23 @@ type Dispatcher struct {
 // recipe's injected tools resolve the agent branch from. pub is the repo's
 // task publisher (the `trigger` SSE event), owned by the parent and kept here
 // unexported.
+//
+// The second result is the dispatcher's run loop, its lifetime under the
+// Serve stage's life. It is a capability, not a method: the parent keeps it
+// in an unexported field and is the only one that starts it, because a
+// second loop on one dispatcher would consume the same kicks and fire the
+// same watermark→head range twice. Callers holding the *Dispatcher
+// (RepoInstance.Triggers) can kick it and read its report, nothing more.
+// Only the repos parent may call New (test/archtest
+// TestTriggerNew_OnlyFromRepos).
 func New(repo, agentBranch, ontologyRoot string, identity fact.TriggerIdentity, slowMS, ratePerMinute int,
 	tools ScriptTools, home string, serverAddr func() string, pub *events.TaskPublisher,
 	acquire func() (*store.Service, func(), error), syncWake func(), indexReady func() bool,
-	bind func(context.Context) context.Context) *Dispatcher {
+	bind func(context.Context) context.Context) (*Dispatcher, func(context.Context)) {
 	if serverAddr == nil {
 		serverAddr = func() string { return "" }
 	}
-	return &Dispatcher{
+	d := &Dispatcher{
 		repo:         repo,
 		branch:       agentBranch,
 		ontologyRoot: ontologyRoot,
@@ -261,6 +270,7 @@ func New(repo, agentBranch, ontologyRoot string, identity fact.TriggerIdentity, 
 		serverAddr:   serverAddr,
 		rc:           newRecipeState(),
 	}
+	return d, d.run
 }
 
 // indexIsReady reports whether the due sweep may read the index now.
@@ -287,7 +297,7 @@ func (d *Dispatcher) Kick() {
 // that never waits and carries nothing.
 func (d *Dispatcher) wakeSync() { d.syncWake() }
 
-// Run is the dispatcher's lifetime, under the Serve stage's life. It kicks
+// run is the dispatcher's lifetime, under the Serve stage's life. It kicks
 // itself once so advances made while the repo was not served fire now (the
 // watermark makes that at-least-once), then receives kicks until ctx ends.
 // The kick is RECEIVED before the head ref is read (inside runOnce): the
@@ -297,7 +307,7 @@ func (d *Dispatcher) wakeSync() { d.syncWake() }
 // On ctx's end it waits for every running recipe to be killed and to hand in
 // its `stopped` row, then flushes what is buffered — while the store is still
 // attached, because the Serve stage is drained before Open closes the store.
-func (d *Dispatcher) Run(ctx context.Context) {
+func (d *Dispatcher) run(ctx context.Context) {
 	d.runCtx = ctx
 	d.Kick()
 	for {

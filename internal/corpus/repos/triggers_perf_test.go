@@ -382,7 +382,7 @@ func TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld(t *testing.T) {
 	gate := make(chan struct{})
 	var enterOnce, releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(gate) }) }
-	h := trigger.TestHooksForTest()
+	h := trigger.HooksForTest()
 	h.EvalDelay = func(name, path string) time.Duration {
 		if name == "held" && path == pathA {
 			enterOnce.Do(func() { close(entered) })

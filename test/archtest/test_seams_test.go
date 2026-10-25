@@ -333,7 +333,7 @@ func TestFaultHookSettersDeclaredInTestseams(t *testing.T) {
 // names) keeps production source from naming it.
 var triggerSeams = []faultHook{
 	{"trigger", "", "SetTestHooksForTest"},
-	{"trigger", "", "TestHooksForTest"},
+	{"trigger", "", "HooksForTest"},
 	{"trigger", "", "SetRecipeAfterStartForTest"},
 	{"trigger", "", "SetRecipeServerAddrWaitForTest"},
 	{"trigger", "", "RecipeMCPForTest"},

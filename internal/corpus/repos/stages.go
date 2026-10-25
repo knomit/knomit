@@ -748,8 +748,8 @@ func (serveStage) Name() string { return "serve" }
 // under Synchronous). Each reaches the store through Acquire per run, and each
 // is drained before Open closes the store.
 func (serveStage) Enter(_ context.Context, life *Life, r *RepoInstance) error {
-	if d := r.triggers; d != nil {
-		life.Go("triggers", d.Run)
+	if run := r.runTriggers; run != nil {
+		life.Go("triggers", run)
 	}
 	if c := r.consensus; c != nil {
 		life.Go("consensus", c.run)

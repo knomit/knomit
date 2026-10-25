@@ -171,6 +171,10 @@ type RepoInstance struct {
 	// a lock and its kick slot exists from the first commit; it runs under the
 	// Serve stage's life.
 	triggers *trigger.Dispatcher
+	// runTriggers is the dispatcher's run loop (the second result of
+	// trigger.New), nil exactly when triggers is. Only the Serve stage starts
+	// it; it is never handed out, so nothing else can run a second loop.
+	runTriggers func(context.Context)
 	// consensus is the F08 consensus merger (`consensus: auto`; on the fleet
 	// repository, the fleet master's merger), nil when this
 	// repo can have none: a read-only server, or a subscription with no agent

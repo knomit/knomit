@@ -949,10 +949,11 @@ func TestScript_WriteIsNextAdvance(t *testing.T) {
 }
 
 // NoStoreHeldDuringScript [M1]: SwapStore completes while a script is in a
-// long JavaScript loop (phase B holds no Acquire; the swap drains only a host
-// call's), and stop() interrupts the loop within the interrupt latency, not
-// the budget. Sabotage: hold Acquire across the script; arm the interrupt
-// from the timer only.
+// long JavaScript loop (the swap drains only a host call's lease), and stop()
+// interrupts the loop within the interrupt latency, not the budget.
+// Sabotage: arm the interrupt from the timer only. A lease held across phase
+// B is NOT caught here (the swap cancels the run before it drains the
+// leases); TestDispatch_PhaseBHoldsNoLease pins that.
 func TestScript_NoStoreHeldDuringScript(t *testing.T) {
 	m, ri, _ := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "spin"))
 	putScript(t, ri, "spin", `while (true) {}`)

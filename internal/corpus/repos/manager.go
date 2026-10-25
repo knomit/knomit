@@ -896,7 +896,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 	// F07 / F08: built for a writable repo with an agent branch on a
 	// writable server; nil otherwise, and the kicks below are nil checks.
 	if agentBranch != "" && !cfg.ReadOnly {
-		ri.triggers = trigger.New(name, agentBranch, ri.ontologyRoot,
+		ri.triggers, ri.runTriggers = trigger.New(name, agentBranch, ri.ontologyRoot,
 			fact.TriggerIdentity{Agent: m.AgentID(), Host: m.deps.AgentHost}, cfg.Log.SlowTriggerMS,
 			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress, ri.pub,
 			ri.Acquire, ri.wakeSync,

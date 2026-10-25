@@ -602,7 +602,7 @@ func TestPush_TickDispatcherCycleSettles(t *testing.T) {
 	require.Eventually(t, func() bool { return bareRef(t, bare, "refs/heads/"+trigAgent) == head(t, ri) },
 		20*time.Second, 10*time.Millisecond, "the first tick pushes the agent branch")
 	initial := ticks.Load()
-	h := trigger.TestHooksForTest()
+	h := trigger.HooksForTest()
 	h.FlushGrace = time.Hour
 	setHooks(t, h)
 

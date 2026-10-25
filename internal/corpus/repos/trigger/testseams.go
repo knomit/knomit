@@ -42,10 +42,10 @@ func SetTestHooksForTest(h TestHooks) {
 	triggerHooksMu.Unlock()
 }
 
-// TestHooksForTest returns the installed test hooks, so a test can add one
+// HooksForTest returns the installed test hooks, so a test can add one
 // to those already in force.
-func TestHooksForTest() TestHooks {
-	mustBeTest("TestHooksForTest")
+func HooksForTest() TestHooks {
+	mustBeTest("HooksForTest")
 	return currentTriggerHooks()
 }
 
