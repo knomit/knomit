@@ -2,12 +2,12 @@ package repos
 
 import (
 	"context"
-	"knomit/internal/corpus/repos/events"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"github.com/stretchr/testify/require"
 

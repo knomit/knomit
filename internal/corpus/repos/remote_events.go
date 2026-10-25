@@ -20,13 +20,13 @@ import (
 //
 // The zero value publishes nothing (a loop built without a hub, in tests).
 type remoteEdgeSink struct {
-	hub  *events.RepoEventHub
+	pub  *events.RepoEventPublisher
 	name func() string
 }
 
 // remoteEdgeSink is this instance's sink: its Manager's hub and its live name.
 func (ri *RepoInstance) remoteEdgeSink() remoteEdgeSink {
-	return remoteEdgeSink{hub: ri.repoEventHub, name: ri.Name}
+	return remoteEdgeSink{pub: ri.repoEventPub, name: ri.Name}
 }
 
 // publishRemoteEdge publishes a events.RemoteEvent when the origin's PERSISTED status
@@ -46,7 +46,7 @@ func (ri *RepoInstance) remoteEdgeSink() remoteEdgeSink {
 // A failed or empty re-read publishes nothing: the client's list refetch on a
 // reconnect's `ready` is the fallback, as it is for every repo-event.
 func publishRemoteEdge(sink remoteEdgeSink, svc *store.Service, prevSync, prevPush string, lg *zerolog.Logger) {
-	if sink.hub == nil || sink.name == nil {
+	if sink.pub == nil || sink.name == nil {
 		return
 	}
 	after, err := svc.Remote().GetRemote("origin")
@@ -61,5 +61,5 @@ func publishRemoteEdge(sink remoteEdgeSink, svc *store.Service, prevSync, prevPu
 	if s == prevSync && p == prevPush {
 		return
 	}
-	sink.hub.Publish(events.RemoteEvent{Repo: sink.name(), Sync: s, Push: p})
+	sink.pub.Publish(events.RemoteEvent{Repo: sink.name(), Sync: s, Push: p})
 }

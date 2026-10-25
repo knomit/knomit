@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"

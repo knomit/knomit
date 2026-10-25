@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"knomit/internal/engine/store/model"
 
@@ -111,6 +111,8 @@ type Manager struct {
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
 	// for every repo it lists. Created by New so it is available before Start.
 	repoEventHub *events.RepoEventHub
+	// repoEventPub is its publishing half, never handed out.
+	repoEventPub *events.RepoEventPublisher
 
 	// registry is the lens registry (first tenant of <home>/control.db).
 	// Opened by Start, closed by Close; nil before Start.
@@ -227,7 +229,7 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (string, 
 // New returns an uninitialised Manager. Call Boot to open repos.
 func New(ctx context.Context, deps Deps) *Manager {
 	createsCtx, createsCancel := context.WithCancel(ctx)
-	return &Manager{
+	m := &Manager{
 		createsCtx:      createsCtx,
 		createsCancel:   createsCancel,
 		repos:           make(map[string]*RepoInstance),
@@ -239,8 +241,9 @@ func New(ctx context.Context, deps Deps) *Manager {
 		creatingOrigins: make(map[string]struct{}),
 		// Created here rather than in Start: a repo can be mounted before
 		// Start on some paths, and a nil hub would silently drop its events.
-		repoEventHub: events.NewRepoEventHub(goob.New(ctx)),
 	}
+	m.repoEventHub, m.repoEventPub = events.NewRepoEventHub(goob.New(ctx))
+	return m
 }
 
 // RepoEventHub is the server-wide repo-event stream: one for every repo — see
@@ -848,6 +851,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 	if subscribed {
 		agentBranch = ""
 	}
+	hub, pub := events.NewTaskHub(m.ctx)
 	ri := &RepoInstance{
 		uid:                           uid,
 		dbPath:                        m.RepoPath(uid),
@@ -870,10 +874,12 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 		discoveryWCoh:                 cfg.Discovery.WCoh,
 		discoveryWGap:                 cfg.Discovery.WGap,
 		discoveryWSpec:                cfg.Discovery.WSpec,
-		hub:                           events.NewTaskHub(m.ctx),
+		hub:                           hub,
+		pub:                           pub,
 		syncWake:                      make(chan struct{}, 1),
 		breakers:                      &syncBreakers{},
 		repoEventHub:                  m.repoEventHub,
+		repoEventPub:                  m.repoEventPub,
 		env: stageEnv{
 			m:        m,
 			cfg:      cfg,

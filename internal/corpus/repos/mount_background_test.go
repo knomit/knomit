@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/modelparams"
 	"knomit/internal/engine/store"

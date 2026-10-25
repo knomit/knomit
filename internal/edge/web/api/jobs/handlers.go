@@ -8,13 +8,13 @@ package jobs
 import (
 	"context"
 	"encoding/json"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/corpus/synthesize"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"

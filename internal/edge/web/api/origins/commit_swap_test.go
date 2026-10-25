@@ -3,7 +3,6 @@ package origins
 import (
 	"context"
 	"encoding/json"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 )
 
 // writeAgentKey writes an agent key file and returns its path: with it,

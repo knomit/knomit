@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"

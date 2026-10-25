@@ -41,8 +41,18 @@ type RepoEventHub struct {
 	ob *goob.Observable
 }
 
-// NewRepoEventHub returns a hub whose lifetime is ctx.
-func NewRepoEventHub(ob *goob.Observable) *RepoEventHub { return &RepoEventHub{ob: ob} }
+// RepoEventPublisher is the publishing half of a RepoEventHub. The Manager
+// keeps it in an unexported field; consumers hold the *RepoEventHub, which can
+// only Subscribe. TestEventPublishers_NotExposed keeps it that way.
+type RepoEventPublisher struct {
+	h *RepoEventHub
+}
+
+// NewRepoEventHub returns a hub over ob and its publisher.
+func NewRepoEventHub(ob *goob.Observable) (*RepoEventHub, *RepoEventPublisher) {
+	h := &RepoEventHub{ob: ob}
+	return h, &RepoEventPublisher{h: h}
+}
 
 // Subscribe returns the stream of repo events until ctx ends. A nil hub yields
 // a nil channel — one that blocks forever rather than one that is already
@@ -58,9 +68,9 @@ func (h *RepoEventHub) Subscribe(ctx context.Context) goob.Events {
 // Publish is nil-safe: a Manager built without a hub (most tests) simply
 // broadcasts nothing, and every caller stays unconditional. ev is one of the
 // kinds named on RepoEventHub; the SSE handler drops anything else.
-func (h *RepoEventHub) Publish(ev any) {
-	if h == nil || h.ob == nil {
+func (p *RepoEventPublisher) Publish(ev any) {
+	if p == nil || p.h == nil || p.h.ob == nil {
 		return
 	}
-	h.ob.Publish(ev)
+	p.h.ob.Publish(ev)
 }

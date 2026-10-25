@@ -3,12 +3,12 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )

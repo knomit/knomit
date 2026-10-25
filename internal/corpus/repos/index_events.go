@@ -45,9 +45,9 @@ func (m *Machine) publishIndex(s events.Status, throttled bool) {
 	}
 	ev := events.IndexEvent{Repo: m.r.Name(), State: s.Index.State, Done: s.Index.Done, Total: s.Index.Total, Reason: s.Index.Reason}
 	// Per-repo stream, for a client watching one repo.
-	if m.r.hub != nil {
-		m.r.hub.BroadcastIndex(ev)
+	if m.r.pub != nil {
+		m.r.pub.BroadcastIndex(ev)
 	}
 	// Server-wide stream, for the fleet-wide chip.
-	m.r.repoEventHub.Publish(ev)
+	m.r.repoEventPub.Publish(ev)
 }

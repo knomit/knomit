@@ -3,12 +3,13 @@ package repos
 import (
 	"context"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/corpus/repos/events"
 )
 
 // remoteEventLog records the RemoteEvents a repo's hub publishes, and lets a
@@ -21,7 +22,7 @@ type remoteEventLog struct {
 	mu      sync.Mutex
 	remote  []events.RemoteEvent
 	markers map[string]bool
-	hub     *events.RepoEventHub
+	pub     *events.RepoEventPublisher
 	seq     int
 }
 
@@ -31,7 +32,7 @@ func subscribeRemoteEvents(t *testing.T, ri *RepoInstance) *remoteEventLog {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	stream := ri.repoEventHub.Subscribe(ctx)
-	l := &remoteEventLog{markers: map[string]bool{}, hub: ri.repoEventHub}
+	l := &remoteEventLog{markers: map[string]bool{}, pub: ri.repoEventPub}
 	go func() {
 		for {
 			select {
@@ -57,7 +58,7 @@ func (l *remoteEventLog) settle(t *testing.T) []events.RemoteEvent {
 	t.Helper()
 	l.seq++
 	marker := fmt.Sprintf("marker-%d", l.seq)
-	l.hub.Publish(events.IndexEvent{Repo: marker})
+	l.pub.Publish(events.IndexEvent{Repo: marker})
 	require.Eventually(t, func() bool {
 		l.mu.Lock()
 		defer l.mu.Unlock()

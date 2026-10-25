@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"knomit/internal/engine/store/model"
 

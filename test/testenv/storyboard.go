@@ -3,13 +3,13 @@ package testenv
 import (
 	"context"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/fsck"

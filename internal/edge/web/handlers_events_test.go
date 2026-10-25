@@ -2,16 +2,16 @@ package web
 
 import (
 	"context"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 )
 
 func TestHandleHALEvents_SetsContentTypeAndStreams(t *testing.T) {
-	hub := events.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha",
 		Hub:  hub,

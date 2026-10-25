@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 )
 
 // The job routes read the repo's TaskHub and nothing else. These fixtures run
@@ -42,14 +42,14 @@ const failedRebuildMsg = "rebuild exploded: disk full"
 
 func newJobsFixture(t *testing.T) jobsFixture {
 	t.Helper()
-	hub := events.NewTaskHub(context.Background())
-	t.Cleanup(hub.Shutdown)
+	hub, pub := events.NewTaskHub(context.Background())
+	t.Cleanup(pub.Shutdown)
 	m := newTestManagerWithRepos(t, "empty") // a repo whose hub is nil
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", AgentBranch: "agent/test", Hub: hub,
 	}))
 	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-		Name: "beta", AgentBranch: "agent/test", Hub: events.NewTaskHub(context.Background()),
+		Name: "beta", AgentBranch: "agent/test", Hub: testHub(),
 	}))
 
 	f := jobsFixture{r: (&Server{Manager: m}).NewAPIRouter(), hub: hub}
@@ -531,4 +531,10 @@ func TestJobs_DeleteCancelsALifecycleRebuild(t *testing.T) {
 	}
 	requireJobProblem(t, f.do(t, http.MethodDelete, base+"/"+id),
 		http.StatusConflict, "Job already finished", "job "+id+" has already finished; there is nothing to cancel")
+}
+
+// testHub is a task hub whose publisher the test does not need.
+func testHub() *events.TaskHub {
+	h, _ := events.NewTaskHub(context.Background())
+	return h
 }

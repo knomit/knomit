@@ -18,12 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/corpus/repos/events"
 )
 
 // DefaultCrashBackoff is how long a crashed worker stage waits, once drained,
@@ -91,10 +92,12 @@ type snapshot struct {
 }
 
 // Transition is one published change of a machine's status.
+//
+// It embeds the machine's snapshot so a test can read the bookkeeping beside the
+// public events.Status; outside the package only Status (the promoted field) is
+// reachable by name.
 type Transition struct {
-	Status events.Status
-
-	snap snapshot // the same state with the machine's bookkeeping (test seam)
+	snapshot
 }
 
 // terminal is the machine's end state, if any.
@@ -578,14 +581,14 @@ func (m *Machine) unmount() {
 		}
 	}
 	m.term = termClosed
-	if m.r.hub != nil {
-		m.r.hub.Shutdown()
+	if m.r.pub != nil {
+		m.r.pub.Shutdown()
 	}
 	m.inbox.close()
 	s := m.computeStatus()
 	m.watchers.mu.Lock()
 	m.status.Store(&s)
-	m.watchers.closeAllLocked(Transition{Status: s.Status, snap: s})
+	m.watchers.closeAllLocked(Transition{s})
 	m.watchers.mu.Unlock()
 	close(m.done)
 }
@@ -659,15 +662,15 @@ func (m *Machine) publish() {
 		}
 		m.publishRebuildTask(prev, s)
 	}
-	m.watchers.sendLocked(Transition{Status: s.Status, snap: s})
+	m.watchers.sendLocked(Transition{s})
 }
 
 // publishRebuildTask keeps the jobs UI contract for a manual rebuild — hub
 // TaskEvents on op "rebuild", running → done | error — from the same publish
 // point, so there is no second single-flight.
 func (m *Machine) publishRebuildTask(prev, s snapshot) {
-	hub := m.r.hub
-	if hub == nil {
+	pub := m.r.pub
+	if pub == nil {
 		return
 	}
 	repo := m.r.Name()
@@ -678,7 +681,7 @@ func (m *Machine) publishRebuildTask(prev, s snapshot) {
 		if s.Index.State == events.IndexStateError && s.Index.Reason == ErrIndexCancelled.Error() {
 			ev.Message = ErrIndexCancelled.Error()
 		}
-		hub.PublishTask(ev)
+		pub.PublishTask(ev)
 	}
 	if !s.jobFull || s.job == "" {
 		return
@@ -686,18 +689,18 @@ func (m *Machine) publishRebuildTask(prev, s snapshot) {
 	switch s.Index.State {
 	case events.IndexStateIndexing:
 		if prev.job != s.job {
-			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
+			pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 		} else if s.Index.Done != prev.Index.Done || s.Index.Total != prev.Index.Total {
-			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: s.phase,
+			pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: s.phase,
 				Message: fmt.Sprintf("%d/%d", s.Index.Done, s.Index.Total), Repo: repo})
 		}
 	case events.IndexStateReady:
 		if prev.job != s.job || prev.Index.State != events.IndexStateReady {
-			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "done", Message: "rebuild complete", Repo: repo})
+			pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "done", Message: "rebuild complete", Repo: repo})
 		}
 	case events.IndexStateError:
 		if prev.job != s.job || prev.Index.State != events.IndexStateError {
-			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "error", Message: s.Index.Reason, Repo: repo})
+			pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "error", Message: s.Index.Reason, Repo: repo})
 		}
 	}
 }
@@ -716,7 +719,7 @@ func (b *broadcaster) subscribe(ctx context.Context, current func() snapshot, do
 	ch := make(chan Transition, 1)
 	b.mu.Lock()
 	cur := current()
-	ch <- Transition{Status: cur.Status, snap: cur}
+	ch <- Transition{cur}
 	if b.closed {
 		b.mu.Unlock()
 		close(ch)

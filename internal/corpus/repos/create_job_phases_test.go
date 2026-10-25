@@ -2,13 +2,14 @@ package repos
 
 import (
 	"context"
-	"knomit/internal/corpus/repos/events"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/corpus/repos/events"
 )
 
 // heldIndexRepo creates a repo, then restarts its Index stage as a full

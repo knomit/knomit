@@ -3,12 +3,12 @@ package repos
 import (
 	"context"
 	"errors"
-	"knomit/internal/corpus/repos/events"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/remotesync"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -172,7 +172,7 @@ func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre fun
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.hub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	l.waitRounds(t, 1)

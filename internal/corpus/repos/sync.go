@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"errors"
-	"knomit/internal/corpus/repos/events"
 	"sync"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
@@ -278,7 +278,7 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 //
 // once runs the immediate first round and returns: the Synchronous mode the
 // test harness uses, where no loop may race its assertions.
-func runReconcileLoop(ctx context.Context, svc *store.Service, hub *events.TaskHub, edges remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, peers *fleetPeers, once bool) {
+func runReconcileLoop(ctx context.Context, svc *store.Service, pub *events.TaskPublisher, edges remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, peers *fleetPeers, once bool) {
 	defer mode.clear()
 
 	// Initial config read for logging context; a failed one only loses the
@@ -436,7 +436,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *events.TaskH
 				if serr := svc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
 					lg.Warn().Err(serr).Msg("reconcile: failed to persist auth-resolution error")
 				}
-				hub.BroadcastSyncError("origin", authErr.Error())
+				pub.BroadcastSyncError("origin", authErr.Error())
 				logFailure(syncFails).Err(authErr).Msg("reconcile: auth resolution failed")
 				recordStep("fetch", &fetchBrk, false, base)
 				return
@@ -471,7 +471,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *events.TaskH
 			}
 			if err != nil {
 				syncFails++
-				hub.BroadcastSyncError("origin", err.Error())
+				pub.BroadcastSyncError("origin", err.Error())
 				logFailure(syncFails).Err(err).Msg("reconcile: sync failed")
 				recordStep("fetch", &fetchBrk, false, base)
 				// The fleet repository's host refused this instance at the
@@ -490,7 +490,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *events.TaskH
 				}
 				recordStep("fetch", &fetchBrk, true, base)
 				if shouldBroadcastSyncOK(syncResult, wasSyncFailing) {
-					hub.BroadcastSyncOK("origin", syncResult)
+					pub.BroadcastSyncOK("origin", syncResult)
 				}
 				if syncChanged(syncResult) {
 					lg.Info().
@@ -553,7 +553,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *events.TaskH
 			}
 			if err != nil {
 				pushFails++
-				hub.BroadcastPushError("origin", err.Error())
+				pub.BroadcastPushError("origin", err.Error())
 				logFailure(pushFails).Err(err).Msg("reconcile: push failed")
 				recordStep("push", &pushBrk, false, base)
 				return
@@ -564,7 +564,7 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, hub *events.TaskH
 			}
 			recordStep("push", &pushBrk, true, base)
 			if shouldBroadcastPushOK(pushResult.Pushed, wasPushFailing) {
-				hub.BroadcastPushOK("origin")
+				pub.BroadcastPushOK("origin")
 			}
 			if pushResult.Pushed {
 				lg.Info().Str("branch", agentBranch).Msg("reconcile: pushed changes")
@@ -638,7 +638,7 @@ func (ri *RepoInstance) OriginRoundForTest(ctx context.Context) error {
 	}
 	defer release()
 	cfg := ri.env.cfg
-	runReconcileLoop(ctx, svc, ri.hub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
+	runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
 		makeRemoteAuthFn(cfg.Remote, ri.env.keyPath), cfg.LocalOriginRoot, cfg.ReadOnly,
 		ri.env.onPush, nil, nil, nil, nil, ri.peers, true)
 	return nil

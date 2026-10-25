@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
 )

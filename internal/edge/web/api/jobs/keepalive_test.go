@@ -3,7 +3,6 @@ package jobs
 import (
 	"context"
 	"encoding/json"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"
 )
@@ -76,8 +76,8 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 	jobEventsKeepalive = 20 * time.Millisecond
 	t.Cleanup(func() { jobEventsKeepalive = old })
 
-	hub := events.NewTaskHub(context.Background())
-	t.Cleanup(hub.Shutdown)
+	hub, pub := events.NewTaskHub(context.Background())
+	t.Cleanup(pub.Shutdown)
 	m := repos.New(context.Background(), repos.Deps{})
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", AgentBranch: "agent/test", Hub: hub,

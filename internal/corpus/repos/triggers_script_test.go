@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-git/go-git/v5/plumbing"

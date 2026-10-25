@@ -2,12 +2,12 @@ package repos
 
 import (
 	"context"
-	"knomit/internal/corpus/repos/events"
 	"sync"
 	"testing"
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +28,7 @@ func waitIndexSettled(t *testing.T, ri *RepoInstance) snapshot {
 	defer cancel()
 	for tr := range ri.Watch(ctx) {
 		if tr.Status.Index.State != events.IndexStateIndexing {
-			return tr.snap
+			return tr.snapshot
 		}
 	}
 	t.Fatalf("index of %s did not settle; last status %+v", ri.Name(), ri.Status())
@@ -41,8 +41,8 @@ func waitStatus(t *testing.T, ri *RepoInstance, msg string, pred func(snapshot) 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for tr := range ri.Watch(ctx) {
-		if pred(tr.snap) {
-			return tr.snap
+		if pred(tr.snapshot) {
+			return tr.snapshot
 		}
 	}
 	t.Fatalf("%s: status never matched; last %+v", msg, ri.Status())
@@ -142,13 +142,4 @@ func hooks(hs ...func(StageID, string, context.Context)) func(StageID, string, c
 			h(s, p, ctx)
 		}
 	}
-}
-
-// snap is ri's machine snapshot, bookkeeping included (a bare test instance
-// has none).
-func (ri *RepoInstance) snap() snapshot {
-	if ri.machine == nil {
-		return snapshot{}
-	}
-	return ri.machine.snap()
 }

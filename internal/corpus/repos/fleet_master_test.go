@@ -133,7 +133,7 @@ func roundOnPush(t *testing.T, ri *RepoInstance, onPush func(string, error)) {
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	defer release()
-	runReconcileLoop(context.Background(), svc, ri.hub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
+	runReconcileLoop(context.Background(), svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
 		makeRemoteAuthFn(config.RemoteAuthConfig{}, ""), ri.env.cfg.LocalOriginRoot, false, onPush, nil, nil, nil, nil, ri.peers, true)
 }
 

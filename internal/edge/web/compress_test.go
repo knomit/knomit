@@ -272,7 +272,7 @@ func TestSSE_IsNeverCompressedThroughServerHandler(t *testing.T) {
 	defer tapCancel()
 
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	hub := events.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", Hub: hub}))
 
 	s := &Server{

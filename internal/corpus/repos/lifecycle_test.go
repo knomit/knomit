@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"errors"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"github.com/stretchr/testify/require"
 

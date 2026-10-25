@@ -18,11 +18,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"strings"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"github.com/rs/zerolog/log"
 

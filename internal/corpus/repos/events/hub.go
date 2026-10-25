@@ -53,10 +53,21 @@ type TaskHub struct {
 	counter  int
 }
 
-// NewTaskHub creates a TaskHub. The provided context is the parent for all task goroutines.
-func NewTaskHub(ctx context.Context) *TaskHub {
+// TaskPublisher is the publishing half of a TaskHub: the only way to put an
+// event on the hub's streams, record a task the hub did not Start, cancel every
+// task, or shut the hub down. NewTaskHub returns it beside the hub, and the
+// repo instance that owns the hub keeps it in an unexported field; consumers
+// hold the *TaskHub, which can subscribe, read and start tasks but cannot
+// announce anything. TestEventPublishers_NotExposed keeps it that way.
+type TaskPublisher struct {
+	h *TaskHub
+}
+
+// NewTaskHub creates a TaskHub and its publisher. The provided context is the
+// parent for all task goroutines.
+func NewTaskHub(ctx context.Context) (*TaskHub, *TaskPublisher) {
 	taskCtx, taskCancel := context.WithCancel(ctx)
-	return &TaskHub{
+	h := &TaskHub{
 		ctx:      taskCtx,
 		cancel:   taskCancel,
 		ob:       goob.New(taskCtx),
@@ -64,6 +75,7 @@ func NewTaskHub(ctx context.Context) *TaskHub {
 		lastDone: make(map[string]TaskEvent),
 		cancels:  make(map[string]context.CancelFunc),
 	}
+	return h, &TaskPublisher{h: h}
 }
 
 // Start launches a background goroutine for op. Returns the task ID
@@ -194,12 +206,14 @@ func (h *TaskHub) Subscribe(ctx context.Context) (goob.Events, []TaskEvent) {
 // BroadcastIndex publishes an index-state change to this repo's SSE
 // subscribers. Called only from Machine.publishIndex, which is the
 // chokepoint every index-state change goes through.
-func (h *TaskHub) BroadcastIndex(ev IndexEvent) {
+func (p *TaskPublisher) BroadcastIndex(ev IndexEvent) {
+	h := p.h
 	h.ob.Publish(ev)
 }
 
 // BroadcastStatus publishes a HEAD change to all SSE subscribers.
-func (h *TaskHub) BroadcastStatus(head string) {
+func (p *TaskPublisher) BroadcastStatus(head string) {
+	h := p.h
 	h.ob.Publish(StatusEvent{Head: head})
 }
 
@@ -219,7 +233,8 @@ type SyncEvent struct {
 // SyncResult so frontends can render which side of the reconcile actually
 // changed (main fast-forward / rewound, agent merge / ff / rebase / noop)
 // rather than collapsing both into a single merge-commit hash.
-func (h *TaskHub) BroadcastSyncOK(remote string, result remotesync.SyncResult) {
+func (p *TaskPublisher) BroadcastSyncOK(remote string, result remotesync.SyncResult) {
+	h := p.h
 	main := result.Main
 	agent := result.Agent
 	h.ob.Publish(SyncEvent{
@@ -250,12 +265,14 @@ type TriggerEvent struct {
 }
 
 // BroadcastTrigger publishes one trigger fire to this repo's SSE subscribers.
-func (h *TaskHub) BroadcastTrigger(ev TriggerEvent) {
+func (p *TaskPublisher) BroadcastTrigger(ev TriggerEvent) {
+	h := p.h
 	h.ob.Publish(ev)
 }
 
 // BroadcastSyncError publishes a sync failure event.
-func (h *TaskHub) BroadcastSyncError(remote, errMsg string) {
+func (p *TaskPublisher) BroadcastSyncError(remote, errMsg string) {
+	h := p.h
 	h.ob.Publish(SyncEvent{
 		Remote: remote,
 		Status: "sync_error",
@@ -271,7 +288,8 @@ type PushEvent struct {
 }
 
 // BroadcastPushOK publishes a successful push event.
-func (h *TaskHub) BroadcastPushOK(remote string) {
+func (p *TaskPublisher) BroadcastPushOK(remote string) {
+	h := p.h
 	h.ob.Publish(PushEvent{
 		Remote: remote,
 		Status: "push_ok",
@@ -279,7 +297,8 @@ func (h *TaskHub) BroadcastPushOK(remote string) {
 }
 
 // BroadcastPushError publishes a push failure event.
-func (h *TaskHub) BroadcastPushError(remote, errMsg string) {
+func (p *TaskPublisher) BroadcastPushError(remote, errMsg string) {
+	h := p.h
 	h.ob.Publish(PushEvent{
 		Remote: remote,
 		Status: "push_error",
@@ -353,7 +372,8 @@ func (h *TaskHub) Cancel(id string) (TaskEvent, bool) {
 // start itself — the lifecycle machine's manual index rebuild — so the jobs
 // UI sees it exactly as it sees a Start task: running while it runs, then
 // one terminal, and the Subscribe snapshot carries either.
-func (h *TaskHub) PublishTask(ev TaskEvent) {
+func (p *TaskPublisher) PublishTask(ev TaskEvent) {
+	h := p.h
 	h.mu.Lock()
 	switch ev.Status {
 	case "running":
@@ -371,7 +391,8 @@ func (h *TaskHub) PublishTask(ev TaskEvent) {
 // CancelTasks cancels every running task's context without shutting the hub
 // down: the store a task holds is about to be closed (Open.Exit), and the
 // drain waits for each task's release. Subscribers stay connected.
-func (h *TaskHub) CancelTasks() {
+func (p *TaskPublisher) CancelTasks() {
+	h := p.h
 	h.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(h.cancels))
 	for _, c := range h.cancels {
@@ -384,6 +405,7 @@ func (h *TaskHub) CancelTasks() {
 }
 
 // Shutdown cancels all active task contexts.
-func (h *TaskHub) Shutdown() {
+func (p *TaskPublisher) Shutdown() {
+	h := p.h
 	h.cancel()
 }

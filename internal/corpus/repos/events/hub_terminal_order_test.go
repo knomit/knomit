@@ -19,7 +19,7 @@ import (
 func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
 	const iterations = 2000
 	for i := 0; i < iterations; i++ {
-		hub := NewTaskHub(context.Background())
+		hub, pub := NewTaskHub(context.Background())
 		gate := make(chan struct{})
 		id, err := hub.Start("synth", func(_ context.Context, emit func(TaskEvent)) {
 			emit(TaskEvent{Status: "running"})
@@ -63,13 +63,13 @@ func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
 					}
 				case <-deadline:
 					cancel()
-					hub.Shutdown()
+					pub.Shutdown()
 					t.Fatalf("iteration %d: subscription %d saw %s running and its terminal never arrived", i, n, id)
 				}
 			}
 		}
 		cancel()
-		hub.Shutdown()
+		pub.Shutdown()
 	}
 }
 
@@ -77,8 +77,8 @@ func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
 // an unknown one and a task the hub only records (PublishTask) are refused,
 // and a refused Cancel cancels nothing.
 func TestTaskHub_CancelOnlyTheRunningStartedTask(t *testing.T) {
-	hub := NewTaskHub(context.Background())
-	defer hub.Shutdown()
+	hub, pub := NewTaskHub(context.Background())
+	defer pub.Shutdown()
 
 	finished, _ := hub.Start("synth", func(_ context.Context, emit func(TaskEvent)) { emit(TaskEvent{Status: "done"}) })
 	for {
@@ -98,7 +98,7 @@ func TestTaskHub_CancelOnlyTheRunningStartedTask(t *testing.T) {
 			break
 		}
 	}
-	hub.PublishTask(TaskEvent{Op: "rebuild", ID: "rebuild-77", Status: "running"})
+	pub.PublishTask(TaskEvent{Op: "rebuild", ID: "rebuild-77", Status: "running"})
 
 	for _, id := range []string{finished, "synth-99", "rebuild-77"} {
 		if _, ok := hub.Cancel(id); ok {

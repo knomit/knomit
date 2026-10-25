@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"knomit/internal/corpus/repos/events"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )

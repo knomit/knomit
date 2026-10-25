@@ -2,11 +2,12 @@ package repos
 
 import (
 	"context"
-	"knomit/internal/corpus/repos/events"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/corpus/repos/events"
 )
 
 // THE TERMINAL EVENT MUST SURVIVE THE THROTTLE. Progress is capped at one per

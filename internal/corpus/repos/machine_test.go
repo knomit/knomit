@@ -7,7 +7,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/corpus/repos/events"
 
 	"github.com/stretchr/testify/require"
 

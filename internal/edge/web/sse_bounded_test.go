@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/platform/logging"
 )
 
@@ -56,7 +56,7 @@ func waitReturn(done <-chan struct{}) bool {
 
 func branchEventsServer(t *testing.T) (*Server, *events.TaskHub) {
 	t.Helper()
-	hub := events.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "alpha", Hub: hub})
 	m := newTestManagerWithRepos(t)
 	m.Set("alpha", ri)
@@ -228,7 +228,7 @@ func TestSSE_HeadersSurviveACompressingProxy(t *testing.T) {
 	defer tapCancel()
 
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	hub := events.NewTaskHub(context.Background())
+	hub, _ := events.NewTaskHub(context.Background())
 	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", Hub: hub}))
 
 	s := &Server{
