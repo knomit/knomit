@@ -96,8 +96,11 @@ func TestLearnHandler_DistinctFromKeepsCounterHypothesisSeparate(t *testing.T) {
 
 // (b) WITHOUT distinct_from the counter still merges (the merge stage is not
 // switched off), and the response says which prediction was kept and which
-// DROPPED, in notes and in summary. When the counter is the more confident,
-// the ORIGINAL was dropped and the seed path now holds the counter.
+// DROPPED, in notes and in summary. The counter is a DIFFERENT prediction, so
+// even when it is the more confident the original is kept at the seed path and
+// the counter is the one dropped: a merge never overwrites an existing
+// statement with another (incomingIdentityWins). Before that rule the
+// conf=0.7 row dropped the ORIGINAL and the seed path held the counter.
 //
 // SABOTAGE S5c (the generic note instead of kept/dropped) → red.
 func TestLearnHandler_HypothesisMergeSaysWhatWasDropped(t *testing.T) {
@@ -108,7 +111,7 @@ func TestLearnHandler_HypothesisMergeSaysWhatWasDropped(t *testing.T) {
 			keptTitle, dropTitle string
 		}{
 			{0.33, "existing", "incoming", "October", "November"},
-			{0.7, "incoming", "existing", "November", "October"},
+			{0.7, "existing", "incoming", "October", "November"},
 		} {
 			t.Run(fmt.Sprintf("%s/conf=%g", ts.name, tc.conf), func(t *testing.T) {
 				svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, ts.th.Dedup+(1-ts.th.Dedup)*0.5)

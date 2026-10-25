@@ -411,6 +411,36 @@ func newFactWins(newFact, existing fact.Fact) bool {
 	return newFact.Sources >= existing.Sources
 }
 
+// incomingIdentityWins is the identity tiebreak a learn merge actually
+// applies: the incoming fact's identity replaces the existing one's only when
+// newFactWins AND the two state the same thing (sameStatement).
+//
+// A MERGE NEVER REPLACES AN EXISTING STATEMENT WITH A DIFFERENT ONE. The
+// dedup match is a cosine above the Dedup floor inside a path prefix, and two
+// distinct facts about related subjects clear that bar: two sibling decisions
+// (steps W0g1 and W0g2) in one category did on 2026-10-23, and the more
+// confident second one overwrote the first one's title and body at the first
+// one's path. The first decision was gone from the head, behind a response
+// that listed one fact written and no note. Under this rule the existing fact
+// keeps its title and body; the incoming statement is not written, and the
+// response says so (statementNotAppliedNotes, hypothesisMergeNote) and names
+// distinct_from and knomit_update. The incoming text is still in the caller's
+// hands, so it is recoverable; an overwritten fact's text was not.
+//
+// When the statements are equal, newFactWins decides as before, and then it
+// only picks whose kind, type, origin, expires, context and motif order win.
+func incomingIdentityWins(newFact, existing fact.Fact) bool {
+	return sameStatement(newFact, existing) && newFactWins(newFact, existing)
+}
+
+// sameStatement reports whether a and b have the same title and body, ignoring
+// only surrounding whitespace (ParseFact trims both; an incoming fact need not
+// be). Deliberately strict: a false "different" only keeps the existing text.
+func sameStatement(a, b fact.Fact) bool {
+	return strings.TrimSpace(a.Title) == strings.TrimSpace(b.Title) &&
+		strings.TrimSpace(a.Body) == strings.TrimSpace(b.Body)
+}
+
 // mergeCorroborates reports whether folding newFact into existing counts as a
 // new corroboration, and when it does not, why (for the learn-response note).
 // It is the single decision behind mergeFacts' sources arithmetic.
@@ -427,7 +457,7 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 // mergeFacts folds an incoming near-duplicate into the existing fact it
 // matched, returning the fact to write at the EXISTING path.
 //
-// The merge is asymmetric by design: the winner (see newFactWins) contributes
+// The merge is asymmetric by design: the winner (see incomingIdentityWins) contributes
 // the identity — title, body, kind, type, origin — while the metadata is
 // always pooled, because both facts are evidence of the same thing. Confidence
 // takes the max rather than the winner's, and sources add WHEN the incoming fact brings a novel ref (#361): two independent
@@ -470,7 +500,7 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	merged := fact.NewFact(existing.Path())
 	winner, loser := existing, newFact
-	if newFactWins(newFact, existing) {
+	if incomingIdentityWins(newFact, existing) {
 		winner, loser = newFact, existing
 	}
 	merged.Title = winner.Title
@@ -574,12 +604,14 @@ func subsumeHypothesis(f fact.Fact, retract []string, hypothesisPath string) (fa
 
 // hypothesisMergeNote is the learn-response note for incoming hypothesis i
 // folded into the existing hypothesis at path. mergeFacts keeps ONE title and
-// body — the winner's (newFactWins) — so one of the two predictions is gone,
-// and the note says which, in words a caller cannot read as "both stored".
-// When the incoming one wins, the original prediction at path was overwritten.
+// body — the winner's (incomingIdentityWins) — so one of the two predictions
+// is gone, and the note says which, in words a caller cannot read as "both
+// stored". The incoming one wins only when it states the same prediction, so
+// a DIFFERENT prediction is always the one dropped: the original at path is
+// never overwritten by another claim.
 func hypothesisMergeNote(i int, path string, incoming, existing fact.Fact) string {
 	kept, keptSide, dropped, droppedSide := existing, "existing", incoming, "incoming"
-	if newFactWins(incoming, existing) {
+	if incomingIdentityWins(incoming, existing) {
 		kept, keptSide, dropped, droppedSide = incoming, "incoming", existing, "existing"
 	}
 	return fmt.Sprintf(
@@ -874,7 +906,7 @@ func applyDedupMerge(
 		if f.Type == fact.Hypothesis && existingFact.Type == fact.Hypothesis {
 			hypMerged[i] = hypothesisMergeNote(i, match.Path, f, existingFact)
 		}
-		if newFactWins(f, existingFact) {
+		if incomingIdentityWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
 			// match.Path, not merged.Path(): this keys the embedding donation,
@@ -1061,8 +1093,11 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		// Each fact's context as built, before the dedup stage may replace a
 		// fact with the existing one it matched (contextNotAppliedNotes).
 		builtContext := make([]map[string]any, len(parsed))
+		// And each fact's statement as built (statementNotAppliedNotes).
+		built := make([]fact.Fact, len(parsed))
 		for i := range parsed {
 			builtContext[i] = parsed[i].Context
+			built[i] = parsed[i]
 		}
 
 		// An explicit path is a NAMED SLOT: learn allocates it once, update
@@ -1241,6 +1276,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		notes := expiresNotAppliedNotes(factInputs, parsed)
 		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
 		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
+		notes = append(notes, statementNotAppliedNotes(built, parsed, hypMerged)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
@@ -1281,6 +1317,31 @@ func uncountedMergeNotes(uncounted, hypMerged map[int]string, facts []fact.Fact)
 		}
 		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
 			i, facts[i].Path(), uncounted[i]))
+	}
+	return notes
+}
+
+// statementNotAppliedNotes names every incoming fact whose title and body were
+// NOT written because a dedup merge kept the existing fact's statement
+// (incomingIdentityWins). built[i] is fact i as the build stage produced it,
+// before the dedup stage; facts[i] is what was written. Without this note a
+// corroborating merge listed the existing path under commits and nothing
+// else, so a caller that sent a different claim read it as stored. A
+// hypothesis merged into a hypothesis is skipped: its hypMerged note already
+// names the prediction it dropped.
+func statementNotAppliedNotes(built, facts []fact.Fact, hypMerged map[int]string) []string {
+	var notes []string
+	for i := range built {
+		if i >= len(facts) || sameStatement(built[i], facts[i]) {
+			continue
+		}
+		if _, ok := hypMerged[i]; ok {
+			continue
+		}
+		p := facts[i].Path()
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: merged into existing fact %s; existing fact kept; its title and body were NOT replaced, so the incoming statement %q was not written. If it is a different claim, resubmit with distinct_from: [%q]; to revise the existing fact, use knomit_update on %s.",
+			i, p, built[i].Title, p, p))
 	}
 	return notes
 }
