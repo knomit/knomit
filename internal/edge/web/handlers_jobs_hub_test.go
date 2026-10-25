@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -26,6 +27,14 @@ type jobEnvelope struct {
 	Kind  string `json:"kind"`
 	State string `json:"state"`
 	Error string `json:"error,omitempty"`
+}
+
+// decodeStrict decodes b into v and fails on a field v does not declare, so a
+// field added to the job wire shape is a red test, not a silent drop.
+func decodeStrict(b []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 type jobsFixture struct {
@@ -158,7 +167,7 @@ func listJobs(t *testing.T, f jobsFixture, path string) jobsListBody {
 		t.Fatalf("jobs must be an array, never null or absent: %s", rec.Body.String())
 	}
 	var body jobsListBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	if err := decodeStrict(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("list body: %v (%s)", err, rec.Body.String())
 	}
 	if body.Links["self"].Href != path {

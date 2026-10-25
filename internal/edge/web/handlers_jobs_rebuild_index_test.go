@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -59,7 +58,7 @@ func postRebuild(t *testing.T, r http.Handler, repo string) *httptest.ResponseRe
 func jobOf(t *testing.T, rec *httptest.ResponseRecorder) jobEnvelope {
 	t.Helper()
 	var env jobEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+	if err := decodeStrict(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("job envelope is not JSON: %v (%s)", err, rec.Body.String())
 	}
 	return env
