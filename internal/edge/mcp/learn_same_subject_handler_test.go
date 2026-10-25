@@ -265,10 +265,12 @@ func TestLearnHandler_DistinctFromUnknownPathRejected(t *testing.T) {
 	require.Equal(t, before, liveFactCount(t, svc), "a rejected call must write nothing")
 }
 
-// Regression guard on the existing path: a true near-duplicate in the SAME
-// category is still auto-merged, not refused. The probe sits just above Dedup
-// rather than at a comfortable 0.95, so the case actually exercises the real
-// boundary for whichever model is in force.
+// Regression guard on the existing path at the real boundary: just above
+// Dedup in the SAME category, a DIFFERENT statement is refused by the dedup
+// stage (nearDuplicateRefusal, nothing written), and an EXACT restatement is
+// still auto-merged. The probe sits just above Dedup rather than at a
+// comfortable 0.95, so the case exercises the boundary for whichever model is
+// in force.
 func TestLearnHandler_AutoMergeStillWinsAboveDedup(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
@@ -284,7 +286,17 @@ func TestLearnHandler_AutoMergeStillWinsAboveDedup(t *testing.T) {
 				[]any{"Ramp", "AI Index"}, nil))
 			require.NoError(t, err)
 
-			require.False(t, r.IsError, "an above-Dedup near-duplicate must merge, not be refused: %s", resultText(t, r))
+			require.True(t, r.IsError, "an above-Dedup DIFFERENT statement must be refused: %s", resultText(t, r))
+			require.Contains(t, resultText(t, r), "near-duplicate of ")
+			require.Equal(t, before, liveFactCount(t, svc), "a refused call writes nothing")
+
+			r, err = LearnHandler(emb)(ctx, sameSubjectLearnReq(
+				"restatement", "decisions", "accepted/ramp/ai-index",
+				"Ramp AI Index shows adoption flat",
+				"The "+seedMarker+" records Ramp's spend data on paid AI adoption.",
+				[]any{"Ramp", "AI Index"}, nil))
+			require.NoError(t, err)
+			require.False(t, r.IsError, "an exact restatement must merge, not be refused: %s", resultText(t, r))
 			require.Equal(t, before, liveFactCount(t, svc), "the merge must land on the existing fact, not add one")
 		})
 	}
@@ -592,11 +604,13 @@ func TestLearnHandler_SameCategoryAboveDedupStillMerges(t *testing.T) {
 			seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc)
 
-			// SAME category directory as the seed.
+			// SAME category directory as the seed, and the SAME statement: only
+			// an exact restatement is merged (a different one is refused by
+			// the dedup stage before this gate runs).
 			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
 				"same-category-dup", "decisions", "accepted/ramp/ai-index",
 				"Ramp AI Index shows adoption flat",
-				"The "+probeMarker+" records Ramp's spend data on paid AI adoption.",
+				"The "+seedMarker+" records Ramp's spend data on paid AI adoption.",
 				[]any{"Ramp", "AI Index"}, nil))
 			require.NoError(t, err)
 
@@ -630,16 +644,15 @@ func TestLearnHandler_TwoSameCategoryDupsSecondIsWrittenNotRefused(t *testing.T)
 			seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc) // the seed alone
 
-			// Both in the SEED's category, both above Dedup. Only one can be
-			// absorbed; the other reaches the gate untouched.
-			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two-dups",
-				sameSubjectFact("decisions", "accepted/ramp/ai-index",
-					"Ramp AI Index first restatement",
-					"A "+probeMarker+" note on Ramp spend, one.", []any{"Ramp"}),
-				sameSubjectFact("decisions", "accepted/ramp/ai-index",
-					"Ramp AI Index second restatement",
-					"A "+probeMarker+" note on Ramp spend, two.", []any{"Ramp"}),
-			))
+			// Both in the SEED's category, both EXACT restatements of it (only
+			// those merge). Only one can be absorbed; the other is skipped by
+			// `consumed` and reaches the gate untouched.
+			restate := func() map[string]any {
+				return sameSubjectFact("decisions", "accepted/ramp/ai-index",
+					"Ramp AI Index shows adoption flat",
+					"The "+seedMarker+" records Ramp's spend data on paid AI adoption.", []any{"Ramp", "AI Index"})
+			}
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two-dups", restate(), restate()))
 			require.NoError(t, err)
 
 			require.False(t, r.IsError,

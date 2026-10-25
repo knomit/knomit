@@ -118,19 +118,11 @@ func TestMission_SignalTopicsNeedDedupOff(t *testing.T) {
 				require.NoError(t, err)
 				if !c.dedupOff {
 					// Control: with dedup on, the second signal is never its own
-					// fact. Where a rule forbids the merged shape (a task carries
-					// ONE entity) the post is refused outright; elsewhere it is
-					// folded into the first, which then names both tasks.
-					if r2.IsError {
-						require.Contains(t, resultText(t, r2), "dedup-merge")
-						return
-					}
-					require.Equal(t, first, mergedFactPath(t, r2), "control: the second signal folds into the first")
-					got, err := svc.Facts().ReadFact(context.Background(), "agent/test", first, nil)
-					require.NoError(t, err)
-					f, err := fact.ParseFact(first, got.Content)
-					require.NoError(t, err)
-					require.ElementsMatch(t, []string{"task-1", "task-2"}, f.Entities, "one working copy now names two tasks")
+					// fact: it states something different from the first, so it
+					// is refused as a near-duplicate of it (before #638 it was
+					// folded into the first, which then named both tasks).
+					require.True(t, r2.IsError, resultText(t, r2))
+					require.Contains(t, resultText(t, r2), "near-duplicate of "+first)
 					return
 				}
 				require.False(t, r2.IsError, resultText(t, r2))

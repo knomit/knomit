@@ -1473,11 +1473,19 @@ specification; what is normative is the outcome a writer must produce:
    the incoming fact is written at its **own** fresh path with the
    hypothesis's path added to its `refs`, and the hypothesis is retracted
    **in the same commit** (the hypothesis is resolved by the observation).
-3. **Genuine duplicate** — a merged fact is written **at the existing
-   fact's path**; no new file is created.
+3. **Exact restatement** — the incoming title and body equal the existing
+   fact's (ignoring surrounding whitespace): a merged fact is written **at
+   the existing fact's path**; no new file is created.
+4. **Different statement** — any other near-duplicate refuses the **whole
+   call**: nothing is written, and the refusal names the existing path so the
+   writer can update it or resubmit naming it in `distinct_from` (which writes
+   the fact at its own fresh path). A writer must never merge two different
+   statements: keeping either text loses one claim, and pooling the metadata
+   below credits one fact with another's evidence.
 
-Merge semantics: the **winner contributes identity** — title, body, `kind`,
-`type`, `origin`. Metadata always **pools** regardless of winner:
+Merge semantics (outcome 3 only): the **winner contributes identity** —
+title, body, `kind`, `type`, `origin`; title and body are equal by
+construction. Metadata always **pools** regardless of winner:
 
 | Field | Merged value |
 |---|---|

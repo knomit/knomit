@@ -88,6 +88,8 @@ Then call `knomit_learn` with:
 - `refs`: source files touched + URL to the conversation if available
 - `confidence`: 0.95
 
+If the call is refused as a `near-duplicate of <path>`, nothing was written. Decisions about neighbouring steps of one plan (W0g1, W0g2) usually trip this: read `<path>`, and if it records a different choice, resubmit with `distinct_from: ["<path>"]`; if it records this same choice, `/knomit-update` it instead.
+
 Only after the fact is committed should you start the implementing edit.
 
 ## Ref format for source files (IMPORTANT)

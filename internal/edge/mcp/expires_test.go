@@ -36,17 +36,14 @@ func TestMergeFacts_ExpiresIsTheWinnersOwn(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			nf := fact.NewFact("kb/alpha/new.md")
-			// One statement on both sides: a merge never replaces the existing
-			// statement with a different one (incomingIdentityWins), so the
-			// incoming identity can win only when the text is the same.
-			nf.Title, nf.Body, nf.Type, nf.Sources, nf.Expires = "Same", "Same body", tc.newType, 1, tc.newExpires
+			nf.Title, nf.Body, nf.Type, nf.Sources, nf.Expires = "New", "New body", tc.newType, 1, tc.newExpires
 			ex := fact.NewFact("kb/alpha/existing.md")
-			ex.Title, ex.Body, ex.Type, ex.Sources, ex.Expires = "Same", "Same body", tc.exType, 1, tc.exExpire
+			ex.Title, ex.Body, ex.Type, ex.Sources, ex.Expires = "Existing", "Existing body", tc.exType, 1, tc.exExpire
 			nf.Confidence, ex.Confidence = 0.5, 0.9
 			if tc.newWins {
 				nf.Confidence, ex.Confidence = 0.9, 0.5
 			}
-			require.Equal(t, tc.newWins, incomingIdentityWins(nf, ex), "fixture must produce the intended winner")
+			require.Equal(t, tc.newWins, newFactWins(nf, ex), "fixture must produce the intended winner")
 			merged := mergeFacts(nf, ex, testLocalID)
 			require.Equal(t, tc.want, merged.Expires)
 			if tc.newWins {
@@ -103,9 +100,10 @@ func TestLearnHandler_DedupExistingWins_SaysExpiresNotApplied(t *testing.T) {
 		weightedFactContent(t, existingTitle, existingBody, 0.95, 0), "seed", "test")
 	require.NoError(t, err)
 
-	incomingTitle := "Weighted synthesis restated"
-	incomingBody := lenMatched(t, incomingTitle, "the same claim, said again", targetLen)
-	res, err := LearnHandler(emb)(ctx, expiresLearnReq(incomingTitle, incomingBody, "synthesis", 0.5, "2026-10-01T00:00:00Z"))
+	// The SAME statement: only an exact restatement merges (a different one
+	// is refused, nearDuplicateRefusal), so that is the only case where the
+	// existing fact can win and drop the incoming expires.
+	res, err := LearnHandler(emb)(ctx, expiresLearnReq(existingTitle, existingBody, "synthesis", 0.5, "2026-10-01T00:00:00Z"))
 	require.NoError(t, err)
 	require.False(t, res.IsError, resultText(t, res))
 	require.Equal(t, weightedExistingPath, mergedFactPath(t, res), "fixture: must merge INTO the existing fact")

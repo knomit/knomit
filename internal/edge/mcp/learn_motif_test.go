@@ -22,22 +22,21 @@ func riFrom(t *testing.T, ctx context.Context) *repos.RepoInstance {
 }
 
 // motifMergeFixture builds a new/existing pair whose winner is the one the
-// caller asked for, asserts that intent against incomingIdentityWins so the
-// fixture cannot silently invert, and returns the merge result. Both sides
-// carry one statement: the incoming identity can win only then.
+// caller asked for, asserts that intent against newFactWins so the fixture
+// cannot silently invert, and returns the merge result.
 func motifMergeFixture(t *testing.T, newMotifs, existingMotifs []string, newWins bool) fact.Fact {
 	t.Helper()
 	nf := fact.NewFact("kb/alpha/new.md")
-	nf.Title = "Same"
-	nf.Body = "Same body"
+	nf.Title = "New"
+	nf.Body = "New body"
 	nf.Type = fact.Observation
 	nf.Confidence = 0.9
 	nf.Sources = 1
 	nf.Motifs = newMotifs
 
 	ex := fact.NewFact("kb/alpha/existing.md")
-	ex.Title = "Same"
-	ex.Body = "Same body"
+	ex.Title = "Existing"
+	ex.Body = "Existing body"
 	ex.Type = fact.Observation
 	ex.Confidence = 0.5
 	ex.Sources = 1
@@ -46,7 +45,7 @@ func motifMergeFixture(t *testing.T, newMotifs, existingMotifs []string, newWins
 	if !newWins {
 		nf.Confidence, ex.Confidence = 0.5, 0.9
 	}
-	require.Equal(t, newWins, incomingIdentityWins(nf, ex), "fixture must produce the intended winner")
+	require.Equal(t, newWins, newFactWins(nf, ex), "fixture must produce the intended winner")
 	return mergeFacts(nf, ex, testLocalID)
 }
 

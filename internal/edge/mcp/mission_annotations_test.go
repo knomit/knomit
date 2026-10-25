@@ -101,7 +101,8 @@ func TestMissionAnnotations_TypedByContext(t *testing.T) {
 // The control is not vacuous: learn's dedup search scope is a RAW path prefix
 // (learn.go, #260), so a verdict learned into annotations/xcheck-1/ searches
 // annotations/xcheck-12/ too. With `learn_dedup: off` removed from the topic,
-// the second task's verdict folds into the first task's file.
+// the second task's verdict collides with the first task's file (refused
+// as a near-duplicate).
 //
 // SABOTAGE: delete `learn_dedup: off` under annotations in the shipped
 // ontology → the shipped case folds → red.
@@ -127,9 +128,10 @@ func TestMissionAnnotations_TwoTasksTwoPaths(t *testing.T) {
 			r2 := learn(annotation("xcheck-1", "Verdict of xcheck-1x", verdictCtx("contradict")))
 			if !c.dedupOff {
 				// Control: the second task's verdict does not get a file of
-				// its own: it is folded into the first task's file.
-				require.False(t, r2.IsError, resultText(t, r2))
-				require.Equal(t, first, mergedFactPath(t, r2), "control: the second verdict folds into the first task's file")
+				// its own: it is refused as a near-duplicate of the first
+				// task's file (before #638 it was folded into it).
+				require.True(t, r2.IsError, resultText(t, r2))
+				require.Contains(t, resultText(t, r2), "near-duplicate of "+first, "control: the second verdict collides with the first task's file")
 				return
 			}
 			require.False(t, r2.IsError, resultText(t, r2))

@@ -67,7 +67,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
-		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis."),
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. A fact that restates an existing one in the same category word for word (same title and body) is merged into it automatically. A near-duplicate that states something different is refused with the existing path named, and nothing is written: call knomit_update on that path to revise it, or resubmit with distinct_from naming it to keep both, e.g. a counter-hypothesis or a sibling decision."),
 		bindingArg(true),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
@@ -128,7 +128,7 @@ func learnToolSchemaProperties() map[string]any {
 		"confidence":    map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
 		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
 		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
-		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
+		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the dedup stage never merges this fact into, or refuses it as a near-duplicate of, a path named here (the fact is written at its own new path), and the same-subject refusal skips those paths. Use it after a refusal (each refusal names the paths it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
 		"motifs":        motifsProperty(),
 		"expires":       expiresProperty(),
 		"context":       contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
@@ -411,36 +411,6 @@ func newFactWins(newFact, existing fact.Fact) bool {
 	return newFact.Sources >= existing.Sources
 }
 
-// incomingIdentityWins is the identity tiebreak a learn merge actually
-// applies: the incoming fact's identity replaces the existing one's only when
-// newFactWins AND the two state the same thing (sameStatement).
-//
-// A MERGE NEVER REPLACES AN EXISTING STATEMENT WITH A DIFFERENT ONE. The
-// dedup match is a cosine above the Dedup floor inside a path prefix, and two
-// distinct facts about related subjects clear that bar: two sibling decisions
-// (steps W0g1 and W0g2) in one category did on 2026-10-23, and the more
-// confident second one overwrote the first one's title and body at the first
-// one's path. The first decision was gone from the head, behind a response
-// that listed one fact written and no note. Under this rule the existing fact
-// keeps its title and body; the incoming statement is not written, and the
-// response says so (statementNotAppliedNotes, hypothesisMergeNote) and names
-// distinct_from and knomit_update. The incoming text is still in the caller's
-// hands, so it is recoverable; an overwritten fact's text was not.
-//
-// When the statements are equal, newFactWins decides as before, and then it
-// only picks whose kind, type, origin, expires, context and motif order win.
-func incomingIdentityWins(newFact, existing fact.Fact) bool {
-	return sameStatement(newFact, existing) && newFactWins(newFact, existing)
-}
-
-// sameStatement reports whether a and b have the same title and body, ignoring
-// only surrounding whitespace (ParseFact trims both; an incoming fact need not
-// be). Deliberately strict: a false "different" only keeps the existing text.
-func sameStatement(a, b fact.Fact) bool {
-	return strings.TrimSpace(a.Title) == strings.TrimSpace(b.Title) &&
-		strings.TrimSpace(a.Body) == strings.TrimSpace(b.Body)
-}
-
 // mergeCorroborates reports whether folding newFact into existing counts as a
 // new corroboration, and when it does not, why (for the learn-response note).
 // It is the single decision behind mergeFacts' sources arithmetic.
@@ -457,7 +427,7 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 // mergeFacts folds an incoming near-duplicate into the existing fact it
 // matched, returning the fact to write at the EXISTING path.
 //
-// The merge is asymmetric by design: the winner (see incomingIdentityWins) contributes
+// The merge is asymmetric by design: the winner (see newFactWins) contributes
 // the identity — title, body, kind, type, origin — while the metadata is
 // always pooled, because both facts are evidence of the same thing. Confidence
 // takes the max rather than the winner's, and sources add WHEN the incoming fact brings a novel ref (#361): two independent
@@ -481,8 +451,10 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 //     ordinary "B cites A" that becomes "A cites A" the moment B is retargeted
 //     onto A. Nothing was appended; the ref was already there and only its
 //     meaning changed. So the union is FILTERED against the merged path rather
-//     than merely not added to. (Found by the suite, not by reading: it is
-//     exactly what TestLearnHandler_OriginDefaultsAuthored does.)
+//     than merely not added to. (Found by the suite, not by reading:
+//     TestLearnHandler_OriginDefaultsAuthored did it, before a different
+//     statement stopped merging; an exact restatement that cites its match
+//     still does, and TestMergeFacts_DropsARefThatBecomesSelfReferential pins it.)
 //
 // Nothing downstream loses information. localEvidenceRefs already dropped the
 // self-path so it could not inflate evidence weight, and the recursive ref
@@ -500,7 +472,7 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	merged := fact.NewFact(existing.Path())
 	winner, loser := existing, newFact
-	if incomingIdentityWins(newFact, existing) {
+	if newFactWins(newFact, existing) {
 		winner, loser = newFact, existing
 	}
 	merged.Title = winner.Title
@@ -602,21 +574,63 @@ func subsumeHypothesis(f fact.Fact, retract []string, hypothesisPath string) (fa
 	return f, retract
 }
 
-// hypothesisMergeNote is the learn-response note for incoming hypothesis i
-// folded into the existing hypothesis at path. mergeFacts keeps ONE title and
-// body — the winner's (incomingIdentityWins) — so one of the two predictions
-// is gone, and the note says which, in words a caller cannot read as "both
-// stored". The incoming one wins only when it states the same prediction, so
-// a DIFFERENT prediction is always the one dropped: the original at path is
-// never overwritten by another claim.
-func hypothesisMergeNote(i int, path string, incoming, existing fact.Fact) string {
-	kept, keptSide, dropped, droppedSide := existing, "existing", incoming, "incoming"
-	if incomingIdentityWins(incoming, existing) {
-		kept, keptSide, dropped, droppedSide = incoming, "incoming", existing, "existing"
+// sameStatement reports whether a and b have the same title and body, ignoring
+// only surrounding whitespace. The trim is load-bearing: validateAndBuildFacts
+// stores an incoming body as sent (usually ending in a newline) while
+// ParseFact trims the stored one, so an exact re-learn compares equal only
+// through it. Deliberately strict otherwise: a reworded restatement is
+// "different", and costs its caller one knomit_update round trip.
+func sameStatement(a, b fact.Fact) bool {
+	return strings.TrimSpace(a.Title) == strings.TrimSpace(b.Title) &&
+		strings.TrimSpace(a.Body) == strings.TrimSpace(b.Body)
+}
+
+// nearDuplicateRefusal refuses a learn call in which an incoming fact matched
+// an existing one above the Dedup cosine but states something DIFFERENT.
+//
+// THE AUTO-MERGE ONLY ABSORBS EXACT RESTATEMENTS. A cosine above the floor
+// inside a path prefix does not make two facts one claim: on 2026-10-23 a new
+// decision about step W0g2 matched the sibling decision about W0g1, won the
+// identity tiebreak on confidence, and overwrote W0g1's title and body at
+// W0g1's path behind a response that listed one fact written. Keeping the
+// existing text instead (#638's first round) still pooled the sibling's
+// confidence, sources and refs into a fact that does not describe them. So a
+// different statement merges into nothing: the whole call is refused, the
+// match is named, and the caller chooses — knomit_update the match, or
+// resubmit with distinct_from to keep both (principles/philosophy/
+// dedup-not-append holds: nothing is appended either way).
+//
+// Refused WHOLE, never in part, for the reason sameSubjectRefusal is: one
+// learn call is one commit, and writing the innocent facts would report
+// success for a batch that only half landed. Every offending fact is listed
+// so one round trip tells the caller about all of them.
+type nearDuplicateRefusal struct {
+	refused []nearDuplicate
+}
+
+type nearDuplicate struct {
+	Index      int
+	Title      string
+	Match      string
+	MatchTitle string
+}
+
+func (e *nearDuplicateRefusal) Error() string {
+	var b strings.Builder
+	b.WriteString("refused: ")
+	b.WriteString(pluralFacts(len(e.refused)))
+	if len(e.refused) == 1 {
+		b.WriteString(" in this call is a near-duplicate")
+	} else {
+		b.WriteString(" in this call are near-duplicates")
 	}
-	return fmt.Sprintf(
-		"fact %d: merged into existing hypothesis %s; kept the %s prediction %q (confidence %g) and DROPPED the %s prediction %q (confidence %g); sources unchanged. To keep both as separate hypotheses, resubmit with distinct_from: [%q].",
-		i, path, keptSide, kept.Title, kept.Confidence, droppedSide, dropped.Title, dropped.Confidence, path)
+	b.WriteString(" of an existing fact but state something different, so nothing was merged and nothing was written.\n")
+	for _, r := range e.refused {
+		fmt.Fprintf(&b, "\nfact %d: %q\n  near-duplicate of %s — %s\n", r.Index, r.Title, r.Match, r.MatchTitle)
+	}
+	b.WriteString("\nTo revise the existing fact call knomit_update on its path. " +
+		"To keep this as a separate fact, resubmit with distinct_from: [<path>] on this entry.")
+	return b.String()
 }
 
 // dedupEmbed batch-embeds every incoming fact upfront so each dedup Search can
@@ -662,9 +676,11 @@ var onDedupSkipRetracted func(path string)
 // applyDedupMerge searches under each incoming fact's category directory — a
 // raw path PREFIX, see the scope comment at the search — for a near-duplicate
 // and folds any match in, mutating facts and files in place.
-// Three outcomes per fact: no match (write as-is), the match is a hypothesis
-// this fact subsumes (write as-is, stage the hypothesis for retraction), or a
-// genuine duplicate (merge and write at the EXISTING path).
+// Four outcomes per fact: no match (write as-is), the match is a hypothesis
+// this fact subsumes (write as-is, stage the hypothesis for retraction), an
+// exact restatement (sameStatement: merge and write at the EXISTING path), or
+// a match that states something different, which refuses the WHOLE call with
+// a *nearDuplicateRefusal naming every such fact.
 //
 // Returns the precomputed-embedding donation map keyed by FINAL on-disk path —
 // upsert reads it from ctx and skips its own ONNX call — plus the hypothesis
@@ -684,7 +700,7 @@ func applyDedupMerge(
 	localRepoID string,
 	retracting map[string]bool,
 	distinctFrom [][]string,
-) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, error) {
+) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/domain/modelparams).
 	dedupThreshold := model.EmbedderThresholds(batchEmb).Dedup
 	// dedupVecs is computed by the CALLER now, because the same-subject stage
@@ -702,11 +718,9 @@ func applyDedupMerge(
 	// uncounted[i] is why the merge at index i did not add the incoming
 	// sources (#361); it feeds the learn response's notes.
 	uncounted := make(map[int]string)
-	// hypMerged[i] is the note for a hypothesis folded into an existing
-	// hypothesis: which prediction was kept and which was DROPPED. Only one
-	// of the two predictions survives such a merge, so "wrote 1 fact" alone
-	// would hide a lost claim.
-	hypMerged := make(map[int]string)
+	// refused collects every fact whose match states something different
+	// (nearDuplicateRefusal); any entry refuses the whole call.
+	var refused []nearDuplicate
 
 	// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to, or
 	// "" to suppress donation (used when the merge kept the EXISTING fact's
@@ -893,9 +907,21 @@ func applyDedupMerge(
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
-				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+				return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
 			touched[i] = true
+			continue
+		}
+
+		// A DIFFERENT statement is never merged (nearDuplicateRefusal): not
+		// its text over the match's, and not its confidence, sources or refs
+		// into a fact that does not describe them. Collected, not returned at
+		// once, so the refusal names every offending fact in the batch. Sits
+		// AFTER the distinct_from decline (a named match is never refused) and
+		// AFTER hypothesis subsumption (an observation settling a prediction
+		// is written at its own path, so nothing is pooled).
+		if !sameStatement(f, existingFact) {
+			refused = append(refused, nearDuplicate{Index: i, Title: f.Title, Match: match.Path, MatchTitle: existingFact.Title})
 			continue
 		}
 
@@ -903,10 +929,7 @@ func applyDedupMerge(
 		if ok, why := mergeCorroborates(f, existingFact, localRepoID); !ok {
 			uncounted[i] = why
 		}
-		if f.Type == fact.Hypothesis && existingFact.Type == fact.Hypothesis {
-			hypMerged[i] = hypothesisMergeNote(i, match.Path, f, existingFact)
-		}
-		if incomingIdentityWins(f, existingFact) {
+		if newFactWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
 			// match.Path, not merged.Path(): this keys the embedding donation,
@@ -926,7 +949,7 @@ func applyDedupMerge(
 		// would surface later as an opaque serialize error.
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
-				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+				return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
 		// F22: the merged fact lands at the MATCH's path, which the prefix
@@ -936,7 +959,7 @@ func applyDedupMerge(
 		// where it will live. With no ontology nothing declares a key, so a
 		// winner carrying context is refused rather than written unchecked.
 		if err := fact.ValidateContext(ontology, topicPathOf(ontologyRoot, match.Path), merged.Context); err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
 		}
 
 		// Retarget the fact from its freshly-minted path to the existing
@@ -949,10 +972,13 @@ func applyDedupMerge(
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs
 		if err := reserialize(files, match.Path, merged); err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
 		touched[i] = true
+	}
+	if len(refused) > 0 {
+		return nil, nil, nil, nil, nil, &nearDuplicateRefusal{refused: refused}
 	}
 
 	// Build the donation map keyed by final on-disk path. Empty/missing
@@ -967,7 +993,7 @@ func applyDedupMerge(
 		}
 		embByPath[donatePaths[i]] = dedupVecs[i]
 	}
-	return embByPath, retract, priorRefs, touched, uncounted, hypMerged, nil
+	return embByPath, retract, priorRefs, touched, uncounted, nil
 }
 
 // computeEvidenceWeights stamps an evidence weight on machine-origin derived
@@ -1093,11 +1119,8 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		// Each fact's context as built, before the dedup stage may replace a
 		// fact with the existing one it matched (contextNotAppliedNotes).
 		builtContext := make([]map[string]any, len(parsed))
-		// And each fact's statement as built (statementNotAppliedNotes).
-		built := make([]fact.Fact, len(parsed))
 		for i := range parsed {
 			builtContext[i] = parsed[i].Context
-			built[i] = parsed[i]
 		}
 
 		// An explicit path is a NAMED SLOT: learn allocates it once, update
@@ -1150,7 +1173,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		for i, in := range factInputs {
 			distinctFrom[i] = in.DistinctFrom
 		}
-		embByPath, retract, priorRefs, touched, uncounted, hypMerged, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
+		embByPath, retract, priorRefs, touched, uncounted, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -1275,8 +1298,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		notes := expiresNotAppliedNotes(factInputs, parsed)
 		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
-		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
-		notes = append(notes, statementNotAppliedNotes(built, parsed, hypMerged)...)
+		notes = append(notes, uncountedMergeNotes(uncounted, parsed)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
@@ -1293,17 +1315,14 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 // sources (#361), so a caller re-reading one page is told its re-read was not
 // counted. Corroborating merges and plain learns add nothing.
 //
-// A hypothesis merged into a hypothesis gets its hypMerged note INSTEAD: it
-// says which prediction was dropped, which matters more than the count.
-func uncountedMergeNotes(uncounted, hypMerged map[int]string, facts []fact.Fact) []string {
-	idx := make([]int, 0, len(uncounted)+len(hypMerged))
+// A hypothesis merged into a hypothesis gets the same note ("incoming is a
+// hypothesis"). It used to get a kept/DROPPED note instead, but a merge now
+// only absorbs the SAME statement (nearDuplicateRefusal), so no prediction is
+// dropped by one.
+func uncountedMergeNotes(uncounted map[int]string, facts []fact.Fact) []string {
+	idx := make([]int, 0, len(uncounted))
 	for i := range uncounted {
 		idx = append(idx, i)
-	}
-	for i := range hypMerged {
-		if _, dup := uncounted[i]; !dup {
-			idx = append(idx, i)
-		}
 	}
 	sort.Ints(idx)
 	var notes []string
@@ -1311,37 +1330,8 @@ func uncountedMergeNotes(uncounted, hypMerged map[int]string, facts []fact.Fact)
 		if i >= len(facts) {
 			continue
 		}
-		if n, ok := hypMerged[i]; ok {
-			notes = append(notes, n)
-			continue
-		}
 		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
 			i, facts[i].Path(), uncounted[i]))
-	}
-	return notes
-}
-
-// statementNotAppliedNotes names every incoming fact whose title and body were
-// NOT written because a dedup merge kept the existing fact's statement
-// (incomingIdentityWins). built[i] is fact i as the build stage produced it,
-// before the dedup stage; facts[i] is what was written. Without this note a
-// corroborating merge listed the existing path under commits and nothing
-// else, so a caller that sent a different claim read it as stored. A
-// hypothesis merged into a hypothesis is skipped: its hypMerged note already
-// names the prediction it dropped.
-func statementNotAppliedNotes(built, facts []fact.Fact, hypMerged map[int]string) []string {
-	var notes []string
-	for i := range built {
-		if i >= len(facts) || sameStatement(built[i], facts[i]) {
-			continue
-		}
-		if _, ok := hypMerged[i]; ok {
-			continue
-		}
-		p := facts[i].Path()
-		notes = append(notes, fmt.Sprintf(
-			"fact %d: merged into existing fact %s; existing fact kept; its title and body were NOT replaced, so the incoming statement %q was not written. If it is a different claim, resubmit with distinct_from: [%q]; to revise the existing fact, use knomit_update on %s.",
-			i, p, built[i].Title, p, p))
 	}
 	return notes
 }
