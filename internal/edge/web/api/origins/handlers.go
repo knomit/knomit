@@ -1115,7 +1115,26 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 		stream.event(map[string]string{"phase": "error", "message": sendErr.Error()})
 		return false
 	}
-	if phase == "" {
+	// The watch is lossy (cap 1, latest wins) and the loop above may have left
+	// on done before reading its last value: take whatever is pending, without
+	// blocking, so the phases the machine passed are narrated in order.
+drain:
+	for watch != nil {
+		select {
+		case t, ok := <-watch:
+			if !ok {
+				watch = nil
+				break drain
+			}
+			emitPhase(t.Status)
+		default:
+			break drain
+		}
+	}
+	// A swap that raced past open/identify between two reads leaves phase at
+	// "swapping" (or unset, for an attach that never repopulated). The send
+	// succeeded, so the store was configured: say so before done.
+	if phase != "configuring" {
 		stream.event(map[string]string{"phase": "configuring"})
 	}
 	// The event is applied; the index job of the (possibly new) store runs in
