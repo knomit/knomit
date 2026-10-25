@@ -57,3 +57,52 @@ func TestRepoIndexEvents_TerminalSurvivesTheProgressThrottle(t *testing.T) {
 		}
 	}
 }
+
+// A MOUNT ANNOUNCES ITS ENTRY INTO INDEXING (issue #570). A fresh machine's
+// first publish must emit an `indexing` event even though its initial derived
+// status already says indexing: the machine seeds its last-published snapshot
+// as the zero value, so entering indexing is a change like any other.
+//
+// The index job is held at its hook for the whole check, so no progress frame
+// and no terminal frame can exist: the only way an `indexing` frame reaches the
+// stream while the job is parked is the entry event. (Before the fix the
+// frame was a throttled progress frame, present only when the driver handled
+// indexProgressed before indexDone, which is what flaked
+// TestRepoIndexEvents_StartupHealEmitsIndexingThenReady under load.)
+func TestRepoIndexEvents_MountAnnouncesEntryIntoIndexing(t *testing.T) {
+	g := newGate(StageIndex, "index-job")
+	m := newTestManager(t)
+	m.deps.Machine.Hook = g.hook
+	t.Cleanup(g.open)
+	require.NoError(t, m.Start())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := m.RepoEventHub().Subscribe(ctx)
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := m.Create(context.Background(), CreateSpec{Name: testRepoName, Mode: "preset"}, nil)
+		created <- err
+	}()
+	g.waitArrived(t)
+
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case e := <-stream:
+			ev, ok := e.(events.IndexEvent)
+			if !ok || ev.Repo != testRepoName {
+				continue
+			}
+			require.Equal(t, events.IndexStateIndexing, ev.State, "the first index event of a mount")
+			require.Zero(t, ev.Done)
+			require.Zero(t, ev.Total)
+			g.open()
+			require.NoError(t, <-created)
+			return
+		case <-deadline:
+			t.Fatal("the index job is parked and no entry `indexing` event was published")
+		}
+	}
+}
