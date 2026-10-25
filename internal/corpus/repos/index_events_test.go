@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"knomit/internal/corpus/repos/events"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestRepoIndexEvents_TerminalSurvivesTheProgressThrottle(t *testing.T) {
 	m, ri, _ := heldIndexRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	events := m.RepoEvents(ctx)
+	stream := m.RepoEventHub().Subscribe(ctx)
 
 	// A progress tick opens the throttle window, a second inside it must be
 	// suppressed, then the terminal — all well inside a second.
@@ -33,16 +34,16 @@ func TestRepoIndexEvents_TerminalSurvivesTheProgressThrottle(t *testing.T) {
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
-		case e := <-events:
-			ev, ok := e.(IndexEvent)
+		case e := <-stream:
+			ev, ok := e.(events.IndexEvent)
 			if !ok || ev.Repo != ri.Name() {
 				continue
 			}
-			if ev.State == IndexStateIndexing && ev.Total == 10 {
+			if ev.State == events.IndexStateIndexing && ev.Total == 10 {
 				progress++
 				continue
 			}
-			if ev.State == IndexStateError {
+			if ev.State == events.IndexStateError {
 				require.Equal(t, "indexing cancelled", ev.Reason)
 				// And the suppressed tick really was suppressed: exactly one
 				// progress frame, not two. Without this the test would pass

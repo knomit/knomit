@@ -15,7 +15,7 @@ import (
 // capability any other layer needs, so it lives here unexported.
 //
 // DEFERRAL, NEVER DISCARD. The callback is heavyweight (Acquire →
-// IndexManager().SyncLocked → hub.broadcastStatus), so after a large merge it
+// IndexManager().SyncLocked → hub.BroadcastStatus), so after a large merge it
 // runs for many seconds. Every state transition therefore happens under mu:
 // `running` used to be an atomic the timer CAS'd, and a failed CAS threw the
 // notification away — `pending` had already been cleared and nothing re-armed,

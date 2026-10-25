@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"knomit/internal/corpus/repos/events"
 	"path/filepath"
 	"testing"
 	"time"
@@ -435,7 +436,7 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	// was looking at when they pressed Cancel.
 	require.Eventually(t, func() bool {
 		st := job.Status()
-		return st.IndexState == IndexStateIndexing && st.State == CreateRunning
+		return st.IndexState == events.IndexStateIndexing && st.State == CreateRunning
 	}, 120*time.Second, 5*time.Millisecond,
 		"the create never reported an in-flight index while still running")
 
@@ -463,7 +464,7 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	// before CancelCreate, so an index that finished in the gap would let the
 	// job reach the cancel with nothing left to wait on. IndexState is sticky
 	// and only leaves "indexing" if the mirror saw the heal finish.
-	require.Equal(t, IndexStateIndexing, final.IndexState,
+	require.Equal(t, events.IndexStateIndexing, final.IndexState,
 		"the index finished before the cancel landed; the fixture no longer discriminates")
 
 	require.Nil(t, m.Get("sub"))

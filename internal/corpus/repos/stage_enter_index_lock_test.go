@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"knomit/internal/corpus/repos/events"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -113,7 +114,7 @@ func TestCreate_StageEnterDoesNotParkBehindTheIndexRebuild(t *testing.T) {
 	// forever, since only a cancel releases it.
 	require.Eventually(t, func() bool {
 		st := job.Status()
-		return st.State == CreateRunning && st.Step == "index" && st.IndexState == IndexStateIndexing
+		return st.State == CreateRunning && st.Step == "index" && st.IndexState == events.IndexStateIndexing
 	}, 30*time.Second, 5*time.Millisecond,
 		"the create never reported an in-flight index while still running: the mount walk is parked behind the index's branch lock")
 

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -90,7 +91,7 @@ func TestRebuild_MarksIndexingThenReady(t *testing.T) {
 		return false
 	})
 
-	var mine []repos.IndexEvent
+	var mine []events.IndexEvent
 	for _, e := range indexFrames(t, body) {
 		if e.Repo == "alpha" {
 			mine = append(mine, e)

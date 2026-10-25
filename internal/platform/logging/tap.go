@@ -14,7 +14,7 @@ import (
 // tap starts dropping for it.
 //
 // Bounded deliberately, and this is the whole safety property of the type. The
-// obvious implementation — goob.Observable, which internal/corpus/repos/hub.go and the
+// obvious implementation — goob.Observable, which internal/corpus/repos/events/hub.go and the
 // sessions hub both use — buffers per subscriber into an UNBOUNDED slice
 // (goob's NewPipe: "Events uses an internal buffer so it won't block Write").
 // That is fine for the handful of task events those hubs carry. It is not fine

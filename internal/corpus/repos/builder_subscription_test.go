@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,7 +94,7 @@ func TestMount_SubscriptionBuildsAgentlessReadOnlyInstance(t *testing.T) {
 	}))
 
 	// The index heals the upstream and reaches ready.
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, ri).Index.State)
 }
 
 // A store swap must not resurrect write access. readOnly lives on the store's

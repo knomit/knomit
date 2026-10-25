@@ -3,6 +3,7 @@ package repos
 import (
 	"bytes"
 	"context"
+	"knomit/internal/corpus/repos/events"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestReconcileLoop_UnreadableRemoteIsLoggedAndSkipped(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runReconcileLoop(ctx, svc, NewTaskHub(ctx), remoteEdgeSink{}, "beta", "agent/x", nil, "", false, nil, nil, nil, nil, nil, nil, false)
+		runReconcileLoop(ctx, svc, events.NewTaskHub(ctx), remoteEdgeSink{}, "beta", "agent/x", nil, "", false, nil, nil, nil, nil, nil, nil, false)
 	}()
 
 	require.Eventually(t, func() bool {

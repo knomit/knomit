@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -105,7 +106,7 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 					// The walk is past Sync while the index is still held:
 					// sync, triggers and requests run during indexing.
 					if inst := m.Get("sub"); inst != nil {
-						syncRanDuringIndex.Store(inst.Status().gens[StageSync] != 0)
+						syncRanDuringIndex.Store(inst.snap().gens[StageSync] != 0)
 					}
 				}
 				// Let the job finish so the create can reach "done".
@@ -130,8 +131,8 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	require.Equal(t, "done", final.Step)
 	require.Equal(t, PhaseDone, final.Phase)
 	require.Equal(t, 100, final.Pct)
-	require.Equal(t, IndexStateReady, final.IndexState)
-	require.NotEqual(t, IndexStateIndexing, indexAtDone,
+	require.Equal(t, events.IndexStateReady, final.IndexState)
+	require.NotEqual(t, events.IndexStateIndexing, indexAtDone,
 		"the create reported done while the repo was still indexing")
 
 	// TRANSFER: at least one event carrying the remote's own sideband line,
@@ -156,7 +157,7 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	}
 	require.NotNil(t, index, "the create never reported an index phase; saw %s", summarize(seen))
 	require.Equal(t, 1, g.count(), "the index job passed its hook exactly once")
-	require.Equal(t, IndexStateIndexing, index.IndexState)
+	require.Equal(t, events.IndexStateIndexing, index.IndexState)
 	require.True(t, strings.HasPrefix(index.Message, "indexing "), "got %q", index.Message)
 	require.GreaterOrEqual(t, index.Pct, indexPctFloor)
 	require.Less(t, index.Pct, 100)

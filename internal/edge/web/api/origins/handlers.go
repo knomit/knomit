@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"path/filepath"
@@ -916,7 +917,7 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) htt
 
 		// Exclusive with indexing, checked before the session's clone is
 		// closed, so a refused commit can be retried with cancel_indexing.
-		if ri.Status().IndexRunning() && !body.CancelIndexing {
+		if ri.Status().IndexRunning && !body.CancelIndexing {
 			httpx.WriteLifecycleProblem(w, r, b, repo, repos.ErrIndexing)
 			return
 		}
@@ -1071,7 +1072,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 	}()
 
 	phase := ""
-	emitPhase := func(st repos.Status) {
+	emitPhase := func(st events.Status) {
 		switch st.Stage {
 		case "populate":
 			if phase == "" {
@@ -1120,7 +1121,7 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 	// The event is applied; the index job of the (possibly new) store runs in
 	// the background. Narrate it until it leaves "indexing".
 	st := ri.Status()
-	for st.Index.State == repos.IndexStateIndexing && watch != nil {
+	for st.Index.State == events.IndexStateIndexing && watch != nil {
 		stream.event(map[string]any{"phase": "indexing", "current": st.Index.Done, "total": st.Index.Total})
 		t, ok := <-watch
 		if !ok {

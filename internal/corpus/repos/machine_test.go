@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sync"
@@ -120,7 +121,7 @@ func (f *mfix) holdIndex(t *testing.T) Reply {
 	rep, err := f.m.Send(context.Background(), f.ri, Rebuild(f.ri.AgentBranch()))
 	require.NoError(t, err)
 	f.hk.g.waitArrived(t)
-	require.True(t, f.ri.Status().IndexRunning())
+	require.True(t, f.ri.Status().IndexRunning)
 	return rep
 }
 
@@ -190,7 +191,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 		f := newMFix(t, StageIndex, "index-job", true)
 		url := f.remote(t, "r")
 		first := f.holdIndex(t)
-		gens := f.ri.Status().gens
+		gens := f.ri.snap().gens
 
 		for name, e := range map[string]MachineEvent{
 			"attach": AttachOrigin(OriginSpec{URL: url, Branch: "main"}),
@@ -200,21 +201,21 @@ func TestMachine_TransitionTable(t *testing.T) {
 			_, err := send(f.m, f.ri, e)
 			require.ErrorIs(t, err, ErrIndexing, name)
 		}
-		require.Equal(t, gens, f.ri.Status().gens, "a refused event touches nothing")
+		require.Equal(t, gens, f.ri.snap().gens, "a refused event touches nothing")
 
 		// An identical rebuild is absorbed: the same job id, nothing restarted.
 		rep, err := send(f.m, f.ri, Rebuild(f.ri.AgentBranch()))
 		require.NoError(t, err)
 		require.True(t, rep.Absorbed)
 		require.Equal(t, first.JobID, rep.JobID)
-		require.Equal(t, gens, f.ri.Status().gens)
+		require.Equal(t, gens, f.ri.snap().gens)
 
 		// A rebuild of another branch replaces the running job.
 		rep, err = send(f.m, f.ri, Rebuild("main"))
 		require.NoError(t, err)
 		require.False(t, rep.Absorbed)
 		require.NotEqual(t, first.JobID, rep.JobID)
-		after := f.ri.Status()
+		after := f.ri.snap()
 		require.NotEqual(t, gens[StageIndex], after.gens[StageIndex], "Index restarted")
 		require.Equal(t, gens[StageServe], after.gens[StageServe], "Serve untouched")
 		require.Equal(t, gens[StageSync], after.gens[StageSync], "Sync untouched")
@@ -222,45 +223,45 @@ func TestMachine_TransitionTable(t *testing.T) {
 		// CancelIndex exits Index only; the result is cancelled.
 		rep, err = send(f.m, f.ri, CancelIndex())
 		require.NoError(t, err)
-		require.Equal(t, IndexStateError, rep.Status.Index.State)
+		require.Equal(t, events.IndexStateError, rep.Status.Index.State)
 		require.Equal(t, "indexing cancelled", rep.Status.Index.Reason)
-		require.Zero(t, rep.Status.gens[StageIndex], "Index exited, not re-entered")
-		require.Equal(t, gens[StageServe], rep.Status.gens[StageServe])
-		require.Equal(t, gens[StageSync], rep.Status.gens[StageSync])
+		require.Zero(t, rep.gens[StageIndex], "Index exited, not re-entered")
+		require.Equal(t, gens[StageServe], rep.gens[StageServe])
+		require.Equal(t, gens[StageSync], rep.gens[StageSync])
 		require.Equal(t, "ready", rep.Status.Stage, "the repo stays usable")
 	})
 
 	t.Run("ready, index idle", func(t *testing.T) {
 		f := newMFix(t, StageIndex, "index-job", true)
 		url := f.remote(t, "r")
-		gens := f.ri.Status().gens
+		gens := f.ri.snap().gens
 
 		rep, err := send(f.m, f.ri, CancelIndex())
 		require.NoError(t, err, "CancelIndex with no job running is a no-op")
-		require.Equal(t, gens, rep.Status.gens)
-		require.Equal(t, IndexStateReady, rep.Status.Index.State)
+		require.Equal(t, gens, rep.gens)
+		require.Equal(t, events.IndexStateReady, rep.Status.Index.State)
 
 		// Attach and Detach restart Sync alone.
 		rep, err = send(f.m, f.ri, AttachOrigin(OriginSpec{URL: url, Branch: "main"}))
 		require.NoError(t, err)
 		require.Equal(t, url, rep.Status.Sync.Origin)
 		for _, k := range []StageID{StageOpen, StageIdentify, StageIndex, StageServe} {
-			require.Equal(t, gens[k], rep.Status.gens[k], "attach must not touch %s", stageName(k))
+			require.Equal(t, gens[k], rep.gens[k], "attach must not touch %s", stageName(k))
 		}
-		require.NotEqual(t, gens[StageSync], rep.Status.gens[StageSync])
-		gens = rep.Status.gens
+		require.NotEqual(t, gens[StageSync], rep.gens[StageSync])
+		gens = rep.gens
 		rep, err = send(f.m, f.ri, DetachOrigin())
 		require.NoError(t, err)
 		require.Empty(t, rep.Status.Sync.Origin, "the local loop now")
-		require.Equal(t, gens[StageServe], rep.Status.gens[StageServe])
-		require.NotEqual(t, gens[StageSync], rep.Status.gens[StageSync])
+		require.Equal(t, gens[StageServe], rep.gens[StageServe])
+		require.NotEqual(t, gens[StageSync], rep.gens[StageSync])
 
 		// Swap rewinds to Populate: every stage re-entered.
-		gens = rep.Status.gens
+		gens = rep.gens
 		rep, err = send(f.m, f.ri, SwapStore(SwapSpec{TempDB: f.copyOfOwnDB(t)}))
 		require.NoError(t, err)
 		for k := StageOpen; k < StageReady; k++ {
-			require.NotEqual(t, gens[k], rep.Status.gens[k], "swap re-enters %s", stageName(k))
+			require.NotEqual(t, gens[k], rep.gens[k], "swap re-enters %s", stageName(k))
 		}
 		require.Equal(t, "ready", rep.Status.Stage)
 	})
@@ -277,7 +278,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 		var se *StageError
 		require.ErrorAs(t, err, &se)
 		require.Equal(t, StageOpen, se.Stage)
-		st := ri.Status()
+		st := ri.snap()
 		require.Equal(t, "unavailable", st.Stage)
 		require.Zero(t, st.gens, "a failed walk leaves nothing entered")
 		_, err = send(m, ri, Rebuild(upstream))
@@ -306,7 +307,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 
 	t.Run("a stale reenter is ignored", func(t *testing.T) {
 		f := newMFix(t, StageIndex, "index-job", true)
-		gens := f.ri.Status().gens
+		gens := f.ri.snap().gens
 		f.ri.machine.post(reenter{stage: StageServe, gen: gens[StageServe]})        // no pending restart
 		f.ri.machine.post(drained{stage: StageServe, gen: gens[StageServe] + 1000}) // unknown gen
 		f.ri.machine.post(crashed{stage: StageServe, gen: gens[StageServe] + 1000}) // stale crash
@@ -314,7 +315,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 		// handled before the reply.
 		_, err := send(f.m, f.ri, CancelIndex())
 		require.NoError(t, err)
-		require.Equal(t, gens, f.ri.Status().gens, "stale internal events change nothing")
+		require.Equal(t, gens, f.ri.snap().gens, "stale internal events change nothing")
 		require.True(t, f.ri.Status().Serve.Running)
 	})
 }
@@ -354,15 +355,15 @@ func TestWalkthrough_Boot(t *testing.T) {
 	for _, name := range []string{"alpha", "beta"} {
 		ri := m2.Get(name)
 		require.NotNil(t, ri)
-		st := ri.Status()
+		st := ri.snap()
 		require.Equal(t, "ready", st.Stage)
-		require.True(t, st.IndexRunning(), "%s: the index job is held, the mount replied anyway", name)
+		require.True(t, st.IndexRunning, "%s: the index job is held, the mount replied anyway", name)
 		require.True(t, st.Serve.Running)
 		require.NotZero(t, st.gens[StageSync])
 	}
 	g.open()
 	for _, name := range []string{"alpha", "beta"} {
-		require.Equal(t, IndexStateReady, waitIndexSettled(t, m2.Get(name)).Index.State)
+		require.Equal(t, events.IndexStateReady, waitIndexSettled(t, m2.Get(name)).Index.State)
 	}
 }
 
@@ -385,10 +386,10 @@ func TestWalkthrough_AttachOK(t *testing.T) {
 // is the reply, NOTHING is persisted and the running loop never stopped.
 func TestWalkthrough_AttachUnreachable(t *testing.T) {
 	f := newMFix(t, StageIndex, "index-job", false)
-	before := f.ri.Status()
+	before := f.ri.snap()
 	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: fileuri.New(filepath.Join(f.root, "nowhere.git")), Branch: "main"}))
 	require.ErrorIs(t, err, ErrOriginUnreachable)
-	after := f.ri.Status()
+	after := f.ri.snap()
 	require.Equal(t, before.gens, after.gens, "nothing exited or re-entered")
 	o, err := f.m.Origins().Get(f.ri.UID())
 	require.NoError(t, err)
@@ -435,7 +436,7 @@ func TestWalkthrough_SwapOK(t *testing.T) {
 	o, err := f.m.Origins().Get(f.ri.UID())
 	require.NoError(t, err)
 	require.Equal(t, url, o.URL)
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
 	_, statErr := os.Stat(f.m.RepoPath(f.ri.UID()) + ".bak")
 	require.True(t, os.IsNotExist(statErr), "the first successful Open after a swap deletes its backup")
 }
@@ -460,7 +461,7 @@ func TestSwap_OriginPersistFailureAbortsWithNothingChanged(t *testing.T) {
 	o, gerr := f.m.Origins().Get(f.ri.UID())
 	require.NoError(t, gerr)
 	require.Nil(t, o, "the origin row is untouched")
-	st := f.ri.Status()
+	st := f.ri.snap()
 	require.Equal(t, "ready", st.Stage)
 	require.Empty(t, st.Sync.Origin, "Sync is back on the local loop")
 }
@@ -491,7 +492,7 @@ func TestSwap_CopyFailureRestoresStoreAndOrigin(t *testing.T) {
 	require.NoError(t, gerr)
 	require.NotNil(t, o)
 	require.Equal(t, previous, o.URL, "the previous origin row is restored")
-	st := f.ri.Status()
+	st := f.ri.snap()
 	require.Equal(t, "ready", st.Stage, "the restored store opens")
 	require.Equal(t, previous, st.Sync.Origin)
 	require.Equal(t, idBefore, f.ri.ID())
@@ -515,7 +516,7 @@ func TestWalkthrough_SwapDuringIndexingAndCancelAndContinue(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rep.Status.Serve.Running)
 	require.True(t, rep.Status.Sync.Running)
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
 	require.NotNil(t, f.ri.triggers)
 }
 
@@ -523,12 +524,12 @@ func TestWalkthrough_SwapDuringIndexingAndCancelAndContinue(t *testing.T) {
 // Sync and Serve untouched; then ready.
 func TestWalkthrough_RebuildReadyAndDuplicate(t *testing.T) {
 	f := newMFix(t, StageIndex, "index-job", true)
-	gens := f.ri.Status().gens
+	gens := f.ri.snap().gens
 	rep := f.holdIndex(t)
 	require.NotEmpty(t, rep.JobID)
 	require.False(t, rep.Absorbed)
-	st := f.ri.Status()
-	require.Equal(t, IndexStateIndexing, st.Index.State)
+	st := f.ri.snap()
+	require.Equal(t, events.IndexStateIndexing, st.Index.State)
 	require.Equal(t, gens[StageServe], st.gens[StageServe])
 	require.Equal(t, gens[StageSync], st.gens[StageSync])
 
@@ -538,7 +539,7 @@ func TestWalkthrough_RebuildReadyAndDuplicate(t *testing.T) {
 	require.Equal(t, rep.JobID, dup.JobID)
 
 	f.hk.g.open()
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
 }
 
 // Rebuild while the heal runs: the heal is replaced (after its batch).
@@ -556,7 +557,7 @@ func TestWalkthrough_RebuildWhileIndexing(t *testing.T) {
 	rep, err := send(f.m, f.ri, Rebuild("main"))
 	require.NoError(t, err, "a rebuild of another branch replaces the running job; the replaced job's ctx ends its batch")
 	require.False(t, rep.Absorbed)
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
 }
 
 // A panic in the index job is its result: error (with a crashdump), published;
@@ -582,14 +583,14 @@ func TestWalkthrough_RebuildPanic(t *testing.T) {
 	_, err := send(m, ri, Rebuild(ri.AgentBranch()))
 	require.NoError(t, err)
 	st := waitIndexSettled(t, ri)
-	require.Equal(t, IndexStateError, st.Index.State)
+	require.Equal(t, events.IndexStateError, st.Index.State)
 	require.Contains(t, st.Index.Reason, "panicked")
 	require.NotZero(t, st.gens[StageIndex], "the stage stays entered")
 	require.True(t, st.Serve.Running, "a job panic is not a worker crash")
 
 	_, err = send(m, ri, Rebuild(ri.AgentBranch()))
 	require.NoError(t, err, "the next Rebuild is accepted")
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, ri).Index.State)
 }
 
 // CancelIndex: Index exits after the current batch, the result is cancelled,
@@ -605,15 +606,15 @@ func TestWalkthrough_CancelIndex(t *testing.T) {
 
 	rep, err := send(f.m, f.ri, CancelIndex())
 	require.NoError(t, err, "the reply comes after the job has drained")
-	require.Equal(t, IndexStateError, rep.Status.Index.State)
+	require.Equal(t, events.IndexStateError, rep.Status.Index.State)
 	require.Equal(t, "indexing cancelled", rep.Status.Index.Reason)
-	require.False(t, rep.Status.IndexRunning())
+	require.False(t, rep.Status.IndexRunning)
 	require.False(t, f.ri.triggers.indexIsReady(), "the due sweep stays gated after a cancel")
 
 	f.emb.armed.Store(false)
 	_, err = send(f.m, f.ri, Rebuild(f.ri.AgentBranch()))
 	require.NoError(t, err)
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, f.ri).Index.State)
 }
 
 // Worker crash during indexing: a Serve worker is parked on lockBranch(agent)
@@ -659,9 +660,9 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	peer.round(t)
 	require.Eventually(t, parked.Load, 10*time.Second, 5*time.Millisecond, "the merger reached its merge")
 
-	gen := host.ri.Status().gens[StageServe]
+	gen := host.ri.snap().gens[StageServe]
 	host.ri.machine.post(crashed{stage: StageServe, gen: gen})
-	waitStatus(t, host.ri, "Serve marked pending", func(s Status) bool { return !s.Serve.Running })
+	waitStatus(t, host.ri, "Serve marked pending", func(s snapshot) bool { return !s.Serve.Running })
 
 	// The driver is not waiting on the parked merger: it answers at once.
 	rep, err := send(m, host.ri, Rebuild(cHostAgent))
@@ -675,17 +676,17 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	// holding it. Everything else in the suite synchronises on hooks or Watch.
 	time.Sleep(50 * testCrashBackoff)
 	require.False(t, host.ri.Status().Serve.Running, "no re-entry while a Serve worker is still parked")
-	require.Equal(t, gen, host.ri.Status().gens[StageServe])
+	require.Equal(t, gen, host.ri.snap().gens[StageServe])
 
 	// Release the job: the lock frees, the merger finishes and exits, the
 	// waiter reports drained, the timer re-enters Serve.
 	emb.armed.Store(false)
 	emb.unblock()
-	st := waitStatus(t, host.ri, "Serve re-entered", func(s Status) bool {
+	st := waitStatus(t, host.ri, "Serve re-entered", func(s snapshot) bool {
 		return s.Serve.Running && s.gens[StageServe] != gen
 	})
 	require.NotZero(t, st.gens[StageServe])
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, host.ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, host.ri).Index.State)
 }
 
 // Archive mid-index with a parked sync round: the index job holds
@@ -866,7 +867,7 @@ func TestDispatcher_DueSweepGatedOnIndexReady(t *testing.T) {
 	require.Empty(t, dueFiresOf(t, ri, "due"))
 
 	g.open()
-	require.Equal(t, IndexStateReady, waitIndexSettled(t, ri).Index.State)
+	require.Equal(t, events.IndexStateReady, waitIndexSettled(t, ri).Index.State)
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		20*time.Second, 10*time.Millisecond, "the index job's success kicks the dispatcher, and the sweep fires")
 }

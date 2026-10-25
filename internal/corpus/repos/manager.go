@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sort"
@@ -109,7 +110,7 @@ type Manager struct {
 	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
 	// for every repo it lists. Created by New so it is available before Start.
-	repoEventHub *RepoEventHub
+	repoEventHub *events.RepoEventHub
 
 	// registry is the lens registry (first tenant of <home>/control.db).
 	// Opened by Start, closed by Close; nil before Start.
@@ -238,16 +239,14 @@ func New(ctx context.Context, deps Deps) *Manager {
 		creatingOrigins: make(map[string]struct{}),
 		// Created here rather than in Start: a repo can be mounted before
 		// Start on some paths, and a nil hub would silently drop its events.
-		repoEventHub: NewRepoEventHub(goob.New(ctx)),
+		repoEventHub: events.NewRepoEventHub(goob.New(ctx)),
 	}
 }
 
-// RepoEvents subscribes to the server-wide repo-event stream until ctx ends.
-// One stream for every repo — see RepoEventHub for why the per-repo TaskHub cannot
-// serve the fleet-wide chip.
-func (m *Manager) RepoEvents(ctx context.Context) goob.Events {
-	return m.repoEventHub.Subscribe(ctx)
-}
+// RepoEventHub is the server-wide repo-event stream: one for every repo — see
+// events.RepoEventHub for why the per-repo events.TaskHub cannot serve the
+// fleet-wide chip. Callers Subscribe on it.
+func (m *Manager) RepoEventHub() *events.RepoEventHub { return m.repoEventHub }
 
 // ErrReplicaInLens rejects a lens mounting two replicas (same root-commit ID)
 // of one repo: duplicated results, version confusion, ambiguous ID routing
@@ -871,7 +870,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 		discoveryWCoh:                 cfg.Discovery.WCoh,
 		discoveryWGap:                 cfg.Discovery.WGap,
 		discoveryWSpec:                cfg.Discovery.WSpec,
-		hub:                           NewTaskHub(m.ctx),
+		hub:                           events.NewTaskHub(m.ctx),
 		syncWake:                      make(chan struct{}, 1),
 		breakers:                      &syncBreakers{},
 		repoEventHub:                  m.repoEventHub,

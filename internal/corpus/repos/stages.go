@@ -228,7 +228,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 			log.Warn().Err(serr).Str("repo", r.Name()).Msg("observer sync failed")
 		}
 		if r.hub != nil {
-			r.hub.broadcastStatus(hash)
+			r.hub.BroadcastStatus(hash)
 		}
 	}))
 	svc.SetOnCommit(r.onCommit)
@@ -242,7 +242,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 	}
 	if r.hub != nil {
 		if head, herr := svc.HeadCommit(context.Background(), read); herr == nil {
-			r.hub.broadcastStatus(head)
+			r.hub.BroadcastStatus(head)
 		}
 	}
 	return nil
@@ -256,7 +256,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 // than ErrStoreUnavailable.
 func (openStage) Exit(r *RepoInstance) {
 	if r.hub != nil {
-		r.hub.cancelTasks()
+		r.hub.CancelTasks()
 	}
 	if obs := r.observer.Swap(nil); obs != nil {
 		obs.Stop()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -206,10 +207,10 @@ type RepoInstance struct {
 	// users before closing the underlying service.
 	handle *storeHandle
 	closed bool
-	hub    *TaskHub
+	hub    *events.TaskHub
 	// repoEventHub is the server-wide repo-event stream; nil in tests and in
 	// any Manager built without one, which publishIndex handles.
-	repoEventHub *RepoEventHub
+	repoEventHub *events.RepoEventHub
 
 	// machine drives this repo's lifecycle; nil for a bare test instance.
 	machine *Machine
@@ -235,9 +236,9 @@ type RepoInstance struct {
 
 // Status is the repo's lifecycle status, derived by its machine. A bare test
 // instance (no machine) reads as open, ready and indexed.
-func (ri *RepoInstance) Status() Status {
+func (ri *RepoInstance) Status() events.Status {
 	if ri.machine == nil {
-		return Status{Stage: "ready", Index: IndexStatus{State: IndexStateReady}, open: true}
+		return events.Status{Stage: "ready", Index: events.IndexStatus{State: events.IndexStateReady}}
 	}
 	return ri.machine.Status()
 }
@@ -247,7 +248,8 @@ func (ri *RepoInstance) Status() Status {
 func (ri *RepoInstance) Watch(ctx context.Context) <-chan Transition {
 	if ri.machine == nil {
 		ch := make(chan Transition, 1)
-		ch <- Transition{Status: ri.Status()}
+		st := ri.Status()
+		ch <- Transition{Status: st, snap: snapshot{Status: st}}
 		close(ch)
 		return ch
 	}
@@ -656,7 +658,7 @@ func (ri *RepoInstance) DiscoveryWGap() float64 { return ri.discoveryWGap }
 func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 
 // TaskHub returns the hub for broadcasting task status events.
-func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
+func (ri *RepoInstance) TaskHub() *events.TaskHub { return ri.hub }
 
 // Verify runs the integrity check against the current store while holding a
 // store reference (Acquire), so a concurrent SwapStore/Archive drains this
@@ -724,7 +726,7 @@ type TestInstanceConfig struct {
 	Subscribed          bool
 	Svc                 *store.Service
 	Ontology            *fact.Ontology
-	Hub                 *TaskHub
+	Hub                 *events.TaskHub
 	Embedder            model.BatchEmbedder
 	OntologyRoot        string
 	MethodologyMinScore float64

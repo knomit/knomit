@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"path/filepath"
 	"sort"
@@ -664,7 +665,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	// card on indexing until the rebuild ends.
 	indexState := watchIndex(ctx, ri, emit)
 	message := "repo ready"
-	if indexState == IndexStateError {
+	if indexState == events.IndexStateError {
 		message = "repo ready; index needs attention"
 	}
 	emit(Event{Step: "done", Phase: PhaseDone, Message: message, Pct: 100, IndexState: indexState})
@@ -800,13 +801,13 @@ const (
 func watchIndex(ctx context.Context, ri *RepoInstance, emit func(Event)) string {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	last := IndexStatus{State: "-"}
+	last := events.IndexStatus{State: "-"}
 	for t := range ri.Watch(wctx) {
 		ix := t.Status.Index
-		if ix.State != IndexStateIndexing {
+		if ix.State != events.IndexStateIndexing {
 			return ix.State
 		}
-		if ix.Done == last.Done && ix.Total == last.Total && last.State == IndexStateIndexing {
+		if ix.Done == last.Done && ix.Total == last.Total && last.State == events.IndexStateIndexing {
 			continue
 		}
 		last = ix
@@ -815,15 +816,15 @@ func watchIndex(ctx context.Context, ri *RepoInstance, emit func(Event)) string 
 			Phase:      PhaseIndex,
 			Message:    fmt.Sprintf("indexing %d/%d", ix.Done, ix.Total),
 			Pct:        scaleIndexPct(ix.Done, ix.Total),
-			IndexState: IndexStateIndexing,
+			IndexState: events.IndexStateIndexing,
 		})
 	}
 	// The job's deadline, shutdown, or the repo unmounted: the job reports
 	// the last thing it saw.
-	if st := ri.Status().Index.State; st != IndexStateIndexing && ctx.Err() == nil {
+	if st := ri.Status().Index.State; st != events.IndexStateIndexing && ctx.Err() == nil {
 		return st
 	}
-	return IndexStateIndexing
+	return events.IndexStateIndexing
 }
 
 // scaleIndexPct maps the heal's own done/total onto the index phase's band.

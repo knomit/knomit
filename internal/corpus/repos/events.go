@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"strings"
 
@@ -135,7 +136,10 @@ type Reply struct {
 	JobID    string
 	Absorbed bool
 	// Status is the machine's status after the event was handled.
-	Status Status
+	Status events.Status
+
+	// gens is each entered stage's life generation after the event (test seam).
+	gens [StageReady]uint64
 }
 
 type reply struct {

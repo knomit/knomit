@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -993,10 +994,10 @@ func TestCreate_CloneMode_SyncRunsWhileTheIndexJobIsHeld(t *testing.T) {
 	g.waitArrived(t)
 	var ri *RepoInstance
 	require.Eventually(t, func() bool { ri = m.Get("cloned"); return ri != nil }, 10*time.Second, 5*time.Millisecond)
-	st := waitStatus(t, ri, "mounted with the index held", func(s Status) bool { return s.Stage == "ready" })
+	st := waitStatus(t, ri, "mounted with the index held", func(s snapshot) bool { return s.Stage == "ready" })
 	require.True(t, st.Sync.Running, "the sync loop runs while the index job is held")
 	require.Equal(t, url, st.Sync.Origin, "the origin loop, not the local one")
-	require.Equal(t, IndexStateIndexing, st.Index.State)
+	require.Equal(t, events.IndexStateIndexing, st.Index.State)
 	select {
 	case <-created:
 		t.Fatal("the create reported done while the repo was still indexing")
@@ -1007,7 +1008,7 @@ func TestCreate_CloneMode_SyncRunsWhileTheIndexJobIsHeld(t *testing.T) {
 	res := <-created
 	require.NoError(t, res.err)
 	require.Same(t, ri, res.ri)
-	require.Equal(t, IndexStateReady, ri.Status().Index.State, "the clone-create index reaches 'ready'")
+	require.Equal(t, events.IndexStateReady, ri.Status().Index.State, "the clone-create index reaches 'ready'")
 }
 
 // setExperimentSweepInterval shortens the sweep cadence for sweepers started
@@ -1049,7 +1050,7 @@ func cloneCreateForSweep(t *testing.T, m *Manager, root, name string) *RepoInsta
 	}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, ri)
-	require.Equal(t, IndexStateReady, ri.Status().Index.State)
+	require.Equal(t, events.IndexStateReady, ri.Status().Index.State)
 	require.NotNil(t, ri.sweep, "fixture: this repo must run an experiment sweep")
 	return ri
 }
@@ -1071,10 +1072,10 @@ func TestAttachOrigin_RestartsSyncOnlyAndTheSweepSurvives(t *testing.T) {
 	o, err := testService(t, ri).Remote().GetRemote("origin")
 	require.NoError(t, err)
 	require.NotNil(t, o)
-	before := ri.Status()
+	before := ri.snap()
 	_, err = m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: o.URL, Branch: o.Branch}))
 	require.NoError(t, err)
-	after := ri.Status()
+	after := ri.snap()
 	require.NotEqual(t, before.gens[StageSync], after.gens[StageSync], "the attach restarts Sync")
 	for _, k := range []StageID{StageOpen, StageIdentify, StageIndex, StageServe} {
 		require.Equal(t, before.gens[k], after.gens[k], "the attach must not touch %s", stageName(k))

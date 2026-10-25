@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"knomit/internal/corpus/repos/events"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,7 +30,7 @@ func heldIndexRepo(t *testing.T) (*Manager, *RepoInstance, *gate) {
 	require.NoError(t, err)
 	g.waitArrived(t)
 	t.Cleanup(g.open)
-	require.Equal(t, IndexStateIndexing, ri.Status().Index.State)
+	require.Equal(t, events.IndexStateIndexing, ri.Status().Index.State)
 	return m, ri, g
 }
 
@@ -39,8 +40,8 @@ func heldIndexRepo(t *testing.T) (*Manager, *RepoInstance, *gate) {
 func reportProgress(t *testing.T, ri *RepoInstance, done, total int) {
 	t.Helper()
 	ri.indexProgress.Store(&indexProgress{done: done, total: total})
-	ri.machine.postProgress(ri.Status().gens[StageIndex])
-	waitStatus(t, ri, "progress published", func(s Status) bool { return s.Index.Done == done && s.Index.Total == total })
+	ri.machine.postProgress(ri.snap().gens[StageIndex])
+	waitStatus(t, ri, "progress published", func(s snapshot) bool { return s.Index.Done == done && s.Index.Total == total })
 }
 
 // watchIndex narrates the index job and returns the state it ended in — and
@@ -65,7 +66,7 @@ func TestWatchIndex_NarratesProgressAndEndsReady(t *testing.T) {
 
 	select {
 	case state := <-done:
-		require.Equal(t, IndexStateReady, state)
+		require.Equal(t, events.IndexStateReady, state)
 	case <-time.After(30 * time.Second):
 		t.Fatal("watchIndex did not return after the job reported ready")
 	}
@@ -76,7 +77,7 @@ func TestWatchIndex_NarratesProgressAndEndsReady(t *testing.T) {
 	first := got[0]
 	require.Equal(t, PhaseIndex, first.Phase)
 	require.Equal(t, "index", first.Step)
-	require.Equal(t, IndexStateIndexing, first.IndexState)
+	require.Equal(t, events.IndexStateIndexing, first.IndexState)
 	require.Equal(t, "indexing 3/12", first.Message, "the message carries the job's own counts")
 	// 3/12 of the band 95..99 is 96 — a value derived from the job, which is
 	// the whole point: a constant here would pass an "is it between 95 and 99"
@@ -97,7 +98,7 @@ func TestWatchIndex_ReportsErrorWithoutFailing(t *testing.T) {
 
 	select {
 	case state := <-done:
-		require.Equal(t, IndexStateError, state)
+		require.Equal(t, events.IndexStateError, state)
 	case <-time.After(30 * time.Second):
 		t.Fatal("watchIndex did not return after the index ended in error")
 	}
@@ -117,11 +118,11 @@ func TestWatchIndex_ContextEndsTheNarrationNotTheCreate(t *testing.T) {
 
 	select {
 	case state := <-done:
-		require.Equal(t, IndexStateIndexing, state, "the last state it actually saw")
+		require.Equal(t, events.IndexStateIndexing, state, "the last state it actually saw")
 	case <-time.After(5 * time.Second):
 		t.Fatal("watchIndex ignored its context")
 	}
-	require.Equal(t, IndexStateIndexing, ri.Status().Index.State, "the index job itself is untouched")
+	require.Equal(t, events.IndexStateIndexing, ri.Status().Index.State, "the index job itself is untouched")
 }
 
 // An index that has already settled is not narrated at all — watchIndex
@@ -130,7 +131,7 @@ func TestWatchIndex_AlreadyReadyEmitsNothing(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
 	var got []Event
-	require.Equal(t, IndexStateReady,
+	require.Equal(t, events.IndexStateReady,
 		watchIndex(context.Background(), ri, func(e Event) { got = append(got, e) }))
 	require.Empty(t, got)
 }
@@ -180,14 +181,14 @@ func TestCreateJobRecord_IndexStateIsSticky(t *testing.T) {
 	require.True(t, st.Indeterminate)
 	require.Empty(t, st.IndexState, "nothing has said anything about the index yet")
 
-	j.record(Event{Step: "index", Phase: PhaseIndex, Message: "indexing 1/4", Pct: 96, IndexState: IndexStateIndexing})
-	require.Equal(t, IndexStateIndexing, j.Status().IndexState)
+	j.record(Event{Step: "index", Phase: PhaseIndex, Message: "indexing 1/4", Pct: 96, IndexState: events.IndexStateIndexing})
+	require.Equal(t, events.IndexStateIndexing, j.Status().IndexState)
 	require.False(t, j.Status().Indeterminate, "indeterminate is overwritten, not sticky")
 
-	j.record(Event{Step: "done", Phase: PhaseDone, Message: "repo ready", Pct: 100, IndexState: IndexStateReady})
-	require.Equal(t, IndexStateReady, j.Status().IndexState)
+	j.record(Event{Step: "done", Phase: PhaseDone, Message: "repo ready", Pct: 100, IndexState: events.IndexStateReady})
+	require.Equal(t, events.IndexStateReady, j.Status().IndexState)
 
 	// An event with no index state leaves the last one standing.
 	j.record(Event{Step: "whatever", Phase: PhaseDone, Message: "later"})
-	require.Equal(t, IndexStateReady, j.Status().IndexState)
+	require.Equal(t, events.IndexStateReady, j.Status().IndexState)
 }

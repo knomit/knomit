@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -444,7 +445,7 @@ func TestPush_StatisticsAndLog(t *testing.T) {
 	_, ri := newTriggerRepo(t, pushTrig("fast", "learn", "", "change.path !== 'kb/tasks/skip.md'"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	events, _ := ri.TaskHub().Subscribe(ctx)
+	stream, _ := ri.TaskHub().Subscribe(ctx)
 
 	write(t, ri, "kb/tasks/a.md")
 	write(t, ri, "kb/tasks/skip.md")
@@ -465,8 +466,8 @@ func TestPush_StatisticsAndLog(t *testing.T) {
 	deadline := time.After(pushQuiet)
 	for {
 		select {
-		case e := <-events:
-			if ev, ok := e.(TriggerEvent); ok {
+		case e := <-stream:
+			if ev, ok := e.(events.TriggerEvent); ok {
 				t.Fatalf("a push fire must not emit an SSE trigger event, got %+v", ev)
 			}
 		case <-deadline:

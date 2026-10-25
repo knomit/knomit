@@ -3,11 +3,10 @@ package repos
 import (
 	"context"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"sync"
 	"testing"
 	"time"
-
-	"knomit/internal/engine/store/remotesync"
 
 	"github.com/stretchr/testify/require"
 )
@@ -20,9 +19,9 @@ import (
 // a sleep.
 type remoteEventLog struct {
 	mu      sync.Mutex
-	remote  []RemoteEvent
+	remote  []events.RemoteEvent
 	markers map[string]bool
-	hub     *RepoEventHub
+	hub     *events.RepoEventHub
 	seq     int
 }
 
@@ -31,19 +30,19 @@ func subscribeRemoteEvents(t *testing.T, ri *RepoInstance) *remoteEventLog {
 	require.NotNil(t, ri.repoEventHub, "precondition: the repo is mounted by a Manager with a repo-event hub")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	events := ri.repoEventHub.Subscribe(ctx)
+	stream := ri.repoEventHub.Subscribe(ctx)
 	l := &remoteEventLog{markers: map[string]bool{}, hub: ri.repoEventHub}
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case e := <-events:
+			case e := <-stream:
 				l.mu.Lock()
 				switch ev := e.(type) {
-				case RemoteEvent:
+				case events.RemoteEvent:
 					l.remote = append(l.remote, ev)
-				case IndexEvent:
+				case events.IndexEvent:
 					l.markers[ev.Repo] = true
 				}
 				l.mu.Unlock()
@@ -53,12 +52,12 @@ func subscribeRemoteEvents(t *testing.T, ri *RepoInstance) *remoteEventLog {
 	return l
 }
 
-// settle publishes a marker and returns every RemoteEvent seen before it.
-func (l *remoteEventLog) settle(t *testing.T) []RemoteEvent {
+// settle publishes a marker and returns every events.RemoteEvent seen before it.
+func (l *remoteEventLog) settle(t *testing.T) []events.RemoteEvent {
 	t.Helper()
 	l.seq++
 	marker := fmt.Sprintf("marker-%d", l.seq)
-	l.hub.publish(IndexEvent{Repo: marker})
+	l.hub.Publish(events.IndexEvent{Repo: marker})
 	require.Eventually(t, func() bool {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -66,7 +65,7 @@ func (l *remoteEventLog) settle(t *testing.T) []RemoteEvent {
 	}, 10*time.Second, 2*time.Millisecond, "marker %s never arrived", marker)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]RemoteEvent(nil), l.remote...)
+	return append([]events.RemoteEvent(nil), l.remote...)
 }
 
 func persistedHealth(t *testing.T, ri *RepoInstance) (string, string) {
@@ -74,7 +73,7 @@ func persistedHealth(t *testing.T, ri *RepoInstance) (string, string) {
 	r, err := testService(t, ri).Remote().GetRemote("origin")
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	return RemoteHealth(r)
+	return events.RemoteHealth(r)
 }
 
 // The `remote` repo-event is an EDGE: published when a persisted status column
@@ -102,7 +101,7 @@ func TestRemoteEvents_EdgesOnly(t *testing.T) {
 
 	l.authFail.Store(true)
 	l.round(t, ri) // round 3: ok → error on the sync half
-	require.Equal(t, []RemoteEvent{{Repo: ri.Name(), Sync: "error", Push: "ok"}}, log.settle(t),
+	require.Equal(t, []events.RemoteEvent{{Repo: ri.Name(), Sync: "error", Push: "ok"}}, log.settle(t),
 		"exactly one frame, carrying the whole row: sync error, push untouched")
 
 	l.round(t, ri) // round 4: still failing
@@ -112,7 +111,7 @@ func TestRemoteEvents_EdgesOnly(t *testing.T) {
 	l.round(t, ri) // round 5: error → ok
 	got := log.settle(t)
 	require.Len(t, got, 2)
-	require.Equal(t, RemoteEvent{Repo: ri.Name(), Sync: "ok", Push: "ok"}, got[1], "the recovery edge")
+	require.Equal(t, events.RemoteEvent{Repo: ri.Name(), Sync: "ok", Push: "ok"}, got[1], "the recovery edge")
 
 	l.round(t, ri) // round 6: healthy again
 	require.Len(t, log.settle(t), 2, "and silent again")
@@ -133,7 +132,7 @@ func TestRemoteEvents_RecoveryEdgeAfterRestart(t *testing.T) {
 	log := subscribeRemoteEvents(t, ri)
 
 	startBreakerLoop(t, ri, root, nil) // a fresh loop: counters at zero
-	require.Equal(t, []RemoteEvent{{Repo: ri.Name(), Sync: "ok", Push: "ok"}}, log.settle(t))
+	require.Equal(t, []events.RemoteEvent{{Repo: ri.Name(), Sync: "ok", Push: "ok"}}, log.settle(t))
 }
 
 // A RENAME DOES NOT RESTART THE LOOP (RenameRepo only re-keys the instance),
@@ -156,16 +155,5 @@ func TestRemoteEvents_CarryTheNameAtPublishTime(t *testing.T) {
 
 	l.authFail.Store(true)
 	l.round(t, ri) // ok → error, in the SAME loop
-	require.Equal(t, []RemoteEvent{{Repo: "renamed", Sync: "error", Push: "ok"}}, log.settle(t))
-}
-
-// Pure: the wire vocabulary of one status column. NULL is "never ran", not
-// "ok" — a dot must not claim health for a half that has not been tried.
-func TestRemoteStatusValue(t *testing.T) {
-	ok, bad := "ok", "error"
-	require.Equal(t, "", RemoteStatusValue(nil))
-	require.Equal(t, "ok", RemoteStatusValue(&ok))
-	require.Equal(t, "error", RemoteStatusValue(&bad))
-	s, p := RemoteHealth(&remotesync.Remote{LastStatus: &ok})
-	require.Equal(t, [2]string{"ok", ""}, [2]string{s, p})
+	require.Equal(t, []events.RemoteEvent{{Repo: "renamed", Sync: "error", Push: "ok"}}, log.settle(t))
 }

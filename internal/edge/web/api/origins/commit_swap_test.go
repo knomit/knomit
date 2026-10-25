@@ -3,6 +3,7 @@ package origins
 import (
 	"context"
 	"encoding/json"
+	"knomit/internal/corpus/repos/events"
 	"net/http"
 	"os"
 	"strings"
@@ -69,7 +70,7 @@ func waitIndexSettledWeb(t *testing.T, ri *repos.RepoInstance) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for tr := range ri.Watch(ctx) {
-		if tr.Status.Index.State != repos.IndexStateIndexing {
+		if tr.Status.Index.State != events.IndexStateIndexing {
 			return tr.Status.Index.State
 		}
 	}
@@ -127,7 +128,7 @@ func TestHandleCommit_Disjoint_SwapDuringIndexingIs409_CancelAndContinueReachesR
 	if !strings.Contains(body, `"index_state":"ready"`) {
 		t.Fatalf("the commit's done must report the new store's index ready; body=%s", body)
 	}
-	if got := f.ri.Status().Index.State; got != repos.IndexStateReady {
+	if got := f.ri.Status().Index.State; got != events.IndexStateReady {
 		t.Fatalf("index state after the swap: got %q, want ready", got)
 	}
 }
@@ -174,7 +175,7 @@ func TestHandleCommit_Disjoint_FailedSwapRestartsThePreviousSyncMode(t *testing.
 			if f.ri.ID() != idBefore {
 				t.Fatalf("the previous store must be back")
 			}
-			if got := waitIndexSettledWeb(t, f.ri); got != repos.IndexStateReady {
+			if got := waitIndexSettledWeb(t, f.ri); got != events.IndexStateReady {
 				t.Fatalf("index state after a failed swap: %q, want ready (the restored store is healed)", got)
 			}
 		})

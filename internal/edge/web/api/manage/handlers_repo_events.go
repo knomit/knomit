@@ -2,6 +2,7 @@ package manage
 
 import (
 	"encoding/json"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"time"
@@ -76,7 +77,7 @@ func handleRepoEvents(m *repos.Manager) http.HandlerFunc {
 
 		// Subscribe BEFORE announcing ready: an event published between the two
 		// would fall in the gap that `ready` exists to close.
-		events := m.RepoEvents(r.Context())
+		updates := m.RepoEventHub().Subscribe(r.Context())
 
 		// One `ready` per connection. The client refetches the repo list on a
 		// LATER one, because a reconnect's gap may have dropped the terminal
@@ -91,15 +92,15 @@ func handleRepoEvents(m *repos.Manager) http.HandlerFunc {
 			select {
 			case <-r.Context().Done():
 				return
-			case e, ok := <-events:
+			case e, ok := <-updates:
 				if !ok {
 					return
 				}
 				var kind string
 				switch e.(type) {
-				case repos.IndexEvent:
+				case events.IndexEvent:
 					kind = "index"
-				case repos.RemoteEvent:
+				case events.RemoteEvent:
 					kind = "remote"
 				default:
 					continue

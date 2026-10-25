@@ -1,4 +1,4 @@
-package repos
+package events
 
 import (
 	"context"
@@ -74,7 +74,7 @@ func TestTaskHub_SubscribeRacingATerminalNeverMissesIt(t *testing.T) {
 }
 
 // Cancel acts only on its op's running task the hub started: a finished id,
-// an unknown one and a task the hub only records (publishTask) are refused,
+// an unknown one and a task the hub only records (PublishTask) are refused,
 // and a refused Cancel cancels nothing.
 func TestTaskHub_CancelOnlyTheRunningStartedTask(t *testing.T) {
 	hub := NewTaskHub(context.Background())
@@ -98,7 +98,7 @@ func TestTaskHub_CancelOnlyTheRunningStartedTask(t *testing.T) {
 			break
 		}
 	}
-	hub.publishTask(TaskEvent{Op: "rebuild", ID: "rebuild-77", Status: "running"})
+	hub.PublishTask(TaskEvent{Op: "rebuild", ID: "rebuild-77", Status: "running"})
 
 	for _, id := range []string{finished, "synth-99", "rebuild-77"} {
 		if _, ok := hub.Cancel(id); ok {

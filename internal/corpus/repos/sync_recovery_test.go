@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func TestRemoteStatusIsError(t *testing.T) {
-	if remoteStatusIsError(RemoteStatusValue(nil)) {
+	if remoteStatusIsError(events.RemoteStatusValue(nil)) {
 		t.Fatal("a NULL status is 'never attempted', not a failure")
 	}
 	if remoteStatusIsError("ok") {

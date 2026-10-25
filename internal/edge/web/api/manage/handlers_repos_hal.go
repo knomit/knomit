@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
@@ -106,7 +107,7 @@ func remoteHealthOf(ctx context.Context, ri *repos.RepoInstance) *repoRemoteHeal
 	if err != nil || remote == nil {
 		return nil
 	}
-	s, p := repos.RemoteHealth(remote)
+	s, p := events.RemoteHealth(remote)
 	return &repoRemoteHealth{Sync: s, Push: p}
 }
 

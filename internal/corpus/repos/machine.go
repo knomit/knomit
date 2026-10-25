@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/events"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -75,45 +76,25 @@ func (o Options) unmountDrainBound() time.Duration {
 	return DefaultUnmountDrainBound
 }
 
-// Status is a repo's lifecycle status, derived from the machine and read
-// lock-free from an atomic snapshot.
-type Status struct {
-	// Stage is populate|open|identify|index|serve|sync while a walk is in
-	// flight, ready once it finished, else unavailable|closed.
-	Stage string
-	Index IndexStatus
-	Sync  struct {
-		Running bool
-		Origin  string
-	}
-	Serve struct{ Running bool }
-	// Err is the cause of Unavailable.
-	Err error
+// snapshot is the machine's published state: the public events.Status
+// projection plus the bookkeeping only the machine reads. It is derived from
+// the cursor and the Index result and read lock-free from an atomic pointer.
+type snapshot struct {
+	events.Status
 
-	open         bool // the store is attached (Open entered)
-	indexRunning bool // the index job is in flight
-	terminal     terminal
-	job          string // the manual rebuild's job id, "" for a heal
-	jobFull      bool
-	gens         [StageReady]uint64 // each entered stage's life generation, 0 when not entered
-}
-
-// IndexRunning reports whether the index job is in flight — what makes
-// Attach, Detach and Swap answer ErrIndexing.
-func (s Status) IndexRunning() bool { return s.indexRunning }
-
-// IndexStatus is the index half of Status. State is indexing|ready|error.
-type IndexStatus struct {
-	State  string
-	Done   int
-	Total  int
-	Reason string
-	phase  string
+	open     bool // the store is attached (Open entered)
+	terminal terminal
+	job      string // the manual rebuild's job id, "" for a heal
+	jobFull  bool
+	phase    string             // the index job's current phase
+	gens     [StageReady]uint64 // each entered stage's life generation, 0 when not entered
 }
 
 // Transition is one published change of a machine's status.
 type Transition struct {
-	Status Status
+	Status events.Status
+
+	snap snapshot // the same state with the machine's bookkeeping (test seam)
 }
 
 // terminal is the machine's end state, if any.
@@ -226,11 +207,11 @@ type Machine struct {
 	jobID      string // the current manual rebuild's job id
 	closing    bool   // set before an Unmount's exits: Open.Exit marks the instance closed
 	pendingBak string // a swap's backup, deleted by the next successful Open
-	lastPub    Status
+	lastPub    snapshot
 	pub        indexPublisher
 
 	progressPending atomic.Bool
-	status          atomic.Pointer[Status]
+	status          atomic.Pointer[snapshot]
 	watchers        broadcaster
 	done            chan struct{}
 }
@@ -266,18 +247,19 @@ func (m *Machine) Send(ctx context.Context, e MachineEvent) (Reply, error) {
 	if e.kind == evUnmount {
 		m.rootCancel()
 	} else {
-		st := m.Status()
+		sn := m.snap()
+		st := sn.Status
 		switch {
-		case st.terminal == termClosed:
+		case sn.terminal == termClosed:
 			return Reply{Status: st}, ErrClosed
-		case st.terminal == termUnavailable && e.kind != evMount:
+		case sn.terminal == termUnavailable && e.kind != evMount:
 			return Reply{Status: st}, unavailableErr(st.Err)
-		case e.kind != evMount && !st.open:
+		case e.kind != evMount && !sn.open:
 			if st.Stage == "populate" {
 				return Reply{Status: st}, errNotOpenPopulating
 			}
 			return Reply{Status: st}, ErrNotOpen
-		case e.exclusiveWithIndex() && st.indexRunning:
+		case e.exclusiveWithIndex() && st.IndexRunning:
 			return Reply{Status: st}, ErrIndexing
 		}
 	}
@@ -300,14 +282,17 @@ func (m *Machine) Send(ctx context.Context, e MachineEvent) (Reply, error) {
 	}
 }
 
+// snap is the last published snapshot, bookkeeping included.
+func (m *Machine) snap() snapshot { return *m.status.Load() }
+
 // Status is the last published status.
-func (m *Machine) Status() Status { return *m.status.Load() }
+func (m *Machine) Status() events.Status { return m.snap().Status }
 
 // Watch streams status transitions until ctx ends or the machine is done. The
 // current status is delivered first. A slow reader sees the latest status,
 // not every intermediate one.
 func (m *Machine) Watch(ctx context.Context) <-chan Transition {
-	return m.watchers.subscribe(ctx, m.Status, m.done)
+	return m.watchers.subscribe(ctx, m.snap, m.done)
 }
 
 // Done is closed once the machine has unmounted.
@@ -351,7 +336,8 @@ func (m *Machine) drive() {
 // it reports true once the machine has unmounted.
 func (m *Machine) handleExternal(e *MachineEvent) bool {
 	answer := func(rep Reply, err error) {
-		rep.Status = m.Status()
+		sn := m.snap()
+		rep.Status, rep.gens = sn.Status, sn.gens
 		e.reply <- reply{Reply: rep, err: err}
 	}
 	if m.term == termClosed {
@@ -599,16 +585,16 @@ func (m *Machine) unmount() {
 	s := m.computeStatus()
 	m.watchers.mu.Lock()
 	m.status.Store(&s)
-	m.watchers.closeAllLocked(Transition{Status: s})
+	m.watchers.closeAllLocked(Transition{Status: s.Status, snap: s})
 	m.watchers.mu.Unlock()
 	close(m.done)
 }
 
 // computeStatus derives the status from the machine. The ONE function that
 // does so.
-func (m *Machine) computeStatus() Status {
+func (m *Machine) computeStatus() snapshot {
 	r := m.r
-	var s Status
+	var s snapshot
 	switch m.term {
 	case termClosed:
 		s.Stage = "closed"
@@ -625,19 +611,19 @@ func (m *Machine) computeStatus() Status {
 		}
 	}
 	s.open = m.lives[StageOpen] != nil
-	s.indexRunning = m.indexRunning()
+	s.IndexRunning = m.indexRunning()
 	switch v := r.indexVerdict; {
 	case v == nil:
-		s.Index.State = IndexStateIndexing
+		s.Index.State = events.IndexStateIndexing
 		if p := r.indexProgress.Load(); p != nil {
-			s.Index.Done, s.Index.Total, s.Index.phase = p.done, p.total, p.phase
+			s.Index.Done, s.Index.Total, s.phase = p.done, p.total, p.phase
 		}
 	case v.err == nil:
-		s.Index.State = IndexStateReady
+		s.Index.State = events.IndexStateReady
 	case errors.Is(v.err, ErrIndexCancelled):
-		s.Index.State, s.Index.Reason = IndexStateError, ErrIndexCancelled.Error()
+		s.Index.State, s.Index.Reason = events.IndexStateError, ErrIndexCancelled.Error()
 	default:
-		s.Index.State, s.Index.Reason = IndexStateError, v.err.Error()
+		s.Index.State, s.Index.Reason = events.IndexStateError, v.err.Error()
 	}
 	if m.indexSpec.full && m.lives[StageIndex] != nil {
 		s.job, s.jobFull = m.jobID, true
@@ -667,19 +653,19 @@ func (m *Machine) publish() {
 		moved := s.Index.Done != prev.Index.Done || s.Index.Total != prev.Index.Total
 		switch {
 		case changed:
-			m.publishIndex(s, false)
-		case moved && s.Index.State == IndexStateIndexing:
-			m.publishIndex(s, true)
+			m.publishIndex(s.Status, false)
+		case moved && s.Index.State == events.IndexStateIndexing:
+			m.publishIndex(s.Status, true)
 		}
 		m.publishRebuildTask(prev, s)
 	}
-	m.watchers.sendLocked(Transition{Status: s})
+	m.watchers.sendLocked(Transition{Status: s.Status, snap: s})
 }
 
 // publishRebuildTask keeps the jobs UI contract for a manual rebuild — hub
 // TaskEvents on op "rebuild", running → done | error — from the same publish
 // point, so there is no second single-flight.
-func (m *Machine) publishRebuildTask(prev, s Status) {
+func (m *Machine) publishRebuildTask(prev, s snapshot) {
 	hub := m.r.hub
 	if hub == nil {
 		return
@@ -687,31 +673,31 @@ func (m *Machine) publishRebuildTask(prev, s Status) {
 	repo := m.r.Name()
 	// A previous rebuild that was still running and is no longer the current
 	// job ended without finishing: replaced by another index job, or cancelled.
-	if prev.jobFull && prev.job != "" && prev.job != s.job && prev.Index.State == IndexStateIndexing {
-		ev := TaskEvent{Op: "rebuild", ID: prev.job, Status: "error", Message: "replaced by another index job", Repo: repo}
-		if s.Index.State == IndexStateError && s.Index.Reason == ErrIndexCancelled.Error() {
+	if prev.jobFull && prev.job != "" && prev.job != s.job && prev.Index.State == events.IndexStateIndexing {
+		ev := events.TaskEvent{Op: "rebuild", ID: prev.job, Status: "error", Message: "replaced by another index job", Repo: repo}
+		if s.Index.State == events.IndexStateError && s.Index.Reason == ErrIndexCancelled.Error() {
 			ev.Message = ErrIndexCancelled.Error()
 		}
-		hub.publishTask(ev)
+		hub.PublishTask(ev)
 	}
 	if !s.jobFull || s.job == "" {
 		return
 	}
 	switch s.Index.State {
-	case IndexStateIndexing:
+	case events.IndexStateIndexing:
 		if prev.job != s.job {
-			hub.publishTask(TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
+			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 		} else if s.Index.Done != prev.Index.Done || s.Index.Total != prev.Index.Total {
-			hub.publishTask(TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: s.Index.phase,
+			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "running", Phase: s.phase,
 				Message: fmt.Sprintf("%d/%d", s.Index.Done, s.Index.Total), Repo: repo})
 		}
-	case IndexStateReady:
-		if prev.job != s.job || prev.Index.State != IndexStateReady {
-			hub.publishTask(TaskEvent{Op: "rebuild", ID: s.job, Status: "done", Message: "rebuild complete", Repo: repo})
+	case events.IndexStateReady:
+		if prev.job != s.job || prev.Index.State != events.IndexStateReady {
+			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "done", Message: "rebuild complete", Repo: repo})
 		}
-	case IndexStateError:
-		if prev.job != s.job || prev.Index.State != IndexStateError {
-			hub.publishTask(TaskEvent{Op: "rebuild", ID: s.job, Status: "error", Message: s.Index.Reason, Repo: repo})
+	case events.IndexStateError:
+		if prev.job != s.job || prev.Index.State != events.IndexStateError {
+			hub.PublishTask(events.TaskEvent{Op: "rebuild", ID: s.job, Status: "error", Message: s.Index.Reason, Repo: repo})
 		}
 	}
 }
@@ -726,10 +712,11 @@ type broadcaster struct {
 	closed bool
 }
 
-func (b *broadcaster) subscribe(ctx context.Context, current func() Status, done <-chan struct{}) <-chan Transition {
+func (b *broadcaster) subscribe(ctx context.Context, current func() snapshot, done <-chan struct{}) <-chan Transition {
 	ch := make(chan Transition, 1)
 	b.mu.Lock()
-	ch <- Transition{Status: current()}
+	cur := current()
+	ch <- Transition{Status: cur.Status, snap: cur}
 	if b.closed {
 		b.mu.Unlock()
 		close(ch)
