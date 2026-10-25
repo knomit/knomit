@@ -152,3 +152,48 @@ func TestFactAsOfDate_LensReadMountFact(t *testing.T) {
 
 	requireRFC3339Date(t, body.AsOf.Date, "lens read-mount fact")
 }
+
+// TestFactAsOfDate_FallbackBeforeView pins the stamp on the ?fallback=before
+// view of GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/{path...}
+// (handlers_commit_anchored.go): when the fact is retracted at the pinned
+// commit the view shows the last live version, so as_of.date is THAT version's
+// commit date, not the date of the retracting commit the URL names and not
+// the branch tip's.
+//
+// Commit dates have one-second resolution, so the history is spread over real
+// time: v1 is written, the test waits past the next second, then the fact is
+// retracted and an unrelated fact written (the tip). The expected date is read
+// back from the store, and the test first requires it to differ from the
+// tip's, or it would pass for any stamp.
+func TestFactAsOfDate_FallbackBeforeView(t *testing.T) {
+	m, svcs := newRealStoreManager(t, "alpha")
+	svc := svcs["alpha"]
+	ctx := context.Background()
+	branch := "agent/test"
+
+	v1, err := svc.Facts().WriteFact(ctx, branch, "kb/r.md", factText(t, "kb/r.md", "Retract one", 0.9, nil), "add r", "learn")
+	require.NoError(t, err)
+	time.Sleep(1100 * time.Millisecond)
+	retract, _, err := svc.Facts().BatchWriteFacts(ctx, branch, nil, []string{"kb/r.md"}, "retract r", "retract")
+	require.NoError(t, err)
+	tip, err := svc.Facts().WriteFact(ctx, branch, "kb/other.md", factText(t, "kb/other.md", "Other", 0.9, nil), "add other", "learn")
+	require.NoError(t, err)
+
+	dateOf := func(path, anchor string) string {
+		revs, err := svc.Search().RevisionsBefore(ctx, branch, path, anchor, 1)
+		require.NoError(t, err)
+		require.Len(t, revs, 1)
+		return time.Unix(revs[0].CommittedAt, 0).UTC().Format(time.RFC3339)
+	}
+	want := dateOf("kb/r.md", v1.CommitHash)
+	require.Less(t, want, dateOf("kb/other.md", tip.CommitHash), "fixture: the tip must be dated after v1")
+
+	s := &Server{Manager: m}
+	rec := getAPI(t, s, "/repos/alpha/branches/"+urlBranch(branch)+"/commits/"+retract+"/facts/kb/r.md?fallback=before")
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	var body factViewBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, v1.CommitHash, body.AsOf.Commit, "fixture: the fallback must have fired")
+	requireRFC3339Date(t, body.AsOf.Date, "fallback=before view")
+	require.Equal(t, want, body.AsOf.Date, "as_of.date is the shown version's date, not the retracting commit's or the tip's")
+}
