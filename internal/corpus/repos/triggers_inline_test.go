@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -65,8 +66,12 @@ func TestTriggers_InlineJS(t *testing.T) {
 // blob → the unrelated edit compiles → red; key by trigger name → v1 runs
 // after the edit → red.
 func TestTriggers_InlineJSCacheBySource(t *testing.T) {
+	// The compile cache is process-global and keyed by source, so a repeat
+	// iteration (-count>1) would find v(2) already compiled. A per-run nonce in
+	// the source gives every run its own cache entries.
+	nonce := time.Now().UnixNano()
 	v := func(n int) string {
-		return jsTrig("ver", "learn", "tasks/in/**", fmt.Sprintf(`knomit.emit({v: %d, marker: "cache-by-source"});`, n))
+		return jsTrig("ver", "learn", "tasks/in/**", fmt.Sprintf(`knomit.emit({v: %d, marker: "cache-by-source-%d"});`, n, nonce))
 	}
 	_, ri, _ := newScriptRepo(t, 0, v(1))
 	sink := subscribePayloads(t, ri, "ver")
