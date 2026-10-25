@@ -13,12 +13,14 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/engine/store/merge"
+	"knomit/internal/engine/store/model"
 )
 
 // EnsureLocalUpstream creates refs/heads/<upstream> from
@@ -34,6 +36,31 @@ import (
 // Nothing to bootstrap from is not an error — the reconcile loop's first
 // fetch creates it. An empty upstream is not an error either: it creates
 // nothing and answers (false, nil).
+//
+// It is safe to retry after a failure at any step (#587). The ref is written
+// before its SQL bookkeeping (branches row, commit_log, index notify), and
+// nothing undoes a SetReference when a later step fails, so an existing ref
+// is not proof the bootstrap finished: when refs/heads/<upstream> is present
+// but its branches row is missing or its tip is not recorded on the branch,
+// the bookkeeping is completed at the ref's CURRENT hash (the ref is never
+// moved; branch_commits rows not reachable from it are dropped) and the
+// answer is (true, nil). The same repair completes any torn move of the
+// upstream, not only this function's own: a reconcileMain create,
+// fast-forward or force-update, or an AdvanceLocalUpstream fast-forward,
+// interrupted after its SetReference. An upstream whose row and tip are both
+// recorded is left alone with (false, nil).
+//
+// true therefore means "this call wrote the upstream's bookkeeping", from
+// origin or at the existing ref; the log line says which.
+//
+// ctx is checked once the branch lock is held, before anything is written:
+// LockBranch is not ctx-aware, so a caller cancelled while parked behind an
+// index Rebuild of the upstream (the Sync life at Unmount) must leave without
+// writing rather than take the lock with a dead ctx and fail halfway. Once
+// the create path has moved the ref, its SQL runs without cancellation
+// (AdvanceBranchTo's rule), so a cancel cannot tear it there; the repair
+// path moves no ref and keeps the caller's ctx, since a cancelled repair is
+// simply repaired by the next call.
 func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool, error) {
 	if upstream == "" {
 		return false, nil
@@ -41,10 +68,25 @@ func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool
 	rh := ri.rh
 	unlock := rh.vr.LockBranch(upstream)
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
+	}
 
 	local := plumbing.NewBranchReferenceName(upstream)
-	if _, err := rh.vr.Storer().Reference(local); err == nil {
-		return false, nil
+	if ref, err := rh.vr.Storer().Reference(local); err == nil {
+		recorded, err := rh.vr.CommitRecorded(ctx, upstream, ref.Hash())
+		if err != nil {
+			return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
+		}
+		if recorded {
+			return false, nil
+		}
+		if err := ri.recordLocalUpstream(ctx, upstream, ref.Hash()); err != nil {
+			return false, err
+		}
+		log.Info().Str("upstream", upstream).Str("at", ref.Hash().String()[:8]).
+			Msg("EnsureLocalUpstream: completed a half-written local upstream")
+		return true, nil
 	}
 	originRef, err := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstream))
 	if err != nil {
@@ -56,18 +98,49 @@ func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool
 	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: create %s: %w", upstream, err)
 	}
-	if _, err := rh.vr.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
-		return false, fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
-	}
-	if err := rh.vr.PopulateCommitLog(ctx, upstream); err != nil {
-		return false, fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
-	}
-	if err := rh.vr.NotifyCommit(ctx, upstream, originRef.Hash()); err != nil {
-		return false, fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
+	// The ref has moved: from here a cancel could only tear the write.
+	if err := ri.recordLocalUpstream(context.WithoutCancel(ctx), upstream, originRef.Hash()); err != nil {
+		return false, err
 	}
 	log.Info().Str("upstream", upstream).Str("at", originRef.Hash().String()[:8]).
 		Msg("EnsureLocalUpstream: bootstrapped local upstream from origin")
 	return true, nil
+}
+
+// recordLocalUpstream is the SQL half of EnsureLocalUpstream, run under the
+// upstream's branch lock once refs/heads/<upstream> points at tip: the
+// branches row, branch_commits/commit_log for the commits reachable from tip,
+// then the index notify. Every step is idempotent, so a run interrupted
+// anywhere is completed by the next call.
+//
+// With no branches row there is nothing recorded to correct (branch_commits
+// cascades from the row), so PopulateCommitLog inserts in its short batches.
+// With a row, what is recorded may belong to a history the ref no longer
+// reaches (a force-update torn after SetReference), and PopulateCommitLog
+// only inserts; RepopulateBranch replaces the visibility with exactly the
+// reachable set in one swap proportional to the change, the same step
+// AdvanceBranchTo runs after a force-update under the same lock.
+func (ri *Index) recordLocalUpstream(ctx context.Context, upstream string, tip plumbing.Hash) error {
+	rh := ri.rh
+	_, err := rh.vr.BranchID(ctx, upstream)
+	hadRow := err == nil
+	if err != nil && !errors.Is(err, model.ErrBranchNotFound) {
+		return fmt.Errorf("EnsureLocalUpstream: %w", err)
+	}
+	if _, err := rh.vr.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
+		return fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
+	}
+	if hadRow {
+		if err := rh.vr.RepopulateBranch(ctx, upstream); err != nil {
+			return fmt.Errorf("EnsureLocalUpstream: repopulate commit_log: %w", err)
+		}
+	} else if err := rh.vr.PopulateCommitLog(ctx, upstream); err != nil {
+		return fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
+	}
+	if err := rh.vr.NotifyCommit(ctx, upstream, tip); err != nil {
+		return fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
+	}
+	return nil
 }
 
 // AdvanceLocalUpstream fast-forwards refs/heads/<upstream> to the agent tip on

@@ -6,6 +6,7 @@ package vcs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -18,7 +19,39 @@ import (
 
 	storegit "knomit/internal/engine/store/git"
 	"knomit/internal/engine/store/internal/sqlite"
+	"knomit/internal/engine/store/model"
 )
+
+// CommitRecorded reports whether branch's SQL bookkeeping covers hash: the
+// branches row exists and, when commit_log is available, hash is recorded on
+// the branch in branch_commits. A missing branches row is (false, nil), not an
+// error. It only reads; a caller that acts on the answer must hold branch's
+// write lock (remotesync.Index.EnsureLocalUpstream, which completes a ref left
+// without its rows).
+//
+// It is a torn-write probe for a branch's TIP, not a membership test for
+// other callers: with no commit_log it answers true for any hash, and true
+// says nothing about rows that should not be there (stale rows from a
+// history the ref no longer reaches).
+func (rh *Repo) CommitRecorded(ctx context.Context, branch string, hash plumbing.Hash) (bool, error) {
+	id, err := rh.BranchID(ctx, branch)
+	if errors.Is(err, model.ErrBranchNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !rh.gits.CommitLogAvailable() {
+		return true, nil
+	}
+	var n int
+	if err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+		id, hash.String()).Scan(&n); err != nil {
+		return false, fmt.Errorf("commit recorded: %w", err)
+	}
+	return n > 0, nil
+}
 
 // PopulateCommitLog indexes every commit reachable from the tip of branch
 // that is not yet recorded on it: commit_log, branch_commits, commit_parents
