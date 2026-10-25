@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/fsck"
 	"knomit/internal/engine/store/model"
 )
 
@@ -128,6 +129,63 @@ func TestEnsureLocalUpstream_CancelledWhileParkedOnTheLockWritesNothing(t *testi
 	require.NoError(t, err)
 	require.True(t, created)
 	requireLocalMainRecorded(t, svc, originTip)
+}
+
+// commitLogIssues returns Verify's commit-log parity issues on branch.
+func commitLogIssues(t *testing.T, svc *Service, branch string) []string {
+	t.Helper()
+	rep, err := svc.Integrity().Verify(context.Background(), fsck.VerifyOpts{})
+	require.NoError(t, err)
+	var out []string
+	for _, i := range rep.Issues {
+		if i.Branch == branch && i.Category == fsck.CategoryCommitLog {
+			out = append(out, i.Detail)
+		}
+	}
+	return out
+}
+
+// A force-update of main torn after its SetReference — reconcileMain's
+// rewind cancelled before RepopulateBranch — leaves main pointing at a new
+// history while branch_commits still holds the old one. The repair must
+// REPLACE the recorded set, not only add to it: inserting the new commits and
+// keeping the stale rows would satisfy the tip probe and leave Verify
+// reporting the stale rows forever.
+func TestEnsureLocalUpstream_CompletesATornForceUpdate(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	ctx := context.Background()
+	require.NoError(t, svc.InitRepoWithUpstream(ctx, map[string]string{}, "main", "agent/a"))
+	// main and agent/a diverge from the root: neither tip is the other's
+	// ancestor, so moving main to the agent tip is a rewind.
+	_, err = svc.Facts().WriteFact(ctx, "main", "kb/only-main.md", testFactBody("m", 0.9, nil), "m", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/x.md", testFactBody("x", 0.9, nil), "x", "")
+	require.NoError(t, err)
+	staleTip, err := svc.HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	newTip, err := svc.HeadCommit(ctx, "agent/a")
+	require.NoError(t, err)
+
+	// The torn force-update: the ref moved, nothing else did.
+	require.NoError(t, svc.rh.Storer().SetReference(plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("main"), plumbing.NewHash(newTip))))
+	require.NotEmpty(t, commitLogIssues(t, svc, "main"),
+		"the torn state must be visible to Verify, or the test proves nothing")
+
+	created, err := svc.Remote().EnsureLocalUpstream(ctx, "main")
+	require.NoError(t, err)
+	require.True(t, created, "the torn force-update was completed")
+	requireLocalMainRecorded(t, svc, newTip)
+
+	id, err := svc.rh.BranchID(ctx, "main")
+	require.NoError(t, err)
+	var stale int
+	require.NoError(t, svc.rh.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`, id, staleTip).Scan(&stale))
+	require.Zero(t, stale, "the old history's rows are dropped")
+	require.Empty(t, commitLogIssues(t, svc, "main"))
 }
 
 // #587: a half-state that already exists — refs/heads/main written, its SQL

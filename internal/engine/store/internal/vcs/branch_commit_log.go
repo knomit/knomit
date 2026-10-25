@@ -28,6 +28,11 @@ import (
 // error. It only reads; a caller that acts on the answer must hold branch's
 // write lock (remotesync.Index.EnsureLocalUpstream, which completes a ref left
 // without its rows).
+//
+// It is a torn-write probe for a branch's TIP, not a membership test for
+// other callers: with no commit_log it answers true for any hash, and true
+// says nothing about rows that should not be there (stale rows from a
+// history the ref no longer reaches).
 func (rh *Repo) CommitRecorded(ctx context.Context, branch string, hash plumbing.Hash) (bool, error) {
 	id, err := rh.BranchID(ctx, branch)
 	if errors.Is(err, model.ErrBranchNotFound) {

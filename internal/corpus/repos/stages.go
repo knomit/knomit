@@ -854,7 +854,9 @@ func (r *RepoInstance) ensureLocalUpstream(ctx context.Context, svc *store.Servi
 		return
 	}
 	if created {
+		// Created from origin OR completed at an existing ref; the store's
+		// own log line says which.
 		log.Info().Str("repo", r.Name()).Str("upstream", r.upstreamMain).
-			Msg("ensureLocalUpstream: bootstrapped local upstream from origin")
+			Msg("ensureLocalUpstream: local upstream created or completed")
 	}
 }
