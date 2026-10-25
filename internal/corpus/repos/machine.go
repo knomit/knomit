@@ -236,7 +236,11 @@ func newMachine(parent context.Context, r *RepoInstance, opts Options) *Machine 
 	r.machine = m
 	s := m.computeStatus()
 	m.status.Store(&s)
-	m.lastPub = s
+	// lastPub starts EMPTY, not at s: the initial status already derives to
+	// `indexing` (no verdict yet), so seeding it with s would make the first
+	// publish compare indexing against indexing and a mount would never
+	// announce its entry into indexing (issue #570).
+	m.lastPub = snapshot{}
 	go m.drive()
 	return m
 }
