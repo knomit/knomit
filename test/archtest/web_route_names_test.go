@@ -145,7 +145,7 @@ func TestWebFamily_RouteTableNamesAreUnique(t *testing.T) {
 			t.Errorf("non-vacuity: golden names do not include %s (%d names): the golden parse is blind", n, len(golden))
 		}
 		if got := len(declared[n]); got != 1 {
-			t.Errorf("non-vacuity: %s declared in %d web-family packages %v, want exactly 1: the scan is blind or the name moved", n, got, declared[n])
+			t.Errorf("non-vacuity: %s declared in %d web-family packages %v, want exactly 1: the scan is blind, the name moved, or it is now declared twice", n, got, declared[n])
 		}
 	}
 	for _, b := range sameNameProblems(golden, declared) {
