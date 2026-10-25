@@ -173,8 +173,9 @@ func newWriteRefsServer(t *testing.T) *Server {
 }
 
 // requireWrittenRefKinds requires a write response's refs, in order, as
-// repo-relative path → kind pairs (the write gate stores refs in the canonical
-// kb://<id>/… form, so Raw is not the path the request sent).
+// repo-relative path → kind pairs (refs.Gate.Canonicalize, reached through
+// writerGate in internal/edge/web/api/kb/handlers_fact_write.go, stores refs in
+// the canonical kb://<id>/… form, so Raw is not the path the request sent).
 func requireWrittenRefKinds(t *testing.T, rec *httptest.ResponseRecorder, want ...[2]string) {
 	t.Helper()
 	var view struct {
