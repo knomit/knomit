@@ -34,6 +34,20 @@ import (
 // Nothing to bootstrap from is not an error — the reconcile loop's first
 // fetch creates it. An empty upstream is not an error either: it creates
 // nothing and answers (false, nil).
+//
+// It is safe to retry after a failure at any step (#587). The ref is written
+// before its SQL bookkeeping (branches row, commit_log, index notify), and
+// nothing undoes a SetReference when a later step fails, so an existing ref
+// is not proof the bootstrap finished: when refs/heads/<upstream> is present
+// but its branches row is missing or its tip is not recorded on the branch,
+// the bookkeeping is completed at the ref's CURRENT hash (the ref is never
+// moved) and the answer is (true, nil). An upstream whose row and tip are
+// both recorded is left alone with (false, nil).
+//
+// ctx is checked once the branch lock is held, before anything is written:
+// LockBranch is not ctx-aware, so a caller cancelled while parked behind an
+// index Rebuild of the upstream (the Sync life at Unmount) must leave without
+// writing rather than take the lock with a dead ctx and fail halfway.
 func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool, error) {
 	if upstream == "" {
 		return false, nil
@@ -41,10 +55,25 @@ func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool
 	rh := ri.rh
 	unlock := rh.vr.LockBranch(upstream)
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
+	}
 
 	local := plumbing.NewBranchReferenceName(upstream)
-	if _, err := rh.vr.Storer().Reference(local); err == nil {
-		return false, nil
+	if ref, err := rh.vr.Storer().Reference(local); err == nil {
+		recorded, err := rh.vr.CommitRecorded(ctx, upstream, ref.Hash())
+		if err != nil {
+			return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
+		}
+		if recorded {
+			return false, nil
+		}
+		if err := ri.recordLocalUpstream(ctx, upstream, ref.Hash()); err != nil {
+			return false, err
+		}
+		log.Info().Str("upstream", upstream).Str("at", ref.Hash().String()[:8]).
+			Msg("EnsureLocalUpstream: completed a half-written local upstream")
+		return true, nil
 	}
 	originRef, err := rh.vr.Storer().Reference(plumbing.NewRemoteReferenceName("origin", upstream))
 	if err != nil {
@@ -56,18 +85,31 @@ func (ri *Index) EnsureLocalUpstream(ctx context.Context, upstream string) (bool
 	if err := rh.vr.Storer().SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: create %s: %w", upstream, err)
 	}
-	if _, err := rh.vr.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
-		return false, fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
-	}
-	if err := rh.vr.PopulateCommitLog(ctx, upstream); err != nil {
-		return false, fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
-	}
-	if err := rh.vr.NotifyCommit(ctx, upstream, originRef.Hash()); err != nil {
-		return false, fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
+	if err := ri.recordLocalUpstream(ctx, upstream, originRef.Hash()); err != nil {
+		return false, err
 	}
 	log.Info().Str("upstream", upstream).Str("at", originRef.Hash().String()[:8]).
 		Msg("EnsureLocalUpstream: bootstrapped local upstream from origin")
 	return true, nil
+}
+
+// recordLocalUpstream is the SQL half of EnsureLocalUpstream, run under the
+// upstream's branch lock once refs/heads/<upstream> points at tip: the
+// branches row, commit_log for every reachable commit, then the index notify.
+// Every step is idempotent, so a run interrupted anywhere is completed by the
+// next call.
+func (ri *Index) recordLocalUpstream(ctx context.Context, upstream string, tip plumbing.Hash) error {
+	rh := ri.rh
+	if _, err := rh.vr.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
+		return fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
+	}
+	if err := rh.vr.PopulateCommitLog(ctx, upstream); err != nil {
+		return fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
+	}
+	if err := rh.vr.NotifyCommit(ctx, upstream, tip); err != nil {
+		return fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
+	}
+	return nil
 }
 
 // AdvanceLocalUpstream fast-forwards refs/heads/<upstream> to the agent tip on
