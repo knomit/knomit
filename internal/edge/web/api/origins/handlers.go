@@ -188,16 +188,23 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 		// /test runs once per session. A tested session already has its clone
 		// in its folder, so a re-run would open a second handle on clone.db and
 		// its CloneFrom would fail ("repository already exists"), moving a good
-		// session to stateError. Refuse before touching anything, so the
-		// session and its state stay exactly as they were; a fresh test is a
-		// new session (POST origin-sessions replaces this one).
+		// session to stateError. A session whose /test failed (stateError) has
+		// the same leftover: go-git's Init writes HEAD into clone.db before the
+		// clone runs, and a failed clone leaves it behind. Refuse before
+		// touching anything, so the session and its state stay exactly as they
+		// were; a fresh test is a new session (POST origin-sessions replaces
+		// this one). The wizard already opens a new session for every test.
 		sess.mu.Lock()
 		tested := sess.RemoteStore != nil || sess.State == stateTested || sess.State == statePreviewed ||
 			sess.State == stateApplied || sess.State == stateCommitted
+		failed := sess.State == stateError
 		sess.mu.Unlock()
-		if tested {
-			hal.WriteProblem(w, http.StatusConflict, "Session state conflict",
-				"session has already been tested; create a new session to test again", r.URL.Path)
+		if tested || failed {
+			msg := "session has already been tested; create a new session to test again"
+			if failed {
+				msg = "session's test failed and left a partial clone; create a new session to test again"
+			}
+			hal.WriteProblem(w, http.StatusConflict, "Session state conflict", msg, r.URL.Path)
 			return
 		}
 
