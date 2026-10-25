@@ -17,7 +17,7 @@ import (
 // `knomit`, whose functions are the only way out of the VM. This file is the
 // sandbox half: compile, bind, run. What each host function does (the
 // in-process MCP handlers, the trailers, the `.knomit/` refusal, the
-// budget's ctx) is the dispatcher's (internal/corpus/repos/trigger_script.go).
+// budget's ctx) is the dispatcher's (internal/corpus/repos/trigger/trigger_script.go).
 
 // ScriptEvalTimeout is the time budget of ONE script fire — a constant beside
 // the 100 ms `if` budget, not a config key: a script's host calls cost

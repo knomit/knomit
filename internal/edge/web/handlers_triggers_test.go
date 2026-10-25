@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
 )
@@ -65,8 +66,8 @@ type triggersPage struct {
 	Reason   string                    `json:"reason"`
 	Branch   string                    `json:"branch"`
 	Head     string                    `json:"head"`
-	Runs     repos.TriggerRunStats     `json:"runs"`
-	Triggers []repos.TriggerView       `json:"triggers"`
+	Runs     trigger.RunStats          `json:"runs"`
+	Triggers []trigger.View            `json:"triggers"`
 	Fires    []facts.TriggerFire       `json:"fires"`
 	Links    map[string]map[string]any `json:"_links"`
 }

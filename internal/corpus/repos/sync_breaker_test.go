@@ -164,7 +164,7 @@ func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre fun
 		return nil, nil
 	}
 	kick := func() {
-		ri.triggerKick()
+		ri.triggers.Kick()
 		l.rounds.Add(1)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

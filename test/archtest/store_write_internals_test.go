@@ -180,14 +180,14 @@ var triggerTableWrites = map[string]bool{
 // Service. They were already reachable through Service.Triggers(), so E3 did
 // not widen the method set; this guard pins the reach. It parses every .go
 // file outside internal/engine/store/** and fails on a non-test file other than
-// internal/corpus/repos/triggers.go that selects one of them.
+// internal/corpus/repos/trigger/triggers.go that selects one of them.
 //
 // Non-vacuity: at least 500 files walked; triggers.go must use
 // RecordTriggerRuns, RecordTriggerResults and AdvanceTriggerWatermarks; and
 // facts/triggers.go must still declare all four.
 func TestFactsRepoTriggerWrites_OnlyFromDispatcher(t *testing.T) {
 	const minFiles = 500
-	const dispatcher = "internal/corpus/repos/triggers.go"
+	const dispatcher = "internal/corpus/repos/trigger/triggers.go"
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 	var offenders []string

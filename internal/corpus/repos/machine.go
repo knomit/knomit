@@ -426,7 +426,7 @@ func (m *Machine) handleInternal(ie internalEvent) {
 		m.publish()
 		// The due sweep was skipped while the index was not ready; run it now.
 		if e.err == nil {
-			m.r.triggerKick()
+			m.r.triggers.Kick()
 		}
 	case indexProgressed:
 		m.progressPending.Store(false)

@@ -27,7 +27,7 @@ import (
 // ontology. A fatal diagnostic fails ParseOntology, and the repo then opens
 // with no ontology and refuses every write (repos/builder.go loadOntology →
 // ontologyErr). A missing trigger loses nothing — its watermark freezes in the
-// dispatcher (repos/triggers.go) and catches up once fixed — while a fatal one
+// dispatcher (repos/trigger/triggers.go) and catches up once fixed — while a fatal one
 // would stop writes on every machine that pulls the typo. So every problem is
 // a warning, and the trigger is recorded as `invalid` with its error text
 // (user ruling D-a, 2026-09-27; and "invalid / malformed triggers and recipes

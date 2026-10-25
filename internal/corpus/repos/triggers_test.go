@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos/events"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
@@ -128,8 +129,8 @@ func waitTriggerHeadFor(t *testing.T, ri *RepoInstance, head string, timeout tim
 	t.Helper()
 	require.NotNil(t, ri.triggers, "the repo must have a dispatcher")
 	require.Eventually(t, func() bool {
-		got, _ := ri.triggers.runSequence()
-		return got == head && ri.triggers.flushed()
+		got, _ := ri.triggers.RunSequenceForTest()
+		return got == head && ri.triggers.FlushedForTest()
 	}, timeout, 10*time.Millisecond, "the dispatcher never completed and flushed a run at %s", head)
 }
 
@@ -194,16 +195,10 @@ func pathsOf(rows []facts.TriggerFire) []string {
 }
 
 // setHooks installs test hooks for the test's duration.
-func setHooks(t *testing.T, h triggerHooks) {
+func setHooks(t *testing.T, h trigger.TestHooks) {
 	t.Helper()
-	triggerHooksMu.Lock()
-	triggerTestHooks = h
-	triggerHooksMu.Unlock()
-	t.Cleanup(func() {
-		triggerHooksMu.Lock()
-		triggerTestHooks = triggerHooks{}
-		triggerHooksMu.Unlock()
-	})
+	trigger.SetTestHooksForTest(h)
+	t.Cleanup(func() { trigger.SetTestHooksForTest(trigger.TestHooks{}) })
 }
 
 // parkDispatcher blocks the worker between the kick and the ref read until
@@ -213,9 +208,9 @@ func parkDispatcher(t *testing.T, ri *RepoInstance) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
 	var once sync.Once
-	prev := currentTriggerHooks()
+	prev := trigger.TestHooksForTest()
 	parked := prev
-	parked.afterKick = func() {
+	parked.AfterKick = func() {
 		<-gate
 	}
 	setHooks(t, parked)
@@ -232,11 +227,11 @@ func parkDispatcher(t *testing.T, ri *RepoInstance) (release func()) {
 // hooks installed. The sandbox's Date.now() is the run's pinned clock, so an
 // `if` cannot spin on the wall clock, and a spin counted in iterations
 // shrinks under CPU contention; a sleep inside the timed section does not.
-func slowIf(t *testing.T, trigger string, ms int, match func(path string) bool) {
+func slowIf(t *testing.T, trig string, ms int, match func(path string) bool) {
 	t.Helper()
-	h := currentTriggerHooks()
-	h.evalDelay = func(name, path string) time.Duration {
-		if name == trigger && (match == nil || match(path)) {
+	h := trigger.TestHooksForTest()
+	h.EvalDelay = func(name, path string) time.Duration {
+		if name == trig && (match == nil || match(path)) {
 			return time.Duration(ms) * time.Millisecond
 		}
 		return 0
@@ -575,7 +570,7 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	require.Empty(t, firesOf(t, ri, "later"), "no back-fill on activation")
 	write(t, ri, "kb/tasks/after-run.md")
 	require.Empty(t, firesOf(t, ri, "later"), "unbound writes no row")
-	require.Equal(t, int64(1), ri.triggers.stats.view("later").Unbound)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("later").Unbound)
 
 	enabled := setOntology(t, ri, triggerOntology("", trig("later", "learn", "", "")))
 	require.Equal(t, enabled, watermarks(t, ri)["later"], "first set at the advance where it becomes active")
@@ -673,7 +668,7 @@ func TestDispatch_NoFireOnMainOrExp(t *testing.T) {
 	ctx := context.Background()
 	svc := testService(t, ri)
 	write(t, ri, "kb/tasks/own.md")
-	_, seq := ri.triggers.runSequence()
+	_, seq := ri.triggers.RunSequenceForTest()
 
 	_, err := svc.Remote().AdvanceLocalUpstream(ctx, trigAgent, "main")
 	require.NoError(t, err)
@@ -681,7 +676,7 @@ func TestDispatch_NoFireOnMainOrExp(t *testing.T) {
 	require.NoError(t, err)
 	writeOn(t, ri, "exp/e", "kb/tasks/in-exp.md")
 	time.Sleep(200 * time.Millisecond)
-	_, seq2 := ri.triggers.runSequence()
+	_, seq2 := ri.triggers.RunSequenceForTest()
 	require.Equal(t, seq, seq2, "main and exp/* commits must not kick the dispatcher")
 	require.Len(t, firesOf(t, ri, "all"), 1)
 
@@ -735,7 +730,7 @@ func TestDispatch_KickReceivedBeforeRefRead(t *testing.T) {
 	write(t, ri, "kb/tasks/warm.md")
 	var once sync.Once
 	var inBetween string
-	setHooks(t, triggerHooks{afterHeadRead: func() {
+	setHooks(t, trigger.TestHooks{AfterHeadRead: func() {
 		once.Do(func() { inBetween = writeOn(t, ri, trigAgent, "kb/tasks/in-between.md") })
 	}})
 	writeOn(t, ri, trigAgent, "kb/other/unrelated.md") // the kick whose run the hook interrupts
@@ -785,7 +780,7 @@ func TestDispatch_CrashBetweenFireAndWatermark(t *testing.T) {
 	setOntology(t, ri, triggerOntology("", trig("all", "learn", "", "")))
 	w := head(t, ri)
 	var once sync.Once
-	setHooks(t, triggerHooks{beforeTx2: func() {
+	setHooks(t, trigger.TestHooks{BeforeTx2: func() {
 		once.Do(func() { panic("crash between tx1 and tx2") })
 	}})
 	h := write(t, ri, "kb/tasks/crash.md")
@@ -959,10 +954,10 @@ func TestDispatch_IfThrowsOrTimesOutIsFalse(t *testing.T) {
 	require.Len(t, lo, 1)
 	require.Equal(t, facts.TriggerOutcomeIfTimeout, lo[0].Outcome)
 	require.Len(t, firesOf(t, ri, "all"), 1)
-	st := ri.triggers.stats.view("throws")
+	st := ri.triggers.StatsViewForTest("throws")
 	require.Equal(t, int64(1), st.IfError)
 	require.Equal(t, int64(0), st.Fires)
-	require.Equal(t, int64(1), ri.triggers.stats.view("loops").IfTimeout)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("loops").IfTimeout)
 }
 
 // An unparseable fact fires with fact = null (the outcome says so) and a

@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
@@ -183,8 +184,8 @@ func settle(t *testing.T, ri *RepoInstance) string {
 	stable := 0
 	require.Eventually(t, func() bool {
 		h := head(t, ri)
-		done, _ := ri.triggers.runSequence()
-		if done == h && ri.triggers.flushed() && h == last {
+		done, _ := ri.triggers.RunSequenceForTest()
+		if done == h && ri.triggers.FlushedForTest() && h == last {
 			stable++
 		} else {
 			stable = 0
@@ -334,7 +335,7 @@ knomit.emit({q: q, e: e, l: l, u: u, r: r, push: knomit.push(), run: knomit.run(
 
 	rows := firesOf(t, ri, "t1")
 	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(rows))
-	require.Equal(t, int64(1), ri.triggers.stats.view("t1").Fires)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("t1").Fires)
 	// The script made three commits (learn, update, retract) after c0.
 	require.Len(t, commitsAfter(t, ri, c0), 3)
 }
@@ -350,7 +351,7 @@ knomit.emit({q: q, e: e, l: l, u: u, r: r, push: knomit.push(), run: knomit.run(
 // -race (goja ~14× slower), so the fire timed out before emit.
 func TestScript_NoIOPrimitives(t *testing.T) {
 	pinned := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
-	setHooks(t, triggerHooks{now: func() time.Time { return pinned }})
+	setHooks(t, trigger.TestHooks{Now: func() time.Time { return pinned }})
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "probe"))
 	putScript(t, ri, "probe", `
 var d1 = Date.now(); var d2 = new Date().getTime();
@@ -565,7 +566,7 @@ func TestScript_LoopGuard(t *testing.T) {
 	require.Len(t, commits, 2, "the human write and ONE script update")
 	require.Equal(t, "t", trailersOf(t, ri, commits[1]).Trigger)
 	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")), "exactly one run: the update it made is self-caused")
-	st := ri.triggers.stats.view("t")
+	st := ri.triggers.StatsViewForTest("t")
 	require.Equal(t, int64(1), st.SelfCaused)
 	require.Equal(t, int64(1), st.Evaluations, "a self-caused fire is not an evaluation")
 	require.Equal(t, last, watermarks(t, ri)["t"], "the bookmark moved past the script's own write")
@@ -575,7 +576,7 @@ func TestScript_LoopGuard(t *testing.T) {
 	updateOn(t, ri, trigAgent, "kb/tasks/loop/p.md")
 	settle(t, ri)
 	require.Len(t, firesOf(t, ri, "t"), 2)
-	require.Equal(t, int64(1), ri.triggers.stats.view("t").SelfCaused)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("t").SelfCaused)
 }
 
 // LoopGuardNeverOnDue [M3]: a due fire is caused by time, not by the write:
@@ -584,7 +585,7 @@ func TestScript_LoopGuard(t *testing.T) {
 // Sabotage: apply the guard in sweepDue → the second due fire is skipped.
 func TestScript_LoopGuardNeverOnDue(t *testing.T) {
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t", "[update, due]", "tasks/due/**", "rearm"))
 	putScript(t, ri, "rearm", `if (change.episode === 'due') { knomit.update(change.path, {updates: {title: 'rearmed', expires: new Date(Date.now() + 1000).toISOString()}}); }`)
 	settle(t, ri)
@@ -602,11 +603,11 @@ func TestScript_LoopGuardNeverOnDue(t *testing.T) {
 		return n
 	}
 	require.Equal(t, 1, dueRows(), "the overdue fact fired once; the script re-armed it one second ahead")
-	require.Equal(t, int64(1), ri.triggers.stats.view("t").SelfCaused, "the script's update is the one self-caused episode")
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("t").SelfCaused, "the script's update is the one self-caused episode")
 	_ = r
 
 	clock.add(2 * time.Second)
-	ri.triggers.triggerKick()
+	ri.triggers.Kick()
 	require.Eventually(t, func() bool { return dueRows() == 2 }, 10*time.Second, 20*time.Millisecond,
 		"the re-armed fact fires again at its new instant: a due fire is never self-caused")
 	settle(t, ri)
@@ -634,7 +635,7 @@ func TestScript_LoopGuardOnRetract(t *testing.T) {
 	require.Len(t, commits, 2, "the write and the script's retract")
 	require.Equal(t, "t", trailersOf(t, ri, commits[1]).Trigger)
 	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
-	require.Equal(t, int64(1), ri.triggers.stats.view("t").SelfCaused, "the linear retract is self-caused")
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("t").SelfCaused, "the linear retract is self-caused")
 	_ = r
 
 	// Nonlinear: the branch is rewound to base and a new commit lands there
@@ -667,7 +668,7 @@ func TestScript_LoopGuardOnRetract(t *testing.T) {
 func TestScript_RateCap(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	clock := newFakeClock()
-	dueHooks(t, clock, triggerHooks{})
+	dueHooks(t, clock, trigger.TestHooks{})
 	_, ri, _ := newScriptRepo(t, 3, scriptTrig("t", "learn", "tasks/in/**", "noop"))
 	putScript(t, ri, "noop", `knomit.emit({ok: true});`)
 	settle(t, ri)
@@ -689,22 +690,22 @@ func TestScript_RateCap(t *testing.T) {
 		counts[r.Outcome]++
 	}
 	require.Equal(t, map[string]int{facts.TriggerOutcomeRan: 3, facts.TriggerOutcomeRateLimited: 7}, counts)
-	require.Equal(t, int64(7), ri.triggers.stats.view("t").RateLimited)
+	require.Equal(t, int64(7), ri.triggers.StatsViewForTest("t").RateLimited)
 	require.Equal(t, 1, strings.Count(logs.String(), "rate cap reached"), "%s", logs.String())
 	require.Equal(t, last, watermarks(t, ri)["t"], "dropped fires are not retried: the bookmark moved past them")
 
 	// Still inside the minute: dropped.
 	writeOn(t, ri, trigAgent, "kb/tasks/in/still.md")
 	settle(t, ri)
-	require.Equal(t, int64(8), ri.triggers.stats.view("t").RateLimited)
+	require.Equal(t, int64(8), ri.triggers.StatsViewForTest("t").RateLimited)
 	require.Equal(t, 1, strings.Count(logs.String(), "rate cap reached"), "one WARN per cap episode")
 
 	// After the window: runs.
 	clock.add(61 * time.Second)
 	writeOn(t, ri, trigAgent, "kb/tasks/in/later.md")
 	settle(t, ri)
-	require.Equal(t, int64(4), ri.triggers.stats.view("t").Fires)
-	require.Equal(t, int64(8), ri.triggers.stats.view("t").RateLimited)
+	require.Equal(t, int64(4), ri.triggers.StatsViewForTest("t").Fires)
+	require.Equal(t, int64(8), ri.triggers.StatsViewForTest("t").RateLimited)
 }
 
 // ---- T10, T11: errors and time
@@ -743,7 +744,7 @@ func TestScript_RuntimeErrorIsOutcome(t *testing.T) {
 		require.Equal(t, facts.TriggerOutcomeScriptError, f.Outcome)
 		require.Contains(t, f.Error, "boom")
 	}
-	require.Equal(t, int64(5), ri.triggers.stats.view("throws").ScriptError)
+	require.Equal(t, int64(5), ri.triggers.StatsViewForTest("throws").ScriptError)
 	warnsOf := func(trigger string) int {
 		n := 0
 		for _, line := range strings.Split(logs.String(), "\n") {
@@ -766,9 +767,9 @@ func TestScript_RuntimeErrorIsOutcome(t *testing.T) {
 	require.Equal(t, true, p["isError"], "a host failure is a real JavaScript Error")
 	require.Contains(t, p["caught"], "stub exploded")
 	require.Equal(t, last, watermarks(t, ri)["panics"], "the watermark advanced: the range did not re-fire")
-	_, seq := ri.triggers.runSequence()
+	_, seq := ri.triggers.RunSequenceForTest()
 	time.Sleep(200 * time.Millisecond)
-	_, seq2 := ri.triggers.runSequence()
+	_, seq2 := ri.triggers.RunSequenceForTest()
 	require.Equal(t, seq, seq2, "no re-run loop after a host panic")
 }
 
@@ -783,7 +784,7 @@ func TestScript_TimeoutIsOutcome(t *testing.T) {
 		scriptTrig("loops", "learn", "tasks/in/**", "loops"),
 		scriptTrig("slowcall", "learn", "tasks/in/**", "slowcall"),
 		scriptTrig("blocks", "learn", "tasks/in/**", "blocks"))
-	setHooks(t, triggerHooks{scriptBudget: 300 * time.Millisecond})
+	setHooks(t, trigger.TestHooks{ScriptBudget: 300 * time.Millisecond})
 	putScript(t, ri, "loops", `while (true) {}`)
 	putScript(t, ri, "slowcall", `knomit.query({slow: true}); knomit.emit({done: true});`)
 	putScript(t, ri, "blocks", `knomit.query({block: true}); knomit.emit({after: true});`)
@@ -815,12 +816,12 @@ func TestScript_TimeoutIsOutcome(t *testing.T) {
 	require.Len(t, lo, 1)
 	require.Equal(t, facts.TriggerOutcomeScriptTimeout, lo[0].Outcome)
 	require.Contains(t, lo[0].Error, "exceeded")
-	require.Equal(t, int64(1), ri.triggers.stats.view("loops").ScriptTimeout)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("loops").ScriptTimeout)
 
 	sc := firesOf(t, ri, "slowcall")
 	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(sc), "a 100 ms host call under a 300 ms budget completes")
 	require.Equal(t, true, sinkSlow.wait(t, 1)[0]["done"])
-	require.Less(t, ri.triggers.stats.view("slowcall").Duration.MaxMS, 50.0, "host time is not the script's own time")
+	require.Less(t, ri.triggers.StatsViewForTest("slowcall").Duration.MaxMS, 50.0, "host time is not the script's own time")
 
 	bl := firesOf(t, ri, "blocks")
 	require.Len(t, bl, 1)
@@ -850,17 +851,13 @@ func TestScript_ReloadOnHeadBlob(t *testing.T) {
 	ps := sink.wait(t, 2)
 	require.Equal(t, float64(1), ps[0]["v"])
 	require.Equal(t, float64(2), ps[1]["v"])
-	ri.triggers.mu.Lock()
-	compiles := ri.triggers.sc.compiles
-	ri.triggers.mu.Unlock()
+	compiles := ri.triggers.ScriptCompilesForTest()
 	require.Equal(t, 2, compiles)
 
 	putScript(t, ri, "ver", `knomit.emit({v: 2});`) // the same blob again
 	writeOn(t, ri, trigAgent, "kb/tasks/in/c.md")
 	settle(t, ri)
-	ri.triggers.mu.Lock()
-	compiles = ri.triggers.sc.compiles
-	ri.triggers.mu.Unlock()
+	compiles = ri.triggers.ScriptCompilesForTest()
 	require.Equal(t, 2, compiles, "the same blob is not recompiled")
 	for _, f := range fires(t, ri) {
 		require.NotContains(t, f.Path, ".knomit/", "a script change is never an episode")
@@ -880,7 +877,7 @@ func TestScript_CompileErrorAndMissingAreInvalid(t *testing.T) {
 	putScript(t, ri, "broken", `this is not javascript ((`)
 	rep, err := ri.TriggerReport(context.Background(), 0)
 	require.NoError(t, err)
-	states := map[string]TriggerView{}
+	states := map[string]trigger.View{}
 	for _, v := range rep.Triggers {
 		states[v.Name] = v
 	}
@@ -902,7 +899,7 @@ func TestScript_CompileErrorAndMissingAreInvalid(t *testing.T) {
 			require.Equal(t, facts.TriggerOutcomeScriptError, f.Outcome)
 		}
 		require.Equal(t, last, watermarks(t, ri)[name], "%s: the bookmark advances", name)
-		require.Equal(t, int64(5), ri.triggers.stats.view(name).ScriptError)
+		require.Equal(t, int64(5), ri.triggers.StatsViewForTest(name).ScriptError)
 	}
 	// One ERROR per (trigger, blob) across the 5 fires: the compile error
 	// once, the missing file once (plus "broken" being absent before it was
@@ -936,13 +933,13 @@ func TestScript_WriteIsNextAdvance(t *testing.T) {
 		trig("sibling", "learn", "tasks/out/**", ""))
 	putScript(t, ri, "to-out", `knomit.learn({topic: "tasks", category: "out", title: "o"});`)
 	before := settle(t, ri)
-	_, seq0 := ri.triggers.runSequence()
+	_, seq0 := ri.triggers.RunSequenceForTest()
 	c0 := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	settle(t, ri)
 	commits := commitsAfter(t, ri, before)
 	require.Len(t, commits, 2)
 	c1 := commits[1]
-	_, seq1 := ri.triggers.runSequence()
+	_, seq1 := ri.triggers.RunSequenceForTest()
 	require.Equal(t, seq0+2, seq1, "the fire's run, then the run for the script's commit")
 	runs := runRows(t, ri)
 	require.GreaterOrEqual(t, len(runs), 2)
@@ -960,7 +957,7 @@ func TestScript_NoStoreHeldDuringScript(t *testing.T) {
 	m, ri, _ := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "spin"))
 	putScript(t, ri, "spin", `while (true) {}`)
 	settle(t, ri)
-	setHooks(t, triggerHooks{scriptBudget: 5 * time.Second})
+	setHooks(t, trigger.TestHooks{ScriptBudget: 5 * time.Second})
 	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	time.Sleep(300 * time.Millisecond) // the run is in phase B, spinning
 

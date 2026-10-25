@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web"
 	"knomit/internal/engine/store"
@@ -103,7 +104,7 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 		t.Fatalf("%s: ontology error: %v", who, oe)
 	}
 	// A freshly opened repo lists its triggers once its dispatcher has run.
-	var rep repos.TriggerReport
+	var rep trigger.Report
 	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		var err error
 		rep, err = ri.TriggerReport(ctx, 0)

@@ -20,7 +20,7 @@
 //	    are read and discarded (the child never blocks on a full pipe) and the
 //	    result says truncated: true.
 //	  - a start failure or a timeout THROWS; a non-zero exit is `exit`.
-package repos
+package trigger
 
 import (
 	"bytes"

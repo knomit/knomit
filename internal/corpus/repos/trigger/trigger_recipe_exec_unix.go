@@ -1,6 +1,6 @@
 //go:build !windows
 
-package repos
+package trigger
 
 import (
 	"errors"

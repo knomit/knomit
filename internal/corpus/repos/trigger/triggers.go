@@ -46,7 +46,7 @@
 // attach or detach restarts Sync and must not touch the dispatcher. The due
 // sweep is gated on the index being ready (indexReady), and the index job's
 // success kicks the dispatcher.
-package repos
+package trigger
 
 import (
 	"context"
@@ -77,61 +77,64 @@ import (
 // trigger WARN, the same bound the slow-request log applies to client fields.
 const maxTriggerLogField = 256
 
-// triggerHooks are test seams. Every field is nil (or zero) in production.
-type triggerHooks struct {
-	// afterKick runs between receiving a kick and reading the head ref. It is
+// TestHooks are test seams. Every field is nil (or zero) in production; a
+// test installs them with SetTestHooksForTest (testseams.go), which refuses
+// to run outside a test binary.
+type TestHooks struct {
+	// AfterKick runs between receiving a kick and reading the head ref. It is
 	// how a test parks the worker.
-	afterKick func()
-	// afterHeadRead runs right after phase A read the head ref: a commit made
+	AfterKick func()
+	// AfterHeadRead runs right after phase A read the head ref: a commit made
 	// here is NOT in this run's range, and its kick must survive the run
 	// (KickReceivedBeforeRefRead). A dispatcher that drained the kick channel
 	// after reading the ref would swallow it.
-	afterHeadRead func()
-	// beforeTx2 runs between tx1 and tx2 (the crash test panics here).
-	beforeTx2 func()
-	// changeDelay is added inside the change build: knomit's per-path cost,
+	AfterHeadRead func()
+	// BeforeTx2 runs between tx1 and tx2 (the crash test panics here).
+	BeforeTx2 func()
+	// ChangeDelay is added inside the change build: knomit's per-path cost,
 	// which must not be charged to the trigger.
-	changeDelay time.Duration
-	// now is the run's clock — read ONCE per run, the one clock comparison in
+	ChangeDelay time.Duration
+	// Now is the run's clock — read ONCE per run, the one clock comparison in
 	// F07 (the due sweep's `expires_at <= now`). nil means time.Now().UTC().
-	now func() time.Time
-	// dueCandidates lets a test append STALE candidates (a path the index no
+	Now func() time.Time
+	// DueCandidates lets a test append STALE candidates (a path the index no
 	// longer lists) to what the liveness join returned, so the head
 	// confirmation is exercised on its own.
-	dueCandidates func([]facts.DueCandidate) []facts.DueCandidate
-	// trees wraps the run's tree reader (a test counts blob reads).
-	trees func(facts.TriggerTrees) facts.TriggerTrees
-	// scriptBudget replaces fact.ScriptEvalTimeout (5 s) for a script fire.
-	scriptBudget time.Duration
-	// evalDelay is slept INSIDE the trigger's timed work (before its `if`),
+	DueCandidates func([]facts.DueCandidate) []facts.DueCandidate
+	// Trees wraps the run's tree reader (a test counts blob reads).
+	Trees func(facts.TriggerTrees) facts.TriggerTrees
+	// ScriptBudget replaces fact.ScriptEvalTimeout (5 s) for a script fire.
+	ScriptBudget time.Duration
+	// EvalDelay is slept INSIDE the trigger's timed work (before its `if`),
 	// per (trigger, path): a trigger that is slow in real wall time whatever
 	// the CPU load. The sandbox's `Date.now()` is the run's pinned clock, so
 	// an `if` can no longer spin on the wall clock; a spin counted in
 	// iterations shrinks under contention and made the detector tests flaky.
-	evalDelay func(trigger, path string) time.Duration
-	// flushGrace, when non-zero, replaces triggerFlushGrace in settle: a long
+	EvalDelay func(trigger, path string) time.Duration
+	// FlushGrace, when non-zero, replaces triggerFlushGrace in settle: a long
 	// value holds phase C's buffer pending, so every later run meets it and
 	// only overlayPending keeps a range from re-firing.
-	flushGrace time.Duration
-	// skipFlushOnStop tears the loop down WITHOUT the final flush: a crash
+	FlushGrace time.Duration
+	// SkipFlushOnStop tears the loop down WITHOUT the final flush: a crash
 	// as far as the tables are concerned (T20 pins the M2 window with it).
-	skipFlushOnStop bool
+	SkipFlushOnStop bool
 }
 
 var (
 	triggerHooksMu   sync.Mutex
-	triggerTestHooks triggerHooks
+	triggerTestHooks TestHooks
 )
 
-func currentTriggerHooks() triggerHooks {
+func currentTriggerHooks() TestHooks {
 	triggerHooksMu.Lock()
 	defer triggerHooksMu.Unlock()
 	return triggerTestHooks
 }
 
-// triggerDispatcher is one repo's dispatcher.
-type triggerDispatcher struct {
-	ri       *RepoInstance
+// Dispatcher is one repo's dispatcher. The repos parent builds it (New) for a
+// writable repo with an agent branch, holds it in RepoInstance.triggers, and
+// runs it under the Serve stage's life (Run).
+type Dispatcher struct {
 	repo     string
 	branch   string // the agent branch: the only branch that kicks
 	identity fact.TriggerIdentity
@@ -139,6 +142,22 @@ type triggerDispatcher struct {
 	kick     chan struct{}
 	cache    fact.TriggerCache
 	stats    *triggerStats
+	// ontologyRoot is the repo's ontology root (fixed when the instance is
+	// built): a fire's root-relative path is the store path under it.
+	ontologyRoot string
+	// pub publishes the SSE `trigger` event (emit). The repos parent owns the
+	// publisher and hands it in here; it is never handed out again.
+	pub *events.TaskPublisher
+	// acquire is the repo's store lease (RepoInstance.Acquire): every phase
+	// that reads or writes the store holds it, and only for that phase.
+	acquire func() (*store.Service, func(), error)
+	// syncWake is the push action's one non-blocking send on the repo's sync
+	// wake (RepoInstance.wakeSync).
+	syncWake func()
+	// bind puts the repo's binding for the agent branch on a script or
+	// recipe host's ctx (repos.WithBinding of NewBindingOfRepo), which the
+	// injected tools resolve their branch from.
+	bind func(context.Context) context.Context
 	// indexReady gates the `on: due` sweep, which reads index tables
 	// (branch_facts ⋈ fact_expires): while the repo's index is not ready the
 	// sweep is skipped, and the index job's success kicks the dispatcher so it
@@ -196,10 +215,10 @@ type triggerDispatcher struct {
 	lateIn []facts.TriggerFire
 }
 
-// newTriggerDispatcher builds the dispatcher for ri WITHOUT starting it, so
-// the kick slot exists from the instance's construction (a write during the
-// index job kicks it) while run starts under the Serve stage's life. Its
-// due sweep is gated on ri's index being ready.
+// New builds a repo's dispatcher WITHOUT starting it, so the kick slot exists
+// from the instance's construction (a write during the index job kicks it)
+// while Run starts under the Serve stage's life. Its due sweep is gated on the
+// repo's index being ready (indexReady).
 // ratePerMinute is [triggers].script_rate_per_minute; tools the injected
 // in-process MCP tool set of `do: script` (nil on a build with none); home
 // the knomit home whose recipes/ folder holds this machine's recipes.
@@ -209,64 +228,66 @@ type triggerDispatcher struct {
 // handed in by the Manager. Nothing here derives either from the agent
 // branch's name (D18): a hostname that happens to end in "-<8 hex>" is not
 // trimmed, and an opaque id is not split.
-func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, identity fact.TriggerIdentity, slowMS, ratePerMinute int, tools ScriptTools, home string, serverAddr func() string) *triggerDispatcher {
+//
+// The last four parameters are the dispatcher's only ways back into its repo
+// instance, each a func the repos parent binds to that instance: acquire is
+// the store lease, syncWake the push action's wake of the sync loop,
+// indexReady the due sweep's gate, and bind the binding a script's or a
+// recipe's injected tools resolve the agent branch from. pub is the repo's
+// task publisher (the `trigger` SSE event), owned by the parent and kept here
+// unexported.
+func New(repo, agentBranch, ontologyRoot string, identity fact.TriggerIdentity, slowMS, ratePerMinute int,
+	tools ScriptTools, home string, serverAddr func() string, pub *events.TaskPublisher,
+	acquire func() (*store.Service, func(), error), syncWake func(), indexReady func() bool,
+	bind func(context.Context) context.Context) *Dispatcher {
 	if serverAddr == nil {
 		serverAddr = func() string { return "" }
 	}
-	return &triggerDispatcher{
-		ri:         ri,
-		repo:       repo,
-		branch:     agentBranch,
-		identity:   identity,
-		indexReady: func() bool { return ri.Status().Index.State == events.IndexStateReady },
-		slow:       time.Duration(slowMS) * time.Millisecond,
-		kick:       make(chan struct{}, 1),
-		stats:      newTriggerStats(),
-		sc:         newScriptState(tools, ratePerMinute),
-		home:       home,
-		serverAddr: serverAddr,
-		rc:         newRecipeState(),
+	return &Dispatcher{
+		repo:         repo,
+		branch:       agentBranch,
+		ontologyRoot: ontologyRoot,
+		identity:     identity,
+		pub:          pub,
+		acquire:      acquire,
+		syncWake:     syncWake,
+		bind:         bind,
+		indexReady:   indexReady,
+		slow:         time.Duration(slowMS) * time.Millisecond,
+		kick:         make(chan struct{}, 1),
+		stats:        newTriggerStats(),
+		sc:           newScriptState(tools, ratePerMinute),
+		home:         home,
+		serverAddr:   serverAddr,
+		rc:           newRecipeState(),
 	}
 }
 
 // indexIsReady reports whether the due sweep may read the index now.
-func (d *triggerDispatcher) indexIsReady() bool {
+func (d *Dispatcher) indexIsReady() bool {
 	return d.indexReady == nil || d.indexReady()
 }
 
-// triggerKick is the observer's whole job for triggers: record "the agent
-// branch advanced" and return. O(1), never blocks, never allocates.
-func (d *triggerDispatcher) triggerKick() {
+// Kick is the observer's whole job for triggers: record "the agent branch
+// advanced" and return. O(1), never blocks, never allocates. A nil
+// dispatcher (a read-only server, a subscription: the repo has none) ignores
+// it, so ri.onCommit and the other kick sources call it without a check.
+func (d *Dispatcher) Kick() {
+	if d == nil {
+		return
+	}
 	select {
 	case d.kick <- struct{}{}:
 	default:
 	}
 }
 
-// triggerKick on the instance is what ri.onCommit calls; nil when this repo
-// has no dispatcher (read-only server, subscription).
-func (ri *RepoInstance) triggerKick() {
-	if d := ri.triggers; d != nil {
-		d.triggerKick()
-	}
-}
+// wakeSync is how phase B and the script host reach the push action: ask
+// this machine's sync loop for a round now (F07 PR 4), a non-blocking send
+// that never waits and carries nothing.
+func (d *Dispatcher) wakeSync() { d.syncWake() }
 
-// wakeSync is the push action (F07 PR 4): ask this machine's sync loop for a
-// round now. One non-blocking send on the instance's 1-slot channel — O(1),
-// never blocks, carries nothing (no branch, no payload): the loop pushes only
-// its own agent branch. Fire-and-forget: the round's outcome is the remote's
-// sync/push status, never reported back to the fire (D-report).
-func (ri *RepoInstance) wakeSync() {
-	select {
-	case ri.syncWake <- struct{}{}:
-	default:
-	}
-}
-
-// wakeSync on the dispatcher is how phase B and the script host reach it.
-func (d *triggerDispatcher) wakeSync() { d.ri.wakeSync() }
-
-// run is the dispatcher's lifetime, under the Serve stage's life. It kicks
+// Run is the dispatcher's lifetime, under the Serve stage's life. It kicks
 // itself once so advances made while the repo was not served fire now (the
 // watermark makes that at-least-once), then receives kicks until ctx ends.
 // The kick is RECEIVED before the head ref is read (inside runOnce): the
@@ -276,9 +297,9 @@ func (d *triggerDispatcher) wakeSync() { d.ri.wakeSync() }
 // On ctx's end it waits for every running recipe to be killed and to hand in
 // its `stopped` row, then flushes what is buffered — while the store is still
 // attached, because the Serve stage is drained before Open closes the store.
-func (d *triggerDispatcher) run(ctx context.Context) {
+func (d *Dispatcher) Run(ctx context.Context) {
 	d.runCtx = ctx
-	d.triggerKick()
+	d.Kick()
 	for {
 		select {
 		case <-ctx.Done():
@@ -287,7 +308,7 @@ func (d *triggerDispatcher) run(ctx context.Context) {
 			// kill. Wait for them FIRST, so their `stopped` rows reach the
 			// late inbox before the final flush reads it.
 			d.rc.wg.Wait()
-			if currentTriggerHooks().skipFlushOnStop {
+			if currentTriggerHooks().SkipFlushOnStop {
 				return
 			}
 			d.flushOnStop()
@@ -310,7 +331,7 @@ const triggerFlushGrace = 20 * time.Millisecond
 // settle waits for the writer to go quiet, then flushes. A kick that arrives
 // meanwhile is consumed and its run happens right away; the buffer keeps
 // growing until a gap (or a bound, see maybeFlush) flushes it.
-func (d *triggerDispatcher) settle(ctx context.Context) {
+func (d *Dispatcher) settle(ctx context.Context) {
 	for {
 		d.mu.Lock()
 		empty := d.pending.empty()
@@ -319,7 +340,7 @@ func (d *triggerDispatcher) settle(ctx context.Context) {
 			return
 		}
 		grace := triggerFlushGrace
-		if g := currentTriggerHooks().flushGrace; g > 0 {
+		if g := currentTriggerHooks().FlushGrace; g > 0 {
 			grace = g
 		}
 		timer := time.NewTimer(grace)
@@ -340,7 +361,7 @@ func (d *triggerDispatcher) settle(ctx context.Context) {
 // safeRun is one run with panic recovery: a panic (or a test hook that panics
 // between tx1 and tx2) must not take the actor down; the range simply re-fires
 // on the next run or after a restart, which is the at-least-once contract.
-func (d *triggerDispatcher) safeRun(ctx context.Context) {
+func (d *Dispatcher) safeRun(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			crashdump.ReportRecovered("triggers:"+d.repo, r)
@@ -354,7 +375,7 @@ func (d *triggerDispatcher) safeRun(ctx context.Context) {
 		d.runSeq++
 		d.mu.Unlock()
 	}()
-	if h := currentTriggerHooks().afterKick; h != nil {
+	if h := currentTriggerHooks().AfterKick; h != nil {
 		h()
 	}
 	d.runOnce(ctx)
@@ -483,14 +504,14 @@ func (p *pendingFlush) empty() bool {
 
 // clock is the run's one clock read: UTC (all times are UTC) at whole seconds
 // — the granularity fact_expires.expires_at and F03's `expired` filter use.
-func (d *triggerDispatcher) clock() time.Time {
-	if h := currentTriggerHooks().now; h != nil {
+func (d *Dispatcher) clock() time.Time {
+	if h := currentTriggerHooks().Now; h != nil {
 		return h().UTC().Truncate(time.Second)
 	}
 	return time.Now().UTC().Truncate(time.Second)
 }
 
-func (d *triggerDispatcher) runOnce(ctx context.Context) {
+func (d *Dispatcher) runOnce(ctx context.Context) {
 	rs := &runState{newWM: map[string]string{}, started: time.Now()}
 	defer func() {
 		d.mu.Lock()
@@ -499,7 +520,7 @@ func (d *triggerDispatcher) runOnce(ctx context.Context) {
 	}()
 
 	// ---- Phase A: with the store.
-	svc, release, err := d.ri.Acquire()
+	svc, release, err := d.acquire()
 	if err != nil {
 		return // closed or mid-swap: the next commit kicks again
 	}
@@ -530,7 +551,7 @@ func (d *triggerDispatcher) runOnce(ctx context.Context) {
 	}
 	paths := rs.paths + rs.duePaths
 	if rs.didWork() {
-		d.stats.recordRun(TriggerLastRun{
+		d.stats.recordRun(LastRun{
 			RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear, Paths: paths,
 			Evaluated: evaluated, Fires: fires, DurationMS: durationMS, DiffMS: rs.diffMS, ChangeMS: rs.changeMS,
 		})
@@ -544,7 +565,7 @@ func (d *triggerDispatcher) runOnce(ctx context.Context) {
 }
 
 // buffer merges one run's phase C into the write-behind buffer.
-func (d *triggerDispatcher) buffer(rs *runState, run facts.TriggerRun) {
+func (d *Dispatcher) buffer(rs *runState, run facts.TriggerRun) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	p := &d.pending
@@ -585,7 +606,7 @@ func (d *triggerDispatcher) buffer(rs *runState, run facts.TriggerRun) {
 
 // maybeFlush flushes the buffer when it has reached a bound; otherwise the
 // flush waits for the writer to go quiet (settle).
-func (d *triggerDispatcher) maybeFlush(ctx context.Context) {
+func (d *Dispatcher) maybeFlush(ctx context.Context) {
 	d.mu.Lock()
 	full := !d.pending.empty() &&
 		(d.pending.rows >= facts.TriggerFireRetention || len(d.pending.runs) >= maxBufferedRuns)
@@ -596,7 +617,7 @@ func (d *triggerDispatcher) maybeFlush(ctx context.Context) {
 }
 
 // flushed reports whether nothing is buffered (tests wait on it).
-func (d *triggerDispatcher) flushed() bool {
+func (d *Dispatcher) flushed() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.pending.empty()
@@ -606,7 +627,7 @@ func (d *triggerDispatcher) flushed() bool {
 // (the watermarks and the prune). Any failure — or a panic — drops the
 // buffer: the stored tables are then the truth and the unflushed range
 // re-fires (at-least-once).
-func (d *triggerDispatcher) flush(ctx context.Context) {
+func (d *Dispatcher) flush(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			crashdump.ReportRecovered("triggers:"+d.repo, r)
@@ -615,7 +636,7 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 			d.resetPending()
 		}
 	}()
-	svc, release, err := d.ri.Acquire()
+	svc, release, err := d.acquire()
 	if err != nil {
 		return // closed or mid-swap: retried by the next run, or dropped on the swap
 	}
@@ -671,7 +692,7 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 		d.pending.late = nil
 		d.mu.Unlock()
 	}
-	if h := currentTriggerHooks().beforeTx2; h != nil {
+	if h := currentTriggerHooks().BeforeTx2; h != nil {
 		h()
 	}
 	if len(wm) > 0 || len(del) > 0 || len(due) > 0 {
@@ -685,7 +706,7 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 }
 
 // resetPending drops the write-behind buffer.
-func (d *triggerDispatcher) resetPending() {
+func (d *Dispatcher) resetPending() {
 	d.mu.Lock()
 	d.pending = pendingFlush{}
 	d.mu.Unlock()
@@ -697,7 +718,7 @@ func (d *triggerDispatcher) resetPending() {
 // second time and never re-evaluates a due fact whose mark is still in the
 // buffer — a run kicked inside the 20 ms flush grace sees the mark. A buffer
 // from another store generation is dropped first. Either map may be nil.
-func (d *triggerDispatcher) overlayPending(svc *store.Service, wms map[string]string, marks map[facts.DueKey]int64) {
+func (d *Dispatcher) overlayPending(svc *store.Service, wms map[string]string, marks map[facts.DueKey]int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.pending.svc != svc && !d.pending.empty() {
@@ -729,8 +750,8 @@ func (d *triggerDispatcher) overlayPending(svc *store.Service, wms map[string]st
 // emitted. The store is still attached: shutdown stops the dispatcher before
 // it closes the store. Recipe results still in the late inbox (the killed
 // recipes' `stopped` rows) are drained into the buffer first.
-func (d *triggerDispatcher) flushOnStop() {
-	if svc, release, err := d.ri.Acquire(); err == nil {
+func (d *Dispatcher) flushOnStop() {
+	if svc, release, err := d.acquire(); err == nil {
 		d.drainLate(svc)
 		release()
 	}
@@ -747,7 +768,7 @@ func (d *triggerDispatcher) flushOnStop() {
 
 // phaseA reads everything the run needs and prepares the pending fires. It
 // returns false when there is nothing to do (or the run should stop).
-func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *runState) bool {
+func (d *Dispatcher) phaseA(ctx context.Context, svc *store.Service, rs *runState) bool {
 	tr := svc.FactsRepo()
 	headStr, err := svc.HeadCommit(ctx, d.branch)
 	if err != nil {
@@ -756,7 +777,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	}
 	head := plumbing.NewHash(headStr)
 	rs.head = headStr
-	if h := currentTriggerHooks().afterHeadRead; h != nil {
+	if h := currentTriggerHooks().AfterHeadRead; h != nil {
 		h()
 	}
 
@@ -848,7 +869,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		verifiedSet = d.verifiedBelow(ctx, tr, remote.UpstreamBranch())
 	}
 	instanceFP := tr.SignerFingerprint()
-	root := d.ri.ontologyRoot
+	root := d.ontologyRoot
 	if root == "" {
 		root = "kb"
 	}
@@ -857,7 +878,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	// tree (or verifying a signature) once per path instead of once per
 	// commit is what made a large advance take minutes.
 	trees := tr.TreeReader()
-	if h := currentTriggerHooks().trees; h != nil {
+	if h := currentTriggerHooks().Trees; h != nil {
 		trees = h(trees)
 	}
 	cr := &changeReader{trees: trees, tr: tr, meta: map[plumbing.Hash]commitMeta{}, instanceFP: instanceFP}
@@ -878,7 +899,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 // advance is the tree-episode half of phase A: one diff per distinct
 // watermark, glob matching, `change` built once per matched path. It returns
 // false only when ctx is cancelled.
-func (d *triggerDispatcher) advance(ctx context.Context, svc *store.Service, tr *facts.Repo, rs *runState, cr *changeReader, head plumbing.Hash,
+func (d *Dispatcher) advance(ctx context.Context, svc *store.Service, tr *facts.Repo, rs *runState, cr *changeReader, head plumbing.Hash,
 	byW map[string][]*fact.CompiledTrigger, root string, verifyOn bool, verifiedSet map[plumbing.Hash]bool) bool {
 	headStr := head.String()
 	// Normally every trigger shares one watermark, so this is ONE diff.
@@ -989,7 +1010,7 @@ func (d *triggerDispatcher) advance(ctx context.Context, svc *store.Service, tr 
 //
 // It returns false only when ctx is cancelled. Nothing else happens on
 // expiry: the sweep emits and marks; it never writes a fact.
-func (d *triggerDispatcher) sweepDue(ctx context.Context, tr *facts.Repo, rs *runState, cr *changeReader, head plumbing.Hash,
+func (d *Dispatcher) sweepDue(ctx context.Context, tr *facts.Repo, rs *runState, cr *changeReader, head plumbing.Hash,
 	root string, trigs []*fact.CompiledTrigger, verifyOn bool, verifiedSet map[plumbing.Hash]bool) bool {
 	nowUnix := rs.now.Unix()
 	cands, err := tr.DueCandidates(ctx, d.branch, nowUnix)
@@ -997,7 +1018,7 @@ func (d *triggerDispatcher) sweepDue(ctx context.Context, tr *facts.Repo, rs *ru
 		log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: due candidates unreadable; the sweep will re-run")
 		return true
 	}
-	if h := currentTriggerHooks().dueCandidates; h != nil {
+	if h := currentTriggerHooks().DueCandidates; h != nil {
 		cands = h(cands)
 	}
 	// Survivors of the cheap filters, ONE entry per path (the join lists a
@@ -1091,7 +1112,7 @@ func appendTrigger(list []*fact.CompiledTrigger, ct *fact.CompiledTrigger) []*fa
 
 // verifyModeOn reports whether the ontology blob at the head turns F09 on
 // (`verify_signatures: log|enforce`), parsing each distinct blob once.
-func (d *triggerDispatcher) verifyModeOn(blob string, data []byte, readable bool) bool {
+func (d *Dispatcher) verifyModeOn(blob string, data []byte, readable bool) bool {
 	if !readable {
 		return false
 	}
@@ -1115,7 +1136,7 @@ func (d *triggerDispatcher) verifyModeOn(blob string, data []byte, readable bool
 // dispatcher walks the tip's history ONCE per run and reuses the set while
 // the tip does not move (a restart re-walks once). Your own unmerged writes
 // are therefore verified:false until they come back through main.
-func (d *triggerDispatcher) verifiedBelow(ctx context.Context, tr *facts.Repo, upstream string) map[plumbing.Hash]bool {
+func (d *Dispatcher) verifiedBelow(ctx context.Context, tr *facts.Repo, upstream string) map[plumbing.Hash]bool {
 	tip, err := tr.UpstreamTip(ctx, upstream)
 	if err != nil || tip == plumbing.ZeroHash {
 		return nil
@@ -1203,9 +1224,9 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 // `before` at the watermark. For a due fire (episode due, wm == head) there is
 // no advance: `source` is "due", `before` is null, and `commit` is the commit
 // that introduced the content the path carries at the head.
-func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, head, wm plumbing.Hash, repoPath, episode string,
+func (d *Dispatcher) buildChange(ctx context.Context, cr *changeReader, head, wm plumbing.Hash, repoPath, episode string,
 	nonlinear, verifyOn bool, verifiedSet map[plumbing.Hash]bool) pendingFire {
-	if delay := currentTriggerHooks().changeDelay; delay > 0 {
+	if delay := currentTriggerHooks().ChangeDelay; delay > 0 {
 		time.Sleep(delay)
 	}
 	pf := pendingFire{repoPath: repoPath, episode: episode, nonlinear: nonlinear}
@@ -1292,7 +1313,7 @@ func factGlobal(ctx context.Context, trees facts.TriggerTrees, commit plumbing.H
 // action (emit, or the script — trigger_script.go). It returns the rows to
 // log (every outcome but if-false), the evaluation and fire counts, and
 // whether ctx cancelled the run.
-func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []facts.TriggerFire, evaluated, fires int, aborted bool) {
+func (d *Dispatcher) phaseB(ctx context.Context, rs *runState) (rows []facts.TriggerFire, evaluated, fires int, aborted bool) {
 	agent := map[string]any{"id": d.identity.Agent, "host": d.identity.Host, "branch": d.branch}
 	for _, p := range rs.pending {
 		if ctx.Err() != nil {
@@ -1309,7 +1330,7 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []fa
 		// knomit's, like change_ms, and is taken out of the trigger's own
 		// duration before the statistics and the slow detector see it.
 		t0 := time.Now()
-		if h := currentTriggerHooks().evalDelay; h != nil {
+		if h := currentTriggerHooks().EvalDelay; h != nil {
 			time.Sleep(h(p.trig.Name, p.repoPath))
 		}
 		pass, err := p.trig.EvalIf(globals, rs.now)
@@ -1407,7 +1428,7 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []fa
 // emit is the `emit` action, and knomit.emit(payload) from a script: a log
 // line and the SSE `trigger` event on the branch stream, published straight
 // to the hub (no debounce). payload is nil for the action.
-func (d *triggerDispatcher) emit(p pendingFire, payload json.RawMessage) {
+func (d *Dispatcher) emit(p pendingFire, payload json.RawMessage) {
 	ev := log.Info().
 		Str("repo", d.repo).
 		Str("branch", d.branch).
@@ -1421,7 +1442,7 @@ func (d *triggerDispatcher) emit(p pendingFire, payload json.RawMessage) {
 		ev = ev.Str("payload", capForLog(string(payload)))
 	}
 	ev.Msg("trigger fired")
-	if pub := d.ri.pub; pub != nil {
+	if pub := d.pub; pub != nil {
 		pub.BroadcastTrigger(events.TriggerEvent{
 			Branch: d.branch, Trigger: p.trig.Name, Path: p.repoPath, Episode: p.episode,
 			Source: p.source, Commit: p.commit, Trace: p.trace, Payload: payload,
@@ -1478,13 +1499,13 @@ func capForLog(s string) string {
 }
 
 // recordSet remembers the last compiled set for the report.
-func (d *triggerDispatcher) recordSet(set *fact.TriggerSet, head, blob string) {
+func (d *Dispatcher) recordSet(set *fact.TriggerSet, head, blob string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.lastSet, d.lastHead, d.lastBlob = set, head, blob
 }
 
-func (d *triggerDispatcher) lastCompiledSet() *fact.TriggerSet {
+func (d *Dispatcher) lastCompiledSet() *fact.TriggerSet {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.lastSet
@@ -1492,7 +1513,7 @@ func (d *triggerDispatcher) lastCompiledSet() *fact.TriggerSet {
 
 // logInvalidOnce logs each INVALID trigger at ERROR once per (name, blob).
 // Unsupported triggers are not errors and are not logged.
-func (d *triggerDispatcher) logInvalidOnce(set *fact.TriggerSet) {
+func (d *Dispatcher) logInvalidOnce(set *fact.TriggerSet) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.errBlob != set.Blob {
@@ -1520,7 +1541,7 @@ func (d *triggerDispatcher) logInvalidOnce(set *fact.TriggerSet) {
 
 // logOntologyErrorOnce reports an ontology at the head that cannot be read or
 // parsed, once per blob (or head), keeping the last good trigger set.
-func (d *triggerDispatcher) logOntologyErrorOnce(key string, err error) {
+func (d *Dispatcher) logOntologyErrorOnce(key string, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.ontErr == key {
@@ -1531,7 +1552,7 @@ func (d *triggerDispatcher) logOntologyErrorOnce(key string, err error) {
 		Msg("triggers: ontology at head unusable; keeping the last good trigger set")
 }
 
-func (d *triggerDispatcher) clearOntologyError() {
+func (d *Dispatcher) clearOntologyError() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ontErr = ""
@@ -1539,7 +1560,7 @@ func (d *triggerDispatcher) clearOntologyError() {
 
 // runSequence is how many runs have completed (any outcome) and the head the
 // last completed run read. Tests wait on it.
-func (d *triggerDispatcher) runSequence() (completedHead string, seq int64) {
+func (d *Dispatcher) runSequence() (completedHead string, seq int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.completedHead, d.runSeq
@@ -1547,59 +1568,59 @@ func (d *triggerDispatcher) runSequence() (completedHead string, seq int64) {
 
 // ---- The report behind GET …/branches/{branch}/triggers.
 
-// TriggerReport is the trigger resource of one repo: the ONLY statistics
-// surface (user ruling D-d: no stats block, no CLI, no Prometheus counters).
-type TriggerReport struct {
+// Report is the trigger resource of one repo: the ONLY statistics surface
+// (user ruling D-d: no stats block, no CLI, no Prometheus counters).
+type Report struct {
 	Enabled  bool                `json:"enabled"`
 	Reason   string              `json:"reason,omitempty"`
 	Branch   string              `json:"branch"`
 	Head     string              `json:"head,omitempty"`
 	Blob     string              `json:"ontology_blob,omitempty"`
-	Runs     TriggerRunStats     `json:"runs"`
-	Triggers []TriggerView       `json:"triggers"`
+	Runs     RunStats            `json:"runs"`
+	Triggers []View              `json:"triggers"`
 	Fires    []facts.TriggerFire `json:"fires"`
 }
 
-// TriggerView is one declared trigger as the endpoint shows it. State is
+// View is one declared trigger as the endpoint shows it. State is
 // active | invalid | unsupported | frozen, where frozen is an invalid trigger
 // that holds a bookmark (its fires wait for the fix). A `do: script` trigger
 // whose script is missing or does not compile at the head shows `invalid`
 // with the error, though its bookmark keeps advancing (every fire is a
 // `script-error` row): fixing the file needs no catch-up.
-type TriggerView struct {
-	Name      string           `json:"name"`
-	Node      string           `json:"node"`
-	Match     string           `json:"match,omitempty"`
-	On        []string         `json:"on"`
-	Do        string           `json:"do"`
-	Script    string           `json:"script,omitempty"`
-	JS        string           `json:"js,omitempty"`
-	Recipe    string           `json:"recipe,omitempty"`
-	State     string           `json:"state"`
-	Error     string           `json:"error,omitempty"`
-	Watermark string           `json:"watermark,omitempty"`
-	Stats     TriggerStatsView `json:"stats"`
+type View struct {
+	Name      string    `json:"name"`
+	Node      string    `json:"node"`
+	Match     string    `json:"match,omitempty"`
+	On        []string  `json:"on"`
+	Do        string    `json:"do"`
+	Script    string    `json:"script,omitempty"`
+	JS        string    `json:"js,omitempty"`
+	Recipe    string    `json:"recipe,omitempty"`
+	State     string    `json:"state"`
+	Error     string    `json:"error,omitempty"`
+	Watermark string    `json:"watermark,omitempty"`
+	Stats     StatsView `json:"stats"`
 }
 
-// TriggerReport renders the repo's trigger resource. logN is how many recent
-// fire rows to include (0 for none).
-func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerReport, error) {
-	rep := TriggerReport{Branch: ri.agentBranch, Triggers: []TriggerView{}, Fires: []facts.TriggerFire{}}
-	d := ri.triggers
-	if d == nil {
-		switch {
-		case ri.subscribed || ri.agentBranch == "":
-			rep.Reason = "subscription: no agent branch to observe"
-		default:
-			rep.Reason = "read-only server"
-		}
-		return rep, nil
-	}
+// Report renders the repo's trigger resource. logN is how many recent fire
+// rows to include (0 for none). repoName is the repo's CURRENT display name,
+// for the log (a rename keeps the dispatcher, which was built with the old
+// one). A repo without a dispatcher has a disabled report, which the repos
+// parent renders (RepoInstance.TriggerReport): only it knows why.
+func (d *Dispatcher) Report(ctx context.Context, logN int, repoName string) (Report, error) {
+	rep := Report{Branch: d.branch, Triggers: []View{}, Fires: []facts.TriggerFire{}}
 	rep.Enabled = true
 	rep.Runs = d.stats.runView()
 
+	// The store is held for the reads only (released on the way out, a panic
+	// included), not for the rendering below.
+	svc, release, err := d.acquire()
+	if err != nil {
+		return rep, err
+	}
 	var wms map[string]string
-	err := ri.WithRead(func(svc *store.Service) {
+	func() {
+		defer release()
 		var werr error
 		wms, werr = svc.FactsRepo().TriggerWatermarks(ctx, d.branch)
 		if werr != nil {
@@ -1610,12 +1631,9 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 			rep.Fires, werr = svc.FactsRepo().RecentTriggerFires(ctx, d.branch, logN)
 		}
 		if werr != nil {
-			log.Warn().Err(werr).Str("repo", ri.Name()).Msg("trigger report: fire log unreadable")
+			log.Warn().Err(werr).Str("repo", repoName).Msg("trigger report: fire log unreadable")
 		}
-	})
-	if err != nil {
-		return rep, err
-	}
+	}()
 
 	d.mu.Lock()
 	set, head, blob := d.lastSet, d.lastHead, d.lastBlob
@@ -1629,7 +1647,7 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		active[ct.Name] = ct
 	}
 	for _, st := range set.States {
-		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, JS: st.JS, Recipe: st.Recipe,
+		v := View{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, JS: st.JS, Recipe: st.Recipe,
 			State: st.State, Error: st.Error}
 		if v.On == nil {
 			v.On = []string{}
@@ -1657,27 +1675,23 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 	return rep, nil
 }
 
-// TriggerFiresByRun returns the fire-log rows of one recipe run on the
-// observed agent branch, oldest first: the `started` row, then the result row
-// once the recipe has finished and its row is flushed (F07 PR 5, D5). A repo
-// with no dispatcher has none.
-func (ri *RepoInstance) TriggerFiresByRun(ctx context.Context, id string) ([]facts.TriggerFire, error) {
-	out := []facts.TriggerFire{}
-	d := ri.triggers
+// FiresByRun returns the fire-log rows of one recipe run on the observed agent
+// branch, oldest first: the `started` row, then the result row once the
+// recipe has finished and its row is flushed (F07 PR 5, D5). A nil dispatcher
+// (the repo has none) has none.
+func (d *Dispatcher) FiresByRun(ctx context.Context, id string) ([]facts.TriggerFire, error) {
 	if d == nil {
-		return out, nil
+		return []facts.TriggerFire{}, nil
 	}
-	var rerr error
-	err := ri.WithRead(func(svc *store.Service) {
-		out, rerr = svc.FactsRepo().TriggerFiresByRun(ctx, d.branch, id)
-	})
+	svc, release, err := d.acquire()
 	if err != nil {
 		return nil, err
 	}
-	return out, rerr
+	defer release()
+	return svc.FactsRepo().TriggerFiresByRun(ctx, d.branch, id)
 }
 
 // String renders the identity for logs.
-func (d *triggerDispatcher) String() string {
+func (d *Dispatcher) String() string {
 	return fmt.Sprintf("triggers(%s@%s)", d.repo, d.branch)
 }

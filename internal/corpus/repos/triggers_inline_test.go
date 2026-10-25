@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/facts"
 )
@@ -45,7 +46,7 @@ func TestTriggers_InlineJS(t *testing.T) {
 	require.Empty(t, firesOf(t, ri, "broken"), "an uncompilable js never fires")
 	rep, err := ri.TriggerReport(context.Background(), 0)
 	require.NoError(t, err)
-	byName := map[string]TriggerView{}
+	byName := map[string]trigger.View{}
 	for _, v := range rep.Triggers {
 		byName[v.Name] = v
 	}

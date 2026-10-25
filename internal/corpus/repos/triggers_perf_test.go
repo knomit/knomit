@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/storetest"
@@ -54,9 +55,9 @@ func TestDispatch_SlowIfIsReported(t *testing.T) {
 		require.Contains(t, out, field)
 	}
 	require.NotContains(t, out, `"trigger":"fast"`)
-	require.Equal(t, int64(1), ri.triggers.stats.view("slow").Slow)
-	require.Equal(t, int64(0), ri.triggers.stats.view("fast").Slow)
-	require.GreaterOrEqual(t, ri.triggers.stats.view("slow").Duration.MaxMS, 80.0)
+	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("slow").Slow)
+	require.Equal(t, int64(0), ri.triggers.StatsViewForTest("fast").Slow)
+	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("slow").Duration.MaxMS, 80.0)
 }
 
 // ChangeCostNotChargedToTrigger [R2-2]: a slow `change` build (the toucher
@@ -66,13 +67,13 @@ func TestDispatch_SlowIfIsReported(t *testing.T) {
 func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	_, ri := newSlowRepo(t, 40, trig("fast", "learn", "", "true"))
-	setHooks(t, triggerHooks{changeDelay: 80 * time.Millisecond})
+	setHooks(t, trigger.TestHooks{ChangeDelay: 80 * time.Millisecond})
 	write(t, ri, "kb/tasks/x.md")
 	require.NotContains(t, logs.String(), "slow trigger")
-	st := ri.triggers.stats.view("fast")
+	st := ri.triggers.StatsViewForTest("fast")
 	require.Equal(t, int64(0), st.Slow)
 	require.Less(t, st.Duration.MaxMS, 40.0, "the trigger's own work stays small")
-	run := ri.triggers.stats.runView()
+	run := ri.triggers.RunStatsForTest()
 	require.NotNil(t, run.Last)
 	require.GreaterOrEqual(t, run.Last.ChangeMS, int64(80), "the change build is knomit's cost, on the run")
 	rows := runRows(t, ri)
@@ -93,7 +94,7 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	}
 	release()
 	waitTriggerHead(t, ri, last)
-	st := ri.triggers.stats.view("mixed")
+	st := ri.triggers.StatsViewForTest("mixed")
 	require.Equal(t, int64(40), st.Duration.Count)
 	require.Less(t, st.Duration.P95RecentMS, 40.0, "40 fast evaluations: the p95 is fast")
 
@@ -103,14 +104,14 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	}
 	release()
 	waitTriggerHead(t, ri, last)
-	st = ri.triggers.stats.view("mixed")
+	st = ri.triggers.StatsViewForTest("mixed")
 	require.Equal(t, int64(44), st.Duration.Count)
 	require.Equal(t, int64(44), st.Evaluations)
 	require.Equal(t, int64(44), st.Fires)
 	require.GreaterOrEqual(t, st.Duration.P95RecentMS, 85.0, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
 	require.GreaterOrEqual(t, st.Duration.MaxMS, 85.0)
 	require.Less(t, st.Duration.MinMS, 40.0)
-	require.Equal(t, triggerP95Window, st.Duration.P95Window)
+	require.Equal(t, trigger.P95WindowForTest, st.Duration.P95Window)
 }
 
 // SlowTriggerThresholdFromConfig: slow_trigger_ms = 0 disables the detector
@@ -122,8 +123,8 @@ func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 	slowIf(t, "slow", 90, nil)
 	write(t, ri, "kb/tasks/x.md")
 	require.NotContains(t, logs.String(), "slow trigger")
-	require.Equal(t, int64(0), ri.triggers.stats.view("slow").Slow)
-	require.GreaterOrEqual(t, ri.triggers.stats.view("slow").Duration.MaxMS, 80.0, "the duration is still measured")
+	require.Equal(t, int64(0), ri.triggers.StatsViewForTest("slow").Slow)
+	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("slow").Duration.MaxMS, 80.0, "the duration is still measured")
 
 	// The default from config.Defaults reaches the dispatcher unchanged.
 	home := t.TempDir()
@@ -133,7 +134,7 @@ func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 		KeyPath: filepath.Join(home, "agent.key"), Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff}})
 	t.Cleanup(func() { _ = m.Close() })
 	ri2 := bootRepo(t, m)
-	require.Equal(t, 50*time.Millisecond, ri2.triggers.slow)
+	require.Equal(t, 50*time.Millisecond, ri2.triggers.SlowForTest())
 }
 
 // Tx1Bounded at the dispatcher: one advance with 12,000 matching paths logs
@@ -163,9 +164,9 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("commit of 12,000 facts (no index): %s", time.Since(started))
 	started = time.Now()
-	ri.triggers.triggerKick() // what notifyCommit would have done
+	ri.triggers.Kick() // what notifyCommit would have done
 	waitTriggerHeadFor(t, ri, h, 2*time.Minute)
-	t.Logf("dispatcher run over 12,000 paths: %s (run stats: %+v)", time.Since(started), ri.triggers.stats.runView().Last)
+	t.Logf("dispatcher run over 12,000 paths: %s (run stats: %+v)", time.Since(started), ri.triggers.RunStatsForTest().Last)
 	rows := fires(t, ri)
 	// tx1 inserted 10,000 fire rows plus the run row; tx2's prune then kept
 	// the newest 10,000 rows of the log, so the run row (newest) and 9,999
@@ -176,7 +177,7 @@ func TestDispatch_Tx1Bounded(t *testing.T) {
 	require.Equal(t, 12000, rows[0].Fires)
 	require.Equal(t, 12000, rows[0].Evaluated)
 	require.Equal(t, 12000, rows[0].Paths)
-	st := ri.triggers.stats.view("all")
+	st := ri.triggers.StatsViewForTest("all")
 	require.Equal(t, int64(12000), st.Fires, "every fire is counted, logged or not")
 	require.Equal(t, int64(12000), st.Evaluations)
 }
@@ -312,7 +313,7 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 	} else {
 		require.True(t, withinMedian(bm, lm), "median with 50 triggers (%s) is not within max(1.5×, +3ms) of 0 triggers (%s)", lm, bm)
 	}
-	require.GreaterOrEqual(t, ri.triggers.stats.view("t00").Fires, int64(100), "the loaded blocks did fire")
+	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("t00").Fires, int64(100), "the loaded blocks did fire")
 }
 
 // The sabotage target [M5]: 10 triggers whose `if` busy-loops to the 100 ms
@@ -381,8 +382,8 @@ func TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld(t *testing.T) {
 	gate := make(chan struct{})
 	var enterOnce, releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(gate) }) }
-	h := currentTriggerHooks()
-	h.evalDelay = func(name, path string) time.Duration {
+	h := trigger.TestHooksForTest()
+	h.EvalDelay = func(name, path string) time.Duration {
 		if name == "held" && path == pathA {
 			enterOnce.Do(func() { close(entered) })
 			<-gate
@@ -498,8 +499,8 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			waitHead := func(h string) {
 				deadline := time.Now().Add(2 * time.Minute)
 				for {
-					got, _ := ri.triggers.runSequence()
-					if got == h && ri.triggers.flushed() {
+					got, _ := ri.triggers.RunSequenceForTest()
+					if got == h && ri.triggers.FlushedForTest() {
 						return
 					}
 					if time.Now().After(deadline) {
@@ -529,7 +530,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			// 2,000 facts is the store's cost, not the dispatcher's.
 			_, err = storetest.CommitFiles(svc, trigAgent, files, "fixture")
 			must(err)
-			ri.triggers.triggerKick()
+			ri.triggers.Kick()
 			waitHead(headOf())
 			w := headOf()
 			// The advance: 8 paths (a typical knomit-kb advance), own writes
@@ -559,11 +560,11 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 					must(svc.FactsRepo().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil, nil))
 				}
 				b.StartTimer()
-				d.runOnce(ctx)
-				d.flush(ctx)
+				d.RunOnceForTest(ctx)
+				d.FlushForTest(ctx)
 			}
 			b.StopTimer()
-			if tc.triggers > 0 && d.stats.view("t00").Fires == 0 {
+			if tc.triggers > 0 && d.StatsViewForTest("t00").Fires == 0 {
 				b.Fatal("the benchmark never fired")
 			}
 		})

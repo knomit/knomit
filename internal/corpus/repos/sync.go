@@ -819,3 +819,16 @@ func runLocalReconcile(
 		}
 	}
 }
+
+// wakeSync is the push action (F07 PR 4): ask this machine's sync loop for a
+// round now. One non-blocking send on the instance's 1-slot channel — O(1),
+// never blocks, carries nothing (no branch, no payload): the loop pushes only
+// its own agent branch. Fire-and-forget: the round's outcome is the remote's
+// sync/push status, never reported back to the fire (D-report). The trigger
+// dispatcher reaches it through the func it was built with.
+func (ri *RepoInstance) wakeSync() {
+	select {
+	case ri.syncWake <- struct{}{}:
+	default:
+	}
+}

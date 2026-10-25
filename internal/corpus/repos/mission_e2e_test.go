@@ -44,6 +44,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/edge/mcp"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
@@ -199,7 +200,7 @@ func claudeRuns(t *testing.T) [][]string {
 // that retracts something (a take, a dup-check back-off) fails as if the
 // machine died mid-decision.
 type crashableTools struct {
-	real       repos.ScriptTools
+	real       trigger.ScriptTools
 	crashTakes atomic.Bool
 }
 

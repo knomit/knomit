@@ -47,7 +47,7 @@
 // still never SEEN by a trigger: the dispatcher's diff (store.DiffFacts) reads
 // only the ontology-root subtree, so an artifacts/ commit matches no `match`
 // pattern — no loop is possible, with no extra filter needed here.
-package repos
+package trigger
 
 import (
 	"context"
@@ -132,7 +132,7 @@ func newScriptState(tools ScriptTools, ratePerMinute int) scriptState {
 // script per run, a compile only when the blob changed. A script commit is
 // not an episode (`.knomit/` never appears in the diff), so this is the only
 // way a changed script takes effect — on the next run, with no restart.
-func (d *triggerDispatcher) loadScripts(ctx context.Context, tr *facts.Repo, head plumbing.Hash, set *fact.TriggerSet) {
+func (d *Dispatcher) loadScripts(ctx context.Context, tr *facts.Repo, head plumbing.Hash, set *fact.TriggerSet) {
 	for _, ct := range set.Active {
 		if ct.Do != fact.TriggerDoScript {
 			continue
@@ -192,7 +192,7 @@ func (d *triggerDispatcher) loadScripts(ctx context.Context, tr *facts.Repo, hea
 }
 
 // scriptFor is the cached script of a trigger (nil before its first load).
-func (d *triggerDispatcher) scriptFor(name string) *compiledScript {
+func (d *Dispatcher) scriptFor(name string) *compiledScript {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.sc.scripts[name]
@@ -200,7 +200,7 @@ func (d *triggerDispatcher) scriptFor(name string) *compiledScript {
 
 // scriptError is the compile/missing error the endpoint overlays on a
 // `do: script` trigger ("" when the script is fine or not loaded yet).
-func (d *triggerDispatcher) scriptError(name string) string {
+func (d *Dispatcher) scriptError(name string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if cs := d.sc.scripts[name]; cs != nil && cs.err != nil {
@@ -212,7 +212,7 @@ func (d *triggerDispatcher) scriptError(name string) string {
 // rateAllows applies the per-minute cap (ruling D-rate: per trigger, per
 // minute, a sliding window in memory; fires beyond it are DROPPED, not
 // delayed). now is the run's clock. Dispatcher goroutine only.
-func (d *triggerDispatcher) rateAllows(name string, now time.Time) bool {
+func (d *Dispatcher) rateAllows(name string, now time.Time) bool {
 	w := d.sc.windows[name]
 	cut := now.Add(-time.Minute)
 	i := 0
@@ -229,7 +229,7 @@ func (d *triggerDispatcher) rateAllows(name string, now time.Time) bool {
 }
 
 // warnOnce reports whether key has not been warned yet, marking it.
-func (d *triggerDispatcher) warnOnce(key string) bool {
+func (d *Dispatcher) warnOnce(key string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.sc.warned[key] {
@@ -245,7 +245,7 @@ func (d *triggerDispatcher) warnOnce(key string) bool {
 // knomit.run calls produced (their `started`/`busy`/`recipe-error` rows,
 // logged after the fire's own). The caller checks the dispatcher ctx
 // afterwards: a cancelled run has no outcome.
-func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendingFire, globals map[string]any) (outcome, errText string, hostMS time.Duration, extra []facts.TriggerFire) {
+func (d *Dispatcher) runScript(ctx context.Context, rs *runState, p pendingFire, globals map[string]any) (outcome, errText string, hostMS time.Duration, extra []facts.TriggerFire) {
 	cs := d.scriptFor(p.trig.Name)
 	if cs == nil {
 		return facts.TriggerOutcomeScriptError, fmt.Sprintf("script %s: not loaded", p.trig.Script), 0, nil
@@ -270,12 +270,12 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 	d.mu.Unlock()
 
 	budget := fact.ScriptEvalTimeout
-	if h := currentTriggerHooks().scriptBudget; h > 0 {
+	if h := currentTriggerHooks().ScriptBudget; h > 0 {
 		budget = h
 	}
 	hostCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	hostCtx = WithBinding(hostCtx, NewBindingOfRepo(d.ri, d.branch))
+	hostCtx = d.bind(hostCtx)
 	hostCtx = model.WithTrailers(hostCtx, model.Trailers{Trace: p.trace, Cause: p.commit, Trigger: p.trig.Name})
 	rf, rt := rs.fireRange()
 	h := &scriptHost{d: d, p: p, cs: cs, ctx: hostCtx, globals: globals, rangeFrom: rf, rangeTo: rt}
@@ -310,7 +310,7 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 // scriptHost is the `knomit` object of one fire — a script's, or a recipe's
 // (which adds `exec`, recipeHostFunctions).
 type scriptHost struct {
-	d     *triggerDispatcher
+	d     *Dispatcher
 	p     pendingFire
 	cs    *compiledScript
 	ctx   context.Context // budget deadline + binding + trailers
@@ -508,7 +508,7 @@ func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
 	if !ok || file == "" {
 		return "", fmt.Errorf("knomit.%s: a path must be a non-empty string, got %v", tool, v)
 	}
-	root := h.d.ri.ontologyRoot
+	root := h.d.ontologyRoot
 	if root == "" {
 		root = "kb"
 	}

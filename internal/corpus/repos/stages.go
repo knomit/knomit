@@ -749,7 +749,7 @@ func (serveStage) Name() string { return "serve" }
 // is drained before Open closes the store.
 func (serveStage) Enter(_ context.Context, life *Life, r *RepoInstance) error {
 	if d := r.triggers; d != nil {
-		life.Go("triggers", d.run)
+		life.Go("triggers", d.Run)
 	}
 	if c := r.consensus; c != nil {
 		life.Go("consensus", c.run)
@@ -802,7 +802,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 	name := "local-reconcile"
 	run := func(ctx context.Context) {
 		runLocalReconcileLoop(ctx, svc, r.Name(), r.agentBranch, cfg.Git.LocalReconcileInterval,
-			r.triggerKick, r.syncWake, mode(), once, r.fleetHostRound, r.fleetMainAdvanced)
+			r.triggers.Kick, r.syncWake, mode(), once, r.fleetHostRound, r.fleetMainAdvanced)
 	}
 	if hasOrigin {
 		if remote != nil {
@@ -812,7 +812,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 		name = "reconcile"
 		run = func(ctx context.Context) {
 			runReconcileLoop(ctx, svc, r.pub, r.remoteEdgeSink(), r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
-				env.onPush, r.triggerKick, r.syncWake, r.breakers, mode(), r.peers, once)
+				env.onPush, r.triggers.Kick, r.syncWake, r.breakers, mode(), r.peers, once)
 		}
 	}
 	// The local-upstream repair runs on the life's goroutine, never on the

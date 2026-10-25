@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store/facts"
 )
@@ -24,15 +25,15 @@ var runIDRe = regexp.MustCompile(`^run-[0-9a-f]{32}$`)
 // statistics, and the last `log` fire rows. It is the ONLY place the trigger
 // statistics are exposed (user ruling D-d).
 type triggersView struct {
-	Enabled  bool                  `json:"enabled"`
-	Reason   string                `json:"reason,omitempty"`
-	Branch   string                `json:"branch"`
-	Head     string                `json:"head,omitempty"`
-	Blob     string                `json:"ontology_blob,omitempty"`
-	Runs     repos.TriggerRunStats `json:"runs"`
-	Triggers []repos.TriggerView   `json:"triggers"`
-	Fires    []facts.TriggerFire   `json:"fires"`
-	Links    hal.LinkMap           `json:"_links"`
+	Enabled  bool                `json:"enabled"`
+	Reason   string              `json:"reason,omitempty"`
+	Branch   string              `json:"branch"`
+	Head     string              `json:"head,omitempty"`
+	Blob     string              `json:"ontology_blob,omitempty"`
+	Runs     trigger.RunStats    `json:"runs"`
+	Triggers []trigger.View      `json:"triggers"`
+	Fires    []facts.TriggerFire `json:"fires"`
+	Links    hal.LinkMap         `json:"_links"`
 }
 
 // triggerRunView is the HAL body of GET …/triggers?run=<id>: the rows of ONE
@@ -76,7 +77,7 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 			// ONLY that run's rows (rehearsal finding F5): not the declared
 			// triggers, their statistics or the run summary, which a caller
 			// following one run has no use for and which buried its rows.
-			fires, err := ri.TriggerFiresByRun(r.Context(), runID)
+			fires, err := ri.Triggers().FiresByRun(r.Context(), runID)
 			if err != nil {
 				httpx.WriteStoreError(w, r, err, "Failed to read triggers", branch)
 				return

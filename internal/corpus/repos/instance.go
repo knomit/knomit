@@ -16,8 +16,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/foundation/config"
 )
 
@@ -168,7 +170,7 @@ type RepoInstance struct {
 	// with the instance and never reassigned, so ri.onCommit reads it without
 	// a lock and its kick slot exists from the first commit; it runs under the
 	// Serve stage's life.
-	triggers *triggerDispatcher
+	triggers *trigger.Dispatcher
 	// consensus is the F08 consensus merger (`consensus: auto`; on the fleet
 	// repository, the fleet master's merger), nil when this
 	// repo can have none: a read-only server, or a subscription with no agent
@@ -673,6 +675,30 @@ func (ri *RepoInstance) DiscoveryWSpec() float64 { return ri.discoveryWSpec }
 // reads, starts and cancels tasks but cannot publish (the publisher stays in
 // the instance).
 func (ri *RepoInstance) TaskHub() *events.TaskHub { return ri.hub }
+
+// Triggers returns the repo's trigger dispatcher, nil when the repo has none
+// (a read-only server, or a subscription with no agent branch). Its exported
+// methods that a caller can reach with no dispatcher (FiresByRun) accept a
+// nil one.
+func (ri *RepoInstance) Triggers() *trigger.Dispatcher { return ri.triggers }
+
+// TriggerReport renders the repo's trigger resource. logN is how many recent
+// fire rows to include (0 for none). A repo with no dispatcher gets a
+// disabled report that says why; one with a dispatcher gets the
+// dispatcher's (trigger.Dispatcher.Report).
+func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (trigger.Report, error) {
+	if d := ri.triggers; d != nil {
+		return d.Report(ctx, logN, ri.Name())
+	}
+	rep := trigger.Report{Branch: ri.agentBranch, Triggers: []trigger.View{}, Fires: []facts.TriggerFire{}}
+	switch {
+	case ri.subscribed || ri.agentBranch == "":
+		rep.Reason = "subscription: no agent branch to observe"
+	default:
+		rep.Reason = "read-only server"
+	}
+	return rep, nil
+}
 
 // Verify runs the integrity check against the current store while holding a
 // store reference (Acquire), so a concurrent SwapStore/Archive drains this

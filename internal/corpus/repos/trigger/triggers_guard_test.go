@@ -1,4 +1,4 @@
-package repos
+package trigger
 
 import (
 	"go/ast"
@@ -25,12 +25,11 @@ import (
 var triggersRepoAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// the store: reads, and the three tables
-		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.HeadCommit", "svc.Remote", "remote.UpstreamBranch", "tr.SignerFingerprint",
+		"d.acquire", "release", "svc.FactsRepo", "svc.HeadCommit", "svc.Remote", "remote.UpstreamBranch", "tr.SignerFingerprint",
 		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "svc.DiffFacts", "tr.TreeReader",
 		"tr.UpstreamTip", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
 		"tr.DueCandidates", "tr.DueMarks",
 		"cr.tr.CommitInfo", "cr.tr.CommitSignerOf", "cr.trees.Toucher", "cr.trees.BlobAt", "trees.BlobAt", "?.TriggerWatermarks", "?.RecentTriggerFires",
-		"ri.WithRead", "ri.Name",
 		// the compiled triggers
 		"d.cache.Get", "ct.OnEpisode", "ct.Matches", "p.trig.EvalIf",
 		"fact.ReadVerifySettings", "fact.ParseFact", "fact.FactGlobal", "fact.ExpiresUnix",
@@ -39,10 +38,10 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"pub.BroadcastTrigger", "log.Warn", "log.Error", "log.Info", "log.Debug", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
 		// the push action (F07 PR 4): a non-blocking send on the sync wake,
 		// from phase B's own case — never a push, never the network
-		"d.wakeSync", "d.ri.wakeSync",
+		"d.wakeSync", "d.syncWake",
 		"crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
-		"newTriggerStats", "currentTriggerHooks", "d.triggerKick", "d.safeRun",
+		"newTriggerStats", "currentTriggerHooks", "d.Kick", "d.safeRun",
 		"d.runOnce", "d.phaseA", "d.advance", "d.sweepDue", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
 		"d.overlayPending", "d.verifyModeOn", "d.verifiedBelow", "d.buildChange", "d.emit", "d.recordSet",
 		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError", "d.clock",
@@ -50,8 +49,9 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"cr.metaOf", "factGlobal", "nameStates", "episodeOf", "shortHash", "capForLog", "appendTrigger",
 		"cancel", "timer.Stop", "h",
 		// the due sweep's gate: a read of the repo's derived lifecycle status
-		// (an atomic snapshot), never the store
-		"d.indexIsReady", "d.indexReady", "ri.Status",
+		// (an atomic snapshot, read by the func the repos parent built the
+		// dispatcher with), never the store
+		"d.indexIsReady", "d.indexReady",
 		// the `do: script` half (trigger_script.go has its own list below):
 		// the phase-A load, the phase-B run, the report overlay, the trace
 		"newScriptState", "d.loadScripts", "d.runScript", "d.scriptError", "deriveTrace", "hostMS.Milliseconds",
@@ -81,8 +81,9 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// knomit.run (F07 PR 5): the name rule, the start (trigger_recipe.go),
 		// its row handed to the fire (or the late inbox), the counter
 		"fact.ValidRecipeName", "h.d.startRecipe", "h.onRow", "?.recordRecipe", "rs.fireRange",
-		// the binding and the trailers the handlers see
-		"NewBindingOfRepo", "WithBinding", "model.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
+		// the binding (the func the repos parent built the dispatcher with)
+		// and the trailers the handlers see
+		"d.bind", "model.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
 		// the sandbox
 		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath", "fact.IsUnderArtifactsRoot",
 		// F25 follow-up (user ruling 2026-10-06): the same artifact-shape
@@ -112,12 +113,12 @@ var triggersRepoAllowedCalls = map[string][]string{
 	// TestRecipe_OSExecOnlyInExecFile), never from here.
 	"trigger_recipe.go": {
 		// the store: main's tip and the recipe blob at it
-		"d.ri.Acquire", "release", "svc.FactsRepo", "svc.Remote", "remote.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
+		"d.acquire", "release", "svc.FactsRepo", "svc.Remote", "remote.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
 		// the local tier
 		"os.Stat", "os.ReadFile", "filepath.Join", "fi.Mode", "?.IsRegular", "fi.ModTime", "fi.Size", "cur.mtime.Equal",
 		"sha256.Sum256", "hex.EncodeToString",
 		// the sandbox and the host
-		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "model.WithTrailers",
+		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "d.bind", "model.WithTrailers",
 		"recipeHostFunctions", "recipeMCP", "serverkey.ServerKey", "json.Marshal", "os.Environ", "mergeEnv",
 		"d.recipeGlobals", "d.recipeEnv",
 		// F5: which result outcomes are failures (their text in `error`, else
@@ -128,7 +129,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.serverAddr", "d.waitServerAddr", "time.NewTicker", "tick.Stop", "deadline.Stop", "ctx.Err",
 		// the runner: resolution, slots, the goroutine, the late inbox, a kick
 		"d.resolveRecipe", "d.mainRecipe", "d.localRecipe", "d.compileRecipe", "d.rc.tryTake", "d.rc.release",
-		"?.Add", "?.Done", "d.runJob", "d.execRecipe", "d.addLate", "d.triggerKick", "d.stats.recordRecipe",
+		"?.Add", "?.Done", "d.runJob", "d.execRecipe", "d.addLate", "d.Kick", "d.stats.recordRecipe",
 		"newRunID", "rand.Read", "mathrand.Int64N", "?.Lock", "?.Unlock", "rc.mu.Lock", "rc.mu.Unlock",
 		"d.lateMu.Lock", "d.lateMu.Unlock", "d.mu.Lock", "d.mu.Unlock", "p.empty",
 		// the log and pure helpers

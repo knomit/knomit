@@ -135,7 +135,7 @@ func startModeLoop(t *testing.T, ri *RepoInstance, agent, upstream string, mode 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), agent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, mode, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), agent, auth, "", false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, mode, nil, false)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -163,7 +163,7 @@ func startRealModeLoop(t *testing.T, ri *RepoInstance, originRoot string, mode *
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, mode, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, mode, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
@@ -527,7 +527,7 @@ func TestSyncMode_LocalLoop(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runLocalReconcileLoop(ctx, svc, ri.Name(), trigAgent, 30*time.Second, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, 5*time.Second), false, nil, nil)
+		runLocalReconcileLoop(ctx, svc, ri.Name(), trigAgent, 30*time.Second, ri.triggers.Kick, ri.syncWake, modeFor(t, ri, trigAgent, 5*time.Second), false, nil, nil)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 
@@ -562,7 +562,7 @@ func TestSyncMode_LocalIntervalZero(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcileLoop(context.Background(), testService(t, ri), ri.Name(), trigAgent, 0, ri.triggerKick, ri.syncWake, modeFor(t, ri, trigAgent, time.Second), false, nil, nil)
+		runLocalReconcileLoop(context.Background(), testService(t, ri), ri.Name(), trigAgent, 0, ri.triggers.Kick, ri.syncWake, modeFor(t, ri, trigAgent, time.Second), false, nil, nil)
 	}()
 	select {
 	case <-done:
