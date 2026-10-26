@@ -17,7 +17,9 @@ import (
 
 // TestMergeFacts_ExpiresIsTheWinnersOwn: a dedup merge never invents,
 // inherits or pools an expiry — the surviving identity keeps its own value.
-// Mixed-type rows included: the winner's TYPE and its EXPIRES travel together.
+// Mixed-type rows included. The type is NOT the winner's: a merge never changes
+// the stored fact's type (typeKept), so the stored type is asserted on every
+// row, winner or not.
 func TestMergeFacts_ExpiresIsTheWinnersOwn(t *testing.T) {
 	cases := []struct {
 		name                 string
@@ -49,11 +51,7 @@ func TestMergeFacts_ExpiresIsTheWinnersOwn(t *testing.T) {
 			require.Equal(t, tc.newWins, incomingIdentityWins(nf, ex), "fixture must produce the intended winner")
 			merged := mergeFacts(nf, ex, testLocalID)
 			require.Equal(t, tc.want, merged.Expires)
-			if tc.newWins {
-				require.Equal(t, tc.newType, merged.Type)
-			} else {
-				require.Equal(t, tc.exType, merged.Type)
-			}
+			require.Equal(t, tc.exType, merged.Type, "the stored type is kept whoever wins")
 		})
 	}
 }
