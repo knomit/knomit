@@ -448,6 +448,28 @@ func TestEvalIfDefaultBudgetIs100ms(t *testing.T) {
 	}
 }
 
+// EvalIf must take its budget from ifBudget: a busy loop under a distinctive
+// evalTimeout is interrupted with that duration in the error.
+func TestEvalIfUsesIfBudget(t *testing.T) {
+	var c TriggerCache
+	set, err := c.Get("blobBusy", triggerDoc("(function(){ while (true) {} })()"), testIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := activeNamed(set, "c")
+	tr.evalTimeout = 37 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { _, err := tr.EvalIf(nil, time.Now()); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exceeded 37ms") {
+			t.Errorf("want an error saying \"exceeded 37ms\", got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a busy loop ran 5s: evalTimeout is not enforced")
+	}
+}
+
 func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 	var c TriggerCache
 	signal := map[string]any{"fact": map[string]any{"type": "signal"}}

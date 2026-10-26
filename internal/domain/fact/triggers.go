@@ -294,7 +294,8 @@ type CompiledTrigger struct {
 	jsProg *goja.Program
 	// evalTimeout overrides ruleEvalTimeout for this trigger's EvalIf. Only a
 	// white-box test in this package sets it (production never does, so the
-	// budget is always ruleEvalTimeout); zero means the default.
+	// budget is always ruleEvalTimeout); zero means the default. Any write to
+	// it from production code is a bug.
 	evalTimeout time.Duration
 }
 
