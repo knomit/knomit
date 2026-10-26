@@ -149,4 +149,6 @@ func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *te
 		}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, warns, "a member consumed by an earlier merge in the call still carries its refs")
+	// Written, not merely unwarned: a skipped merge would also leave warns empty.
+	mergedFactPath(t, svc, branch, "Second")
 }
