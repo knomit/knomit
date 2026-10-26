@@ -292,6 +292,19 @@ type CompiledTrigger struct {
 	glob   *glob
 	ifProg *goja.Program
 	jsProg *goja.Program
+	// evalTimeout overrides ruleEvalTimeout for this trigger's EvalIf. Only a
+	// white-box test in this package sets it (production never does, so the
+	// budget is always ruleEvalTimeout); zero means the default.
+	evalTimeout time.Duration
+}
+
+// ifBudget is the time EvalIf allows a condition: ruleEvalTimeout unless a
+// test in this package set evalTimeout.
+func (t *CompiledTrigger) ifBudget() time.Duration {
+	if t.evalTimeout > 0 {
+		return t.evalTimeout
+	}
+	return ruleEvalTimeout
 }
 
 // JSProgram is the compiled inline script (nil for a file script).
@@ -632,8 +645,9 @@ func (t *CompiledTrigger) EvalIf(globals map[string]any, now time.Time) (bool, e
 		return true, nil
 	}
 	vm := newSandboxVM(now)
-	timer := time.AfterFunc(ruleEvalTimeout, func() {
-		vm.Interrupt(fmt.Sprintf("trigger %s: if exceeded %s", t.Name, ruleEvalTimeout))
+	budget := t.ifBudget()
+	timer := time.AfterFunc(budget, func() {
+		vm.Interrupt(fmt.Sprintf("trigger %s: if exceeded %s", t.Name, budget))
 	})
 	defer timer.Stop()
 	if _, _, err := sandboxGlobals(vm, "trigger "+t.Name, globals); err != nil {

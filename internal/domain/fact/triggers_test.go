@@ -421,11 +421,31 @@ func triggerDoc(cond string) []byte {
 // not as a wrong boolean.
 func mustEvalIf(t *testing.T, tr *CompiledTrigger, globals map[string]any) bool {
 	t.Helper()
+	// The 100ms default is for production; a loaded test machine gets a
+	// generous budget so the evaluation is not what the test measures.
+	tr.evalTimeout = time.Minute
 	ok, err := tr.EvalIf(globals, time.Now())
 	if err != nil {
 		t.Fatalf("EvalIf errored: %v", err)
 	}
 	return ok
+}
+
+// The production budget for a trigger condition is exactly ruleEvalTimeout
+// (100ms) unless a test sets evalTimeout; mustEvalIf's generous limit must
+// not leak into the default.
+func TestEvalIfDefaultBudgetIs100ms(t *testing.T) {
+	if ruleEvalTimeout != 100*time.Millisecond {
+		t.Fatalf("ruleEvalTimeout = %v, want 100ms", ruleEvalTimeout)
+	}
+	var tr CompiledTrigger
+	if got := tr.ifBudget(); got != 100*time.Millisecond {
+		t.Fatalf("default EvalIf budget = %v, want 100ms", got)
+	}
+	tr.evalTimeout = time.Minute
+	if got := tr.ifBudget(); got != time.Minute {
+		t.Fatalf("overridden budget = %v, want 1m", got)
+	}
 }
 
 func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
