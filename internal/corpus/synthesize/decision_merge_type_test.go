@@ -18,8 +18,17 @@ import (
 
 func writeTyped(t *testing.T, env *synthtest.RestatementEnv, path, title, typ string, conf float64) {
 	t.Helper()
+	writeFrontmatter(t, env, path, title, typ, "", conf, 1)
+}
+
+func writeFrontmatter(t *testing.T, env *synthtest.RestatementEnv, path, title, typ, kind string, conf float64, sources int) {
+	t.Helper()
+	kindLine := ""
+	if kind != "" {
+		kindLine = "kind: " + kind + "\n"
+	}
 	_, err := env.Svc.Facts().WriteFact(context.Background(), env.Branch, path,
-		fmt.Sprintf("---\ntype: %s\nconfidence: %.2f\nsources: 1\n---\n# %s\n\nbody of %s", typ, conf, title, title),
+		fmt.Sprintf("---\n%stype: %s\nconfidence: %.2f\nsources: %d\n---\n# %s\n\nbody of %s", kindLine, typ, conf, sources, title, title),
 		"write "+path, "test")
 	require.NoError(t, err)
 }
@@ -126,4 +135,89 @@ func TestApplyPruneMerge_UnreadableMembersAreRefused(t *testing.T) {
 	stats, _, warns := mergeTyped(t, env, "kb/alpha/gone1.md", "kb/alpha/gone2.md", "synthesis")
 	require.Equal(t, 0, stats.Merged, "with no member to read there is no type to keep")
 	require.True(t, hasWarn(warns, "cannot be derived"), "warns: %v", warns)
+}
+
+// One judge response may both retract members and merge them. The members were
+// typed from a snapshot taken before the retracts, so the merge must be
+// refused when apply-time reads find none of them.
+func TestApplyPruneMerge_MembersRetractedInTheSameCallAreRefused(t *testing.T) {
+	env := synthtest.NewRestatementEnv(t, 0)
+	writeTyped(t, env, "kb/alpha/one.md", "One", "concept", 0.7)
+	writeTyped(t, env, "kb/alpha/two.md", "Two", "concept", 0.7)
+
+	var warns []string
+	onProgress := func(e step.ProgressEvent) {
+		if e.Phase == "warn" {
+			warns = append(warns, e.Message)
+		}
+	}
+	stats, err := ApplyPruneDecisions(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+		[]step.PruneDecision{
+			{Path: "kb/alpha/one.md", Action: "retract"},
+			{Path: "kb/alpha/two.md", Action: "retract"},
+		},
+		[]step.MergeEntry{{
+			Paths:  []string{"kb/alpha/one.md", "kb/alpha/two.md"},
+			Merged: step.MergedFact{Path: "kb/alpha/merged-result.md", Title: mergedTitle, Body: "Both.", Confidence: 0.9},
+		}},
+		step.ReviewTool, onProgress, env.Branch, "", "kb", nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.Pruned, "fixture: both retracts must have applied")
+	require.Equal(t, 0, stats.Merged, "a merge over members already gone must not write a fact from stale types")
+	require.True(t, hasWarn(warns, "apply time"), "warns: %v", warns)
+}
+
+// Under a widened [cluster_cache] neighbor_kinds a prune merge can hold a
+// pragmatic member. Whichever wins the tiebreak, the merge is refused: a policy
+// must not be deleted into an epistemic fact (94172e81).
+func TestApplyPruneMerge_CrossKindMembersAreRefused_WhoeverWinsTheTiebreak(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		obsConf, polCf float64
+	}{
+		{"policy wins", 0.5, 0.7},
+		{"observation wins", 0.9, 0.7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := synthtest.NewRestatementEnv(t, 0)
+			writeFrontmatter(t, env, "kb/alpha/obs.md", "Obs", "observation", "", tc.obsConf, 1)
+			writeFrontmatter(t, env, "kb/alpha/pol.md", "Pol", "policy", "pragmatic", tc.polCf, 1)
+
+			stats, _, warns := mergeTyped(t, env, "kb/alpha/obs.md", "kb/alpha/pol.md", "observation")
+			require.Equal(t, 0, stats.Merged, "warns: %v", warns)
+			require.True(t, hasWarn(warns, "not all of one known kind"), "warns: %v", warns)
+			for _, p := range []string{"kb/alpha/obs.md", "kb/alpha/pol.md"} {
+				ok, err := env.Svc.Facts().FactExists(context.Background(), env.Branch, p)
+				require.NoError(t, err)
+				require.True(t, ok, "%s must survive a refused merge", p)
+			}
+		})
+	}
+}
+
+// With three tied members the winner must not depend on how the fold pooled
+// sources: sources [2,2,3] at equal confidence, the third has the most.
+func TestApplyPruneMerge_ThreeWayTieUsesEachMembersOwnSources(t *testing.T) {
+	for _, order := range [][]string{{"a", "b", "c"}, {"c", "b", "a"}, {"b", "c", "a"}} {
+		env := synthtest.NewRestatementEnv(t, 0)
+		kinds := map[string]struct {
+			typ     string
+			sources int
+		}{"a": {"concept", 2}, "b": {"pattern", 2}, "c": {"process", 3}}
+		var paths []string
+		for _, k := range order {
+			p := "kb/alpha/" + k + ".md"
+			writeFrontmatter(t, env, p, "T"+k, kinds[k].typ, "", 0.8, kinds[k].sources)
+			paths = append(paths, p)
+		}
+		stats, err := ApplyPruneDecisions(context.Background(), env.Svc.Facts(), env.Svc.FactsRepo(), env.Svc.Search(),
+			nil, []step.MergeEntry{{Paths: paths, Merged: step.MergedFact{
+				Path: "kb/alpha/merged-result.md", Title: mergedTitle, Body: "All.", Confidence: 0.9}}},
+			step.ReviewTool, func(step.ProgressEvent) {}, env.Branch, "", "kb", nil)
+		require.NoError(t, err)
+		require.Equal(t, 1, stats.Merged, "order %v", order)
+		got, err := env.Svc.Search().GetByPath(context.Background(), env.Branch, mergedFactPath(t, env.Svc, env.Branch, mergedTitle))
+		require.NoError(t, err)
+		require.Equal(t, "process", string(got.Type), "order %v: the member with the most sources wins a confidence tie", order)
+	}
 }

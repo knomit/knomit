@@ -139,9 +139,9 @@ func ApplyPruneDecisions(ctx context.Context,
 		// type is derived from the members (mergedTypeFromMembers); the
 		// judge is not asked for one, and one it volunteers anyway is
 		// ignored and reported below, never trusted.
-		mergedType, ok := mergedTypeFromMembers(memberTypes[i])
-		if !ok {
-			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: none of the %d subsumed facts could be read, so the merged type cannot be derived from them", mf.Path, len(m.Paths))})
+		mergedType, terr := mergedTypeFromMembers(memberTypes[i])
+		if terr != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, terr)})
 			continue
 		}
 		// Prune-merges cannot create hypothesis-type facts. Hypotheses
@@ -178,7 +178,20 @@ func ApplyPruneDecisions(ctx context.Context,
 		// below, so trusting the count the model happened to emit discards the
 		// corroborations the merge just absorbed. §5.3 already mandates summing
 		// for dedup-on-learn; this is the same merge.
-		weight, pooled, _ := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
+		weight, pooled, readable := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
+		// The members were typed from a snapshot taken before this call's
+		// retracts and earlier merges ran; this read is at apply time. One
+		// judge response may retract a path and also list it in a merge, so
+		// members readable then can be gone now. A merge that can read none of
+		// the facts it is about to delete is destroying evidence it never
+		// counted and would write a fact whose type came from a stale
+		// snapshot: refuse it.
+		if readable == 0 && len(m.Paths) > 0 {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"merge %s rejected: none of the %d subsumed facts could be read at apply time (a retract or an earlier merge in this call took them)",
+				mf.Path, len(m.Paths))})
+			continue
+		}
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
@@ -739,7 +752,7 @@ func memberTypeInputs(ctx context.Context, gs *facts.Index, branch string, paths
 		if !ok {
 			continue
 		}
-		out = append(out, step.FactForLLM{File: p, Type: string(f.Type), Confidence: f.Confidence, Sources: f.Sources})
+		out = append(out, step.FactForLLM{File: p, Type: string(f.Type), Kind: string(f.Kind), Confidence: f.Confidence, Sources: f.Sources})
 	}
 	return out
 }
@@ -747,17 +760,37 @@ func memberTypeInputs(ctx context.Context, gs *facts.Index, branch string, paths
 // mergedTypeFromMembers is the type a prune merge writes: the members' shared
 // type when they agree, else the type of the member the dedup tiebreak picks
 // (mergeFacts: non-hypothesis wins, then confidence, then sources;
-// kb/decisions/synthesize/dedup-merge-tiebreak/02422cde.md). It is false when
-// no member could be read, because then there is nothing to derive it from.
-func mergedTypeFromMembers(members []step.FactForLLM) (fact.Type, bool) {
+// kb/decisions/synthesize/dedup-merge-tiebreak/02422cde.md).
+//
+// It errors when there is nothing to derive from (no member could be read) and
+// when the members do not all share one known kind: a merge writes an
+// epistemic fact, so a policy deleted into it is a cross-kind loss. This is
+// the sameKnownKind rule mechanical dedup already applies
+// (kb/incidents/synthesize/cluster/cross-kind-dedup-merge/94172e81.md); under a
+// widened [cluster_cache] neighbor_kinds, joinCousinsForPrune can hand a prune
+// merge pragmatic members.
+func mergedTypeFromMembers(members []step.FactForLLM) (fact.Type, error) {
 	if len(members) == 0 {
-		return "", false
+		return "", fmt.Errorf("none of the subsumed facts could be read, so the merged type cannot be derived from them")
 	}
-	winner := members[0]
 	for _, m := range members[1:] {
-		winner, _ = mergeFacts(winner, m)
+		if !sameKnownKind(members[0], m) {
+			return "", fmt.Errorf("its members are not all of one known kind (%q: %q, %q: %q); a merge never deletes a fact across kinds",
+				members[0].File, members[0].Kind, m.File, m.Kind)
+		}
 	}
-	return fact.Type(winner.Type), true
+	// Pick the winning MEMBER with the tiebreak, comparing each against the
+	// best so far. mergeFacts pools Sources into the winner it returns, so
+	// the returned value is used only to say WHICH operand won; the operands
+	// stay the members' own, and the outcome does not depend on member order
+	// beyond a full tie (the earlier member keeps it).
+	best := members[0]
+	for _, m := range members[1:] {
+		if w, _ := mergeFacts(best, m); w.File == m.File {
+			best = m
+		}
+	}
+	return fact.Type(best.Type), nil
 }
 
 // agreedContext is the F22 prune-merge rule: the merged fact is NEW, so it
