@@ -405,6 +405,7 @@ func TestApplyReflectDecisions_OnlyACiterOfTheDeletedTransitionIsReinforced(t *t
 	require.NoError(t, err)
 	x := fact.NewFact(other)
 	x.Title, x.Body, x.Type, x.Confidence, x.Sources = "Other", "does not cite the hypothesis", fact.Observation, 0.7, 1
+	x.Refs = []string{setO} // has a ref, but not to the hypothesis
 	notCiting, err := fact.SerializeFact(x)
 	require.NoError(t, err)
 	_, _, err = svc.Facts().BatchWriteFacts(ctx, branch, map[string]string{setO: citing, other: notCiting}, []string{setH}, "settle by hand", "test")
