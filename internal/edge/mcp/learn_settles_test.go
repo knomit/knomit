@@ -223,3 +223,16 @@ func TestLearnSettles_HypothesisMustStillExistUnderTheLock(t *testing.T) {
 	require.NotContains(t, settledMessage(t, ri, "agent/test"), model.TrailerOutcome)
 	_ = before
 }
+
+// A fact whose nearest match an earlier fact in the call already took is
+// written on its own with a note, not declined silently.
+//
+// SABOTAGE: drop the note in the `consumed` decline of applyDedupMerge → red.
+func TestLearnDedup_SecondMatcherOfAConsumedFactGetsANote(t *testing.T) {
+	_, ctx, emb := newDedupAttrRepo(t)
+	existing := settledWritten(t, settledLearn(t, ctx, emb, "seed", nil, settledFact("notes", "a", "Same claim", "observation")))[0]
+	res := settledLearn(t, ctx, emb, "two", nil,
+		settledFact("notes", "a", "Same claim", "observation"),
+		settledFact("notes", "a", "Same claim", "observation"))
+	require.Contains(t, settledNotesOf(res), "fact 1: matched "+existing+", already taken by fact 0 in this call.")
+}

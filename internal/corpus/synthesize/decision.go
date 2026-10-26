@@ -572,6 +572,9 @@ func ApplyReflectDecisions(
 	idx *index.Facade,
 	result step.ReflectResult,
 	sess *model.PipelineSession,
+	// since is the review watermark: where the walk for a deleted transition's
+	// deleting commit stops ("" walks the whole history).
+	since string,
 	// localRepoID is this repo's 12-hex id, for the ref gate below.
 	localRepoID string,
 	ontologyRoot string,
@@ -651,7 +654,7 @@ func ApplyReflectDecisions(
 			// the live facts the deleting commit wrote that cite it. With
 			// none, skip this transition with one warning; reflect must not
 			// fail whole on a deleted path.
-			citers, err := livingCiters(ctx, gs, sysFiles, branch, tp, localRepoID)
+			citers, err := livingCiters(ctx, gs, sysFiles, branch, since, tp, localRepoID)
 			if err != nil {
 				return fmt.Errorf("reinforce[%d]: %w", i, err)
 			}
@@ -969,14 +972,15 @@ func memberExpiries(ctx context.Context, gs *facts.Index, branch string, paths [
 
 // livingCiters returns the live facts written in the commit that deleted path
 // whose refs cite it.
-func livingCiters(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, branch, path, localRepoID string) ([]string, error) {
+func livingCiters(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, branch, since, path, localRepoID string) ([]string, error) {
 	if sysFiles == nil {
 		return nil, nil
 	}
-	peers, err := sysFiles.DeletionPeers(ctx, branch, path)
+	st, err := sysFiles.SettlementsSince(ctx, branch, since)
 	if err != nil {
 		return nil, err
 	}
+	peers := st.Written[path]
 	want := fact.ClassifyRef(path, localRepoID).Path
 	var out []string
 	for _, p := range peers {

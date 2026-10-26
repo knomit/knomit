@@ -126,7 +126,7 @@ func TestApplyReflectDecisions_NewMethodologyInheritsNoExpires(t *testing.T) {
 		TransitionPaths: []string{"kb/technology/a.md"},
 		Refs:            []string{"kb/technology/a.md"},
 	}}}
-	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess,
+	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess, "",
 		synthtest.BareRefFixture, ri.OntologyRoot(), 0.95, nil))
 	found := methodologyFactPaths(t, svc, branch)
 	require.Len(t, found, 1, "precondition: the propose arm must have written one methodology")

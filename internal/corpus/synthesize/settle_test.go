@@ -310,12 +310,12 @@ func TestApplyDistillDecisions_UnusedSettleWarns(t *testing.T) {
 	require.Contains(t, warns[0], setH)
 }
 
-// S6: OutcomesSince reads every value per commit, only after the watermark,
+// S6: SettlementsSince reads every value per commit, only after the watermark,
 // latest word wins, and ignores a value that is not an outcome.
 //
 // SABOTAGE: read only the last value per commit; take the first sighting; or
 // drop the ParseOutcome check → red.
-func TestOutcomesSince(t *testing.T) {
+func TestSettlementsSince_Outcomes(t *testing.T) {
 	ctx := context.Background()
 	svc, branch := synthtest.NewSourcesTestRepo(t)
 	write := func(c context.Context, name string) {
@@ -330,9 +330,15 @@ func TestOutcomesSince(t *testing.T) {
 	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/p1.md", Outcome: "refuted"}}), "resettle")
 	write(model.WithTrailers(ctx, model.Trailers{Extra: []model.TrailerEntry{{Key: model.TrailerOutcome, Value: "kb/x/p3.md maybe"}}}), "garbage")
 
-	got, err := svc.FactsRepo().OutcomesSince(ctx, branch, head)
+	got, err := svc.FactsRepo().SettlementsSince(ctx, branch, head)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"kb/x/p1.md": "refuted", "kb/x/p2.md": "refuted"}, got)
+	require.Equal(t, map[string]string{"kb/x/p1.md": "refuted", "kb/x/p2.md": "refuted"}, got.Outcomes)
+	require.Empty(t, got.Written, "no commit in the range deleted anything")
+
+	// The watermark bounds the walk: from "" the earlier settle is visible too.
+	all, err := svc.FactsRepo().SettlementsSince(ctx, branch, "")
+	require.NoError(t, err)
+	require.Equal(t, "confirmed", all.Outcomes["kb/x/old.md"])
 }
 
 // B2 (r1): reflect names a settled hypothesis as a transition, but the path is
@@ -350,7 +356,7 @@ func TestApplyReflectDecisions_ReinforcesTheCiterOfADeletedTransition(t *testing
 		var warns []string
 		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
 			step.ReflectResult{Reinforce: []step.ReinforceEntry{{MethodologyPath: meth, TransitionPaths: paths, Rationale: "x"}}},
-			&model.PipelineSession{Branch: branch}, synthtest.BareRefFixture, "kb", reflectTestThreshold,
+			&model.PipelineSession{Branch: branch}, "", synthtest.BareRefFixture, "kb", reflectTestThreshold,
 			func(e step.ProgressEvent) {
 				if e.Phase == "warn" {
 					warns = append(warns, e.Message)
@@ -376,4 +382,43 @@ func TestApplyReflectDecisions_ReinforcesTheCiterOfADeletedTransition(t *testing
 		require.Contains(t, warns[0], setH)
 		require.Contains(t, strings.Join(refsOf(t, svc, branch, setO), " "), meth, "the live transition is still reinforced")
 	})
+}
+
+// M9 (r2): only the facts that CITE the deleted transition are reinforced. The
+// deleting commit also writes a fact that does not cite it; it must be left
+// alone, and Written must list both.
+//
+// SABOTAGE: replace the cite filter in livingCiters with `true` → red.
+func TestApplyReflectDecisions_OnlyACiterOfTheDeletedTransitionIsReinforced(t *testing.T) {
+	ctx := context.Background()
+	svc, branch := seedSettle(t)
+	const other = "kb/technology/other.md"
+	head, err := svc.HeadCommit(ctx, branch)
+	require.NoError(t, err)
+
+	r, err := svc.Facts().ReadFact(ctx, branch, setO, nil)
+	require.NoError(t, err)
+	o, err := fact.ParseFact(setO, r.Content)
+	require.NoError(t, err)
+	o.Refs = append(o.Refs, setH)
+	citing, err := fact.SerializeFact(o)
+	require.NoError(t, err)
+	x := fact.NewFact(other)
+	x.Title, x.Body, x.Type, x.Confidence, x.Sources = "Other", "does not cite the hypothesis", fact.Observation, 0.7, 1
+	notCiting, err := fact.SerializeFact(x)
+	require.NoError(t, err)
+	_, _, err = svc.Facts().BatchWriteFacts(ctx, branch, map[string]string{setO: citing, other: notCiting}, []string{setH}, "settle by hand", "test")
+	require.NoError(t, err)
+
+	st, err := svc.FactsRepo().SettlementsSince(ctx, branch, head)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{setO, other}, st.Written[setH], "both writes of the deleting commit are candidates")
+
+	const meth = "kb/meta/reasoning/m.md"
+	writeMethodologyForTest(t, svc, branch, meth, "M", "Body of methodology M")
+	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
+		step.ReflectResult{Reinforce: []step.ReinforceEntry{{MethodologyPath: meth, TransitionPaths: []string{setH}, Rationale: "x"}}},
+		&model.PipelineSession{Branch: branch}, head, synthtest.BareRefFixture, "kb", reflectTestThreshold, nil))
+	require.Contains(t, strings.Join(refsOf(t, svc, branch, setO), " "), meth)
+	require.NotContains(t, strings.Join(refsOf(t, svc, branch, other), " "), meth, "a fact that does not cite the transition is not reinforced")
 }

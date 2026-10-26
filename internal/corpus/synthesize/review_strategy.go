@@ -857,7 +857,8 @@ func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.Pipeli
 
 	switch item.StepType {
 	case "reflect":
-		if err := ApplyReflectDecisions(ctx, d.Facts, d.Files, d.Search, *dec.reflect, sess, fact.ID12(d.RI.ID()),
+		since, _ := d.Pipeline.GetPipelineWatermark(ctx, step.ReviewTool, branch)
+		if err := ApplyReflectDecisions(ctx, d.Facts, d.Files, d.Search, *dec.reflect, sess, since, fact.ID12(d.RI.ID()),
 			d.RI.OntologyRoot(), reflectNoveltyThreshold(model.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
 			return step.Wrapf(step.ReviewTool, err, "apply reflect")
 		}
@@ -1247,8 +1248,9 @@ func findHypothesisTransitions(ctx context.Context, d step.Deps, sess *model.Pip
 	// the commit that deleted it (#641): report the verdict, not "retracted".
 	var outcomes map[string]string
 	if len(deleted) > 0 && d.Files != nil {
-		var oerr error
-		if outcomes, oerr = d.Files.OutcomesSince(ctx, branch, watermark); oerr != nil {
+		st, oerr := d.Files.SettlementsSince(ctx, branch, watermark)
+		outcomes = st.Outcomes
+		if oerr != nil {
 			log.Warn().Err(oerr).Msg("reflect: could not read hypothesis outcomes; reporting retractions without a verdict")
 		}
 	}

@@ -107,7 +107,7 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 	for _, bad := range sfBad {
 		before := sfTip(t, svc)
 		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), propose("bad "+bad, sfFile, bad), sess,
-			sfRepoID, "kb", 0.95, nil)
+			"", sfRepoID, "kb", 0.95, nil)
 		require.Errorf(t, err, "reflect citing %s", bad)
 		requireFileRefusal(t, err.Error(), bad)
 		require.NotContainsf(t, err.Error(), "cites "+sfFile, "the good ref is not refused alongside %s", bad)
@@ -115,7 +115,7 @@ func TestApplyReflectDecisions_SystemFileRefs(t *testing.T) {
 	}
 
 	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), propose("good", sfGood...), sess,
-		sfRepoID, "kb", 0.95, nil))
+		"", sfRepoID, "kb", 0.95, nil))
 	found := methodologyFactPaths(t, svc, sfSide)
 	require.Len(t, found, 1, "the reflect wrote its methodology")
 	got := synthtest.ReadFact(t, svc, sfSide, found[0]).Refs

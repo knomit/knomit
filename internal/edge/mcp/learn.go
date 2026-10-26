@@ -819,7 +819,7 @@ func applyDedupMerge(
 	// a tiebreak winner among three bodies and drop two, silently, inside a
 	// call the caller thinks wrote everything it sent. A redundant fact is
 	// recoverable; a discarded one is not.
-	consumed := make(map[string]bool)
+	consumed := make(map[string]int)
 
 	for i, f := range facts {
 		// Private-state facts are not knowledge and have no category
@@ -921,18 +921,20 @@ func applyDedupMerge(
 		if ontology.LearnDedupOff(topicPathOf(ontologyRoot, match.Path)) {
 			continue
 		}
-		if consumed[match.Path] {
+		if by, taken := consumed[match.Path]; taken {
 			// Already absorbed an earlier fact in this call — see `consumed`.
+			// Said, not dropped: this fact is written at its own path.
+			hypMerged[i] = fmt.Sprintf("fact %d: matched %s, already taken by fact %d in this call.", i, match.Path, by)
 			continue
+		}
+		if by, ok := settledBy[strings.ToLower(match.Path)]; ok && by != i {
+			hypMerged[i] = fmt.Sprintf("fact %d: matched hypothesis %s, settled by fact %d in this call.", i, match.Path, by)
 		}
 		// F04: the call retracts the match. Folding the incoming fact into it
 		// would retarget the write onto a path the same commit deletes, and
 		// the new fact would vanish with it. Declined; the fact is written at
 		// its own freshly-minted path (and a hypothesis being retracted is
 		// not "subsumed" either: the caller already retracts it).
-		if by, ok := settledBy[strings.ToLower(match.Path)]; ok && by != i {
-			hypMerged[i] = fmt.Sprintf("fact %d: matched hypothesis %s, settled by fact %d in this call.", i, match.Path, by)
-		}
 		if retracting[strings.ToLower(match.Path)] {
 			if onDedupSkipRetracted != nil {
 				onDedupSkipRetracted(match.Path)
@@ -971,7 +973,7 @@ func applyDedupMerge(
 		// observation is written at its OWN path — it is a new fact, not a
 		// revision of the prediction it settles.
 		if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
-			consumed[match.Path] = true
+			consumed[match.Path] = i
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
@@ -1045,7 +1047,7 @@ func applyDedupMerge(
 		// f.Path() here removed a key that was never inserted (the build stage
 		// keyed by the raw path), so the merge left the new-fact file in place
 		// and the commit wrote BOTH the original and the merged file.
-		consumed[match.Path] = true
+		consumed[match.Path] = i
 		delete(files, paths[i])
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs

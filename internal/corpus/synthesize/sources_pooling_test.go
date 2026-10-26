@@ -149,7 +149,7 @@ func TestApplyReflectDecisions_ProposeSourcesIsOne(t *testing.T) {
 		TransitionPaths: []string{"kb/technology/a.md"},
 		Refs:            []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}}}
-	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess,
+	require.NoError(t, ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), result, sess, "",
 		synthtest.BareRefFixture, ri.OntologyRoot(), 0.95, nil))
 
 	found := methodologyFactPaths(t, svc, branch)
