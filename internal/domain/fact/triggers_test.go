@@ -470,6 +470,52 @@ func TestEvalIfUsesIfBudget(t *testing.T) {
 	}
 }
 
+// The budget bounds the condition, not the sandbox setup: setup made slower
+// than the whole budget (afterSetup) must not time out a trivial condition.
+// Armed before setup, the timer would fire during the sleep and the first
+// instruction of the condition would be interrupted.
+func TestEvalIfBudgetExcludesSetup(t *testing.T) {
+	var c TriggerCache
+	set, err := c.Get("blobSetup", triggerDoc("fact.type === 'x'"), testIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := activeNamed(set, "c")
+	tr.evalTimeout = 200 * time.Millisecond
+	ran := false
+	tr.afterSetup = func() { ran = true; time.Sleep(3 * tr.evalTimeout) }
+	ok, err := tr.EvalIf(map[string]any{"fact": map[string]any{"type": "x"}}, time.Now())
+	if !ran {
+		t.Fatal("afterSetup never ran: the seam is not reached")
+	}
+	if err != nil || !ok {
+		t.Fatalf("slow setup with a trivial condition: ok=%v err=%v, want true, nil", ok, err)
+	}
+}
+
+// A slow condition still times out after a slow setup: the budget starts at
+// the condition, it is not removed.
+func TestEvalIfSlowConditionStillTimesOutAfterSlowSetup(t *testing.T) {
+	var c TriggerCache
+	set, err := c.Get("blobSlowCond", triggerDoc("(function(){ while (true) {} })()"), testIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := activeNamed(set, "c")
+	tr.evalTimeout = 40 * time.Millisecond
+	tr.afterSetup = func() { time.Sleep(100 * time.Millisecond) }
+	done := make(chan error, 1)
+	go func() { _, err := tr.EvalIf(nil, time.Now()); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exceeded 40ms") {
+			t.Errorf("want an error saying \"exceeded 40ms\", got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a busy loop ran 5s: the budget is not enforced after setup")
+	}
+}
+
 func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 	var c TriggerCache
 	signal := map[string]any{"fact": map[string]any{"type": "signal"}}
