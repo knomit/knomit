@@ -67,7 +67,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
-		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) outside the category the automatic merge searches (its category and sub-categories) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. Inside that merge scope a similar fact is written at its own path and the response notes the nearest neighbour; if it states the same claim, fold it into that fact with knomit_update and retract this one. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis. An observation that matches a hypothesis in the merge scope settles it: the hypothesis is retracted in the same commit and the response notes it."),
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) outside the category the automatic merge searches (its category and sub-categories) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. Inside that merge scope a similar fact is written at its own path and the response notes the nearest neighbour; if it states the same claim, fold it into that fact with knomit_update and retract this one. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis. Name a hypothesis your fact confirms or refutes in its settles ([{path, outcome}]): it is cited, retracted in the same commit and the outcome recorded in the commit's Knomit-Outcome trailer. Without settles, an observation that matches a hypothesis in the merge scope still settles it by similarity: retracted in the same commit, noted in the response, no outcome recorded."),
 		bindingArg(true),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
@@ -129,9 +129,15 @@ func learnToolSchemaProperties() map[string]any {
 		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
 		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the cross-category same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
-		"motifs":        motifsProperty(),
-		"expires":       expiresProperty(),
-		"context":       contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
+		"settles": map[string]any{"type": "array", "items": map[string]any{
+			"type": "object", "additionalProperties": false, "required": []string{"path", "outcome"},
+			"properties": map[string]any{
+				"path":    map[string]any{"type": "string", "description": "Path of a stored hypothesis."},
+				"outcome": map[string]any{"type": "string", "enum": []string{model.OutcomeConfirmed, model.OutcomeRefuted}},
+			}}, "description": "Hypotheses THIS fact settles, with the verdict (confirmed or refuted). Each is cited in this fact's refs and retracted in the same commit, whatever the similarity, and the commit records `Knomit-Outcome: <path> <outcome>`. Only a non-hypothesis fact can settle; the path must be a stored hypothesis, not also in this fact's distinct_from or the call's retract. Not stored with the fact."},
+		"motifs":  motifsProperty(),
+		"expires": expiresProperty(),
+		"context": contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
 		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in five forms. " +
 			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
 			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
@@ -171,8 +177,11 @@ type learnFactInput struct {
 	// inert, and an entry naming a path that does not exist is an error rather
 	// than a silently accepted bypass.
 	DistinctFrom []string `json:"distinct_from"`
-	Refs         []string `json:"refs"`
-	Origin       string   `json:"origin"`
+	// Settles names stored hypotheses this fact settles, each with a verdict.
+	// Request-only like DistinctFrom: never stored (applySettles).
+	Settles []learnSettle `json:"settles"`
+	Refs    []string      `json:"refs"`
+	Origin  string        `json:"origin"`
 	// Expires is passed through to SerializeFact, the single gate that
 	// refuses a non-RFC 3339 value.
 	Expires string `json:"expires"`
@@ -1133,8 +1142,10 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		// written, so a refused call writes nothing.
 		if err := rejectUnknownArguments(req, learnTool()); err != nil {
 			msg := err.Error()
-			if _, ok := req.GetArguments()["distinct_from"]; ok {
-				msg += "; distinct_from belongs on each fact (facts[i].distinct_from), not at the top level of the call"
+			for _, k := range []string{"distinct_from", "settles"} {
+				if _, ok := req.GetArguments()[k]; ok {
+					msg += "; " + k + " belongs on each fact (facts[i]." + k + "), not at the top level of the call"
+				}
 			}
 			return mcpgo.NewToolResultError(msg), nil
 		}
@@ -1244,6 +1255,14 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
 		dedupVecs := dedupEmbed(ctx, batchEmb, parsed)
+		// Declared settles first: they put their hypotheses in `retracting`,
+		// so the merge below leaves them alone and the declared outcome wins
+		// over similarity subsumption.
+		settles, settleRetract, err := applySettles(ctx, b, s, writeBranch, ontologyRoot, factInputs, parsed, paths, files, retractPaths, retracting)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		ctx = model.WithOutcomes(ctx, outcomeLines(settles))
 		distinctFrom := make([][]string, len(factInputs))
 		for i, in := range factInputs {
 			distinctFrom[i] = in.DistinctFrom
@@ -1339,6 +1358,9 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			commitMsg += "\n\n" + strings.Join(markers, "\n")
 		}
 		deletes := retract
+		for _, p := range settleRetract {
+			deletes = fact.AppendUnique(deletes, p)
+		}
 		for _, p := range retractPaths {
 			deletes = fact.AppendUnique(deletes, p)
 		}
@@ -1389,6 +1411,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
 		notes = append(notes, statementNotAppliedNotes(built, parsed, hypMerged)...)
 		notes = append(notes, settledNotes(settled, parsed)...)
+		notes = append(notes, settleNotes(settles)...)
 		notes = append(notes, nearNotes(nears)...)
 		if len(notes) > 0 {
 			result["notes"] = notes

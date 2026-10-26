@@ -510,18 +510,4 @@ func trailerSortKey(line string) string {
 // TrailerValues returns every value of the `Key: value` trailer key in the
 // last paragraph of message, in order — the conflict record has one line per
 // path.
-func TrailerValues(message, key string) []string {
-	msg := strings.TrimRight(message, "\n")
-	last := msg
-	if i := strings.LastIndex(msg, "\n\n"); i >= 0 {
-		last = msg[i+2:]
-	}
-	var out []string
-	for _, line := range strings.Split(last, "\n") {
-		k, v, ok := strings.Cut(line, ":")
-		if ok && strings.EqualFold(strings.TrimSpace(k), key) {
-			out = append(out, strings.TrimSpace(v))
-		}
-	}
-	return out
-}
+func TrailerValues(message, key string) []string { return model.TrailerValuesOf(message, key) }
