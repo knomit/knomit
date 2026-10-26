@@ -200,8 +200,8 @@ func TestPeerSync_MergeFacts_NonMainConsensus(t *testing.T) {
 	dstBlob, _ := r.blob(agentTip, "kb/notes/f.md")
 	require.True(t, strings.HasPrefix(tip.Message, "merge: master into "+agent+" (conflicts:merge/off)\n"), tip.Message)
 	require.Equal(t, []string{mergeLine("kb/notes/f.md", baseBlob, srcBlob, dstBlob, outBlob, "body")},
-		merge.TrailerValues(tip.Message, merge.TrailerMerge), "message:\n%s", tip.Message)
-	require.Empty(t, merge.TrailerValues(tip.Message, merge.TrailerConflict))
+		model.TrailerValues(tip.Message, merge.TrailerMerge), "message:\n%s", tip.Message)
+	require.Empty(t, model.TrailerValues(tip.Message, merge.TrailerConflict))
 	verifyMergeClean(t, r.svc, agent)
 }
 
@@ -229,8 +229,8 @@ func TestPeerSync_SettingOnAgentBranchOnly_IsToday(t *testing.T) {
 	srcBlob, _ := r.blob(consensusTip, "kb/notes/f.md")
 	dstBlob, _ := r.blob(agentTip, "kb/notes/f.md")
 	require.Equal(t, []string{fmt.Sprintf("kb/notes/f.md kept=dst dropped=src-modify strategy=local_wins base=%s src=%s dst=%s",
-		baseBlob, srcBlob, dstBlob)}, merge.TrailerValues(tip.Message, merge.TrailerConflict), "message:\n%s", tip.Message)
-	require.Empty(t, merge.TrailerValues(tip.Message, merge.TrailerMerge))
+		baseBlob, srcBlob, dstBlob)}, model.TrailerValues(tip.Message, merge.TrailerConflict), "message:\n%s", tip.Message)
+	require.Empty(t, model.TrailerValues(tip.Message, merge.TrailerMerge))
 }
 
 // What the merge cannot merge keeps the peer's side-pick and says why; a fact
@@ -285,8 +285,8 @@ func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
 		require.True(t, h.IsZero(), "%s: the retraction wins", p)
 	}
 
-	merges := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerMerge), "\n")
-	conflicts := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
+	merges := strings.Join(model.TrailerValues(tip.Message, merge.TrailerMerge), "\n")
+	conflicts := strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
 	require.Contains(t, merges, "kb/notes/f.md strategy=merge ")
 	require.Regexp(t, `kb/notes/d1\.md strategy=merge base=[0-9a-f]{40} src=none dst=[0-9a-f]{40} out=none dropped=dst-modify decided=delete`, merges)
 	require.Regexp(t, `kb/notes/d2\.md strategy=merge base=[0-9a-f]{40} src=[0-9a-f]{40} dst=none out=none dropped=src-modify decided=delete`, merges)
@@ -335,7 +335,7 @@ func TestMergePushed_MergeFacts_NonMainUpstream(t *testing.T) {
 	require.Equal(t, "peer body", f.Body)
 	require.Equal(t, 0.8, f.Confidence)
 	require.Equal(t, []string{"HostAdded"}, f.Entities)
-	require.Len(t, merge.TrailerValues(tip.Message, merge.TrailerMerge), 1, tip.Message)
+	require.Len(t, model.TrailerValues(tip.Message, merge.TrailerMerge), 1, tip.Message)
 	require.Contains(t, tip.Message, "(conflicts:merge/off)")
 }
 
@@ -349,7 +349,7 @@ func TestMergePushed_MergeConsensus_HostIsConsensus(t *testing.T) {
 	tip := r.tip(pmAgent)
 	_, out := r.blob(tip, "kb/notes/f.md")
 	require.Equal(t, "host body", r.parse(out).Body)
-	require.Contains(t, merge.TrailerValues(tip.Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
+	require.Contains(t, model.TrailerValues(tip.Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
 	require.Contains(t, tip.Message, "(conflicts:merge:consensus/off)")
 }
 
@@ -363,9 +363,9 @@ func TestMergePushed_ExplicitSideBeatsSetting(t *testing.T) {
 	_, out := r.blob(tip, "kb/notes/f.md")
 	_, peerF := r.blob(r.tip(pmPeer), "kb/notes/f.md")
 	require.Equal(t, peerF, out, "the peer's version, whole")
-	require.Empty(t, merge.TrailerValues(tip.Message, merge.TrailerMerge))
+	require.Empty(t, model.TrailerValues(tip.Message, merge.TrailerMerge))
 	require.Regexp(t, `^kb/notes/f\.md kept=src dropped=dst-modify strategy=refuse .* reason=chosen$`,
-		strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n"))
+		strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n"))
 }
 
 // On the host, what the merge cannot merge is still refused — the whole merge,
@@ -422,7 +422,7 @@ func TestReplay_MergeFacts(t *testing.T) {
 	require.Equal(t, 0.9, f.Confidence)
 	require.Equal(t, []string{"MainAdded"}, f.Entities)
 	require.True(t, strings.HasPrefix(tip.Message, "learn: f\n\n"), tip.Message)
-	lines := merge.TrailerValues(tip.Message, merge.TrailerMerge)
+	lines := model.TrailerValues(tip.Message, merge.TrailerMerge)
 	require.Len(t, lines, 1, tip.Message)
 	require.Contains(t, lines[0], "decided=body,confidence")
 	require.Equal(t, "t-123", model.TrailerValue(tip.Message, model.TrailerTrace), "the trace trailer still reads")
@@ -457,7 +457,7 @@ func TestReplay_MergeConsensus_OntoIsConsensus(t *testing.T) {
 	tip := r.tip(agent)
 	_, out := r.blob(tip, "kb/notes/f.md")
 	require.Equal(t, "main body", r.parse(out).Body, "consensus = onto (the rewound consensus branch)")
-	lines := merge.TrailerValues(tip.Message, merge.TrailerMerge)
+	lines := model.TrailerValues(tip.Message, merge.TrailerMerge)
 	require.Len(t, lines, 1, tip.Message)
 	require.Contains(t, lines[0], "strategy=merge_consensus ")
 }
@@ -476,7 +476,7 @@ func TestReplay_MergeFacts_FallbackAgentWins(t *testing.T) {
 	tip := r.tip(agent)
 	_, notes := r.blob(tip, "notes.txt")
 	require.Equal(t, "agent\n", notes, "not a fact: the agent's commit wins, as the replay always did")
-	conflicts := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
+	conflicts := strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
 	require.Regexp(t, `notes\.txt kept=src dropped=dst-modify strategy=remote_wins .* reason=not-a-fact`, conflicts, tip.Message)
 }
 
@@ -502,10 +502,10 @@ func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
 	_, err := r.svc.Remote().ReconcileNowForTest(context.Background(), agent, consensus)
 	require.NoError(t, err)
 	tip := r.tip(agent)
-	lines := merge.TrailerValues(tip.Message, merge.TrailerConflict)
+	lines := model.TrailerValues(tip.Message, merge.TrailerConflict)
 	require.Len(t, lines, 3, tip.Message)
 	require.Regexp(t, `^kb/notes/d\.md kept=dst dropped=src-delete strategy=local_wins base=[0-9a-f]{40} src=none dst=[0-9a-f]{40}$`, lines[0])
 	require.Regexp(t, `^kb/notes/f\.md kept=dst dropped=src-modify strategy=local_wins `, lines[1])
 	require.Regexp(t, `^x\.txt kept=src dropped=dst-add strategy=local_wins base=none `, lines[2])
-	require.Empty(t, merge.TrailerValues(tip.Message, merge.TrailerMerge))
+	require.Empty(t, model.TrailerValues(tip.Message, merge.TrailerMerge))
 }

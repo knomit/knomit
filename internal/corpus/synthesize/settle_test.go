@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -12,6 +13,7 @@ import (
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/model"
 )
@@ -90,7 +92,7 @@ func TestApplyPruneDecisions_SettleCitesRetractsAndRecordsInOneCommit(t *testing
 			require.Equal(t, []plumbing.Hash{plumbing.NewHash(before.hash)}, after.parents, "one commit")
 			require.False(t, liveAt(t, svc, branch, setH))
 			require.Contains(t, strings.Join(refsOf(t, svc, branch, setO), " "), setH)
-			require.Equal(t, []string{setH + " " + outcome}, model.TrailerValuesOf(after.message, model.TrailerOutcome))
+			require.Equal(t, []string{setH + " " + outcome}, model.TrailerValues(after.message, model.TrailerOutcome))
 		})
 	}
 }
@@ -155,7 +157,7 @@ func TestApplyDistillDecisions_SettleRecordsOutcomeInTheSynthesisCommit(t *testi
 	require.Equal(t, []plumbing.Hash{plumbing.NewHash(before.hash)}, after.parents, "one commit")
 	require.False(t, liveAt(t, svc, branch, setH))
 	require.True(t, liveAt(t, svc, branch, written[0].Path))
-	require.Equal(t, []string{setH + " refuted"}, model.TrailerValuesOf(after.message, model.TrailerOutcome))
+	require.Equal(t, []string{setH + " refuted"}, model.TrailerValues(after.message, model.TrailerOutcome))
 	require.Equal(t, []string{setH}, stats.Retired)
 }
 
@@ -228,4 +230,107 @@ func TestFindHypothesisTransitions_ReportsTheSettledOutcome(t *testing.T) {
 			require.Equal(t, []hypothesisTransition{{Path: setH, OriginalType: "hypothesis", Action: tc.want}}, got)
 		})
 	}
+}
+
+// B1 (r1): a settle whose `by` fact a merge in the same response consumes
+// would leave the hypothesis cited by nothing. Refused with a warn, no write.
+//
+// SABOTAGE: drop the mergeMembers check in applyPruneSettle → red.
+func TestApplyPruneDecisions_SettleRefusesAByFactTheSameResponseMerges(t *testing.T) {
+	svc, branch := seedSettle(t)
+	const o2 = "kb/technology/obs2.md"
+	synthtest.SeedOriginFact(t, svc, branch, o2, fact.Observation, fact.Authored, 0.8, 1, nil)
+	var warns []string
+	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+		[]step.PruneDecision{{Path: setH, Action: "settle", Outcome: "confirmed", By: []string{setO}}},
+		[]step.MergeEntry{{Paths: []string{setO, o2}, Merged: step.MergedFact{Path: "kb/technology/m.md", Title: "M", Body: "merged", Confidence: 0.8, Refs: step.FlexStrings{setO, o2}}}},
+		"review-test", func(e step.ProgressEvent) {
+			if e.Phase == "warn" {
+				warns = append(warns, e.Message)
+			}
+		}, branch, synthtest.BareRefFixture, "kb", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, warns)
+	require.Contains(t, warns[0], "merged in this same response")
+	require.True(t, liveAt(t, svc, branch, setH), "the refused settle leaves the hypothesis live")
+}
+
+// S1: the settled path is a precondition under the branch lock. A rival that
+// deletes the hypothesis between validation and the write makes the settle
+// fail with nothing written (prune and distill).
+//
+// SABOTAGE: use BatchWriteFacts instead of BatchWriteFactsMustExist → the
+// stale settle commits its own verdict → red.
+func TestSettle_HypothesisMustStillExistUnderTheLock(t *testing.T) {
+	rival := func(t *testing.T, svc *store.Service, branch string) func() {
+		var once sync.Once
+		return facts.SetBatchWriteUnlockedHookForTest(func() {
+			once.Do(func() {
+				_, err := svc.Facts().DeleteFact(context.Background(), branch, setH, "rival settle")
+				require.NoError(t, err)
+			})
+		})
+	}
+	t.Run("prune", func(t *testing.T) {
+		svc, branch := seedSettle(t)
+		defer rival(t, svc, branch)()
+		warns := applyPrune(t, svc, branch, step.PruneDecision{Path: setH, Action: "settle", Outcome: "confirmed", By: []string{setO}})
+		require.Len(t, warns, 1)
+		require.NotContains(t, tipOf(t, svc, branch).message, model.TrailerOutcome)
+		require.NotContains(t, strings.Join(refsOf(t, svc, branch, setO), " "), setH, "nothing written")
+	})
+	t.Run("distill", func(t *testing.T) {
+		svc, branch := seedSettle(t)
+		defer rival(t, svc, branch)()
+		df := step.DistillFact{Path: "kb/technology/syn.md", Title: "Syn", Body: "claim", Type: "synthesis", Confidence: 0.8, Refs: step.FlexStrings{setH, setO}}
+		_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+			[]step.DistillFact{df}, nil, []step.HypothesisOutcome{{Path: setH, Outcome: "refuted"}},
+			"review-test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
+		require.NoError(t, err)
+		require.Empty(t, written)
+		require.NotContains(t, tipOf(t, svc, branch).message, model.TrailerOutcome)
+	})
+}
+
+// S3: one warn per settle no written fact settles, also when synthesize is empty.
+//
+// SABOTAGE: drop the warn loop in ApplyDistillDecisions → red.
+func TestApplyDistillDecisions_UnusedSettleWarns(t *testing.T) {
+	svc, branch := seedSettle(t)
+	var warns []string
+	_, _, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(),
+		nil, nil, []step.HypothesisOutcome{{Path: setH, Outcome: "refuted"}},
+		"review-test", func(e step.ProgressEvent) {
+			if e.Phase == "warn" {
+				warns = append(warns, e.Message)
+			}
+		}, branch, synthtest.BareRefFixture, "kb")
+	require.NoError(t, err)
+	require.Len(t, warns, 1)
+	require.Contains(t, warns[0], setH)
+}
+
+// S6: OutcomesSince reads every value per commit, only after the watermark,
+// latest word wins, and ignores a value that is not an outcome.
+//
+// SABOTAGE: read only the last value per commit; take the first sighting; or
+// drop the ParseOutcome check → red.
+func TestOutcomesSince(t *testing.T) {
+	ctx := context.Background()
+	svc, branch := synthtest.NewSourcesTestRepo(t)
+	write := func(c context.Context, name string) {
+		_, err := svc.Facts().WriteFact(c, branch, "kb/technology/"+name+".md", "---\ntype: observation\n---\n# T\n\nb", name, "")
+		require.NoError(t, err)
+	}
+	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/old.md", Outcome: "confirmed"}}), "before")
+	head, err := svc.HeadCommit(ctx, branch)
+	require.NoError(t, err)
+
+	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/p1.md", Outcome: "confirmed"}, {Path: "kb/x/p2.md", Outcome: "refuted"}}), "two")
+	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/p1.md", Outcome: "refuted"}}), "resettle")
+	write(model.WithTrailers(ctx, model.Trailers{Extra: []model.TrailerEntry{{Key: model.TrailerOutcome, Value: "kb/x/p3.md maybe"}}}), "garbage")
+
+	got, err := svc.FactsRepo().OutcomesSince(ctx, branch, head)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"kb/x/p1.md": "refuted", "kb/x/p2.md": "refuted"}, got)
 }

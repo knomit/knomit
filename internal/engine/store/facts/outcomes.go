@@ -32,7 +32,7 @@ func (rh *Repo) OutcomesSince(ctx context.Context, branch, since string) (map[st
 	// WalkHistory visits parents before children, so a later settle of the
 	// same path overwrites an earlier one.
 	if err := vcs.WalkHistory(rh.vr.Storer(), head, seen, func(c *object.Commit) {
-		for _, v := range model.TrailerValuesOf(c.Message, model.TrailerOutcome) {
+		for _, v := range model.TrailerValues(c.Message, model.TrailerOutcome) {
 			if path, outcome, ok := model.ParseOutcome(v); ok {
 				out[path] = outcome
 			}

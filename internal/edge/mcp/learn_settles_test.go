@@ -3,12 +3,14 @@ package mcp
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/model"
 )
 
@@ -79,7 +81,7 @@ func TestLearnSettles_SeveralAndTraceShareTheLastParagraph(t *testing.T) {
 	require.Len(t, settledNotesOf(res), 3)
 	msg := settledMessage(t, ri, "agent/test")
 	require.Equal(t, "learn: many\n\nKnomit-Trace: story-1\nKnomit-Outcome: "+h0+" confirmed\nKnomit-Outcome: "+h1+" refuted\nKnomit-Outcome: "+h2+" refuted\n", msg)
-	require.Equal(t, []string{h0 + " confirmed", h1 + " refuted", h2 + " refuted"}, model.TrailerValuesOf(msg, model.TrailerOutcome))
+	require.Equal(t, []string{h0 + " confirmed", h1 + " refuted", h2 + " refuted"}, model.TrailerValues(msg, model.TrailerOutcome))
 }
 
 // Without settles the similarity subsumption is unchanged and records NO
@@ -180,4 +182,44 @@ func TestLearnSettles_InsideAnExperiment(t *testing.T) {
 	require.False(t, factExistsOn(t, ri, branch, hyp))
 	require.True(t, factExistsOn(t, ri, "agent/test", hyp))
 	require.Equal(t, agentBefore, headOf(t, ri, "agent/test"))
+}
+
+// S2: a second fact whose nearest match is a hypothesis another fact settles
+// gets one note, not a silent decline and not a citation.
+//
+// SABOTAGE: drop the settledBy note in applyDedupMerge → red.
+func TestLearnSettles_SecondMatchingFactGetsANote(t *testing.T) {
+	ri, ctx, emb := newDedupAttrRepo(t)
+	h := seedHyp(t, ctx, emb, "notes", "a", "Prediction A")
+	res := settledLearn(t, ctx, emb, "two", nil,
+		settledFact("notes", "a", "Prediction A", "observation"),
+		withSettles(settledFact("inbox", "b", "Other obs", "observation"), h, "refuted"))
+	w := settledWritten(t, res)
+	require.Equal(t, []string{
+		"fact 0: matched hypothesis " + h + ", settled by fact 1 in this call.",
+		"fact 1: hypothesis " + h + " refuted; retracted, cited in refs.",
+	}, settledNotesOf(res))
+	require.Empty(t, readFactAt(t, ri, w[0]).Refs, "no citation for the second fact")
+}
+
+// S1: the settled hypothesis must still exist under the branch lock.
+//
+// SABOTAGE: drop settleRetract from mustExist → the stale settle commits → red.
+func TestLearnSettles_HypothesisMustStillExistUnderTheLock(t *testing.T) {
+	ri, ctx, emb := newDedupAttrRepo(t)
+	svc := testRepoService(t, ctx)
+	hyp := seedHyp(t, ctx, emb, "inbox", "a", "Prediction A")
+	before := headOf(t, ri, "agent/test")
+	var once sync.Once
+	defer facts.SetBatchWriteUnlockedHookForTest(func() {
+		once.Do(func() {
+			_, err := svc.Facts().DeleteFact(context.Background(), "agent/test", hyp, "rival")
+			require.NoError(t, err)
+		})
+	})()
+	msg := settleErr(t, ctx, emb, map[string]any{"moment_name": "m", "facts": []any{
+		withSettles(settledFact("inbox", "b", "Obs", "observation"), hyp, "refuted")}})
+	require.Contains(t, msg, "nothing written")
+	require.NotContains(t, settledMessage(t, ri, "agent/test"), model.TrailerOutcome)
+	_ = before
 }

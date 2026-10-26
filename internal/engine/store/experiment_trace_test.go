@@ -24,7 +24,7 @@ func TestAppendTrailersToParagraph_JoinsTheRecord(t *testing.T) {
 	require.Equal(t, "merge: exp/x into agent/a (refuse)\n\n"+
 		"Knomit-Merge: kb/a.md src\nKnomit-Merge: kb/b.md dst\n"+
 		"Knomit-Trace: task-1\nKnomit-Run: run-0123456789abcdef0123456789abcdef\n", got)
-	require.Len(t, merge.TrailerValues(got, merge.TrailerMerge), 2, "the record is still read")
+	require.Len(t, model.TrailerValues(got, merge.TrailerMerge), 2, "the record is still read")
 	require.Equal(t, "task-1", model.TrailerValue(got, model.TrailerTrace))
 
 	plain := model.AppendTrailersToParagraph("merge: exp/x into agent/a (refuse)", tr)

@@ -16,8 +16,6 @@ var validPruneActions = map[string]bool{
 	"keep": true, "retract": true, "update": true, "settle": true,
 }
 
-func validOutcome(o string) bool { return o == model.OutcomeConfirmed || o == model.OutcomeRefuted }
-
 // ValidatePrunePaths checks that all decision paths and merge source paths
 // reference facts that were actually sent to the LLM, that actions are valid,
 // and that merges are well-formed. Returns an error on the first violation.
@@ -34,7 +32,7 @@ func ValidatePrunePaths(r PruneResult, inputPaths []string) error {
 			return fmt.Errorf("decision has unknown action %q for path %q", d.Action, d.Path)
 		}
 		if d.Action == "settle" {
-			if !validOutcome(d.Outcome) {
+			if !model.ValidOutcome(d.Outcome) {
 				return fmt.Errorf("settle %q: outcome %q must be %q or %q", d.Path, d.Outcome, model.OutcomeConfirmed, model.OutcomeRefuted)
 			}
 			if len(d.By) == 0 {
@@ -88,7 +86,7 @@ func ValidateDistillPaths(r DistillResult, inputPaths []string) error {
 		if !valid[h.Path] {
 			return fmt.Errorf("settle references unknown path %q", h.Path)
 		}
-		if !validOutcome(h.Outcome) {
+		if !model.ValidOutcome(h.Outcome) {
 			return fmt.Errorf("settle %q: outcome %q must be %q or %q", h.Path, h.Outcome, model.OutcomeConfirmed, model.OutcomeRefuted)
 		}
 		if retracted[h.Path] {

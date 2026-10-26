@@ -96,12 +96,11 @@ func applySettles(
 	return decls, retract, nil
 }
 
-// outcomeLines is the Knomit-Outcome values ("<path> <outcome>"), one per
-// distinct hypothesis, in call order.
-func outcomeLines(decls []settleDecl) []string {
-	var out []string
+// outcomePairs is the (path, outcome) pairs for model.WithOutcomes.
+func outcomePairs(decls []settleDecl) []model.Outcome {
+	out := make([]model.Outcome, 0, len(decls))
 	for _, d := range decls {
-		out = fact.AppendUnique(out, d.path+" "+d.outcome)
+		out = append(out, model.Outcome{Path: d.path, Outcome: d.outcome})
 	}
 	return out
 }

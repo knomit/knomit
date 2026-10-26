@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -74,4 +75,44 @@ func TestTrailers_TemplateOnlySetIsStamped(t *testing.T) {
 	// exactly as it refuses one over a script's set.
 	_, err := WithAgentTrace(WithTrailers(context.Background(), Trailers{Template: "m"}), Trailers{Trace: "t"})
 	require.ErrorIs(t, err, ErrTraceOverride)
+}
+
+// ParseOutcome accepts only the two verdict words; any other word is refused.
+//
+// SABOTAGE: accept any word in ParseOutcome (ValidOutcome → true) → red.
+func TestParseOutcome(t *testing.T) {
+	for v, want := range map[string][3]any{
+		"kb/a/b.md confirmed": {"kb/a/b.md", "confirmed", true},
+		"kb/a/b.md refuted":   {"kb/a/b.md", "refuted", true},
+		"kb/a b.md refuted":   {"kb/a b.md", "refuted", true},
+		"kb/a/b.md maybe":     {"kb/a/b.md", "maybe", false},
+		"kb/a/b.md":           {"", "", false},
+		" refuted":            {"", "refuted", false},
+		"kb/a/b.md CONFIRMED": {"kb/a/b.md", "CONFIRMED", false},
+	} {
+		p, o, ok := ParseOutcome(v)
+		if ok != want[2].(bool) || (ok && (p != want[0] || o != want[1])) {
+			t.Errorf("ParseOutcome(%q) = %q, %q, %v; want %v", v, p, o, ok, want)
+		}
+	}
+}
+
+// WithOutcomes keeps an existing trace set, appends one line per distinct pair,
+// and the lines end the message in the last paragraph.
+//
+// SABOTAGE: drop the dedup or overwrite the existing set → red.
+func TestWithOutcomes(t *testing.T) {
+	ctx := WithTrailers(context.Background(), Trailers{Trace: "s"})
+	ctx = WithOutcomes(ctx, []Outcome{{"kb/a.md", "confirmed"}, {"kb/a.md", "confirmed"}, {"kb/b.md", "refuted"}})
+	got := AppendTrailers("learn: m", TrailersFromContext(ctx))
+	want := "learn: m\n\nKnomit-Trace: s\nKnomit-Outcome: kb/a.md confirmed\nKnomit-Outcome: kb/b.md refuted\n"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if !reflect.DeepEqual(TrailerValues(got, TrailerOutcome), []string{"kb/a.md confirmed", "kb/b.md refuted"}) {
+		t.Fatal(TrailerValues(got, TrailerOutcome))
+	}
+	if WithOutcomes(context.Background(), nil) == nil {
+		t.Fatal("nil ctx")
+	}
 }

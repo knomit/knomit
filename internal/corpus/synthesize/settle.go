@@ -29,9 +29,6 @@ func readHypothesis(ctx context.Context, gs *facts.Index, branch, path string) e
 	return nil
 }
 
-// settleLine is the Knomit-Outcome value for a settled hypothesis.
-func settleLine(path, outcome string) string { return path + " " + outcome }
-
 // applyPruneSettle applies one prune "settle": every By fact gains the
 // hypothesis in its refs and the hypothesis is deleted, in ONE commit whose
 // last paragraph carries `Knomit-Outcome: <path> <outcome>`. A By fact that is
@@ -40,9 +37,9 @@ func settleLine(path, outcome string) string { return path + " " + outcome }
 // predictions, and a verdict with no surviving citer would leave the retracted
 // hypothesis uncited.
 func applyPruneSettle(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, idx *index.Facade, localRepoID, branch, recipe string,
-	d step.PruneDecision, deleted map[string]bool) error {
+	d step.PruneDecision, deleted map[string]bool, mergeMembers map[string]bool) error {
 	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, branch)
-	if d.Outcome != model.OutcomeConfirmed && d.Outcome != model.OutcomeRefuted {
+	if !model.ValidOutcome(d.Outcome) {
 		return fmt.Errorf("settle %s: outcome %q must be confirmed or refuted", d.Path, d.Outcome)
 	}
 	if len(d.By) == 0 {
@@ -56,6 +53,9 @@ func applyPruneSettle(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo
 	}
 	files := make(map[string]string, len(d.By))
 	for _, by := range d.By {
+		if mergeMembers[by] {
+			return fmt.Errorf("settle %s: by %s is merged in this same response, which would leave the hypothesis cited by nothing; settle it by the merged fact in a later pass", d.Path, by)
+		}
 		if deleted[by] {
 			return fmt.Errorf("settle %s: by %s was removed earlier in this call", d.Path, by)
 		}
@@ -84,9 +84,9 @@ func applyPruneSettle(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo
 		}
 		files[by] = content
 	}
-	ctx = model.WithOutcomes(ctx, []string{settleLine(d.Path, d.Outcome)})
+	ctx = model.WithOutcomes(ctx, []model.Outcome{{Path: d.Path, Outcome: d.Outcome}})
 	msg := fmt.Sprintf("synthesize-%s: settle %s %s", recipe, d.Path, d.Outcome)
-	if _, _, err := gs.BatchWriteFacts(ctx, branch, files, []string{d.Path}, msg, "settle"); err != nil {
+	if _, _, err := gs.BatchWriteFactsMustExist(ctx, branch, files, []string{d.Path}, []string{d.Path}, msg, "settle"); err != nil {
 		return fmt.Errorf("settle %s: write: %v", d.Path, err)
 	}
 	deleted[d.Path] = true

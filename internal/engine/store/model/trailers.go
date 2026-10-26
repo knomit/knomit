@@ -40,25 +40,34 @@ const (
 // ValidOutcome reports whether o is a hypothesis outcome.
 func ValidOutcome(o string) bool { return o == OutcomeConfirmed || o == OutcomeRefuted }
 
-// WithOutcomes adds one Knomit-Outcome line per entry ("<path> <outcome>") to
-// the trailer set on ctx, keeping whatever set (an agent's trace) is already
-// there, so every authored commit under ctx ends with them in its last
-// paragraph. No entries returns ctx unchanged.
-func WithOutcomes(ctx context.Context, lines []string) context.Context {
-	if len(lines) == 0 {
+// Outcome is one Knomit-Outcome line: a hypothesis path and its verdict.
+type Outcome struct{ Path, Outcome string }
+
+// WithOutcomes adds one Knomit-Outcome line per entry to the trailer set on
+// ctx, keeping whatever set (an agent's trace) is already there, so every
+// authored commit under ctx ends with them in its last paragraph. A repeated
+// pair is written once. No entries returns ctx unchanged.
+func WithOutcomes(ctx context.Context, outcomes []Outcome) context.Context {
+	if len(outcomes) == 0 {
 		return ctx
 	}
 	t, _ := ctx.Value(trailersCtxKey{}).(Trailers)
 	t.Extra = append([]TrailerEntry(nil), t.Extra...)
-	for _, l := range lines {
-		t.Extra = append(t.Extra, TrailerEntry{Key: TrailerOutcome, Value: l})
+	seen := map[string]bool{}
+	for _, o := range outcomes {
+		v := o.Path + " " + o.Outcome
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		t.Extra = append(t.Extra, TrailerEntry{Key: TrailerOutcome, Value: v})
 	}
 	return WithTrailers(ctx, t)
 }
 
-// TrailerValuesOf returns every value of the key in the LAST paragraph of
+// TrailerValues returns every value of the key in the LAST paragraph of
 // message, in order (TrailerValue returns only the last occurrence).
-func TrailerValuesOf(message, key string) []string {
+func TrailerValues(message, key string) []string {
 	msg := strings.TrimRight(message, "\n")
 	last := msg
 	if i := strings.LastIndex(msg, "\n\n"); i >= 0 {
@@ -82,7 +91,7 @@ func ParseOutcome(v string) (path, outcome string, ok bool) {
 	}
 	v = strings.TrimSpace(v)
 	path, outcome = strings.TrimSpace(v[:i]), v[i+1:]
-	return path, outcome, path != "" && (outcome == OutcomeConfirmed || outcome == OutcomeRefuted)
+	return path, outcome, path != "" && ValidOutcome(outcome)
 }
 
 // TrailerValue returns the value of the `Key: value` trailer line in a commit

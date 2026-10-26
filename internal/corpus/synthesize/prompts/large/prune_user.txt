@@ -6,7 +6,7 @@ You are reviewing facts in a knowledge base for staleness, redundancy, and dupli
 
 For each fact, decide:
 - keep: fact is current and valuable
-- retract: fact is obsolete, superseded, or no longer true (never a hypothesis: use settle)
+- retract: fact is obsolete, superseded, or no longer true (a hypothesis with a verdict: use settle)
 - update: fact needs confidence adjusted (provide new value)
 - settle: a hypothesis that other facts in the batch confirm or refute (see Hypothesis handling)
 

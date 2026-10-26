@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/engine/store/model"
 	"strings"
 	"testing"
 
@@ -59,7 +60,7 @@ func TestPeerSync_MergeConsensus_ConsensusBranchIsConsensusSide(t *testing.T) {
 	require.Equal(t, "consensus body", f.Body, "the consensus side's body, although the agent is more confident")
 	require.Equal(t, 0.9, f.Confidence, "only the agent changed the confidence: kept")
 	require.Equal(t, []string{"C", "A"}, f.Entities, "both additions, the consensus side's first")
-	lines := merge.TrailerValues(tip.Message, merge.TrailerMerge)
+	lines := model.TrailerValues(tip.Message, merge.TrailerMerge)
 	require.Len(t, lines, 1, tip.Message)
 	require.Contains(t, lines[0], "strategy=merge_consensus ")
 	require.Contains(t, tip.Message, "(conflicts:merge:consensus/off)")
@@ -83,8 +84,8 @@ func TestPeerSync_FactsConsensus_WholeVersion(t *testing.T) {
 	_, out := r.blob(tip, "kb/notes/f.md")
 	_, want := r.blob(consensusTip, "kb/notes/f.md")
 	require.Equal(t, want, out, "the consensus branch's version, whole")
-	require.Empty(t, merge.TrailerValues(tip.Message, merge.TrailerMerge))
-	lines := merge.TrailerValues(tip.Message, merge.TrailerConflict)
+	require.Empty(t, model.TrailerValues(tip.Message, merge.TrailerMerge))
+	lines := model.TrailerValues(tip.Message, merge.TrailerConflict)
 	require.Len(t, lines, 1, tip.Message)
 	require.Regexp(t, `^kb/notes/f\.md kept=src dropped=dst-modify strategy=consensus base=[0-9a-f]{40} src=[0-9a-f]{40} dst=[0-9a-f]{40}$`, lines[0])
 	require.Equal(t, []plumbing.Hash{agentTip.Hash, consensusTip.Hash}, tip.ParentHashes, "the dropped version is one parent away")
@@ -113,7 +114,7 @@ func TestPeerSync_FactsConsensus_ModifyDelete(t *testing.T) {
 	require.True(t, h.IsZero(), "the consensus side's deletion wins")
 	_, d2 := r.blob(tip, "kb/notes/d2.md")
 	require.Equal(t, consensusEdit, d2, "the consensus side's edit wins over the agent's deletion")
-	conflicts := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
+	conflicts := strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
 	require.Regexp(t, `kb/notes/d1\.md kept=src dropped=dst-modify strategy=consensus `, conflicts)
 	require.Regexp(t, `kb/notes/d2\.md kept=src dropped=dst-delete strategy=consensus `, conflicts)
 }
@@ -169,12 +170,12 @@ func TestPeerSync_StateConsensus(t *testing.T) {
 	require.Equal(t, []string{"Commented"}, mf.Entities, "and the commented version's entity: merged, not side-picked")
 	require.NotContains(t, merged, "checked by alice", "the comment is dropped")
 
-	conflicts := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
+	conflicts := strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
 	require.Regexp(t, `notes\.txt kept=src dropped=dst-modify strategy=consensus .* reason=not-a-fact`, conflicts)
 	require.Regexp(t, `extra\.txt kept=src dropped=dst-add strategy=consensus base=none .* reason=not-a-fact`, conflicts)
 	require.Regexp(t, `kb/notes/bad\.md kept=src dropped=dst-modify strategy=consensus .* reason=src-unparsable`, conflicts)
 	require.Regexp(t, `kb/notes/lossy\.md kept=src dropped=dst-modify strategy=consensus .* reason=dst-lossy`, conflicts)
-	merges := merge.TrailerValues(tip.Message, merge.TrailerMerge)
+	merges := model.TrailerValues(tip.Message, merge.TrailerMerge)
 	require.Len(t, merges, 1, tip.Message)
 	require.True(t, strings.HasPrefix(merges[0], "kb/notes/comment.md strategy=merge "), merges[0])
 	require.Contains(t, tip.Message, "(conflicts:merge/consensus)")
@@ -197,7 +198,7 @@ func TestPeerSync_FactsOffStateConsensus(t *testing.T) {
 	require.Equal(t, agentF, f, "facts: off — the peer keeps its own")
 	_, notes := r.blob(tip, "notes.txt")
 	require.Equal(t, "consensus\n", notes, "state: consensus — the consensus side's")
-	conflicts := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
+	conflicts := strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
 	require.Regexp(t, `kb/notes/f\.md kept=dst dropped=src-modify strategy=local_wins base=[0-9a-f]{40} src=[0-9a-f]{40} dst=[0-9a-f]{40}(\n|$)`, conflicts)
 	require.Regexp(t, `notes\.txt kept=src dropped=dst-add strategy=consensus base=none .* reason=not-a-fact`, conflicts)
 }
@@ -254,7 +255,7 @@ func TestHost_FactsConsensus_HostBranchWins(t *testing.T) {
 			_, out := r.blob(tip, "kb/notes/f.md")
 			require.Equal(t, hostF, out, "the host's whole version")
 			require.Regexp(t, `^kb/notes/f\.md kept=dst dropped=src-modify strategy=consensus `,
-				strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n"))
+				strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n"))
 			require.Contains(t, tip.Message, "(conflicts:consensus/off)")
 		})
 	}
@@ -273,7 +274,7 @@ func TestMergeConsensus_MergeConsensus_HostIsConsensus(t *testing.T) {
 	require.Equal(t, "host body", f.Body)
 	require.Equal(t, 0.6, f.Confidence)
 	require.Equal(t, []string{"HostAdded"}, f.Entities)
-	require.Contains(t, merge.TrailerValues(tip.Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
+	require.Contains(t, model.TrailerValues(tip.Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
 }
 
 // Host, `state: consensus`: a non-fact both changed no longer refuses the
@@ -301,10 +302,10 @@ func TestHost_StateConsensus_NotRefused(t *testing.T) {
 			require.Equal(t, "host\n", notes)
 			_, lossy := r.blob(tip, "kb/notes/lossy.md")
 			require.Equal(t, hostLossy, lossy)
-			conflicts := strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
+			conflicts := strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n")
 			require.Regexp(t, `notes\.txt kept=dst dropped=src-add strategy=consensus base=none .* reason=not-a-fact`, conflicts)
 			require.Regexp(t, `kb/notes/lossy\.md kept=dst dropped=src-add strategy=consensus base=none .* reason=src-lossy`, conflicts)
-			require.Len(t, merge.TrailerValues(tip.Message, merge.TrailerMerge), 1, "f.md merged")
+			require.Len(t, model.TrailerValues(tip.Message, merge.TrailerMerge), 1, "f.md merged")
 		})
 	}
 }
@@ -325,7 +326,7 @@ func TestReplay_FactsConsensus_OntoWins(t *testing.T) {
 	_, out := r.blob(tip, "kb/notes/f.md")
 	require.Equal(t, ontoF, out, "onto's whole version")
 	require.Regexp(t, `kb/notes/f\.md kept=dst dropped=src-modify strategy=consensus `,
-		strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n"), tip.Message)
+		strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n"), tip.Message)
 }
 
 // Replay, `state: consensus`: a non-fact both changed goes to onto, not to
@@ -340,5 +341,5 @@ func TestReplay_StateConsensus_OntoWins(t *testing.T) {
 	_, notes := r.blob(tip, "notes.txt")
 	require.Equal(t, "main\n", notes)
 	require.Regexp(t, `notes\.txt kept=dst dropped=src-modify strategy=consensus .* reason=not-a-fact`,
-		strings.Join(merge.TrailerValues(tip.Message, merge.TrailerConflict), "\n"), tip.Message)
+		strings.Join(model.TrailerValues(tip.Message, merge.TrailerConflict), "\n"), tip.Message)
 }

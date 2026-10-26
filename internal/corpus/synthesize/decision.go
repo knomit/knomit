@@ -70,6 +70,15 @@ func ApplyPruneDecisions(ctx context.Context,
 	}
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
+	// Paths a merge in this response consumes. A settle may not rest on one:
+	// decisions run first, so the merge would later delete the citing fact.
+	mergeMembers := make(map[string]bool)
+	for _, m := range merges {
+		for _, p := range m.Paths {
+			mergeMembers[p] = true
+		}
+	}
+
 	// Apply decisions.
 	for _, d := range decisions {
 		switch d.Action {
@@ -92,7 +101,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			stats.Pruned++
 
 		case "settle":
-			if err := applyPruneSettle(ctx, gs, sysFiles, idx, localRepoID, agentBranch, recipeName, d, deletedPaths); err != nil {
+			if err := applyPruneSettle(ctx, gs, sysFiles, idx, localRepoID, agentBranch, recipeName, d, deletedPaths, mergeMembers); err != nil {
 				onProgress(step.ProgressEvent{Phase: "warn", Message: err.Error()})
 				continue
 			}
@@ -486,13 +495,14 @@ func ApplyDistillDecisions(ctx context.Context,
 			settledHere = append(settledHere, h)
 		}
 		if len(settledHere) > 0 {
-			var lines, dels []string
+			var outs []model.Outcome
+			var dels []string
 			for _, h := range settledHere {
-				lines = append(lines, settleLine(h.Path, h.Outcome))
+				outs = append(outs, model.Outcome{Path: h.Path, Outcome: h.Outcome})
 				dels = append(dels, h.Path)
 			}
-			wctx := model.WithOutcomes(ctx, lines)
-			if _, _, err := gs.BatchWriteFacts(wctx, agentBranch, map[string]string{f.Path(): content}, dels, msg, "subsume"); err != nil {
+			wctx := model.WithOutcomes(ctx, outs)
+			if _, _, err := gs.BatchWriteFactsMustExist(wctx, agentBranch, map[string]string{f.Path(): content}, dels, dels, msg, "subsume"); err != nil {
 				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 				continue
 			}
@@ -509,6 +519,12 @@ func ApplyDistillDecisions(ctx context.Context,
 		onProgress(step.ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
 		written = append(written, df)
+	}
+
+	for _, h := range settle {
+		if !settledPaths[h.Path] {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill settle %s: no written synthesized fact settles it; left live", h.Path)})
+		}
 	}
 
 	// Delete subsumed facts.

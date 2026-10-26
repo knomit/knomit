@@ -380,7 +380,9 @@ func dedupCluster(
 			mergedRefs, carriedRefs = dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, winnerFact.File, loserFact.File, localRepoID)
 		} else {
 			mergedRefs = fact.AppendUnique(append([]string(nil), fullWinner.Refs...), loserFact.File)
-			carriedRefs = mergedRefs
+			// Carried from the OPERANDS, never from the list being written
+			// (0ee925f4): winner refs plus the loser path the winner cites.
+			carriedRefs = fact.AppendUnique(append([]string(nil), fullWinner.Refs...), loserFact.File)
 		}
 
 		// Same gate as every other write path — but this merge ADDS no

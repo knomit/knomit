@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"knomit/internal/engine/store/model"
 	"strings"
 	"testing"
 
@@ -62,7 +63,7 @@ func TestCommitExperiment_ConflictsMerge_FieldMerges(t *testing.T) {
 	require.Equal(t, "experiment body", f.Body)
 	require.Equal(t, 0.9, f.Confidence)
 	require.Equal(t, []string{"ParentAdded"}, f.Entities)
-	require.Len(t, merge.TrailerValues(tip.Message, merge.TrailerMerge), 1)
+	require.Len(t, model.TrailerValues(tip.Message, merge.TrailerMerge), 1)
 	require.Contains(t, tip.Message, "(conflicts:merge/off)")
 	require.Equal(t, []merge.SettledPath{{Path: expF, Kept: "merged"}}, res.Settled)
 	require.False(t, expStillOpen(t, svc), "a successful commit deletes the experiment")
@@ -98,7 +99,7 @@ func TestCommitExperiment_MergeConsensus_ParentIsConsensusSide(t *testing.T) {
 	require.Equal(t, "Experiment title", f.Title, "a field only the experiment changed is kept")
 	require.Equal(t, "parent body", f.Body)
 	require.Equal(t, 0.6, f.Confidence)
-	require.Contains(t, merge.TrailerValues(r.tip(testAgentBranch).Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
+	require.Contains(t, model.TrailerValues(r.tip(testAgentBranch).Message, merge.TrailerMerge)[0], "strategy=merge_consensus ")
 }
 
 // (R2) `facts: consensus`: the parent's whole version lands and the
@@ -163,8 +164,8 @@ func TestCommitExperiment_ConflictsMerge_RetryKeepsTheSetting(t *testing.T) {
 	require.Equal(t, "experiment\n", notes)
 	_, out := r.blob(tip, expF)
 	require.Equal(t, "experiment body", r.parse(out).Body, "the fact is still field-merged by the setting")
-	require.Len(t, merge.TrailerValues(tip.Message, merge.TrailerMerge), 1)
-	conflicts := merge.TrailerValues(tip.Message, merge.TrailerConflict)
+	require.Len(t, model.TrailerValues(tip.Message, merge.TrailerMerge), 1)
+	conflicts := model.TrailerValues(tip.Message, merge.TrailerConflict)
 	require.Len(t, conflicts, 1)
 	require.Regexp(t, `^notes\.txt kept=src dropped=dst-add strategy=refuse base=none .* reason=chosen$`, conflicts[0])
 	require.Equal(t, []merge.SettledPath{

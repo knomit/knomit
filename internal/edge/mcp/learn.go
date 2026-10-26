@@ -755,6 +755,10 @@ func applyDedupMerge(
 	localRepoID string,
 	retracting map[string]bool,
 	distinctFrom [][]string,
+	// settledBy maps a lowercased hypothesis path to the fact index that
+	// settles it in this call (settles). A different fact whose nearest match
+	// is that hypothesis gets a note instead of a silent decline.
+	settledBy map[string]int,
 ) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, map[int]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/domain/modelparams).
 	dedupThreshold := model.EmbedderThresholds(batchEmb).Dedup
@@ -926,6 +930,9 @@ func applyDedupMerge(
 		// the new fact would vanish with it. Declined; the fact is written at
 		// its own freshly-minted path (and a hypothesis being retracted is
 		// not "subsumed" either: the caller already retracts it).
+		if by, ok := settledBy[strings.ToLower(match.Path)]; ok && by != i {
+			hypMerged[i] = fmt.Sprintf("fact %d: matched hypothesis %s, settled by fact %d in this call.", i, match.Path, by)
+		}
 		if retracting[strings.ToLower(match.Path)] {
 			if onDedupSkipRetracted != nil {
 				onDedupSkipRetracted(match.Path)
@@ -1262,12 +1269,16 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		ctx = model.WithOutcomes(ctx, outcomeLines(settles))
+		ctx = model.WithOutcomes(ctx, outcomePairs(settles))
+		settledBy := make(map[string]int, len(settles))
+		for _, d := range settles {
+			settledBy[strings.ToLower(d.path)] = d.fact
+		}
 		distinctFrom := make([][]string, len(factInputs))
 		for i, in := range factInputs {
 			distinctFrom[i] = in.DistinctFrom
 		}
-		embByPath, retract, priorRefs, touched, uncounted, hypMerged, settled, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
+		embByPath, retract, priorRefs, touched, uncounted, hypMerged, settled, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom, settledBy)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -1365,8 +1376,15 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			deletes = fact.AppendUnique(deletes, p)
 		}
 		var hash string
-		if len(retractPaths) > 0 {
-			hash, _, err = s.facts.BatchWriteFactsMustExist(ctx, writeBranch, files, deletes, retractPaths, commitMsg, operation)
+		// The caller's retract paths AND the hypotheses a settle names must
+		// still exist under the branch lock, so two concurrent settles of one
+		// hypothesis cannot both commit a verdict.
+		mustExist := retractPaths
+		for _, p := range settleRetract {
+			mustExist = fact.AppendUnique(append([]string(nil), mustExist...), p)
+		}
+		if len(mustExist) > 0 {
+			hash, _, err = s.facts.BatchWriteFactsMustExist(ctx, writeBranch, files, deletes, mustExist, commitMsg, operation)
 		} else {
 			hash, _, err = s.facts.BatchWriteFacts(ctx, writeBranch, files, deletes, commitMsg, operation)
 		}
