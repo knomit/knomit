@@ -230,31 +230,6 @@ func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
 		"a hypothesis is a conjecture; its count must not pool into the merged fact")
 }
 
-// TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable pins the loud
-// failure on the destructive path. Flooring silently at 1 would dress up
-// "I deleted N facts whose evidence I never counted" as a plausible number.
-func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
-	svc, branch := synthtest.NewSourcesTestRepo(t)
-	ctx := context.Background()
-
-	onProgress, warns := synthtest.CollectWarns()
-	merges := []step.MergeEntry{{
-		Paths: []string{"kb/technology/gone.md"}, // never written
-		Merged: step.MergedFact{
-			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
-			Domain: []string{"technology"}, Confidence: 0.9,
-		},
-	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, synthtest.BareRefFixture, "kb", nil)
-	require.NoError(t, err)
-
-	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
-		"the floor still applies — 0 would make the fact invisible to every downstream weight")
-	require.NotEmpty(t, *warns, "a merge that could read none of its sources must say so")
-	require.Contains(t, (*warns)[0], "could be read",
-		"the warn must name the failure, not just the merge")
-}
-
 // ── TRANSFER: review dedupCluster ─────────────────────────────────────────
 
 // TestMergeFacts_SumsSourcesOfBothWinnerAndLoser covers the dedup transfer.
@@ -341,35 +316,4 @@ func TestComputeTransfer_HypothesisSourceCountsAsReadable(t *testing.T) {
 	_, pooled, readable := step.ComputeTransfer(ctx, svc.Facts(), branch, synthtest.BareRefFixture, []string{"kb/h.md"})
 	require.Equal(t, 1, readable, "a hypothesis reads fine; readable answers 'could I see it', not 'did it corroborate'")
 	require.Equal(t, 1, pooled, "and it still contributes nothing, so the floor is what remains")
-}
-
-// TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable is the
-// caller-visible consequence. The warn on this path is read after the sources
-// are already deleted, so claiming a read failure that never happened sends
-// whoever finds it looking for a storage fault instead of an honest
-// "these facts carried no corroborations".
-func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing.T) {
-	svc, branch := synthtest.NewSourcesTestRepo(t)
-	ctx := context.Background()
-
-	synthtest.SeedTypedFactWithSources(t, svc, branch, "kb/technology/h1.md", 3, fact.Hypothesis)
-	synthtest.SeedTypedFactWithSources(t, svc, branch, "kb/technology/h2.md", 4, fact.Hypothesis)
-
-	onProgress, warns := synthtest.CollectWarns()
-	merges := []step.MergeEntry{{
-		Paths: []string{"kb/technology/h1.md", "kb/technology/h2.md"},
-		Merged: step.MergedFact{
-			Path: "kb/technology/merged.md", Title: "M", Body: "merged", Type: "observation",
-			Domain: []string{"technology"}, Confidence: 0.9,
-		},
-	}}
-	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges, "test", onProgress, branch, synthtest.BareRefFixture, "kb", nil)
-	require.NoError(t, err)
-
-	require.Equal(t, 1, synthtest.ReadSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
-		"conjecture pools nothing, so the merged fact rests on the floor")
-	for _, w := range *warns {
-		require.NotContains(t, w, "could be read",
-			"the sources were readable — only the unreadable case may claim they were not")
-	}
 }

@@ -23,7 +23,6 @@ Respond as JSON (no markdown wrapping):
         "path": "{{.OntologyRoot}}/...",
         "title": "...",
         "body": "...",
-        "type": "synthesis|methodology|observation|concept|process|principle|pattern|reference",
         "domain": [],
         "confidence": 0.X,
         "sources": 2,
@@ -36,7 +35,7 @@ Respond as JSON (no markdown wrapping):
 
 Merge output requirements (mandatory):
 - `merged.path` MUST start with `{{.OntologyRoot}}/`. Merges with any other prefix are rejected.
-- `merged.type` MUST be set to one of the listed values. Empty or missing type rejects the merge.
+- Do NOT emit a `type` for the merged fact. A merge never changes a stored fact's type: the merged fact takes the members' type, or when they differ the type of the member the dedup tiebreak prefers (a non-hypothesis over a hypothesis, then higher confidence, then more sources). A type you emit is ignored.
 
 Merge fidelity (mandatory):
 - Facts are duplicates only if their conditions and scopes match. Same subject with different qualifiers ("only when…", "except…", different thresholds) is NOT a duplicate — keep both.
@@ -55,7 +54,7 @@ Merge fidelity (mandatory):
 If the batch contains facts with type "hypothesis" alongside observations or synthesis facts:
 
 - Check whether observations corroborate or contradict the hypothesis's falsification condition.
-- Corroborated: action "update" with higher confidence, or promote via "merge" into a synthesis fact if evidence is strong. When promoting, the merged output type must be "synthesis" and confidence must be inherited from the hypothesis (not recomputed).
+- Corroborated: action "update" with higher confidence. A merge cannot promote a hypothesis to another type: the merged fact takes the type of its non-hypothesis members, and a merge whose members are all hypotheses is refused.
 - Contradicted: action "update" with lower confidence, or "retract" if falsified.
 - Neither: action "keep".
 - Only observations and synthesis facts count as confirmation. Other hypotheses do NOT count — predictions cannot confirm predictions.

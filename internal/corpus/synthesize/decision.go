@@ -61,8 +61,12 @@ func ApplyPruneDecisions(ctx context.Context,
 	// earlier in this same call contributes nothing, and a legacy ref the judge
 	// kept from it reads as newly added (knomit#249 review).
 	memberPrior := make([][]string, len(merges))
+	// The members' own types, snapshotted for the same reason: the merged
+	// fact's type comes from them and never from the judge.
+	memberTypes := make([][]step.FactForLLM, len(merges))
 	for i, m := range merges {
 		memberPrior[i] = memberRefs(ctx, gs, agentBranch, m.Paths)
+		memberTypes[i] = memberTypeInputs(ctx, gs, agentBranch, m.Paths)
 	}
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
@@ -131,18 +135,22 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge rejected: %v", err)})
 			continue
 		}
-		if err := step.ValidateOutputType(mf.Type); err != nil {
-			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
+		// A dedup merge never changes a stored fact's type. The merged fact's
+		// type is derived from the members (mergedTypeFromMembers); the
+		// judge is not asked for one, and one it volunteers anyway is
+		// ignored and reported below, never trusted.
+		mergedType, ok := mergedTypeFromMembers(memberTypes[i])
+		if !ok {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: none of the %d subsumed facts could be read, so the merged type cannot be derived from them", mf.Path, len(m.Paths))})
 			continue
 		}
 		// Prune-merges cannot create hypothesis-type facts. Hypotheses
 		// are only created by knomit_hypothesize via knomit_learn (the
-		// agent-driven path), never by review. The prompt forbids this
-		// in merged.type's enum but the schema accepts the LLM's word;
-		// this guard mirrors the same check on the distill path so the
-		// architectural invariant "review never creates hypotheses" is
-		// enforced server-side, not just by prompt.
-		if fact.Type(mf.Type) == fact.Hypothesis {
+		// agent-driven path), never by review. With the type taken from
+		// the members this fires only when every member is a hypothesis;
+		// it keeps the architectural invariant "review never creates
+		// hypotheses" enforced server-side.
+		if mergedType == fact.Hypothesis {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
@@ -170,19 +178,11 @@ func ApplyPruneDecisions(ctx context.Context,
 		// below, so trusting the count the model happened to emit discards the
 		// corroborations the merge just absorbed. §5.3 already mandates summing
 		// for dedup-on-learn; this is the same merge.
-		weight, pooled, readable := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
-		// A merge that can read none of the facts it is about to delete is
-		// destroying evidence it never counted. The floor would otherwise
-		// dress that up as a plausible sources: 1.
-		if readable == 0 && len(m.Paths) > 0 {
-			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
-				"merge %s: none of the %d subsumed facts could be read — their corroborations are lost",
-				mf.Path, len(m.Paths))})
-		}
+		weight, pooled, _ := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID, m.Paths)
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
-		merged.Type = fact.Type(mf.Type)
+		merged.Type = mergedType
 		merged.Domain = mf.Domain
 		merged.Confidence = mf.Confidence
 		merged.Sources = pooled
@@ -304,6 +304,11 @@ func ApplyPruneDecisions(ctx context.Context,
 		}
 		for _, src := range deletes {
 			deletedPaths[src] = true
+		}
+		if mf.Type != "" && fact.Type(mf.Type) != mergedType {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"merge %s: judge type %q ignored; the merged fact keeps %q, derived from its members (a merge never changes a stored fact's type)",
+				merged.Path(), mf.Type, mergedType)})
 		}
 		if len(notCarried) > 0 {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
@@ -723,6 +728,36 @@ func memberRefs(ctx context.Context, gs *facts.Index, branch string, paths []str
 		}
 	}
 	return out
+}
+
+// memberTypeInputs reads the members of a prune merge as the operands of the
+// dedup tiebreak. A member that cannot be read is left out.
+func memberTypeInputs(ctx context.Context, gs *facts.Index, branch string, paths []string) []step.FactForLLM {
+	var out []step.FactForLLM
+	for _, p := range paths {
+		f, ok := step.ReadFactAt(ctx, gs, branch, p)
+		if !ok {
+			continue
+		}
+		out = append(out, step.FactForLLM{File: p, Type: string(f.Type), Confidence: f.Confidence, Sources: f.Sources})
+	}
+	return out
+}
+
+// mergedTypeFromMembers is the type a prune merge writes: the members' shared
+// type when they agree, else the type of the member the dedup tiebreak picks
+// (mergeFacts: non-hypothesis wins, then confidence, then sources;
+// kb/decisions/synthesize/dedup-merge-tiebreak/02422cde.md). It is false when
+// no member could be read, because then there is nothing to derive it from.
+func mergedTypeFromMembers(members []step.FactForLLM) (fact.Type, bool) {
+	if len(members) == 0 {
+		return "", false
+	}
+	winner := members[0]
+	for _, m := range members[1:] {
+		winner, _ = mergeFacts(winner, m)
+	}
+	return fact.Type(winner.Type), true
 }
 
 // agreedContext is the F22 prune-merge rule: the merged fact is NEW, so it

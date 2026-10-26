@@ -54,9 +54,12 @@ type PruneDecision struct {
 
 // MergedFact is the embedded merged fact object from the LLM response.
 type MergedFact struct {
-	Path       string      `json:"path"`
-	Title      string      `json:"title"`
-	Body       string      `json:"body"`
+	Path  string `json:"path"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	// Type is NOT asked of the judge any more and is never applied: a merge
+	// takes its type from its members. The field survives only so a judge that
+	// emits one anyway can be reported as having been ignored.
 	Type       string      `json:"type"`
 	Domain     FlexStrings `json:"domain"`
 	Confidence float64     `json:"confidence"`

@@ -28,7 +28,15 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
-	// A merge whose merged.type is "hypothesis" must be rejected with a
+	// The merged type is derived from the members, so the members are
+	// hypotheses here; the judge's word (below) is irrelevant either way.
+	for _, p := range []string{"kb/synth/a.md", "kb/synth/b.md"} {
+		_, err = svc.Facts().WriteFact(context.Background(), "agent/test", p,
+			"---\ntype: hypothesis\n---\n# H\n\nconjecture", "seed "+p, "test")
+		require.NoError(t, err)
+	}
+
+	// A merge of hypothesis members must be rejected with a
 	// warn — the merged fact is NOT written and source facts are NOT
 	// deleted (because the merge never committed).
 	merges := []step.MergeEntry{
@@ -38,7 +46,7 @@ func TestApplyPruneDecisions_RejectsHypothesisMerge(t *testing.T) {
 				Path:  "kb/synth/merged.md",
 				Title: "Merged hypothesis",
 				Body:  "claim",
-				Type:  "hypothesis",
+				Type:  "synthesis",
 			},
 		},
 	}
@@ -94,9 +102,14 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 
+	for _, p := range []string{"kb/synth/a.md", "kb/synth/b.md"} {
+		_, err = svc.Facts().WriteFact(context.Background(), "agent/test", p,
+			"---\ntype: synthesis\n---\n# S\n\nclaim", "seed "+p, "test")
+		require.NoError(t, err)
+	}
 	merges := []step.MergeEntry{
 		{
-			Paths: []string{}, // no source facts to delete (keeps the test minimal)
+			Paths: []string{"kb/synth/a.md", "kb/synth/b.md"},
 			Merged: step.MergedFact{
 				Path:  "kb/synth/merged.md",
 				Title: "Merged synthesis",
