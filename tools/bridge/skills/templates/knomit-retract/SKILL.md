@@ -16,7 +16,7 @@ DON'T use for:
 
 - Partial correction — use `/knomit-update`
 - A stale `src://` ref only — `/knomit-update` and resend the refs list with the fresh anchor added and the stale one dropped (refs replace wholesale)
-- Hypothesis that turned out to be wrong AND has a confirming-observation companion — keep the hypothesis retracted *via the dedup-collision lifecycle in knomit_learn*, not by hand
+- Hypothesis that turned out to be wrong AND has a confirming-observation companion — settle the hypothesis with `settles` on the confirming or refuting `knomit_learn` fact (records `confirmed`/`refuted`), not by hand
 
 ## How
 

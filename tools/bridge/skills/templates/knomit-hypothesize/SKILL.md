@@ -46,4 +46,4 @@ Vagueness fails the falsifiability test. Time-bound and quantified predictions p
 
 - Hypotheses must NEVER be evidence for other hypotheses.
 - Distill must NEVER synthesize from hypotheses.
-- On dedup collision with an existing observation, the hypothesis is retracted and linked via the observation's `refs` (canonical "hypothesis confirmed" lifecycle).
+- A fact that settles a hypothesis names it in `settles` with `confirmed` or `refuted`; the hypothesis is cited, retracted in the same commit, and the verdict goes in the `Knomit-Outcome` commit trailer. Mere similarity also retracts it and links it via `refs`, but records no verdict.

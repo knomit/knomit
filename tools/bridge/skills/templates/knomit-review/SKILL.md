@@ -9,7 +9,7 @@ Work-stealing KB-maintenance pipeline. Three phases run in order over the dirty-
 
 1. **Prune** — dedup near-identical facts (cosine ≥ 0.92); the winner inherits union of domains/entities and summed sources, hypothesis loses to observation regardless of confidence.
 2. **Distill** — synthesize clusters of related facts into higher-level `type: synthesis` facts; RAPTOR runs up to depth 3 through the same queue.
-3. **Reflect** — detect hypothesis transitions (confirmed/retracted) and optionally emit one new methodology (capped by `KNOMIT_REFLECT_PROPOSE_CAP`, novelty-gated by `KNOMIT_REFLECT_NOVELTY_THRESHOLD`).
+3. **Reflect** — detect hypothesis transitions (confirmed/refuted from the `Knomit-Outcome` trailer, else retracted) and optionally emit one new methodology (capped by `KNOMIT_REFLECT_PROPOSE_CAP`, novelty-gated by `KNOMIT_REFLECT_NOVELTY_THRESHOLD`).
 
 Use when:
 
