@@ -1083,6 +1083,19 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			WithFiles(refs.FromSystemFiles(s.files, writeBranch))
 
 		// 1. Parse arguments.
+		// A top-level key the tool does not declare is refused, not ignored,
+		// as every other tool does (rejectUnknownArguments). Ignoring one
+		// dropped a caller's protection and reported success: a top-level
+		// distinct_from left the dedup merge free to fold the fact into the
+		// very path it was meant to keep apart. Before anything is read or
+		// written, so a refused call writes nothing.
+		if err := rejectUnknownArguments(req, learnTool()); err != nil {
+			msg := err.Error()
+			if _, ok := req.GetArguments()["distinct_from"]; ok {
+				msg += "; distinct_from belongs on each fact (facts[i].distinct_from), not at the top level of the call"
+			}
+			return mcpgo.NewToolResultError(msg), nil
+		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
