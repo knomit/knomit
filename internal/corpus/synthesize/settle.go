@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/corpus/refs"
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/model"
 )
 
@@ -39,8 +39,9 @@ func settleLine(path, outcome string) string { return path + " " + outcome }
 // refuses the whole decision (nothing is written): predictions cannot settle
 // predictions, and a verdict with no surviving citer would leave the retracted
 // hypothesis uncited.
-func applyPruneSettle(ctx context.Context, gs *facts.Index, gate refs.Gate, branch, recipe string,
+func applyPruneSettle(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, idx *index.Facade, localRepoID, branch, recipe string,
 	d step.PruneDecision, deleted map[string]bool) error {
+	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, branch)
 	if d.Outcome != model.OutcomeConfirmed && d.Outcome != model.OutcomeRefuted {
 		return fmt.Errorf("settle %s: outcome %q must be confirmed or refuted", d.Path, d.Outcome)
 	}

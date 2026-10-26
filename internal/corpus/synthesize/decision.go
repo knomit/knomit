@@ -92,7 +92,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			stats.Pruned++
 
 		case "settle":
-			if err := applyPruneSettle(ctx, gs, mergeGate, agentBranch, recipeName, d, deletedPaths); err != nil {
+			if err := applyPruneSettle(ctx, gs, sysFiles, idx, localRepoID, agentBranch, recipeName, d, deletedPaths); err != nil {
 				onProgress(step.ProgressEvent{Phase: "warn", Message: err.Error()})
 				continue
 			}
