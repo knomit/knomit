@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -166,10 +168,11 @@ var incidentCosine = map[string]float64{
 }
 
 // The incident pair's measured score, with the SHIPPED floors, no longer
-// reaches the merge: with no shared entity the sibling is written at its own
-// path; with a shared entity (W0g1 and W0g2 share webInterfaceAllowlist) the
-// same-category band of the same-subject gate refuses it instead, naming
-// W0g1. In both, W0g1's file is byte-identical.
+// reaches the merge: the sibling is written at its own path in both rows, with
+// or without a shared entity (W0g1 and W0g2 share webInterfaceAllowlist), and
+// W0g1's file is byte-identical. With a shared entity the pair sits in the
+// same-subject band inside the merge's scope, so the response names W0g1 (see
+// TestLearnHandler_InScopeBandNeighbourIsWrittenWithANote).
 //
 // The shipped floor must sit above the score (asserted, so a later re-sweep
 // that drops it under the incident pair turns this red, not green-by-accident).
@@ -196,19 +199,66 @@ func TestLearnHandler_IncidentPairScoreNoLongerMerges(t *testing.T) {
 					g2["entities"] = []any{"factSubProvider", "webInterfaceAllowlist"}
 				}
 				r := dfLearn(t, ctx, emb, g2)
-				inSubjectBand := cos > ts.th.ReflectNovelty
-				switch {
-				case shared && inSubjectBand:
-					require.True(t, r.IsError, "a same-category sibling sharing an entity is refused: %s", resultText(t, r))
-					require.Contains(t, resultText(t, r), seed)
-					require.Equal(t, before, liveFactCount(t, svc))
-				default:
-					require.False(t, r.IsError, resultText(t, r))
-					require.NotEqual(t, seed, mergedFactPath(t, r), "the sibling is written at its own path, not merged")
-					require.Equal(t, before+1, liveFactCount(t, svc))
-				}
+				require.False(t, r.IsError, resultText(t, r))
+				require.NotEqual(t, seed, mergedFactPath(t, r), "the sibling is written at its own path, not merged")
+				require.Equal(t, before+1, liveFactCount(t, svc))
 				require.Equal(t, seedBefore, dfRead(t, svc, seed), "W0g1 is byte-identical")
 			})
 		}
+	}
+}
+
+// The user's ruling on #638: inside learn's merge scope, a candidate in the
+// same-subject band below Dedup is written at its own path, never refused. The
+// response notes the nearest neighbour (path, cosine, knomit_update) and the
+// commit message carries ONE short "near:" line. A cross-category pair at the
+// same cosine is still refused.
+//
+// SABOTAGE: route the in-scope band candidate to `kept` (the pre-ruling
+// refusal) → the write is refused → red.
+func TestLearnHandler_InScopeBandNeighbourIsWrittenWithANote(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name+"/in-scope", func(t *testing.T) {
+			cos := inBand(ts.th)
+			require.Less(t, cos, ts.th.Dedup)
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, cos)
+			seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(w0g1Title, w0g1Body(), 0.85, []any{}, nil)))
+			before := liveFactCount(t, svc)
+
+			r := dfLearn(t, ctx, emb, siblingDecision(w0g2Title, w0g2Body(), 0.85, []any{}, nil))
+			require.False(t, r.IsError, "an in-scope band sibling is written, not refused: %s", resultText(t, r))
+			written := mergedFactPath(t, r)
+			require.NotEqual(t, seed, written, "written at its own new path")
+			require.Equal(t, before+1, liveFactCount(t, svc))
+
+			notes := readNotes(t, resultText(t, r)).Notes
+			require.Len(t, notes, 1)
+			require.Contains(t, notes[0], seed, "the note names the neighbour's path")
+			require.Contains(t, notes[0], fmt.Sprintf("(%.2f)", cos), "and the cosine")
+			require.Contains(t, notes[0], "knomit_update that fact instead")
+
+			head, err := svc.HeadCommit(context.Background(), "agent/test")
+			require.NoError(t, err)
+			info, _ := commitDiff(t, svc, head)
+			require.Contains(t, info.Message, fmt.Sprintf("\nnear: %s (%.2f)", seed, cos),
+				"the commit message carries the one-line near: marker")
+			require.Equal(t, 1, strings.Count(info.Message, "near:"))
+			require.Len(t, strings.Split(strings.TrimSpace(info.Message), "\n"), 3, "subject, blank line, one near: line")
+		})
+
+		t.Run(ts.name+"/cross-category-still-refused", func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
+			seeded := seedRampFact(t, ctx, emb)
+			before := liveFactCount(t, svc)
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
+				"collide", "gotchas", "tools/ai/spend",
+				"Enterprise AI spend is plateauing",
+				"A "+probeMarker+" note on Ramp's numbers for paid AI seats.",
+				[]any{"Ramp"}, nil))
+			require.NoError(t, err)
+			require.True(t, r.IsError, resultText(t, r))
+			require.Contains(t, resultText(t, r), seeded)
+			require.Equal(t, before, liveFactCount(t, svc))
+		})
 	}
 }

@@ -67,7 +67,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
-		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis."),
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact in ANOTHER category that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. A similar fact inside the same category is written at its own path and the response notes the nearest neighbour; if it states the same claim, knomit_update that fact instead. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis."),
 		bindingArg(true),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
@@ -128,7 +128,7 @@ func learnToolSchemaProperties() map[string]any {
 		"confidence":    map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
 		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
 		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
-		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
+		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. It does two things for THIS call: the automatic dedup merge never folds this fact into a path named here (the fact is written at its own new path), and the cross-category same-subject refusal skips those paths. Use it after a refusal (the refusal lists the candidates it found), and when you write a fact that deliberately sits next to a near-identical one — a counter-hypothesis to an existing hypothesis, a competing claim — so both are kept. It is not stored with the fact, and a later knomit_review may still merge the two. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
 		"motifs":        motifsProperty(),
 		"expires":       expiresProperty(),
 		"context":       contextProperty(" Not allowed with path (private state has no topic to declare keys)."),
@@ -1181,7 +1181,8 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, parsed, topicCategories, paths, touched, dedupVecs, batchEmb, retracting); err != nil {
+		nears, err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, parsed, topicCategories, paths, touched, dedupVecs, batchEmb, retracting)
+		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -1241,6 +1242,9 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			operation = "retract"
 		}
 		commitMsg := fmt.Sprintf("%s: %s", operation, momentName)
+		if line := nearCommitLine(nears); line != "" {
+			commitMsg += "\n\n" + line
+		}
 		deletes := retract
 		for _, p := range retractPaths {
 			deletes = fact.AppendUnique(deletes, p)
@@ -1291,6 +1295,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
 		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
 		notes = append(notes, statementNotAppliedNotes(built, parsed, hypMerged)...)
+		notes = append(notes, nearNotes(nears)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
