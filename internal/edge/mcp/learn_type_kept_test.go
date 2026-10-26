@@ -47,7 +47,7 @@ func TestLearnHandler_MergeKeepsStoredType(t *testing.T) {
 		// Origin is coupled to type (Origin.ValidateForType): it is kept with the type.
 		{"distilled synthesis over observation", "observation", "synthesis", "", "distilled", 0.9, "authored", true, 0.9},
 		{"discovered synthesis over observation", "observation", "synthesis", "", "discovered", 0.9, "authored", true, 0.9},
-		{"authored observation over distilled synthesis", "synthesis", "observation", "distilled", "", 0.9, "distilled", true, 0.9},
+		{"authored observation over distilled synthesis", "synthesis", "observation", "distilled", "authored", 0.9, "distilled", true, 0.9},
 		// The note also fires when the STORED fact wins on the same text.
 		{"stored wins: insight under observation", "observation", "insight", "", "", 0.5, "authored", true, 0.6},
 		{"control: same type", "observation", "observation", "", "", 0.9, "authored", false, 0.9},
