@@ -455,6 +455,16 @@ func absorbedHypothesis(newFact, existing fact.Fact) bool {
 	return newFact.Type == fact.Hypothesis && existing.Type != fact.Hypothesis
 }
 
+// typeKept reports whether a dedup merge kept the stored fact's type although
+// the incoming fact's identity won: the types differ and the text is the same,
+// so the incoming type is the only thing the merge declined to take. When the
+// existing fact won outright, or the incoming one is an absorbed hypothesis,
+// their own notes already say what was kept, so this is false.
+func typeKept(newFact, existing fact.Fact) bool {
+	return newFact.Type != existing.Type && !absorbedHypothesis(newFact, existing) &&
+		incomingIdentityWins(newFact, existing)
+}
+
 // sameStatement reports whether a and b have the same title and body, ignoring
 // only surrounding whitespace (ParseFact trims both; an incoming fact need not
 // be). Deliberately strict: a false "different" only keeps the existing text.
@@ -527,8 +537,14 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	}
 	merged.Title = winner.Title
 	merged.Body = winner.Body
-	merged.Kind = winner.Kind
-	merged.Type = winner.Type
+	// A MERGE NEVER CHANGES THE STORED FACT'S TYPE. Kind goes with it: every
+	// type belongs to exactly one kind, so keeping the type and taking the
+	// incoming kind would write an invalid pair. The winner still decides the
+	// rest of the identity; with identical text a differing type is the only
+	// thing the incoming side could have changed, and knomit_update is the
+	// verb for that (typeKept).
+	merged.Kind = existing.Kind
+	merged.Type = existing.Type
 	// The winner's identity wins, so its origin wins too.
 	merged.Origin = winner.Origin
 	// And its expiry: a merge never invents, inherits or pools one. When the
@@ -947,6 +963,16 @@ func applyDedupMerge(
 			// confidence are kept, AND the incoming prediction was not written.
 			hypMerged[i] = fmt.Sprintf("fact %d: incoming hypothesis absorbed by %s %s; stored type and confidence (%g) kept, the prediction was NOT written; to keep it, resubmit with distinct_from: [%q].",
 				i, existingFact.Type, match.Path, existingFact.Confidence, match.Path)
+		}
+
+		if typeKept(f, existingFact) {
+			// ONE short note, standing in for the uncounted note (like the
+			// absorbed-hypothesis note above) with its reason kept inside it.
+			hypMerged[i] = fmt.Sprintf("fact %d: merged into %s %s; stored type kept (incoming was %s); use knomit_update to change it.",
+				i, existingFact.Type, match.Path, f.Type)
+			if why := uncounted[i]; why != "" {
+				hypMerged[i] += " Sources unchanged: " + why + "."
+			}
 		}
 
 		if incomingIdentityWins(f, existingFact) {
