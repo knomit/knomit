@@ -50,8 +50,8 @@ func TestLearnHandler_IncomingHypothesisIsAbsorbedByStoredFact(t *testing.T) {
 
 			require.Equal(t, []string{seed}, settledWritten(t, res), "merged at the stored path")
 			require.Equal(t,
-				[]string{fmt.Sprintf("fact 0: incoming hypothesis %q absorbed by %s %s; stored type and confidence (0.6) kept, the prediction was NOT written; to keep it, resubmit with distinct_from: [%q].",
-					tc.incoming, tc.storedType, seed, seed)},
+				[]string{fmt.Sprintf("fact 0: incoming hypothesis absorbed by %s %s; stored type and confidence (0.6) kept, the prediction was NOT written; to keep it, resubmit with distinct_from: [%q].",
+					tc.storedType, seed, seed)},
 				settledNotesOf(res), "one note, no second statement-not-applied note")
 
 			svc := testRepoService(t, ctx)
