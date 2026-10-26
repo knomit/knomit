@@ -297,6 +297,11 @@ type CompiledTrigger struct {
 	// budget is always ruleEvalTimeout); zero means the default. Any write to
 	// it from production code is a bug.
 	evalTimeout time.Duration
+	// afterSetup, when set by a test in this package, runs in EvalIf after the
+	// sandbox globals are bound and before the budget timer is armed: it
+	// stands in for slow setup. Production never sets it (compileTrigger
+	// leaves it nil); a production write is a bug.
+	afterSetup func()
 }
 
 // ifBudget is the time EvalIf allows a condition: ruleEvalTimeout unless a
@@ -635,9 +640,23 @@ func jsValue(vm *goja.Runtime, parse goja.Callable, v any) (goja.Value, error) {
 	return parse(goja.Undefined(), vm.ToValue(string(b)))
 }
 
+// bindGlobals is the whole of EvalIf's setup: the frozen globals, then the
+// test-only afterSetup stand-in for slow setup. They are one step so the
+// seam cannot sit outside the budget while the real setup sits inside it.
+func (t *CompiledTrigger) bindGlobals(vm *goja.Runtime, globals map[string]any) error {
+	if _, _, err := sandboxGlobals(vm, "trigger "+t.Name, globals); err != nil {
+		return err
+	}
+	if t.afterSetup != nil {
+		t.afterSetup()
+	}
+	return nil
+}
+
 // EvalIf runs the trigger's condition with the given globals (fact, agent,
 // change in the dispatcher). An empty condition is true. It uses a FRESH VM
-// per call, the validations' time budget, no process/require, `Date` pinned
+// per call, the validations' time budget (armed after the globals are bound,
+// so it covers the condition alone), no process/require, `Date` pinned
 // to now (the run's clock), and frozen copies of the globals. A throw or
 // timeout is returned as an error, which the dispatcher counts as false and
 // records.
@@ -646,14 +665,16 @@ func (t *CompiledTrigger) EvalIf(globals map[string]any, now time.Time) (bool, e
 		return true, nil
 	}
 	vm := newSandboxVM(now)
+	// Setup first, budget second: the budget bounds the user's condition, not
+	// the host's work of freezing the globals, which load can stretch.
+	if err := t.bindGlobals(vm, globals); err != nil {
+		return false, err
+	}
 	budget := t.ifBudget()
 	timer := time.AfterFunc(budget, func() {
 		vm.Interrupt(fmt.Sprintf("trigger %s: if exceeded %s", t.Name, budget))
 	})
 	defer timer.Stop()
-	if _, _, err := sandboxGlobals(vm, "trigger "+t.Name, globals); err != nil {
-		return false, err
-	}
 	v, err := vm.RunProgram(t.ifProg)
 	if err != nil {
 		return false, fmt.Errorf("trigger %s: if: %w", t.Name, err)
