@@ -117,6 +117,12 @@ func resolvedMotifs(f Fact) []string { return StripSubjectMotifs(f) }
 // between two independent expressions of that default is what once
 // round-tripped authored synthesis facts into distilled.
 func resolvedOrigin(f Fact) Origin {
+	return f.ResolvedOrigin()
+}
+
+// ResolvedOrigin is the origin that lands on disk and reads back: the explicit
+// value, or the type's default when unset (authored; distilled for synthesis).
+func (f Fact) ResolvedOrigin() Origin {
 	if f.Origin != "" {
 		return f.Origin
 	}
