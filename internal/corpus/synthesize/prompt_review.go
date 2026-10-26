@@ -33,7 +33,6 @@ const pruneResponseSchema = `{
               "path": {"type": "string"},
               "title": {"type": "string"},
               "body": {"type": "string"},
-              "type": {"type": "string"},
               "domain": {"type": "array", "items": {"type": "string"}},
               "confidence": {"type": "number"},
               "sources": {"type": "integer"},

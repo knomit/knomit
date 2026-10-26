@@ -123,6 +123,11 @@ func TestApplyPruneDecisions_MergeKeepsRefsOfAMemberRetractedEarlierInTheCall(t 
 // member, the first deletes it, and the second must still see its refs.
 func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *testing.T) {
 	svc, branch := seedMergeMembers(t)
+	// A merge whose members are ALL gone by apply time is refused, so the
+	// second merge also holds a member the first leaves alone.
+	_, err := svc.Facts().WriteFact(context.Background(), branch, "kb/technology/c.md",
+		"---\ntype: observation\n---\n# C\n\nuntouched body", "seed c", "test")
+	require.NoError(t, err)
 	var warns []string
 	merges := []step.MergeEntry{
 		{
@@ -131,12 +136,12 @@ func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *te
 				Refs: []string{"src://knomit/internal/b.go"}},
 		},
 		{
-			Paths: []string{"kb/technology/a.md"},
+			Paths: []string{"kb/technology/a.md", "kb/technology/c.md"},
 			Merged: step.MergedFact{Path: "kb/technology/m2.md", Title: "Second", Body: "second", Type: "observation",
 				Refs: []string{"src://knomit/internal/a.go@ca1c272"}},
 		},
 	}
-	_, err := ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
+	_, err = ApplyPruneDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), nil, merges,
 		"review-test", func(e step.ProgressEvent) {
 			if e.Phase == "warn" && strings.Contains(e.Message, "rejected") {
 				warns = append(warns, e.Message)
@@ -144,4 +149,6 @@ func TestApplyPruneDecisions_SecondMergeKeepsRefsOfAMemberTheFirstConsumed(t *te
 		}, branch, synthtest.BareRefFixture, "kb", nil)
 	require.NoError(t, err)
 	require.Empty(t, warns, "a member consumed by an earlier merge in the call still carries its refs")
+	// Written, not merely unwarned: a skipped merge would also leave warns empty.
+	mergedFactPath(t, svc, branch, "Second")
 }

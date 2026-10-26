@@ -45,14 +45,26 @@ func TestReview_AWriteThatFailsTheOntologyIsRefusedAtTheSource(t *testing.T) {
 		require.NoError(t, err)
 		return out
 	}
+	// The merge members are epistemic principles: a prune merge writes an
+	// epistemic fact whose type is its members' (never the judge's), so only
+	// these can yield a principle output for the designer-entity rule to refuse.
+	epiPrinciple := func(body string) string {
+		f := fact.NewFact("placeholder.md")
+		f.Title, f.Body = "A principle "+body, body
+		f.Type = fact.Principle
+		f.Confidence, f.Sources, f.Domain = 0.9, 1, []string{"global"}
+		out, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		return out
+	}
 	const legacy, a, b = "kb/principles/ui/legacy.md", "kb/principles/ui/a.md", "kb/principles/ui/b.md"
 	const branch = "agent/test"
 	// Written by the repository's init, where no rule runs: legacy content.
 	require.NoError(t, svc.InitRepo(ctx, map[string]string{
 		fact.OntologyFile: string(ontYAML),
 		legacy:            principle("legacy"),
-		a:                 principle("a"),
-		b:                 principle("b"),
+		a:                 epiPrinciple("a"),
+		b:                 epiPrinciple("b"),
 	}, branch))
 	read := func(p string) string {
 		res, err := svc.Facts().ReadFact(ctx, branch, p, nil)
