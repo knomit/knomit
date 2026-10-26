@@ -437,7 +437,9 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // text but lends it its metadata; the fix for that is the floor, not this rule.
 //
 // When the statements are equal, newFactWins decides as before, and then it
-// only picks whose kind, type, origin, expires, context and motif order win.
+// only picks whose title, body, expires, context and motif order win (and the
+// origin, when the types agree). The stored kind and type, and with a differing
+// type the stored origin, are kept whoever wins (mergeFacts, typeKept).
 func incomingIdentityWins(newFact, existing fact.Fact) bool {
 	if absorbedHypothesis(newFact, existing) {
 		return false
@@ -456,13 +458,14 @@ func absorbedHypothesis(newFact, existing fact.Fact) bool {
 }
 
 // typeKept reports whether a dedup merge kept the stored fact's type although
-// the incoming fact's identity won: the types differ and the text is the same,
-// so the incoming type is the only thing the merge declined to take. When the
-// existing fact won outright, or the incoming one is an absorbed hypothesis,
-// their own notes already say what was kept, so this is false.
+// the incoming fact stated the same thing in a different type, whichever side
+// won the identity tiebreak: the caller's type was not applied and must be told
+// so. A different statement is excluded (existing text wins and
+// statementNotAppliedNotes reports it), and so is an absorbed hypothesis, whose
+// own note replaces this one.
 func typeKept(newFact, existing fact.Fact) bool {
-	return newFact.Type != existing.Type && !absorbedHypothesis(newFact, existing) &&
-		incomingIdentityWins(newFact, existing)
+	return newFact.Type != existing.Type && sameStatement(newFact, existing) &&
+		!absorbedHypothesis(newFact, existing)
 }
 
 // sameStatement reports whether a and b have the same title and body, ignoring
@@ -537,16 +540,22 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	}
 	merged.Title = winner.Title
 	merged.Body = winner.Body
-	// A MERGE NEVER CHANGES THE STORED FACT'S TYPE. Kind goes with it: every
-	// type belongs to exactly one kind, so keeping the type and taking the
-	// incoming kind would write an invalid pair. The winner still decides the
-	// rest of the identity; with identical text a differing type is the only
-	// thing the incoming side could have changed, and knomit_update is the
-	// verb for that (typeKept).
+	// A MERGE NEVER CHANGES THE STORED FACT'S TYPE. Kind and origin go with
+	// it: every type belongs to exactly one kind, and origin is coupled to type
+	// (Origin.ValidateForType: distilled is reserved for synthesis, discovered
+	// for synthesis or hypothesis), so taking the winner's kind or origin onto
+	// the stored type would write an invalid pair or reattribute pipeline output
+	// (merge_versions.go moves the three together). When the types agree the
+	// winner's origin wins as before. With identical text a differing type is the
+	// one thing the incoming side could have changed; knomit_update is the verb
+	// for that (typeKept).
 	merged.Kind = existing.Kind
 	merged.Type = existing.Type
-	// The winner's identity wins, so its origin wins too.
-	merged.Origin = winner.Origin
+	if newFact.Type == existing.Type {
+		merged.Origin = winner.Origin
+	} else {
+		merged.Origin = existing.Origin
+	}
 	// And its expiry: a merge never invents, inherits or pools one. When the
 	// existing fact wins, an incoming explicit expires is NOT applied — the
 	// handler says so in its result (expiresNotAppliedNotes) rather than
