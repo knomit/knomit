@@ -493,7 +493,7 @@ func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, s
 // matched, returning the fact to write at the EXISTING path.
 //
 // The merge is asymmetric by design: the winner (see incomingIdentityWins) contributes
-// the identity — title, body, kind, type, origin — while the metadata is
+// the identity — title, body, expires, context — while the metadata is
 // always pooled, because both facts are evidence of the same thing. Confidence
 // takes the max rather than the winner's, and sources add WHEN the incoming fact brings a novel ref (#361): two independent
 // observations of one fact are worth more than either alone. Motifs are the
@@ -545,14 +545,21 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	// (Origin.ValidateForType: distilled is reserved for synthesis, discovered
 	// for synthesis or hypothesis), so taking the winner's kind or origin onto
 	// the stored type would write an invalid pair or reattribute pipeline output
-	// (merge_versions.go moves the three together). When the types agree the
-	// winner's origin wins as before. With identical text a differing type is the
-	// one thing the incoming side could have changed; knomit_update is the verb
-	// for that (typeKept).
+	// (merge_versions.go moves the three together). With identical text a
+	// differing type is the one thing the incoming side could have changed;
+	// knomit_update is the verb for that (typeKept).
+	//
+	// ORIGIN IS LAST-WINS (user ruling): when the types agree, the merged origin
+	// is the INCOMING fact's, whichever side won on confidence or identity,
+	// because the incoming fact is the newest. An unset incoming origin is
+	// resolved first (ResolvedOrigin: authored, or distilled for synthesis), so
+	// the result equals the caller having sent that value explicitly. The ONE
+	// exception is a differing type, where the stored type is kept and the
+	// stored origin must stay valid for it (Origin.ValidateForType).
 	merged.Kind = existing.Kind
 	merged.Type = existing.Type
 	if newFact.Type == existing.Type {
-		merged.Origin = winner.Origin
+		merged.Origin = newFact.ResolvedOrigin()
 	} else {
 		merged.Origin = existing.Origin
 	}

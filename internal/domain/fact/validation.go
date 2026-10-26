@@ -41,7 +41,7 @@ func compileRules(topic string, rules []Validation) ([]compiledRule, error) {
 //
 // Two fields are exposed as their RESOLVED value rather than the raw one —
 // origin and motifs — because ValidateFact runs before SerializeFact and both
-// are rewritten there. See resolvedOrigin and resolvedMotifs.
+// are rewritten there. See Fact.ResolvedOrigin and resolvedMotifs.
 //
 // Every field of Fact is exposed, keyed by its json tag, with one deliberate
 // exception: RefWarnings. That field is derived on read and never stored, and
@@ -68,7 +68,7 @@ func factToJS(f Fact) map[string]any {
 		"path":            f.Path(),
 		"confidence":      f.Confidence,
 		"sources":         f.Sources,
-		"origin":          string(resolvedOrigin(f)),
+		"origin":          string(f.ResolvedOrigin()),
 		"evidence_weight": f.EvidenceWeight,
 		"expires":         f.Expires,
 		// F22: a copy, so a rule cannot mutate the fact; {} when absent, so
@@ -88,7 +88,7 @@ func contextForJS(ctx map[string]any) map[string]any {
 }
 
 // resolvedMotifs is the motif list a rule sees: the value that will actually
-// land on disk, never the raw field — the same discipline resolvedOrigin
+// land on disk, never the raw field — the same discipline Fact.ResolvedOrigin
 // applies below, for the same reason.
 //
 // ValidateFact runs BEFORE SerializeFact, and SerializeFact silently drops
@@ -99,8 +99,10 @@ func contextForJS(ctx map[string]any) map[string]any {
 // here keeps the rule sandbox and the on-disk fact telling one story.
 func resolvedMotifs(f Fact) []string { return StripSubjectMotifs(f) }
 
-// resolvedOrigin is the origin a rule sees: the value that will actually land
-// on disk, never the raw field.
+// ResolvedOrigin is the origin that lands on disk and reads back, never the raw
+// field: the explicit value, or the type's default when unset (authored;
+// distilled for synthesis). Rules see this value, and a learn dedup merge
+// resolves the incoming origin through it.
 //
 // The two write paths disagree about whether Origin is set by the time
 // ValidateFact runs. knomit_learn deliberately leaves it empty when the caller
@@ -116,7 +118,7 @@ func resolvedMotifs(f Fact) []string { return StripSubjectMotifs(f) }
 // ParseFact and SerializeFact rather than restating their rule — the drift
 // between two independent expressions of that default is what once
 // round-tripped authored synthesis facts into distilled.
-func resolvedOrigin(f Fact) Origin {
+func (f Fact) ResolvedOrigin() Origin {
 	if f.Origin != "" {
 		return f.Origin
 	}
