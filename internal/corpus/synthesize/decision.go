@@ -586,6 +586,9 @@ func ApplyReflectDecisions(
 	}
 
 	branch := sess.Branch
+	// written is facts.Settlements.Written, read lazily the first time a
+	// transition turns out to be deleted.
+	var written map[string][]string
 
 	// files accumulates everything to commit in this reflect application —
 	// proposed methodology facts plus reinforced transition facts (with
@@ -654,10 +657,15 @@ func ApplyReflectDecisions(
 			// the live facts the deleting commit wrote that cite it. With
 			// none, skip this transition with one warning; reflect must not
 			// fail whole on a deleted path.
-			citers, err := livingCiters(ctx, gs, sysFiles, branch, since, tp, localRepoID)
-			if err != nil {
-				return fmt.Errorf("reinforce[%d]: %w", i, err)
+			if written == nil && sysFiles != nil {
+				// ONE walk per call, however many transitions were deleted.
+				st, err := sysFiles.SettlementsSince(ctx, branch, since)
+				if err != nil {
+					return fmt.Errorf("reinforce[%d]: %w", i, err)
+				}
+				written = st.Written
 			}
+			citers := livingCiters(ctx, gs, branch, written[tp], tp, localRepoID)
 			if len(citers) == 0 {
 				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("reinforce[%d]: transition %s was deleted and no live fact written with its deletion cites it; skipped", i, tp)})
 				continue
@@ -972,15 +980,7 @@ func memberExpiries(ctx context.Context, gs *facts.Index, branch string, paths [
 
 // livingCiters returns the live facts written in the commit that deleted path
 // whose refs cite it.
-func livingCiters(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, branch, since, path, localRepoID string) ([]string, error) {
-	if sysFiles == nil {
-		return nil, nil
-	}
-	st, err := sysFiles.SettlementsSince(ctx, branch, since)
-	if err != nil {
-		return nil, err
-	}
-	peers := st.Written[path]
+func livingCiters(ctx context.Context, gs *facts.Index, branch string, peers []string, path, localRepoID string) []string {
 	want := fact.ClassifyRef(path, localRepoID).Path
 	var out []string
 	for _, p := range peers {
@@ -999,5 +999,5 @@ func livingCiters(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, br
 			}
 		}
 	}
-	return out, nil
+	return out
 }

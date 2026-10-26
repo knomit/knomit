@@ -857,7 +857,12 @@ func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.Pipeli
 
 	switch item.StepType {
 	case "reflect":
-		since, _ := d.Pipeline.GetPipelineWatermark(ctx, step.ReviewTool, branch)
+		since, err := d.Pipeline.GetPipelineWatermark(ctx, step.ReviewTool, branch)
+		if err != nil {
+			// Not a fallback to a whole-history walk: a deleted transition
+			// would be matched against an unbounded range.
+			return step.Wrapf(step.ReviewTool, err, "apply reflect: read the review watermark")
+		}
 		if err := ApplyReflectDecisions(ctx, d.Facts, d.Files, d.Search, *dec.reflect, sess, since, fact.ID12(d.RI.ID()),
 			d.RI.OntologyRoot(), reflectNoveltyThreshold(model.EmbedderThresholds(d.RI.Embedder()).ReflectNovelty), d.OnProgress); err != nil {
 			return step.Wrapf(step.ReviewTool, err, "apply reflect")

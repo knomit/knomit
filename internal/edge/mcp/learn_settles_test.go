@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/model"
 )
@@ -235,4 +236,29 @@ func TestLearnDedup_SecondMatcherOfAConsumedFactGetsANote(t *testing.T) {
 		settledFact("notes", "a", "Same claim", "observation"),
 		settledFact("notes", "a", "Same claim", "observation"))
 	require.Contains(t, settledNotesOf(res), "fact 1: matched "+existing+", already taken by fact 0 in this call.")
+}
+
+// SettlementsSince after a NON-FF experiment commit: the merge commit is not
+// diffed, the experiment's own settling commit is, so Written[hyp] is exactly
+// the settling fact and not the whole experiment diff (an earlier, unrelated
+// experiment fact stays out).
+//
+// SABOTAGE: diff merge commits too in SettlementsSince (drop the NumParents
+// guard) → Written[hyp] also lists the earlier fact → red.
+func TestSettlementsSince_WrittenAfterANonFFExperimentCommit(t *testing.T) {
+	ri, ctx, emb := newDedupAttrRepo(t)
+	hyp := seedHyp(t, ctx, emb, "inbox", "a", "Prediction A")
+	branch := openTestExperiment(t, ri, "settling")
+	ectx := repos.WithBinding(ctx, repos.NewBindingOfRepo(ri, branch))
+	settledLearn(t, ectx, emb, "early", nil, settledFact("inbox", "e", "Early exp fact", "observation"))
+	obs := settledWritten(t, settledLearn(t, ectx, emb, "settle", nil, withSettles(settledFact("inbox", "b", "Obs", "observation"), hyp, "refuted")))[0]
+	settledLearn(t, ctx, emb, "side", nil, settledFact("inbox", "z", "Unrelated", "observation")) // diverge: non-FF
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, err := svc.Merge().CommitExperiment(context.Background(), "settling", nil)
+		require.NoError(t, err)
+		st, err := svc.FactsRepo().SettlementsSince(context.Background(), "agent/test", "")
+		require.NoError(t, err)
+		require.Equal(t, []string{obs}, st.Written[hyp])
+		require.Equal(t, "refuted", st.Outcomes[hyp])
+	}))
 }

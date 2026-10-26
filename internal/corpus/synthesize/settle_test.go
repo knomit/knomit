@@ -423,3 +423,18 @@ func TestApplyReflectDecisions_OnlyACiterOfTheDeletedTransitionIsReinforced(t *t
 	require.Contains(t, strings.Join(refsOf(t, svc, branch, setO), " "), meth)
 	require.NotContains(t, strings.Join(refsOf(t, svc, branch, other), " "), meth, "a fact that does not cite the transition is not reinforced")
 }
+
+// A watermark read that fails stops the reflect apply; it must not fall back
+// to a whole-history walk.
+//
+// SABOTAGE: restore `since, _ :=` at the reflect Apply call site → the error
+// is dropped and the test goes red.
+func TestReviewStrategyApply_ReflectStopsOnAWatermarkError(t *testing.T) {
+	svc, branch := seedSettle(t)
+	d := step.Deps{Facts: svc.Facts(), Files: svc.FactsRepo(), Search: svc.Search(), Pipeline: svc.Pipeline()}
+	require.NoError(t, svc.Close())
+	err := reviewStrategy{}.Apply(context.Background(), d, &model.PipelineSession{Branch: branch},
+		&model.PipelineWorkItem{StepType: "reflect"}, &itemDecision{reflect: &step.ReflectResult{}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "review watermark")
+}
