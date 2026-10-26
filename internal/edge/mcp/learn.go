@@ -439,7 +439,20 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // When the statements are equal, newFactWins decides as before, and then it
 // only picks whose kind, type, origin, expires, context and motif order win.
 func incomingIdentityWins(newFact, existing fact.Fact) bool {
+	if absorbedHypothesis(newFact, existing) {
+		return false
+	}
 	return sameStatement(newFact, existing) && newFactWins(newFact, existing)
+}
+
+// absorbedHypothesis reports whether an incoming hypothesis is folding into a
+// stored fact that is NOT a hypothesis. A dedup merge never turns a stored
+// observation (or any other non-hypothesis type) into a prediction: the stored
+// fact keeps its whole identity and confidence, and the incoming hypothesis is
+// absorbed. A prediction is not evidence, so it neither raises the stored
+// confidence nor adds sources (mergeCorroborates already refuses the latter).
+func absorbedHypothesis(newFact, existing fact.Fact) bool {
+	return newFact.Type == fact.Hypothesis && existing.Type != fact.Hypothesis
 }
 
 // sameStatement reports whether a and b have the same title and body, ignoring
@@ -537,6 +550,9 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	// so the two cannot drift.
 	merged.Motifs = fact.MergeMotifs(winner.Motifs, loser.Motifs)
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
+	if absorbedHypothesis(newFact, existing) {
+		merged.Confidence = existing.Confidence
+	}
 	// SOURCES COUNT CORROBORATION, NOT RE-READS (#361). The incoming count is
 	// added to the EXISTING count — whichever fact won the identity tiebreak —
 	// only when the incoming fact is not a hypothesis and cites a ref the
@@ -924,6 +940,10 @@ func applyDedupMerge(
 		}
 		if f.Type == fact.Hypothesis && existingFact.Type == fact.Hypothesis {
 			hypMerged[i] = hypothesisMergeNote(i, match.Path, f, existingFact)
+		}
+		if absorbedHypothesis(f, existingFact) {
+			hypMerged[i] = fmt.Sprintf("fact %d: incoming hypothesis absorbed by %s %s; type kept; confidence kept at %g; sources unchanged.",
+				i, existingFact.Type, match.Path, existingFact.Confidence)
 		}
 		if incomingIdentityWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
