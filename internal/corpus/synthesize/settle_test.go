@@ -326,7 +326,7 @@ func TestOutcomesSince(t *testing.T) {
 	head, err := svc.HeadCommit(ctx, branch)
 	require.NoError(t, err)
 
-	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/p1.md", Outcome: "confirmed"}, {Path: "kb/x/p2.md", Outcome: "refuted"}}), "two")
+	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/p2.md", Outcome: "refuted"}, {Path: "kb/x/p1.md", Outcome: "confirmed"}}), "two")
 	write(model.WithOutcomes(ctx, []model.Outcome{{Path: "kb/x/p1.md", Outcome: "refuted"}}), "resettle")
 	write(model.WithTrailers(ctx, model.Trailers{Extra: []model.TrailerEntry{{Key: model.TrailerOutcome, Value: "kb/x/p3.md maybe"}}}), "garbage")
 
