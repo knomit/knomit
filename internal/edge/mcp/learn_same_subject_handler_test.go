@@ -551,7 +551,7 @@ func TestLearnHandler_PipelineOriginExemptWithoutRefs(t *testing.T) {
 // Before 9d both gates passed it: the merge could not see it, and the band
 // excluded it for being at or above Dedup. Measured pairs that fell through:
 // Coursera Project Helix 0.8752, Forethought nightwatchman 0.8384,
-// TPUv7 Ironwood 0.9179 (band on the shipped model is (0.69, 0.82)).
+// TPUv7 Ironwood 0.9179 (band on the shipped model was then (0.69, 0.82)).
 func TestLearnHandler_RefusesCrossCategoryCollisionAboveDedup(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {

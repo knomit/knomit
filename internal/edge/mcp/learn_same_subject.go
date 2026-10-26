@@ -329,6 +329,13 @@ func (e *sameSubjectRefusal) Error() string {
 // commit. Counting is a structured log event instead, carrying the band and
 // model actually in force so a later re-tune is evidence-based.
 //
+// RULING (#638): a candidate inside the merge's own scope (inMergeScope) and
+// below Dedup is NOT refused. The merge declined it, so it is a sibling: the
+// fact is written at its own path and the closest such neighbour is returned
+// (nearNeighbour) for a response note and a one-line commit message. Only
+// candidates outside that scope, or at or above Dedup, are refused. The band
+// edges are the existing derived thresholds; no new cosine is introduced.
+//
 // Every failure mode fails OPEN. A refusal is a hard block on the caller, so an
 // infrastructure error, an absent embedder, or a model with no calibrated band
 // must let the write through — the same direction applyDedupMerge takes when
@@ -346,7 +353,7 @@ func checkSameSubjectCollisions(
 	vecs [][]float32,
 	emb model.BatchEmbedder,
 	retracting map[string]bool,
-) error {
+) ([]nearNeighbour, error) {
 	// distinct_from is validated even when nothing would have been refused: a
 	// caller naming a path that does not exist has checked nothing, and
 	// silently accepting it would let a typo become a permanent bypass. This
@@ -356,10 +363,10 @@ func checkSameSubjectCollisions(
 		for _, p := range in.DistinctFrom {
 			exists, err := s.facts.FactExists(ctx, branch, p)
 			if err != nil {
-				return fmt.Errorf("fact %d: distinct_from %s: %v", i, p, err)
+				return nil, fmt.Errorf("fact %d: distinct_from %s: %v", i, p, err)
 			}
 			if !exists {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"fact %d: distinct_from names %s, which does not exist on this branch; "+
 						"name only paths returned by a refusal or by knomit_query", i, p)
 			}
@@ -373,7 +380,7 @@ func checkSameSubjectCollisions(
 	// geometry would apply.
 	if emb == nil {
 		log.Info().Msg("learn: same-subject gate off, embeddings disabled")
-		return nil
+		return nil, nil
 	}
 	modelID := emb.ID()
 	// (2) No calibrated band for the model actually running. The band is read
@@ -397,22 +404,23 @@ func checkSameSubjectCollisions(
 	if !ok {
 		log.Warn().Str("model", modelID).
 			Msg("learn: same-subject gate off, no calibrated thresholds for this embedding model")
-		return nil
+		return nil, nil
 	}
 	if len(vecs) == 0 {
 		// An embedder exists but the batch embed failed; dedupEmbed already
 		// warned. Without vectors there is nothing to compare.
-		return nil
+		return nil, nil
 	}
 
 	total, err := s.factQuery.LiveFactCount(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Msg("learn: same-subject gate skipped, corpus size unavailable")
-		return nil
+		return nil, nil
 	}
 	ceiling := dfCeilingForFacts(total)
 
 	var refusals []refusedFact
+	var nears []nearNeighbour
 	for i := range facts {
 		// An artifact is not knowledge, has no subject to collide on, and is
 		// unindexed — the search would return nothing anyway.
@@ -456,6 +464,7 @@ func checkSameSubjectCollisions(
 			continue
 		}
 		kept := candidates[:0:0]
+		var near *sameSubjectCandidate
 		for _, c := range candidates {
 			// Two bypasses, logged separately so each one's rate is readable on
 			// its own. The refs limb is the cheaper escape — any caller can add
@@ -470,11 +479,23 @@ func checkSameSubjectCollisions(
 				logBypass(i, c, th, modelID, "learn: same-subject candidate bypassed by distinct_from")
 			case citedIn(f.Refs, c.Path):
 				logBypass(i, c, th, modelID, "learn: same-subject candidate skipped, already cited in refs")
+			case inMergeScope(c.Path, categoryDirOf(paths[i])) && c.Similarity < th.Dedup:
+				// Inside the merge's own scope and below its floor: the
+				// merge declined this pair, so it is a sibling, not a
+				// restatement. Written, never refused; the closest one is
+				// reported so the caller can knomit_update instead.
+				if near == nil || c.Similarity > near.Similarity {
+					c := c
+					near = &c
+				}
 			default:
 				kept = append(kept, c)
 			}
 		}
 		if len(kept) == 0 {
+			if near != nil {
+				nears = append(nears, nearNeighbour{Index: i, Candidate: *near})
+			}
 			continue
 		}
 		log.Info().
@@ -488,9 +509,62 @@ func checkSameSubjectCollisions(
 		refusals = append(refusals, refusedFact{Index: i, Title: f.Title, Candidates: kept})
 	}
 	if len(refusals) == 0 {
-		return nil
+		return nears, nil
 	}
-	return &sameSubjectRefusal{refused: refusals}
+	return nil, &sameSubjectRefusal{refused: refusals}
+}
+
+// nearNeighbour is the closest same-subject sibling, inside learn's merge scope
+// and below Dedup, of the fact at Index. It is reported, not refused.
+type nearNeighbour struct {
+	Index     int
+	Candidate sameSubjectCandidate
+}
+
+// inMergeScope reports whether an existing fact sits where applyDedupMerge
+// searches: the raw, case-insensitive prefix of the incoming fact's category
+// directory (categoryDirOf is the one definition of that directory). It is
+// deliberately the merge's reach, not the gate's narrower exact-directory cap.
+// It reaches descendants and prefix siblings, never a parent. One known
+// narrowing: the merge's LIKE treats "_" as a wildcard and this does not, so
+// such a candidate is refused rather than written (the safe direction).
+func inMergeScope(candidatePath, categoryDir string) bool {
+	if categoryDir == "" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(candidatePath), strings.ToLower(categoryDir))
+}
+
+// nearNotes is the one short line per fact the learn response carries for a
+// near neighbour: path, cosine, and the way out.
+func nearNotes(nears []nearNeighbour) []string {
+	var out []string
+	for _, n := range nears {
+		out = append(out, fmt.Sprintf(
+			"fact %d: near %s (%.2f); if it states the same claim, fold it into that fact with knomit_update and retract this one.",
+			n.Index, n.Candidate.Path, n.Candidate.Similarity))
+	}
+	return out
+}
+
+// nearCommitLine is the single short commit-message line for the same
+// neighbours, e.g. "near: kb/x/y/abc.md (0.86)". Empty when there are none.
+func nearCommitLine(nears []nearNeighbour) string {
+	if len(nears) == 0 {
+		return ""
+	}
+	// One line however many facts have neighbours; a neighbour shared by
+	// several facts is listed once.
+	var parts []string
+	seen := map[string]bool{}
+	for _, n := range nears {
+		if seen[n.Candidate.Path] {
+			continue
+		}
+		seen[n.Candidate.Path] = true
+		parts = append(parts, fmt.Sprintf("%s (%.2f)", n.Candidate.Path, n.Candidate.Similarity))
+	}
+	return "near: " + strings.Join(parts, ", ")
 }
 
 func logBypass(i int, c sameSubjectCandidate, th modelparams.Thresholds, modelID, msg string) {

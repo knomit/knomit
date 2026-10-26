@@ -563,7 +563,7 @@ func dedupThresholdFor(cfg QualityConfig) (float64, bool) {
 	}
 	// UNKNOWN, not defaulted (review finding M-5). params.Defaults() is nomic's
 	// geometry; every corpus in this campaign is embeddinggemma, whose Dedup is
-	// 0.82 against the default 0.92. Returning the default here made
+	// 0.905 against the default 0.95. Returning the default here made
 	// `calibrate --kind motif` — which opens a store with no embedder — report
 	// OverDedup 0.000 for a pair genuinely above its corpus's own gate, breaking
 	// the one direction OverDedup's doc promises is safe.

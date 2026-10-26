@@ -21,7 +21,8 @@ import (
 // Three preconditions must all hold, and the fixture asserts each rather than
 // arranging them silently:
 //   1. the existing fact carries a stored evidence_weight;
-//   2. the incoming fact WINS newFactWins (higher confidence);
+//   2. the incoming fact WINS incomingIdentityWins (the same statement, higher
+//      confidence);
 //   3. the incoming fact OMITS origin — which the learn schema tells agents to
 //      do — so the merged Origin is empty and computeEvidenceWeights, which
 //      gates on the RAW field, skips the fact instead of restamping it.
@@ -56,9 +57,12 @@ func TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight(t *testing.T) {
 	existingTitle := "Weighted synthesis"
 	existingBody := lenMatched(t, existingTitle, "the corpus already holds this claim", targetLen)
 
+	// A motif on each side makes the winner visible: motifs union
+	// WINNER-first, and the two facts otherwise state the same thing.
+	seed := strings.Replace(weightedFactContent(t, existingTitle, existingBody, 0.5, 0.8),
+		"refs: []\n", "refs: []\nmotifs: [existing-shape]\n", 1)
 	_, err := svc.Facts().WriteFact(bg, "agent/test", weightedExistingPath,
-		weightedFactContent(t, existingTitle, existingBody, 0.5, 0.8),
-		"seed a weighted synthesis fact", "test")
+		seed, "seed a weighted synthesis fact", "test")
 	require.NoError(t, err)
 
 	// PRECONDITION 1, asserted: the stored file really carries a weight.
@@ -67,10 +71,11 @@ func TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight(t *testing.T) {
 	require.Contains(t, stored.Content, "evidence_weight: 0.8",
 		"fixture: the existing fact must carry a stored weight, or this test measures nothing")
 
-	// The incoming fact: same embedding bucket (same length), HIGHER
-	// confidence so it wins, and no origin key at all.
-	incomingTitle := "Weighted synthesis restated"
-	incomingBody := lenMatched(t, incomingTitle, "the same claim, said again", targetLen)
+	// The incoming fact: the SAME statement (an incoming identity wins only
+	// then, see incomingIdentityWins), HIGHER confidence so it wins, and no
+	// origin key at all.
+	incomingTitle := existingTitle
+	incomingBody := existingBody
 
 	var req mcpgo.CallToolRequest
 	req.Params.Arguments = map[string]any{
@@ -87,6 +92,7 @@ func TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight(t *testing.T) {
 				"sources":    1,
 				"entities":   []any{"designer"},
 				"refs":       []any{},
+				"motifs":     []any{"incoming-shape"},
 			},
 		},
 	}
@@ -102,8 +108,8 @@ func TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight(t *testing.T) {
 
 	merged, err := svc.Facts().ReadFact(bg, "agent/test", weightedExistingPath, nil)
 	require.NoError(t, err)
-	require.Contains(t, merged.Content, "Weighted synthesis restated",
-		"fixture: the incoming fact must have WON the merge")
+	require.Contains(t, merged.Content, "motifs: [incoming-shape, existing-shape]",
+		"fixture: the incoming fact must have WON the merge (its motif first)")
 
 	require.Contains(t, merged.Content, "evidence_weight:",
 		"a dedup-merge must not erase the existing fact's stored evidence_weight — "+

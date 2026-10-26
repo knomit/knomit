@@ -96,19 +96,23 @@ func TestLearnHandler_DistinctFromKeepsCounterHypothesisSeparate(t *testing.T) {
 
 // (b) WITHOUT distinct_from the counter still merges (the merge stage is not
 // switched off), and the response says which prediction was kept and which
-// DROPPED, in notes and in summary. When the counter is the more confident,
-// the ORIGINAL was dropped and the seed path now holds the counter.
+// DROPPED, in notes and in summary. The counter is a DIFFERENT prediction, so
+// even when it is the more confident the original is kept at the seed path and
+// the counter is the one dropped: a merge never overwrites an existing
+// statement with another (incomingIdentityWins). Before that rule the
+// conf=0.7 row dropped the ORIGINAL and the seed path held the counter.
 //
 // SABOTAGE S5c (the generic note instead of kept/dropped) → red.
 func TestLearnHandler_HypothesisMergeSaysWhatWasDropped(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		for _, tc := range []struct {
 			conf                 float64
+			stored               string
 			kept, dropped        string
 			keptTitle, dropTitle string
 		}{
-			{0.33, "existing", "incoming", "October", "November"},
-			{0.7, "incoming", "existing", "November", "October"},
+			{0.33, "0.55", "existing", "incoming", "October", "November"},
+			{0.7, "0.7", "existing", "incoming", "October", "November"},
 		} {
 			t.Run(fmt.Sprintf("%s/conf=%g", ts.name, tc.conf), func(t *testing.T) {
 				svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, ts.th.Dedup+(1-ts.th.Dedup)*0.5)
@@ -132,6 +136,8 @@ func TestLearnHandler_HypothesisMergeSaysWhatWasDropped(t *testing.T) {
 				require.Contains(t, note, "merged into existing hypothesis "+seed)
 				require.Contains(t, note, "kept the "+tc.kept+" prediction \"Anthropic IPO launch happens in "+tc.keptTitle)
 				require.Contains(t, note, "DROPPED the "+tc.dropped+" prediction \"Anthropic IPO launch happens in "+tc.dropTitle)
+				require.Contains(t, note, "stored at confidence "+tc.stored+";",
+					"the note reports the max of the two confidences the file carries, not the kept side's own")
 				require.Contains(t, note, "distinct_from")
 				require.Contains(t, res.Summary, note, "the summary carries the note too")
 				require.Contains(t, dfRead(t, svc, seed), "# Anthropic IPO launch happens in "+tc.keptTitle)

@@ -58,11 +58,13 @@ func TestEmbeddingGemmaThresholdsAreCooler(t *testing.T) {
 			t.Errorf("embeddinggemma %s = %.3f, must be below nomic %.3f", p.name, p.gemma, p.nom)
 		}
 	}
-	// Dedup must stay inside the validated safety gap (distinct p99 ~0.77,
-	// true near-dup p05 ~0.96): high enough not to merge distinct facts, low
-	// enough to still catch real duplicates.
-	if g.Thresholds.Dedup < 0.77 || g.Thresholds.Dedup > 0.95 {
-		t.Errorf("embeddinggemma Dedup %.3f outside calibrated safety gap [0.77, 0.95]", g.Thresholds.Dedup)
+	// Dedup must stay inside the gap measured for #638 (modelparams): above
+	// the highest distinct pair in learn's merge scope (0.8915; the W0g1/W0g2
+	// incident pair is 0.8616) and at or below the synthetic true near-dup
+	// p01 (0.9214): high enough not to merge distinct facts, low enough to
+	// still catch real duplicates.
+	if g.Thresholds.Dedup <= 0.8915 || g.Thresholds.Dedup > 0.9214 {
+		t.Errorf("embeddinggemma Dedup %.3f outside the measured gap (0.8915, 0.9214]", g.Thresholds.Dedup)
 	}
 }
 
