@@ -613,7 +613,8 @@ func ApplyReflectDecisions(
 			return fmt.Errorf("reinforce[%d]: %q is type %q, not methodology", i, e.MethodologyPath, mf.Type)
 		}
 
-		for _, tp := range e.TransitionPaths {
+		// stage binds the methodology to one live fact.
+		stage := func(tp string) error {
 			tr, err := gs.ReadFact(ctx, branch, tp, nil)
 			if err != nil {
 				return fmt.Errorf("reinforce[%d]: transition fact %q not found: %w", i, tp, err)
@@ -632,6 +633,36 @@ func ApplyReflectDecisions(
 				factsByPath[tf.Path()] = tf
 				refsByPath[tf.Path()] = tf.Refs
 				priorRefsByPath[tf.Path()] = before
+			}
+			return nil
+		}
+		for _, tp := range e.TransitionPaths {
+			live, err := gs.FactExists(ctx, branch, tp)
+			if err != nil {
+				return fmt.Errorf("reinforce[%d]: transition fact %q: %w", i, tp, err)
+			}
+			if live {
+				if err := stage(tp); err != nil {
+					return err
+				}
+				continue
+			}
+			// A settled or retracted hypothesis is a deleted path: reinforce
+			// the live facts the deleting commit wrote that cite it. With
+			// none, skip this transition with one warning; reflect must not
+			// fail whole on a deleted path.
+			citers, err := livingCiters(ctx, gs, sysFiles, branch, tp, localRepoID)
+			if err != nil {
+				return fmt.Errorf("reinforce[%d]: %w", i, err)
+			}
+			if len(citers) == 0 {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("reinforce[%d]: transition %s was deleted and no live fact written with its deletion cites it; skipped", i, tp)})
+				continue
+			}
+			for _, c := range citers {
+				if err := stage(c); err != nil {
+					return err
+				}
 			}
 		}
 		onProgress(step.ProgressEvent{Phase: "detail-reflect-reinforce",
@@ -934,4 +965,35 @@ func memberExpiries(ctx context.Context, gs *facts.Index, branch string, paths [
 		out = append(out, fmt.Sprintf("%s (expires %s)", p, f.Expires))
 	}
 	return out
+}
+
+// livingCiters returns the live facts written in the commit that deleted path
+// whose refs cite it.
+func livingCiters(ctx context.Context, gs *facts.Index, sysFiles *facts.Repo, branch, path, localRepoID string) ([]string, error) {
+	if sysFiles == nil {
+		return nil, nil
+	}
+	peers, err := sysFiles.DeletionPeers(ctx, branch, path)
+	if err != nil {
+		return nil, err
+	}
+	want := fact.ClassifyRef(path, localRepoID).Path
+	var out []string
+	for _, p := range peers {
+		r, err := gs.ReadFact(ctx, branch, p, nil)
+		if err != nil {
+			continue
+		}
+		f, err := fact.ParseFact(p, r.Content)
+		if err != nil {
+			continue
+		}
+		for _, ref := range f.Refs {
+			if c := fact.ClassifyRef(ref, localRepoID); c.Kind == fact.RefLocalFact && c.Path == want {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out, nil
 }

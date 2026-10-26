@@ -334,3 +334,46 @@ func TestOutcomesSince(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"kb/x/p1.md": "refuted", "kb/x/p2.md": "refuted"}, got)
 }
+
+// B2 (r1): reflect names a settled hypothesis as a transition, but the path is
+// deleted. The reinforcement goes to the facts the settling commit wrote that
+// cite it; a deleted path with no such citer is skipped with ONE warning and
+// the rest of the reflect still applies.
+//
+// SABOTAGE: restore the plain ReadFact on every transition (fail on a deleted
+// path), or return no citers from livingCiters → red.
+func TestApplyReflectDecisions_ReinforcesTheCiterOfADeletedTransition(t *testing.T) {
+	ctx := context.Background()
+	const meth = "kb/meta/reasoning/m.md"
+	reflect := func(t *testing.T, svc *store.Service, branch string, paths ...string) []string {
+		writeMethodologyForTest(t, svc, branch, meth, "M", "Body of methodology M")
+		var warns []string
+		err := ApplyReflectDecisions(ctx, svc.Facts(), svc.FactsRepo(), stubSearch(t, svc, nil),
+			step.ReflectResult{Reinforce: []step.ReinforceEntry{{MethodologyPath: meth, TransitionPaths: paths, Rationale: "x"}}},
+			&model.PipelineSession{Branch: branch}, synthtest.BareRefFixture, "kb", reflectTestThreshold,
+			func(e step.ProgressEvent) {
+				if e.Phase == "warn" {
+					warns = append(warns, e.Message)
+				}
+			})
+		require.NoError(t, err)
+		return warns
+	}
+	for _, outcome := range []string{"confirmed", "refuted"} {
+		t.Run(outcome, func(t *testing.T) {
+			svc, branch := seedSettle(t)
+			require.Empty(t, applyPrune(t, svc, branch, step.PruneDecision{Path: setH, Action: "settle", Outcome: outcome, By: []string{setO}}))
+			require.Empty(t, reflect(t, svc, branch, setH))
+			require.Contains(t, strings.Join(refsOf(t, svc, branch, setO), " "), meth, "the citing fact is reinforced")
+		})
+	}
+	t.Run("plain retraction with no citer is skipped, the rest applies", func(t *testing.T) {
+		svc, branch := seedSettle(t)
+		_, err := svc.Facts().DeleteFact(ctx, branch, setH, "retract")
+		require.NoError(t, err)
+		warns := reflect(t, svc, branch, setH, setO)
+		require.Len(t, warns, 1)
+		require.Contains(t, warns[0], setH)
+		require.Contains(t, strings.Join(refsOf(t, svc, branch, setO), " "), meth, "the live transition is still reinforced")
+	})
+}
