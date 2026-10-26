@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { Library } from './Library';
 import { init } from './state';
 import type { AppState } from './state';
@@ -116,6 +116,16 @@ describe('Library rows are memoized — a parent re-render costs zero row render
     const navigate = vi.fn();
     render(<Library state={lensState()} dispatch={dispatch} navigate={navigate} />);
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(ROWS));
+
+    // waitFor resolves on the DOM COMMIT of the first page, which can be a
+    // Scheduler task BEFORE that commit's passive effects run. One of them
+    // (Library's "keep the highlighted lens row tied to the open fact" effect)
+    // calls setSelectedIdx(-1) when no fact is open. A click that lands in that
+    // gap queues setSelectedIdx(5) first; React then flushes the pending
+    // passive effects, whose setSelectedIdx(-1) is queued AFTER it and wins, so
+    // the click's selection is silently discarded and zero rows re-render.
+    // Flush the pending effects so the click starts from a settled tree.
+    await act(async () => {});
 
     const rows = screen.getAllByTestId('lens-item');
     renders.typeIcon = 0;
