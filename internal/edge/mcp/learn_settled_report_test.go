@@ -219,3 +219,43 @@ func TestLearnHandler_SettledHypothesisIsReportedInsideAnExperiment(t *testing.T
 	require.True(t, factExistsOn(t, ri, "agent/test", hyp), "the agent branch still has it")
 	require.Equal(t, agentBefore, headOf(t, ri, "agent/test"))
 }
+
+// `near:` and `settled:` share ONE paragraph, and the trace trailers stay the
+// LAST paragraph on their own.
+//
+// Fact 0 settles a hypothesis in its own category (both unmarked, cosine 1);
+// fact 1 lands in the band of a sibling seed. The hypothesis' entities differ
+// from the sibling's, so the sibling is the only neighbour.
+//
+// SABOTAGE: join the marker lines with "\n\n" (separate paragraphs) → red.
+func TestLearnHandler_NearAndSettledLinesShareOneParagraphBeforeTrailers(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			cos := inBand(ts.th)
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, cos)
+			seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(w0g1Title, w0g1Body(), 0.85, []any{}, nil)))
+			hypFact := func(typ string) map[string]any {
+				f := siblingDecision("Prediction about something else", "Unmarked body.", 0.7, []any{}, nil)
+				f["category"] = "other/hyp"
+				f["type"] = typ
+				f["entities"] = []any{"Elsewhere"}
+				return f
+			}
+			hyp := mergedFactPath(t, dfLearn(t, ctx, emb, hypFact("hypothesis")))
+
+			ctx = model.WithTrailers(ctx, model.Trailers{Trace: "story-1"})
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("both",
+				hypFact("observation"),
+				siblingDecision(w0g2Title, w0g2Body(), 0.85, []any{}, nil)))
+			require.NoError(t, err)
+			require.False(t, r.IsError, resultText(t, r))
+
+			head, err := svc.HeadCommit(context.Background(), "agent/test")
+			require.NoError(t, err)
+			info, _ := commitDiff(t, svc, head)
+			require.Equal(t,
+				fmt.Sprintf("learn: both\n\nnear: %s (%.2f)\nsettled: %s\n\nKnomit-Trace: story-1\n", seed, cos, hyp),
+				info.Message)
+		})
+	}
+}

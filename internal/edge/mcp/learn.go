@@ -942,9 +942,13 @@ func applyDedupMerge(
 			hypMerged[i] = hypothesisMergeNote(i, match.Path, f, existingFact)
 		}
 		if absorbedHypothesis(f, existingFact) {
-			hypMerged[i] = fmt.Sprintf("fact %d: incoming hypothesis absorbed by %s %s; type kept; confidence kept at %g; sources unchanged.",
-				i, existingFact.Type, match.Path, existingFact.Confidence)
+			// ONE note that stands in for statementNotAppliedNotes and the
+			// uncounted note (both skip hypMerged): the stored type and
+			// confidence are kept, AND the incoming prediction was not written.
+			hypMerged[i] = fmt.Sprintf("fact %d: incoming hypothesis %q absorbed by %s %s; stored type and confidence (%g) kept, the prediction was NOT written; to keep it, resubmit with distinct_from: [%q].",
+				i, f.Title, existingFact.Type, match.Path, existingFact.Confidence, match.Path)
 		}
+
 		if incomingIdentityWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
