@@ -51,6 +51,12 @@ func dedupAttrOntology(t *testing.T) *fact.Ontology {
 // applyDedupMerge directly.
 func newDedupAttrRepo(t *testing.T) (*repos.RepoInstance, context.Context, model.BatchEmbedder) {
 	t.Helper()
+	return newDedupAttrRepoWith(t, dedupAttrOntology(t))
+}
+
+// newDedupAttrRepoWith is newDedupAttrRepo over a caller-supplied ontology.
+func newDedupAttrRepoWith(t *testing.T, ont *fact.Ontology) (*repos.RepoInstance, context.Context, model.BatchEmbedder) {
+	t.Helper()
 	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
@@ -62,7 +68,7 @@ func newDedupAttrRepo(t *testing.T) (*repos.RepoInstance, context.Context, model
 		UID:          nextTestRepoUID(),
 		AgentBranch:  "agent/test",
 		Svc:          svc,
-		Ontology:     dedupAttrOntology(t),
+		Ontology:     ont,
 		OntologyRoot: "kb",
 		Embedder:     emb,
 	})
@@ -184,6 +190,80 @@ func TestApplyDedupMerge_LearnDedupOffSkipsSearchKeepsDonation(t *testing.T) {
 	// Private state: no merge, and the donation is dropped.
 	require.False(t, touched[2])
 	require.NotContains(t, embByPath, paths[2], "private state never donates")
+}
+
+// nestedOverrideOntologyYAML flags `flagged` with learn_dedup: off and
+// overrides it back ON on one descendant, flagged/queue/open. A search from
+// flagged/queue is a raw path prefix, so it reaches that unflagged child.
+const nestedOverrideOntologyYAML = `id: t
+name: T
+topics:
+  flagged:
+    description: x
+    attributes:
+      learn_dedup: off
+    children:
+      queue:
+        description: x
+        children:
+          open:
+            description: x
+            attributes:
+              learn_dedup: "on"
+`
+
+// The INCOMING-side learn_dedup: off check, isolated. The incoming fact sits in
+// a flagged topic (flagged/queue); its best match sits in a descendant that
+// overrides the flag back on (flagged/queue/open), so the MATCH-side check
+// does not decline it. Only the incoming-side check stands between this fact
+// and a merge into the child: the same-topic fixture above cannot show that,
+// because there the match-side check declines the same-topic match too.
+//
+// SABOTAGE: delete the incoming-side `if ontology.LearnDedupOff(
+// topicCategories[i]) { ... continue }` block in applyDedupMerge → the fact
+// merges into the child → touched[0] is true and the path is retargeted → red.
+func TestApplyDedupMerge_IncomingSideLearnDedupOffIsolated(t *testing.T) {
+	ont, err := fact.ParseOntology([]byte(nestedOverrideOntologyYAML))
+	require.NoError(t, err)
+	// The fixture must really have the shape the test claims.
+	require.True(t, ont.LearnDedupOff("flagged/queue"), "incoming topic is flagged")
+	require.False(t, ont.LearnDedupOff("flagged/queue/open"), "the child overrides the flag back on")
+	ri, ctx, emb := newDedupAttrRepoWith(t, ont)
+
+	conf, src := 0.8, 1
+	in := func(category string) learnFactInput {
+		return learnFactInput{
+			Topic: "flagged", Category: category,
+			Title: "Task ready for pickup", Body: "A task is ready for an agent to pick up.",
+			Type: "observation", Domain: []string{"queue"}, Confidence: &conf, Sources: &src,
+			Entities: []string{"task-queue"},
+		}
+	}
+	// Seed the match in the unflagged child.
+	seed := settledWritten(t, settledLearn(t, ctx, emb, "seed", nil, map[string]any{
+		"topic": "flagged", "category": "queue/open", "title": "Task ready for pickup",
+		"body": "A task is ready for an agent to pick up.", "type": "observation",
+		"confidence": 0.8, "sources": 1, "domain": []any{"queue"},
+		"entities": []any{"task-queue"}, "refs": []any{},
+	}))[0]
+
+	ont2 := ri.Ontology()
+	facts, tcs, paths, files, err := validateAndBuildFacts(ont2, "kb", []learnFactInput{in("queue")})
+	require.NoError(t, err)
+	require.Equal(t, "flagged/queue", tcs[0])
+	minted := paths[0]
+
+	s, release, err := storeIndices(ri)
+	require.NoError(t, err)
+	defer release()
+	vecs := dedupEmbed(ctx, emb, facts)
+	embByPath, _, _, touched, _, _, _, err := applyDedupMerge(ctx, s, "agent/test", ont2, "kb", emb, vecs, facts, tcs, paths, files, "x", nil, nil)
+	require.NoError(t, err)
+
+	require.False(t, touched[0], "a fact in a flagged topic must not merge, even into an unflagged descendant")
+	require.Equal(t, minted, paths[0], "it keeps its freshly-minted path")
+	require.NotEqual(t, seed, paths[0])
+	require.Contains(t, embByPath, paths[0], "and still donates its vector")
 }
 
 // testRepoService pulls the store back out of a handler ctx.

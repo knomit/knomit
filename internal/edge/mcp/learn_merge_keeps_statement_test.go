@@ -116,10 +116,12 @@ func TestLearnHandler_MergeNeverOverwritesSiblingStatement(t *testing.T) {
 // whitespace on the incoming body pin sameStatement's trim: the incoming body
 // is stored as sent while ParseFact trims the existing one.
 //
+// The incoming identity wins on confidence, yet the stored TYPE is kept (a
+// merge never changes it), so the one note is the type-kept note.
 // SABOTAGE: incomingIdentityWins returning false always (existing always
-// wins) → the merged type stays the existing one's → red on the type check.
-// SABOTAGE: sameStatement without TrimSpace → the suffix rows keep the
-// existing type and gain a statement note → red.
+// wins) → the confidence is still pooled but the type note is gone → red.
+// SABOTAGE: sameStatement without TrimSpace → the suffix rows gain a statement
+// note instead of the type note → red.
 func TestLearnHandler_TrueDuplicateStillSubsumes(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		for _, suffix := range []string{"", "\n", "  \n\n"} {
@@ -141,7 +143,7 @@ func trueDuplicateCase(t *testing.T, modelID string, th modelparams.Thresholds, 
 
 	again := siblingDecision(w0g1Title, w0g1Body()+suffix, 0.9,
 		[]any{"https://github.com/knomit/knomit/pull/616"}, nil)
-	// A visible identity field, so the winner can be read off the file.
+	// A different type, so the merge has a type to decline.
 	again["type"] = "pattern"
 	r := dfLearn(t, ctx, emb, again)
 	require.False(t, r.IsError, resultText(t, r))
@@ -151,12 +153,14 @@ func trueDuplicateCase(t *testing.T, modelID string, th modelparams.Thresholds, 
 
 	got := dfRead(t, svc, seed)
 	require.Contains(t, got, "# "+w0g1Title)
-	require.Contains(t, got, "type: pattern", "the same statement, more confident: the incoming identity wins")
+	require.Contains(t, got, "type: observation", "the stored type is kept")
+	require.NotContains(t, got, "type: pattern")
 	require.Contains(t, got, "confidence: 0.9")
 	require.Contains(t, got, "sources: 2", "a new ref corroborates: sources pool")
 	require.Contains(t, got, "pull/615")
 	require.Contains(t, got, "pull/616")
-	require.Empty(t, readNotes(t, resultText(t, r)).Notes, "nothing was dropped, so nothing to report")
+	require.Equal(t, []string{fmt.Sprintf("fact 0: merged into observation %s; stored type kept (incoming was pattern); use knomit_update to change it.", seed)},
+		readNotes(t, resultText(t, r)).Notes, "the type was kept, and that is the only thing to report")
 }
 
 // incidentCosine is the W0g1/W0g2 pair's cosine, measured for #638 on the

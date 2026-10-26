@@ -437,7 +437,9 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // text but lends it its metadata; the fix for that is the floor, not this rule.
 //
 // When the statements are equal, newFactWins decides as before, and then it
-// only picks whose kind, type, origin, expires, context and motif order win.
+// only picks whose title, body, expires, context and motif order win (and the
+// origin, when the types agree). The stored kind and type, and with a differing
+// type the stored origin, are kept whoever wins (mergeFacts, typeKept).
 func incomingIdentityWins(newFact, existing fact.Fact) bool {
 	if absorbedHypothesis(newFact, existing) {
 		return false
@@ -453,6 +455,17 @@ func incomingIdentityWins(newFact, existing fact.Fact) bool {
 // confidence nor adds sources (mergeCorroborates already refuses the latter).
 func absorbedHypothesis(newFact, existing fact.Fact) bool {
 	return newFact.Type == fact.Hypothesis && existing.Type != fact.Hypothesis
+}
+
+// typeKept reports whether a dedup merge kept the stored fact's type although
+// the incoming fact stated the same thing in a different type, whichever side
+// won the identity tiebreak: the caller's type was not applied and must be told
+// so. A different statement is excluded (existing text wins and
+// statementNotAppliedNotes reports it), and so is an absorbed hypothesis, whose
+// own note replaces this one.
+func typeKept(newFact, existing fact.Fact) bool {
+	return newFact.Type != existing.Type && sameStatement(newFact, existing) &&
+		!absorbedHypothesis(newFact, existing)
 }
 
 // sameStatement reports whether a and b have the same title and body, ignoring
@@ -527,10 +540,22 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	}
 	merged.Title = winner.Title
 	merged.Body = winner.Body
-	merged.Kind = winner.Kind
-	merged.Type = winner.Type
-	// The winner's identity wins, so its origin wins too.
-	merged.Origin = winner.Origin
+	// A MERGE NEVER CHANGES THE STORED FACT'S TYPE. Kind and origin go with
+	// it: every type belongs to exactly one kind, and origin is coupled to type
+	// (Origin.ValidateForType: distilled is reserved for synthesis, discovered
+	// for synthesis or hypothesis), so taking the winner's kind or origin onto
+	// the stored type would write an invalid pair or reattribute pipeline output
+	// (merge_versions.go moves the three together). When the types agree the
+	// winner's origin wins as before. With identical text a differing type is the
+	// one thing the incoming side could have changed; knomit_update is the verb
+	// for that (typeKept).
+	merged.Kind = existing.Kind
+	merged.Type = existing.Type
+	if newFact.Type == existing.Type {
+		merged.Origin = winner.Origin
+	} else {
+		merged.Origin = existing.Origin
+	}
 	// And its expiry: a merge never invents, inherits or pools one. When the
 	// existing fact wins, an incoming explicit expires is NOT applied — the
 	// handler says so in its result (expiresNotAppliedNotes) rather than
@@ -949,6 +974,16 @@ func applyDedupMerge(
 				i, existingFact.Type, match.Path, existingFact.Confidence, match.Path)
 		}
 
+		if typeKept(f, existingFact) {
+			// ONE short note, standing in for the uncounted note (like the
+			// absorbed-hypothesis note above) with its reason kept inside it.
+			hypMerged[i] = fmt.Sprintf("fact %d: merged into %s %s; stored type kept (incoming was %s); use knomit_update to change it.",
+				i, existingFact.Type, match.Path, f.Type)
+			if why := uncounted[i]; why != "" {
+				hypMerged[i] += " Sources unchanged: " + why + "."
+			}
+		}
+
 		if incomingIdentityWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
@@ -1083,6 +1118,19 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			WithFiles(refs.FromSystemFiles(s.files, writeBranch))
 
 		// 1. Parse arguments.
+		// A top-level key the tool does not declare is refused, not ignored,
+		// as every other tool does (rejectUnknownArguments). Ignoring one
+		// dropped a caller's protection and reported success: a top-level
+		// distinct_from left the dedup merge free to fold the fact into the
+		// very path it was meant to keep apart. Before anything is read or
+		// written, so a refused call writes nothing.
+		if err := rejectUnknownArguments(req, learnTool()); err != nil {
+			msg := err.Error()
+			if _, ok := req.GetArguments()["distinct_from"]; ok {
+				msg += "; distinct_from belongs on each fact (facts[i].distinct_from), not at the top level of the call"
+			}
+			return mcpgo.NewToolResultError(msg), nil
+		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
