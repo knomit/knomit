@@ -14,7 +14,7 @@ Fire WHEN any of these occur:
 - **A bug fix exposed a hidden invariant** — the bug only happens when a non-obvious precondition is violated.
 - **You're about to claim X exists** based on a memory or training-data guess — if you had to verify it, that's a discovery worth keeping.
 
-For **predictions** (something that *might* be true but isn't observed yet): write as a fact with `type: hypothesis` instead of `observation`. Hypotheses carry uncertainty and trigger the confirm/retract lifecycle on dedup collisions.
+For **predictions** (something that *might* be true but isn't observed yet): write as a fact with `type: hypothesis` instead of `observation`. Hypotheses carry uncertainty. A later observation that matches one in the merge scope settles it: the hypothesis is retracted in the same commit and the response notes it (name it in `distinct_from` to keep it).
 
 DON'T fire for:
 

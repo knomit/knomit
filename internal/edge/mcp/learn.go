@@ -67,7 +67,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
-		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) outside the category the automatic merge searches (its category and sub-categories) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. Inside that merge scope a similar fact is written at its own path and the response notes the nearest neighbour; if it states the same claim, fold it into that fact with knomit_update and retract this one. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis."),
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) outside the category the automatic merge searches (its category and sub-categories) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. Inside that merge scope a similar fact is written at its own path and the response notes the nearest neighbour; if it states the same claim, fold it into that fact with knomit_update and retract this one. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis. An observation that matches a hypothesis in the merge scope settles it: the hypothesis is retracted in the same commit and the response notes it."),
 		bindingArg(true),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
@@ -698,7 +698,7 @@ func applyDedupMerge(
 	localRepoID string,
 	retracting map[string]bool,
 	distinctFrom [][]string,
-) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, error) {
+) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, map[int]string, map[int]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/domain/modelparams).
 	dedupThreshold := model.EmbedderThresholds(batchEmb).Dedup
 	// dedupVecs is computed by the CALLER now, because the same-subject stage
@@ -721,6 +721,10 @@ func applyDedupMerge(
 	// of the two predictions survives such a merge, so "wrote 1 fact" alone
 	// would hide a lost claim.
 	hypMerged := make(map[int]string)
+	// settled[i] is the hypothesis path that incoming observation i retracts
+	// (subsumeHypothesis). It feeds the response note and the commit line, so
+	// a side-effect delete is reported where the caller reads.
+	settled := make(map[int]string)
 
 	// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to, or
 	// "" to suppress donation (used when the merge kept the EXISTING fact's
@@ -907,9 +911,10 @@ func applyDedupMerge(
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
-				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
 			touched[i] = true
+			settled[i] = match.Path
 			continue
 		}
 
@@ -940,7 +945,7 @@ func applyDedupMerge(
 		// would surface later as an opaque serialize error.
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
-				return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
 		// F22: the merged fact lands at the MATCH's path, which the prefix
@@ -950,7 +955,7 @@ func applyDedupMerge(
 		// where it will live. With no ontology nothing declares a key, so a
 		// winner carrying context is refused rather than written unchecked.
 		if err := fact.ValidateContext(ontology, topicPathOf(ontologyRoot, match.Path), merged.Context); err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
+			return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
 		}
 
 		// Retarget the fact from its freshly-minted path to the existing
@@ -963,7 +968,7 @@ func applyDedupMerge(
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs
 		if err := reserialize(files, match.Path, merged); err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+			return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
 		touched[i] = true
@@ -981,7 +986,7 @@ func applyDedupMerge(
 		}
 		embByPath[donatePaths[i]] = dedupVecs[i]
 	}
-	return embByPath, retract, priorRefs, touched, uncounted, hypMerged, nil
+	return embByPath, retract, priorRefs, touched, uncounted, hypMerged, settled, nil
 }
 
 // computeEvidenceWeights stamps an evidence weight on machine-origin derived
@@ -1164,7 +1169,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		for i, in := range factInputs {
 			distinctFrom[i] = in.DistinctFrom
 		}
-		embByPath, retract, priorRefs, touched, uncounted, hypMerged, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
+		embByPath, retract, priorRefs, touched, uncounted, hypMerged, settled, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, parsed, topicCategories, paths, files, gate.LocalRepoID(), retracting, distinctFrom)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -1242,8 +1247,17 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			operation = "retract"
 		}
 		commitMsg := fmt.Sprintf("%s: %s", operation, momentName)
+		// Short marker lines, then the trailers (AppendTrailers adds those as
+		// the last paragraph).
+		var markers []string
 		if line := nearCommitLine(nears); line != "" {
-			commitMsg += "\n\n" + line
+			markers = append(markers, line)
+		}
+		if line := settledCommitLine(settled); line != "" {
+			markers = append(markers, line)
+		}
+		if len(markers) > 0 {
+			commitMsg += "\n\n" + strings.Join(markers, "\n")
 		}
 		deletes := retract
 		for _, p := range retractPaths {
@@ -1295,6 +1309,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		notes = append(notes, contextNotAppliedNotes(builtContext, parsed)...)
 		notes = append(notes, uncountedMergeNotes(uncounted, hypMerged, parsed)...)
 		notes = append(notes, statementNotAppliedNotes(built, parsed, hypMerged)...)
+		notes = append(notes, settledNotes(settled, parsed)...)
 		notes = append(notes, nearNotes(nears)...)
 		if len(notes) > 0 {
 			result["notes"] = notes
@@ -1306,6 +1321,46 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
+}
+
+// settledNotes is one short note per incoming fact that retracted a stored
+// hypothesis as a side effect (subsumeHypothesis). The trigger is similarity,
+// not a verdict, so the wording is "settled", never "confirmed". The undo is a
+// re-learn with distinct_from: knomit_update cannot restore a deleted fact.
+func settledNotes(settled map[int]string, facts []fact.Fact) []string {
+	idx := make([]int, 0, len(settled))
+	for i := range settled {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	var notes []string
+	for _, i := range idx {
+		if i >= len(facts) {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: retracted hypothesis %s (settled by this fact, cited in refs); to keep it, re-learn it with distinct_from: [%s].",
+			i, settled[i], facts[i].Path()))
+	}
+	return notes
+}
+
+// settledCommitLine is the single short commit-message line for the
+// hypotheses a call retracted by subsumption, e.g. "settled: kb/x/y/abc.md".
+func settledCommitLine(settled map[int]string) string {
+	idx := make([]int, 0, len(settled))
+	for i := range settled {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	var paths []string
+	for _, i := range idx {
+		paths = fact.AppendUnique(paths, settled[i])
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return "settled: " + strings.Join(paths, ", ")
 }
 
 // uncountedMergeNotes names every dedup merge that did not add the incoming
