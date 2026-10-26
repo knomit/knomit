@@ -918,7 +918,7 @@ func (reviewStrategy) Apply(ctx context.Context, d step.Deps, sess *model.Pipeli
 		}
 
 	case "distill":
-		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Files, d.Search, dec.distill.Synthesize, dec.distill.Retract, step.ReviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
+		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Files, d.Search, dec.distill.Synthesize, dec.distill.Retract, dec.distill.Settle, step.ReviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return step.Wrapf(step.ReviewTool, err, "apply distill")
 		}
@@ -1216,7 +1216,7 @@ func topKByScore(seen map[string]index.MethodologyMatch, k int) []index.Methodol
 type hypothesisTransition struct {
 	Path         string `json:"path"`
 	OriginalType string `json:"original_type"`
-	Action       string `json:"action"` // "promoted", "retracted", "confidence-updated"
+	Action       string `json:"action"` // "promoted", "retracted", "confirmed", "refuted", "confidence-updated"
 	Detail       string `json:"detail,omitempty"`
 }
 
@@ -1243,6 +1243,16 @@ func findHypothesisTransitions(ctx context.Context, d step.Deps, sess *model.Pip
 
 	var transitions []hypothesisTransition
 
+	// A hypothesis retracted by a settle carries a Knomit-Outcome trailer on
+	// the commit that deleted it (#641): report the verdict, not "retracted".
+	var outcomes map[string]string
+	if len(deleted) > 0 && d.Files != nil {
+		var oerr error
+		if outcomes, oerr = d.Files.OutcomesSince(ctx, branch, watermark); oerr != nil {
+			log.Warn().Err(oerr).Msg("reflect: could not read hypothesis outcomes; reporting retractions without a verdict")
+		}
+	}
+
 	// Check deleted paths — were any hypotheses retracted?
 	for _, path := range deleted {
 		readResult, err := gs.ReadFact(ctx, branch, path, &facts.ReadFactOpts{AtCommit: watermark})
@@ -1254,8 +1264,12 @@ func findHypothesisTransitions(ctx context.Context, d step.Deps, sess *model.Pip
 			continue
 		}
 		if f.Type == fact.Hypothesis {
+			action := "retracted"
+			if o := outcomes[path]; o != "" {
+				action = o
+			}
 			transitions = append(transitions, hypothesisTransition{
-				Path: path, OriginalType: "hypothesis", Action: "retracted",
+				Path: path, OriginalType: "hypothesis", Action: action,
 			})
 		}
 	}

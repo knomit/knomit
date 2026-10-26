@@ -142,7 +142,7 @@ func TestApplyDistillDecisions_SystemFileRefs(t *testing.T) {
 		in = append(in, synth("bad"+string(rune('a'+i)), bad))
 	}
 	sink, warns := synthtest.CollectWarns()
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), in, nil,
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), in, nil, nil,
 		"test", sink, sfSide, sfRepoID, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1, "only the good fact lands: %v", *warns)

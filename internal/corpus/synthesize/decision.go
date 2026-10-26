@@ -91,6 +91,17 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(step.ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
+		case "settle":
+			if err := applyPruneSettle(ctx, gs, mergeGate, agentBranch, recipeName, d, deletedPaths); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: err.Error()})
+				continue
+			}
+			for _, by := range d.By {
+				rewrittenPaths[by] = true
+			}
+			onProgress(step.ProgressEvent{Phase: "detail-retract", Message: "settle " + d.Path + " " + d.Outcome})
+			stats.Pruned++
+
 		case "update":
 			readResult, err := gs.ReadFact(ctx, agentBranch, d.Path, nil)
 			if err != nil {
@@ -372,6 +383,10 @@ func ApplyDistillDecisions(ctx context.Context,
 	idx *index.Facade,
 	synthesized []step.DistillFact,
 	retract []string,
+	// settle lists hypotheses the batch confirms or refutes. Each is retracted
+	// in the SAME commit as the synthesized fact that cites it, which records
+	// the verdict (Knomit-Outcome). One no synthesized fact cites stays.
+	settle []step.HypothesisOutcome,
 	recipeName string,
 	onProgress func(step.ProgressEvent),
 	agentBranch string,
@@ -384,6 +399,7 @@ func ApplyDistillDecisions(ctx context.Context,
 	stats := &step.ReviewStats{}
 	var written []step.DistillFact
 	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
+	settledPaths := make(map[string]bool)
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -452,7 +468,41 @@ func ApplyDistillDecisions(ctx context.Context,
 			continue
 		}
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
-		if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
+		// Hypotheses this fact cites AND the judge settled leave in this very
+		// commit, with the verdict as its trailer.
+		var settledHere []step.HypothesisOutcome
+		cited := make(map[string]bool)
+		for _, p := range step.LocalFactRefPaths(f.Refs, localRepoID) {
+			cited[strings.ToLower(p)] = true
+		}
+		for _, h := range settle {
+			if settledPaths[h.Path] || !cited[strings.ToLower(h.Path)] {
+				continue
+			}
+			if err := readHypothesis(ctx, gs, agentBranch, h.Path); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: "distill settle: " + err.Error()})
+				continue
+			}
+			settledHere = append(settledHere, h)
+		}
+		if len(settledHere) > 0 {
+			var lines, dels []string
+			for _, h := range settledHere {
+				lines = append(lines, settleLine(h.Path, h.Outcome))
+				dels = append(dels, h.Path)
+			}
+			wctx := model.WithOutcomes(ctx, lines)
+			if _, _, err := gs.BatchWriteFacts(wctx, agentBranch, map[string]string{f.Path(): content}, dels, msg, "subsume"); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
+				continue
+			}
+			for _, h := range settledHere {
+				settledPaths[h.Path] = true
+				onProgress(step.ProgressEvent{Phase: "detail-distill-retract", Message: "settle " + h.Path + " " + h.Outcome})
+				stats.Pruned++
+				stats.Retired = append(stats.Retired, h.Path)
+			}
+		} else if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}

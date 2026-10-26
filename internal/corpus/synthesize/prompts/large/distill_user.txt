@@ -65,7 +65,7 @@ A synthesis that is longer than its members combined has copied provenance; a sy
 
 Retract a member only when the new synthesis restates its whole claim and the member's provenance is carried by its refs rather than its body — typically a prior synthesis or a digest. Carry that member's refs into the new synthesis's refs. A member whose body carries its own measurement, date, source, or affected list stays. Zero retractions is the normal outcome over a cluster of observations.
 
-The hypothesis rule below is separate and takes precedence: a hypothesis confirmed by the batch is retracted even though it is not a restatement, because that is a type transition, not subsumption.
+The hypothesis rule below is separate and takes precedence: a hypothesis the batch confirms or refutes is settled, not retracted, though it is not a restatement.
 
 ## When NOT to distill
 
@@ -84,7 +84,7 @@ Most facts instantiate no nameable motif, and that is the normal case — leave 
 ## Hypothesis handling
 
 - Do NOT use hypothesis-type facts as inputs for creating new synthesis facts. Hypotheses are unconfirmed predictions.
-- If a hypothesis is confirmed by other evidence in the batch, retract it and include the hypothesis path in the new synthesis fact's refs.
+- If other evidence in the batch confirms or refutes a hypothesis, put it in `settle` ({"path", "outcome": "confirmed|refuted"}), not `retract`, and cite its path in the synthesis fact's refs.
 - When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `{{.OntologyRoot}}/meta/reasoning/` for methodology-type output (e.g. `{{.OntologyRoot}}/meta/reasoning/descriptive-name.md`).
 
 ## Persistence — origin reflects how this group was formed

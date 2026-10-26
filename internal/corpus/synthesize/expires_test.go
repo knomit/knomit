@@ -104,7 +104,7 @@ func TestApplyDistillDecisions_NewClaimInheritsNoExpires(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil, nil,
 		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)

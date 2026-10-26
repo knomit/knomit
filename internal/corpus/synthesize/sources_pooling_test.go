@@ -53,7 +53,7 @@ func TestApplyDistillDecisions_SourcesIsOne_NotPooled(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md", "kb/technology/c.md"},
 	}
-	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+	stats, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil, nil,
 		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Synthesized)
@@ -84,7 +84,7 @@ func TestApplyDistillDecisions_EvidenceWeightStillPoolsRefs(t *testing.T) {
 		Domain: []string{"technology"}, Confidence: 0.9,
 		Refs: []string{"kb/technology/a.md", "kb/technology/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+	_, written, err := ApplyDistillDecisions(ctx, svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil, nil,
 		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 

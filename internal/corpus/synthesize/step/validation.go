@@ -6,14 +6,17 @@ import (
 	"strings"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/model"
 
 	"github.com/google/uuid"
 )
 
 // validPruneActions is the set of allowed decision actions.
 var validPruneActions = map[string]bool{
-	"keep": true, "retract": true, "update": true,
+	"keep": true, "retract": true, "update": true, "settle": true,
 }
+
+func validOutcome(o string) bool { return o == model.OutcomeConfirmed || o == model.OutcomeRefuted }
 
 // ValidatePrunePaths checks that all decision paths and merge source paths
 // reference facts that were actually sent to the LLM, that actions are valid,
@@ -29,6 +32,22 @@ func ValidatePrunePaths(r PruneResult, inputPaths []string) error {
 		}
 		if !validPruneActions[d.Action] {
 			return fmt.Errorf("decision has unknown action %q for path %q", d.Action, d.Path)
+		}
+		if d.Action == "settle" {
+			if !validOutcome(d.Outcome) {
+				return fmt.Errorf("settle %q: outcome %q must be %q or %q", d.Path, d.Outcome, model.OutcomeConfirmed, model.OutcomeRefuted)
+			}
+			if len(d.By) == 0 {
+				return fmt.Errorf("settle %q: by must name the facts that decide it", d.Path)
+			}
+			for _, b := range d.By {
+				if !valid[b] {
+					return fmt.Errorf("settle %q: by references unknown path %q", d.Path, b)
+				}
+				if b == d.Path {
+					return fmt.Errorf("settle %q: a hypothesis cannot settle itself", d.Path)
+				}
+			}
 		}
 	}
 	for _, m := range r.Merges {
@@ -59,6 +78,21 @@ func ValidateDistillPaths(r DistillResult, inputPaths []string) error {
 	for _, p := range r.Retract {
 		if !valid[p] {
 			return fmt.Errorf("retract references unknown path %q", p)
+		}
+	}
+	retracted := make(map[string]bool, len(r.Retract))
+	for _, p := range r.Retract {
+		retracted[p] = true
+	}
+	for _, h := range r.Settle {
+		if !valid[h.Path] {
+			return fmt.Errorf("settle references unknown path %q", h.Path)
+		}
+		if !validOutcome(h.Outcome) {
+			return fmt.Errorf("settle %q: outcome %q must be %q or %q", h.Path, h.Outcome, model.OutcomeConfirmed, model.OutcomeRefuted)
+		}
+		if retracted[h.Path] {
+			return fmt.Errorf("settle %q is also in retract; a hypothesis is settled or retracted, not both", h.Path)
 		}
 	}
 	return nil

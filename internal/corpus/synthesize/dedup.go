@@ -333,43 +333,55 @@ func dedupCluster(
 			continue
 		}
 
-		// Apply merged fields to the full winner fact.
-		fullWinner.Domain = winnerFact.Domain
-		fullWinner.Entities = winnerFact.Entities
-		fullWinner.Confidence = winnerFact.Confidence
-		fullWinner.Sources = winnerFact.Sources
-		// Motifs are merged HERE rather than in mergeFacts above, because
-		// factForLLM does not carry them — only the full parsed facts do. Same
-		// helper as the learn-time merge: this is the same operation in a second
-		// location, and without it the loser's motifs are simply deleted along
-		// with the loser, losing authored data that no derived state can rebuild.
-		fullWinner.Motifs = fact.MergeMotifs(fullWinner.Motifs, fullLoser.Motifs)
-		// RECOMPUTE the evidence weight from the pooled lineage (#94).
-		//
-		// The merge pools the loser's sources onto the winner two lines above,
-		// and evidence weight is DEFINED as a function of the pooled evidence —
-		// so a weight carried over unchanged describes evidence the surviving
-		// fact no longer has. Not an erasure like the learn path: a stale
-		// number, which is harder to notice and just as wrong.
-		//
-		// computeTransfer is the SAME call ApplyPruneDecisions uses, deliberately.
-		// Two merge paths deriving one field two ways is the "same operation,
-		// two callers, one silently wrong" drift this package keeps hitting;
-		// one mechanism cannot drift from itself. It runs before the loser is
-		// deleted, because it reads both facts.
-		//
-		// Only the WEIGHT is taken. Sources stays with mergeFacts, which owns
-		// the merge rule and whose hypothesis handling
-		// (loserCorroborations) is already pinned by tests; the two agree on
-		// every ordinary pair and disagree only when the WINNER is a
-		// hypothesis, where mergeFacts' answer is the tested one.
-		mergedWeight, _, _ := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID,
-			[]string{winnerFact.File, loserFact.File})
-		fullWinner.EvidenceWeight = mergedWeight
-		// Refs = union of both refs + loser's path, minus the winner's own path
-		// (#280), and — separately — the snapshot of what the two operands
-		// already carried.
-		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, winnerFact.File, loserFact.File, localRepoID)
+		// A hypothesis loser of a non-hypothesis winner is treated as learn's
+		// unjudged subsumption is (#641): the survivor only CITES it, the
+		// hypothesis is retracted in the same commit, and no outcome is
+		// recorded, because nothing judged one. None of its fields transfer.
+		subsumed := fullLoser.Type == fact.Hypothesis && fullWinner.Type != fact.Hypothesis
+
+		var mergedRefs, carriedRefs []string
+		if !subsumed {
+			// Apply merged fields to the full winner fact.
+			fullWinner.Domain = winnerFact.Domain
+			fullWinner.Entities = winnerFact.Entities
+			fullWinner.Confidence = winnerFact.Confidence
+			fullWinner.Sources = winnerFact.Sources
+			// Motifs are merged HERE rather than in mergeFacts above, because
+			// factForLLM does not carry them — only the full parsed facts do. Same
+			// helper as the learn-time merge: this is the same operation in a second
+			// location, and without it the loser's motifs are simply deleted along
+			// with the loser, losing authored data that no derived state can rebuild.
+			fullWinner.Motifs = fact.MergeMotifs(fullWinner.Motifs, fullLoser.Motifs)
+			// RECOMPUTE the evidence weight from the pooled lineage (#94).
+			//
+			// The merge pools the loser's sources onto the winner two lines above,
+			// and evidence weight is DEFINED as a function of the pooled evidence —
+			// so a weight carried over unchanged describes evidence the surviving
+			// fact no longer has. Not an erasure like the learn path: a stale
+			// number, which is harder to notice and just as wrong.
+			//
+			// computeTransfer is the SAME call ApplyPruneDecisions uses, deliberately.
+			// Two merge paths deriving one field two ways is the "same operation,
+			// two callers, one silently wrong" drift this package keeps hitting;
+			// one mechanism cannot drift from itself. It runs before the loser is
+			// deleted, because it reads both facts.
+			//
+			// Only the WEIGHT is taken. Sources stays with mergeFacts, which owns
+			// the merge rule and whose hypothesis handling
+			// (loserCorroborations) is already pinned by tests; the two agree on
+			// every ordinary pair and disagree only when the WINNER is a
+			// hypothesis, where mergeFacts' answer is the tested one.
+			mergedWeight, _, _ := step.ComputeTransfer(ctx, gs, agentBranch, localRepoID,
+				[]string{winnerFact.File, loserFact.File})
+			fullWinner.EvidenceWeight = mergedWeight
+			// Refs = union of both refs + loser's path, minus the winner's own path
+			// (#280), and — separately — the snapshot of what the two operands
+			// already carried.
+			mergedRefs, carriedRefs = dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, winnerFact.File, loserFact.File, localRepoID)
+		} else {
+			mergedRefs = fact.AppendUnique(append([]string(nil), fullWinner.Refs...), loserFact.File)
+			carriedRefs = mergedRefs
+		}
 
 		// Same gate as every other write path — but this merge ADDS no
 		// citation, so the whole carried set goes in as prior.
@@ -406,6 +418,16 @@ func dedupCluster(
 		newContent, err := fact.SerializeFact(fullWinner)
 		if err != nil {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup serialize winner %s: %v", winnerFact.File, err)})
+			continue
+		}
+		if subsumed {
+			// One commit: the citation and the retraction cannot part.
+			msg := fmt.Sprintf("dedup: %s cites %s, retracted [%s]", winnerFact.File, loserFact.File, recipeName)
+			if _, _, err := gs.BatchWriteFacts(ctx, agentBranch, map[string]string{winnerFact.File: newContent}, []string{loserFact.File}, msg, "subsume"); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup subsume %s: %v", loserFact.File, err)})
+				continue
+			}
+			removedPaths[loserFact.File] = true
 			continue
 		}
 		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
