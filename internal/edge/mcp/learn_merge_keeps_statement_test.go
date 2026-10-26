@@ -235,7 +235,7 @@ func TestLearnHandler_InScopeBandNeighbourIsWrittenWithANote(t *testing.T) {
 			require.Len(t, notes, 1)
 			require.Contains(t, notes[0], seed, "the note names the neighbour's path")
 			require.Contains(t, notes[0], fmt.Sprintf("(%.2f)", cos), "and the cosine")
-			require.Contains(t, notes[0], "knomit_update that fact instead")
+			require.Contains(t, notes[0], "fold it into that fact with knomit_update and retract this one")
 
 			head, err := svc.HeadCommit(context.Background(), "agent/test")
 			require.NoError(t, err)
@@ -261,4 +261,159 @@ func TestLearnHandler_InScopeBandNeighbourIsWrittenWithANote(t *testing.T) {
 			require.Equal(t, before, liveFactCount(t, svc))
 		})
 	}
+}
+
+func siblingIn(category, title, body string) map[string]any {
+	f := siblingDecision(title, body, 0.85, []any{}, nil)
+	f["category"] = category
+	return f
+}
+
+// The merge's reach is a PREFIX of the incoming category directory, so a band
+// neighbour in a sub-category or a prefix-sibling category is in scope (written,
+// with a note), while one in the PARENT directory is not (refused). Pins the
+// scope from both sides.
+//
+// SABOTAGE: inMergeScope narrowed to the exact directory → the first two rows
+// are refused → red. inMergeScope returning true → the parent row is written → red.
+func TestLearnHandler_InMergeScopePrefixReach(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		for _, tc := range []struct {
+			name, seedCat, probeCat string
+			written                 bool
+		}{
+			{"descendant", siblingCategory + "/child", siblingCategory, true},
+			{"prefix-sibling", siblingCategory + "x", siblingCategory, true},
+			{"parent", siblingCategory, siblingCategory + "/child", false},
+		} {
+			t.Run(ts.name+"/"+tc.name, func(t *testing.T) {
+				svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
+				seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingIn(tc.seedCat, w0g1Title, w0g1Body())))
+				before := liveFactCount(t, svc)
+
+				r := dfLearn(t, ctx, emb, siblingIn(tc.probeCat, w0g2Title, w0g2Body()))
+				if !tc.written {
+					require.True(t, r.IsError, "outside the merge scope: refused: %s", resultText(t, r))
+					require.Contains(t, resultText(t, r), seed)
+					require.Equal(t, before, liveFactCount(t, svc))
+					return
+				}
+				require.False(t, r.IsError, resultText(t, r))
+				require.Equal(t, before+1, liveFactCount(t, svc))
+				notes := readNotes(t, resultText(t, r)).Notes
+				require.Len(t, notes, 1)
+				require.Contains(t, notes[0], seed)
+			})
+		}
+	}
+}
+
+func TestInMergeScope_IsCaseInsensitivePrefix(t *testing.T) {
+	require.True(t, inMergeScope("kb/Decisions/Pipeline/a.md", "kb/decisions/pipeline"))
+	require.True(t, inMergeScope("kb/decisions/pipeline/child/a.md", "kb/decisions/pipeline"))
+	require.True(t, inMergeScope("kb/decisions/pipelinex/a.md", "kb/decisions/pipeline"))
+	require.False(t, inMergeScope("kb/decisions/a.md", "kb/decisions/pipeline"))
+	require.False(t, inMergeScope("kb/decisions/pipeline/a.md", ""))
+}
+
+// An in-scope candidate AT or above Dedup that the merge did NOT take is still
+// refused: the ruling covers only "below Dedup". Here two incoming facts match
+// one seed in a sub-category; the merge absorbs one (an existing fact absorbs at
+// most one per call) and the other reaches the gate untouched, in scope but not
+// the exact directory, so the Dedup cap does not exempt it.
+//
+// SABOTAGE: drop `&& c.Similarity < th.Dedup` from the near case → written → red.
+func TestLearnHandler_InScopeAtOrAboveDedupDeclinedByMergeIsRefused(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			above := ts.th.Dedup + (1-ts.th.Dedup)*0.5
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, above)
+			seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingIn(siblingCategory+"/child", w0g1Title, w0g1Body())))
+			before := liveFactCount(t, svc)
+
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two",
+				siblingIn(siblingCategory, w0g2Title, w0g2Body()),
+				siblingIn(siblingCategory, w0g2Title+" again", w0g2Body()+" again")))
+			require.NoError(t, err)
+			require.True(t, r.IsError, resultText(t, r))
+			require.Contains(t, resultText(t, r), seed)
+			require.Equal(t, before, liveFactCount(t, svc), "refused whole")
+		})
+	}
+}
+
+// Several noted facts in one call share ONE short near: line, and a neighbour
+// shared by several facts is listed once.
+//
+// SABOTAGE: join with "\nnear: " (a line per neighbour) or skip the dedupe → red.
+func TestLearnHandler_MultiFactCommitCarriesOneNearLine(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
+			seed := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(w0g1Title, w0g1Body(), 0.85, []any{}, nil)))
+
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two",
+				siblingDecision(w0g2Title, w0g2Body(), 0.85, []any{}, nil),
+				siblingDecision(w0g2Title+" again", w0g2Body()+" again", 0.85, []any{}, nil)))
+			require.NoError(t, err)
+			require.False(t, r.IsError, resultText(t, r))
+			require.Len(t, readNotes(t, resultText(t, r)).Notes, 2, "a note per fact")
+
+			head, err := svc.HeadCommit(context.Background(), "agent/test")
+			require.NoError(t, err)
+			info, _ := commitDiff(t, svc, head)
+			require.Equal(t, 1, strings.Count(info.Message, "near:"), info.Message)
+			require.Equal(t, 1, strings.Count(info.Message, seed), "the shared neighbour is listed once")
+		})
+	}
+}
+
+// With two in-band neighbours, the NEAREST one is reported.
+//
+// SABOTAGE: keep the farthest instead (`<` for `>`) → red.
+func TestLearnHandler_ReportsTheNearestNeighbour(t *testing.T) {
+	const farMarker = "FARMARKER"
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			near := inBand(ts.th)
+			far := (ts.th.ReflectNovelty + near) / 2
+			probeAngle := angleFor(near)
+			emb := newAngleEmbedder(t, ts.model, ts.th, map[string]float64{
+				seedMarker:  0,
+				probeMarker: probeAngle,
+				farMarker:   probeAngle + angleFor(far),
+			})
+			svc, ctx, _ := newRepoWithEmbedder(t, emb)
+			nearPath := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(w0g1Title, w0g1Body(), 0.85, []any{}, nil)))
+			farPath := mergedFactPath(t, dfLearn(t, ctx, emb, siblingDecision(
+				"Step W0g3 is a farther sibling", "A "+farMarker+" decision for W0g3.", 0.85, []any{}, nil)))
+			require.NotEqual(t, nearPath, farPath)
+
+			r := dfLearn(t, ctx, emb, siblingDecision(w0g2Title, w0g2Body(), 0.85, []any{}, nil))
+			require.False(t, r.IsError, resultText(t, r))
+			notes := readNotes(t, resultText(t, r)).Notes
+			require.Len(t, notes, 1)
+			require.Contains(t, notes[0], nearPath)
+			require.NotContains(t, notes[0], farPath)
+			require.Contains(t, notes[0], fmt.Sprintf("(%.2f)", near))
+
+			head, err := svc.HeadCommit(context.Background(), "agent/test")
+			require.NoError(t, err)
+			info, _ := commitDiff(t, svc, head)
+			require.Contains(t, info.Message, "near: "+nearPath)
+			require.NotContains(t, info.Message, farPath)
+		})
+	}
+}
+
+// Distinct neighbours of several facts still make ONE commit line.
+//
+// SABOTAGE: join with "\nnear: " → red.
+func TestNearCommitLine_IsOneLine(t *testing.T) {
+	mk := func(i int, p string, sim float64) nearNeighbour {
+		return nearNeighbour{Index: i, Candidate: sameSubjectCandidate{Path: p, Similarity: sim}}
+	}
+	line := nearCommitLine([]nearNeighbour{mk(0, "kb/a.md", 0.86), mk(1, "kb/b.md", 0.84), mk(2, "kb/a.md", 0.86)})
+	require.Equal(t, "near: kb/a.md (0.86), kb/b.md (0.84)", line)
+	require.Empty(t, nearCommitLine(nil))
 }

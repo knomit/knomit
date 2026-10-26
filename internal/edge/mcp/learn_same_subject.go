@@ -525,6 +525,9 @@ type nearNeighbour struct {
 // searches: the raw, case-insensitive prefix of the incoming fact's category
 // directory (categoryDirOf is the one definition of that directory). It is
 // deliberately the merge's reach, not the gate's narrower exact-directory cap.
+// It reaches descendants and prefix siblings, never a parent. One known
+// narrowing: the merge's LIKE treats "_" as a wildcard and this does not, so
+// such a candidate is refused rather than written (the safe direction).
 func inMergeScope(candidatePath, categoryDir string) bool {
 	if categoryDir == "" {
 		return false
@@ -538,7 +541,7 @@ func nearNotes(nears []nearNeighbour) []string {
 	var out []string
 	for _, n := range nears {
 		out = append(out, fmt.Sprintf(
-			"fact %d: near %s (%.2f); if it states the same claim, knomit_update that fact instead.",
+			"fact %d: near %s (%.2f); if it states the same claim, fold it into that fact with knomit_update and retract this one.",
 			n.Index, n.Candidate.Path, n.Candidate.Similarity))
 	}
 	return out
@@ -550,9 +553,16 @@ func nearCommitLine(nears []nearNeighbour) string {
 	if len(nears) == 0 {
 		return ""
 	}
-	parts := make([]string, len(nears))
-	for i, n := range nears {
-		parts[i] = fmt.Sprintf("%s (%.2f)", n.Candidate.Path, n.Candidate.Similarity)
+	// One line however many facts have neighbours; a neighbour shared by
+	// several facts is listed once.
+	var parts []string
+	seen := map[string]bool{}
+	for _, n := range nears {
+		if seen[n.Candidate.Path] {
+			continue
+		}
+		seen[n.Candidate.Path] = true
+		parts = append(parts, fmt.Sprintf("%s (%.2f)", n.Candidate.Path, n.Candidate.Similarity))
 	}
 	return "near: " + strings.Join(parts, ", ")
 }

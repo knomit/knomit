@@ -63,7 +63,9 @@ not re-listed in the tool.
 `(ReflectNovelty, Dedup)` is a coherent band. This is a statement about
 calibration, not a description of the production gate. The learn-time
 same-subject check caps at `Dedup` only for candidates in the incoming fact's
-own category, and has no upper bound across categories
+own category directory, and has no upper bound elsewhere. It refuses a
+candidate outside the merge's scope (the category and its sub-categories); a
+candidate inside that scope and below `Dedup` is written with a note instead
 (`internal/edge/mcp/learn_same_subject.go`). `SimilarTo` comes from
 `docDocAll`, so `[SimilarTo, Dedup)` describes no region of either population
 (see knomit fact `decisions/mcp/learn/same-subject-band-endpoints`). This does
