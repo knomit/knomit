@@ -640,6 +640,19 @@ func jsValue(vm *goja.Runtime, parse goja.Callable, v any) (goja.Value, error) {
 	return parse(goja.Undefined(), vm.ToValue(string(b)))
 }
 
+// bindGlobals is the whole of EvalIf's setup: the frozen globals, then the
+// test-only afterSetup stand-in for slow setup. They are one step so the
+// seam cannot sit outside the budget while the real setup sits inside it.
+func (t *CompiledTrigger) bindGlobals(vm *goja.Runtime, globals map[string]any) error {
+	if _, _, err := sandboxGlobals(vm, "trigger "+t.Name, globals); err != nil {
+		return err
+	}
+	if t.afterSetup != nil {
+		t.afterSetup()
+	}
+	return nil
+}
+
 // EvalIf runs the trigger's condition with the given globals (fact, agent,
 // change in the dispatcher). An empty condition is true. It uses a FRESH VM
 // per call, the validations' time budget (armed after the globals are bound,
@@ -654,11 +667,8 @@ func (t *CompiledTrigger) EvalIf(globals map[string]any, now time.Time) (bool, e
 	vm := newSandboxVM(now)
 	// Setup first, budget second: the budget bounds the user's condition, not
 	// the host's work of freezing the globals, which load can stretch.
-	if _, _, err := sandboxGlobals(vm, "trigger "+t.Name, globals); err != nil {
+	if err := t.bindGlobals(vm, globals); err != nil {
 		return false, err
-	}
-	if t.afterSetup != nil {
-		t.afterSetup()
 	}
 	budget := t.ifBudget()
 	timer := time.AfterFunc(budget, func() {
