@@ -380,13 +380,14 @@ var r = knomit.exec([%s], {env: %s});
 
 // ---- T9: the dispatcher never waits
 
-// DispatcherNotBlockedByLongProcess [F4]: a recipe whose program blocks until
-// the test ends; a later write matching an emit trigger fires (its row and its
-// run complete) WHILE the program still runs: the recipe has only its started
-// row. The program cannot end before cleanup, so the order is the assertion
-// and waitTriggerHeadFor's 10 s is only a hang detector.
-// Sabotage: run the recipe inline in phase B (red: the emit's run never
-// completes and the hang detector fires).
+// DispatcherNotBlockedByLongProcess [F4]: a recipe whose program blocks on a
+// file the test writes only at cleanup (HELPER_BLOCK_FILE, capped at 60 s); a
+// later write matching an emit trigger fires (its row and its run complete)
+// WHILE the program still runs: the recipe has only its started row. Within
+// the 10 s that waitTriggerHeadFor allows, the program cannot end (its cap is
+// 60 s), so the order is the assertion and the 10 s is only a hang detector.
+// Sabotage: run the recipe inline in phase B (red: the emit's run does not
+// complete within the hang detector).
 func TestRun_DispatcherNotBlockedByLongProcess(t *testing.T) {
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"), trig("e", "learn", "tasks/other/**", ""))
 	dir := t.TempDir()

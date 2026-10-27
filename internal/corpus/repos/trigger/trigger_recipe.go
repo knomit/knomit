@@ -320,11 +320,11 @@ func (d *Dispatcher) startRecipe(p pendingFire, name string, payload any, global
 // slot back, the result row into the late inbox, a kick.
 func (d *Dispatcher) runJob(ctx context.Context, j recipeJob) {
 	defer d.rc.wg.Done()
-	t0 := time.Now()
+	t0 := stopwatch()
 	outcome, msg := d.execRecipe(ctx, j)
 	d.rc.release(j.cr.name)
 	row := j.row
-	row.Outcome, row.DurationMS = outcome, time.Since(t0).Milliseconds()
+	row.Outcome, row.DurationMS = outcome, stopwatch().Sub(t0).Milliseconds()
 	// The result text goes in `error` only when the run FAILED; a recipe's
 	// own report on a run that succeeded (done, spawned, delivered —
 	// "exit 0 cost=…") is a message, not an error (F5).

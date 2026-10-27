@@ -13,11 +13,52 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/mcp"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/foundation/config"
 )
+
+// longScriptBudget installs a 24 h script budget for the rest of the test.
+// The production budget (fact.ScriptEvalTimeout, 5 s) counts the script's
+// host calls, and here those are real writes through the MCP handlers: under
+// `go test -race` on a loaded machine they can outlast it, and a correct
+// script would be recorded as script-timeout (the mission e2e failed exactly
+// so). These tests assert what the scripts DO, and each asserts its fire's
+// outcome is `ran` (requireRan), so a fire the budget cut is red even when
+// its write landed; their require.Eventually waits (20 s) are the hang
+// detectors, and Close interrupts a script that never ends. The hooks are
+// process wide: none of these tests is parallel. The previous hooks are put
+// back at cleanup.
+func longScriptBudget(t *testing.T) {
+	t.Helper()
+	prev := trigger.HooksForTest()
+	h := prev
+	h.ScriptBudget = 24 * time.Hour
+	trigger.SetTestHooksForTest(h)
+	t.Cleanup(func() { trigger.SetTestHooksForTest(prev) })
+}
+
+// requireRan waits (20 s, a hang detector) for trigger's fire on path to be
+// in the fire log and requires its outcome to be `ran`: the script ran to its
+// end, neither thrown nor cut by the budget.
+func requireRan(t *testing.T, fires func() ([]facts.TriggerFire, error), trigger, path string) {
+	t.Helper()
+	var got facts.TriggerFire
+	require.Eventually(t, func() bool {
+		rows, err := fires()
+		require.NoError(t, err)
+		for _, r := range rows {
+			if r.Trigger == trigger && r.Path == path && r.Outcome != "" {
+				got = r
+				return true
+			}
+		}
+		return false
+	}, 20*time.Second, 25*time.Millisecond, "%s never recorded an outcome on %s", trigger, path)
+	require.Equal(t, facts.TriggerOutcomeRan, got.Outcome, "%s on %s: %s", trigger, path, got.Error)
+}
 
 // TestScript_RealToolsEndToEnd [T4, the real wiring]: a Manager built the way
 // internal/app builds it — mcp.NewScriptTools injected into repos.Deps — runs a
@@ -27,6 +68,7 @@ import (
 // ctx transport is proven through an unchanged handler, not a stub. Sabotage:
 // drop the ScriptTools wiring in app.go (the host throws "no script tools").
 func TestScript_RealToolsEndToEnd(t *testing.T) {
+	longScriptBudget(t)
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
@@ -68,6 +110,7 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 		scriptCommit = h
 		return true
 	}, 20*time.Second, 25*time.Millisecond, "the script's commit never landed")
+	requireRan(t, func() ([]facts.TriggerFire, error) { return svc.FactsRepo().RecentTriggerFires(ctx, branch, 100) }, "t1", "kb/tasks/in/a.md")
 
 	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(scriptCommit))
 	require.NoError(t, err)
@@ -99,6 +142,7 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 // Sabotage: forward only moment_name from the host → the firing fact
 // survives (and learn([]) is refused) → red.
 func TestScript_MoveThroughRealTools(t *testing.T) {
+	longScriptBudget(t)
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
@@ -161,7 +205,9 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 	body := "---\ntype: observation\nconfidence: 0.8\nsources: 1\n---\n# a\n\nbody\n"
 	firing, err := svc.Facts().WriteFact(ctx, branch, "kb/tasks/in/a.md", body, "learn: a", "learn")
 	require.NoError(t, err)
+	fires := func() ([]facts.TriggerFire, error) { return svc.FactsRepo().RecentTriggerFires(ctx, branch, 100) }
 	move := waitTrigger(firing.CommitHash, "take")
+	requireRan(t, fires, "take", "kb/tasks/in/a.md")
 	info, err := svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(move))
 	require.NoError(t, err)
 	require.Equal(t, "move: trigger:take\n\nKnomit-Trace: "+firing.CommitHash+"\nKnomit-Cause: "+firing.CommitHash+"\nKnomit-Trigger: take\n", info.Message)
@@ -180,6 +226,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 	firing2, err := svc.Facts().WriteFact(ctx, branch, "kb/tasks/drop/b.md", body, "learn: b", "learn")
 	require.NoError(t, err)
 	drop := waitTrigger(firing2.CommitHash, "drop")
+	requireRan(t, fires, "drop", "kb/tasks/drop/b.md")
 	info, err = svc.FactsRepo().CommitInfo(ctx, plumbing.NewHash(drop))
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(info.Message, "retract: trigger:drop\n"), info.Message)
@@ -220,6 +267,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 // TestDispatch_ArtifactsAreNotTriggerVisible going red under the same
 // sabotage.
 func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
+	longScriptBudget(t)
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",

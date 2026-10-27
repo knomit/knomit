@@ -357,7 +357,29 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	abort := make(chan struct{})
 	// Advanced only by the rebuild's goroutine, but read by the writers'.
 	var next atomic.Int32
+	// Every git object read the rebuild makes, split by whether the swap
+	// transaction (storegit's CommitLogApply) is on the stack. The rebuild's
+	// git reads are its derivation and its staging; all of them must happen
+	// before the swap, which runs SQL only.
+	//
+	// What this does NOT see: a read on ANOTHER goroutine (one the swap
+	// started and waits on has neither RebuildCommitLog nor CommitLogApply
+	// on its stack, so it lands in neither count), a read that bypasses
+	// deriver.readGuard (a direct rh.repo object read), and a read deeper
+	// than onStack's 128 frames. A flag set for the swap's duration would not
+	// close the first gap: the only hook inside the swap (vcs.SwapHook) runs
+	// AFTER the rebuild's own swap callback, which is where a stray read
+	// would most likely go. Reads in the Derive half of the swap are refused
+	// in production anyway (ErrReadInApply).
+	var readsInSwap, readsOutside atomic.Int64
 	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
+		if callerIs("RebuildCommitLog") {
+			if onStack("knomit/internal/engine/store/git.", "CommitLogApply") {
+				readsInSwap.Add(1)
+			} else {
+				readsOutside.Add(1)
+			}
+		}
 		i := int(next.Load())
 		if i == len(triggers) {
 			return nil
@@ -475,22 +497,33 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	require.True(t, swapped.Load(), "the rebuild swapped")
 	require.NoError(t, werr, "a concurrent writer never fails with a lock timeout")
 	swap := time.Duration(vcs.LastSwapDuration.Load())
-	t.Logf("rebuild %v unpaused (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v (logged, not asserted)", elapsed, swap, worst)
+	t.Logf("rebuild %v unpaused (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v (logged, not asserted); git reads %d before the swap, %d inside it",
+		elapsed, swap, worst, readsOutside.Load(), readsInSwap.Load())
 	// The lock is held only for the swap: re-deriving 2000 commits happens
-	// before it, in short batches. A rebuild that derived inside the swap
-	// would hold it for most of the run. elapsed excludes the pauses.
-	require.Less(t, swap, elapsed/4, "the swap transaction is a small part of the rebuild")
+	// before it, in short batches. This used to be the ratio swap < elapsed/4,
+	// which one preemption inside the swap on a loaded runner could break.
+	// The property itself is structural: the rebuild reads no git object
+	// while the swap transaction is open.
+	require.Positive(t, readsOutside.Load(), "reached: the rebuild read git objects (derivation, staging)")
+	require.Zero(t, readsInSwap.Load(), "the rebuild read git objects inside the swap transaction")
 }
 
 // callerIs reports whether a function of the store package whose bare name
 // (a method's name without its receiver) is name is on the calling
 // goroutine's stack.
 func callerIs(name string) bool {
-	pcs := make([]uintptr, 64)
+	return onStack("knomit/internal/engine/store/internal/vcs.", name)
+}
+
+// onStack reports whether a function of the package whose qualified prefix is
+// pkg ("import/path.") and whose bare name is name is on the calling
+// goroutine's stack.
+func onStack(pkg, name string) bool {
+	pcs := make([]uintptr, 128)
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
 	for {
 		f, more := frames.Next()
-		if strings.HasPrefix(f.Function, "knomit/internal/engine/store/internal/vcs.") && strings.HasSuffix(f.Function, "."+name) {
+		if strings.HasPrefix(f.Function, pkg) && strings.HasSuffix(f.Function, "."+name) {
 			return true
 		}
 		if !more {
