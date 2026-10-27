@@ -217,7 +217,8 @@ func (rh *Repo) indexItems(ctx context.Context, d *deriver, commits []*object.Co
 var SwapHook func() error
 
 // LastSwapDuration is how long the last swap transaction held the write lock
-// (tests assert it stays short).
+// (tests log it; that the swap reads no git object is asserted structurally,
+// TestPathHistory_RebuildDoesNotBlockWriters).
 var LastSwapDuration atomic.Int64
 
 // branchSet returns the commits recorded on the branch.

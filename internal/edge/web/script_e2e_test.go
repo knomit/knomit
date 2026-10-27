@@ -13,11 +13,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/mcp"
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/foundation/config"
 )
+
+// longScriptBudget installs a 24 h script budget for the rest of the test.
+// The production budget (fact.ScriptEvalTimeout, 5 s) counts the script's
+// host calls, and here those are real writes through the MCP handlers: under
+// `go test -race` on a loaded machine they can outlast it, and a correct
+// script would be recorded as script-timeout (the mission e2e failed exactly
+// so). These tests assert what the scripts DO; their require.Eventually waits
+// (20 s) are the hang detectors, and Close interrupts a script that never
+// ends. The hooks are process wide: none of these tests is parallel.
+func longScriptBudget(t *testing.T) {
+	t.Helper()
+	trigger.SetTestHooksForTest(trigger.TestHooks{ScriptBudget: 24 * time.Hour})
+	t.Cleanup(func() { trigger.SetTestHooksForTest(trigger.TestHooks{}) })
+}
 
 // TestScript_RealToolsEndToEnd [T4, the real wiring]: a Manager built the way
 // internal/app builds it — mcp.NewScriptTools injected into repos.Deps — runs a
@@ -27,6 +42,7 @@ import (
 // ctx transport is proven through an unchanged handler, not a stub. Sabotage:
 // drop the ScriptTools wiring in app.go (the host throws "no script tools").
 func TestScript_RealToolsEndToEnd(t *testing.T) {
+	longScriptBudget(t)
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
@@ -99,6 +115,7 @@ func TestScript_RealToolsEndToEnd(t *testing.T) {
 // Sabotage: forward only moment_name from the host → the firing fact
 // survives (and learn([]) is refused) → red.
 func TestScript_MoveThroughRealTools(t *testing.T) {
+	longScriptBudget(t)
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
@@ -220,6 +237,7 @@ func TestScript_MoveThroughRealTools(t *testing.T) {
 // TestDispatch_ArtifactsAreNotTriggerVisible going red under the same
 // sabotage.
 func TestScript_ArtifactsLandThroughRealTools(t *testing.T) {
+	longScriptBudget(t)
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
