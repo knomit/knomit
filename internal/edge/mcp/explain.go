@@ -47,7 +47,7 @@ func explainTool() mcpgo.Tool {
 			mcpgo.Description("Anchor commit: explain the fact (and its graph) as of this version. Omit for HEAD. Use a `commit` value returned by a previous explain to drill into a summary node."),
 		),
 		mcpgo.WithString("cursor",
-			mcpgo.Description("Session ID from a previous call. Omit to start."),
+			mcpgo.Description("The `cursor` from a previous explain response, to page the walk. With it, `file` and `commit` are ignored. Omit to start."),
 		),
 		mcpgo.WithString("history_cursor",
 			mcpgo.Description("Pass `history.history_cursor` from your previous explain of this `file` to get the next page of its history (history only). Pass it with the same `file`, without `commit` or `cursor`, and unchanged."),
@@ -306,6 +306,11 @@ func seenKey(path, commit string) string { return path + "@" + commit }
 // ExplainHandler returns the handler function for knomit_explain.
 func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		// An argument this tool does not declare is refused, never ignored
+		// (knomit#122): the call would otherwise run as if it were absent.
+		if err := rejectUnknownArguments(req, explainTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 

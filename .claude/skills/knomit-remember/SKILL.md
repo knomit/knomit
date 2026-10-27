@@ -14,7 +14,7 @@ Fire WHEN any of these occur:
 - **A bug fix exposed a hidden invariant** — the bug only happens when a non-obvious precondition is violated.
 - **You're about to claim X exists** based on a memory or training-data guess — if you had to verify it, that's a discovery worth keeping.
 
-For **predictions** (something that *might* be true but isn't observed yet): write as a fact with `type: hypothesis` instead of `observation`. Hypotheses carry uncertainty. A fact that confirms or refutes one names it in `settles: [{path, outcome: confirmed|refuted}]`: it is cited, retracted in the same commit, and the verdict recorded as a `Knomit-Outcome` commit trailer. Without `settles`, a similar observation in the merge scope still retracts it, with a note and no verdict (name it in `distinct_from` to keep it).
+For **predictions** (something that *might* be true but isn't observed yet): write as a fact with `type: hypothesis` instead of `observation`. Hypotheses carry uncertainty. A fact (not itself a hypothesis) that confirms or refutes one names it in its own `settles: [{path, outcome: confirmed|refuted}]`: it is cited, retracted in the same commit, and the verdict recorded as a `Knomit-Outcome` commit trailer. Without `settles`, a similar observation in the merge scope still retracts it, with a note and no verdict (name it in `distinct_from` to keep it).
 
 DON'T fire for:
 
@@ -24,9 +24,9 @@ DON'T fire for:
 
 ## How
 
-1. Run `knomit_query` with `text` = the would-be title AND body, and NO `entities` filter, then read the hits for any that share an entity with the fact you are about to write. A title-only query misses facts whose title is phrased differently but whose subject and body are the same. Do not pass `entities`: that filter is AND, so asking for `[Ramp, AI Index]` hides an existing fact tagged only `[Ramp]` — which is exactly the overlap you are looking for. If a hit shares a subject, decide before writing: update, retract, merge, or assert distinctness with `distinct_from`. `distinct_from` also stops the automatic merge from folding your fact into a path it names, so name the existing fact there when you deliberately write next to it (a counter-hypothesis, a competing claim); it applies to this call only and is not stored.
+1. Run `knomit_query` with `text` = the would-be title AND body, and NO `entities` filter, then read the hits for any that share an entity with the fact you are about to write. A title-only query misses facts whose title is phrased differently but whose subject and body are the same. Do not pass `entities`: that filter is AND, so asking for `[Ramp, AI Index]` hides an existing fact tagged only `[Ramp]` — which is exactly the overlap you are looking for. If a hit shares a subject, decide before writing: update, retract, merge, or assert distinctness with `distinct_from`. `distinct_from` also stops the automatic merge from folding your fact into a path it names, so name the existing fact there when you deliberately write next to it (a counter-hypothesis, a competing claim); it is a field of each fact (`facts[i].distinct_from`, never top-level), applies to this call only, and is not stored.
 2. If a contradicting fact exists: ASK the user whether to `/knomit-update`, `/knomit-retract`, or merge — don't write a duplicate.
-3. Otherwise call `knomit_learn` with: `topic`, `category`, `title`, `body`, `kind` (default epistemic), `type` (default observation; use `hypothesis` for predictions), `entities`, `refs`, `confidence` 0.85.
+3. Otherwise call `knomit_learn` with `moment_name` (a short label) and `facts: [ {…} ]`, each fact carrying: `topic`, `category`, `title`, `body`, `kind` (default epistemic), `type` (default observation; use `hypothesis` for predictions), `entities`, `refs`, `confidence` 0.85. Per-fact fields (`distinct_from`, `settles` included) go inside the fact object; an unknown top-level key refuses the call.
 
 ## Body authoring contract — write it so it can't compress into a falsehood
 

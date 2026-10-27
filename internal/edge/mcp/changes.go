@@ -106,6 +106,11 @@ type changesArgs struct {
 // trees of one branch of one mounted repo. It never calls a store write.
 func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		// An argument this tool does not declare is refused, never ignored
+		// (knomit#122): the call would otherwise run as if it were absent.
+		if err := rejectUnknownArguments(req, changesTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 

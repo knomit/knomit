@@ -112,7 +112,6 @@ func TestRetract_BoundToExperiment_RemovesOnlyThere(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"moment_name": "drop-it",
 		"file":        path,
-		"reason":      "trying life without it",
 	}
 	ctx := repos.WithBinding(context.Background(), repos.NewBindingOfRepo(ri, branch))
 	result, err := RetractHandler()(ctx, req)

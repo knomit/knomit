@@ -77,7 +77,7 @@ Before writing the code/edit the decision authorized, summarize into three parts
 3. **The choice** — concrete decision
 4. **Non-scope** (when foreseeable) — one line on what the decision does NOT authorize. Decisions compress into "we always do X" slogans; if the choice was conditional on context, name the boundary so it isn't stretched later.
 
-Then call `knomit_learn` with:
+Then call `knomit_learn` with a `moment_name` and one fact in `facts: [ {…} ]` carrying:
 
 - `topic`: `decisions`
 - `category`: `<area>/<slug>` (e.g. `synthesize/sumproductnorm-default`)
@@ -85,7 +85,7 @@ Then call `knomit_learn` with:
 - `title`: short imperative summary of the choice
 - `body`: the three parts above
 - `entities`: files/symbols affected
-- `refs`: source files touched + URL to the conversation if available
+- `refs`: `src://` refs to the source files touched, `kb/` paths of related facts, and the PR or issue URL if there is one. Never a session or conversation link.
 - `confidence`: 0.95
 
 Only after the fact is committed should you start the implementing edit.

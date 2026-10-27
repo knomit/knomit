@@ -30,13 +30,17 @@ func reviewTool() mcpgo.Tool {
 		mcpgo.WithString("completion_token", mcpgo.Description("Echo back the completion_token from the FINAL page of a multi-page work item. Required to answer such an item: it is the server's proof you read every page, and a response without it is rejected (the item stays available, so you can page properly and resubmit). Not needed for items delivered in a single page — those carry no token.")),
 		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Required with every response, so an answer can only ever apply to the item it was written for.")),
 		mcpgo.WithBoolean("takeover", mcpgo.Description("Start only: abandon the review session already in progress on this branch and start a new one. Needed only when a start is refused because a live session was opened with a different scope or effort.")),
-		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default — pre-discovery behaviour), 'medium', or 'high'. Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
-		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the seed pool to facts in these domains. Empty = whole corpus.")),
-		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the seed pool to facts tagged with these entities. Empty = whole corpus.")),
+		mcpgo.WithString("effort", mcpgo.Enum(effortValues...), mcpgo.Description("Fixed by the start call: omit it on later calls or repeat the same value (it is validated on every call). Discovery effort dial: 'normal' (pre-discovery behaviour), 'medium', or 'high'. Omitted: the server's configured default (discovery.effort_default, normally 'normal'). Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
+		mcpgo.WithArray("domain", mcpgo.WithStringItems(), mcpgo.Description("Fixed by the start call: omit it on later calls or repeat the same value. Optional scope filter: restrict the seed pool to facts in these domains. Empty = whole corpus.")),
+		mcpgo.WithArray("entities", mcpgo.WithStringItems(), mcpgo.Description("Fixed by the start call: omit it on later calls or repeat the same value. Optional scope filter: restrict the seed pool to facts tagged with these entities. Empty = whole corpus.")),
 		traceArg(),
 		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),
 	)
 }
+
+// effortValues is the `effort` enum of knomit_review and knomit_hypothesize:
+// exactly what step.Effort.Validate accepts.
+var effortValues = []string{string(step.EffortNormal), string(step.EffortMedium), string(step.EffortHigh)}
 
 // ReviewHandler returns the handler function for knomit_review.
 // A fresh synthesize.Reviewer is constructed per call from the repo in ctx.

@@ -42,7 +42,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.AdditionalProperties(false),
-			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn. Send updates, ops, or both."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either takes a fresh knomit_learn naming the old path in its retract argument (one atomic commit). Send updates, ops, or both."),
 			mcpgo.Properties(updateToolSchemaProperties()),
 		),
 		mcpgo.WithArray("ops",
@@ -155,6 +155,11 @@ func updateContext(raw json.RawMessage) (ctx map[string]any, ok bool, err error)
 // UpdateHandler returns the handler function for knomit_update.
 func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		// An argument this tool does not declare is refused, never ignored
+		// (knomit#122): the call would otherwise run as if it were absent.
+		if err := rejectUnknownArguments(req, updateTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 

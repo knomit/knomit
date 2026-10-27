@@ -66,7 +66,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, origin, context, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one filter is required ("+queryFilterList+"), except with sort=recent or when paging with cursor. Set sort=recent to browse most-recently-committed facts, optionally filtered; with text, sort=recent ranks by relevance instead (recency breaks ties)."),
 		bindingArg(true),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
@@ -76,7 +76,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("domain",
-			mcpgo.Description("Filter by domain tags."),
+			mcpgo.Description("Filter by domain tags. Several values are ANDed: a fact must match every one."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("applies_to",
@@ -99,7 +99,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Return full fact bodies instead of snippets. Page size is capped low (default 3, max 5). For a single fact's full body, prefer knomit_explain."),
 		),
 		mcpgo.WithString("sort",
-			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
+			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed — but combined with text it is ranked by relevance, recency breaking ties. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
 		),
 		mcpgo.WithString("cursor",
 			mcpgo.Description("Opaque page token from a previous response's `cursor`. When set, all filter arguments are ignored (the result set is frozen); only `limit` and `include_body` still apply."),
@@ -108,7 +108,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Maximum total results materialised for this query across all pages (snapshot depth). Default 500; values above 500 are clamped. Page size is controlled by `limit`, not this."),
 		),
 		mcpgo.WithArray("type",
-			mcpgo.Description("Filter to these epistemic types (e.g. observation, policy, principle, hypothesis)."),
+			mcpgo.Description("Filter to these fact types, of either kind (e.g. observation, hypothesis, policy, heuristic)."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithBoolean("domain_exact",
@@ -220,6 +220,11 @@ func QueryHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		emb = embedders[0]
 	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		// An argument this tool does not declare is refused, never ignored
+		// (knomit#122): the call would otherwise run as if it were absent.
+		if err := rejectUnknownArguments(req, queryTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
@@ -536,6 +541,11 @@ func stringOrSlice(req mcpgo.CallToolRequest, key string) []string {
 	return req.GetStringSlice(key, nil)
 }
 
+// queryFilterList names every argument hasAnyFilter counts, for the tool
+// description and the no-filter error alike — two hand-kept lists had each
+// drifted from the check (motifs, context and the expiry filters).
+const queryFilterList = "text, entities, domain, applies_to, path, type, origin, motifs, context, min_confidence, expired, expires_before or expires_after"
+
 // hasAnyFilter reports whether any selecting filter was supplied.
 func hasAnyFilter(q index.SearchOptions) bool {
 	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
@@ -642,7 +652,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		return mcpgo.NewToolResultError(msg), nil
 	}
 	if !hasAnyFilter(q) {
-		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, motifs, or min_confidence is required"), nil
+		return mcpgo.NewToolResultError("at least one filter is required: " + queryFilterList), nil
 	}
 	// Widen motif terms to the lens's merged clusters BEFORE the fan-out. After
 	// hasAnyFilter, so the "no filter supplied" message stays about what the

@@ -36,7 +36,7 @@ func TestUpdate_NonWritablePrivatePathRefused(t *testing.T) {
 		result := callTool(t, UpdateHandler(), ctx, map[string]any{
 			"file":        p,
 			"moment_name": "m",
-			"body":        "b",
+			"updates":     map[string]any{"body": "b"},
 		})
 		require.Truef(t, result.IsError, "update must refuse %s", p)
 		require.Containsf(t, resultText(t, result), "closed to the fact tools",
@@ -51,7 +51,6 @@ func TestRetract_NonWritablePrivatePathRefused(t *testing.T) {
 	result := callTool(t, RetractHandler(), ctx, map[string]any{
 		"file":        "kb/.drafts/x.md",
 		"moment_name": "m",
-		"reason":      "r",
 	})
 	require.True(t, result.IsError, "retract must refuse a non-writable private path")
 	require.Contains(t, resultText(t, result), "closed to the fact tools")

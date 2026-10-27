@@ -61,6 +61,9 @@ var changesAllowedCalls = map[string][]string{
 		"resolveChangesRepo", "describeChangesRepo", "kbPrefixRefusal", "isHexDigits",
 		"model.ParseChangesSince", "model.ChangesBookmark",
 		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
+		// the undeclared-argument refusal (#122): compares the call's keys
+		// with the tool's own schema, no store and no clock.
+		"rejectUnknownArguments", "changesTool",
 	},
 	"internal/edge/web/api/kb/handlers_changes.go": {
 		"repos.RepoFromContext", "httpx.BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
