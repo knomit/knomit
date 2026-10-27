@@ -87,10 +87,17 @@ func LoadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]Member
 	if err := vcs.CheckTreeShape(tree, nil); err != nil {
 		return nil, fmt.Errorf("fleet %s: malformed tree: %w", fleetID, err)
 	}
-	prefix := path.Join(root, fact.MembersTopic) + "/"
+	return loadMembersUnder(fleetID, tree, "", path.Join(root, fact.MembersTopic)+"/")
+}
+
+// loadMembersUnder reads the member records (.md under prefix) of tree, whose
+// paths are base + the path within tree: tree is the repository's root tree
+// (base "") or a subtree read from base. The skip rules are LoadMembersOfTree's.
+func loadMembersUnder(fleetID string, tree *object.Tree, base, prefix string) ([]Member, error) {
 	var out []Member
 	err := tree.Files().ForEach(func(f *object.File) error {
-		if !strings.HasPrefix(f.Name, prefix) || !strings.HasSuffix(f.Name, ".md") {
+		name := base + f.Name
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".md") {
 			return nil
 		}
 		content, err := f.Contents()
@@ -98,25 +105,25 @@ func LoadMembersOfTree(fleetID string, tree *object.Tree, root string) ([]Member
 			return err
 		}
 		var m fact.Member
-		ff, perr := fact.ParseFact(f.Name, content)
+		ff, perr := fact.ParseFact(name, content)
 		if perr == nil {
 			m, perr = fact.ParseMember(ff.Body)
 		}
 		if perr != nil {
-			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+f.Name+"\x00"+f.Hash.String(), true); !seen {
-				log.Error().Err(perr).Str("fleet", fleetID).Str("path", f.Name).Str("blob", f.Hash.String()).
+			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+name+"\x00"+f.Hash.String(), true); !seen {
+				log.Error().Err(perr).Str("fleet", fleetID).Str("path", name).Str("blob", f.Hash.String()).
 					Msg("fleet: malformed member record skipped")
 			}
 			return nil
 		}
-		if folder, _, ok := strings.Cut(strings.TrimPrefix(f.Name, prefix), "/"); !ok || folder != m.Agent {
-			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+f.Name+"\x00"+f.Hash.String(), true); !seen {
-				log.Error().Str("fleet", fleetID).Str("path", f.Name).Str("blob", f.Hash.String()).Str("agent", m.Agent).
+		if folder, _, ok := strings.Cut(strings.TrimPrefix(name, prefix), "/"); !ok || folder != m.Agent {
+			if _, seen := malformedLogged.LoadOrStore(fleetID+"\x00"+name+"\x00"+f.Hash.String(), true); !seen {
+				log.Error().Str("fleet", fleetID).Str("path", name).Str("blob", f.Hash.String()).Str("agent", m.Agent).
 					Msg("fleet: member record outside its agent's folder skipped")
 			}
 			return nil
 		}
-		out = append(out, Member{Member: m, Path: f.Name, Blob: f.Hash.String()})
+		out = append(out, Member{Member: m, Path: name, Blob: f.Hash.String()})
 		return nil
 	})
 	return out, err
