@@ -621,6 +621,7 @@ func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing.T) {
 	ctx := context.Background()
 	f, _, old, due := renewFixture(t)
+	time.Sleep(1100 * time.Millisecond) // beta's leaf starts strictly after S_old (one-second NotBefore)
 	enr, err := f.master.EnrollFleetMember(ctx, "beta", keyLine("alpha"), "")
 	require.NoError(t, err)
 	require.True(t, enr.Published, enr.PublishError)
@@ -630,6 +631,7 @@ func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing
 	renewed := f.mainLeaf(t, "alpha")
 	require.NotEqual(t, old.SerialNumber, renewed.SerialNumber, "fixture: alpha renewed")
 	betaLeaf := f.mainLeaf(t, "beta")
+	require.True(t, betaLeaf.NotBefore.After(old.NotBefore), "fixture: only the identity tells beta's leaf from a renewal of S_old")
 	pub := old.PublicKey.(ed25519.PublicKey)
 	f.forgeMainCommit(t, memberRecordPath("kb", "beta"), leftRecordFile(t, "beta", pub, old.SerialNumber.Text(16)), "beta: left, naming alpha's leaf")
 	before := f.mainCRLNumber(t)
