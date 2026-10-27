@@ -62,7 +62,7 @@ DON'T fire for:
 Call `knomit_query` with:
 
 - `text`: the user-supplied topic (or your own one-line summary of the area)
-- `entities`: any file paths currently open or about to be edited
+- `entities`: at most ONE file path or symbol, the one the work centres on. The filter is AND: every entity listed must be on the fact, so several open files hide every fact not tagged with all of them. Put other paths in `text` instead.
 - `applies_to`: the area path the work targets (e.g. `store/resolver`). Derive from an explicit user-supplied path, OR from the dominant directory among open files. Omit if uncertain; text/entities matching still works.
 - `path`: an ontology-path prefix, when the request names a KIND of knowledge rather than only a subject. `applies_to` and `path` are DIFFERENT AXES and combine freely:
     - `applies_to` = **subject matter**, matched ancestor-or-equal against each fact's `domain:` tags (`store`, `mcp`, `repos`, `build`). The match walks UP, not down: `["store/resolver"]` returns facts scoped to `store/resolver` *and* facts scoped to `store`, because a fact declared at the parent applies to the child. `["store"]` therefore does NOT pick up facts tagged `store/resolver` — name the narrowest scope you mean. **One value per call**: each entry adds its own `AND EXISTS (…)` clause, so `["store","mcp"]` matches only facts tagged with *both* — in practice nothing. To cover two scopes, run two queries.
@@ -72,7 +72,7 @@ Call `knomit_query` with:
 
   **Use `path` whenever the question is about a kind.** Step 1 below tells you to read principles and invariants first; without `path` that is a hope about ranking, and with it the priority order is actually reachable.
 
-**Empty result?** If you passed `path` or `applies_to`, re-run on `text`/`entities` alone BEFORE concluding anything: both filters fail silently, as an empty result rather than an error, so a malformed prefix and a genuinely empty area are indistinguishable. Once the unfiltered query is also empty, note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
+**Empty result?** If you passed `path` or `applies_to`, re-run on `text` alone BEFORE concluding anything: both filters fail silently, as an empty result rather than an error, so a malformed prefix and a genuinely empty area are indistinguishable. Once the unfiltered query is also empty, note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
 
 When the query returns facts, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
 
@@ -82,7 +82,7 @@ When the query returns facts, do BOTH steps below. Skipping step 2 means you're 
 2. **Invariants** (`kb/invariants/`) — load-bearing rules. Violating one breaks the system; if your design needs to, STOP and confirm with the user.
 3. **Decisions** (`kb/decisions/`) — the *why* behind current shape.
 4. **Conventions** — house style for the area.
-5. **Scan all bodies for "anti-pattern:"** — cheapest design constraint you'll find.
+5. **Scan the bodies for "anti-pattern:"** — cheapest design constraint you'll find. Query rows carry a ~400-char snippet (`body_truncated: true`), not the body: read the facts you rely on in full with `knomit_explain`, or re-query with `include_body: true` (at most 5 per page).
 
 ### Step 2 — Verify the load-bearing claims
 

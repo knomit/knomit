@@ -77,7 +77,7 @@ Before writing the code/edit the decision authorized, summarize into three parts
 3. **The choice** — concrete decision
 4. **Non-scope** (when foreseeable) — one line on what the decision does NOT authorize. Decisions compress into "we always do X" slogans; if the choice was conditional on context, name the boundary so it isn't stretched later.
 
-Then call `knomit_learn` with:
+Then call `knomit_learn` with a `moment_name` and one fact in `facts: [ {…} ]` carrying:
 
 - `topic`: `decisions`
 - `category`: `<area>/<slug>` (e.g. `synthesize/sumproductnorm-default`)
