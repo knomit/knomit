@@ -576,6 +576,7 @@ func TestFleetLeave_AStaleLeftAcrossARenewalAndARejoinNeverRevokesTheFreshLeaf(t
 // is revoked -> red.
 func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 	ctx := context.Background()
+	logs := captureLog(t) // before any loop starts: the swap of the global logger races a running one
 	f, _, old, renewed := renewedBeforeLeave(t)
 	// Both straight onto main, as its forge admin would: a member's branch
 	// on top of the removal would carry the delete of a write-once file into
@@ -584,7 +585,6 @@ func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), []byte(leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16))), "alpha: left, naming S_old")
 	before := f.mainCRLNumber(t)
 
-	logs := captureLog(t)
 	f.masterRounds(t)
 	rows, err := f.master.FleetMembers(ctx)
 	require.NoError(t, err)
@@ -592,12 +592,24 @@ func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 		require.False(t, r.RevokeDue, "nothing is due: %s", r.Agent)
 	}
 	require.Equal(t, before, f.mainCRLNumber(t), "nothing revoked")
-	out := logs.String()
-	require.Contains(t, out, `"level":"warn"`)
-	require.Contains(t, out, `"agent":"alpha"`)
-	require.Contains(t, out, `"left_serial":"`+old.SerialNumber.Text(16)+`"`)
-	require.Contains(t, out, `"current_serial":"`+renewed.SerialNumber.Text(16)+`"`)
-	require.Contains(t, out, "no issuance record")
+	warns := unprovenWarns(logs, "alpha")
+	require.NotEmpty(t, warns, "the duty warns")
+	require.Contains(t, warns[0], `"left_serial":"`+old.SerialNumber.Text(16)+`"`)
+	require.Contains(t, warns[0], `"current_serial":"`+renewed.SerialNumber.Text(16)+`"`)
+	require.Contains(t, warns[0], "no issuance record")
+}
+
+// unprovenWarns is the leave duty's WARN lines in logs for agent: a left
+// record it does not follow to main's current leaf for want of proof.
+func unprovenWarns(logs *syncBuf, agent string) []string {
+	var out []string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, `"level":"warn"`) && strings.Contains(l, `"agent":"`+agent+`"`) &&
+			strings.Contains(l, "does not prove its current leaf a renewal") {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // A forged left record: beta, in its OWN folder (what the record-owner rule
@@ -612,6 +624,7 @@ func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 // leaf (and alpha's S_old) are revoked by beta's record -> red.
 func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing.T) {
 	ctx := context.Background()
+	logs := captureLog(t) // before any loop starts
 	f, _, old, due := renewFixture(t)
 	time.Sleep(1100 * time.Millisecond) // beta's leaf starts strictly after S_old (one-second NotBefore)
 	enr, err := f.master.EnrollFleetMember(ctx, "beta", keyLine("alpha"), "")
@@ -640,10 +653,11 @@ func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing
 	require.NotEqual(t, old.SerialNumber, renewed.SerialNumber, "beta's record blocks nothing: alpha is renewed")
 	before := f.mainCRLNumber(t)
 
-	logs := captureLog(t)
 	f.masterRounds(t)
 	require.Equal(t, before, f.mainCRLNumber(t), "a forged left record revokes nothing")
-	require.Contains(t, logs.String(), `"agent":"beta"`, "the duty warns about it")
+	warns := unprovenWarns(logs, "beta")
+	require.NotEmpty(t, warns, "the duty warns about it")
+	require.Contains(t, warns[len(warns)-1], "is not agent beta's")
 
 	// alpha's own left record, naming S_old (straight onto main like beta's:
 	// a member branch from before beta's record would carry it into the
@@ -663,6 +677,7 @@ func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing
 // SABOTAGE: drop the same-key check -> the replacement and S_old are revoked
 // -> red.
 func TestFleetLeave_ALeftRecordAcrossAKeyChangeIsNotFollowed(t *testing.T) {
+	logs := captureLog(t) // before any loop starts
 	f, _, old, _ := renewFixture(t)
 	other, _, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
@@ -674,8 +689,9 @@ func TestFleetLeave_ALeftRecordAcrossAKeyChangeIsNotFollowed(t *testing.T) {
 	require.True(t, cur.NotBefore.After(old.NotBefore), "fixture: the replacement starts later")
 	before := f.mainCRLNumber(t)
 
-	logs := captureLog(t)
 	f.masterRounds(t)
 	require.Equal(t, before, f.mainCRLNumber(t), "another key: nothing revoked")
-	require.Contains(t, logs.String(), "another key")
+	warns := unprovenWarns(logs, "alpha")
+	require.NotEmpty(t, warns, "the duty warns")
+	require.Contains(t, warns[0], "certifies another key")
 }
