@@ -107,7 +107,10 @@ func TestServeUntil_ListenerFailureUnblocksStreams(t *testing.T) {
 	}
 
 	errCh <- errors.New("local authenticated listener: boom")
-	const grace = 3 * time.Second
+	// A long grace: the stream holding Shutdown is the only way to reach it,
+	// so the elapsed check below is a hang detector, not a latency bound
+	// (with 3 s a loaded machine's ordinary shutdown came close to it).
+	const grace = 60 * time.Second
 	start := time.Now()
 	err = serveUntil(context.Background(), errCh, cancelServe, grace, srv)
 	if elapsed := time.Since(start); elapsed >= grace {

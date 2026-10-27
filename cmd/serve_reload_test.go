@@ -264,13 +264,16 @@ func TestReloadCmd_ExitStatusReflectsWhatHappened(t *testing.T) {
 	// Config error: refused, shown, generation unchanged; twice in a row.
 	t.Setenv("KNOMIT_PORT", port)
 	writeToml(t, home, "http = [nope\n")
+	// The wait is two minutes, so a reload that waited for it instead of the
+	// error trips the one-minute check below: a hang detector, not a bound on
+	// how fast the server refuses (the old 4 s against a 10 s wait was one).
 	for i := 0; i < 2; i++ {
 		start := time.Now()
-		err = runReload(context.Background(), io.Discard, 10*time.Second)
+		err = runReload(context.Background(), io.Discard, 2*time.Minute)
 		if err == nil || !strings.Contains(err.Error(), "reload refused") || !strings.Contains(err.Error(), "toml") {
 			t.Fatalf("round %d: a config error must be shown, got %v", i, err)
 		}
-		if time.Since(start) > 4*time.Second {
+		if time.Since(start) > time.Minute {
 			t.Fatalf("round %d took %v: it waited for a timeout instead of the error", i, time.Since(start))
 		}
 		cur, _ := serveraddr.ReadLock(h.lock)

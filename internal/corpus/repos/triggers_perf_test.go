@@ -21,8 +21,51 @@ import (
 	"knomit/internal/testsupport/testsigner"
 )
 
-// The slow `if` in these tests is slowIf (triggers_test.go): a real 90 ms of
-// wall time inside the trigger's timed section, whatever the CPU load.
+// The slow `if` in these tests is either slowIf (triggers_test.go), a real
+// 90 ms of wall time inside the trigger's timed section, or slowIfOn, 90 ms
+// on a fakeStopwatch. A test that asserts only a FLOOR (the duration is at
+// least 80 ms) may use the real sleep: load only makes it longer. A test
+// that asserts a CEILING (a fast trigger is not slow, the change build is not
+// charged to the trigger, the p95 of fast evaluations is fast) uses the
+// stopwatch, on which a fast trigger takes exactly 0 ms, because a ceiling
+// on real time is a bound on the machine (a trivial `if` under -race load can
+// take tens of milliseconds).
+
+// fakeStopwatch is a TestHooks.Stopwatch that moves only when the test moves
+// it: every duration the dispatcher measures on it is exactly the sum of the
+// advances made inside the measured span.
+type fakeStopwatch struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (s *fakeStopwatch) now() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.t
+}
+
+func (s *fakeStopwatch) advance(d time.Duration) {
+	s.mu.Lock()
+	s.t = s.t.Add(d)
+	s.mu.Unlock()
+}
+
+// slowIfOn installs sw as the dispatcher's stopwatch and makes trig's `if`
+// (on the paths match accepts; nil is every path) take ms on it, keeping the
+// hooks already in force.
+func slowIfOn(t *testing.T, sw *fakeStopwatch, trig string, ms int, match func(path string) bool) {
+	t.Helper()
+	h := trigger.HooksForTest()
+	h.Stopwatch = sw.now
+	h.EvalDelay = func(name, path string) time.Duration {
+		if name == trig && (match == nil || match(path)) {
+			sw.advance(time.Duration(ms) * time.Millisecond)
+		}
+		return 0
+	}
+	setHooks(t, h)
+}
 
 // newSlowRepo boots a repo with slow_trigger_ms set.
 func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoInstance) {
@@ -43,11 +86,13 @@ func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoIn
 // SlowIfIsReported: with slow_trigger_ms = 40, a trigger whose own work takes
 // 90 ms logs exactly one "slow trigger" WARN naming repo, branch, trigger,
 // path and elapsed, and its `slow` count is 1; a fast trigger in the same run
-// logs nothing. Sabotage: hard-code the threshold, or time the whole run.
+// logs nothing. Both durations are on a fakeStopwatch (90 ms and 0 ms), so
+// "the fast one is not slow" holds however loaded the machine is.
+// Sabotage: hard-code the threshold, or time the whole run.
 func TestDispatch_SlowIfIsReported(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	_, ri := newSlowRepo(t, 40, trig("slow", "learn", "", "true"), trig("fast", "learn", "", "true"))
-	slowIf(t, "slow", 90, nil)
+	slowIfOn(t, &fakeStopwatch{}, "slow", 90, nil)
 	write(t, ri, "kb/tasks/x.md")
 	out := logs.String()
 	require.Equal(t, 1, strings.Count(out, `"message":"slow trigger"`), "%s", out)
@@ -57,22 +102,27 @@ func TestDispatch_SlowIfIsReported(t *testing.T) {
 	require.NotContains(t, out, `"trigger":"fast"`)
 	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("slow").Slow)
 	require.Equal(t, int64(0), ri.triggers.StatsViewForTest("fast").Slow)
-	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("slow").Duration.MaxMS, 80.0)
+	require.Equal(t, 90.0, ri.triggers.StatsViewForTest("slow").Duration.MaxMS)
+	require.Equal(t, 0.0, ri.triggers.StatsViewForTest("fast").Duration.MaxMS)
 }
 
 // ChangeCostNotChargedToTrigger [R2-2]: a slow `change` build (the toucher
 // walk, here a test hook) with a trivial `if` yields a large change_ms on the
-// run, a small trigger duration, and NO "slow trigger" WARN. Sabotage: time
-// the change build inside the trigger's timer.
+// run, a zero trigger duration, and NO "slow trigger" WARN. The change build
+// takes 80 ms on a fakeStopwatch and nothing else moves it, so the trigger's
+// own duration is exactly 0 however loaded the machine is.
+// Sabotage: time the change build inside the trigger's timer (red: 80 ms).
 func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	_, ri := newSlowRepo(t, 40, trig("fast", "learn", "", "true"))
-	setHooks(t, trigger.TestHooks{ChangeDelay: 80 * time.Millisecond})
+	sw := &fakeStopwatch{}
+	setHooks(t, trigger.TestHooks{Stopwatch: sw.now, InChange: func() { sw.advance(80 * time.Millisecond) }})
 	write(t, ri, "kb/tasks/x.md")
 	require.NotContains(t, logs.String(), "slow trigger")
 	st := ri.triggers.StatsViewForTest("fast")
 	require.Equal(t, int64(0), st.Slow)
-	require.Less(t, st.Duration.MaxMS, 40.0, "the trigger's own work stays small")
+	require.Positive(t, st.Duration.Count, "reached: the trigger was evaluated")
+	require.Equal(t, 0.0, st.Duration.MaxMS, "the change build is not the trigger's own work")
 	run := ri.triggers.RunStatsForTest()
 	require.NotNil(t, run.Last)
 	require.GreaterOrEqual(t, run.Last.ChangeMS, int64(80), "the change build is knomit's cost, on the run")
@@ -82,11 +132,13 @@ func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 
 // P95MovesWithASlowTrigger: 40 fast evaluations give a p95 near the fast
 // duration; after 4 slow ones (~10% of the window) the p95 is at least the
-// slow duration; count, min and max are exact. Sabotage: report the mean, or
-// leave the slow samples out of the window.
+// slow duration; count, min and max are exact. The durations are on a
+// fakeStopwatch (fast 0 ms, slow 90 ms), so "the p95 is fast" does not depend
+// on the machine's load. Sabotage: report the mean, or leave the slow samples
+// out of the window.
 func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	_, ri := newTriggerRepo(t, trig("mixed", "learn", "", "true"))
-	slowIf(t, "mixed", 90, func(path string) bool { return strings.Contains(path, "slow") })
+	slowIfOn(t, &fakeStopwatch{}, "mixed", 90, func(path string) bool { return strings.Contains(path, "slow") })
 	release := parkDispatcher(t, ri)
 	var last string
 	for i := 0; i < 40; i++ {
@@ -96,7 +148,7 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	waitTriggerHead(t, ri, last)
 	st := ri.triggers.StatsViewForTest("mixed")
 	require.Equal(t, int64(40), st.Duration.Count)
-	require.Less(t, st.Duration.P95RecentMS, 40.0, "40 fast evaluations: the p95 is fast")
+	require.Equal(t, 0.0, st.Duration.P95RecentMS, "40 fast evaluations: the p95 is fast")
 
 	release = parkDispatcher(t, ri)
 	for i := 0; i < 4; i++ {
@@ -108,9 +160,9 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	require.Equal(t, int64(44), st.Duration.Count)
 	require.Equal(t, int64(44), st.Evaluations)
 	require.Equal(t, int64(44), st.Fires)
-	require.GreaterOrEqual(t, st.Duration.P95RecentMS, 85.0, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
-	require.GreaterOrEqual(t, st.Duration.MaxMS, 85.0)
-	require.Less(t, st.Duration.MinMS, 40.0)
+	require.Equal(t, 90.0, st.Duration.P95RecentMS, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
+	require.Equal(t, 90.0, st.Duration.MaxMS)
+	require.Equal(t, 0.0, st.Duration.MinMS)
 	require.Equal(t, trigger.P95WindowForTest, st.Duration.P95Window)
 }
 
@@ -386,10 +438,11 @@ func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	t.Logf("median: 0 triggers %s, 10 busy triggers %s (%.2f×)", bm, lm, float64(lm)/float64(bm))
 	require.True(t, withinRace(bm, lm), "median with busy triggers (%s) is not within max(3×, +250ms) of 0 triggers (%s)", lm, bm)
-	// Teardown must not wait for the backlog: ctx is checked per evaluation.
-	started := time.Now()
-	restartServe(t, ri)
-	require.Less(t, time.Since(started), 2*time.Second)
+	// No teardown timing here. abba ends on a base block, and its switch to
+	// the trigger-less ontology waits for the dispatcher to drain the busy
+	// backlog, so a restart here met no backlog and its old 2 s bound timed
+	// only an idle restart. That teardown stops a run within one evaluation
+	// is TestDispatch_NoStoreHeldDuringIf's.
 }
 
 // WriteReturnsWhileTriggerEvaluationIsHeld (#369): the OUTCOME behind the

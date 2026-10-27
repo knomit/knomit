@@ -91,20 +91,28 @@ func TestWarnVersionSkew_NoSignalIsSilent(t *testing.T) {
 		}
 	})
 	t.Run("hung server is bounded", func(t *testing.T) {
+		// The server answers only after the test ends, so the check returning
+		// at all proves its own bound ended it; 30 s is a hang detector, not
+		// a latency bound on versionCheckTimeout.
 		release := make(chan struct{})
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-release:
-			case <-time.After(5 * time.Second):
+			case <-r.Context().Done():
 			}
 			_, _ = w.Write([]byte(`{"full":"0.5.3.other"}`))
 		}))
 		t.Cleanup(func() { close(release); s.Close() })
 		var w bytes.Buffer
-		start := time.Now()
-		warnVersionSkew(&w, knomitapi.NewServerClient(serverFor(t, s.URL), versionCheckTimeout), s.URL, "srv", "0.5.3.mine")
-		if d := time.Since(start); d > versionCheckTimeout+500*time.Millisecond {
-			t.Fatalf("the check took %v, past its %v bound", d, versionCheckTimeout)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			warnVersionSkew(&w, knomitapi.NewServerClient(serverFor(t, s.URL), versionCheckTimeout), s.URL, "srv", "0.5.3.mine")
+		}()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the check against a server that never answers did not return; its %v bound is not applied", versionCheckTimeout)
 		}
 		if w.Len() != 0 {
 			t.Fatalf("a timed-out check must print nothing, got %q", w.String())

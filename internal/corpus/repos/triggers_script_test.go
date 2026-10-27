@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -775,43 +776,61 @@ func TestScript_RuntimeErrorIsOutcome(t *testing.T) {
 }
 
 // TimeoutIsOutcome: a busy loop is interrupted at the budget (script-timeout);
-// a host call that finishes within the budget is not cut; [M1] a host call
-// that BLOCKS returns the budget's DeadlineExceeded to the script and the
-// fire is script-timeout within the budget plus the interrupt latency — the
-// host ctx carries the deadline, not the handler's 60 s. Sabotage: pass the
-// bare run ctx to the host.
+// [M1] a host call that BLOCKS returns the budget's DeadlineExceeded to the
+// script and the fire is script-timeout — the host ctx carries the budget as
+// its deadline, not the handler's 60 s, and the script stops at the very next
+// instruction. Both fires can end ONLY through the budget (the loop never
+// returns; the stub returns only when its ctx ends), so nothing here is a
+// latency bound: settle's 20 s is the hang detector. The deadline itself is
+// checked against the clock the test read BEFORE the fire and the one the
+// stub read inside it, which brackets the fire's start whatever the load.
+// Sabotage: pass the bare run ctx to the host (red: the stub sees no deadline
+// and refuses, the fire is script-error); derive the host ctx with the
+// handler's own 60 s (red: the deadline is outside the bracket).
+//
+// That host time is not charged to the script is HostTimeIsNotTheScripts.
 func TestScript_TimeoutIsOutcome(t *testing.T) {
+	const budget = 300 * time.Millisecond
 	_, ri, tools := newScriptRepo(t, 0,
 		scriptTrig("loops", "learn", "tasks/in/**", "loops"),
-		scriptTrig("slowcall", "learn", "tasks/in/**", "slowcall"),
 		scriptTrig("blocks", "learn", "tasks/in/**", "blocks"))
-	setHooks(t, trigger.TestHooks{ScriptBudget: 300 * time.Millisecond})
+	setHooks(t, trigger.TestHooks{ScriptBudget: budget})
 	putScript(t, ri, "loops", `while (true) {}`)
-	putScript(t, ri, "slowcall", `knomit.query({slow: true}); knomit.emit({done: true});`)
 	putScript(t, ri, "blocks", `knomit.query({block: true}); knomit.emit({after: true});`)
-	var blockedErr error
-	var blockedAt time.Duration
+	var (
+		mu             sync.Mutex
+		blockedErr     error
+		deadline       time.Time
+		hasDeadline    bool
+		entered        time.Time
+		blockedEntered bool
+	)
 	tools.hook = func(ctx context.Context, tool string, args map[string]any) (string, bool, error, bool) {
-		switch {
-		case args["slow"] == true:
-			time.Sleep(100 * time.Millisecond) // ignores ctx: completes inside the budget
-			return `{"facts":[]}`, false, nil, true
-		case args["block"] == true:
-			t0 := time.Now()
-			<-ctx.Done() // a stuck store: returns only when the ctx ends
-			blockedErr, blockedAt = ctx.Err(), time.Since(t0)
-			return "", false, ctx.Err(), true
+		if args["block"] != true {
+			return "", false, nil, false
 		}
-		return "", false, nil, false
+		dl, ok := ctx.Deadline()
+		now := time.Now()
+		mu.Lock()
+		deadline, hasDeadline, entered, blockedEntered = dl, ok, now, true
+		mu.Unlock()
+		if !ok || dl.After(now.Add(budget)) {
+			// Not the budget's deadline: blocking would only wait for the
+			// hang detector. Refuse at once; the asserts below say why.
+			return "", false, fmt.Errorf("the host ctx does not carry the budget (deadline %v, %v)", dl, ok), true
+		}
+		<-ctx.Done() // a stuck store: returns only when the ctx ends
+		mu.Lock()
+		blockedErr = ctx.Err()
+		mu.Unlock()
+		return "", false, ctx.Err(), true
 	}
-	sinkSlow := subscribePayloads(t, ri, "slowcall")
 	sinkBlock := subscribePayloads(t, ri, "blocks")
 	settle(t, ri)
 
-	started := time.Now()
+	before := time.Now()
 	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	settle(t, ri)
-	require.Less(t, time.Since(started), 3*time.Second, "three fires, two of them bounded by a 300 ms budget")
 
 	lo := firesOf(t, ri, "loops")
 	require.Len(t, lo, 1)
@@ -819,19 +838,58 @@ func TestScript_TimeoutIsOutcome(t *testing.T) {
 	require.Contains(t, lo[0].Error, "exceeded")
 	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("loops").ScriptTimeout)
 
-	sc := firesOf(t, ri, "slowcall")
-	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(sc), "a 100 ms host call under a 300 ms budget completes")
-	require.Equal(t, true, sinkSlow.wait(t, 1)[0]["done"])
-	require.Less(t, ri.triggers.StatsViewForTest("slowcall").Duration.MaxMS, 50.0, "host time is not the script's own time")
-
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, blockedEntered, "reached: the blocking host call ran")
+	require.True(t, hasDeadline, "the host ctx carries a deadline")
+	// runScript derives the deadline as (its start) + budget, and its start
+	// lies between the test's write and the stub's entry.
+	require.False(t, deadline.Before(before.Add(budget)), "the deadline %v is earlier than the budget allows (write at %v)", deadline, before)
+	require.False(t, deadline.After(entered.Add(budget)), "the deadline %v is later than the fire's start + the budget (stub entered at %v): not the budget", deadline, entered)
+	require.ErrorIs(t, blockedErr, context.DeadlineExceeded, "the host ctx ended at its deadline, not by a cancel")
 	bl := firesOf(t, ri, "blocks")
 	require.Len(t, bl, 1)
-	require.Equal(t, facts.TriggerOutcomeScriptTimeout, bl[0].Outcome)
-	require.ErrorIs(t, blockedErr, context.DeadlineExceeded, "the host ctx carried the budget as its deadline, not the handler's 60 s")
-	require.Less(t, blockedAt, 1500*time.Millisecond, "released at the budget (300 ms), not the handler's own timeout")
+	require.Equal(t, facts.TriggerOutcomeScriptTimeout, bl[0].Outcome, "%s", bl[0].Error)
 	sinkBlock.mu.Lock()
 	require.Empty(t, sinkBlock.got, "the budget interrupts the script at the very next instruction; the emit after the call never runs")
 	sinkBlock.mu.Unlock()
+}
+
+// HostTimeIsNotTheScripts: the time a script spends INSIDE host calls is
+// knomit's (host_ms), and is taken out of the trigger's own duration before
+// the statistics and the slow detector see it. The dispatcher's stopwatch is
+// a test clock that moves only when the stub host call moves it (by an hour),
+// so the script's own duration is exactly zero, whatever the CPU load, and
+// charging the call to the script would record an hour. The budget is 24 h:
+// it must not be what ends the fire, and the call returning inside it lets
+// the script run on to its emit.
+// Sabotage: drop `- hostMS` from phase B's elapsed (red: 3,600,000 ms).
+func TestScript_HostTimeIsNotTheScripts(t *testing.T) {
+	_, ri, tools := newScriptRepo(t, 0, scriptTrig("slowcall", "learn", "tasks/in/**", "slowcall"))
+	sw := &fakeStopwatch{}
+	setHooks(t, trigger.TestHooks{ScriptBudget: 24 * time.Hour, Stopwatch: sw.now})
+	putScript(t, ri, "slowcall", `knomit.query({slow: true}); knomit.emit({done: true});`)
+	var calls atomic.Int32
+	tools.hook = func(ctx context.Context, tool string, args map[string]any) (string, bool, error, bool) {
+		if args["slow"] != true {
+			return "", false, nil, false
+		}
+		sw.advance(time.Hour) // an hour inside the host, by the dispatcher's stopwatch
+		calls.Add(1)
+		return `{"facts":[]}`, false, nil, true
+	}
+	sink := subscribePayloads(t, ri, "slowcall")
+	settle(t, ri)
+
+	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	settle(t, ri)
+
+	require.Equal(t, []string{facts.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "slowcall")), "a host call that returns inside the budget is not cut")
+	require.Equal(t, true, sink.wait(t, 1)[0]["done"], "the script ran on past the call")
+	require.Equal(t, int32(1), calls.Load(), "reached: the host call ran once")
+	st := ri.triggers.StatsViewForTest("slowcall")
+	require.Equal(t, int64(1), st.Duration.Count)
+	require.Equal(t, 0.0, st.Duration.MaxMS, "host time is not the script's own time")
 }
 
 // ---- T14, T15, T16: the script at the head

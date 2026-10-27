@@ -21,10 +21,6 @@ func mustBeTest(name string) {
 	}
 }
 
-// RecipeWaitDelayForTest is recipeWaitDelay: how long an ended exec call
-// waits for its pipes after the child exits or is killed.
-const RecipeWaitDelayForTest = recipeWaitDelay
-
 // RecipeOutputCapForTest is recipeOutputCap: the cap on a recipe child's
 // stdout and stderr each.
 const RecipeOutputCapForTest = recipeOutputCap

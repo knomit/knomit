@@ -19,8 +19,8 @@ import (
 // AdvanceTriggerWatermarks (bookmarks and due marks); everything else is a
 // read (DueCandidates and DueMarks are the `on: due` sweep's two reads), the
 // hub, the log, or pure computation. The one clock read that decides anything
-// is d.clock (time.Now().UTC(), once per run, for the sweep); the others time
-// durations. A call that is not here fails the test — add it only after
+// is d.clock (time.Now().UTC(), once per run, for the sweep); stopwatch (a
+// test seam over time.Now) times durations. A call that is not here fails the test — add it only after
 // checking it keeps that contract.
 var triggersRepoAllowedCalls = map[string][]string{
 	"triggers.go": {
@@ -66,7 +66,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.mu.Lock", "d.mu.Unlock", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",
 		"context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
 		// pure helpers
-		"time.Now", "time.Since", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds", "?.UTC", "?.Truncate", "rs.now.Unix",
+		"time.Now", "stopwatch", "?.Sub", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds", "?.UTC", "?.Truncate", "rs.now.Unix",
 		"strings.TrimPrefix", "strings.HasSuffix",
 		"plumbing.NewHash", "commit.String", "head.String", "errors.As", "err.Error", "fmt.Sprintf",
 		"sort.Strings", "sort.Slice", "sort.SliceStable", "append", "len", "make", "delete", "recover",
@@ -99,7 +99,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"h.privateRefused", // factPath's rule for one path, also on knomit.learn's opts.retract (F08 M2)
 		"d.mu.Lock", "d.mu.Unlock", "argAt", "stringArg", "objectArg", "capForLog",
 		// pure helpers
-		"time.Now", "time.Since", "now.Add", "?.After", "json.Marshal", "json.Unmarshal", "strings.TrimSpace",
+		"stopwatch", "?.Sub", "now.Add", "?.After", "json.Marshal", "json.Unmarshal", "strings.TrimSpace",
 		"errors.Is", "errors.As", "errors.New", "fmt.Errorf", "fmt.Sprintf", "err.Error", "cs.err.Error",
 		"append", "len", "delete", "string", "recover", "make",
 	},
