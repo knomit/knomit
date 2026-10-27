@@ -16,6 +16,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -28,7 +29,7 @@ func TestProbeOrigin_HeadNotMainByName(t *testing.T) {
 	root := t.TempDir()
 	m := newProbeTestManager(t, root)
 	bare := filepath.Join(root, "remote.git")
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	for _, b := range []string{"main", "trunk"} {
@@ -77,7 +78,7 @@ func TestOrigins_RefuseAnEmptyBranch(t *testing.T) {
 func seedFleetRemoteOn(t *testing.T, bare, branch string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch="+branch, bare)
+	gitfixture.InitBare(t, bare, branch)
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	runGit(t, work, "checkout", "-B", branch)

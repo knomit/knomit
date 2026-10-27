@@ -22,6 +22,7 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -67,7 +68,7 @@ func newForgeFleet(t *testing.T, leaves map[string]ssh.Signer) *forgeFleet {
 		files["artifacts/fleet/certs/"+id+".pem"] = leaf
 	}
 	require.NoError(t, os.MkdirAll(f.bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", f.bare)
+	gitfixture.InitBare(t, f.bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", f.bare, work)
 	for p, b := range files {

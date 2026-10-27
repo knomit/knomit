@@ -9,6 +9,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/test/testenv/gitserver"
 )
 
@@ -18,10 +19,9 @@ import (
 // direct writes to main, merging an agent branch into main, and deliberate
 // object-store corruption for Verify tests.
 //
-// Uses real git via os/exec for ops the production code doesn't handle,
-// matching the exact pattern in internal/engine/store/repo_test.go:
-//
-//	exec.Command("git", "init", "--bare", remoteDir).Run()
+// Uses real git via os/exec for ops the production code doesn't handle. The
+// bare repository itself is made by internal/testsupport/gitfixture, like
+// every test remote, so it runs no git auto-maintenance.
 type RemoteHandle struct {
 	sb             *Storyboard
 	name           string
@@ -53,7 +53,7 @@ func (sb *Storyboard) BareRemoteWithBranch(name, upstreamBranch string) *RemoteH
 		upstreamBranch = "main"
 	}
 	dir := filepath.Join(sb.homeDir, "remotes", name)
-	mustGit(t, "", "init", "--bare", "--initial-branch="+upstreamBranch, dir)
+	gitfixture.InitBare(t, dir, upstreamBranch)
 	return &RemoteHandle{
 		sb:             sb,
 		name:           name,
@@ -86,7 +86,7 @@ func (sb *Storyboard) MirrorOf(name string, src *RemoteHandle) *RemoteHandle {
 	t := sb.t
 	t.Helper()
 	dir := filepath.Join(sb.homeDir, "remotes", name)
-	mustGit(t, "", "clone", "--bare", src.Dir(), dir)
+	gitfixture.CloneBare(t, src.Dir(), dir)
 	return &RemoteHandle{
 		sb:             sb,
 		name:           name,
@@ -373,7 +373,9 @@ func (r *RemoteHandle) WriteDisjointRootOnMain(path, content, msg string) {
 // exit. Used by BareRemote, MergeIntoMain, and WriteMain.
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// maintenance.auto=false: a commit in a work clone would otherwise start
+	// a detached auto-maintenance there too (see internal/testsupport/gitfixture).
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	if dir != "" {
 		cmd.Dir = dir
 	}

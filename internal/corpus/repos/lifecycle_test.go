@@ -19,6 +19,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -146,7 +147,9 @@ func TestActiveRepoWithOrigin_EmptyWhenNone(t *testing.T) {
 // error. Used to build a real bare remote that clone-mode Create fetches from.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// maintenance.auto=false: no detached auto-maintenance outliving the
+	// command in a t.TempDir repository (#651).
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -186,7 +189,7 @@ func seedBareRemoteNoOntology(t *testing.T, bare string) string {
 func seedBareRemoteWithOntology(t *testing.T, bare string, withOntology bool) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
@@ -927,7 +930,7 @@ func countActiveWithOrigin(m *Manager, url string) int {
 func seedBareRemoteWithFact(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 

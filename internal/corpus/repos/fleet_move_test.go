@@ -17,6 +17,7 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -26,7 +27,7 @@ func emptyBare(t *testing.T, dir, name string) (string, string) {
 	t.Helper()
 	bare := filepath.Join(dir, name)
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	return bare, fileuri.New(bare)
 }
 
@@ -277,7 +278,7 @@ func seedFleetForge(t *testing.T, bare string, root *pkitest.Fleet) {
 		files["artifacts/fleet/"+name] = b
 	}
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	for p, b := range files {

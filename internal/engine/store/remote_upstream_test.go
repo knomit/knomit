@@ -21,6 +21,7 @@ import (
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -148,7 +149,7 @@ func TestReconcileMain_UsesConfiguredUpstream(t *testing.T) {
 func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 	// Build a bare remote whose HEAD points to master (not main).
 	bareDir := t.TempDir()
-	mustRun(t, "", "git", "init", "--bare", "--initial-branch=master", bareDir)
+	gitfixture.InitBare(t, bareDir, "master")
 
 	// Seed a commit on master via a worktree clone.
 	work := t.TempDir()
@@ -192,7 +193,7 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 // remote with two such branches is refused (TestResolveUpstream_UndecidableIsRefused).
 func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	bareDir := t.TempDir()
-	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
+	gitfixture.InitBare(t, bareDir, "main")
 
 	work := t.TempDir()
 	mustRun(t, "", "git", "clone", bareDir, work)
@@ -260,7 +261,7 @@ func mustRun(t *testing.T, dir, cmd string, args ...string) {
 func seedBareRemoteOnMain(t *testing.T) string {
 	t.Helper()
 	bareDir := t.TempDir()
-	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
+	gitfixture.InitBare(t, bareDir, "main")
 	work := t.TempDir()
 	mustRun(t, "", "git", "clone", bareDir, work)
 	mustRun(t, work, "git", "checkout", "-B", "main")
@@ -342,7 +343,7 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 
 func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
 	bareDir := t.TempDir()
-	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
+	gitfixture.InitBare(t, bareDir, "main")
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -356,7 +357,7 @@ func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
 // else the remote HEAD. A master-only remote yields "master".
 func TestInitSubscription_ResolvesRemoteHEADWhenNoMain(t *testing.T) {
 	bareDir := t.TempDir()
-	mustRun(t, "", "git", "init", "--bare", "--initial-branch=master", bareDir)
+	gitfixture.InitBare(t, bareDir, "master")
 	work := t.TempDir()
 	mustRun(t, "", "git", "clone", bareDir, work)
 	mustRun(t, work, "git", "checkout", "-B", "master")

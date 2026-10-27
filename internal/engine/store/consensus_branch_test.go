@@ -12,6 +12,7 @@ import (
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // The consensus branch of a repo with no origin is the RECORDED one, never a
@@ -111,7 +112,7 @@ func TestInitFromRemote_RecordsTheResolvedConsensusBranchBeforeAnySetOrigin(t *t
 	})
 	t.Run("a clone of an empty remote records the branch it created", func(t *testing.T) {
 		bare := t.TempDir()
-		mustRun(t, "", "git", "init", "--bare", bare)
+		gitfixture.InitBare(t, bare, "")
 		svc := open(t)
 		up, wasEmpty, err := svc.Remote().InitFromRemote(context.Background(), fileuri.New(bare), nil, "trunk", "agent/test", nil, nil)
 		require.NoError(t, err)

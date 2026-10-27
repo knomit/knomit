@@ -16,6 +16,7 @@ import (
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // bareRemoteWith builds a bare remote holding one commit on each of branches
@@ -23,7 +24,7 @@ import (
 func bareRemoteWith(t *testing.T, head string, branches ...string) string {
 	t.Helper()
 	bareDir := t.TempDir()
-	mustRun(t, "", "git", "init", "--bare", "--initial-branch="+branches[0], bareDir)
+	gitfixture.InitBare(t, bareDir, branches[0])
 	work := t.TempDir()
 	mustRun(t, "", "git", "clone", bareDir, work)
 	mustRun(t, work, "git", "config", "user.email", "t@t")
@@ -115,7 +116,7 @@ func TestResolveUpstream_UndecidableIsRefused(t *testing.T) {
 func TestNewRepo_DefaultConsensusBranchOnlyWhenUnnamed(t *testing.T) {
 	t.Run("empty remote, trunk requested", func(t *testing.T) {
 		bare := t.TempDir()
-		mustRun(t, "", "git", "init", "--bare", bare)
+		gitfixture.InitBare(t, bare, "")
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })
@@ -127,7 +128,7 @@ func TestNewRepo_DefaultConsensusBranchOnlyWhenUnnamed(t *testing.T) {
 	})
 	t.Run("empty remote, nothing requested", func(t *testing.T) {
 		bare := t.TempDir()
-		mustRun(t, "", "git", "init", "--bare", bare)
+		gitfixture.InitBare(t, bare, "")
 		svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = svc.Close() })

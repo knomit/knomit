@@ -21,6 +21,7 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -29,7 +30,7 @@ import (
 func seedFleetRemote(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	ont, err := fact.FleetOntology().Serialize()

@@ -13,6 +13,7 @@ import (
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -209,7 +210,7 @@ func TestCreate_InitializeRefusesARemoteThatIsAlreadyAKnowledgeBase(t *testing.T
 func TestCreate_InitializeRefusesAnEmptyRemote(t *testing.T) {
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	gitfixture.InitBare(t, remoteDir, "")
 	url := fileuri.New(remoteDir)
 	m := newRemoteModeManager(t, dir)
 
@@ -230,7 +231,7 @@ func TestCreate_InitializeRefusesAnEmptyRemote(t *testing.T) {
 func TestCreate_CloneRefusesAnEmptyRemote(t *testing.T) {
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	gitfixture.InitBare(t, remoteDir, "")
 	m := newRemoteModeManager(t, dir)
 
 	_, err := m.Create(context.Background(), CreateSpec{
@@ -340,7 +341,7 @@ func TestCreatePreflight_InitializeRequiresOriginAndOntology(t *testing.T) {
 func TestCreatePreflight_InitializeRefusesAnEmptyRemote(t *testing.T) {
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	gitfixture.InitBare(t, remoteDir, "")
 	m := newRemoteModeManager(t, dir)
 
 	err := m.CreatePreflight(context.Background(), CreateSpec{

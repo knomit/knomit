@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,6 +15,7 @@ import (
 
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -41,7 +41,7 @@ func newProbeTestManager(t *testing.T, root string) *Manager {
 func initBareRepo(t *testing.T, parent string) string {
 	t.Helper()
 	dir := filepath.Join(parent, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", dir).Run())
+	gitfixture.InitBare(t, dir, "")
 	return fileuri.New(dir)
 }
 

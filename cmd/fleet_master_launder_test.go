@@ -26,6 +26,7 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // The laundering attack on a fleet copy that HOLDS a member commit nobody
@@ -72,7 +73,7 @@ func newLaunderFixture(t *testing.T, master bool) *launderFixture {
 	lf := &launderFixture{ctx: ctx, f: f, evil: "kb/members/bravo/evil.md"}
 
 	lf.bare = filepath.Join(dir, "fleet.git")
-	missionGit(t, dir, "init", "-q", "--bare", "--initial-branch=main", lf.bare)
+	gitfixture.InitBare(t, lf.bare, "main")
 	lf.seed = filepath.Join(dir, "seed")
 	missionGit(t, dir, "clone", "-q", lf.bare, lf.seed)
 	ont, err := fact.FleetOntology().Serialize()
