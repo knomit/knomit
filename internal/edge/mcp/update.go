@@ -155,6 +155,11 @@ func updateContext(raw json.RawMessage) (ctx map[string]any, ok bool, err error)
 // UpdateHandler returns the handler function for knomit_update.
 func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		// An argument this tool does not declare is refused, never ignored
+		// (knomit#122): the call would otherwise run as if it were absent.
+		if err := rejectUnknownArguments(req, updateTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 

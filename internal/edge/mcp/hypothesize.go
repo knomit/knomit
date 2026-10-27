@@ -62,9 +62,9 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
 		mcpgo.WithBoolean("current", mcpgo.Description("With session_id and no response: return the current item again without answering it (it may advance the session when nothing is outstanding).")),
 		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Optional but strongly recommended: it lets the server reject a response aimed at a stale item instead of applying it to a different one.")),
-		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
-		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
-		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
+		mcpgo.WithString("effort", mcpgo.Enum(effortValues...), mcpgo.Description("Start only (ignored with session_id). Discovery effort dial: 'normal', 'medium', or 'high'. Omitted: the server's configured default (discovery.effort_default, normally 'normal'). Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
+		mcpgo.WithArray("domain", mcpgo.WithStringItems(), mcpgo.Description("Start only (ignored with session_id). Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
+		mcpgo.WithArray("entities", mcpgo.WithStringItems(), mcpgo.Description("Start only (ignored with session_id). Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
 		traceArg(),
 		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),
 	)
