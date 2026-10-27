@@ -1,11 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newServerWithSessions returns a Server with the given registered repo names,
@@ -13,22 +16,54 @@ import (
 // are api/origins', mounted by the router).
 func newServerWithSessions(t *testing.T, repoNames ...string) *Server {
 	t.Helper()
-	isolateOriginSessionTemp(t)
-	return &Server{Manager: newTestManagerWithRepos(t, repoNames...)}
+	return withOriginSessionLifetime(t, &Server{Manager: newTestManagerWithRepos(t, repoNames...)})
 }
 
-// isolateOriginSessionTemp points os.TempDir() at a directory of t's own. A
-// test Server sets neither Lifetime nor OriginSessionsDir, so the
-// origin-session manager origins.Mount creates lives forever and keeps its
-// session folders in a private knomit-origin-sessions-* dir under
-// os.TempDir(); that dir goes with the test's TempDir instead. It sets the environment, so the test must not be
-// parallel.
-func isolateOriginSessionTemp(t *testing.T) {
+// withOriginSessionLifetime gives s, a test Server that will open origin
+// sessions, a Lifetime that ends with t, and points os.TempDir() at a
+// directory of t's own, where the manager origins.Mount creates (s sets no
+// OriginSessionsDir) makes its private knomit-origin-sessions-* dir.
+//
+// At cleanup it ends the Lifetime and WAITS for the manager to release every
+// file it holds (the run's held lock file, a session's clone.db) before t's
+// TempDir is removed: the cleanup is registered after that TempDir, so it runs
+// first. Without the wait the manager lives forever, and on Windows the
+// TempDir removal fails on the still-open lock file (#649). It then asserts
+// the manager left nothing behind, which also holds the test to this on
+// macOS and Linux, where an open file can be unlinked.
+//
+// It sets the environment, so the test must not be parallel.
+func withOriginSessionLifetime(t *testing.T, s *Server) *Server {
 	t.Helper()
 	d := t.TempDir()
 	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
 		t.Setenv(k, d)
 	}
+	life, end := context.WithCancel(context.Background())
+	s.Lifetime = life
+	t.Cleanup(func() {
+		end()
+		released := make(chan struct{})
+		go func() {
+			s.originSessionsReleased.Wait()
+			close(released)
+		}()
+		select {
+		case <-released:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the origin-session manager did not release its files within 30s of its lifetime ending")
+		}
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "knomit-origin-sessions-") {
+				t.Errorf("the origin-session manager left %s behind after its lifetime ended", e.Name())
+			}
+		}
+	})
+	return s
 }
 
 // TestOriginSessions_UnknownRepo_Returns404 verifies that any request against

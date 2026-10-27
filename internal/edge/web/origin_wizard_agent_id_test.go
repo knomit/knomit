@@ -49,8 +49,7 @@ func TestConnect_ReplayAuthorsAsThePersistedAgentID(t *testing.T) {
 	if err := m.Start(); err != nil {
 		t.Fatal(err)
 	}
-	isolateOriginSessionTemp(t)
-	s := &Server{Manager: m, AgentBranch: "agent/test"}
+	s := withOriginSessionLifetime(t, &Server{Manager: m, AgentBranch: "agent/test"})
 
 	ri := createLocalRepo(t, m, "core")
 	// A local fact for /apply to replay onto the remote's history.

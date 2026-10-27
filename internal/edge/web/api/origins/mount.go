@@ -6,6 +6,7 @@ package origins
 
 import (
 	"context"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,12 +30,31 @@ import (
 // sessionManager). "" gives the manager a private directory under
 // os.TempDir() instead.
 //
+// That removal runs after ctx ends, asynchronously. A non-nil released is
+// how the caller waits for it: Mount adds one to it, and the manager marks it
+// Done once ctx has ended and it has let go of everything it held (every
+// session's store closed and folder removed, its run directory and lock file
+// removed with the lock's handle closed, its startup sweep finished). A
+// caller that deletes sessionsDir (or the temp dir a "" manager uses) waits
+// on it first: on Windows a file with an open handle cannot be removed. While
+// ctx is live nothing runs on released's behalf (no goroutine waits on it).
+//
 // Two Mount calls make two managers that know nothing of each other's
 // sessions, so a caller that serves the routes from more than one router
 // mounts ONE r in all of them (web's router does, for its plain and OAuth
 // listeners).
-func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string) {
-	routes(r, rm, agentBranch, newSessionManager(ctx, sessionsDir))
+func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string, released *sync.WaitGroup) {
+	sm := newSessionManager(ctx, sessionsDir)
+	if released != nil {
+		released.Add(1)
+		// close is once-only and returns when the first call has finished,
+		// whichever of the two AfterFuncs runs it.
+		context.AfterFunc(ctx, func() {
+			sm.close()
+			released.Done()
+		})
+	}
+	routes(r, rm, agentBranch, sm)
 }
 
 // routes is Mount's route table, over a given manager so the package's tests
