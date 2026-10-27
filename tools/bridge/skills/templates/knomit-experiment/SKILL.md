@@ -73,6 +73,13 @@ experiment moves all of them on that mount. It can never reach another
 knowledge base: the URL fixed the repo before any of this applied. Say so if
 you are not the only job on the connection.
 
+**Several agents on one `--repo`/`--lens` connection: one handle each.** Call
+`knomit_bind {}` for a handle of your own (it changes only the branch, never
+the repo or lens), open with `knomit_experiment {action: "open", name, binding:
+<handle>}`, and pass that `binding` on every call of yours. Only your handle
+moves; calls without `binding` stay where the connection is. The handle works
+only on this connection.
+
 **On open, warn about expiry.** An experiment with no commits for
 `experiments.expiry_days` (default 30) is rolled back automatically by the
 sweeper — the whole thing, not just the stale part. A long-running PR can

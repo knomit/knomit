@@ -175,7 +175,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 
 		out := hypothesizeResult(result)
 		if out != nil {
-			out.Next = hypothesizeNext(out, repos.SessionScoped(ctx))
+			out.Next = hypothesizeNext(out, bindingHandleFromContext(ctx) != "")
 		}
 		resultJSON, _ := json.MarshalIndent(out, "", "  ")
 		return mcpgo.NewToolResultText(string(resultJSON)), nil

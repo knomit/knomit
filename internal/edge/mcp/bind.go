@@ -13,7 +13,12 @@ import (
 	"knomit/internal/foundation/clientsessions"
 )
 
-// bindTool defines knomit_bind: the caller's choice of repo or lens.
+// bindExperimentDescription is knomit_bind's `experiment` argument. One text
+// for both endpoint kinds: resuming an experiment means the same thing on each.
+const bindExperimentDescription = "Optional: RESUME an existing experiment, so the new handle starts inside it. Does not create one — use knomit_experiment {action: \"open\"} for that. This is how you get back into an experiment after reconnecting, since a handle does not outlive its session."
+
+// bindTool defines knomit_bind as the UNSCOPED endpoint lists it: the caller's
+// choice of repo or lens.
 //
 // The description is what an agent reads before its first call on a fresh
 // session, so it states the things it cannot discover by trying: that the
@@ -24,12 +29,29 @@ import (
 // It declares no `binding` argument of its own — knomit_bind is where handles
 // come from — so rejectUnknownArguments refuses one, which is the right answer
 // for an agent reflexively attaching its handle to every call.
+//
+// This is also the schema the handler validates against on BOTH endpoint
+// kinds. A URL-scoped endpoint lists scopedBindTool instead, which drops
+// `repo` and `lens`; a caller there that sends one anyway gets the
+// "this connection is fixed to …" answer rather than "unknown argument".
 func bindTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_bind",
-		mcpgo.WithDescription("Only on the unscoped /api/v1/mcp endpoint (a bridge started with neither --repo nor --lens); on a URL-scoped endpoint this always fails. Bind a repo or lens by name (see knomit_repos for the names) and receive an opaque `binding` handle. EVERY other tool except knomit_repos requires that handle as its `binding` argument — keep it for the rest of your work and pass it on every call. The handle selects the knowledge base and carries no review state: knomit_review and knomit_hypothesize continuations also need their own session_id. Nothing but knomit_repos works until you have one; call again for a different base, which mints a SECOND handle and leaves the first one valid. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the handle, the mounts table and the knowledge base's instructions — treat them as session instructions."),
+		mcpgo.WithDescription("Bind a repo or lens by name (see knomit_repos for the names) and receive an opaque `binding` handle. EVERY other tool except knomit_repos requires that handle as its `binding` argument — keep it for the rest of your work and pass it on every call. The handle selects the knowledge base and carries no review state: knomit_review and knomit_hypothesize continuations also need their own session_id. Nothing but knomit_repos works until you have one; call again for a different base, which mints a SECOND handle and leaves the first one valid. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the handle, the mounts table and the knowledge base's instructions — treat them as session instructions."),
 		mcpgo.WithString("repo", mcpgo.Description("Name of the repo to bind to. Mutually exclusive with lens.")),
 		mcpgo.WithString("lens", mcpgo.Description("Name of the lens to bind to. Mutually exclusive with repo.")),
-		mcpgo.WithString("experiment", mcpgo.Description("Optional: RESUME an existing experiment, so the new handle starts inside it. Does not create one — use knomit_experiment {action: \"open\"} for that. This is how you get back into an experiment after reconnecting, since a handle does not outlive its session.")),
+		mcpgo.WithString("experiment", mcpgo.Description(bindExperimentDescription)),
+	)
+}
+
+// scopedBindTool is knomit_bind as a URL-scoped endpoint lists it. The URL
+// fixes the repo or lens, so the only thing left to choose is the branch: the
+// default one, or an existing experiment. That is exactly what the unscoped
+// bind can choose for a given repo or lens, which is the rule — a scoped
+// endpoint binds whatever the unscoped one could, confined to its own target.
+func scopedBindTool() mcpgo.Tool {
+	return mcpgo.NewTool("knomit_bind",
+		mcpgo.WithDescription("This connection is fixed to one repo or lens by its URL; knomit_bind here only changes the BRANCH you work on, never the repo or lens. Call it with no arguments for a new `binding` handle on the default branch, or with `experiment` to resume an existing experiment. Pass that handle as `binding` on later calls to work on its branch; calls without `binding` keep using the connection's own repo or lens. Each call mints a new handle and earlier ones stay valid, so several agents sharing this connection can each hold their own: bind, then knomit_experiment {action: \"open\", binding: <handle>} moves only that handle into its own experiment."),
+		mcpgo.WithString("experiment", mcpgo.Description(bindExperimentDescription)),
 	)
 }
 
@@ -48,6 +70,11 @@ func bindTool() mcpgo.Tool {
 // replaced, where the second bind silently redirected the first caller's
 // writes.
 //
+// ON A URL-SCOPED ENDPOINT the target is the URL's repo or lens, never a name
+// from the arguments, and the handle is recorded against that mount so it works
+// there and nowhere else. Everything after choosing the target — experiment
+// resume, minting, the result — is the same code as on the unscoped endpoint.
+//
 // There is deliberately no unbind form: a handle is abandoned, not cleared. It
 // ages out of binding_handles once unused for the retention window.
 func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -55,29 +82,36 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		if err := rejectUnknownArguments(req, bindTool()); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		// A URL-scoped mount has nothing to switch: its repo comes from the
-		// path, and rebinding it would silently serve a different base than the
-		// endpoint names.
-		if !repos.SessionScoped(ctx) {
-			return mcpgo.NewToolResultError(
-				"this endpoint is bound by its URL; connect the bridge to /api/v1/mcp (no --repo/--lens) to switch repos"), nil
-		}
-
 		repoName := req.GetString("repo", "")
 		lensName := req.GetString("lens", "")
 		experiment := req.GetString("experiment", "")
-		switch {
-		case repoName == "" && lensName == "":
-			return mcpgo.NewToolResultError(
-				"knomit_bind needs exactly one of `repo` or `lens` (a name); there is no unbind form"), nil
-		case repoName != "" && lensName != "":
-			return mcpgo.NewToolResultError(
-				"knomit_bind takes exactly one of `repo` or `lens`, not both"), nil
+
+		var (
+			b     *repos.Binding
+			pin   string
+			mount string // "" on the unscoped endpoint
+			err   error
+		)
+		if repos.SessionScoped(ctx) {
+			switch {
+			case repoName == "" && lensName == "":
+				return mcpgo.NewToolResultError(
+					"knomit_bind needs exactly one of `repo` or `lens` (a name); there is no unbind form"), nil
+			case repoName != "" && lensName != "":
+				return mcpgo.NewToolResultError(
+					"knomit_bind takes exactly one of `repo` or `lens`, not both"), nil
+			}
+			if mgr == nil {
+				return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
+			}
+			b, pin, err = bindTarget(mgr, repoName, lensName)
+		} else {
+			b, pin, mount, err = scopedBindTarget(ctx, mgr, repoName, lensName)
+		}
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
-		if mgr == nil {
-			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
-		}
 		store := mgr.ClientSessions()
 		if store == nil {
 			return mcpgo.NewToolResultError(
@@ -87,10 +121,6 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		// which is exactly why two callers sharing one session id no longer
 		// collide.
 
-		b, pin, err := bindTarget(mgr, repoName, lensName)
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
 		// RESUME ONLY. Binding is not where experiments are created: an
 		// agent that mistypes a name here should be told so, not handed a
 		// fresh branch it did not ask for and will not find its work on.
@@ -112,9 +142,14 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		// No branch: knomit_bind does not take one yet, and "" already means
 		// the target's own read branch. The column is carried so the planned
 		// per-handle branch switch is a behaviour change, not a migration.
-		if err := store.MintBindingHandle(ctx, handle, pin, "", time.Now()); err != nil {
+		if mount == "" {
+			err = store.MintBindingHandle(ctx, handle, pin, "", time.Now())
+		} else {
+			err = store.MintBindingHandleOnMount(ctx, handle, pin, mount, time.Now())
+		}
+		if err != nil {
 			// Worth a log line: the likely cause is a control.db that never got
-			// migration 000005, and without server-side evidence that presents
+			// its migrations, and without server-side evidence that presents
 			// to the agent as an unexplained refusal it would retry forever.
 			log.Warn().Err(err).Str("pin", pin).
 				Msg("knomit_bind: recording the binding handle failed")
@@ -136,6 +171,11 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		if err != nil {
 			return mcpgo.NewToolResultError("marshal error: " + err.Error()), nil
 		}
+		if mount != "" {
+			// A scoped connection already received this base's instructions at
+			// initialize; only the handle is new.
+			return mcpgo.NewToolResultText(string(out) + "\n\n" + scopedHandleBanner(handle)), nil
+		}
 		// initialize on the unscoped mount could only carry the DEFAULT
 		// ontology, and MCP cannot re-send instructions mid-session, so the
 		// bound base's own instructions have to ride back here — behind the
@@ -144,6 +184,68 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 			string(out) + "\n\n" + handleBanner(handle) +
 				BindingInstructions(b, profileFor(mgr, b.Write()))), nil
 	}
+}
+
+// scopedBindTarget is bindTarget for a URL-scoped endpoint: the URL's own repo
+// or lens at its default branch, plus the mount the handle is recorded against.
+//
+// It resolves the target by the URL's NAME through bindTarget, so the binding a
+// scoped handle starts on is built by exactly the code the unscoped endpoint
+// uses for the same repo or lens.
+func scopedBindTarget(ctx context.Context, mgr *repos.Manager, repoName, lensName string) (*repos.Binding, string, string, error) {
+	kind, name := urlTarget(ctx)
+	// Naming the URL's own repo or lens is harmless and accepted. Naming
+	// anything else is the one thing this endpoint cannot do.
+	if (repoName != "" && (kind != "repo" || repoName != name)) ||
+		(lensName != "" && (kind != "lens" || lensName != name)) {
+		flag, want := "--repo", repoName
+		other := "repo"
+		if lensName != "" {
+			flag, want, other = "--lens", lensName, "lens"
+		}
+		return nil, "", "", fmt.Errorf(
+			"This connection is fixed to %s %s; knomit_bind here only changes the branch. "+
+				"To use another %s, the user must restart the bridge with %s %s. Do not retry.",
+			kind, name, other, flag, want)
+	}
+	_, mount, plain := repos.MountSessionFromContext(ctx)
+	if !plain {
+		return nil, "", "", fmt.Errorf(
+			"This connection is fixed to %s %s at branch %q by its URL, and that branch cannot be changed here. "+
+				"Use the tools without `binding`. Do not retry.", kind, name, fixedBranch(ctx))
+	}
+	if mgr == nil {
+		return nil, "", "", errStoreUnavailable
+	}
+	var (
+		b   *repos.Binding
+		pin string
+		err error
+	)
+	if kind == "lens" {
+		b, pin, err = bindTarget(mgr, "", name)
+	} else {
+		b, pin, err = bindTarget(mgr, name, "")
+	}
+	if err != nil {
+		return nil, "", "", err
+	}
+	// The name resolved to the same uid the URL did, unless a rename raced
+	// this call. Refused then: the handle would name a base the URL does not.
+	if pin != mount {
+		return nil, "", "", fmt.Errorf("%s %q changed while binding — retry", kind, name)
+	}
+	return b, pin, mount, nil
+}
+
+// scopedHandleBanner is handleBanner for a URL-scoped endpoint, where the
+// handle is optional and chooses only the branch.
+func scopedHandleBanner(handle string) string {
+	return "## Your binding handle\n\n`" + handle + "`\n\n" +
+		"Pass this value as the `binding` argument on the calls that should work on this handle's branch " +
+		"(and on knomit_experiment, to open or leave an experiment for this handle alone). Calls without " +
+		"`binding` keep using this connection's own repo or lens. Copy it verbatim; it works only on this " +
+		"connection.\n"
 }
 
 // bindTarget resolves the named repo or lens to a binding plus the pin to

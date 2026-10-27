@@ -159,7 +159,7 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		if result != nil {
-			result.Next = synthesize.ReviewNext(result, repos.SessionScoped(ctx))
+			result.Next = synthesize.ReviewNext(result, bindingHandleFromContext(ctx) != "")
 		}
 		resultJSON, _ := json.MarshalIndent(result, "", "  ")
 		return mcpgo.NewToolResultText(string(resultJSON)), nil

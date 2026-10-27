@@ -68,6 +68,58 @@ INSERT INTO binding_handles (handle, binding, branch, created_at, last_used_at) 
 	return nil
 }
 
+// MintBindingHandleOnMount is MintBindingHandle for a handle minted on a
+// URL-SCOPED endpoint: it also records which mount minted it, so the handle
+// works on that endpoint and nowhere else (see HandleMount).
+//
+// ONE TRANSACTION. A scoped handle whose mount row was lost would read as a
+// handle minted on the unscoped endpoint, and be accepted there.
+func (s *Store) MintBindingHandleOnMount(ctx context.Context, handle, pin, mountUID string, now time.Time) error {
+	if handle == "" || pin == "" || mountUID == "" {
+		return errors.New("mint binding handle: empty handle, pin or mount")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("mint binding handle: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO binding_handles (handle, binding, branch, created_at, last_used_at) VALUES (?, ?, '', ?, ?)`,
+		handle, pin, now.Unix(), now.Unix()); err != nil {
+		return fmt.Errorf("mint binding handle: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO handle_mounts (handle, mount_uid, created_at) VALUES (?, ?, ?)`,
+		handle, mountUID, now.Unix()); err != nil {
+		return fmt.Errorf("mint binding handle: record mount: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("mint binding handle: %w", err)
+	}
+	return nil
+}
+
+// HandleMount returns the URL-scoped mount that minted handle, or "" when it
+// was minted on the unscoped endpoint.
+//
+// A read failure returns the error rather than "", because "" is an answer
+// here: it would make a scoped handle usable on the unscoped endpoint.
+func (s *Store) HandleMount(ctx context.Context, handle string) (string, error) {
+	if handle == "" {
+		return "", nil
+	}
+	var mount string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT mount_uid FROM handle_mounts WHERE handle = ?`, handle).Scan(&mount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("handle mount: %w", err)
+	}
+	return mount, nil
+}
+
 // BindingHandle returns the pin and branch handle routes to; ok is false when no
 // such handle exists. It also stamps last_used_at, which is what keeps a handle
 // in active use alive while an abandoned one ages out of Purge's window.

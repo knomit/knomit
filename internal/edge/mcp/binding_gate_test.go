@@ -178,35 +178,97 @@ func TestGate_MintedHandleWhoseRepoIsGone(t *testing.T) {
 	require.Contains(t, resultText(t, res), "knomit_bind")
 }
 
-// On a URL-scoped endpoint the repo comes from the path. A handle there is
-// refused on PRESENCE — silently ignoring it would let a caller believe it
-// selected one repo while the URL served another.
-func TestGate_HandleOnURLScopedEndpointIsRefused(t *testing.T) {
-	m, _, _ := bindFixture(t)
-	ri := m.Get("alpha")
+// scopedCtx is a URL-scoped request for repo alpha at its agent branch: a
+// RepoInstance, the URL branch, the mount marker MountExperimentMiddleware sets
+// on a mount a handle may steer, and NO session-scoped marker.
+func scopedCtx(t *testing.T, m *repos.Manager, repo string) context.Context {
+	t.Helper()
+	ri := m.Get(repo)
 	require.NotNil(t, ri)
-	// A URL-scoped context: a RepoInstance, and NO session-scoped marker.
-	urlCtx := repos.WithRepoInstance(context.Background(), ri)
+	ctx := repos.WithBranch(repos.WithRepoInstance(context.Background(), ri), ri.AgentBranch())
+	return repos.WithMountSession(ctx, "sid-scoped", repos.PinForRepo(ri))
+}
+
+// mintScopedHandle binds through knomit_bind on a scoped context.
+func mintScopedHandle(t *testing.T, m *repos.Manager, ctx context.Context) string {
+	t.Helper()
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{}
+	res, err := BindHandler(m)(ctx, req)
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	return handleFrom(t, res)
+}
+
+// On a URL-scoped endpoint `binding` is OPTIONAL. Absent, or "", is the URL's
+// own binding exactly as before; a handle minted on this mount routes the call
+// and leaves the mount's session state behind; anything else is refused, never
+// ignored.
+func TestGate_ScopedEndpointHandles(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	ctx := scopedCtx(t, m, "alpha")
 
 	for name, args := range map[string]any{
-		"a real handle":  map[string]any{"binding": "anything-at-all", "text": "x"},
-		"an empty value": map[string]any{"binding": "", "text": "x"},
+		"no key":   map[string]any{"text": "x"},
+		"an empty": map[string]any{"binding": "", "text": "x"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			res, spy := gateCall(t, m, urlCtx, args)
-			require.True(t, res.IsError)
-			require.False(t, spy.called)
-			require.Equal(t, errBindingOnURLScoped, resultText(t, res))
+			res, spy := gateCall(t, m, ctx, args)
+			require.False(t, res.IsError, resultText(t, res))
+			require.True(t, spy.called)
+			b, err := repos.RequireBinding(spy.ctx)
+			require.NoError(t, err)
+			require.Equal(t, "alpha", b.Name())
+			require.Empty(t, bindingHandleFromContext(spy.ctx))
+			_, _, plain := repos.MountSessionFromContext(spy.ctx)
+			require.True(t, plain, "a handle-less call keeps the mount's session state")
 		})
 	}
 
-	// Without one, the URL-scoped call passes through untouched.
-	res, spy := gateCall(t, m, urlCtx, map[string]any{"text": "x"})
+	handle := mintScopedHandle(t, m, ctx)
+	res, spy := gateCall(t, m, ctx, map[string]any{"binding": handle, "text": "x"})
 	require.False(t, res.IsError, resultText(t, res))
-	require.True(t, spy.called)
-	b, err := repos.RequireBinding(spy.ctx)
-	require.NoError(t, err)
-	require.Equal(t, "alpha", b.Name())
+	require.Equal(t, handle, bindingHandleFromContext(spy.ctx))
+	_, _, plain := repos.MountSessionFromContext(spy.ctx)
+	require.False(t, plain, "a handle-routed call must not see the connection's session state")
+
+	res, spy = gateCall(t, m, ctx, map[string]any{"binding": "never-minted", "text": "x"})
+	require.True(t, res.IsError)
+	require.False(t, spy.called)
+	require.Equal(t, errUnknownHandle, resultText(t, res))
+
+	// A mount whose URL names a specific branch carries no marker: no handle
+	// can steer it.
+	fixed := repos.WithBranch(repos.WithRepoInstance(context.Background(), m.Get("alpha")), "main")
+	res, spy = gateCall(t, m, fixed, map[string]any{"binding": handle, "text": "x"})
+	require.True(t, res.IsError)
+	require.False(t, spy.called)
+	require.Contains(t, resultText(t, res), `fixed to repo "alpha" at branch "main"`)
+}
+
+// A handle works only on the endpoint that minted it: an unscoped handle for
+// the same repo is refused on the scoped mount, and the scoped one on the
+// unscoped endpoint.
+func TestGate_HandleIsConfinedToItsEndpoint(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	ctx := scopedCtx(t, m, "alpha")
+	unscoped := mintHandle(t, m, "alpha")
+	scoped := mintScopedHandle(t, m, ctx)
+
+	res, spy := gateCall(t, m, ctx, map[string]any{"binding": unscoped, "text": "x"})
+	require.True(t, res.IsError)
+	require.False(t, spy.called)
+	require.Contains(t, resultText(t, res), "belongs to another endpoint")
+
+	res, spy = gateCall(t, m, scopedCtx(t, m, "beta"), map[string]any{"binding": scoped, "text": "x"})
+	require.True(t, res.IsError)
+	require.False(t, spy.called)
+	require.Contains(t, resultText(t, res), `this connection's repo "beta"`)
+
+	res, spy = gateCall(t, m, repos.WithSessionScoped(context.Background()), map[string]any{"binding": scoped, "text": "x"})
+	require.True(t, res.IsError)
+	require.False(t, spy.called)
+	require.Equal(t, errHandleFromScopedEndpoint, resultText(t, res))
 }
 
 // A non-object `arguments` keeps the handler's own message. Read as an absent
@@ -296,20 +358,25 @@ func TestGate_ReposReportsUnresolvableWithKindAndName(t *testing.T) {
 	require.NotContains(t, envelope.Bound.Name, "uid-", "a uid must never reach a name field")
 }
 
-// A `binding` on a URL-scoped endpoint fails for knomit_repos too — the same
-// answer every other tool gives, because the mistake is the same one.
-func TestGate_ReposRefusesHandleOnURLScopedEndpoint(t *testing.T) {
+// knomit_repos ALWAYS answers on a URL-scoped endpoint: a bad handle is
+// reported under `bound`, exactly as on the unscoped endpoint, and the
+// connection's fixed target is in `endpoint`.
+func TestGate_ReposAnswersOnURLScopedEndpoint(t *testing.T) {
 	m, _, _ := bindFixture(t)
-	ri := m.Get("alpha")
-	require.NotNil(t, ri)
 
 	var req mcpgo.CallToolRequest
 	req.Params.Arguments = map[string]any{"binding": "anything"}
-	res, err := gateBinding(m, reposTool(), gateOptional, ReposHandler(m))(
-		repos.WithRepoInstance(context.Background(), ri), req)
+	res, err := gateBinding(m, reposTool(), gateOptional, ReposHandler(m))(scopedCtx(t, m, "alpha"), req)
 	require.NoError(t, err)
-	require.True(t, res.IsError)
-	require.Equal(t, errBindingOnURLScoped, resultText(t, res))
+	require.False(t, res.IsError, resultText(t, res))
+
+	var envelope reposResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &envelope))
+	require.NotNil(t, envelope.Bound)
+	require.Equal(t, "unresolvable", envelope.Bound.Status)
+	require.NotNil(t, envelope.Endpoint)
+	require.Equal(t, "alpha", envelope.Endpoint.Name)
+	require.NotEmpty(t, envelope.Repos)
 }
 
 // EVERY tool that operates on a knowledge base declares `binding`, and the two

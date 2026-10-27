@@ -27,7 +27,7 @@ import (
 // world rather than a mode the tool is in.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
-		mcpgo.WithDescription("List every repo and lens this server serves, and what a binding points at. The ONE tool that works without a binding handle — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Pass `binding` to have the result also describe what that handle names (or why it no longer resolves). Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
+		mcpgo.WithDescription("List every repo and lens this server serves, and what a binding points at. The ONE tool that works without a binding handle — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Pass `binding` to have the result also describe what that handle names (or why it no longer resolves). On a --repo or --lens endpoint the result also has `endpoint`: the repo or lens this connection is fixed to. Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
 		bindingArg(false),
 	)
 }
@@ -144,6 +144,35 @@ type reposResponse struct {
 	Lenses      *[]reposLens  `json:"lenses,omitempty"`
 	LensesError string        `json:"lenses_error,omitempty"`
 	Bound       *boundSection `json:"bound,omitempty"`
+	// Endpoint is present only on a URL-scoped endpoint (a --repo or --lens
+	// bridge): what the URL fixes this connection to, which no handle can
+	// change. `bound` is then what THIS call is served from — the handle's
+	// branch when one was passed, the URL's own binding otherwise.
+	Endpoint *endpointSection `json:"endpoint,omitempty"`
+}
+
+// endpointSection describes a URL-scoped connection's fixed target.
+type endpointSection struct {
+	Kind string `json:"kind"` // repo | lens
+	Name string `json:"name"`
+	// Bind says what knomit_bind can do on this connection.
+	Bind string `json:"bind"`
+}
+
+// endpointOf builds the `endpoint` section, or nil on the unscoped endpoint.
+func endpointOf(ctx context.Context) *endpointSection {
+	if repos.SessionScoped(ctx) {
+		return nil
+	}
+	kind, name := urlTarget(ctx)
+	out := &endpointSection{Kind: kind, Name: name,
+		Bind: "knomit_bind here mints a handle on this " + kind + " that changes only the branch; calls without `binding` use this " + kind + "."}
+	// A resolved handle proves the mount takes one: the gate masks the mount
+	// marker once a handle routes the call, so the marker alone would say no.
+	if _, _, plain := repos.MountSessionFromContext(ctx); !plain && bindingHandleFromContext(ctx) == "" {
+		out.Bind = "fixed to branch " + fixedBranch(ctx) + " by the URL; knomit_bind is not available here."
+	}
+	return out
 }
 
 // ReposHandler returns the handler for knomit_repos.
@@ -180,8 +209,9 @@ func ReposHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolReques
 		// the agent never reads "no lenses" from a broken lookup, and it still
 		// gets everything that did resolve.
 		resp := reposResponse{
-			Repos: listRepos(mgr),
-			Bound: boundOf(ctx, mgr),
+			Repos:    listRepos(mgr),
+			Bound:    boundOf(ctx, mgr),
+			Endpoint: endpointOf(ctx),
 		}
 		if lenses := listLenses(mgr); lenses != nil {
 			resp.Lenses = &lenses
@@ -239,6 +269,12 @@ func boundFor(b *repos.Binding) *boundSection {
 // boundOf reports what this session points at: the live binding's mount table,
 // the reason a stored pin will not resolve, or nothing at all.
 func boundOf(ctx context.Context, mgr *repos.Manager) *boundSection {
+	// A handle that did not resolve is reported FIRST. On a URL-scoped
+	// endpoint the context still carries the URL's binding, and describing
+	// that instead would tell the caller its handle worked.
+	if err, ok := repos.BindingErrorFromContext(ctx); ok {
+		return unresolvableBound(mgr, err)
+	}
 	if b, ok := repos.BindingFromContextOpt(ctx); ok {
 		return withLapsed(ctx, boundFor(b))
 	}
@@ -247,9 +283,6 @@ func boundOf(ctx context.Context, mgr *repos.Manager) *boundSection {
 		// lens-of-one exactly as the tool handlers do.
 		branch, _ := repos.BranchFromContextOpt(ctx)
 		return withLapsed(ctx, boundFor(repos.NewBindingOfRepo(ri, branch)))
-	}
-	if err, ok := repos.BindingErrorFromContext(ctx); ok {
-		return unresolvableBound(mgr, err)
 	}
 	return nil
 }
