@@ -24,7 +24,7 @@ import (
 // that does not has finished, and then runs beside the other parallel ones
 // only. So the rule is about the parallel set alone: a test may call
 // t.Parallel when nothing it reaches, its helpers included, changes
-// process-wide state. That excludes setHooks and SetTriggerClockForTest
+// process-wide state. That excludes setHooks and SetMissionTriggerHooksForTest
 // (triggerTestHooks), the sync, consensus and recipe-exec hooks, the other
 // package-level seams (swapCopy, hostPlatform, guidanceWarnHook,
 // templatePresetByID, recipeServerAddrWait, experimentSweepIntervalOverride),

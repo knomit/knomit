@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"knomit/internal/foundation/pki"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 
 	"knomit/internal/corpus/repos"
@@ -159,9 +159,7 @@ func TestPostRepos_BadNameReturns400(t *testing.T) {
 func TestPostRepos_InitializeEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
-	if err := exec.Command("git", "init", "--bare", remote).Run(); err != nil {
-		t.Fatalf("init bare: %v", err)
-	}
+	gitfixture.InitBare(t, remote, "")
 
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()
@@ -359,9 +357,7 @@ func TestPostRepos_InitializeOfAKnowledgeBaseIs409NotAStreamedError(t *testing.T
 func TestPostRepos_CloneOfARefLessRemoteIs409NotAStreamedError(t *testing.T) {
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
-	if err := exec.Command("git", "init", "--bare", remote).Run(); err != nil {
-		t.Fatalf("init bare: %v", err)
-	}
+	gitfixture.InitBare(t, remote, "")
 
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()

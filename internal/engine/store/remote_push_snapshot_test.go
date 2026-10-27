@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/store/remotesync"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // F21 S1: the snapshot ("bookmark") push. Push reads the branch tip under the
@@ -89,6 +90,7 @@ func newSnapshotPushFixture(t *testing.T) (*Service, string) {
 	bare := filepath.Join(dir, "origin.git")
 	_, err = gogit.PlainInit(bare, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, bare)
 	svc.Remote().SetOrigin(&remotesync.Origin{URL: bare, Branch: "main"})
 	require.NoError(t, svc.ConfigureRemote(bare, "main", snapBranch))
 	writeTestFact(t, svc, "kb/notes/seed.md", "seed", "seed")

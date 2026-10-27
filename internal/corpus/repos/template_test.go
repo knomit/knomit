@@ -26,6 +26,7 @@ import (
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/playbooks"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -101,7 +102,7 @@ func sourceRepo(t *testing.T, root, name string, s sourceSpec) string {
 	}
 	runGit(t, work, "commit", "-q", "-m", "source")
 	bare := filepath.Join(root, name+".git")
-	runGit(t, "", "init", "-q", "--bare", "-b", s.branch, bare)
+	gitfixture.InitBare(t, bare, s.branch)
 	runGit(t, work, "push", "-q", bare, s.branch)
 	return fileuri.New(bare)
 }

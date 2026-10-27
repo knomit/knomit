@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/engine/store/gitserve"
+	"knomit/internal/testsupport/gitfixture"
 
 	"knomit/internal/engine/store/fleetrec"
 
@@ -44,6 +45,7 @@ func newDiskPeer(t *testing.T, url string) (*peer, string) {
 	dir := t.TempDir()
 	repo, err := gogit.PlainClone(dir, true, &gogit.CloneOptions{URL: url})
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, dir)
 	return &peer{t: t, repo: repo}, dir
 }
 

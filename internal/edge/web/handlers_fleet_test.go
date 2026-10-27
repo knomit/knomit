@@ -21,12 +21,15 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// maintenance.auto=false: no detached auto-maintenance in a work clone
+	// under t.TempDir (#651; seedFleetBare sets it on the bare remote).
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
 	out, err := cmd.CombinedOutput()
@@ -40,7 +43,7 @@ func seedFleetBare(t *testing.T, dir string) (string, *pkitest.Fleet) {
 	t.Helper()
 	root := pkitest.New(t)
 	bare := filepath.Join(dir, "fleet.git")
-	gitRun(t, dir, "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	gitRun(t, dir, "clone", bare, work)
 	ont, err := fact.FleetOntology().Serialize()

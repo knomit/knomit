@@ -137,7 +137,7 @@ func (c *missionClock) add(d time.Duration) {
 // set); it records its argv as JSON in the returned directory and exits 0.
 func newMissionClock(t *testing.T) *missionClock {
 	c := &missionClock{t: time.Now().UTC().Truncate(time.Second)}
-	repos.SetTriggerClockForTest(t, c.now)
+	repos.SetMissionTriggerHooksForTest(t, c.now)
 	fakeClaude(t)
 	return c
 }

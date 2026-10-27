@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/platform/version"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // ---- fixture knowledge base -------------------------------------------------
@@ -233,6 +234,7 @@ func TestCLI_SourceRefsAreNotPushed(t *testing.T) {
 	bare := filepath.Join(t.TempDir(), "bare.git")
 	_, err = git.PlainInit(bare, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, bare)
 	_, err = repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{bare}})
 	require.NoError(t, err)
 	require.NoError(t, repo.Push(&git.PushOptions{RemoteName: "origin"}))

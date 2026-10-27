@@ -17,6 +17,7 @@ import (
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -38,7 +39,7 @@ func seedKnomitRemoteForTest(t *testing.T, bare, factBody string) string {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatalf("mkdir bare: %v", err)
 	}
-	runGitForTest(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGitForTest(t, "", "clone", bare, work)
 	if err := os.MkdirAll(filepath.Join(work, "kb"), 0o755); err != nil {

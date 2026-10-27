@@ -21,8 +21,51 @@ import (
 	"knomit/internal/testsupport/testsigner"
 )
 
-// The slow `if` in these tests is slowIf (triggers_test.go): a real 90 ms of
-// wall time inside the trigger's timed section, whatever the CPU load.
+// The slow `if` in these tests is either slowIf (triggers_test.go), a real
+// 90 ms of wall time inside the trigger's timed section, or slowIfOn, 90 ms
+// on a fakeStopwatch. A test that asserts only a FLOOR (the duration is at
+// least 80 ms) may use the real sleep: load only makes it longer. A test
+// that asserts a CEILING (a fast trigger is not slow, the change build is not
+// charged to the trigger, the p95 of fast evaluations is fast) uses the
+// stopwatch, on which a fast trigger takes exactly 0 ms, because a ceiling
+// on real time is a bound on the machine (a trivial `if` under -race load can
+// take tens of milliseconds).
+
+// fakeStopwatch is a TestHooks.Stopwatch that moves only when the test moves
+// it: every duration the dispatcher measures on it is exactly the sum of the
+// advances made inside the measured span.
+type fakeStopwatch struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (s *fakeStopwatch) now() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.t
+}
+
+func (s *fakeStopwatch) advance(d time.Duration) {
+	s.mu.Lock()
+	s.t = s.t.Add(d)
+	s.mu.Unlock()
+}
+
+// slowIfOn installs sw as the dispatcher's stopwatch and makes trig's `if`
+// (on the paths match accepts; nil is every path) take ms on it, keeping the
+// hooks already in force.
+func slowIfOn(t *testing.T, sw *fakeStopwatch, trig string, ms int, match func(path string) bool) {
+	t.Helper()
+	h := trigger.HooksForTest()
+	h.Stopwatch = sw.now
+	h.EvalDelay = func(name, path string) time.Duration {
+		if name == trig && (match == nil || match(path)) {
+			sw.advance(time.Duration(ms) * time.Millisecond)
+		}
+		return 0
+	}
+	setHooks(t, h)
+}
 
 // newSlowRepo boots a repo with slow_trigger_ms set.
 func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoInstance) {
@@ -43,11 +86,13 @@ func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoIn
 // SlowIfIsReported: with slow_trigger_ms = 40, a trigger whose own work takes
 // 90 ms logs exactly one "slow trigger" WARN naming repo, branch, trigger,
 // path and elapsed, and its `slow` count is 1; a fast trigger in the same run
-// logs nothing. Sabotage: hard-code the threshold, or time the whole run.
+// logs nothing. Both durations are on a fakeStopwatch (90 ms and 0 ms), so
+// "the fast one is not slow" holds however loaded the machine is.
+// Sabotage: hard-code the threshold, or time the whole run.
 func TestDispatch_SlowIfIsReported(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	_, ri := newSlowRepo(t, 40, trig("slow", "learn", "", "true"), trig("fast", "learn", "", "true"))
-	slowIf(t, "slow", 90, nil)
+	slowIfOn(t, &fakeStopwatch{}, "slow", 90, nil)
 	write(t, ri, "kb/tasks/x.md")
 	out := logs.String()
 	require.Equal(t, 1, strings.Count(out, `"message":"slow trigger"`), "%s", out)
@@ -57,22 +102,27 @@ func TestDispatch_SlowIfIsReported(t *testing.T) {
 	require.NotContains(t, out, `"trigger":"fast"`)
 	require.Equal(t, int64(1), ri.triggers.StatsViewForTest("slow").Slow)
 	require.Equal(t, int64(0), ri.triggers.StatsViewForTest("fast").Slow)
-	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("slow").Duration.MaxMS, 80.0)
+	require.Equal(t, 90.0, ri.triggers.StatsViewForTest("slow").Duration.MaxMS)
+	require.Equal(t, 0.0, ri.triggers.StatsViewForTest("fast").Duration.MaxMS)
 }
 
 // ChangeCostNotChargedToTrigger [R2-2]: a slow `change` build (the toucher
 // walk, here a test hook) with a trivial `if` yields a large change_ms on the
-// run, a small trigger duration, and NO "slow trigger" WARN. Sabotage: time
-// the change build inside the trigger's timer.
+// run, a zero trigger duration, and NO "slow trigger" WARN. The change build
+// takes 80 ms on a fakeStopwatch and nothing else moves it, so the trigger's
+// own duration is exactly 0 however loaded the machine is.
+// Sabotage: time the change build inside the trigger's timer (red: 80 ms).
 func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
 	_, ri := newSlowRepo(t, 40, trig("fast", "learn", "", "true"))
-	setHooks(t, trigger.TestHooks{ChangeDelay: 80 * time.Millisecond})
+	sw := &fakeStopwatch{}
+	setHooks(t, trigger.TestHooks{Stopwatch: sw.now, InChange: func() { sw.advance(80 * time.Millisecond) }})
 	write(t, ri, "kb/tasks/x.md")
 	require.NotContains(t, logs.String(), "slow trigger")
 	st := ri.triggers.StatsViewForTest("fast")
 	require.Equal(t, int64(0), st.Slow)
-	require.Less(t, st.Duration.MaxMS, 40.0, "the trigger's own work stays small")
+	require.Positive(t, st.Duration.Count, "reached: the trigger was evaluated")
+	require.Equal(t, 0.0, st.Duration.MaxMS, "the change build is not the trigger's own work")
 	run := ri.triggers.RunStatsForTest()
 	require.NotNil(t, run.Last)
 	require.GreaterOrEqual(t, run.Last.ChangeMS, int64(80), "the change build is knomit's cost, on the run")
@@ -82,11 +132,13 @@ func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 
 // P95MovesWithASlowTrigger: 40 fast evaluations give a p95 near the fast
 // duration; after 4 slow ones (~10% of the window) the p95 is at least the
-// slow duration; count, min and max are exact. Sabotage: report the mean, or
-// leave the slow samples out of the window.
+// slow duration; count, min and max are exact. The durations are on a
+// fakeStopwatch (fast 0 ms, slow 90 ms), so "the p95 is fast" does not depend
+// on the machine's load. Sabotage: report the mean, or leave the slow samples
+// out of the window.
 func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	_, ri := newTriggerRepo(t, trig("mixed", "learn", "", "true"))
-	slowIf(t, "mixed", 90, func(path string) bool { return strings.Contains(path, "slow") })
+	slowIfOn(t, &fakeStopwatch{}, "mixed", 90, func(path string) bool { return strings.Contains(path, "slow") })
 	release := parkDispatcher(t, ri)
 	var last string
 	for i := 0; i < 40; i++ {
@@ -96,7 +148,7 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	waitTriggerHead(t, ri, last)
 	st := ri.triggers.StatsViewForTest("mixed")
 	require.Equal(t, int64(40), st.Duration.Count)
-	require.Less(t, st.Duration.P95RecentMS, 40.0, "40 fast evaluations: the p95 is fast")
+	require.Equal(t, 0.0, st.Duration.P95RecentMS, "40 fast evaluations: the p95 is fast")
 
 	release = parkDispatcher(t, ri)
 	for i := 0; i < 4; i++ {
@@ -108,9 +160,9 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	require.Equal(t, int64(44), st.Duration.Count)
 	require.Equal(t, int64(44), st.Evaluations)
 	require.Equal(t, int64(44), st.Fires)
-	require.GreaterOrEqual(t, st.Duration.P95RecentMS, 85.0, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
-	require.GreaterOrEqual(t, st.Duration.MaxMS, 85.0)
-	require.Less(t, st.Duration.MinMS, 40.0)
+	require.Equal(t, 90.0, st.Duration.P95RecentMS, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
+	require.Equal(t, 90.0, st.Duration.MaxMS)
+	require.Equal(t, 0.0, st.Duration.MinMS)
 	require.Equal(t, trigger.P95WindowForTest, st.Duration.P95Window)
 }
 
@@ -238,19 +290,6 @@ func withinRace(a, b time.Duration) bool {
 	return b <= bound
 }
 
-// withinMedian is the EVERYDAY bound, max(1.5×a, a+3ms) (1b follow-up, applied
-// in PR 2): the 1.25× bound failed 2 of 3 runs on a loaded laptop while CI
-// never failed it, and a loaded laptop is where the test is run by hand. The
-// sabotage that must still redden it is a flush after EVERY run (1b review
-// #15: 6.5 → 10.8 ms median, 1.66×).
-func withinMedian(a, b time.Duration) bool {
-	bound := a + a/2
-	if a+3*time.Millisecond > bound {
-		bound = a + 3*time.Millisecond
-	}
-	return b <= bound
-}
-
 // abba measures write latency with and without the given trigger entries in
 // ALTERNATING blocks (A B B A A B B A …), so both arms see the same repo
 // growth. A first-then-second layout does not work: a write's latency on this
@@ -283,18 +322,16 @@ func abba(t *testing.T, ri *RepoInstance, entries []string, rounds, perBlock int
 }
 
 // WriteLatencyIndependentOfTriggers: 200 learns with 0 triggers and 200 with
-// 50 triggers that all match, in alternating blocks; the median with triggers
-// is within max(1.5×, +3 ms) of the median without (withinMedian); the p90 is
-// reported, not gated (1b follow-up). The fire log is writing during the
-// loaded blocks (two short transactions per run). Sabotage: flush phase C
-// after every run (the median moves ~1.66×); or call the dispatcher
-// synchronously from ri.onCommit — with the busy-if variant below every write
-// gains ≥ 10 × 100 ms.
-//
-// Under -race the median is LOGGED, not gated: the flush-per-run sabotage
-// moves it ~1.66× while race-detector noise on CI already reached 1.50×, so no
-// bound separates them there. The test still runs under -race for its race
-// coverage; the gate is the non-race run (tests.yml).
+// 50 triggers that all match, in alternating blocks. The medians and p90s
+// are LOGGED, not gated (#419): the regression the old max(1.5×, +3 ms) gate
+// existed for, a flush of phase C after every run, measured 1.66× on one
+// machine and 1.46× on a loaded laptop, inside that gate, while runner noise
+// alone reached 1.24× (and 1.50× under -race). A wall-clock ratio cannot tell
+// the two apart on every machine, so the property is asserted structurally
+// by TestDispatch_PhaseCFlushesABurstOnce (flushes counted against runs), and
+// asynchronous dispatch by TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld.
+// What this test still asserts: the loaded blocks fired, and it runs the
+// write path against a busy fire log for -race coverage.
 func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -307,13 +344,65 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	b90, l90 := percentile(base, 0.9), percentile(loaded, 0.9)
-	t.Logf("median: 0 triggers %s, 50 triggers %s (%.2f×); p90 (report only): %s vs %s", bm, lm, float64(lm)/float64(bm), b90, l90)
-	if raceEnabled {
-		t.Log("-race: the median is reported, not gated")
-	} else {
-		require.True(t, withinMedian(bm, lm), "median with 50 triggers (%s) is not within max(1.5×, +3ms) of 0 triggers (%s)", lm, bm)
-	}
+	t.Logf("report only: median 0 triggers %s, 50 triggers %s (%.2f×); p90 %s vs %s", bm, lm, float64(lm)/float64(bm), b90, l90)
 	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("t00").Fires, int64(100), "the loaded blocks did fire")
+}
+
+// PhaseCFlushesABurstOnce (#419): phase C is WRITE-BEHIND
+// (kb/decisions/fleet/f07-triggers/phase-c-write-behind): a run buffers its
+// fire rows and watermarks, and the buffer is written when the writer goes
+// quiet (settle's grace), at a size bound, or at shutdown — never by the run
+// itself. Asserted by COUNTING flushes against runs, not by timing writes.
+//
+// The quiet-gap timer is held off for the burst (FlushGrace: an hour, i.e.
+// it never fires inside the test; that is the timer's only role here, not a
+// speed bound), so the only flush paths left are a run's own (the
+// regression), the size bound (maxBufferedRuns, far above this burst) and
+// the stop. N writes, each waited for until its run has completed: zero
+// flushes. Then Serve is restarted: the stop flushes ONCE, holding all N
+// runs, and the fire log gains exactly N run rows.
+// SABOTAGE: flush at the end of every run (d.flush instead of d.maybeFlush
+// in runOnce) -> N flushes during the burst -> red on every run, whatever
+// the machine's speed.
+func TestDispatch_PhaseCFlushesABurstOnce(t *testing.T) {
+	_, ri := newTriggerRepo(t, trig("t", "learn", "tasks/**", ""))
+	waitTriggerHead(t, ri, head(t, ri)) // the ontology's run is flushed before counting starts
+	rowsBefore := len(runRows(t, ri))
+
+	var mu sync.Mutex
+	var flushes, flushedRuns int
+	h := trigger.HooksForTest()
+	h.FlushGrace = time.Hour
+	h.BeforeFlush = func(runs int) {
+		mu.Lock()
+		flushes++
+		flushedRuns += runs
+		mu.Unlock()
+	}
+	setHooks(t, h)
+	counts := func() (int, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		return flushes, flushedRuns
+	}
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		c := writeOn(t, ri, trigAgent, fmt.Sprintf("kb/tasks/burst-%02d.md", i))
+		require.Eventually(t, func() bool {
+			got, _ := ri.triggers.RunSequenceForTest()
+			return got == c
+		}, 20*time.Second, 5*time.Millisecond, "hang detector: the run of write %d never completed", i)
+	}
+	f, _ := counts()
+	require.Zero(t, f, "a run flushed its own phase C: %d flushes for %d runs", f, n)
+	require.False(t, ri.triggers.FlushedForTest(), "reached: the burst's runs are buffered")
+
+	restartServe(t, ri) // the dispatcher's stop flushes what is buffered
+	f, runs := counts()
+	require.Equal(t, 1, f, "the burst is written in one flush, at the stop")
+	require.Equal(t, n, runs, "that flush holds every run of the burst")
+	require.Len(t, runRows(t, ri), rowsBefore+n, "each run still has exactly one run row")
 }
 
 // The sabotage target [M5]: 10 triggers whose `if` busy-loops to the 100 ms
@@ -349,10 +438,11 @@ func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	t.Logf("median: 0 triggers %s, 10 busy triggers %s (%.2f×)", bm, lm, float64(lm)/float64(bm))
 	require.True(t, withinRace(bm, lm), "median with busy triggers (%s) is not within max(3×, +250ms) of 0 triggers (%s)", lm, bm)
-	// Teardown must not wait for the backlog: ctx is checked per evaluation.
-	started := time.Now()
-	restartServe(t, ri)
-	require.Less(t, time.Since(started), 2*time.Second)
+	// No teardown timing here. abba ends on a base block, and its switch to
+	// the trigger-less ontology waits for the dispatcher to drain the busy
+	// backlog, so a restart here met no backlog and its old 2 s bound timed
+	// only an idle restart. That teardown stops a run within one evaluation
+	// is TestDispatch_NoStoreHeldDuringIf's.
 }
 
 // WriteReturnsWhileTriggerEvaluationIsHeld (#369): the OUTCOME behind the

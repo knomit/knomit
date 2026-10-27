@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { Library } from './Library';
 import { init } from './state';
 import type { AppState } from './state';
@@ -39,6 +39,13 @@ describe('Library — keyboard gated to live mode', () => {
   it('drives selection/navigation when live', async () => {
     const { dispatch } = setup({ asOf: { mode: 'live' } });
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
+    // waitFor resolves at the DOM commit of the listing, which can come before
+    // that commit's passive effects run. A passive effect that writes the
+    // selection (Library's recent and lens highlight effects do) would then
+    // overwrite the selection a key made in that gap: #650 diagnosed exactly
+    // that in Library.memo.test.tsx. Flush the pending effects so the keys
+    // start from a settled tree, whatever effects the listing grows.
+    await act(async () => {});
     // ArrowDown selects the first row (a dir); ArrowRight activates it → NAVIGATE.
     fireEvent.keyDown(window, { key: 'ArrowDown' });
     fireEvent.keyDown(window, { key: 'ArrowRight' });
@@ -48,6 +55,10 @@ describe('Library — keyboard gated to live mode', () => {
   it('ignores keys in history mode (Library is hidden behind TimelineNav)', async () => {
     const { navigate, dispatch } = setup({ asOf: { mode: 'history', commit: 'bbbbbbb' } });
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
+    // Settle the passive effects first, as above: otherwise a selection the
+    // keys made could be reset by a pending effect, and an UNGATED handler
+    // would pass this test too.
+    await act(async () => {});
     // Arrows/Enter must be inert while the read-only history view is shown,
     // otherwise they steer the hidden selection and can navigate away from it.
     fireEvent.keyDown(window, { key: 'ArrowDown' });

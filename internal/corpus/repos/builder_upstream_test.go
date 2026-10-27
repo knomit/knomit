@@ -11,6 +11,7 @@ import (
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -29,7 +30,7 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 	// A bare remote whose default branch is master, seeded with a real commit
 	// so the clone's detection reports it.
 	remoteDir := filepath.Join(dir, "remote.git")
-	runGit(t, "", "init", "--bare", "--initial-branch=master", remoteDir)
+	gitfixture.InitBare(t, remoteDir, "master")
 
 	work := filepath.Join(dir, "work")
 	runGit(t, "", "init", "--initial-branch=master", work)

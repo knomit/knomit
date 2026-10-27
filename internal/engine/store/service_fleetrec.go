@@ -27,6 +27,13 @@ func (s *Service) FleetAt(branch string) (fleetrec.Fleet, error) {
 	return fleetrec.At(s.rh.Storer(), branch, s.rh.FactRoot())
 }
 
+// FleetAgentRecordsAt returns agent's member records at branch in THIS store
+// (a mounted fleet repository): <root>/members/<agent>/ only, read without the
+// ontology or the PKI (fleetrec.AgentRecordsAt).
+func (s *Service) FleetAgentRecordsAt(branch, agent string) ([]fleetrec.Member, error) {
+	return fleetrec.AgentRecordsAt(s.rh.Storer(), branch, s.rh.FactRoot(), agent)
+}
+
 // FileAt reads the regular file p (a repo-root path) at branch's tip in THIS
 // store: ok is false when there is none (a symlink counts as none). A blob
 // larger than limit is an error and is not read.

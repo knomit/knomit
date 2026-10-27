@@ -721,12 +721,13 @@ func passesParams(fd *ast.FuncDecl, call *ast.CallExpr) bool {
 // something a caller outside the store cannot obtain (the storer, the fact
 // root, the Service's own wiring). A stale entry fails.
 var injectsStoreState = map[string]string{
-	"Integrity":    "fsck.NewChecker is given the Service's repository handler (internal/vcs) and indices: callers outside the store cannot build the checker",
-	"FleetAt":      "fleetrec.At is given s.rh.Storer() and the fact root: the storer cannot be obtained outside the store",
-	"FileAt":       "fleetrec.FileAt is given s.rh.Storer(), which callers outside the store cannot obtain",
-	"FleetKeysOf":  "fleetrec reader over s.rh.Storer()",
-	"FleetMainLog": "fleetrec reader over s.rh.Storer()",
-	"FleetSince":   "fleetrec reader over s.rh.Storer()",
+	"Integrity":           "fsck.NewChecker is given the Service's repository handler (internal/vcs) and indices: callers outside the store cannot build the checker",
+	"FleetAt":             "fleetrec.At is given s.rh.Storer() and the fact root: the storer cannot be obtained outside the store",
+	"FileAt":              "fleetrec.FileAt is given s.rh.Storer(), which callers outside the store cannot obtain",
+	"FleetKeysOf":         "fleetrec reader over s.rh.Storer()",
+	"FleetAgentRecordsAt": "fleetrec reader over s.rh.Storer() and the fact root",
+	"FleetMainLog":        "fleetrec reader over s.rh.Storer()",
+	"FleetSince":          "fleetrec reader over s.rh.Storer()",
 }
 
 // TestStoreService_NoForwardIntoImportableChild (guard A2): no exported

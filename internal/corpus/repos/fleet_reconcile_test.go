@@ -96,6 +96,13 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 	return s.b.Write(p)
 }
 
+// Reset drops what was captured so far.
+func (s *syncBuf) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.b.Reset()
+}
+
 func (s *syncBuf) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
