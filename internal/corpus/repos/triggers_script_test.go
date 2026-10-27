@@ -863,6 +863,13 @@ func TestScript_TimeoutIsOutcome(t *testing.T) {
 // charging the call to the script would record an hour. The budget is 24 h:
 // it must not be what ends the fire, and the call returning inside it lets
 // the script run on to its emit.
+//
+// NOT covered any more: "a host call that returns inside a SHORT budget is
+// not cut". The old 100 ms call under a 300 ms budget was that check, and it
+// was a wall-clock race (VM setup, the call and the emit had to fit in 300 ms
+// of real time under any load). The budget is a real ctx deadline that no
+// test clock moves, so the case cannot be asserted without that race; under
+// 24 h it holds trivially.
 // Sabotage: drop `- hostMS` from phase B's elapsed (red: 3,600,000 ms).
 func TestScript_HostTimeIsNotTheScripts(t *testing.T) {
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("slowcall", "learn", "tasks/in/**", "slowcall"))

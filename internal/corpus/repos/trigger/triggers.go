@@ -95,8 +95,8 @@ type TestHooks struct {
 	// must not be charged to the trigger. A test advances its Stopwatch here.
 	InChange func()
 	// Stopwatch is the clock the dispatcher measures DURATIONS by: the run,
-	// its diff, the change build, a trigger's own work and a script's host
-	// calls. nil means time.Now. A test that asserts which side of a split a
+	// its diff, the change build, a trigger's own work, a script's host
+	// calls and a recipe run's row. nil means time.Now. A test that asserts which side of a split a
 	// cost lands on (the trigger's own time against change_ms or host_ms, the
 	// slow detector, the p95) installs a clock that moves only when the test
 	// moves it, so the assertion is exact whatever the CPU load.

@@ -135,9 +135,56 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the log and pure helpers
 		"log.Error", "log.Debug", "?.Str", "?.Msg", "capForLog", "cr.err.Error", "err.Error",
 		"context.Background", "context.WithTimeout", "cancel", "ctx.Err", "ctx.Done", "budget.Err",
-		"time.Now", "time.Since", "time.NewTimer", "time.Duration", "t.Stop", "?.Milliseconds", "?.UTC",
+		"time.Now", "stopwatch", "?.Sub", "time.NewTimer", "time.Duration", "t.Stop", "?.Milliseconds", "?.UTC",
 		"errors.Is", "errors.As", "fmt.Errorf", "fmt.Sprintf", "int64", "string", "append", "len", "delete", "recover",
 	},
+}
+
+// wallClockReaders are the only functions of the three dispatcher files that
+// may call time.Now: the run clock (clock), the stopwatch itself, and the
+// recipe's pinned Date (execRecipe, a wall time handed to the sandbox, not a
+// duration). Every DURATION goes through stopwatch(), so a test's
+// TestHooks.Stopwatch sees all of them; time.Since is not called at all.
+var wallClockReaders = map[string]map[string]bool{
+	"triggers.go":       {"clock": true, "stopwatch": true},
+	"trigger_script.go": {},
+	"trigger_recipe.go": {"execRecipe": true},
+}
+
+// TestTriggers_DurationsOnlyThroughStopwatch: no time.Since in the three
+// files, and time.Now only inside wallClockReaders, so a duration measured
+// as time.Now().Sub(t0) or time.Since(t0) (which a fake Stopwatch would not
+// see) fails here. Sabotage: time a recipe run with time.Since again (red).
+func TestTriggers_DurationsOnlyThroughStopwatch(t *testing.T) {
+	fset := token.NewFileSet()
+	for f, readers := range wallClockReaders {
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		require.NoError(t, err, f)
+		nowCalls := 0
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				switch callKeyOf(call) {
+				case "time.Since":
+					t.Errorf("%s: time.Since in %s: measure durations with stopwatch()", fset.Position(call.Pos()), fd.Name.Name)
+				case "time.Now":
+					nowCalls++
+					if !readers[fd.Name.Name] {
+						t.Errorf("%s: time.Now in %s: durations go through stopwatch(), the run clock through clock()", fset.Position(call.Pos()), fd.Name.Name)
+					}
+				}
+				return true
+			})
+		}
+		require.Equal(t, len(readers), nowCalls, "%s: each wall-clock reader reads time.Now once (an unused entry must go)", f)
+	}
 }
 
 // TestTriggers_RepoCallsAreAllowlisted is the dispatcher's structural
