@@ -887,27 +887,62 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 // swap waits behind the slow ifs). It does NOT catch a lease held across phase B:
 // a swap cancels the Serve life (and so the run) before it drains the leases,
 // so the swap is fast either way. PhaseBHoldsNoLease pins that.
+//
+// No wall-clock bound on the swap: the run's phase B is made far longer
+// (30 evaluations of 2 s, a minute) than the hang detector (20 s), and the
+// hook announces the first evaluation through a channel, so the test starts
+// the swap once the run is certainly inside the if phase. The swap and the
+// Serve restart can then only complete by interrupting the run (one
+// evaluation's sleep, 2 s, is all they may wait); were either to drain behind
+// the if phase they would outlast the detector and fail the test.
 func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 	m, ri := newTriggerRepo(t, trig("slow", "learn", "", ""))
 	write(t, ri, "kb/tasks/warm.md")
-	slowIf(t, "slow", 90, nil)
+	evaluating := make(chan struct{}, 64)
+	h := trigger.HooksForTest()
+	h.EvalDelay = func(name, path string) time.Duration {
+		if name != "slow" {
+			return 0
+		}
+		select {
+		case evaluating <- struct{}{}:
+		default:
+		}
+		return 2 * time.Second
+	}
+	setHooks(t, h)
 	release := parkDispatcher(t, ri)
 	for i := 0; i < 30; i++ {
 		writeOn(t, ri, trigAgent, fmt.Sprintf("kb/tasks/p%02d.md", i))
 	}
 	release()
-	time.Sleep(400 * time.Millisecond) // phase A is done; the run is in phase B (30 × 90 ms)
+	select {
+	case <-evaluating: // phase A is done; the run is in phase B
+	case <-time.After(20 * time.Second): // hang detector only
+		t.Fatal("the run never reached its if phase")
+	}
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) { require.NoError(t, svc.Checkpoint()) }))
 	tmp := filepath.Join(t.TempDir(), "copy.db")
 	copyDB(t, m.RepoPath(ri.UID()), tmp)
-	started := time.Now()
-	require.NoError(t, swapStore(m, ri, tmp))
-	require.Less(t, time.Since(started), time.Second, "a swap must not drain behind a run's if phase")
+	swapped := make(chan error, 1)
+	go func() { swapped <- swapStore(m, ri, tmp) }()
+	select {
+	case err := <-swapped:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second): // hang detector only: the if phase lasts a minute
+		t.Fatal("a swap must not drain behind a run's if phase")
+	}
 
-	started = time.Now()
+	// The copy predates the fire records, so the new Serve re-runs the range
+	// and is inside its if phase again; restartServe has its own hang
+	// detector and can only return if cancel stops that run.
+	select {
+	case <-evaluating:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the run did not start again on the swapped store")
+	}
 	restartServe(t, ri)
-	require.Less(t, time.Since(started), 500*time.Millisecond, "cancel stops the run within one evaluation")
 }
 
 // PhaseBHoldsNoLease [M1]: no store lease is outstanding while phase B
