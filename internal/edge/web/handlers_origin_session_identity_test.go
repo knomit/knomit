@@ -130,8 +130,7 @@ func newIdentitySessionServer(t *testing.T) (*Server, *repos.Manager, string) {
 		t.Fatalf("start manager: %v", err)
 	}
 
-	isolateOriginSessionTemp(t)
-	return &Server{Manager: m, AgentBranch: "agent/test"}, m, remotesRoot
+	return withOriginSessionLifetime(t, &Server{Manager: m, AgentBranch: "agent/test"}), m, remotesRoot
 }
 
 func createLocalRepo(t *testing.T, m *repos.Manager, name string) *repos.RepoInstance {

@@ -29,12 +29,21 @@ import (
 // sessionManager). "" gives the manager a private directory under
 // os.TempDir() instead.
 //
+// The returned channel is closed once ctx has ended and the manager has let
+// go of everything it held: every session's store closed and folder removed,
+// its run directory and lock file removed (the lock's handle closed), its
+// startup sweep finished. Removal after ctx ends is asynchronous, so a caller
+// that deletes sessionsDir (or the temp dir a "" manager uses) waits on it
+// first: on Windows a file with an open handle cannot be removed.
+//
 // Two Mount calls make two managers that know nothing of each other's
 // sessions, so a caller that serves the routes from more than one router
 // mounts ONE r in all of them (web's router does, for its plain and OAuth
 // listeners).
-func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string) {
-	routes(r, rm, agentBranch, newSessionManager(ctx, sessionsDir))
+func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string) (released <-chan struct{}) {
+	sm := newSessionManager(ctx, sessionsDir)
+	routes(r, rm, agentBranch, sm)
+	return sm.released
 }
 
 // routes is Mount's route table, over a given manager so the package's tests

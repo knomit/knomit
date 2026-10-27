@@ -233,10 +233,14 @@ var errSessionsClosed = errors.New("origin sessions have shut down")
 // LIFETIME. The manager lives as long as the ctx it was built with. When ctx
 // ends it refuses further Creates and retires every session (a session in use
 // finalizes when its handler releases it), then, once every session has
-// finalized, removes its run directory and releases its lock. That runs on
-// its own goroutine (context.AfterFunc) and nothing waits for it, so a process
-// that exits right after can leave its run behind; the next manager over the
-// same base reclaims it, since the lock died with the process. The idle-expiry
+// finalized, removes its run directory and releases its lock, waits for the
+// startup sweep to finish, and only then closes released. That runs on its
+// own goroutine (context.AfterFunc). An owner that must not outlive the
+// manager's files (a test whose TempDir holds the base: Windows cannot remove
+// a file with an open handle, such as the held lock or a session's clone.db)
+// waits on released; one that does not wait (a process that exits right
+// after) can leave its run behind, and the next manager over the same base
+// reclaims it, since the lock died with the process. The idle-expiry
 // sweeper runs only while the manager holds at least one session (Create
 // starts it when none is running, and it exits on the first tick that finds
 // the map empty), so a manager with no sessions owns no goroutine.
@@ -246,8 +250,13 @@ type sessionManager struct {
 	done     <-chan struct{}  // the manager's lifetime; nil never ends
 
 	// staleDone is closed when the startup sweep of dead runs has finished
-	// (at once when there is no base to sweep), for tests.
+	// (at once when there is no base to sweep).
 	staleDone chan struct{}
+	// released is closed when the lifetime has ended and the manager holds
+	// nothing any more: every session finalized, the run and its lock
+	// removed (the lock file closed), the startup sweep finished (LIFETIME).
+	released  chan struct{}
+	closeOnce sync.Once
 
 	mu       sync.Mutex
 	sessions map[string]*originSession // by repo name
@@ -273,6 +282,7 @@ func newSessionManager(ctx context.Context, base string) *sessionManager {
 		interval:  cleanupInterval,
 		done:      ctx.Done(),
 		staleDone: make(chan struct{}),
+		released:  make(chan struct{}),
 		base:      base,
 		sessions:  map[string]*originSession{},
 	}
@@ -640,9 +650,16 @@ func (sm *sessionManager) runCleanup() {
 }
 
 // close ends the manager's lifetime (LIFETIME). newSessionManager arranges
-// for it to run when ctx ends; it is idempotent. It blocks until every
-// session has finalized, which a handler still using one delays.
+// for it to run when ctx ends; it is idempotent, and a call made while
+// another is running returns when that one has finished. It blocks until
+// every session has finalized, which a handler still using one delays, and
+// returns after released is closed.
 func (sm *sessionManager) close() {
+	sm.closeOnce.Do(sm.shutdown)
+}
+
+// shutdown is close's body, run once.
+func (sm *sessionManager) shutdown() {
 	sm.mu.Lock()
 	sm.closed = true
 	all := sm.sessions
@@ -675,6 +692,10 @@ func (sm *sessionManager) close() {
 	if len(all) > 0 {
 		log.Debug().Int("sessions", len(all)).Msg("origin sessions: removed at shutdown")
 	}
+	// The startup sweep holds handles in base (the directory it lists, a lock
+	// file it probes) while it runs: released means none are left.
+	<-sm.staleDone
+	close(sm.released)
 }
 
 // isChild reports whether p is a direct child of parent whose name starts

@@ -294,7 +294,7 @@ func (s *Server) originSessionsRouter() chi.Router {
 			ctx = context.Background()
 		}
 		r := chi.NewRouter()
-		origins.Mount(ctx, r, s.Manager, s.AgentBranch, s.OriginSessionsDir)
+		s.originSessionsReleased = origins.Mount(ctx, r, s.Manager, s.AgentBranch, s.OriginSessionsDir)
 		s.originSessions = r
 	})
 	return s.originSessions
