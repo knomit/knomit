@@ -276,7 +276,7 @@ func TestSessionManager_LifetimeEndRemovesEverySession(t *testing.T) {
 	}
 }
 
-// released (what Mount returns) is the signal an owner that removes the
+// released (what Mount's WaitGroup reports) is the signal an owner that removes the
 // sessions dir waits on, so it may close only when the manager holds no file
 // at all: at that moment, with no polling, every session store is closed, the
 // run's lock file handle is closed, and nothing the manager made is on disk.
@@ -284,13 +284,29 @@ func TestSessionManager_LifetimeEndRemovesEverySession(t *testing.T) {
 // here the open handle is checked directly, since unix unlinks it anyway.
 //
 // SABOTAGE: close released at the top of shutdown instead of the end -> red;
-// close it before the lock is closed -> red (the handle is still open).
+// close it before the lock is closed -> red (the handle is still open);
+// remove `<-sm.staleDone` from shutdown -> red (the startup sweep is held on a
+// gate the test owns, not on a timer; the one timed wait is the 1s window in
+// which a shutdown that skips the sweep would close released).
 func TestSessionManager_ReleasedMeansNothingIsHeld(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	base := t.TempDir()
-	sm := newSessionManager(ctx, base)
+	// A dead run's lock file for the startup sweep to find. The sweep is held
+	// open, with the file open, on a gate this test controls (not on a timer),
+	// so it is still running when the lifetime ends however slow setup is.
+	if err := os.WriteFile(filepath.Join(base, runPrefix+"dead"+runLockSuffix), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sweeping, gate := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(gate) }) })
+	sm := newSessionManagerHooked(ctx, base, &runHooks{reclaimOpened: func(string) {
+		close(sweeping)
+		<-gate
+	}})
 	t.Cleanup(sm.close)
+	<-sweeping
 	s, err := sm.Create("alpha", "u", authConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -307,6 +323,14 @@ func TestSessionManager_ReleasedMeansNothingIsHeld(t *testing.T) {
 	default:
 	}
 	cancel()
+	// The sweep is held, so a shutdown that does not wait for it closes
+	// released at once (microseconds); the window only has to outlast that.
+	select {
+	case <-sm.released:
+		t.Fatal("released before the startup sweep finished")
+	case <-time.After(time.Second):
+	}
+	once.Do(func() { close(gate) })
 	select {
 	case <-sm.released:
 	case <-time.After(10 * time.Second):
@@ -513,7 +537,7 @@ func TestReclaimRun_NeverStripsANewRunOfItsLock(t *testing.T) {
 		t.Fatalf("the claimer kept its first lock file %s: the sweeper never unlinked it under the lock", filepath.Base(firstLock))
 	}
 	// And the next sweep sees it as alive.
-	reclaimDeadRuns(base)
+	reclaimDeadRuns(base, nil)
 	if !exists(t, dir) || !sameFileAt(fi, lock.Name()) {
 		t.Fatal("a later sweep removed the live run")
 	}

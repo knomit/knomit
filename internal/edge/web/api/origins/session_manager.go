@@ -277,6 +277,12 @@ type sessionManager struct {
 // background sweep of dead runs in base, and no other goroutine: the first
 // Create starts the sweeper (see LIFETIME).
 func newSessionManager(ctx context.Context, base string) *sessionManager {
+	return newSessionManagerHooked(ctx, base, nil)
+}
+
+// newSessionManagerHooked is newSessionManager with test hooks for the startup
+// sweep (runHooks); h is nil outside tests.
+func newSessionManagerHooked(ctx context.Context, base string, h *runHooks) *sessionManager {
 	sm := &sessionManager{
 		now:       time.Now,
 		interval:  cleanupInterval,
@@ -289,7 +295,7 @@ func newSessionManager(ctx context.Context, base string) *sessionManager {
 	if base != "" {
 		go func() {
 			defer close(sm.staleDone)
-			reclaimDeadRuns(base)
+			reclaimDeadRuns(base, h)
 		}()
 	} else {
 		close(sm.staleDone)
@@ -300,7 +306,7 @@ func newSessionManager(ctx context.Context, base string) *sessionManager {
 
 // reclaimDeadRuns removes every run in base whose owner is dead: whose lock
 // file it can lock. A run whose lock is held is left alone, whoever holds it.
-func reclaimDeadRuns(base string) {
+func reclaimDeadRuns(base string, h *runHooks) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -313,7 +319,7 @@ func reclaimDeadRuns(base string) {
 		if e.IsDir() || !strings.HasPrefix(name, runPrefix) || !strings.HasSuffix(name, runLockSuffix) {
 			continue
 		}
-		reclaimRun(base, filepath.Join(base, name), nil)
+		reclaimRun(base, filepath.Join(base, name), h)
 	}
 }
 
@@ -322,6 +328,7 @@ func reclaimDeadRuns(base string) {
 // are a parameter, not package variables, so the background sweeps other
 // tests start can never call them.
 type runHooks struct {
+	reclaimOpened   func(lockPath string) // reclaimRun has opened the lock file, not yet probed it
 	reclaimLocked   func(lockPath string) // reclaimRun holds the lock
 	reclaimUnlocked func(lockPath string) // reclaimRun has just released it
 	claimCreated    func(lockPath string) // claimRun has created the file, not yet locked it
@@ -337,6 +344,7 @@ func (h *runHooks) fire(f func(*runHooks) func(string), lockPath string) {
 	}
 }
 
+func hookReclaimOpened(h *runHooks) func(string)   { return h.reclaimOpened }
 func hookReclaimLocked(h *runHooks) func(string)   { return h.reclaimLocked }
 func hookReclaimUnlocked(h *runHooks) func(string) { return h.reclaimUnlocked }
 func hookClaimCreated(h *runHooks) func(string)    { return h.claimCreated }
@@ -354,6 +362,7 @@ func reclaimRun(base, lockPath string, h *runHooks) {
 	if err != nil {
 		return
 	}
+	h.fire(hookReclaimOpened, lockPath)
 	ctx, cancel := context.WithTimeout(context.Background(), runProbeWait)
 	err = pki.LockFile(ctx, f)
 	cancel()
@@ -670,6 +679,11 @@ func (sm *sessionManager) shutdown() {
 		s.retire()
 	}
 	sm.live.Wait()
+	// The startup sweep holds handles in base (the directory it lists, a lock
+	// file it probes) while it runs: released means none are left. Waited for
+	// before this manager removes its own run so only one of them ever removes
+	// a lock file (on Windows a probed file cannot be unlinked).
+	<-sm.staleDone
 
 	sm.runMu.Lock()
 	sm.runClosed = true
@@ -692,9 +706,6 @@ func (sm *sessionManager) shutdown() {
 	if len(all) > 0 {
 		log.Debug().Int("sessions", len(all)).Msg("origin sessions: removed at shutdown")
 	}
-	// The startup sweep holds handles in base (the directory it lists, a lock
-	// file it probes) while it runs: released means none are left.
-	<-sm.staleDone
 	close(sm.released)
 }
 
