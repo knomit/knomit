@@ -650,18 +650,25 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	host.advance(t)
 	host.url = serveConsensusGit(t, host.ri)
 	peer := newConsensusPeer(t, host.url)
-	// The peer's own reconcile loop registers its branch on the host by a
-	// push of its own, at a time of its choosing, and that push kicks the
-	// host's merger. Wait for it to land, THEN settle the merger: a pass
-	// kicked by a late registration could otherwise reach its merge before
-	// the hook below is installed, park on the index job's lock unseen, and
-	// hold the merger (runs are serial) so the pass the test is waiting for
-	// never starts.
-	require.Eventually(t, func() bool {
-		tip := host.tip(t, cPeerAgent)
-		return tip != "" && tip == peer.tip(t)
-	}, 30*time.Second, 5*time.Millisecond, "the peer's branch registered on the host")
 	host.settle(t)
+
+	// Hold the merger between passes while the job takes the lock and the
+	// hook goes in. settle returns once a pass that started after it was
+	// called has ENDED, not once the merger is idle: its own second kick, or
+	// the peer reconcile loop's registration push (which lands whenever that
+	// loop runs), can leave a kick queued, and the pass it starts can reach
+	// its merge with no hook installed, park on the job's lock unseen, and
+	// hold every later pass (they are serial) so the hook never fires.
+	// runMu is what serialises passes: holding it means none is in flight,
+	// and every pass after the Unlock runs with the job holding the lock and
+	// the hook installed.
+	host.ri.consensus.runMu.Lock()
+	mergerHeld := true
+	t.Cleanup(func() {
+		if mergerHeld {
+			host.ri.consensus.runMu.Unlock()
+		}
+	})
 
 	// The index job: a full rebuild of the agent branch — the merger's merge
 	// target — parked in a batch, holding lockBranch(agent).
@@ -674,6 +681,8 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	// A peer push kicks the merger, which parks on lockBranch(agent).
 	var parked atomic.Bool
 	setConsensusHooks(t, consensusHooks{beforeMerge: func(string) { parked.Store(true) }})
+	mergerHeld = false
+	host.ri.consensus.runMu.Unlock()
 	peer.write(t, "kb/tasks/peer.md", "peer")
 	peer.round(t)
 	require.Eventually(t, parked.Load, 10*time.Second, 5*time.Millisecond, "the merger reached its merge")
