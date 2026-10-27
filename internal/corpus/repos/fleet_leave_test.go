@@ -469,16 +469,6 @@ func (f *forgeFleet) mainCRL(t *testing.T) *x509.RevocationList {
 	return crl
 }
 
-// leftRecordFile is a `left` member record for id with key pub naming the
-// leaf serial (what a member's leave writes).
-func leftRecordFile(t *testing.T, id string, pub ed25519.PublicKey, serial string) []byte {
-	t.Helper()
-	k, err := ssh.NewPublicKey(pub)
-	require.NoError(t, err)
-	return []byte("---\nkind: pragmatic\ntype: policy\n---\n# member " + id + "\n\n" +
-		fact.RenderMember(fact.Member{Agent: id, State: fact.MemberLeft, Key: k, Host: "h", LeafSerial: serial}))
-}
-
 // renewedBeforeLeave is the race the leave duty follows across a renewal: a
 // forge fleet with alpha joined and accepted, then ONE master round with the
 // decision clock in the final third of alpha's leaf renews it (S_old ->
@@ -591,7 +581,7 @@ func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 	// on top of the removal would carry the delete of a write-once file into
 	// the master's merge, which its own judge refuses.
 	f.forgeMainCommit(t, "artifacts/fleet/issued/"+old.SerialNumber.Text(16)+".pem", nil, "S_old's issuance record goes")
-	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16)), "alpha: left, naming S_old")
+	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), []byte(leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16))), "alpha: left, naming S_old")
 	before := f.mainCRLNumber(t)
 
 	logs := captureLog(t)
@@ -613,8 +603,10 @@ func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
 // A forged left record: beta, in its OWN folder (what the record-owner rule
 // allows it), writes `left` naming alpha's S_old. beta even shares alpha's
 // key, so only the issuance record's identity (alpha, not beta) tells them
-// apart. It revokes nothing (neither beta's leaf nor alpha's) and blocks
-// nothing: alpha's own leave across its renewal still revokes S_new and
+// apart. Read per agent (#654's FleetAgentRecordsAt), the record is beta's
+// and none of alpha's. It blocks nothing: on main while alpha's leaf falls
+// due, alpha is still renewed. It revokes nothing (neither beta's leaf nor
+// alpha's). Alpha's own leave across that renewal still revokes S_new and
 // S_old, and beta's leaf stays valid.
 // SABOTAGE: drop the identity check on S_old's issuance record -> beta's
 // leaf (and alpha's S_old) are revoked by beta's record -> red.
@@ -625,15 +617,27 @@ func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing
 	enr, err := f.master.EnrollFleetMember(ctx, "beta", keyLine("alpha"), "")
 	require.NoError(t, err)
 	require.True(t, enr.Published, enr.PublishError)
+	betaLeaf := f.mainLeaf(t, "beta")
+	require.True(t, betaLeaf.NotBefore.After(old.NotBefore), "fixture: only the identity tells beta's leaf from a renewal of S_old")
+	pub := old.PublicKey.(ed25519.PublicKey)
+	f.forgeMainCommit(t, memberRecordPath("kb", "beta"), []byte(leftRecordFile(t, "beta", pub, old.SerialNumber.Text(16))), "beta: left, naming alpha's leaf")
+	round(t, f.mri)
+	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+		main := svc.Remote().UpstreamBranch()
+		mine, err := svc.FleetAgentRecordsAt(main, "alpha")
+		require.NoError(t, err)
+		require.Len(t, mine, 1)
+		require.Equal(t, fact.MemberActive, mine[0].State, "alpha's own records: still active")
+		betas, err := svc.FleetAgentRecordsAt(main, "beta")
+		require.NoError(t, err)
+		require.Len(t, betas, 1)
+		require.Equal(t, old.SerialNumber.Text(16), betas[0].LeafSerial, "fixture: the forged record is beta's, naming alpha's leaf")
+	}))
 	restore := SetFleetClockForTest(due)
 	round(t, f.mri)
 	restore()
 	renewed := f.mainLeaf(t, "alpha")
-	require.NotEqual(t, old.SerialNumber, renewed.SerialNumber, "fixture: alpha renewed")
-	betaLeaf := f.mainLeaf(t, "beta")
-	require.True(t, betaLeaf.NotBefore.After(old.NotBefore), "fixture: only the identity tells beta's leaf from a renewal of S_old")
-	pub := old.PublicKey.(ed25519.PublicKey)
-	f.forgeMainCommit(t, memberRecordPath("kb", "beta"), leftRecordFile(t, "beta", pub, old.SerialNumber.Text(16)), "beta: left, naming alpha's leaf")
+	require.NotEqual(t, old.SerialNumber, renewed.SerialNumber, "beta's record blocks nothing: alpha is renewed")
 	before := f.mainCRLNumber(t)
 
 	logs := captureLog(t)
@@ -644,7 +648,7 @@ func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing
 	// alpha's own left record, naming S_old (straight onto main like beta's:
 	// a member branch from before beta's record would carry it into the
 	// master's merge as a change outside alpha's folder).
-	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), leftRecordFile(t, "alpha", pub, old.SerialNumber.Text(16)), "alpha: left, naming S_old")
+	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), []byte(leftRecordFile(t, "alpha", pub, old.SerialNumber.Text(16))), "alpha: left, naming S_old")
 	f.masterRounds(t)
 	crl := f.mainCRL(t)
 	require.True(t, pki.IsRevoked(crl, renewed.SerialNumber), "alpha's own leave still revokes S_new")
@@ -665,7 +669,7 @@ func TestFleetLeave_ALeftRecordAcrossAKeyChangeIsNotFollowed(t *testing.T) {
 	is, err := pki.IssueLeaf(f.root.Root, other, "alpha@"+pki.AgentEmailDomain, pki.Lifetime(old), pki.IssueTimeAfter(old.NotBefore))
 	require.NoError(t, err)
 	f.forgeMainCommit(t, "artifacts/fleet/certs/alpha.pem", is.CertPEM, "alpha's leaf for another key")
-	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16)), "alpha: left")
+	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), []byte(leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16))), "alpha: left")
 	cur := f.mainLeaf(t, "alpha")
 	require.True(t, cur.NotBefore.After(old.NotBefore), "fixture: the replacement starts later")
 	before := f.mainCRLNumber(t)
