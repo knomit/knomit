@@ -27,6 +27,7 @@ import (
 	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -534,7 +535,7 @@ func TestScript_TraceReadableWithGitLog(t *testing.T) {
 
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	svc := testService(t, ri)
 	require.NoError(t, svc.ConfigureRemote(fileuri.New(bare), "main", trigAgent))
 	_, err := svc.Remote().Push(context.Background(), trigAgent, nil)

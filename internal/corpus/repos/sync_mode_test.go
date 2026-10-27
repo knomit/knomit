@@ -17,6 +17,7 @@ import (
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -619,7 +620,7 @@ func TestSyncMode_SyncStageWiresOriginLoop(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "remote.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	// A PARSED COPY: fact.DefaultOntology() is a process-wide singleton, and

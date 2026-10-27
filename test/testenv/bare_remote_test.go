@@ -101,8 +101,8 @@ func TestBareRemote_PushSyncRoundTrip(t *testing.T) {
 // started child takes objects/maintenance.lock before it detaches and drops
 // it later, which is what TestMultiRepo_WritesAndRemotesIndependent's byte
 // snapshot of the remote and t.TempDir's cleanup raced.
-// SABOTAGE: drop noAutoMaintenance from BareRemoteWithBranch -> the trace
-// names a maintenance child -> red on every run.
+// SABOTAGE: drop gitfixture.NoAutoMaintenance from gitfixture.InitBare -> the
+// trace names a maintenance child -> red on every run.
 func TestBareRemote_PushStartsNoAutoMaintenance(t *testing.T) {
 	trace := filepath.Join(t.TempDir(), "trace2.json")
 	t.Setenv("GIT_TRACE2_EVENT", trace)

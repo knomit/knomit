@@ -9,6 +9,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/test/testenv/gitserver"
 )
 
@@ -18,10 +19,9 @@ import (
 // direct writes to main, merging an agent branch into main, and deliberate
 // object-store corruption for Verify tests.
 //
-// Uses real git via os/exec for ops the production code doesn't handle,
-// matching the exact pattern in internal/engine/store/repo_test.go:
-//
-//	exec.Command("git", "init", "--bare", remoteDir).Run()
+// Uses real git via os/exec for ops the production code doesn't handle. The
+// bare repository itself is made by internal/testsupport/gitfixture, like
+// every test remote, so it runs no git auto-maintenance.
 type RemoteHandle struct {
 	sb             *Storyboard
 	name           string
@@ -53,8 +53,7 @@ func (sb *Storyboard) BareRemoteWithBranch(name, upstreamBranch string) *RemoteH
 		upstreamBranch = "main"
 	}
 	dir := filepath.Join(sb.homeDir, "remotes", name)
-	mustGit(t, "", "init", "--bare", "--initial-branch="+upstreamBranch, dir)
-	noAutoMaintenance(t, dir)
+	gitfixture.InitBare(t, dir, upstreamBranch)
 	return &RemoteHandle{
 		sb:             sb,
 		name:           name,
@@ -87,8 +86,7 @@ func (sb *Storyboard) MirrorOf(name string, src *RemoteHandle) *RemoteHandle {
 	t := sb.t
 	t.Helper()
 	dir := filepath.Join(sb.homeDir, "remotes", name)
-	mustGit(t, "", "clone", "--bare", src.Dir(), dir)
-	noAutoMaintenance(t, dir)
+	gitfixture.CloneBare(t, src.Dir(), dir)
 	return &RemoteHandle{
 		sb:             sb,
 		name:           name,
@@ -376,7 +374,7 @@ func (r *RemoteHandle) WriteDisjointRootOnMain(path, content, msg string) {
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	// maintenance.auto=false: a commit in a work clone would otherwise start
-	// a detached auto-maintenance there too (see noAutoMaintenance).
+	// a detached auto-maintenance there too (see internal/testsupport/gitfixture).
 	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	if dir != "" {
 		cmd.Dir = dir
@@ -396,23 +394,6 @@ func mustGit(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed in %s:\n%v\n%s", args, dir, err, out)
 	}
-}
-
-// noAutoMaintenance turns git's auto-maintenance off in the bare repository
-// at dir (#651). Every push into a remote runs a real git-receive-pack (the
-// git CLI, and go-git's file:// transport, which execs the git binary), and
-// receive-pack then starts `git maintenance run --auto --detach`. That child
-// takes objects/maintenance.lock BEFORE it detaches and removes it after, so
-// the push returns while the lock may still be in the remote, and is removed
-// whenever the detached process is next scheduled: a byte snapshot of the
-// remote (TestMultiRepo_WritesAndRemotesIndependent) sees a file come or go,
-// and t.TempDir's RemoveAll races it ("directory not empty"). Measured on
-// git 2.56: 9 pushes in 100 left the lock behind after the push returned.
-// maintenance.auto=false is read by receive-pack itself, in this repository,
-// so it starts no child at all; nothing waits for anything.
-func noAutoMaintenance(t *testing.T, dir string) {
-	t.Helper()
-	mustGit(t, "", "-C", dir, "config", "maintenance.auto", "false")
 }
 
 // envPassthrough returns the minimum env needed for `git` to run

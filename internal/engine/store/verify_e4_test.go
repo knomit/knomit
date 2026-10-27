@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/verify"
+	"knomit/internal/testsupport/gitfixture"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -34,6 +35,7 @@ func newE4Origin(t *testing.T) *e4Origin {
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	repo, err := gogit.PlainInit(bare, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, bare)
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
 	return &e4Origin{t: t, bare: bare, repo: repo, files: map[string]string{fact.OntologyFile: string(ont)}}

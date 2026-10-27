@@ -2,6 +2,7 @@ package gitserver
 
 import (
 	"context"
+	"knomit/internal/testsupport/gitfixture"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,7 +41,7 @@ func runGit(t testing.TB, dir string, args ...string) {
 func initBareRepoWithCommit(t testing.TB, root, name string) string {
 	t.Helper()
 	bare := filepath.Join(root, name)
-	runGit(t, root, "init", "--bare", "-b", "main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	runGit(t, root, "--git-dir="+bare, "config", "http.receivepack", "true")
 
 	work := t.TempDir()

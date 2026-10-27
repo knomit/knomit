@@ -21,6 +21,7 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -42,13 +43,7 @@ func seedFleetBare(t *testing.T, dir string) (string, *pkitest.Fleet) {
 	t.Helper()
 	root := pkitest.New(t)
 	bare := filepath.Join(dir, "fleet.git")
-	gitRun(t, dir, "init", "--bare", "--initial-branch=main", bare)
-	// #651: every push into bare runs git-receive-pack, which would start a
-	// detached `git maintenance run --auto` holding objects/maintenance.lock
-	// past the push; t.TempDir's RemoveAll then raced it ("unlinkat
-	// .../fleet.git: directory not empty"). receive-pack reads this setting
-	// in bare itself and starts no child.
-	gitRun(t, dir, "-C", bare, "config", "maintenance.auto", "false")
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	gitRun(t, dir, "clone", bare, work)
 	ont, err := fact.FleetOntology().Serialize()

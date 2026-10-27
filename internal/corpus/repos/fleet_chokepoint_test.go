@@ -19,6 +19,7 @@ import (
 	"knomit/internal/foundation/pki"
 	"knomit/internal/foundation/pki/pkitest"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -263,7 +264,7 @@ func TestFleetReserved_BootAdmitsOnlyTheRecordedFleet(t *testing.T) {
 			// An ordinary knowledge base upstream.
 			bare := filepath.Join(dir, "kb.git")
 			require.NoError(t, os.MkdirAll(bare, 0o755))
-			runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+			gitfixture.InitBare(t, bare, "main")
 			work := t.TempDir()
 			runGit(t, "", "clone", bare, work)
 			require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
@@ -375,7 +376,7 @@ func staleFleetYAML(t *testing.T) string {
 func seedFleetRemoteWithRoot(t *testing.T, bare, ontYAML string, rootPEM []byte) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	// main names the master (fact.FleetMasterPath): the root holder these

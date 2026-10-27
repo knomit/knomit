@@ -25,6 +25,7 @@ import (
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // ---- T-D0: the shipped template's settings, and that it loads as-is
@@ -604,7 +605,7 @@ func git(t *testing.T, dir string, args ...string) {
 func newGitOrigin(t *testing.T, root, branch string, files map[string]string) *gitOrigin {
 	t.Helper()
 	bare := filepath.Join(root, "origin.git")
-	git(t, "", "init", "--bare", "--initial-branch="+branch, bare)
+	gitfixture.InitBare(t, bare, branch)
 	work := t.TempDir()
 	git(t, "", "clone", bare, work)
 	git(t, work, "checkout", "-B", branch)

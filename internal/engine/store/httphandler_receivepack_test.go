@@ -19,6 +19,7 @@ import (
 	"knomit/internal/engine/store/fleetrec"
 	"knomit/internal/engine/store/fsck"
 	"knomit/internal/engine/store/verify"
+	"knomit/internal/testsupport/gitfixture"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -583,6 +584,7 @@ func TestReceivePack_HostPushDoesNotForwardPeerBranch(t *testing.T) {
 	bare := t.TempDir()
 	_, err := gogit.PlainInit(bare, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, bare)
 	require.NoError(t, h.svc.ConfigureRemote(bare, "main", hostBranch))
 	_, err = h.svc.Remote().Push(context.Background(), hostBranch, nil)
 	require.NoError(t, err)

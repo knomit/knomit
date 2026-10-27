@@ -14,6 +14,7 @@ package playbooks
 import (
 	"fmt"
 	"io/fs"
+	"knomit/internal/testsupport/gitfixture"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,7 +151,7 @@ func SourceRepo(t testing.TB, bare, branch string, edit func(work string)) strin
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(bare, "init", "-q", "--bare", "-b", branch)
+	gitfixture.InitBare(t, bare, branch)
 	git(work, "push", "-q", bare, branch)
 	return bare
 }

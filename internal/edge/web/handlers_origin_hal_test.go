@@ -24,6 +24,7 @@ import (
 	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -577,7 +578,7 @@ func seedBareRemoteForTest(t *testing.T, bare string) string {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatalf("mkdir bare: %v", err)
 	}
-	runGitForTest(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGitForTest(t, "", "clone", bare, work)
 	if err := os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644); err != nil {
@@ -1084,7 +1085,7 @@ func seedBareRemoteKBForTest(t *testing.T, bare string) string {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatalf("mkdir bare: %v", err)
 	}
-	runGitForTest(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	work := t.TempDir()
 	runGitForTest(t, "", "clone", bare, work)
 	ont, err := fact.DefaultOntology().Serialize()

@@ -19,6 +19,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -337,7 +338,7 @@ func mirrorOfOrigin(t *testing.T, f *identityFixture, name string, ahead bool) s
 	t.Helper()
 	bare := filepath.Join(f.originRoot, name)
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	gitfixture.InitBare(t, bare, "main")
 
 	work := filepath.Join(t.TempDir(), "work")
 	runGit(t, "", "clone", f.url, work)

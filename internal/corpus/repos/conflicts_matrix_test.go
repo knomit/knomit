@@ -27,6 +27,7 @@ import (
 
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -205,7 +206,7 @@ func newGHOrigin(t *testing.T, root, branch, ontology string, files map[string]s
 	t.Helper()
 	bare := filepath.Join(root, "origin.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch="+branch, bare)
+	gitfixture.InitBare(t, bare, branch)
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	runGit(t, work, "checkout", "-B", branch)
