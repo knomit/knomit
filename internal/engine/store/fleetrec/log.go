@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/crypto/ssh"
@@ -36,6 +37,51 @@ func At(st Storer, branch, root string) (Fleet, error) {
 		return Fleet{}, fmt.Errorf("fleet: %w", err)
 	}
 	return LoadFleetAtCommit("mounted", c, root)
+}
+
+// AgentRecordsAt returns agent's member records at branch's tip: the records
+// in <root>/members/<agent>/ only, read without the ontology, the PKI or any
+// other member's folder, so a defect anywhere else in that revision does not
+// fail the read. A branch with no such folder has none. The skip rules are
+// LoadMembersOfTree's (a record must be FOR its folder's agent).
+func AgentRecordsAt(st Storer, branch, root, agent string) ([]Member, error) {
+	if root == "" {
+		root = "kb"
+	}
+	ref, err := st.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %s: %w", branch, err)
+	}
+	c, err := object.GetCommit(st, ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %w", err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %w", err)
+	}
+	dir := path.Join(root, fact.MembersTopic, agent)
+	// FindEntry, not tree.Tree: Tree reads a subtree whose object is MISSING
+	// as "no such directory", and a missing folder must be an error here, not
+	// "no records" (the caller fails closed on an error).
+	e, err := tree.FindEntry(dir)
+	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %s: %w", dir, err)
+	}
+	if e.Mode != filemode.Dir {
+		return nil, fmt.Errorf("fleet: %s is not a directory (mode %s)", dir, e.Mode)
+	}
+	sub, err := object.GetTree(st, e.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %s: %w", dir, err)
+	}
+	if err := vcs.CheckTreeShape(sub, nil); err != nil {
+		return nil, fmt.Errorf("fleet: %s: malformed tree: %w", dir, err)
+	}
+	return loadMembersUnder("mounted", sub, dir+"/", path.Join(root, fact.MembersTopic)+"/")
 }
 
 // FileAt reads the regular file p (a repo-root path) at branch's tip: ok is

@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/verify"
+	"knomit/internal/testsupport/gitfixture"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -214,6 +215,7 @@ func copyToBare(t *testing.T, svc *Service, refs map[string]string) string {
 	dir := filepath.Join(t.TempDir(), "kb.git")
 	bare, err := gogit.PlainInit(dir, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, dir)
 	var tips []plumbing.Hash
 	for _, h := range refs {
 		tips = append(tips, plumbing.NewHash(h))

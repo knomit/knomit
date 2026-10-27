@@ -12,6 +12,7 @@ import (
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
@@ -26,7 +27,7 @@ import (
 func swCloneBare(t *testing.T, src string) string {
 	t.Helper()
 	dst := filepath.Join(t.TempDir(), "b.git")
-	mustRun(t, t.TempDir(), "git", "clone", "--bare", "--quiet", src, dst)
+	gitfixture.CloneBare(t, src, dst)
 	return dst
 }
 
@@ -149,7 +150,7 @@ func TestSync_SwitchToAnUnrelatedOriginKeepsTheExistingRules(t *testing.T) {
 	swConsumeOwn(t, svc, a)
 	tip := mustHeadHash(t, svc, "agent/test")
 	b := t.TempDir()
-	mustRun(t, "", "git", "init", "-q", "--bare", "--initial-branch=main", b)
+	gitfixture.InitBare(t, b, "main")
 	work := t.TempDir()
 	mustRun(t, "", "git", "init", "-q", "--initial-branch=main", work)
 	mustRun(t, work, "git", "config", "user.email", "u@u")

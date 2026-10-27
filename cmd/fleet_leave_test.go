@@ -15,6 +15,7 @@ import (
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // hubRound runs one round of the hub's local reconcile, as its loop does
@@ -171,8 +172,8 @@ func TestFleetLeave_ForgeJoinIsPendingThenAcceptedAndLeaveRevokes(t *testing.T) 
 	bare := filepath.Join(forgeDir, "fleet.git")
 	// A forge create initializes onto a main that has one commit.
 	work := filepath.Join(dir, "seed")
+	gitfixture.InitBare(t, bare, "main")
 	for _, args := range [][]string{
-		{"init", "--bare", "--initial-branch=main", bare},
 		{"init", "--initial-branch=main", work},
 		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "seed"},
 		{"-C", work, "push", "-q", bare, "main"},

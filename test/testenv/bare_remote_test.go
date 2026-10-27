@@ -1,10 +1,16 @@
 package testenv
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // TestBareRemote_InitCreatesEmptyRepo asserts that BareRemote creates a
@@ -87,4 +93,48 @@ func TestBareRemote_PushSyncRoundTrip(t *testing.T) {
 	bAgent.Sync()
 
 	bAgent.Head().Fact("kb/shared.md").MustExist()
+}
+
+// #651: a push into a Storyboard remote starts no detached git
+// auto-maintenance in it. The push goes through the product (Connect's
+// first round, then Push), i.e. go-git's file:// transport, which execs the
+// real git-receive-pack. The oracle is git's own trace2 event log, not a
+// timing: receive-pack either starts `git maintenance` or it does not. A
+// started child takes objects/maintenance.lock before it detaches and drops
+// it later, which is what TestMultiRepo_WritesAndRemotesIndependent's byte
+// snapshot of the remote and t.TempDir's cleanup raced.
+// SABOTAGE: drop gitfixture.NoAutoMaintenance from gitfixture.InitBare -> the
+// trace names a maintenance child -> red on every run.
+func TestBareRemote_PushStartsNoAutoMaintenance(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace2.json")
+	t.Setenv("GIT_TRACE2_EVENT", trace)
+	sb := NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	agent.Write("kb/one.md", Fact("one"), "a fact to push")
+	require.True(t, agent.Push().Pushed, "fixture: the push reached the remote")
+
+	raw, err := os.ReadFile(trace)
+	require.NoError(t, err)
+	var receivePacks, maintenance int
+	for _, line := range strings.Split(string(raw), "\n") {
+		var ev struct {
+			Event string   `json:"event"`
+			Argv  []string `json:"argv"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil || (ev.Event != "start" && ev.Event != "child_start") {
+			continue
+		}
+		joined := strings.Join(ev.Argv, " ")
+		if ev.Event == "start" && strings.Contains(joined, "receive-pack") {
+			receivePacks++
+		}
+		if gitfixture.IsAutoMaintenance(ev.Argv) {
+			maintenance++
+			t.Logf("auto-maintenance started: %s", joined)
+		}
+	}
+	require.NotZero(t, receivePacks, "positive control: the pushes ran a traced git-receive-pack")
+	require.Zero(t, maintenance, "a push into the remote started a detached git auto-maintenance")
 }

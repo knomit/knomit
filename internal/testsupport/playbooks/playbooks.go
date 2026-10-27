@@ -18,6 +18,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // SubmodulePath is the checkout's path from the repository root.
@@ -150,7 +152,7 @@ func SourceRepo(t testing.TB, bare, branch string, edit func(work string)) strin
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(bare, "init", "-q", "--bare", "-b", branch)
+	gitfixture.InitBare(t, bare, branch)
 	git(work, "push", "-q", bare, branch)
 	return bare
 }

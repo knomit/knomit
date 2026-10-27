@@ -349,10 +349,17 @@ jobs:
       # embed-smoke — so this is a no-op, not a gap. If a test here ever does
       # need ORT on Windows, the spelling is ORT_LIB_PATH="$LIBDIR/onnxruntime.dll"
       # (no lib prefix on the filename; see tools/fetchlibs/spec.go ortSpec).
+      #
+      # ./test/testenv/... (the Storyboard harness's own tests, gitserver
+      # included) and ./internal/testsupport/... (the test-support packages,
+      # gitfixture's git auto-maintenance guard among them) joined this step
+      # with #654: until then they ran in no PR step, only in race.yml after
+      # a merge. testenv boots managers, so it needs the native libs like
+      # storytests; testsupport rides along in the same step.
       - name: Story, web + desktop-helper tests (runtime native libs)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh web ./test/storytests/ ./internal/edge/web/... ./tools/desktop/internal/...
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh web ./test/storytests/ ./test/testenv/... ./internal/testsupport/... ./internal/edge/web/... ./tools/desktop/internal/...
 
       # NEW WITH THE WINDOWS LEG, AND HALF THE POINT OF IT. These packages were
       # COMPILED by the build step above but their tests ran on no platform in

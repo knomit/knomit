@@ -238,19 +238,6 @@ func withinRace(a, b time.Duration) bool {
 	return b <= bound
 }
 
-// withinMedian is the EVERYDAY bound, max(1.5×a, a+3ms) (1b follow-up, applied
-// in PR 2): the 1.25× bound failed 2 of 3 runs on a loaded laptop while CI
-// never failed it, and a loaded laptop is where the test is run by hand. The
-// sabotage that must still redden it is a flush after EVERY run (1b review
-// #15: 6.5 → 10.8 ms median, 1.66×).
-func withinMedian(a, b time.Duration) bool {
-	bound := a + a/2
-	if a+3*time.Millisecond > bound {
-		bound = a + 3*time.Millisecond
-	}
-	return b <= bound
-}
-
 // abba measures write latency with and without the given trigger entries in
 // ALTERNATING blocks (A B B A A B B A …), so both arms see the same repo
 // growth. A first-then-second layout does not work: a write's latency on this
@@ -283,18 +270,16 @@ func abba(t *testing.T, ri *RepoInstance, entries []string, rounds, perBlock int
 }
 
 // WriteLatencyIndependentOfTriggers: 200 learns with 0 triggers and 200 with
-// 50 triggers that all match, in alternating blocks; the median with triggers
-// is within max(1.5×, +3 ms) of the median without (withinMedian); the p90 is
-// reported, not gated (1b follow-up). The fire log is writing during the
-// loaded blocks (two short transactions per run). Sabotage: flush phase C
-// after every run (the median moves ~1.66×); or call the dispatcher
-// synchronously from ri.onCommit — with the busy-if variant below every write
-// gains ≥ 10 × 100 ms.
-//
-// Under -race the median is LOGGED, not gated: the flush-per-run sabotage
-// moves it ~1.66× while race-detector noise on CI already reached 1.50×, so no
-// bound separates them there. The test still runs under -race for its race
-// coverage; the gate is the non-race run (tests.yml).
+// 50 triggers that all match, in alternating blocks. The medians and p90s
+// are LOGGED, not gated (#419): the regression the old max(1.5×, +3 ms) gate
+// existed for, a flush of phase C after every run, measured 1.66× on one
+// machine and 1.46× on a loaded laptop, inside that gate, while runner noise
+// alone reached 1.24× (and 1.50× under -race). A wall-clock ratio cannot tell
+// the two apart on every machine, so the property is asserted structurally
+// by TestDispatch_PhaseCFlushesABurstOnce (flushes counted against runs), and
+// asynchronous dispatch by TestDispatch_WriteReturnsWhileTriggerEvaluationIsHeld.
+// What this test still asserts: the loaded blocks fired, and it runs the
+// write path against a busy fire log for -race coverage.
 func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -307,13 +292,65 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	b90, l90 := percentile(base, 0.9), percentile(loaded, 0.9)
-	t.Logf("median: 0 triggers %s, 50 triggers %s (%.2f×); p90 (report only): %s vs %s", bm, lm, float64(lm)/float64(bm), b90, l90)
-	if raceEnabled {
-		t.Log("-race: the median is reported, not gated")
-	} else {
-		require.True(t, withinMedian(bm, lm), "median with 50 triggers (%s) is not within max(1.5×, +3ms) of 0 triggers (%s)", lm, bm)
-	}
+	t.Logf("report only: median 0 triggers %s, 50 triggers %s (%.2f×); p90 %s vs %s", bm, lm, float64(lm)/float64(bm), b90, l90)
 	require.GreaterOrEqual(t, ri.triggers.StatsViewForTest("t00").Fires, int64(100), "the loaded blocks did fire")
+}
+
+// PhaseCFlushesABurstOnce (#419): phase C is WRITE-BEHIND
+// (kb/decisions/fleet/f07-triggers/phase-c-write-behind): a run buffers its
+// fire rows and watermarks, and the buffer is written when the writer goes
+// quiet (settle's grace), at a size bound, or at shutdown — never by the run
+// itself. Asserted by COUNTING flushes against runs, not by timing writes.
+//
+// The quiet-gap timer is held off for the burst (FlushGrace: an hour, i.e.
+// it never fires inside the test; that is the timer's only role here, not a
+// speed bound), so the only flush paths left are a run's own (the
+// regression), the size bound (maxBufferedRuns, far above this burst) and
+// the stop. N writes, each waited for until its run has completed: zero
+// flushes. Then Serve is restarted: the stop flushes ONCE, holding all N
+// runs, and the fire log gains exactly N run rows.
+// SABOTAGE: flush at the end of every run (d.flush instead of d.maybeFlush
+// in runOnce) -> N flushes during the burst -> red on every run, whatever
+// the machine's speed.
+func TestDispatch_PhaseCFlushesABurstOnce(t *testing.T) {
+	_, ri := newTriggerRepo(t, trig("t", "learn", "tasks/**", ""))
+	waitTriggerHead(t, ri, head(t, ri)) // the ontology's run is flushed before counting starts
+	rowsBefore := len(runRows(t, ri))
+
+	var mu sync.Mutex
+	var flushes, flushedRuns int
+	h := trigger.HooksForTest()
+	h.FlushGrace = time.Hour
+	h.BeforeFlush = func(runs int) {
+		mu.Lock()
+		flushes++
+		flushedRuns += runs
+		mu.Unlock()
+	}
+	setHooks(t, h)
+	counts := func() (int, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		return flushes, flushedRuns
+	}
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		c := writeOn(t, ri, trigAgent, fmt.Sprintf("kb/tasks/burst-%02d.md", i))
+		require.Eventually(t, func() bool {
+			got, _ := ri.triggers.RunSequenceForTest()
+			return got == c
+		}, 20*time.Second, 5*time.Millisecond, "hang detector: the run of write %d never completed", i)
+	}
+	f, _ := counts()
+	require.Zero(t, f, "a run flushed its own phase C: %d flushes for %d runs", f, n)
+	require.False(t, ri.triggers.FlushedForTest(), "reached: the burst's runs are buffered")
+
+	restartServe(t, ri) // the dispatcher's stop flushes what is buffered
+	f, runs := counts()
+	require.Equal(t, 1, f, "the burst is written in one flush, at the stop")
+	require.Equal(t, n, runs, "that flush holds every run of the burst")
+	require.Len(t, runRows(t, ri), rowsBefore+n, "each run still has exactly one run row")
 }
 
 // The sabotage target [M5]: 10 triggers whose `if` busy-loops to the 100 ms

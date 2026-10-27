@@ -132,17 +132,20 @@ func TestFleetTick_NothingInstalledOrAnotherRootInstallsNothing(t *testing.T) {
 // per round.
 // SABOTAGE: drop the nothing-installed early return -> a warning -> red.
 func TestFleetTick_NothingInstalledLogsNothing(t *testing.T) {
+	// The global logger is set BEFORE any instance starts and never swapped
+	// while one runs: reassigning log.Logger mid-test raced the instances'
+	// background goroutines (an index sync's commit observer) reading it
+	// (#654 review N3). Only the capture is reset at the point that counts.
 	restoreLoggerLast(t)
+	var buf syncBuf
+	log.Logger = zerolog.New(&buf)
 	f := newForgeFleet(t, nil)
 	installMasterLeaf(t, f)
 	alpha := f.namedMember(t, "alpha")
 	f.enrollAndJoin(t, alpha, "alpha")
 	dir := alpha.deps.Cfg.TLS.Dir
 	require.NoError(t, pki.Uninstall(dir))
-	var buf syncBuf
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
+	buf.Reset()
 	require.NoError(t, alpha.fleetRepo().WithRead(func(svc *store.Service) {
 		n, err := alpha.installMainCRL(svc)
 		require.NoError(t, err)

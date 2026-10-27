@@ -18,6 +18,7 @@ import (
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // testServer is what this package's tests drive instead of web's Server: the
@@ -125,7 +126,7 @@ func seedBareKBOn(t *testing.T, bare, branch string) string {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGitForTest(t, "", "init", "--bare", "--initial-branch="+branch, bare)
+	gitfixture.InitBare(t, bare, branch)
 	work := t.TempDir()
 	runGitForTest(t, "", "clone", bare, work)
 	runGitForTest(t, work, "checkout", "-B", branch)

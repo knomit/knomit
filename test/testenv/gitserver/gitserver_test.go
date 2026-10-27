@@ -14,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
+
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // testSig returns a fixed-timestamp signature for use in test commits.
@@ -40,7 +42,7 @@ func runGit(t testing.TB, dir string, args ...string) {
 func initBareRepoWithCommit(t testing.TB, root, name string) string {
 	t.Helper()
 	bare := filepath.Join(root, name)
-	runGit(t, root, "init", "--bare", "-b", "main", bare)
+	gitfixture.InitBare(t, bare, "main")
 	runGit(t, root, "--git-dir="+bare, "config", "http.receivepack", "true")
 
 	work := t.TempDir()

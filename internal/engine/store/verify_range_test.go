@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"knomit/internal/engine/store/verify"
+	"knomit/internal/testsupport/gitfixture"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -33,8 +34,10 @@ func newRangeFixture(t *testing.T) *rangeFixture {
 	var err error
 	f.kb, err = gogit.PlainInit(f.kbDir, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, f.kbDir)
 	f.fleet, err = gogit.PlainInit(f.fleetDir, true)
 	require.NoError(t, err)
+	gitfixture.NoAutoMaintenance(t, f.fleetDir)
 	return f
 }
 

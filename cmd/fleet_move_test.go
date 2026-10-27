@@ -15,6 +15,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // TestFleetHubMovesToAForge is the hub → forge move end to end (user ruling
@@ -39,9 +40,7 @@ func TestFleetHubMovesToAForge(t *testing.T) {
 		t.Fatal(err)
 	}
 	bare := filepath.Join(forgeDir, "fleet.git")
-	if out, err := exec.Command("git", "init", "--bare", "--initial-branch=main", bare).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v %s", err, out)
-	}
+	gitfixture.InitBare(t, bare, "main")
 	forge := fileuri.New(bare)
 	allow := func(c *config.Config) { c.LocalOriginRoot = forgeDir }
 

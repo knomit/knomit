@@ -16,6 +16,7 @@ import (
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // installedLeafOf is the instance certificate installed in n's [tls].dir.
@@ -182,8 +183,8 @@ func TestFleetE2E_Forge(t *testing.T) {
 	}
 	bare := filepath.Join(forgeDir, "fleet.git")
 	work := filepath.Join(dir, "seed")
+	gitfixture.InitBare(t, bare, "main")
 	for _, args := range [][]string{
-		{"init", "--bare", "--initial-branch=main", bare},
 		{"init", "--initial-branch=main", work},
 		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "seed"},
 		{"-C", work, "push", "-q", bare, "main"},

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"knomit/internal/engine/store/verify"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -95,6 +96,7 @@ func TestFleetOrigin_PeerBranchMergedInTheUIAndReclonable(t *testing.T) {
 	if _, err := gogit.PlainInit(bare, true); err != nil {
 		t.Fatal(err)
 	}
+	gitfixture.NoAutoMaintenance(t, bare)
 	if err := host.kb.WithRead(func(s *store.Service) {
 		got, err := s.Facts().ReadFact(ctx, fleetServerAgent, "kb/merged.md", nil)
 		if err != nil || !strings.Contains(got.Content, "merged") {

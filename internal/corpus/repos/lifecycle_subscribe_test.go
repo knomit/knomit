@@ -15,6 +15,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -179,7 +180,7 @@ func plainPath(u string) string {
 func seedBareRemoteHeadIsAgentBranch(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=trunk", bare)
+	gitfixture.InitBare(t, bare, "trunk")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	runGit(t, work, "checkout", "-B", "trunk")
@@ -243,7 +244,7 @@ func TestCreate_SubscribeMode_PreflightResolvesByTheCreateRule(t *testing.T) {
 func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=master", bare)
+	gitfixture.InitBare(t, bare, "master")
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	runGit(t, work, "checkout", "-B", "master")

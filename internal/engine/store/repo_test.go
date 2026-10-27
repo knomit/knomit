@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func TestInitRepo_SeedsReadmeWithExactCase(t *testing.T) {
 // branch to merge into the agent branch.
 func TestCloneFrom_EmptyRemoteReturnsErrEmptyRemote(t *testing.T) {
 	remoteDir := t.TempDir()
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	gitfixture.InitBare(t, remoteDir, "")
 
 	svc, err := Open(filepath.Join(t.TempDir(), "clone.db"))
 	require.NoError(t, err)

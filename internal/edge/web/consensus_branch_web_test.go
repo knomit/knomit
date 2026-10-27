@@ -15,6 +15,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -25,7 +26,7 @@ func seedBareKBOn(t *testing.T, bare, branch string) string {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGitForTest(t, "", "init", "--bare", "--initial-branch="+branch, bare)
+	gitfixture.InitBare(t, bare, branch)
 	work := t.TempDir()
 	runGitForTest(t, "", "clone", bare, work)
 	runGitForTest(t, work, "checkout", "-B", branch)

@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // initBareRepoForWebTest creates an empty bare git repo under parent and
@@ -17,9 +17,7 @@ import (
 func initBareRepoForWebTest(t *testing.T, parent string) string {
 	t.Helper()
 	dir := filepath.Join(parent, "remote.git")
-	if err := exec.Command("git", "init", "--bare", dir).Run(); err != nil {
-		t.Fatalf("git init --bare: %v", err)
-	}
+	gitfixture.InitBare(t, dir, "")
 	return fileuri.New(dir)
 }
 

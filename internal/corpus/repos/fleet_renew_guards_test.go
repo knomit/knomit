@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/x509"
+	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
 )
@@ -66,6 +70,16 @@ func TestFleetRenew_AnUnpublishedRevokeIsNotUndoneByARenewal(t *testing.T) {
 // from main only (active), re-issues the leaver's leaf, and the round
 // publishes both; the leave duty then never revokes, because the left
 // record's leaf_serial names the OLD serial (leftLeafDue).
+//
+// #651: the round that admits alpha's leave runs its duties while the
+// consensus merger (its own goroutine) may not have merged agent/alpha yet,
+// so the `left` record is on neither main nor the agent branch. The test used
+// to pass only when the merger won that race; under load it lost about 1 run
+// in 25. The merger is now parked for the due round, so the window is open
+// on every run, and the agent branch is asserted to still read alpha active
+// when the duty has run.
+// SABOTAGE: drop the pushedLeftSerials filter in renewFleetLeaves -> alpha
+// is renewed in the window -> red on every run.
 func TestFleetRenew_ALeaveOnTheAgentBranchIsNotRenewedBeforeMain(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
@@ -95,10 +109,25 @@ func TestFleetRenew_ALeaveOnTheAgentBranchIsNotRenewedBeforeMain(t *testing.T) {
 	}
 	t.Logf("fixture: alpha on main %q, on the agent branch %q", stateAt(""), stateAt(f.mri.AgentBranch()))
 
+	// Park the merger before it merges alpha's branch: the due round admits
+	// the leave and runs its duties with the `left` record on agent/alpha
+	// only.
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unpark := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unpark)
+	setConsensusHooks(t, consensusHooks{beforeMerge: func(branch string) {
+		if branch == "agent/alpha" {
+			<-release
+		}
+	}})
 	due := time.Now().Add(pki.Lifetime(oldAlpha) * 3 / 4)
 	restore := SetFleetClockForTest(func() time.Time { return due })
 	round(t, f.mri)
 	restore()
+	require.Equal(t, "left", stateAt("agent/alpha"), "fixture: the due round admitted alpha's leave")
+	require.Equal(t, "active", stateAt(f.mri.AgentBranch()), "fixture: the leave was not merged before the duty ran")
+	unpark()
 	for i := 0; i < 4; i++ {
 		round(t, f.mri)
 		settleMerger(t, f.mri)
@@ -254,4 +283,98 @@ func TestFleetTick_ALeafOfAnotherRootIsNotInstalled(t *testing.T) {
 	after, err := pki.LoadInstanceCert(dir)
 	require.NoError(t, err)
 	require.Equal(t, before.Raw, after.Raw, "the installed leaf is untouched")
+}
+
+// leftRecordFile is a `left` member record for id holding pub and naming
+// serial, as Leave writes it (the serial is free text to the judge).
+func leftRecordFile(t *testing.T, id string, pub ed25519.PublicKey, serial string) string {
+	t.Helper()
+	k, err := ssh.NewPublicKey(pub)
+	require.NoError(t, err)
+	return "---\nkind: pragmatic\ntype: policy\n---\n# member " + id + "\n\n" +
+		fact.RenderMember(fact.Member{Agent: id, State: fact.MemberLeft, Key: k, Host: "h", LeafSerial: serial})
+}
+
+// pushedBranch makes branch, a pushed member branch on the master's copy
+// (what an admitted fetch leaves), from main, with files written on it. The
+// merger is held for the rest of the test, so nothing merges, re-judges or
+// demotes the branch while the duty reads it.
+func pushedBranch(t *testing.T, f *forgeFleet, branch string, files map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	f.mri.consensus.runMu.Lock()
+	t.Cleanup(f.mri.consensus.runMu.Unlock)
+	require.NoError(t, f.mri.WithRead(func(svc *store.Service) {
+		require.NoError(t, svc.CreateBranch(ctx, branch, svc.Remote().UpstreamBranch()))
+		for p, content := range files {
+			_, err := svc.Facts().WriteFact(ctx, branch, p, content, "fixture: "+p, "learn")
+			require.NoError(t, err)
+		}
+	}))
+	require.True(t, f.mri.IsPushedBranch(branch), "fixture: %s is a pushed branch", branch)
+}
+
+// #654 review B1: the pushed-branch leave check matches like leftLeafDue,
+// per agent. Mallory's own `left` record names ALPHA's serial (leaf_serial is
+// free text to the judge, and every serial is public on main); that is a
+// record of mallory's, so alpha is still renewed. Positive control (a fresh
+// fixture): alpha's own `left` record naming its serial, on a pushed branch
+// not merged yet, does stop alpha's renewal, and only alpha's.
+// SABOTAGE: match the pushed `left` records by serial alone, whoever's record
+// it is (the first #654 revision) -> alpha is not renewed in the first half
+// -> red.
+func TestFleetRenew_AnotherMembersLeftRecordNamingTheSerialDoesNotStopTheRenewal(t *testing.T) {
+	ctx := context.Background()
+	f, _, old, due := renewFixture(t)
+	mallory, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	pushedBranch(t, f, "agent/mallory", map[string]string{
+		memberRecordPath("kb", "mallory"): leftRecordFile(t, "mallory", mallory, old.SerialNumber.Text(16)),
+	})
+	restore := SetFleetClockForTest(due)
+	renewed, err := f.master.renewFleetLeaves(ctx, f.mri)
+	restore()
+	require.NoError(t, err)
+	require.Contains(t, renewed, "alpha", "mallory's record naming alpha's serial blocks nothing")
+
+	f2, _, old2, due2 := renewFixture(t)
+	pushedBranch(t, f2, "agent/alpha", map[string]string{
+		memberRecordPath("kb", "alpha"): leftRecordFile(t, "alpha", old2.PublicKey.(ed25519.PublicKey), old2.SerialNumber.Text(16)),
+	})
+	restore = SetFleetClockForTest(due2)
+	renewed, err = f2.master.renewFleetLeaves(ctx, f2.mri)
+	restore()
+	require.NoError(t, err)
+	require.NotContains(t, renewed, "alpha", "positive control: alpha's own left record stops alpha's renewal")
+	require.Contains(t, renewed, "master", "and only alpha's: the master's due leaf is renewed in the same call")
+}
+
+// #654 review S1: a pushed branch whose records for ONE agent cannot be read
+// stops that agent's renewal only (fail closed per agent: its own `left`
+// record could be the unreadable one); every other due leaf is renewed.
+// SABOTAGE: return the read error from pushedLeaves for the whole duty (the
+// first #654 revision) -> nothing is renewed, the master included -> red.
+func TestFleetRenew_AnUnreadablePushedFolderStopsOnlyThatAgent(t *testing.T) {
+	ctx := context.Background()
+	f, _, _, due := renewFixture(t)
+	pushedBranch(t, f, "agent/other", nil)
+	fleetRenewHooksMu.Lock()
+	fleetRenewTestHooks = fleetRenewHooks{agentRecords: func(branch, agent string) error {
+		if branch == "agent/other" && agent == "alpha" {
+			return errors.New("injected: alpha's folder cannot be read")
+		}
+		return nil
+	}}
+	fleetRenewHooksMu.Unlock()
+	t.Cleanup(func() {
+		fleetRenewHooksMu.Lock()
+		fleetRenewTestHooks = fleetRenewHooks{}
+		fleetRenewHooksMu.Unlock()
+	})
+	restore := SetFleetClockForTest(due)
+	renewed, err := f.master.renewFleetLeaves(ctx, f.mri)
+	restore()
+	require.NoError(t, err)
+	require.NotContains(t, renewed, "alpha", "alpha's records on a pushed branch are unreadable: not renewed")
+	require.Contains(t, renewed, "master", "the master's renewal does not depend on alpha's folder")
 }

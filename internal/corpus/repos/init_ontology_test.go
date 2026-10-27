@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -10,6 +9,7 @@ import (
 
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -58,7 +58,7 @@ func TestCreate_LocalOriginRejectedWithoutRoot(t *testing.T) {
 	dir := t.TempDir()
 
 	remoteDir := filepath.Join(dir, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	gitfixture.InitBare(t, remoteDir, "")
 
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{
@@ -89,7 +89,7 @@ func TestCreate_LocalOriginRejectedOutsideRoot(t *testing.T) {
 	outside := t.TempDir() // a sibling that is not under the configured root
 
 	remoteDir := filepath.Join(outside, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	gitfixture.InitBare(t, remoteDir, "")
 
 	m := New(context.Background(), Deps{
 		Cfg: config.Config{
