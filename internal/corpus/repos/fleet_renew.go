@@ -168,7 +168,9 @@ func (m *Manager) resignFleetCRL(ctx context.Context, ri *RepoInstance) (string,
 // publish failed, a leave admitted in this very round) stops the renewal as
 // surely as one on main (PR #537 review B1, B2). Otherwise the round would
 // publish the revocation or the `left` record together with a fresh,
-// unrevoked leaf, and nothing would ever revoke that one.
+// unrevoked leaf, and nothing would ever revoke that one. A `left` record
+// admitted on a member branch and not merged yet is on neither: the caller
+// (renewFleetLeaves) also skips a leaf that one names (pushedLeftSerials).
 func leafRenewalDue(f, own fleetrec.Fleet, id string, now time.Time) (*x509.Certificate, ed25519.PublicKey) {
 	leaf, err := f.PKI.Cert(id)
 	if err != nil || leaf == nil || !pki.NeedsRenewal(leaf, now) {
@@ -192,6 +194,57 @@ func leafRenewalDue(f, own fleetrec.Fleet, id string, now time.Time) (*x509.Cert
 		return nil, nil
 	}
 	return leaf, pub
+}
+
+// pushedLeftSerials is the set of leaf serials (lowercase hex, as a member
+// record's leaf_serial) that a `left` record names on any pushed member
+// branch of ri (isPushedBranch): a leave the master has admitted (the
+// forge's fetch judge, the hub's receive-pack) and that the consensus
+// merger has not merged into the agent branch yet. The merger runs on its
+// own goroutine, so leafRenewalDue's check of the agent branch alone loses
+// this window whenever the duty reads the agent branch before the merge
+// lands: the round then renews the leaver's leaf, the merge brings the
+// `left` record (naming the OLD serial) after it, and the leave duty, which
+// matches by serial (leftLeafDue), never revokes the renewed leaf (#651).
+// Keyed by serial, not by id: a stale peer branch that still holds an
+// earlier membership's `left` record names an earlier leaf and blocks
+// nothing. An unreadable branch is an error, and the caller renews nothing
+// this round (fail closed: a missed renewal is retried next round; a leaf
+// renewed for a leaver is never revoked).
+func pushedLeftSerials(ctx context.Context, ri *RepoInstance) (map[string]bool, error) {
+	var out map[string]bool
+	var ferr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			ferr = errors.New("fleet repository is not open")
+			return
+		}
+		branches, err := svc.ListBranches(ctx)
+		if err != nil {
+			ferr = err
+			return
+		}
+		upstream := svc.Remote().UpstreamBranch()
+		out = map[string]bool{}
+		for _, b := range branches {
+			if !ri.isPushedBranch(b.Name, upstream) {
+				continue
+			}
+			fl, err := svc.FleetAt(b.Name)
+			if err != nil {
+				ferr = fmt.Errorf("read the fleet at pushed branch %s: %w", b.Name, err)
+				return
+			}
+			for _, mem := range fl.Members {
+				if mem.State == fact.MemberLeft && mem.LeafSerial != "" {
+					out[mem.LeafSerial] = true
+				}
+			}
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return out, ferr
 }
 
 // renewableAt reports whether leaf (id's, certifying key) may be renewed as
@@ -239,6 +292,19 @@ func (m *Manager) renewFleetLeaves(ctx context.Context, ri *RepoInstance) ([]str
 		}
 	}
 	if len(dues) == 0 {
+		return nil, nil
+	}
+	leaving, err := pushedLeftSerials(ctx, ri)
+	if err != nil {
+		return nil, err
+	}
+	kept := dues[:0]
+	for _, d := range dues {
+		if !leaving[d.leaf.SerialNumber.Text(16)] {
+			kept = append(kept, d)
+		}
+	}
+	if dues = kept; len(dues) == 0 {
 		return nil, nil
 	}
 	root, err := pki.LoadRoot(m.fleetRootDir())

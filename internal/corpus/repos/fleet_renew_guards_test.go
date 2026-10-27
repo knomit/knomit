@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,6 +67,16 @@ func TestFleetRenew_AnUnpublishedRevokeIsNotUndoneByARenewal(t *testing.T) {
 // from main only (active), re-issues the leaver's leaf, and the round
 // publishes both; the leave duty then never revokes, because the left
 // record's leaf_serial names the OLD serial (leftLeafDue).
+//
+// #651: the round that admits alpha's leave runs its duties while the
+// consensus merger (its own goroutine) may not have merged agent/alpha yet,
+// so the `left` record is on neither main nor the agent branch. The test used
+// to pass only when the merger won that race; under load it lost about 1 run
+// in 25. The merger is now parked for the due round, so the window is open
+// on every run, and the agent branch is asserted to still read alpha active
+// when the duty has run.
+// SABOTAGE: drop the pushedLeftSerials filter in renewFleetLeaves -> alpha
+// is renewed in the window -> red on every run.
 func TestFleetRenew_ALeaveOnTheAgentBranchIsNotRenewedBeforeMain(t *testing.T) {
 	ctx := context.Background()
 	f := newForgeFleet(t, nil)
@@ -95,10 +106,25 @@ func TestFleetRenew_ALeaveOnTheAgentBranchIsNotRenewedBeforeMain(t *testing.T) {
 	}
 	t.Logf("fixture: alpha on main %q, on the agent branch %q", stateAt(""), stateAt(f.mri.AgentBranch()))
 
+	// Park the merger before it merges alpha's branch: the due round admits
+	// the leave and runs its duties with the `left` record on agent/alpha
+	// only.
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unpark := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unpark)
+	setConsensusHooks(t, consensusHooks{beforeMerge: func(branch string) {
+		if branch == "agent/alpha" {
+			<-release
+		}
+	}})
 	due := time.Now().Add(pki.Lifetime(oldAlpha) * 3 / 4)
 	restore := SetFleetClockForTest(func() time.Time { return due })
 	round(t, f.mri)
 	restore()
+	require.Equal(t, "left", stateAt("agent/alpha"), "fixture: the due round admitted alpha's leave")
+	require.Equal(t, "active", stateAt(f.mri.AgentBranch()), "fixture: the leave was not merged before the duty ran")
+	unpark()
 	for i := 0; i < 4; i++ {
 		round(t, f.mri)
 		settleMerger(t, f.mri)
