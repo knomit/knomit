@@ -419,7 +419,13 @@ func TestWalkthrough_Detach(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, o)
 
+	// The mount's heal index runs in the background, and a Detach sent while
+	// it runs is refused with ErrIndexing BEFORE any origin rule is read
+	// (indexing is checked first, by design: Attach/Detach/Swap are exclusive
+	// with the index job). Wait for the heal to settle so the refusal under
+	// test is the subscription's own.
 	_, sub, _ := buildSubscription(t)
+	waitIndexSettled(t, sub)
 	_, err = send(sub.env.m, sub, DetachOrigin())
 	require.ErrorIs(t, err, ErrSubscriptionOrigin)
 }
@@ -644,6 +650,17 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	host.advance(t)
 	host.url = serveConsensusGit(t, host.ri)
 	peer := newConsensusPeer(t, host.url)
+	// The peer's own reconcile loop registers its branch on the host by a
+	// push of its own, at a time of its choosing, and that push kicks the
+	// host's merger. Wait for it to land, THEN settle the merger: a pass
+	// kicked by a late registration could otherwise reach its merge before
+	// the hook below is installed, park on the index job's lock unseen, and
+	// hold the merger (runs are serial) so the pass the test is waiting for
+	// never starts.
+	require.Eventually(t, func() bool {
+		tip := host.tip(t, cPeerAgent)
+		return tip != "" && tip == peer.tip(t)
+	}, 30*time.Second, 5*time.Millisecond, "the peer's branch registered on the host")
 	host.settle(t)
 
 	// The index job: a full rebuild of the agent branch — the merger's merge
