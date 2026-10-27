@@ -921,6 +921,12 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	flt := newFactFilter(q)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
+	//
+	// Every row ties on score, so the ORDER BY is the whole ranking and also
+	// decides which rows the LIMIT keeps. Without one both were whatever
+	// SQLite's plan produced (the I6 storytest flake). The order is the one
+	// recentFactsSearch falls back to on a score tie — newest commit first,
+	// then path — so a text-less search lists like every recency listing.
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
 		args := append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
@@ -932,7 +938,9 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 			 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
-			 WHERE bf.branch_id = ?`+flt.SQL()+` LIMIT ?`,
+			 WHERE bf.branch_id = ?`+flt.SQL()+`
+			 ORDER BY COALESCE(cl.committed_at, 0) DESC, f.path ASC
+			 LIMIT ?`,
 			args...,
 		)
 		if err != nil {
