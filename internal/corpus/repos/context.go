@@ -121,6 +121,10 @@ type ResolvedBinding struct {
 	Handle string
 	Pin    string
 	Branch string // "" ⇒ the target's own read branch
+	// Served is the branch the call actually wrote or read at — the handle's
+	// experiment, or its target's default — for the request log. Observational
+	// only, like everything here.
+	Served string
 }
 
 // Record stores what the gate resolved. Last write wins: one request carries

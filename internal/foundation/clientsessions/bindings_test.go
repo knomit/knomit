@@ -220,3 +220,62 @@ func TestHandleExperiment_TwoHandlesAreIndependent(t *testing.T) {
 		t.Fatalf("hB = %q, want empty: one handle's experiment must not reach another", got)
 	}
 }
+
+// A scoped handle and its mount row are written in ONE transaction: if the
+// mount row cannot be written, the handle must not exist either, because a
+// handle without one reads as minted on the unscoped endpoint and would be
+// accepted there.
+func TestMintBindingHandleOnMount_IsAtomic(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	// Force the SECOND insert to fail: a mount row for this handle already
+	// exists, so handle_mounts' primary key refuses it.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO handle_mounts (handle, mount_uid, created_at) VALUES ('h', 'repo:u1', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MintBindingHandleOnMount(ctx, "h", "repo:u1", "repo:u1", t0); err == nil {
+		t.Fatal("mint must fail when the mount row cannot be written")
+	}
+	if _, _, ok, _ := s.BindingHandle(ctx, "h", t0); ok {
+		t.Fatal("the handle was written without its mount row: it would read as an unscoped handle")
+	}
+
+	if err := s.MintBindingHandleOnMount(ctx, "h2", "lens:l1", "lens:l1", t0); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.HandleMount(ctx, "h2"); err != nil || m != "lens:l1" {
+		t.Fatalf("HandleMount = %q, %v; want lens:l1", m, err)
+	}
+	if m, err := s.HandleMount(ctx, "never-minted"); err != nil || m != "" {
+		t.Fatalf("HandleMount(unknown) = %q, %v; want \"\"", m, err)
+	}
+}
+
+// A handle's mount row dies with the handle and not before: purge collects the
+// orphan, and keeps the row of a handle still in use.
+func TestPurge_CollectsHandleMountsWithTheirHandles(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, h := range []string{"stale", "busy"} {
+		if err := s.MintBindingHandleOnMount(ctx, h, "repo:u1", "repo:u1", t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, ok, _ := s.BindingHandle(ctx, "busy", t0.Add(199*time.Hour)); !ok {
+		t.Fatal("busy handle missing before purge")
+	}
+	if _, err := s.Purge(ctx, t0.Add(200*time.Hour)); err != nil { // retention 168h
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM handle_mounts WHERE handle = 'stale'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("a purged handle's mount row survived")
+	}
+	if m, err := s.HandleMount(ctx, "busy"); err != nil || m != "repo:u1" {
+		t.Fatalf("a live handle lost its mount row: %q, %v", m, err)
+	}
+}

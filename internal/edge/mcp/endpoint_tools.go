@@ -5,8 +5,6 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-
-	"knomit/internal/corpus/repos"
 )
 
 // endpointToolFilter serves each endpoint kind its own tool schemas.
@@ -25,27 +23,34 @@ import (
 // endpoint marker this does.
 func endpointToolFilter(gates map[string]gateMode) mcpserver.ToolFilterFunc {
 	return func(ctx context.Context, tools []mcpgo.Tool) []mcpgo.Tool {
-		if repos.SessionScoped(ctx) {
+		kind := endpointKindOf(ctx)
+		if kind == endpointUnscoped {
 			return tools
 		}
-		return toolsForScopedEndpoint(tools, gates)
+		return toolsForEndpoint(tools, gates, kind)
 	}
 }
 
-// toolsForScopedEndpoint rewrites a tool list for a URL-scoped endpoint. It
-// never mutates its input: the registered tools are shared by every session.
-func toolsForScopedEndpoint(tools []mcpgo.Tool, gates map[string]gateMode) []mcpgo.Tool {
+// toolsForEndpoint rewrites a tool list for a URL-scoped endpoint of the given
+// kind. It never mutates its input: the registered tools are shared by every
+// session.
+//
+// On an endpointFixed URL knomit_bind is NOT LISTED: every call to it there is
+// refused, and advertising a tool that always fails is the shape of the loop
+// that started this work.
+func toolsForEndpoint(tools []mcpgo.Tool, gates map[string]gateMode, kind endpointKind) []mcpgo.Tool {
 	out := make([]mcpgo.Tool, 0, len(tools))
 	for _, t := range tools {
 		mode, known := gates[t.Name]
 		switch {
 		case !known:
 			out = append(out, t)
+		case mode == gateUngated && kind == endpointFixed:
+			// knomit_bind is the only ungated tool; nothing can bind here.
 		case mode == gateUngated:
-			// knomit_bind is the only ungated tool.
 			out = append(out, scopedBindTool())
 		default:
-			out = append(out, withBindingDescription(t, bindingDescription(mode, true)))
+			out = append(out, withBindingDescription(t, bindingDescription(mode, kind)))
 		}
 	}
 	return out

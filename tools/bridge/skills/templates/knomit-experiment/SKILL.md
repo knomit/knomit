@@ -78,7 +78,8 @@ you are not the only job on the connection.
 the repo or lens), open with `knomit_experiment {action: "open", name, binding:
 <handle>}`, and pass that `binding` on every call of yours. Only your handle
 moves; calls without `binding` stay where the connection is. The handle works
-only on this connection.
+on this `--repo`/`--lens` endpoint (any connection to the same URL) and nowhere
+else.
 
 **On open, warn about expiry.** An experiment with no commits for
 `experiments.expiry_days` (default 30) is rolled back automatically by the

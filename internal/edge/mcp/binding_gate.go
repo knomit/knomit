@@ -61,23 +61,60 @@ func bindingArg(required bool) mcpgo.ToolOption {
 	if required {
 		mode = gateRequired
 	}
-	return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingDescription(mode, false)))
+	return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingDescription(mode, endpointUnscoped)))
+}
+
+// endpointKind is what a request's endpoint lets a handle do.
+type endpointKind int
+
+const (
+	// endpointUnscoped: /api/v1/mcp. The handle names the knowledge base.
+	endpointUnscoped endpointKind = iota
+	// endpointScoped: a URL fixing a repo or lens at its default branch (what
+	// a kb --repo/--lens bridge connects to). A handle may change the branch.
+	endpointScoped
+	// endpointFixed: a URL naming one specific branch (main, a foreign agent
+	// branch, an experiment). An address: no bind, no handle.
+	endpointFixed
+)
+
+// endpointKindOf classifies a request. The scoped/fixed split is the
+// mount-session marker MountExperimentMiddleware sets from the ROUTE — the same
+// predicate the gate and knomit_bind enforce at call time.
+func endpointKindOf(ctx context.Context) endpointKind {
+	if repos.SessionScoped(ctx) {
+		return endpointUnscoped
+	}
+	if _, _, plain := repos.MountSessionFromContext(ctx); plain {
+		return endpointScoped
+	}
+	return endpointFixed
 }
 
 // bindingDescription is the `binding` text for one gate mode on one endpoint
 // kind. "" for gateUngated, which declares no `binding`.
-func bindingDescription(mode gateMode, scoped bool) string {
-	switch {
-	case mode == gateRequired && !scoped:
-		return bindingRequiredDescription
-	case mode == gateOptional && !scoped:
-		return bindingOptionalDescription
-	case mode == gateRequired && scoped:
-		return bindingScopedDescription
-	case mode == gateOptional && scoped:
-		return bindingScopedReposDescription
+func bindingDescription(mode gateMode, kind endpointKind) string {
+	if mode == gateUngated {
+		return ""
 	}
-	return ""
+	required := mode == gateRequired
+	switch kind {
+	case endpointUnscoped:
+		if required {
+			return bindingRequiredDescription
+		}
+		return bindingOptionalDescription
+	case endpointScoped:
+		if required {
+			return bindingScopedDescription
+		}
+		return bindingScopedReposDescription
+	default:
+		if required {
+			return bindingFixedDescription
+		}
+		return bindingFixedReposDescription
+	}
 }
 
 const (
@@ -97,14 +134,23 @@ const (
 	// endpoint, where the handle only chooses a branch.
 	bindingScopedDescription = "Optional on this endpoint, which is fixed to one repo or lens by its URL. " +
 		"Omit it (or pass \"\") to use that repo or lens at its default branch, or inside the experiment " +
-		"this connection opened. Pass a handle that knomit_bind returned on THIS connection to work on the " +
-		"branch or experiment that handle names. A handle from another endpoint is refused."
+		"this connection opened. Pass a handle that knomit_bind returned on this endpoint (this same --repo " +
+		"or --lens URL) to work on the branch or experiment that handle names. A handle minted on any other " +
+		"endpoint is refused."
 	// bindingScopedReposDescription is gateOptional's `binding` (knomit_repos)
 	// on a URL-scoped endpoint.
-	bindingScopedReposDescription = "Optional: a handle that knomit_bind returned on this connection. With it, " +
-		"`bound` describes what the handle names; a handle that does not resolve is reported there (status " +
-		"\"unresolvable\"), not raised. Without it, or with \"\", `bound` describes this connection's own " +
-		"repo or lens."
+	bindingScopedReposDescription = "Optional: a handle that knomit_bind returned on this endpoint (this same " +
+		"--repo or --lens URL). With it, `bound` describes what the handle names; a handle that does not " +
+		"resolve is reported there (status \"unresolvable\"), not raised. Without it, or with \"\", `bound` " +
+		"describes this endpoint's own repo or lens."
+	// bindingFixedDescription is gateRequired's `binding` on a URL naming one
+	// specific branch: nothing can move it, so no handle is accepted.
+	bindingFixedDescription = "Not accepted on this endpoint: its URL names one specific branch, so omit it " +
+		"(\"\" counts as omitted). Any handle is refused here."
+	// bindingFixedReposDescription is gateOptional's `binding` there.
+	bindingFixedReposDescription = "Not accepted on this endpoint: its URL names one specific branch, so omit " +
+		"it (\"\" counts as omitted); `bound` then describes that branch. A handle passed anyway is " +
+		"reported in `bound` with status \"unresolvable\"."
 )
 
 // gateMode says what the gate does with the handle for one tool.
@@ -210,11 +256,11 @@ func gateBinding(mgr *repos.Manager, tool mcpgo.Tool, mode gateMode, next mcpser
 }
 
 // errHandleFromOtherEndpoint answers, on a URL-scoped endpoint, a handle that
-// was minted anywhere but this connection's own mount.
+// was minted anywhere but this endpoint's own mount.
 func errHandleFromOtherEndpoint(ctx context.Context) string {
 	kind, name := urlTarget(ctx)
-	return fmt.Sprintf("this binding handle belongs to another endpoint — omit `binding` to use this connection's %s %q, "+
-		"or call knomit_bind on this connection for a handle", kind, name)
+	return fmt.Sprintf("this binding handle belongs to another endpoint — omit `binding` to use this endpoint's %s %s, "+
+		"or call knomit_bind here for a handle", kind, name)
 }
 
 // errFixedEndpoint answers a handle, or a knomit_bind, on a URL-scoped mount
@@ -223,7 +269,7 @@ func errHandleFromOtherEndpoint(ctx context.Context) string {
 // may move it (kb/invariants/mcp/experiments/mount-eligibility-from-the-route).
 func errFixedEndpoint(ctx context.Context) string {
 	kind, name := urlTarget(ctx)
-	return fmt.Sprintf("this endpoint is fixed to %s %q at branch %q by its URL, so no handle can change its branch — omit `binding`. Do not retry.",
+	return fmt.Sprintf("This endpoint is fixed to %s %s at branch %s by its URL, so no handle can change its branch — omit `binding`. Do not retry.",
 		kind, name, fixedBranch(ctx))
 }
 
@@ -339,7 +385,14 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle, mount string
 	// record what this session was seen doing. Routing was already decided, by
 	// the handle. The handle rides along because the set is keyed by it.
 	if rec, found := repos.PinRecorderFromContext(bctx); found {
-		rec.Record(repos.ResolvedBinding{Handle: handle, Pin: pin, Branch: branch})
+		served := ""
+		if b, ok := repos.BindingFromContextOpt(bctx); ok {
+			served = b.WriteBranch()
+			if served == "" && b.Write() != nil {
+				served = b.Write().ReadBranch()
+			}
+		}
+		rec.Record(repos.ResolvedBinding{Handle: handle, Pin: pin, Branch: branch, Served: served})
 	}
 	return bctx, nil
 }

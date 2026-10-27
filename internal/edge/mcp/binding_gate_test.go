@@ -243,7 +243,7 @@ func TestGate_ScopedEndpointHandles(t *testing.T) {
 	res, spy = gateCall(t, m, fixed, map[string]any{"binding": handle, "text": "x"})
 	require.True(t, res.IsError)
 	require.False(t, spy.called)
-	require.Contains(t, resultText(t, res), `fixed to repo "alpha" at branch "main"`)
+	require.Contains(t, resultText(t, res), `fixed to repo alpha at branch main`)
 }
 
 // A handle works only on the endpoint that minted it: an unscoped handle for
@@ -263,7 +263,7 @@ func TestGate_HandleIsConfinedToItsEndpoint(t *testing.T) {
 	res, spy = gateCall(t, m, scopedCtx(t, m, "beta"), map[string]any{"binding": scoped, "text": "x"})
 	require.True(t, res.IsError)
 	require.False(t, spy.called)
-	require.Contains(t, resultText(t, res), `this connection's repo "beta"`)
+	require.Contains(t, resultText(t, res), `this endpoint's repo beta`)
 
 	res, spy = gateCall(t, m, repos.WithSessionScoped(context.Background()), map[string]any{"binding": scoped, "text": "x"})
 	require.True(t, res.IsError)

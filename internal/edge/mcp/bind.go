@@ -15,7 +15,7 @@ import (
 
 // bindExperimentDescription is knomit_bind's `experiment` argument. One text
 // for both endpoint kinds: resuming an experiment means the same thing on each.
-const bindExperimentDescription = "Optional: RESUME an existing experiment, so the new handle starts inside it. Does not create one — use knomit_experiment {action: \"open\"} for that. This is how you get back into an experiment after reconnecting, since a handle does not outlive its session."
+const bindExperimentDescription = "Optional: RESUME an existing experiment, so the new handle starts inside it. Does not create one — use knomit_experiment {action: \"open\"} for that. This is how a NEW handle gets back into an experiment, e.g. after reconnecting or when an unused handle has aged out."
 
 // bindTool defines knomit_bind as the UNSCOPED endpoint lists it: the caller's
 // choice of repo or lens.
@@ -50,7 +50,7 @@ func bindTool() mcpgo.Tool {
 // endpoint binds whatever the unscoped one could, confined to its own target.
 func scopedBindTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_bind",
-		mcpgo.WithDescription("This connection is fixed to one repo or lens by its URL; knomit_bind here only changes the BRANCH you work on, never the repo or lens. Call it with no arguments for a new `binding` handle on the default branch, or with `experiment` to resume an existing experiment. Pass that handle as `binding` on later calls to work on its branch; calls without `binding` keep using the connection's own repo or lens. Each call mints a new handle and earlier ones stay valid, so several agents sharing this connection can each hold their own: bind, then knomit_experiment {action: \"open\", binding: <handle>} moves only that handle into its own experiment."),
+		mcpgo.WithDescription("This connection is fixed to one repo or lens by its URL; knomit_bind here only changes the BRANCH you work on, never the repo or lens. Call it with no arguments for a new `binding` handle on the default branch, or with `experiment` to resume an existing experiment. Pass that handle as `binding` on later calls to work on its branch; calls without `binding` keep using the connection's own repo or lens. Each call mints a new handle and earlier ones stay valid, so several agents sharing this connection can each hold their own: bind, then knomit_experiment {action: \"open\", binding: <handle>} moves only that handle into its own experiment. A handle works on this endpoint (this same --repo or --lens URL) and nowhere else."),
 		mcpgo.WithString("experiment", mcpgo.Description(bindExperimentDescription)),
 	)
 }
@@ -211,7 +211,7 @@ func scopedBindTarget(ctx context.Context, mgr *repos.Manager, repoName, lensNam
 	_, mount, plain := repos.MountSessionFromContext(ctx)
 	if !plain {
 		return nil, "", "", fmt.Errorf(
-			"This connection is fixed to %s %s at branch %q by its URL, and that branch cannot be changed here. "+
+			"This connection is fixed to %s %s at branch %s by its URL, and that branch cannot be changed here. "+
 				"Use the tools without `binding`. Do not retry.", kind, name, fixedBranch(ctx))
 	}
 	if mgr == nil {
@@ -233,7 +233,7 @@ func scopedBindTarget(ctx context.Context, mgr *repos.Manager, repoName, lensNam
 	// The name resolved to the same uid the URL did, unless a rename raced
 	// this call. Refused then: the handle would name a base the URL does not.
 	if pin != mount {
-		return nil, "", "", fmt.Errorf("%s %q changed while binding — retry", kind, name)
+		return nil, "", "", fmt.Errorf("%s %s was renamed or replaced while binding; call knomit_bind again", kind, name)
 	}
 	return b, pin, mount, nil
 }
@@ -244,8 +244,8 @@ func scopedHandleBanner(handle string) string {
 	return "## Your binding handle\n\n`" + handle + "`\n\n" +
 		"Pass this value as the `binding` argument on the calls that should work on this handle's branch " +
 		"(and on knomit_experiment, to open or leave an experiment for this handle alone). Calls without " +
-		"`binding` keep using this connection's own repo or lens. Copy it verbatim; it works only on this " +
-		"connection.\n"
+		"`binding` keep using this endpoint's own repo or lens. Copy it verbatim; it works on this endpoint " +
+		"(this same --repo or --lens URL) and nowhere else.\n"
 }
 
 // bindTarget resolves the named repo or lens to a binding plus the pin to

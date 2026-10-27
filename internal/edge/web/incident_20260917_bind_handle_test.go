@@ -241,7 +241,7 @@ const (
 	// A handle minted on the unscoped mount, presented on jobA-repo's own
 	// URL-scoped mount: a handle works only on the endpoint that minted it.
 	wantBindingOnURLScope = "this binding handle belongs to another endpoint — omit `binding` to use this " +
-		"connection's repo \"jobA-repo\", or call knomit_bind on this connection for a handle"
+		"endpoint's repo jobA-repo, or call knomit_bind here for a handle"
 )
 
 // TestIncident20260917_TwoCoworkJobsOneMCPSession is the regression test for the

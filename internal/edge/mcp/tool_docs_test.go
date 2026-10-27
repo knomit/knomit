@@ -32,16 +32,17 @@ func TestBindingArg_DescriptionMatchesGateMode(t *testing.T) {
 	// The tool list each endpoint kind is SERVED, through the same filter
 	// tools/list runs.
 	for _, endpoint := range []struct {
-		name   string
-		ctx    context.Context
-		scoped bool
+		name string
+		ctx  context.Context
+		kind endpointKind
 	}{
-		{"unscoped", repos.WithSessionScoped(context.Background()), false},
-		{"url-scoped", context.Background(), true},
+		{"unscoped", repos.WithSessionScoped(context.Background()), endpointUnscoped},
+		{"url-scoped, default branch", repos.WithMountSession(context.Background(), "sid", "repo:uid-x"), endpointScoped},
+		{"url-scoped, names a branch", context.Background(), endpointFixed},
 	} {
 		t.Run(endpoint.name, func(t *testing.T) {
+			require.Equal(t, endpoint.kind, endpointKindOf(endpoint.ctx))
 			served := endpointToolFilter(gates)(endpoint.ctx, registered)
-			require.Len(t, served, len(registered))
 			seen := map[gateMode]int{}
 			for _, tool := range served {
 				mode := gates[tool.Name]
@@ -56,25 +57,30 @@ func TestBindingArg_DescriptionMatchesGateMode(t *testing.T) {
 					_, hasRepo := tool.InputSchema.Properties["repo"]
 					_, hasLens := tool.InputSchema.Properties["lens"]
 					_, hasExp := tool.InputSchema.Properties["experiment"]
-					require.True(t, hasExp, "%s: the branch selector is offered on every endpoint", tool.Name)
-					require.Equal(t, !endpoint.scoped, hasRepo, "%s: `repo` only where the repo can vary", tool.Name)
-					require.Equal(t, !endpoint.scoped, hasLens, "%s: `lens` only where the lens can vary", tool.Name)
+					unscoped := endpoint.kind == endpointUnscoped
+					require.True(t, hasExp, "%s: the branch selector is offered wherever bind is listed", tool.Name)
+					require.Equal(t, unscoped, hasRepo, "%s: `repo` only where the repo can vary", tool.Name)
+					require.Equal(t, unscoped, hasLens, "%s: `lens` only where the lens can vary", tool.Name)
 					continue
 				}
 				require.True(t, declared, "%s is gated and must declare `binding`", tool.Name)
 				desc, _ := prop.(map[string]any)["description"].(string)
-				require.Equal(t, bindingDescription(mode, endpoint.scoped), desc, tool.Name)
+				require.Equal(t, bindingDescription(mode, endpoint.kind), desc, tool.Name)
 				lower := strings.ToLower(desc)
 
 				switch {
-				case mode == gateRequired && !endpoint.scoped:
+				case endpoint.kind == endpointFixed:
+					require.True(t, strings.HasPrefix(desc, "Not accepted on this endpoint"), desc)
+					require.NotContains(t, desc, "knomit_bind", "no handle can be had here, so none is offered")
+				case mode == gateRequired && endpoint.kind == endpointUnscoped:
 					require.Contains(t, desc, "REQUIRED")
 					require.NotContains(t, lower, "optional")
-				case mode == gateRequired && endpoint.scoped:
+				case mode == gateRequired && endpoint.kind == endpointScoped:
 					require.NotContains(t, desc, "REQUIRED")
 					require.True(t, strings.HasPrefix(desc, "Optional"), desc)
 					require.Contains(t, lower, "omit it", "the text must say what absence means")
 					require.Contains(t, lower, "default branch")
+					require.NotContains(t, lower, "connection to", "a handle is tied to the endpoint, not the connection")
 				case mode == gateOptional:
 					require.NotContains(t, desc, "REQUIRED")
 					require.True(t, strings.HasPrefix(desc, "Optional"), desc)
@@ -83,19 +89,26 @@ func TestBindingArg_DescriptionMatchesGateMode(t *testing.T) {
 				default:
 					t.Fatalf("%s: unknown gate mode %d", tool.Name, mode)
 				}
-				// Neither endpoint tells its callers about the other's rules.
+				// No endpoint tells its callers about another's rules.
 				require.NotContains(t, lower, "must not be passed", tool.Name)
 			}
 			require.Positive(t, seen[gateRequired])
 			require.Positive(t, seen[gateOptional])
-			require.Positive(t, seen[gateUngated])
+			if endpoint.kind == endpointFixed {
+				// knomit_bind is refused on every call here, so it is not listed.
+				require.Zero(t, seen[gateUngated], "knomit_bind must not be advertised where it always fails")
+				require.Len(t, served, len(registered)-1)
+			} else {
+				require.Positive(t, seen[gateUngated])
+				require.Len(t, served, len(registered))
+			}
 		})
 	}
 
 	// The filter never mutates the registered tools it was handed.
 	for _, tool := range registered {
 		if p, ok := tool.InputSchema.Properties[bindingArgument].(map[string]any); ok {
-			require.Equal(t, bindingDescription(gates[tool.Name], false), p["description"], tool.Name)
+			require.Equal(t, bindingDescription(gates[tool.Name], endpointUnscoped), p["description"], tool.Name)
 		}
 	}
 }

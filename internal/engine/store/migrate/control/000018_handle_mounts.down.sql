@@ -1,3 +1,11 @@
 -- Symmetric teardown. The up-chain admits no DROP (it is replayed wholesale),
 -- but a DOWN migration is applied on its own by the versioned migrator.
+--
+-- KNOWN CONSEQUENCE, accepted: after this runs, every surviving handle minted
+-- on a URL-scoped endpoint has no mount row and so reads as minted on the
+-- unscoped endpoint, where it is accepted (routing to its repo or lens at the
+-- default branch, plus any handle_experiments row). Handles are not
+-- authorization and down migrations are manual, so the impact is a handle
+-- working on one more endpoint than it was minted for, never a different
+-- knowledge base.
 DROP TABLE IF EXISTS handle_mounts;
