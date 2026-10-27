@@ -361,6 +361,16 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	// transaction (storegit's CommitLogApply) is on the stack. The rebuild's
 	// git reads are its derivation and its staging; all of them must happen
 	// before the swap, which runs SQL only.
+	//
+	// What this does NOT see: a read on ANOTHER goroutine (one the swap
+	// started and waits on has neither RebuildCommitLog nor CommitLogApply
+	// on its stack, so it lands in neither count), a read that bypasses
+	// deriver.readGuard (a direct rh.repo object read), and a read deeper
+	// than onStack's 128 frames. A flag set for the swap's duration would not
+	// close the first gap: the only hook inside the swap (vcs.SwapHook) runs
+	// AFTER the rebuild's own swap callback, which is where a stray read
+	// would most likely go. Reads in the Derive half of the swap are refused
+	// in production anyway (ErrReadInApply).
 	var readsInSwap, readsOutside atomic.Int64
 	vcs.DeriveObjectHook = func(kind string, h plumbing.Hash) error {
 		if callerIs("RebuildCommitLog") {

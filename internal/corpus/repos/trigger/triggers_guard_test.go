@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -140,24 +142,37 @@ var triggersRepoAllowedCalls = map[string][]string{
 	},
 }
 
-// wallClockReaders are the only functions of the three dispatcher files that
-// may call time.Now: the run clock (clock), the stopwatch itself, and the
+// wallClockReaders are the only functions of the trigger package that may
+// call time.Now: the run clock (clock), the stopwatch itself, and the
 // recipe's pinned Date (execRecipe, a wall time handed to the sandbox, not a
 // duration). Every DURATION goes through stopwatch(), so a test's
-// TestHooks.Stopwatch sees all of them; time.Since is not called at all.
+// TestHooks.Stopwatch sees all of them; time.Since and time.Until are not
+// called at all. Files not named here have no reader.
 var wallClockReaders = map[string]map[string]bool{
 	"triggers.go":       {"clock": true, "stopwatch": true},
-	"trigger_script.go": {},
 	"trigger_recipe.go": {"execRecipe": true},
 }
 
-// TestTriggers_DurationsOnlyThroughStopwatch: no time.Since in the three
-// files, and time.Now only inside wallClockReaders, so a duration measured
-// as time.Now().Sub(t0) or time.Since(t0) (which a fake Stopwatch would not
-// see) fails here. Sabotage: time a recipe run with time.Since again (red).
+// TestTriggers_DurationsOnlyThroughStopwatch walks EVERY non-test .go file of
+// the package: no time.Since or time.Until, time.Now only inside
+// wallClockReaders, and every .Sub is stopwatch().Sub(…), so a duration taken
+// as time.Now().Sub(t0), time.Since(t0) or from the run clock
+// (d.clock().Sub, rs.now.Sub), none of which a fake Stopwatch would see,
+// fails here. A duration is written stopwatch().Sub(t0), never end.Sub(t0)
+// on a saved reading. Sabotage: time a recipe run with time.Since again
+// (red).
 func TestTriggers_DurationsOnlyThroughStopwatch(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	seenReaders := map[string]bool{}
+	walked := 0
 	fset := token.NewFileSet()
-	for f, readers := range wallClockReaders {
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		walked++
+		readers := wallClockReaders[f]
 		file, err := parser.ParseFile(fset, f, nil, 0)
 		require.NoError(t, err, f)
 		nowCalls := 0
@@ -172,18 +187,31 @@ func TestTriggers_DurationsOnlyThroughStopwatch(t *testing.T) {
 					return true
 				}
 				switch callKeyOf(call) {
-				case "time.Since":
-					t.Errorf("%s: time.Since in %s: measure durations with stopwatch()", fset.Position(call.Pos()), fd.Name.Name)
+				case "time.Since", "time.Until":
+					t.Errorf("%s: %s in %s: measure durations with stopwatch()", fset.Position(call.Pos()), callKeyOf(call), fd.Name.Name)
 				case "time.Now":
 					nowCalls++
 					if !readers[fd.Name.Name] {
 						t.Errorf("%s: time.Now in %s: durations go through stopwatch(), the run clock through clock()", fset.Position(call.Pos()), fd.Name.Name)
 					}
 				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Sub" {
+					recv, isCall := sel.X.(*ast.CallExpr)
+					if !isCall || callKeyOf(recv) != "stopwatch" {
+						t.Errorf("%s: .Sub in %s on something other than stopwatch(): a duration is stopwatch().Sub(t0)", fset.Position(call.Pos()), fd.Name.Name)
+					}
+				}
 				return true
 			})
 		}
-		require.Equal(t, len(readers), nowCalls, "%s: each wall-clock reader reads time.Now once (an unused entry must go)", f)
+		if readers != nil {
+			seenReaders[f] = true
+			require.Equal(t, len(readers), nowCalls, "%s: each wall-clock reader reads time.Now once (an unused entry must go)", f)
+		}
+	}
+	require.Greater(t, walked, 5, "the guard must have walked the package's files")
+	for f := range wallClockReaders {
+		require.True(t, seenReaders[f], "%s is in wallClockReaders but is not a file of the package", f)
 	}
 }
 
