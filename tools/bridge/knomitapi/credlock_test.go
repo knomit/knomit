@@ -40,20 +40,19 @@ func TestCredentialsLock_WaitHonoursContext(t *testing.T) {
 	defer cancel()
 	ran := false
 	done := make(chan error, 1)
-	start := time.Now()
 	go func() { done <- withCredentialsLock(ctx, u, func() error { ran = true; return nil }) }()
 	select {
 	case err := <-done:
+		// The holder never lets go before this point, so returning at all
+		// proves the ctx ended the wait; the 30 s select below is the hang
+		// detector, and no latency bound is asserted.
 		if !errors.Is(err, context.DeadlineExceeded) || ran {
 			t.Fatalf("err = %v ran = %v; want the ctx deadline and fn not run", err, ran)
 		}
-		if waited := time.Since(start); waited > 2*time.Second {
-			t.Fatalf("returned after %s; the deadline was 200ms", waited)
-		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		_ = unlockFile(holder) // let the stuck waiter finish
 		<-done
-		t.Fatal("the lock wait ignored ctx: still blocked 5 s after a 200 ms deadline")
+		t.Fatal("the lock wait ignored ctx: still blocked 30 s after a 200 ms deadline")
 	}
 
 	// And once the holder lets go, a waiter gets the lock.

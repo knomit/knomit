@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -415,34 +416,72 @@ func TestApprove_ExpiredRefused(t *testing.T) {
 }
 
 // /wait is a long-poll: a browser already waiting is answered as soon as
-// the operator decides, not at the end of the window.
+// the operator decides, not at the end of the window. The window is an hour,
+// so a poll that missed the wake could only answer when the 30 s hang
+// detector (waitAnswered) has already failed the test; there is no latency
+// bound. The approval is made only once the poll has registered its waiter.
+// Sabotage: Approve without notifying the waiters (red: the hang detector).
 func TestWait_LongPollWakesOnApproval(t *testing.T) {
 	f := newIssuerFixture(t)
+	f.iss.waitTimeout = time.Hour
 	_, ch := pkce()
 	id := f.authorize(t, f.authorizeQuery(ch))
-	done := make(chan *http.Response, 1)
-	start := time.Now()
+	type answer struct {
+		resp *http.Response
+		err  error
+	}
+	done := make(chan answer, 1)
 	go func() {
-		resp, err := f.browser.Get(f.srv.URL + "/oauth/authorize/" + id + "/wait")
-		if err != nil {
-			t.Error(err)
-			close(done)
-			return
-		}
-		done <- resp
+		resp, err := f.waitAnswered(id)
+		done <- answer{resp, err}
 	}()
-	time.Sleep(200 * time.Millisecond) // let the poll park
+	deadline := time.Now().Add(30 * time.Second) // hang detector
+	for f.waiterEntries() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the poll never registered a waiter")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if _, err := f.iss.Approve(context.Background(), id, "laptop", nil, "x"); err != nil {
 		t.Fatal(err)
 	}
-	resp := <-done
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status %d", resp.StatusCode)
+	a := <-done
+	if a.err != nil {
+		t.Fatal(a.err)
 	}
-	if el := time.Since(start); el > 1500*time.Millisecond {
-		t.Fatalf("the poll waited %v; it must wake on the decision, not at the %v window", el, 2*time.Second)
+	defer a.resp.Body.Close()
+	if a.resp.StatusCode != http.StatusFound {
+		t.Fatalf("status %d", a.resp.StatusCode)
 	}
+}
+
+// waitAnswered GETs /wait for id and fails after 30 s: a hang detector far
+// above any answer that does not wait for the window, which the tests using
+// it set to an hour. The request's ctx ends with it, so the handler is not
+// left parked for srv.Close.
+func (f *issuerFixture) waitAnswered(id string) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, f.srv.URL+"/oauth/authorize/"+id+"/wait", nil)
+	req.Header.Set("User-Agent", "fixture-browser/1.0")
+	resp, err := f.browser.Do(req)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("/wait was not answered within 30 s (the window is an hour): %w", err)
+	}
+	// The body is read after we return; release the ctx when it is closed.
+	resp.Body = cancelOnClose{resp.Body, cancel}
+	return resp, nil
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 func TestWait_UndecidedReturnsTheWaitingPageAgain(t *testing.T) {
@@ -710,10 +749,13 @@ func TestWait_KnownIDOneEntryRemovedAfter(t *testing.T) {
 
 // A decision that lands between /wait's first read and its registration
 // notified nobody; the re-read after registering still sees it, so the
-// browser is answered at once rather than at the end of the window.
+// browser is answered at once rather than at the end of the window. The
+// window is an hour, so a missed decision trips waitAnswered's 30 s hang
+// detector; there is no latency bound.
+// Sabotage: drop the re-read after registering (red: the hang detector).
 func TestWait_DecisionBetweenReadAndRegisterIsSeen(t *testing.T) {
 	f := newIssuerFixture(t)
-	f.iss.waitTimeout = 5 * time.Second
+	f.iss.waitTimeout = time.Hour
 	_, ch := pkce()
 	id := f.authorize(t, f.authorizeQuery(ch))
 	f.iss.beforeRegister = func(got string) {
@@ -722,13 +764,13 @@ func TestWait_DecisionBetweenReadAndRegisterIsSeen(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	start := time.Now()
-	resp := f.get(t, "/oauth/authorize/"+id+"/wait", nil)
+	resp, err := f.waitAnswered(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status %d", resp.StatusCode)
-	}
-	if el := time.Since(start); el > 2*time.Second {
-		t.Fatalf("answered after %v: the decision in the gap was missed until the window closed", el)
 	}
 }
 
