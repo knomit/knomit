@@ -146,7 +146,9 @@ func TestActiveRepoWithOrigin_EmptyWhenNone(t *testing.T) {
 // error. Used to build a real bare remote that clone-mode Create fetches from.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// maintenance.auto=false: no detached auto-maintenance outliving the
+	// command in a t.TempDir repository (#651).
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	if dir != "" {
 		cmd.Dir = dir
 	}

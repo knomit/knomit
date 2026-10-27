@@ -68,6 +68,10 @@ func newForgeFleet(t *testing.T, leaves map[string]ssh.Signer) *forgeFleet {
 	}
 	require.NoError(t, os.MkdirAll(f.bare, 0o755))
 	runGit(t, "", "init", "--bare", "--initial-branch=main", f.bare)
+	// #651: no detached auto-maintenance after each receive-pack into the
+	// forge (it holds objects/maintenance.lock past the push and races
+	// t.TempDir's cleanup); receive-pack reads this in the bare itself.
+	runGit(t, "", "-C", f.bare, "config", "maintenance.auto", "false")
 	work := t.TempDir()
 	runGit(t, "", "clone", f.bare, work)
 	for p, b := range files {

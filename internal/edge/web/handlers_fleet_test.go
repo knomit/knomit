@@ -26,7 +26,9 @@ import (
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// maintenance.auto=false: no detached auto-maintenance in a work clone
+	// under t.TempDir (#651; seedFleetBare sets it on the bare remote).
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
 	out, err := cmd.CombinedOutput()
@@ -41,6 +43,12 @@ func seedFleetBare(t *testing.T, dir string) (string, *pkitest.Fleet) {
 	root := pkitest.New(t)
 	bare := filepath.Join(dir, "fleet.git")
 	gitRun(t, dir, "init", "--bare", "--initial-branch=main", bare)
+	// #651: every push into bare runs git-receive-pack, which would start a
+	// detached `git maintenance run --auto` holding objects/maintenance.lock
+	// past the push; t.TempDir's RemoveAll then raced it ("unlinkat
+	// .../fleet.git: directory not empty"). receive-pack reads this setting
+	// in bare itself and starts no child.
+	gitRun(t, dir, "-C", bare, "config", "maintenance.auto", "false")
 	work := t.TempDir()
 	gitRun(t, dir, "clone", bare, work)
 	ont, err := fact.FleetOntology().Serialize()
