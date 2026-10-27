@@ -521,9 +521,10 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]FleetMemberRow, error) {
 	if err != nil {
 		return nil, err
 	}
+	issued := issuanceAtMain(ri)
 	due := map[string]bool{}
 	for _, mem := range f.Members {
-		due[mem.Path] = leftLeafDue(f, mem) != nil
+		due[mem.Path] = len(leftLeafDue(f, mem, issued).leaves) > 0
 	}
 	deriveRevoked(f)
 	rows := make([]FleetMemberRow, 0, len(f.Members))

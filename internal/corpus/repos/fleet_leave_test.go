@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
@@ -456,4 +457,219 @@ func TestFleetLeave_ALeftRecordNamingNoLeafIsNotRevokedAutomatically(t *testing.
 	for _, r := range rows {
 		require.False(t, r.RevokeDue, "not due: %s", r.Agent)
 	}
+}
+
+// mainCRL is the CRL on the forge's main.
+func (f *forgeFleet) mainCRL(t *testing.T) *x509.RevocationList {
+	t.Helper()
+	raw, err := runGitOut(f.bare, "show", "main:artifacts/fleet/crl.pem")
+	require.NoError(t, err)
+	crl, err := parseCRLPEM([]byte(raw))
+	require.NoError(t, err)
+	return crl
+}
+
+// leftRecordFile is a `left` member record for id with key pub naming the
+// leaf serial (what a member's leave writes).
+func leftRecordFile(t *testing.T, id string, pub ed25519.PublicKey, serial string) []byte {
+	t.Helper()
+	k, err := ssh.NewPublicKey(pub)
+	require.NoError(t, err)
+	return []byte("---\nkind: pragmatic\ntype: policy\n---\n# member " + id + "\n\n" +
+		fact.RenderMember(fact.Member{Agent: id, State: fact.MemberLeft, Key: k, Host: "h", LeafSerial: serial}))
+}
+
+// renewedBeforeLeave is the race the leave duty follows across a renewal: a
+// forge fleet with alpha joined and accepted, then ONE master round with the
+// decision clock in the final third of alpha's leaf renews it (S_old ->
+// S_new on main) while alpha has not synced, so alpha still holds S_old and a
+// leave now names S_old: a leave pushed after the master's fetch in the round
+// that renewed the leaf.
+func renewedBeforeLeave(t *testing.T) (f *forgeFleet, alpha *Manager, old, renewed *x509.Certificate) {
+	t.Helper()
+	f, alpha, old, due := renewFixture(t)
+	syncFleet(t, alpha)
+	restore := SetFleetClockForTest(due)
+	round(t, f.mri)
+	restore()
+	renewed = f.mainLeaf(t, "alpha")
+	require.NotEqual(t, old.SerialNumber, renewed.SerialNumber, "fixture: the round renewed alpha's leaf on main")
+	require.Equal(t, old.SerialNumber, installedLeaf(t, alpha).SerialNumber, "fixture: alpha still holds the old leaf")
+	return f, alpha, old, renewed
+}
+
+// The renewal race (user-approved revocation design, 2026-10-27): alpha's
+// leave is pushed after the master's fetch in the round that renews alpha's
+// leaf, so the `left` record names S_old while main's leaf is S_new. Main
+// proves S_new a renewal of S_old (S_old's issuance record names alpha for
+// the same key, nothing of alpha's is on the CRL), so the duty revokes BOTH:
+// the departed member keeps no valid certificate. revoke_due says so too.
+// SABOTAGE: revoke only on an exact serial match (the rule before) -> S_new
+// stays valid -> red.
+func TestFleetLeave_ALeaveNamingARenewedLeafRevokesTheRenewal(t *testing.T) {
+	ctx := context.Background()
+	f, alpha, old, renewed := renewedBeforeLeave(t)
+	before := f.mainCRLNumber(t)
+
+	left, err := alpha.LeaveFleet(ctx)
+	require.NoError(t, err)
+	require.True(t, left.Pushed, left.PushError)
+	duty := f.mri.peers.duty
+	f.mri.peers.duty = nil
+	f.masterRounds(t)
+	f.mri.peers.duty = duty
+	rec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
+	require.NoError(t, err)
+	require.Contains(t, rec, "leaf_serial: "+old.SerialNumber.Text(16)+"\n", "fixture: the left record on main names S_old")
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	for _, r := range rows {
+		require.Equal(t, r.Agent == "alpha" && r.State == fact.MemberLeft, r.RevokeDue, "revoke_due of %s (%s)", r.Agent, r.State)
+	}
+
+	f.masterRounds(t)
+	crl := f.mainCRL(t)
+	require.True(t, pki.IsRevoked(crl, renewed.SerialNumber), "S_new, the renewal alpha never installed, is revoked")
+	require.True(t, pki.IsRevoked(crl, old.SerialNumber), "S_old, the leaf alpha left with, is revoked")
+	require.Equal(t, before+2, crl.Number.Int64(), "two revocations")
+	require.Equal(t, fact.MemberRevoked, memberState(t, f.master, "alpha"))
+
+	mainBefore := f.rev(t, "main")
+	f.masterRounds(t)
+	require.Equal(t, mainBefore, f.rev(t, "main"), "once: nothing more is revoked")
+}
+
+// The rejoin counterexample: renew S_old -> S_1, a manual revoke of S_1, a
+// re-enroll with the same key (S_2), and only then the stale left record
+// naming S_old merges. S_1, a leaf of alpha issued after S_old, is on the
+// CRL, so main cannot prove S_2 a renewal of S_old: S_2 (the rejoin's fresh
+// leaf) is NOT revoked, nor is S_old.
+// SABOTAGE: drop the CRL scan (condition c) -> S_2 is revoked -> red.
+func TestFleetLeave_AStaleLeftAcrossARenewalAndARejoinNeverRevokesTheFreshLeaf(t *testing.T) {
+	ctx := context.Background()
+	f, alpha, old, renewed := renewedBeforeLeave(t)
+
+	left, err := alpha.LeaveFleet(ctx)
+	require.NoError(t, err)
+	require.True(t, left.Pushed, left.PushError)
+	_, err = f.master.RevokeFleetMember(ctx, "alpha", "by hand")
+	require.NoError(t, err)
+	enr, err := f.master.EnrollFleetMember(ctx, "alpha", keyLine("alpha"), "")
+	require.NoError(t, err)
+	require.True(t, enr.Published, enr.PublishError)
+	fresh := f.mainLeaf(t, "alpha")
+	require.NotEqual(t, renewed.SerialNumber, fresh.SerialNumber, "fixture: the rejoin's fresh leaf is on main")
+	before := f.mainCRL(t)
+	require.True(t, pki.IsRevoked(before, renewed.SerialNumber), "fixture: S_1 revoked by hand")
+
+	f.masterRounds(t)
+	rec, err := runGitOut(f.bare, "show", "main:"+memberRecordPath("kb", "alpha"))
+	require.NoError(t, err)
+	require.Contains(t, rec, "leaf_serial: "+old.SerialNumber.Text(16)+"\n", "fixture: the stale left record naming S_old is on main")
+	after := f.mainCRL(t)
+	require.False(t, pki.IsRevoked(after, fresh.SerialNumber), "the rejoin's fresh leaf is not revoked")
+	require.False(t, pki.IsRevoked(after, old.SerialNumber), "nothing is followed across a revocation")
+	require.Equal(t, before.Number.Int64(), after.Number.Int64())
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	for _, r := range rows {
+		require.False(t, r.RevokeDue, "nothing is due: %s", r.Agent)
+	}
+}
+
+// No proof, no revocation beyond the exact-serial rule: main holds no
+// issuance record for S_old (a leaf from before issuance records; here
+// removed by a forge admin), so the left record naming S_old revokes neither
+// leaf, and the duty says so at WARN with what an operator needs to revoke
+// by hand.
+// SABOTAGE: revoke main's current leaf whenever the proof is missing -> S_new
+// is revoked -> red.
+func TestFleetLeave_ARenewalWithoutAnIssuanceRecordIsNotFollowed(t *testing.T) {
+	ctx := context.Background()
+	f, _, old, renewed := renewedBeforeLeave(t)
+	// Both straight onto main, as its forge admin would: a member's branch
+	// on top of the removal would carry the delete of a write-once file into
+	// the master's merge, which its own judge refuses.
+	f.forgeMainCommit(t, "artifacts/fleet/issued/"+old.SerialNumber.Text(16)+".pem", nil, "S_old's issuance record goes")
+	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16)), "alpha: left, naming S_old")
+	before := f.mainCRLNumber(t)
+
+	logs := captureLog(t)
+	f.masterRounds(t)
+	rows, err := f.master.FleetMembers(ctx)
+	require.NoError(t, err)
+	for _, r := range rows {
+		require.False(t, r.RevokeDue, "nothing is due: %s", r.Agent)
+	}
+	require.Equal(t, before, f.mainCRLNumber(t), "nothing revoked")
+	out := logs.String()
+	require.Contains(t, out, `"level":"warn"`)
+	require.Contains(t, out, `"agent":"alpha"`)
+	require.Contains(t, out, `"left_serial":"`+old.SerialNumber.Text(16)+`"`)
+	require.Contains(t, out, `"current_serial":"`+renewed.SerialNumber.Text(16)+`"`)
+	require.Contains(t, out, "no issuance record")
+}
+
+// A forged left record: beta, in its OWN folder (what the record-owner rule
+// allows it), writes `left` naming alpha's S_old. beta even shares alpha's
+// key, so only the issuance record's identity (alpha, not beta) tells them
+// apart. It revokes nothing (neither beta's leaf nor alpha's) and blocks
+// nothing: alpha's own leave across its renewal still revokes S_new and
+// S_old, and beta's leaf stays valid.
+// SABOTAGE: drop the identity check on S_old's issuance record -> beta's
+// leaf (and alpha's S_old) are revoked by beta's record -> red.
+func TestFleetLeave_AForgedLeftNamingAnotherMembersLeafRevokesNothing(t *testing.T) {
+	ctx := context.Background()
+	f, _, old, due := renewFixture(t)
+	enr, err := f.master.EnrollFleetMember(ctx, "beta", keyLine("alpha"), "")
+	require.NoError(t, err)
+	require.True(t, enr.Published, enr.PublishError)
+	restore := SetFleetClockForTest(due)
+	round(t, f.mri)
+	restore()
+	renewed := f.mainLeaf(t, "alpha")
+	require.NotEqual(t, old.SerialNumber, renewed.SerialNumber, "fixture: alpha renewed")
+	betaLeaf := f.mainLeaf(t, "beta")
+	pub := old.PublicKey.(ed25519.PublicKey)
+	f.forgeMainCommit(t, memberRecordPath("kb", "beta"), leftRecordFile(t, "beta", pub, old.SerialNumber.Text(16)), "beta: left, naming alpha's leaf")
+	before := f.mainCRLNumber(t)
+
+	logs := captureLog(t)
+	f.masterRounds(t)
+	require.Equal(t, before, f.mainCRLNumber(t), "a forged left record revokes nothing")
+	require.Contains(t, logs.String(), `"agent":"beta"`, "the duty warns about it")
+
+	// alpha's own left record, naming S_old (straight onto main like beta's:
+	// a member branch from before beta's record would carry it into the
+	// master's merge as a change outside alpha's folder).
+	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), leftRecordFile(t, "alpha", pub, old.SerialNumber.Text(16)), "alpha: left, naming S_old")
+	f.masterRounds(t)
+	crl := f.mainCRL(t)
+	require.True(t, pki.IsRevoked(crl, renewed.SerialNumber), "alpha's own leave still revokes S_new")
+	require.True(t, pki.IsRevoked(crl, old.SerialNumber), "and S_old")
+	require.False(t, pki.IsRevoked(crl, betaLeaf.SerialNumber), "beta's leaf is not revoked")
+	require.Equal(t, before+2, crl.Number.Int64())
+}
+
+// A key mismatch: main's current leaf for alpha certifies ANOTHER key than
+// the leaf alpha's left record names (a forge admin replaced it; enroll never
+// does), so it is no renewal of it and nothing is revoked.
+// SABOTAGE: drop the same-key check -> the replacement and S_old are revoked
+// -> red.
+func TestFleetLeave_ALeftRecordAcrossAKeyChangeIsNotFollowed(t *testing.T) {
+	f, _, old, _ := renewFixture(t)
+	other, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	is, err := pki.IssueLeaf(f.root.Root, other, "alpha@"+pki.AgentEmailDomain, pki.Lifetime(old), pki.IssueTimeAfter(old.NotBefore))
+	require.NoError(t, err)
+	f.forgeMainCommit(t, "artifacts/fleet/certs/alpha.pem", is.CertPEM, "alpha's leaf for another key")
+	f.forgeMainCommit(t, memberRecordPath("kb", "alpha"), leftRecordFile(t, "alpha", old.PublicKey.(ed25519.PublicKey), old.SerialNumber.Text(16)), "alpha: left")
+	cur := f.mainLeaf(t, "alpha")
+	require.True(t, cur.NotBefore.After(old.NotBefore), "fixture: the replacement starts later")
+	before := f.mainCRLNumber(t)
+
+	logs := captureLog(t)
+	f.masterRounds(t)
+	require.Equal(t, before, f.mainCRLNumber(t), "another key: nothing revoked")
+	require.Contains(t, logs.String(), "another key")
 }
