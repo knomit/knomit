@@ -276,7 +276,7 @@ func TestSessionManager_LifetimeEndRemovesEverySession(t *testing.T) {
 	}
 }
 
-// released (what Mount returns) is the signal an owner that removes the
+// released (what Mount's WaitGroup reports) is the signal an owner that removes the
 // sessions dir waits on, so it may close only when the manager holds no file
 // at all: at that moment, with no polling, every session store is closed, the
 // run's lock file handle is closed, and nothing the manager made is on disk.
@@ -284,11 +284,25 @@ func TestSessionManager_LifetimeEndRemovesEverySession(t *testing.T) {
 // here the open handle is checked directly, since unix unlinks it anyway.
 //
 // SABOTAGE: close released at the top of shutdown instead of the end -> red;
-// close it before the lock is closed -> red (the handle is still open).
+// close it before the lock is closed -> red (the handle is still open);
+// remove `<-sm.staleDone` from shutdown -> red every run (the held lock below
+// keeps the startup sweep inside its runProbeWait for 50ms, far longer than
+// the rest of shutdown takes).
 func TestSessionManager_ReleasedMeansNothingIsHeld(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	base := t.TempDir()
+	// A previous run's lock file that another handle holds: the startup sweep
+	// opens it and waits runProbeWait for the lock, so it is still running
+	// when the lifetime ends, whatever the scheduler does.
+	held, err := os.Create(filepath.Join(base, runPrefix+"held"+runLockSuffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pki.LockFile(context.Background(), held); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
 	sm := newSessionManager(ctx, base)
 	t.Cleanup(sm.close)
 	s, err := sm.Create("alpha", "u", authConfig{})

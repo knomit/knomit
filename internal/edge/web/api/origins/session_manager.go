@@ -670,6 +670,11 @@ func (sm *sessionManager) shutdown() {
 		s.retire()
 	}
 	sm.live.Wait()
+	// The startup sweep holds handles in base (the directory it lists, a lock
+	// file it probes) while it runs: released means none are left. Waited for
+	// before this manager removes its own run so only one of them ever removes
+	// a lock file (on Windows a probed file cannot be unlinked).
+	<-sm.staleDone
 
 	sm.runMu.Lock()
 	sm.runClosed = true
@@ -692,9 +697,6 @@ func (sm *sessionManager) shutdown() {
 	if len(all) > 0 {
 		log.Debug().Int("sessions", len(all)).Msg("origin sessions: removed at shutdown")
 	}
-	// The startup sweep holds handles in base (the directory it lists, a lock
-	// file it probes) while it runs: released means none are left.
-	<-sm.staleDone
 	close(sm.released)
 }
 
