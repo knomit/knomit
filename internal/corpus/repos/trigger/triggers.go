@@ -115,6 +115,11 @@ type TestHooks struct {
 	// value holds phase C's buffer pending, so every later run meets it and
 	// only overlayPending keeps a range from re-firing.
 	FlushGrace time.Duration
+	// BeforeFlush runs once per flush that writes phase C's buffer, before
+	// its first transaction, with the number of runs the buffer holds: how a
+	// test counts flushes against runs (#419: phase C is write-behind, so a
+	// burst of runs is one flush, never one per run).
+	BeforeFlush func(runs int)
 	// SkipFlushOnStop tears the loop down WITHOUT the final flush: a crash
 	// as far as the tables are concerned (T20 pins the M2 window with it).
 	SkipFlushOnStop bool
@@ -681,6 +686,9 @@ func (d *Dispatcher) flush(ctx context.Context) {
 	})
 	d.mu.Unlock()
 
+	if h := currentTriggerHooks().BeforeFlush; h != nil {
+		h(len(runs))
+	}
 	tr := svc.FactsRepo()
 	if len(runs) > 0 {
 		if _, err := tr.RecordTriggerRuns(ctx, runs); err != nil {
