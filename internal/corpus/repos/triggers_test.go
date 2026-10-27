@@ -934,6 +934,15 @@ func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
 		t.Fatal("a swap must not drain behind a run's if phase")
 	}
 
+	// The swap has returned, so the old run is over: drop its tokens, and the
+	// receive below can only be satisfied by an evaluation on the new store.
+	for drained := false; !drained; {
+		select {
+		case <-evaluating:
+		default:
+			drained = true
+		}
+	}
 	// The copy predates the fire records, so the new Serve re-runs the range
 	// and is inside its if phase again; restartServe has its own hang
 	// detector and can only return if cancel stops that run.
