@@ -315,8 +315,11 @@ func TestSessionManager_ReleasedMeansNothingIsHeld(t *testing.T) {
 	if !isClosed(st) {
 		t.Error("released, but a session's store is still open")
 	}
-	if _, err := lockFile.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Errorf("released, but the run's lock file handle is still open (Stat err = %v)", err)
+	// Read, not Stat: on Windows Stat skips the closed check and asks the OS
+	// about the stale handle ("The handle is invalid"); Read reports
+	// os.ErrClosed on every platform, and an open, empty file gives io.EOF.
+	if _, err := lockFile.Read(make([]byte, 1)); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("released, but the run's lock file handle is still open (Read err = %v)", err)
 	}
 	for _, p := range []string{s.TempDir, run, lock} {
 		if exists(t, p) {
