@@ -43,12 +43,15 @@ func withOriginSessionLifetime(t *testing.T, s *Server) *Server {
 	s.Lifetime = life
 	t.Cleanup(func() {
 		end()
-		if released := s.originSessionsReleased; released != nil {
-			select {
-			case <-released:
-			case <-time.After(30 * time.Second):
-				t.Fatal("the origin-session manager did not release its files within 30s of its lifetime ending")
-			}
+		released := make(chan struct{})
+		go func() {
+			s.originSessionsReleased.Wait()
+			close(released)
+		}()
+		select {
+		case <-released:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the origin-session manager did not release its files within 30s of its lifetime ending")
 		}
 		entries, err := os.ReadDir(d)
 		if err != nil {
