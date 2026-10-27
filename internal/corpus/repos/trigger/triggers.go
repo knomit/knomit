@@ -115,10 +115,12 @@ type TestHooks struct {
 	// value holds phase C's buffer pending, so every later run meets it and
 	// only overlayPending keeps a range from re-firing.
 	FlushGrace time.Duration
-	// BeforeFlush runs once per flush that writes phase C's buffer, before
-	// its first transaction, with the number of runs the buffer holds: how a
-	// test counts flushes against runs (#419: phase C is write-behind, so a
-	// burst of runs is one flush, never one per run).
+	// BeforeFlush runs once per flush of phase C's buffer, before its first
+	// transaction, with the number of runs the buffer holds: how a test
+	// counts flushes against runs (#419: phase C is write-behind, so a burst
+	// of runs is one flush, never one per run). It also fires, with 0, for a
+	// flush that carries no run rows (only watermarks, due marks or recipe
+	// results).
 	BeforeFlush func(runs int)
 	// SkipFlushOnStop tears the loop down WITHOUT the final flush: a crash
 	// as far as the tables are concerned (T20 pins the M2 window with it).
