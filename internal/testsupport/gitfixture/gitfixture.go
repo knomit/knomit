@@ -59,10 +59,50 @@ func NoAutoMaintenance(t testing.TB, dir string) {
 	run(t, "-C", dir, "config", "maintenance.auto", "false")
 }
 
+// IsAutoMaintenance reports whether argv, one process of git's trace2 event
+// log ("start" or "child_start"), is git's auto-maintenance:
+// `git maintenance run ...` or `git gc --auto ...`. It matches the
+// SUBCOMMAND, not the word: `git config maintenance.auto false`, which this
+// package itself runs, is no maintenance (#654 review R2).
+func IsAutoMaintenance(argv []string) bool {
+	for i, a := range argv {
+		if i+1 >= len(argv) {
+			break
+		}
+		if a == "maintenance" && argv[i+1] == "run" {
+			return true
+		}
+		if a == "gc" {
+			for _, b := range argv[i+1:] {
+				if b == "--auto" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// isolatedEnv is the whole environment the fixture's git runs with: PATH and
+// HOME only, the global and system config off. Nothing else is inherited: a
+// GIT_DIR (the suite run from a git hook) would point `git -C <bare> config`
+// at another repository, a developer's init.templateDir or defaultBranch
+// (from their config, or GIT_CONFIG_COUNT) would shape the fixture, and the
+// test's own GIT_TRACE2_EVENT would trace the fixture's git (#654 review R2).
+func isolatedEnv() []string {
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+	}
+}
+
 func run(t testing.TB, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
-	cmd.Env = os.Environ()
+	cmd.Env = isolatedEnv()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}

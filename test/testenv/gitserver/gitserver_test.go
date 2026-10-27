@@ -2,7 +2,6 @@ package gitserver
 
 import (
 	"context"
-	"knomit/internal/testsupport/gitfixture"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
+
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // testSig returns a fixed-timestamp signature for use in test commits.

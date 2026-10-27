@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // TestBareRemote_InitCreatesEmptyRepo asserts that BareRemote creates a
@@ -128,7 +130,7 @@ func TestBareRemote_PushStartsNoAutoMaintenance(t *testing.T) {
 		if ev.Event == "start" && strings.Contains(joined, "receive-pack") {
 			receivePacks++
 		}
-		if strings.Contains(joined, "maintenance run") || strings.Contains(joined, "gc --auto") {
+		if gitfixture.IsAutoMaintenance(ev.Argv) {
 			maintenance++
 			t.Logf("auto-maintenance started: %s", joined)
 		}

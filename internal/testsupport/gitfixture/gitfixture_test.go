@@ -50,7 +50,7 @@ func pushStarts(t *testing.T, bare string) (receivePacks, maintenance int) {
 		if ev.Event == "start" && strings.Contains(joined, "receive-pack") {
 			receivePacks++
 		}
-		if (ev.Event == "start" || ev.Event == "child_start") && strings.Contains(joined, "maintenance run") {
+		if (ev.Event == "start" || ev.Event == "child_start") && IsAutoMaintenance(ev.Argv) {
 			maintenance++
 		}
 	}
@@ -82,5 +82,95 @@ func TestInitBare_APushStartsNoAutoMaintenance(t *testing.T) {
 	gitIn(t, "", "init", "-q", "--bare", plain)
 	if _, m := pushStarts(t, plain); m == 0 {
 		t.Fatal("positive control: a plain bare repository's push starts auto-maintenance (git's default); the oracle saw none")
+	}
+}
+
+// IsAutoMaintenance matches git's maintenance child by its subcommand, never
+// the word alone: the fixture's own `git config maintenance.auto false` is
+// what a loose match counted (#654 review R2-B1).
+func TestIsAutoMaintenance_MatchesTheSubcommandOnly(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"git", "maintenance", "run", "--auto", "--quiet", "--detach"}, true},
+		{[]string{"/usr/libexec/git-core/git", "maintenance", "run", "--auto"}, true},
+		{[]string{"git", "gc", "--auto", "--quiet"}, true},
+		{[]string{"git", "-C", "/r.git", "config", "maintenance.auto", "false"}, false},
+		{[]string{"git", "gc"}, false},
+		{[]string{"git-receive-pack", "/r.git"}, false},
+		{[]string{"git", "maintenance"}, false},
+	} {
+		if got := IsAutoMaintenance(c.argv); got != c.want {
+			t.Errorf("IsAutoMaintenance(%q) = %v, want %v", c.argv, got, c.want)
+		}
+	}
+}
+
+// configValue is `git config --get key` in repo, run with nothing inherited.
+func configValue(t *testing.T, repo, key string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "config", "--get", key)
+	cmd.Env = isolatedEnv()
+	out, _ := cmd.Output()
+	return strings.TrimSpace(string(out))
+}
+
+// #654 review R2-S1: the fixture's git inherits nothing from the test
+// process. With GIT_DIR pointing at another repository (the suite run from a
+// git hook), a template directory and a default branch set through
+// GIT_CONFIG_* (a developer's config), and GIT_TRACE2_EVENT set, InitBare
+// still makes its OWN repository, from git's built-in template, with the
+// setting in IT, and traces nothing. Positive control: the same environment
+// does reach a git started with it (the template's marker file appears).
+// SABOTAGE: run the fixture's git with os.Environ() -> the setting lands in
+// GIT_DIR's repository, the marker is copied and the trace is written -> red.
+func TestInitBare_InheritsNothingFromTheEnvironment(t *testing.T) {
+	other := filepath.Join(t.TempDir(), "other.git")
+	gitIn(t, "", "init", "-q", "--bare", other)
+	tmpl := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpl, "MARKER"), []byte("from the template"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	trace := filepath.Join(t.TempDir(), "trace2.json")
+	t.Setenv("GIT_DIR", other)
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "init.templateDir")
+	t.Setenv("GIT_CONFIG_VALUE_0", tmpl)
+	t.Setenv("GIT_CONFIG_KEY_1", "init.defaultBranch")
+	t.Setenv("GIT_CONFIG_VALUE_1", "inherited")
+	t.Setenv("GIT_TRACE2_EVENT", trace)
+
+	bare := InitBare(t, filepath.Join(t.TempDir(), "fixture.git"), "")
+
+	if got := configValue(t, bare, "maintenance.auto"); got != "false" {
+		t.Fatalf("the fixture's own config holds maintenance.auto=%q, want false", got)
+	}
+	if got := configValue(t, other, "maintenance.auto"); got != "" {
+		t.Fatalf("GIT_DIR's repository got maintenance.auto=%q: the fixture's git followed the inherited GIT_DIR", got)
+	}
+	if _, err := os.Stat(filepath.Join(bare, "MARKER")); err == nil {
+		t.Fatal("the fixture was made from the inherited init.templateDir")
+	}
+	head, err := os.ReadFile(filepath.Join(bare, "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(head), "inherited") {
+		t.Fatalf("the fixture's HEAD follows the inherited init.defaultBranch: %s", head)
+	}
+	if _, err := os.Stat(trace); err == nil {
+		t.Fatal("the fixture's git wrote the inherited GIT_TRACE2_EVENT")
+	}
+
+	// Positive control: that environment does reach a git that inherits it.
+	probe := filepath.Join(t.TempDir(), "probe.git")
+	cmd := exec.Command("git", "init", "-q", "--bare", probe)
+	cmd.Env = append(os.Environ(), "GIT_DIR="+probe)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(probe, "MARKER")); err != nil {
+		t.Fatal("positive control: an inheriting git did not use the template; the check above proves nothing")
 	}
 }

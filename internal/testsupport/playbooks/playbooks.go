@@ -14,11 +14,12 @@ package playbooks
 import (
 	"fmt"
 	"io/fs"
-	"knomit/internal/testsupport/gitfixture"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"knomit/internal/testsupport/gitfixture"
 )
 
 // SubmodulePath is the checkout's path from the repository root.
