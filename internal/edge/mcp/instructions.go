@@ -274,7 +274,7 @@ Call this tool to generate hypotheses from synthesis facts. Works the same way a
 4. Gather additional evidence as needed
 5. If a hypothesis is warranted, call knomit_learn with type: hypothesis
 6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent.
-7. Call knomit_hypothesize with session_id to get the next synthesis fact
+7. Call knomit_hypothesize with session_id and item_id to get the next synthesis fact. response is optional: an empty one acknowledges the item (on a discover item, "no proposals")
 8. Repeat until done
 
 Hypothesis body must contain: hypothesis statement, evidence chain (with confidence/sources for each cited fact), reasoning step, known gaps, and falsification condition.

@@ -85,7 +85,7 @@ Then call `knomit_learn` with a `moment_name` and one fact in `facts: [ {…} ]`
 - `title`: short imperative summary of the choice
 - `body`: the three parts above
 - `entities`: files/symbols affected
-- `refs`: source files touched + URL to the conversation if available
+- `refs`: `src://` refs to the source files touched, `kb/` paths of related facts, and the PR or issue URL if there is one. Never a session or conversation link.
 - `confidence`: 0.95
 
 Only after the fact is committed should you start the implementing edit.
