@@ -128,7 +128,7 @@ func TestBareRemote_PushStartsNoAutoMaintenance(t *testing.T) {
 		if ev.Event == "start" && strings.Contains(joined, "receive-pack") {
 			receivePacks++
 		}
-		if strings.Contains(joined, "maintenance") || strings.Contains(joined, "gc --auto") {
+		if strings.Contains(joined, "maintenance run") || strings.Contains(joined, "gc --auto") {
 			maintenance++
 			t.Logf("auto-maintenance started: %s", joined)
 		}

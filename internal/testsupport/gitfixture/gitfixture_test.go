@@ -30,7 +30,10 @@ func pushStarts(t *testing.T, bare string) (receivePacks, maintenance int) {
 	gitIn(t, work, "init", "-q", "-b", "main")
 	gitIn(t, work, "-c", "maintenance.auto=false", "commit", "-q", "--allow-empty", "-m", "one")
 	t.Setenv("GIT_TRACE2_EVENT", trace)
-	gitIn(t, work, "push", "-q", "file://"+bare, "HEAD:refs/heads/main")
+	// A fresh branch per push: the commit's hash depends only on the clock's
+	// second, so pushing it to an existing branch could be a no-op or a
+	// non-fast-forward.
+	gitIn(t, work, "push", "-q", "file://"+bare, "HEAD:refs/heads/push-"+filepath.Base(work))
 	raw, err := os.ReadFile(trace)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func pushStarts(t *testing.T, bare string) (receivePacks, maintenance int) {
 		if ev.Event == "start" && strings.Contains(joined, "receive-pack") {
 			receivePacks++
 		}
-		if (ev.Event == "start" || ev.Event == "child_start") && strings.Contains(joined, "maintenance") {
+		if (ev.Event == "start" || ev.Event == "child_start") && strings.Contains(joined, "maintenance run") {
 			maintenance++
 		}
 	}
