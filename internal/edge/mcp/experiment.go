@@ -240,9 +240,9 @@ func ExperimentHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolR
 			if nerr != nil {
 				return mcpgo.NewToolResultError(nerr.Error()), nil
 			}
-			res, rerr = experimentCommit(ctx, mgr, svc, b, expName, adjudications)
+			res, rerr = experimentCommit(ctx, mgr, svc, b, expName, active, adjudications)
 		case "rollback":
-			res, rerr = experimentRollback(ctx, mgr, svc, b, pickExperiment(name, active))
+			res, rerr = experimentRollback(ctx, mgr, svc, b, pickExperiment(name, active), active)
 		case "sync":
 			res, rerr = experimentSync(ctx, svc, b, pickExperiment(name, active))
 		case "":
@@ -406,7 +406,7 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 }
 
 // experimentCommit merges into the agent branch and leaves the experiment.
-func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name string, resolutions map[string]merge.Resolution) (experimentResult, error) {
+func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name, active string, resolutions map[string]merge.Resolution) (experimentResult, error) {
 	if name == "" {
 		return experimentResult{}, errors.New(
 			"knomit_experiment commit needs a `name`, or a session that is inside an experiment")
@@ -436,31 +436,53 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 		return experimentResult{}, err
 	}
 	// Eager clear for the caller's own handle, so its very next call is back
-	// on the agent branch without a round trip. Every OTHER handle pointing at
+	// on the agent branch without a round trip — but ONLY when the committed
+	// experiment is the one the caller is in. Every OTHER handle pointing at
 	// this experiment heals on its next resolution instead — see
 	// repos.ResolveSessionBindingOnExperiment.
-	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
-	clearMountExperiment(ctx, mgr)
+	where := leaveIfCurrent(ctx, mgr, b, name, active)
 	agent := b.Write().AgentBranch()
 	// A commit whose every conflict was resolved to the PARENT's side produces
 	// a tree identical to the parent's: no merge commit is written and the
 	// branch does not move. The experiment is still deleted, so the action did
 	// happen — but saying "merged into" would credit it with changes it did
 	// not make, and someone would go looking for a commit that never existed.
-	summary := fmt.Sprintf("experiment %q merged into %q (%s) and deleted; this session is back on %q",
-		name, agent, result.Mode, agent)
+	summary := fmt.Sprintf("experiment %q merged into %q (%s) and deleted; %s",
+		name, agent, result.Mode, where.note)
 	if result.Mode == merge.ModeNoop {
 		summary = fmt.Sprintf(
-			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted and this session is back on %q",
-			name, agent, agent, agent)
+			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted; %s",
+			name, agent, agent, where.note)
 	}
 	if s := settledSummary(result.Settled); s != "" {
 		summary += ". " + s
 	}
 	return experimentResult{
-		Branch:  agent,
+		Branch:  where.branch,
+		Active:  where.active,
 		Summary: summary,
 	}, nil
+}
+
+// callerAfter is where the caller is after a commit or rollback.
+type callerAfter struct {
+	branch, active, note string
+}
+
+// leaveIfCurrent takes the caller out of name — clearing its handle's or its
+// mount session's experiment — ONLY when name is the experiment the caller is
+// in. Committing or rolling back SOMEONE ELSE's experiment by name (a lead
+// agent landing a subagent's work) must leave the caller where it is; clearing
+// unconditionally silently dropped it out of its own experiment.
+func leaveIfCurrent(ctx context.Context, mgr *repos.Manager, b *repos.Binding, name, active string) callerAfter {
+	agent := b.Write().AgentBranch()
+	if name != active {
+		return callerAfter{branch: b.WriteBranch(), active: active,
+			note: fmt.Sprintf("this session stays on %q", b.WriteBranch())}
+	}
+	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
+	clearMountExperiment(ctx, mgr)
+	return callerAfter{branch: agent, note: fmt.Sprintf("this session is back on %q", agent)}
 }
 
 // settledSummary says, per path, how a commit settled a conflict instead of
@@ -506,7 +528,7 @@ func settledSummary(settled []merge.SettledPath) string {
 }
 
 // experimentRollback discards the experiment.
-func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name string) (experimentResult, error) {
+func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name, active string) (experimentResult, error) {
 	if name == "" {
 		return experimentResult{}, errors.New(
 			"knomit_experiment rollback needs a `name`, or a session that is inside an experiment")
@@ -514,13 +536,13 @@ func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Serv
 	if err := svc.Merge().RollbackExperiment(ctx, name); err != nil {
 		return experimentResult{}, err
 	}
-	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
-	clearMountExperiment(ctx, mgr)
+	where := leaveIfCurrent(ctx, mgr, b, name, active)
 	return experimentResult{
-		Branch: b.Write().AgentBranch(),
+		Branch: where.branch,
+		Active: where.active,
 		Summary: fmt.Sprintf(
-			"experiment %q and everything on it are gone; this session is back on %q",
-			name, b.Write().AgentBranch()),
+			"experiment %q and everything on it are gone; %s",
+			name, where.note),
 	}, nil
 }
 

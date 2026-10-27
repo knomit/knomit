@@ -27,10 +27,10 @@ const (
 	// connection, so enumerating live handles in an error would hand one
 	// caller another's routing.
 	errUnknownHandle = "unknown binding handle — call knomit_bind"
-	// errBindingOnURLScoped answers a `binding` on a --repo/--lens endpoint.
-	// Silently ignoring it would be worse than failing: the caller believes it
-	// selected a repo, and the URL picked a different one.
-	errBindingOnURLScoped = "this endpoint is bound by its URL; do not pass binding"
+	// errHandleFromScopedEndpoint answers, on the unscoped endpoint, a handle
+	// that knomit_bind minted on a URL-scoped one. Such a handle names a
+	// branch within one --repo/--lens connection and means nothing here.
+	errHandleFromScopedEndpoint = "this binding handle was minted on a URL-scoped endpoint (a --repo or --lens bridge) and works only there — call knomit_bind on this endpoint"
 )
 
 // errMissingHandle is the unscoped endpoint's "you did not pass one". It names
@@ -49,31 +49,108 @@ func errMissingHandle(tool string) string {
 // valid set from the tool's own schema, and the description is where an agent
 // reading tools/list learns the handle exists at all.
 //
-// The two descriptions are separate texts, not one with a prefix: the required
-// text says REQUIRED, and an "Optional." stuck in front of it told knomit_repos
-// callers both things at once. TestBindingArg_DescriptionMatchesGateMode pins
-// each registration's text to its gate mode.
+// The registered text is the UNSCOPED endpoint's. A URL-scoped endpoint serves
+// the same tools with a different text, swapped in per tools/list by
+// endpointToolFilter, because there the handle is optional and absence means
+// something. Each (endpoint kind, gate mode) pair has its own text rather than
+// one built from another: an "Optional." stuck in front of the required text
+// once told knomit_repos callers both things at once.
+// TestBindingArg_DescriptionMatchesGateMode pins every pair.
 func bindingArg(required bool) mcpgo.ToolOption {
+	mode := gateOptional
 	if required {
-		return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingRequiredDescription))
+		mode = gateRequired
 	}
-	return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingOptionalDescription))
+	return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingDescription(mode, endpointUnscoped)))
+}
+
+// endpointKind is what a request's endpoint lets a handle do.
+type endpointKind int
+
+const (
+	// endpointUnscoped: /api/v1/mcp. The handle names the knowledge base.
+	endpointUnscoped endpointKind = iota
+	// endpointScoped: a URL fixing a repo or lens at its default branch (what
+	// a kb --repo/--lens bridge connects to). A handle may change the branch.
+	endpointScoped
+	// endpointFixed: a URL naming one specific branch (main, a foreign agent
+	// branch, an experiment). An address: no bind, no handle.
+	endpointFixed
+)
+
+// endpointKindOf classifies a request. The scoped/fixed split is the
+// mount-session marker MountExperimentMiddleware sets from the ROUTE — the same
+// predicate the gate and knomit_bind enforce at call time.
+func endpointKindOf(ctx context.Context) endpointKind {
+	if repos.SessionScoped(ctx) {
+		return endpointUnscoped
+	}
+	if _, _, plain := repos.MountSessionFromContext(ctx); plain {
+		return endpointScoped
+	}
+	return endpointFixed
+}
+
+// bindingDescription is the `binding` text for one gate mode on one endpoint
+// kind. "" for gateUngated, which declares no `binding`.
+func bindingDescription(mode gateMode, kind endpointKind) string {
+	if mode == gateUngated {
+		return ""
+	}
+	required := mode == gateRequired
+	switch kind {
+	case endpointUnscoped:
+		if required {
+			return bindingRequiredDescription
+		}
+		return bindingOptionalDescription
+	case endpointScoped:
+		if required {
+			return bindingScopedDescription
+		}
+		return bindingScopedReposDescription
+	default:
+		if required {
+			return bindingFixedDescription
+		}
+		return bindingFixedReposDescription
+	}
 }
 
 const (
-	// bindingRequiredDescription is gateRequired's `binding`.
-	bindingRequiredDescription = "The opaque handle returned by knomit_bind. REQUIRED on the unscoped /api/v1/mcp " +
-		"endpoint; must NOT be passed on a URL-scoped endpoint (a bridge started with --repo or " +
-		"--lens), which is bound by its URL. Pass the value verbatim — it is random, it is not the " +
-		"repo or lens name, and an invented one is refused."
-	// bindingOptionalDescription is gateOptional's `binding` (knomit_repos):
-	// a missing handle passes, a bad one is reported in `bound`, and on a
-	// URL-scoped endpoint passing one is refused exactly as for every tool.
-	bindingOptionalDescription = "Optional, unscoped /api/v1/mcp endpoint only: a handle returned by knomit_bind. " +
-		"With it, the result also has a `bound` section describing what the handle names; a handle that " +
-		"does not resolve is reported there (status \"unresolvable\"), not raised. Without it there is no " +
-		"`bound` section. Must NOT be passed on a URL-scoped endpoint (a bridge started with --repo or " +
-		"--lens): it is refused there, and `bound` always describes the URL's binding."
+	// bindingRequiredDescription is gateRequired's `binding` on the unscoped
+	// endpoint.
+	bindingRequiredDescription = "The opaque handle returned by knomit_bind. REQUIRED on this endpoint: it " +
+		"says which knowledge base the call is for. Pass the value verbatim — it is random, it is not the " +
+		"repo or lens name, and an invented one, or one minted on another endpoint, is refused. An empty " +
+		"string counts as not passing one."
+	// bindingOptionalDescription is gateOptional's `binding` (knomit_repos) on
+	// the unscoped endpoint: a missing handle passes, a bad one is reported in
+	// `bound`.
+	bindingOptionalDescription = "Optional: a handle returned by knomit_bind. With it, the result also has a " +
+		"`bound` section describing what the handle names; a handle that does not resolve is reported there " +
+		"(status \"unresolvable\"), not raised. Without it, or with \"\", there is no `bound` section."
+	// bindingScopedDescription is gateRequired's `binding` on a URL-scoped
+	// endpoint, where the handle only chooses a branch.
+	bindingScopedDescription = "Optional on this endpoint, which is fixed to one repo or lens by its URL. " +
+		"Omit it (or pass \"\") to use that repo or lens at its default branch, or inside the experiment " +
+		"this connection opened. Pass a handle that knomit_bind returned on this endpoint (this same --repo " +
+		"or --lens URL) to work on the branch or experiment that handle names. A handle minted on any other " +
+		"endpoint is refused."
+	// bindingScopedReposDescription is gateOptional's `binding` (knomit_repos)
+	// on a URL-scoped endpoint.
+	bindingScopedReposDescription = "Optional: a handle that knomit_bind returned on this endpoint (this same " +
+		"--repo or --lens URL). With it, `bound` describes what the handle names; a handle that does not " +
+		"resolve is reported there (status \"unresolvable\"), not raised. Without it, or with \"\", `bound` " +
+		"describes this endpoint's own repo or lens."
+	// bindingFixedDescription is gateRequired's `binding` on a URL naming one
+	// specific branch: nothing can move it, so no handle is accepted.
+	bindingFixedDescription = "Not accepted on this endpoint: its URL names one specific branch, so omit it " +
+		"(\"\" counts as omitted). Any handle is refused here."
+	// bindingFixedReposDescription is gateOptional's `binding` there.
+	bindingFixedReposDescription = "Not accepted on this endpoint: its URL names one specific branch, so omit " +
+		"it (\"\" counts as omitted); `bound` then describes that branch. A handle passed anyway is " +
+		"reported in `bound` with status \"unresolvable\"."
 )
 
 // gateMode says what the gate does with the handle for one tool.
@@ -125,33 +202,47 @@ func gateBinding(mgr *repos.Manager, tool mcpgo.Tool, mode gateMode, next mcpser
 		raw, passed := req.GetArguments()[bindingArgument]
 		handle, isString := raw.(string)
 
-		// A URL-scoped endpoint gets its repo from the path. A handle there is
-		// meaningless at best and contradicts the URL at worst, so it is
-		// refused on PRESENCE — an empty string is still a caller that thinks
-		// it is selecting something.
-		if !repos.SessionScoped(ctx) {
-			if passed {
-				return mcpgo.NewToolResultError(errBindingOnURLScoped), nil
-			}
-			return next(ctx, req)
-		}
-
-		// A handle of the wrong TYPE is named as such. Folded into "you forgot
-		// it", a caller that sent one would read the advice as already
-		// followed and resend the same shape.
+		// A handle of the wrong TYPE is named as such, on both endpoint kinds.
+		// Folded into "you forgot it", a caller that sent one would read the
+		// advice as already followed and resend the same shape.
 		if passed && !isString {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
 				"`binding` must be the handle string knomit_bind returned, got %T", raw)), nil
 		}
+
+		// A URL-scoped endpoint takes its repo or lens from the path. There the
+		// handle is OPTIONAL: absent (or "") is the URL's own binding, exactly
+		// as before handles existed there; present routes the call by the
+		// handle, which can name only a branch within that same repo or lens.
+		scoped := !repos.SessionScoped(ctx)
+
 		if handle == "" {
-			if mode == gateOptional {
-				// knomit_repos with nothing bound: the catalogue, no `bound`.
+			if scoped || mode == gateOptional {
+				// Scoped: the URL's binding. knomit_repos unscoped: the
+				// catalogue, no `bound`.
 				return next(ctx, req)
 			}
 			return mcpgo.NewToolResultError(errMissingHandle(tool.Name)), nil
 		}
 
-		ctx, err := resolveHandle(ctx, mgr, handle)
+		// The endpoint the handle must have been minted on: "" for the
+		// unscoped endpoint, the mount's pin for a scoped one.
+		mount := ""
+		if scoped {
+			_, uid, plain := repos.MountSessionFromContext(ctx)
+			if !plain {
+				// The URL names a specific branch or experiment, so nothing
+				// here can choose one: knomit_bind refuses on this mount too.
+				err := errors.New(errFixedEndpoint(ctx))
+				if mode == gateOptional {
+					return next(repos.WithBindingError(ctx, err), req)
+				}
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			mount = uid
+		}
+
+		rctx, err := resolveHandle(ctx, mgr, handle, mount)
 		if err != nil {
 			if mode == gateOptional {
 				// Report, do not raise: knomit_repos renders this as
@@ -160,8 +251,59 @@ func gateBinding(mgr *repos.Manager, tool mcpgo.Tool, mode gateMode, next mcpser
 			}
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		return next(ctx, req)
+		return next(rctx, req)
 	}
+}
+
+// errHandleFromOtherEndpoint answers, on a URL-scoped endpoint, a handle that
+// was minted anywhere but this endpoint's own mount.
+func errHandleFromOtherEndpoint(ctx context.Context) string {
+	kind, name := urlTarget(ctx)
+	return fmt.Sprintf("this binding handle belongs to another endpoint — omit `binding` to use this endpoint's %s %s, "+
+		"or call knomit_bind here for a handle", kind, name)
+}
+
+// errFixedEndpoint answers a handle, or a knomit_bind, on a URL-scoped mount
+// whose URL names a branch other than the repo's own agent branch (main, a
+// foreign agent branch, an experiment). Such a URL is an ADDRESS, and nothing
+// may move it (kb/invariants/mcp/experiments/mount-eligibility-from-the-route).
+func errFixedEndpoint(ctx context.Context) string {
+	kind, name := urlTarget(ctx)
+	return fmt.Sprintf("This endpoint is fixed to %s %s at branch %s by its URL, so no handle can change its branch — omit `binding`. Do not retry.",
+		kind, name, fixedBranch(ctx))
+}
+
+// urlTarget names what a URL-scoped request's URL fixes: ("repo"|"lens", name).
+func urlTarget(ctx context.Context) (kind, name string) {
+	if b, ok := repos.BindingFromContextOpt(ctx); ok {
+		if b.FromLens() {
+			return "lens", b.Name()
+		}
+		if w := b.Write(); w != nil {
+			return "repo", w.Name()
+		}
+	}
+	if ri, ok := repos.RepoFromContextOpt(ctx); ok {
+		return "repo", ri.Name()
+	}
+	return "repo", ""
+}
+
+// fixedBranch is the branch a URL-scoped request's URL names, or the branch its
+// write repo is served at when the route has no {branch} segment.
+func fixedBranch(ctx context.Context) string {
+	if br, ok := repos.BranchFromContextOpt(ctx); ok && br != "" {
+		return br
+	}
+	if b, ok := repos.BindingFromContextOpt(ctx); ok {
+		if w := b.WriteBranch(); w != "" {
+			return w
+		}
+		if b.Write() != nil {
+			return b.Write().ReadBranch()
+		}
+	}
+	return ""
 }
 
 // resolveHandle turns a handle into a context carrying its Binding, and records
@@ -172,7 +314,12 @@ func gateBinding(mgr *repos.Manager, tool mcpgo.Tool, mode gateMode, next mcpser
 // minted but whose repo has since gone surfaces the resolver's own reason,
 // because "bind again" is useless advice if the agent cannot tell that the base
 // it chose no longer exists.
-func resolveHandle(ctx context.Context, mgr *repos.Manager, handle string) (context.Context, error) {
+//
+// mount is the endpoint the call arrived on: "" for the unscoped endpoint, the
+// mount's pin for a URL-scoped one. A handle works only on the endpoint that
+// minted it, so a handle from the unscoped endpoint cannot steer a --repo
+// bridge and a --repo bridge's handle cannot be replayed on the unscoped one.
+func resolveHandle(ctx context.Context, mgr *repos.Manager, handle, mount string) (context.Context, error) {
 	if mgr == nil {
 		return ctx, errStoreUnavailable
 	}
@@ -187,6 +334,29 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle string) (cont
 	}
 	if !ok {
 		return ctx, errors.New(errUnknownHandle)
+	}
+	minted, merr := store.HandleMount(ctx, handle)
+	if merr != nil {
+		log.Warn().Err(merr).Msg("binding gate: handle mount lookup failed")
+		return ctx, errors.New("binding handle lookup failed — retry, or call knomit_bind again")
+	}
+	if minted != mount {
+		if mount == "" {
+			return ctx, errors.New(errHandleFromScopedEndpoint)
+		}
+		return ctx, errors.New(errHandleFromOtherEndpoint(ctx))
+	}
+	if mount != "" {
+		// Unreachable while knomit_bind mints scoped handles with the mount's
+		// own pin. Checked anyway: a handle naming another base here would be
+		// the 2026-09-17 incident on a scoped endpoint.
+		if pin != mount {
+			return ctx, errors.New(errHandleFromOtherEndpoint(ctx))
+		}
+		// The HANDLE routes this call, so the connection's session-keyed
+		// experiment must not touch it: neither apply to it nor be opened,
+		// committed or cleared by it.
+		ctx = repos.WithoutMountState(ctx)
 	}
 	// The experiment this handle is working inside, if any. Read here rather
 	// than deeper because this is where the handle is known, and the handle
@@ -215,7 +385,14 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle string) (cont
 	// record what this session was seen doing. Routing was already decided, by
 	// the handle. The handle rides along because the set is keyed by it.
 	if rec, found := repos.PinRecorderFromContext(bctx); found {
-		rec.Record(repos.ResolvedBinding{Handle: handle, Pin: pin, Branch: branch})
+		served := ""
+		if b, ok := repos.BindingFromContextOpt(bctx); ok {
+			served = b.WriteBranch()
+			if served == "" && b.Write() != nil {
+				served = b.Write().ReadBranch()
+			}
+		}
+		rec.Record(repos.ResolvedBinding{Handle: handle, Pin: pin, Branch: branch, Served: served})
 	}
 	return bctx, nil
 }

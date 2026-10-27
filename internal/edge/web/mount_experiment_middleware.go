@@ -41,6 +41,13 @@ func MountExperimentMiddleware(m *repos.Manager, sessions *clientsessions.Store)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := applyMountExperiment(r.Context(), m, sessions, r.Header.Get("Mcp-Session-Id"))
+			// The same return path the unscoped mount installs: a call routed
+			// by a binding HANDLE here is resolved inside the tool gate, and
+			// the recorder carries that handle back out to
+			// recordClientSession (the session's binding set) and to the
+			// request log's served branch. A call without a handle records
+			// nothing, and both fall back to the URL's binding as before.
+			ctx = repos.WithPinRecorder(ctx, &repos.PinRecorder{})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -193,6 +200,17 @@ func mountExperimentUID(b *repos.Binding) string {
 // whose path does name a branch, can be in the case where the field would
 // merely repeat it, and there it is omitted.
 func servedBranch(ctx context.Context) string {
+	// A call routed by a binding HANDLE was served where the handle points,
+	// which the HTTP context cannot know: the gate resolved it inside the
+	// handler and recorded it here.
+	if p, ok := repos.PinRecorderFromContext(ctx); ok {
+		if rb := p.Resolved(); rb.Handle != "" && rb.Served != "" {
+			if urlBranch, hasURL := repos.BranchFromContextOpt(ctx); hasURL && urlBranch == rb.Served {
+				return ""
+			}
+			return rb.Served
+		}
+	}
 	b, ok := repos.BindingFromContextOpt(ctx)
 	if !ok {
 		return ""

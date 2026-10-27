@@ -240,18 +240,32 @@ func TestBind_UnknownName(t *testing.T) {
 	require.Contains(t, resultText(t, res), `no lens named "zzz"`)
 }
 
-// On a URL-scoped mount there is nothing to switch, and the error says where
-// to connect instead.
-func TestBind_RefusedOnURLScopedMount(t *testing.T) {
-	m, _, srv := bindFixture(t)
-	ctx := srv.WithContext(context.Background(), &fakeSession{id: "sid-7"})
-	var req mcpgo.CallToolRequest
-	req.Params.Arguments = map[string]any{"repo": "alpha"}
+// On a URL-scoped mount knomit_bind mints a handle on the URL's own repo that
+// works only there; on a mount whose URL names a specific branch it refuses.
+func TestBind_OnURLScopedMount(t *testing.T) {
+	m, st, _ := bindFixture(t)
+	ctx := scopedCtx(t, m, "alpha")
 
+	handle := mintScopedHandle(t, m, ctx)
+	require.Equal(t, "repo:uid-alpha", pinOfHandle(t, st, handle))
+	mount, err := st.HandleMount(context.Background(), handle)
+	require.NoError(t, err)
+	require.Equal(t, "repo:uid-alpha", mount, "the handle is recorded against its mount")
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"repo": "beta"}
 	res, err := BindHandler(m)(ctx, req)
 	require.NoError(t, err)
 	require.True(t, res.IsError)
-	require.Contains(t, resultText(t, res), "/api/v1/mcp")
+	require.Equal(t, "This connection is fixed to repo alpha; knomit_bind here only changes the branch. "+
+		"To use another repo, the user must restart the bridge with --repo beta. Do not retry.", resultText(t, res))
+
+	fixed := repos.WithBranch(repos.WithRepoInstance(context.Background(), m.Get("alpha")), "main")
+	req.Params.Arguments = map[string]any{}
+	res, err = BindHandler(m)(fixed, req)
+	require.NoError(t, err)
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), "Do not retry")
 }
 
 // knomit_bind is where handles come from, so it declares no `binding` argument

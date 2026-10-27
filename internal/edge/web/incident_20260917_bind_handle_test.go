@@ -237,8 +237,11 @@ const (
 		"Call knomit_bind with a repo or lens name, then pass its `binding` value on this and every " +
 		"later tool call. There is no session fallback — the handle is the only thing that says " +
 		"which knowledge base this call is for."
-	wantUnknownHandle     = "unknown binding handle — call knomit_bind"
-	wantBindingOnURLScope = "this endpoint is bound by its URL; do not pass binding"
+	wantUnknownHandle = "unknown binding handle — call knomit_bind"
+	// A handle minted on the unscoped mount, presented on jobA-repo's own
+	// URL-scoped mount: a handle works only on the endpoint that minted it.
+	wantBindingOnURLScope = "this binding handle belongs to another endpoint — omit `binding` to use this " +
+		"endpoint's repo jobA-repo, or call knomit_bind here for a handle"
 )
 
 // TestIncident20260917_TwoCoworkJobsOneMCPSession is the regression test for the
@@ -399,9 +402,9 @@ func TestIncident20260917_HandleRefusals(t *testing.T) {
 	require.Equal(t, wantUnknownHandle, text)
 	require.NotContains(t, text, handleA, "the refusal must not echo a live handle")
 
-	// A REAL handle on the URL-scoped mount, which is bound by its path. Refused
-	// on presence: ignoring it would let the caller believe it selected a repo
-	// while the URL served whichever one the path names.
+	// A REAL handle, minted on the unscoped mount, on the URL-scoped mount.
+	// Refused: ignoring it would let the caller believe it selected something
+	// while the URL served whatever the path names.
 	_, sidURL := rpcAt(t, h, urlScopedMount, "",
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cowork","version":"1.0"}}}`)
 	text, isErr = callToolAt(t, h, urlScopedMount, sidURL, "knomit_learn",

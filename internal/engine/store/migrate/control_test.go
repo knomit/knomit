@@ -100,6 +100,8 @@ var controlObjects = []string{
 	// mount_experiments likewise: every read is by its full (session_id,
 	// mount_uid) primary key, and the one listing is per session.
 	"mount_experiments",
+	// handle_mounts likewise: read only by its handle primary key.
+	"handle_mounts",
 	// grants is read by principal on every permission check, and only live
 	// rows matter, so the index is partial on revoked_at IS NULL.
 	"grants", "grants_principal_live",

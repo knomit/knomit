@@ -18,49 +18,99 @@ import (
 // once — because the optional text was the required text with a prefix.
 //
 // Derived from the registration table, not from tool names: a tool whose gate
-// mode changes, or a new tool, is checked without touching this test.
+// mode changes, or a new tool, is checked without touching this test. Run per
+// ENDPOINT KIND as well, because a URL-scoped endpoint is served different
+// texts (the handle is optional there) and a different knomit_bind schema.
 func TestBindingArg_DescriptionMatchesGateMode(t *testing.T) {
 	regs := toolRegistrations(nil)
-	seen := map[gateMode]int{}
+	gates := gateModes(regs)
+	registered := make([]mcpgo.Tool, 0, len(regs))
 	for _, r := range regs {
-		seen[r.gate]++
-		prop, declared := r.tool.InputSchema.Properties[bindingArgument]
-		// The handle is never schema-required: a URL-scoped endpoint refuses it.
-		require.NotContains(t, r.tool.InputSchema.Required, bindingArgument,
-			"%s: `binding` must not be schema-required — a URL-scoped endpoint refuses it", r.tool.Name)
+		registered = append(registered, r.tool)
+	}
 
-		if r.gate == gateUngated {
-			require.False(t, declared, "%s is ungated and must not declare `binding`", r.tool.Name)
-			continue
-		}
-		require.True(t, declared, "%s is gated and must declare `binding`", r.tool.Name)
-		desc, _ := prop.(map[string]any)["description"].(string)
-		require.NotEmpty(t, desc, "%s: `binding` has no description", r.tool.Name)
+	// The tool list each endpoint kind is SERVED, through the same filter
+	// tools/list runs.
+	for _, endpoint := range []struct {
+		name string
+		ctx  context.Context
+		kind endpointKind
+	}{
+		{"unscoped", repos.WithSessionScoped(context.Background()), endpointUnscoped},
+		{"url-scoped, default branch", repos.WithMountSession(context.Background(), "sid", "repo:uid-x"), endpointScoped},
+		{"url-scoped, names a branch", context.Background(), endpointFixed},
+	} {
+		t.Run(endpoint.name, func(t *testing.T) {
+			require.Equal(t, endpoint.kind, endpointKindOf(endpoint.ctx))
+			served := endpointToolFilter(gates)(endpoint.ctx, registered)
+			seen := map[gateMode]int{}
+			for _, tool := range served {
+				mode := gates[tool.Name]
+				seen[mode]++
+				prop, declared := tool.InputSchema.Properties[bindingArgument]
+				// Never schema-required: a URL-scoped endpoint may omit it, and
+				// the unscoped one answers its absence with an actionable error.
+				require.NotContains(t, tool.InputSchema.Required, bindingArgument, tool.Name)
 
-		// Every gated tool is refused a handle on a URL-scoped endpoint
-		// (gateBinding checks presence before the mode), so every text says so.
-		require.Contains(t, strings.ToLower(desc), "must not be passed on a url-scoped endpoint", r.tool.Name)
+				if mode == gateUngated {
+					require.False(t, declared, "%s is ungated and must not declare `binding`", tool.Name)
+					_, hasRepo := tool.InputSchema.Properties["repo"]
+					_, hasLens := tool.InputSchema.Properties["lens"]
+					_, hasExp := tool.InputSchema.Properties["experiment"]
+					unscoped := endpoint.kind == endpointUnscoped
+					require.True(t, hasExp, "%s: the branch selector is offered wherever bind is listed", tool.Name)
+					require.Equal(t, unscoped, hasRepo, "%s: `repo` only where the repo can vary", tool.Name)
+					require.Equal(t, unscoped, hasLens, "%s: `lens` only where the lens can vary", tool.Name)
+					continue
+				}
+				require.True(t, declared, "%s is gated and must declare `binding`", tool.Name)
+				desc, _ := prop.(map[string]any)["description"].(string)
+				require.Equal(t, bindingDescription(mode, endpoint.kind), desc, tool.Name)
+				lower := strings.ToLower(desc)
 
-		switch r.gate {
-		case gateRequired:
-			require.Contains(t, desc, "REQUIRED", "%s is gateRequired: its `binding` must say REQUIRED", r.tool.Name)
-			require.NotContains(t, strings.ToLower(desc), "optional",
-				"%s is gateRequired: its `binding` must not call itself optional", r.tool.Name)
-		case gateOptional:
-			require.NotContains(t, desc, "REQUIRED",
-				"%s is gateOptional (a missing handle passes): its `binding` must not say REQUIRED", r.tool.Name)
-			require.True(t, strings.HasPrefix(desc, "Optional"),
-				"%s is gateOptional: its `binding` must open with Optional: %q", r.tool.Name, desc)
-			require.Contains(t, desc, "unresolvable",
-				"%s is gateOptional: a bad handle is reported, not raised, and the text must say so", r.tool.Name)
-		default:
-			t.Fatalf("%s: unknown gate mode %d", r.tool.Name, r.gate)
+				switch {
+				case endpoint.kind == endpointFixed:
+					require.True(t, strings.HasPrefix(desc, "Not accepted on this endpoint"), desc)
+					require.NotContains(t, desc, "knomit_bind", "no handle can be had here, so none is offered")
+				case mode == gateRequired && endpoint.kind == endpointUnscoped:
+					require.Contains(t, desc, "REQUIRED")
+					require.NotContains(t, lower, "optional")
+				case mode == gateRequired && endpoint.kind == endpointScoped:
+					require.NotContains(t, desc, "REQUIRED")
+					require.True(t, strings.HasPrefix(desc, "Optional"), desc)
+					require.Contains(t, lower, "omit it", "the text must say what absence means")
+					require.Contains(t, lower, "default branch")
+					require.NotContains(t, lower, "connection to", "a handle is tied to the endpoint, not the connection")
+				case mode == gateOptional:
+					require.NotContains(t, desc, "REQUIRED")
+					require.True(t, strings.HasPrefix(desc, "Optional"), desc)
+					require.Contains(t, desc, "unresolvable",
+						"a bad handle is reported, not raised, and the text must say so")
+				default:
+					t.Fatalf("%s: unknown gate mode %d", tool.Name, mode)
+				}
+				// No endpoint tells its callers about another's rules.
+				require.NotContains(t, lower, "must not be passed", tool.Name)
+			}
+			require.Positive(t, seen[gateRequired])
+			require.Positive(t, seen[gateOptional])
+			if endpoint.kind == endpointFixed {
+				// knomit_bind is refused on every call here, so it is not listed.
+				require.Zero(t, seen[gateUngated], "knomit_bind must not be advertised where it always fails")
+				require.Len(t, served, len(registered)-1)
+			} else {
+				require.Positive(t, seen[gateUngated])
+				require.Len(t, served, len(registered))
+			}
+		})
+	}
+
+	// The filter never mutates the registered tools it was handed.
+	for _, tool := range registered {
+		if p, ok := tool.InputSchema.Properties[bindingArgument].(map[string]any); ok {
+			require.Equal(t, bindingDescription(gates[tool.Name], endpointUnscoped), p["description"], tool.Name)
 		}
 	}
-	// The table must exercise every mode, or a branch above is vacuous.
-	require.Positive(t, seen[gateRequired])
-	require.Positive(t, seen[gateOptional])
-	require.Positive(t, seen[gateUngated])
 }
 
 // Every tool refuses an argument its schema does not declare, and names it

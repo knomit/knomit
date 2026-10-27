@@ -79,6 +79,11 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 		}
 		b := repos.BindingFromContext(ctx) // safe: ri present ⇒ never panics
 		result.Instructions = BindingInstructions(b, profileFor(mgr, b.Write()))
+		// Only where a handle can choose a branch: a URL naming the repo's
+		// agent branch, or a lens's default. Elsewhere the URL is an address.
+		if _, _, plain := repos.MountSessionFromContext(ctx); plain {
+			result.Instructions += scopedBindAddendum
+		}
 	})
 
 	regs := enabledTools(toolRegistrationsWith(skills, mgr, embedders...), readOnly)
@@ -100,6 +105,10 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 		// registration seam, because a filter cannot stop a call that never
 		// listed.
 		server.WithToolFilter(permissionFilter(grants, writeTools)),
+		// Each endpoint kind is listed its own `binding` texts and its own
+		// knomit_bind schema (endpoint_tools.go). Presentation only, like the
+		// filter above.
+		server.WithToolFilter(endpointToolFilter(gateModes(regs))),
 		// Skills are served as prompts (prompts.go). listChanged is false:
 		// the list is recomputed per binding on every prompts/list, so there
 		// is nothing to notify, and a true here would make every lazy name

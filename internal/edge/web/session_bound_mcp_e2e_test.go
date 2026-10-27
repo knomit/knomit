@@ -209,8 +209,9 @@ func TestSessionBoundMCP_HandleErrors(t *testing.T) {
 	}
 }
 
-// A handle on a URL-scoped endpoint is refused rather than ignored: the caller
-// believes it selected a repo, and the URL would have served a different one.
+// A handle on a URL-scoped endpoint that this connection did not mint is
+// refused rather than ignored: the caller believes it selected something, and
+// the URL would have served something else.
 func TestURLScopedMCP_RefusesABindingArgument(t *testing.T) {
 	h, _ := sessionBoundE2E(t)
 	const mount = "/repos/alpha/branches/agent%2Ftest/mcp"
@@ -219,13 +220,14 @@ func TestURLScopedMCP_RefusesABindingArgument(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"e2e","version":"1.0"}}}`)
 
 	text, isErr := callToolAt(t, h, mount, sid, "knomit_query", `{"binding":"anything","text":"x"}`)
-	require.True(t, isErr, "a handle on a URL-scoped endpoint must fail: %s", text)
-	require.Equal(t, "this endpoint is bound by its URL; do not pass binding", text)
+	require.True(t, isErr, "an unknown handle on a URL-scoped endpoint must fail: %s", text)
+	require.Equal(t, "unknown binding handle — call knomit_bind", text)
 
-	// knomit_repos gives the same answer — the mistake is the same one.
+	// knomit_repos REPORTS it instead, as on the unscoped endpoint: it is the
+	// tool an agent calls to find out what went wrong.
 	text, isErr = callToolAt(t, h, mount, sid, "knomit_repos", `{"binding":"anything"}`)
-	require.True(t, isErr, text)
-	require.Equal(t, "this endpoint is bound by its URL; do not pass binding", text)
+	require.False(t, isErr, text)
+	require.Contains(t, text, `"status": "unresolvable"`)
 
 	// Without one, the URL-scoped endpoint works exactly as before.
 	text, isErr = callToolAt(t, h, mount, sid, "knomit_repos", `{}`)

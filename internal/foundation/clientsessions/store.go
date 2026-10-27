@@ -411,6 +411,11 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 		`DELETE FROM handle_experiments WHERE handle NOT IN (SELECT handle FROM binding_handles)`); err != nil {
 		return n, fmt.Errorf("purge handle_experiments: %w", err)
 	}
+	// A handle's minting mount dies with the handle, collected the same way.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM handle_mounts WHERE handle NOT IN (SELECT handle FROM binding_handles)`); err != nil {
+		return n, fmt.Errorf("purge handle_mounts: %w", err)
+	}
 	// A mount's experiment dies with its SESSION, not with a handle: these
 	// rows are keyed on the session id, so they are collected against
 	// client_sessions and this runs after that delete. Without it a reused

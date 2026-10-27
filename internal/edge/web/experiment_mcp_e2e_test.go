@@ -395,10 +395,10 @@ func TestExperiment_SyncDoesNotLeaveTheExperiment(t *testing.T) {
 	require.Equal(t, "agent/test", writeBranchOf(t, h, sid, handle))
 }
 
-// TestLensExperimentMount_RefusesABindingArgument: the new route is
-// URL-scoped, so a `binding` argument is refused ON PRESENCE — empty string
-// included. Ignoring it would be worse than failing: the caller believes it
-// selected a base while the URL serves another.
+// TestLensExperimentMount_RefusesABindingArgument: the route NAMES an
+// experiment, so no handle can steer it and a `binding` is refused. Ignoring it
+// would be worse than failing: the caller believes it selected a branch while
+// the URL serves another. An empty string counts as absent and passes.
 func TestLensExperimentMount_RefusesABindingArgument(t *testing.T) {
 	h, m := experimentServer(t)
 	write := m.Get("jobA-repo")
@@ -414,11 +414,12 @@ func TestLensExperimentMount_RefusesABindingArgument(t *testing.T) {
 
 	mount := "/lenses/urlbound/experiments/url-bound/mcp"
 	sid := initAt(t, h, mount)
-	for _, args := range []string{`{"binding":"anything","action":"list"}`, `{"binding":"","action":"list"}`} {
-		text, isErr := callToolAt(t, h, mount, sid, "knomit_experiment", args)
-		require.True(t, isErr, "a binding on a URL-scoped mount must be refused: %s", args)
-		require.Contains(t, text, "bound by its URL", args)
-	}
+	text, isErr := callToolAt(t, h, mount, sid, "knomit_experiment", `{"binding":"anything","action":"list"}`)
+	require.True(t, isErr, "a binding on an experiment-addressed mount must be refused: %s", text)
+	require.Contains(t, text, "by its URL")
+
+	text, isErr = callToolAt(t, h, mount, sid, "knomit_experiment", `{"binding":"","action":"list"}`)
+	require.False(t, isErr, "an empty binding is absent: %s", text)
 }
 
 // TestLensExperimentMount_RePinsOnlyTheWriteMember: the lens twin of the
