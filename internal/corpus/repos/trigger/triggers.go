@@ -91,9 +91,16 @@ type TestHooks struct {
 	AfterHeadRead func()
 	// BeforeTx2 runs between tx1 and tx2 (the crash test panics here).
 	BeforeTx2 func()
-	// ChangeDelay is added inside the change build: knomit's per-path cost,
-	// which must not be charged to the trigger.
-	ChangeDelay time.Duration
+	// InChange runs inside the change build: knomit's per-path cost, which
+	// must not be charged to the trigger. A test advances its Stopwatch here.
+	InChange func()
+	// Stopwatch is the clock the dispatcher measures DURATIONS by: the run,
+	// its diff, the change build, a trigger's own work and a script's host
+	// calls. nil means time.Now. A test that asserts which side of a split a
+	// cost lands on (the trigger's own time against change_ms or host_ms, the
+	// slow detector, the p95) installs a clock that moves only when the test
+	// moves it, so the assertion is exact whatever the CPU load.
+	Stopwatch func() time.Time
 	// Now is the run's clock — read ONCE per run, the one clock comparison in
 	// F07 (the due sweep's `expires_at <= now`). nil means time.Now().UTC().
 	Now func() time.Time
@@ -521,8 +528,16 @@ func (d *Dispatcher) clock() time.Time {
 	return time.Now().UTC().Truncate(time.Second)
 }
 
+// stopwatch is the clock durations are measured by (TestHooks.Stopwatch).
+func stopwatch() time.Time {
+	if h := currentTriggerHooks().Stopwatch; h != nil {
+		return h()
+	}
+	return time.Now()
+}
+
 func (d *Dispatcher) runOnce(ctx context.Context) {
-	rs := &runState{newWM: map[string]string{}, started: time.Now()}
+	rs := &runState{newWM: map[string]string{}, started: stopwatch()}
 	defer func() {
 		d.mu.Lock()
 		d.completedHead = rs.head
@@ -555,7 +570,7 @@ func (d *Dispatcher) runOnce(ctx context.Context) {
 
 	// ---- Phase C: buffered; written in at most two short transactions per
 	// flush, when the writer is quiet.
-	durationMS := time.Since(rs.started).Milliseconds()
+	durationMS := stopwatch().Sub(rs.started).Milliseconds()
 	if rs.rangeFrom == "" {
 		rs.rangeFrom = rs.head // a run with no advance (a tick's sweep): range_from = range_to = head
 	}
@@ -932,9 +947,9 @@ func (d *Dispatcher) advance(ctx context.Context, svc *store.Service, tr *facts.
 			}
 			continue
 		}
-		t0 := time.Now()
+		t0 := stopwatch()
 		rows, err := svc.DiffFacts(ctx, wh, head)
-		rs.diffMS += time.Since(t0).Milliseconds()
+		rs.diffMS += stopwatch().Sub(t0).Milliseconds()
 		if err != nil {
 			log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: diff failed; the range will be re-run")
 			continue
@@ -964,9 +979,9 @@ func (d *Dispatcher) advance(ctx context.Context, svc *store.Service, tr *facts.
 			// change is built ONCE per matched path and shared by every
 			// trigger that matched it; its cost is knomit's (change_ms), not
 			// the trigger's.
-			c0 := time.Now()
+			c0 := stopwatch()
 			pf := d.buildChange(ctx, cr, head, wh, row.Path, episode, !linear, verifyOn, verifiedSet)
-			rs.changeMS += time.Since(c0).Milliseconds()
+			rs.changeMS += stopwatch().Sub(c0).Milliseconds()
 			for _, ct := range matched {
 				// The loop guard (F07: "a write made by a trigger does not
 				// re-fire the same trigger on the same path"), on the
@@ -1096,9 +1111,9 @@ func (d *Dispatcher) sweepDue(ctx context.Context, tr *facts.Repo, rs *runState,
 		if len(fire) == 0 {
 			continue
 		}
-		c0 := time.Now()
+		c0 := stopwatch()
 		pf := d.buildChange(ctx, cr, head, head, path, fact.TriggerOnDue, false, verifyOn, verifiedSet)
-		rs.changeMS += time.Since(c0).Milliseconds()
+		rs.changeMS += stopwatch().Sub(c0).Milliseconds()
 		rs.duePaths++
 		for _, ct := range fire {
 			p := pf
@@ -1236,8 +1251,8 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 // that introduced the content the path carries at the head.
 func (d *Dispatcher) buildChange(ctx context.Context, cr *changeReader, head, wm plumbing.Hash, repoPath, episode string,
 	nonlinear, verifyOn bool, verifiedSet map[plumbing.Hash]bool) pendingFire {
-	if delay := currentTriggerHooks().ChangeDelay; delay > 0 {
-		time.Sleep(delay)
+	if h := currentTriggerHooks().InChange; h != nil {
+		h()
 	}
 	pf := pendingFire{repoPath: repoPath, episode: episode, nonlinear: nonlinear}
 	author := map[string]any{"kind": "unknown", "id": "", "fp": "", "verified": false}
@@ -1339,7 +1354,7 @@ func (d *Dispatcher) phaseB(ctx context.Context, rs *runState) (rows []facts.Tri
 		// time a script spends INSIDE host calls (a write, a text query) is
 		// knomit's, like change_ms, and is taken out of the trigger's own
 		// duration before the statistics and the slow detector see it.
-		t0 := time.Now()
+		t0 := stopwatch()
 		if h := currentTriggerHooks().EvalDelay; h != nil {
 			time.Sleep(h(p.trig.Name, p.repoPath))
 		}
@@ -1399,7 +1414,7 @@ func (d *Dispatcher) phaseB(ctx context.Context, rs *runState) (rows []facts.Tri
 			}
 			rs.dueRetry[facts.DueKey{Trigger: p.trig.Name, Path: p.repoPath}] = true
 		}
-		elapsed := time.Since(t0) - hostMS
+		elapsed := stopwatch().Sub(t0) - hostMS
 		evaluated++
 		if outcome == facts.TriggerOutcomeEmitted || outcome == facts.TriggerOutcomeUnparseable || outcome == facts.TriggerOutcomeRan ||
 			outcome == facts.TriggerOutcomeKicked || outcome == facts.TriggerOutcomeStarted {

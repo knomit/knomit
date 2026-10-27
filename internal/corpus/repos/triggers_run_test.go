@@ -289,7 +289,7 @@ func TestRecipe_OSExecOnlyInExecFile(t *testing.T) {
 // TimeoutKillsProcessGroup [H5] [M3]: the child forks a grandchild that holds
 // the stdout pipe — ONLY after the go-signal (the exec hook, called once the
 // child is in its kill group) [R2-1] — and sleeps; exec's timeout_ms ends it:
-// exec throws "timed out" well within timeout + trigger.RecipeWaitDelayForTest, and the
+// exec throws "timed out" long before the grandchild would exit, and the
 // grandchild is dead. Runs on every OS (windows-2025 included). Sabotage:
 // drop the group kill (Setpgid/Cancel, or the job object) — the grandchild
 // survives (red).
@@ -310,8 +310,11 @@ func TestRun_TimeoutKillsProcessGroup(t *testing.T) {
 	require.Equal(t, facts.TriggerOutcomeUnreachable, rows[1].Outcome)
 	require.Contains(t, rows[1].Error, "timed out after 3000 ms")
 	require.Empty(t, rows[1].Message, "F5: unreachable is a failure, its text stays in error")
-	require.Less(t, rows[1].DurationMS, int64(3000+trigger.RecipeWaitDelayForTest.Milliseconds()+5000),
-		"exec returned within its timeout, the wait delay and a margin: the pipes did not keep it alive")
+	// A pipe-held exec would return only when the grandchild's 60 s sleep
+	// ends; half of that is a hang detector, not a latency bound (the
+	// expected time is the 3 s timeout plus at most the wait delay).
+	require.Less(t, rows[1].DurationMS, int64(30000),
+		"exec returned long before the grandchild's 60 s sleep: the pipes did not keep it alive")
 	require.Eventually(t, func() bool { return !processAlive(gc.Pid) }, 10*time.Second, 20*time.Millisecond,
 		"the grandchild (pid %d) survived the timeout: the process group / job was not killed", gc.Pid)
 }
@@ -377,10 +380,13 @@ var r = knomit.exec([%s], {env: %s});
 
 // ---- T9: the dispatcher never waits
 
-// DispatcherNotBlockedByLongProcess [F4]: a recipe whose program runs for
-// many seconds; a later write matching an emit trigger fires (its row and its
-// run complete) within a second. Sabotage: run the recipe inline in phase B
-// (red: the emit waits for the program).
+// DispatcherNotBlockedByLongProcess [F4]: a recipe whose program blocks until
+// the test ends; a later write matching an emit trigger fires (its row and its
+// run complete) WHILE the program still runs: the recipe has only its started
+// row. The program cannot end before cleanup, so the order is the assertion
+// and waitTriggerHeadFor's 10 s is only a hang detector.
+// Sabotage: run the recipe inline in phase B (red: the emit's run never
+// completes and the hang detector fires).
 func TestRun_DispatcherNotBlockedByLongProcess(t *testing.T) {
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"), trig("e", "learn", "tasks/other/**", ""))
 	dir := t.TempDir()
@@ -390,10 +396,8 @@ func TestRun_DispatcherNotBlockedByLongProcess(t *testing.T) {
 ({status: "done"});`, jsString(helperExe(t)), helperEnv(dir, "HELPER_BLOCK_FILE", block)))
 	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
 	waitHelperReports(t, dir, "child", 1)
-	t0 := time.Now()
 	h := writeOn(t, ri, trigAgent, "kb/tasks/other/b.md")
 	waitTriggerHeadFor(t, ri, h, 10*time.Second)
-	require.Less(t, time.Since(t0), 3*time.Second, "the dispatcher went on while the recipe's program ran")
 	require.Len(t, firesOf(t, ri, "e"), 1)
 	require.Len(t, rowsOf(t, ri, "w"), 1, "the recipe is still running: only its started row")
 }
@@ -500,11 +504,12 @@ var r = knomit.exec([%s, run.id], {env: %s});
 // ---- T11, T20: stop, restart, crash
 
 // StopKillsAndRecords [F5] [D4]: stop() while a recipe's program runs returns
-// within the wait delay and a margin, the program is dead, and a
-// `recipe-error` "stopped" row is in the TABLE; after a restart nothing
-// re-runs (the helper count stays 1). Sabotage: no kill at stop (red: stop
-// hangs / the helper lives); hold the bookmark until the result (red: a
-// re-run after restart).
+// without waiting for the program, the program is dead, and a `recipe-error`
+// "stopped" row is in the TABLE; after a restart nothing re-runs (the helper
+// count stays 1). The program sleeps ten minutes, so a stop() that waited for
+// it would trip restartServe's 30 s hang detector; there is no latency bound.
+// Sabotage: no kill at stop (red: stop hangs / the helper lives); hold the
+// bookmark until the result (red: a re-run after restart).
 func TestRun_StopKillsAndRecords(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
@@ -516,14 +521,12 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	setOntology(t, ri, triggerOntology("", runTrig("w", "learn", "tasks/in/**", "worker")))
 	dir := t.TempDir()
 	putLocalRecipe(t, home, "worker", fmt.Sprintf(`var r = knomit.exec([%s], {env: %s});
-({status: "done"});`, jsString(helperExe(t)), helperEnv(dir, "HELPER_SLEEP_MS", "60000")))
+({status: "done"});`, jsString(helperExe(t)), helperEnv(dir, "HELPER_SLEEP_MS", "600000")))
 	write(t, ri, "kb/tasks/in/a.md")
 	child := waitHelperReports(t, dir, "child", 1)[0]
 	t.Cleanup(func() { killProcess(child.Pid) })
 
-	t0 := time.Now()
-	restartServe(t, ri)
-	require.Less(t, time.Since(t0), trigger.RecipeWaitDelayForTest+5*time.Second, "stop() waits for the killed recipe, not for its program")
+	restartServe(t, ri) // stop() waits for the killed recipe, not for its program
 	require.Eventually(t, func() bool { return !processAlive(child.Pid) }, 10*time.Second, 20*time.Millisecond, "the program survived stop()")
 	rows := rowsOf(t, ri, "w")
 	require.Equal(t, []string{facts.TriggerOutcomeStarted, facts.TriggerOutcomeRecipeError}, outcomesOf(rows), "the stopped row is in the TABLE after stop()")

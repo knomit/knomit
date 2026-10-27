@@ -347,9 +347,9 @@ func (h *scriptHost) functions() fact.ScriptHost {
 // RunProgram, where safeRun would drop the buffer and re-run the whole range
 // on every kick, forever, for a panic that is deterministic for this fire.
 func (h *scriptHost) call(tool string, args map[string]any) (out any, err error) {
-	t0 := time.Now()
+	t0 := stopwatch()
 	defer func() {
-		h.spent += time.Since(t0)
+		h.spent += stopwatch().Sub(t0)
 		if r := recover(); r != nil {
 			if h.d.warnOnce("panic:" + h.p.trig.Name + "@" + h.cs.blob + ":" + tool) {
 				crashdump.ReportRecovered("triggers:"+h.d.repo+":script:"+tool, r)

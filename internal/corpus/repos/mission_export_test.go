@@ -24,11 +24,21 @@ import (
 // derives the claim window's floor from it.
 const PushWakeWindowForTest = pushWakeWindow
 
-// SetTriggerClockForTest installs now as every dispatcher's run clock (and so
-// the sandbox's Date) for the rest of the test.
-func SetTriggerClockForTest(t *testing.T, now func() time.Time) {
+// SetMissionTriggerHooksForTest installs, for the rest of the test, now as
+// every dispatcher's run clock (and so the sandbox's Date), and a 24 h script
+// budget in place of fact.ScriptEvalTimeout's 5 s.
+//
+// The budget is wall-clock and counts the script's host calls, which in the
+// mission e2e are real writes through the MCP handlers on two instances; under
+// `go test -race` on a loaded machine the award script exceeded 5 s
+// ("script awards exceeded 5s") and requireNoFailedFires failed a correct
+// protocol. These tests assert what the template's scripts DO, not how fast
+// this machine runs them, so the budget must never be what ends a fire. A
+// script that never ends still fails: QuiesceTriggersForTest's 30 s is the
+// hang detector, and Close interrupts the script.
+func SetMissionTriggerHooksForTest(t *testing.T, now func() time.Time) {
 	t.Helper()
-	setHooks(t, trigger.TestHooks{Now: now})
+	setHooks(t, trigger.TestHooks{Now: now, ScriptBudget: 24 * time.Hour})
 }
 
 // QuiesceTriggersForTest waits until the dispatcher's last completed run
