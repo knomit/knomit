@@ -107,6 +107,35 @@ func TestIsAutoMaintenance_MatchesTheSubcommandOnly(t *testing.T) {
 	}
 }
 
+// The fixture's environment keeps the operating system's variables git for
+// Windows needs (SYSTEMROOT, TEMP, TMP, USERPROFILE) and nothing of git's
+// own: the only GIT_* entries are the three that turn config off.
+// SABOTAGE: drop TEMP from osPassthrough -> red; pass os.Environ() -> GIT_DIR
+// and GIT_CONFIG_COUNT appear -> red.
+func TestIsolatedEnv_KeepsTheOSVariablesAndNoGitOnes(t *testing.T) {
+	t.Setenv("SYSTEMROOT", `C:\Windows`)
+	t.Setenv("TEMP", "/tmp/t1")
+	t.Setenv("TMP", "/tmp/t2")
+	t.Setenv("USERPROFILE", "/home/u")
+	t.Setenv("GIT_DIR", "/elsewhere.git")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	got := map[string]string{}
+	for _, kv := range isolatedEnv() {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	for k, want := range map[string]string{"SYSTEMROOT": `C:\Windows`, "TEMP": "/tmp/t1", "TMP": "/tmp/t2", "USERPROFILE": "/home/u"} {
+		if got[k] != want {
+			t.Errorf("%s = %q, want %q", k, got[k], want)
+		}
+	}
+	for k := range got {
+		if strings.HasPrefix(k, "GIT_") && k != "GIT_CONFIG_GLOBAL" && k != "GIT_CONFIG_SYSTEM" && k != "GIT_CONFIG_NOSYSTEM" {
+			t.Errorf("isolatedEnv passes %s", k)
+		}
+	}
+}
+
 // configValue is `git config --get key` in repo, run with nothing inherited.
 func configValue(t *testing.T, repo, key string) string {
 	t.Helper()

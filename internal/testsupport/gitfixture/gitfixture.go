@@ -89,15 +89,30 @@ func IsAutoMaintenance(argv []string) bool {
 // at another repository, a developer's init.templateDir or defaultBranch
 // (from their config, or GIT_CONFIG_COUNT) would shape the fixture, and the
 // test's own GIT_TRACE2_EVENT would trace the fixture's git (#654 review R2).
+//
+// The operating system's own variables pass through when set: git for
+// Windows needs SYSTEMROOT (its DLLs and networking), TEMP/TMP (temporary
+// files) and USERPROFILE (its home when HOME is unset), and TMPDIR is the
+// unix equivalent. None of them is a GIT_* or config variable, so the
+// isolation does not depend on dropping them (#654 review R3-S2).
 func isolatedEnv() []string {
-	return []string{
+	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_CONFIG_NOSYSTEM=1",
 	}
+	for _, k := range osPassthrough {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }
+
+// osPassthrough is the operating system's variables isolatedEnv keeps.
+var osPassthrough = []string{"SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "TMPDIR"}
 
 func run(t testing.TB, args ...string) {
 	t.Helper()

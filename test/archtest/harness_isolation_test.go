@@ -5,9 +5,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -159,16 +161,21 @@ var bareRepoAllowlist = map[string]string{}
 //
 // It scans every .go file of the module (third_party excluded) that is test
 // code: a _test.go file, or any file under test/ or internal/testsupport/.
-// Flagged, as syntax (comments and longer strings are not):
-//   - a "--bare" or "--mirror" string argument (git init/clone --bare|--mirror);
-//   - go-git PlainInit or PlainClone whose isBare argument is not the
-//     literal false, unless the same function also calls
-//     gitfixture.NoAutoMaintenance;
+// Flagged, as syntax (comments are not):
+//   - any string literal, interpreted or raw, that holds --bare or --mirror
+//     as a whitespace-separated word: a git argument, or a whole command line
+//     handed to `sh -c`;
+//   - go-git PlainInit, PlainClone or PlainCloneContext whose isBare argument
+//     is not the literal false, unless the same function calls
+//     gitfixture.NoAutoMaintenance on the same directory expression;
 //   - a Bare field set to anything but the literal false in a go-git
-//     *InitOptions or *CloneOptions literal, under the same exception.
+//     *InitOptions or *CloneOptions literal, unless the function calls
+//     gitfixture.NoAutoMaintenance at all (see bareRepoCreations for why).
 //
-// SABOTAGE: a stray exec.Command("git", "init", "--bare", dir) in any test
-// file -> red, naming the file and line.
+// SABOTAGE (each red, naming the file and line): a stray
+// exec.Command("git", "init", "--bare", dir); the flag as a raw string; a
+// `sh -c "git init --bare ..."`; PlainCloneContext(ctx, d, true, ...); a
+// PlainInit(d, true) whose NoAutoMaintenance names another directory.
 func TestBareReposComeFromGitfixture(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
@@ -227,50 +234,96 @@ func TestBareReposComeFromGitfixture(t *testing.T) {
 	}
 }
 
+// bareFlags are the git arguments that make a bare repository, built so this
+// file holds no such literal itself (it is test code the guard scans).
+var bareFlags = map[string]bool{"--" + "bare": true, "--" + "mirror": true}
+
 // bareRepoCreations returns "<line>: <what>" for every direct bare-repository
 // creation in f (see TestBareReposComeFromGitfixture).
+//
+// The exemption for go-git calls is per DIRECTORY where the call names one:
+// PlainInit(dir, true) / PlainClone(dir, true, ...) / PlainCloneContext(ctx,
+// dir, true, ...) is fixed only by gitfixture.NoAutoMaintenance(t, dir) in
+// the same function with the same dir expression (compared as source text).
+// A *InitOptions{Bare: true} / *CloneOptions{Bare: true} literal carries no
+// directory (the call it is passed to does, possibly through a variable), so
+// it keeps the coarser per-function exemption: any NoAutoMaintenance call in
+// the enclosing function. go-git's Init/Clone with a nil worktree also make a
+// bare repository, but on a storer, and the tree uses them only on in-memory
+// storage, where no git-receive-pack ever runs; they are not flagged.
 func bareRepoCreations(fset *token.FileSet, f *ast.File) []string {
 	var out []string
 	notFalse := func(e ast.Expr) bool {
 		id, ok := e.(*ast.Ident)
 		return !ok || id.Name != "false"
 	}
-	// fixed reports whether the function enclosing pos calls
-	// gitfixture.NoAutoMaintenance.
-	fixed := func(pos token.Pos) bool {
+	// fixedDirs returns the source text of every directory argument the
+	// function enclosing pos passes to gitfixture.NoAutoMaintenance, and
+	// whether it calls it at all.
+	fixedDirs := func(pos token.Pos) (map[string]bool, bool) {
+		dirs := map[string]bool{}
+		called := false
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if !ok || fd.Body == nil || pos < fd.Pos() || pos > fd.End() {
 				continue
 			}
-			found := false
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				if c, ok := n.(*ast.CallExpr); ok {
-					if s, ok := c.Fun.(*ast.SelectorExpr); ok && s.Sel.Name == "NoAutoMaintenance" {
-						if x, ok := s.X.(*ast.Ident); ok && x.Name == "gitfixture" {
-							found = true
-						}
+				c, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				s, ok := c.Fun.(*ast.SelectorExpr)
+				if !ok || s.Sel.Name != "NoAutoMaintenance" {
+					return true
+				}
+				if x, ok := s.X.(*ast.Ident); ok && x.Name == "gitfixture" {
+					called = true
+					if len(c.Args) == 2 {
+						dirs[types.ExprString(c.Args[1])] = true
 					}
 				}
-				return !found
+				return true
 			})
-			return found
 		}
-		return false
+		return dirs, called
+	}
+	// isBareArg is the position of the isBare argument and of the directory
+	// argument of each go-git creator.
+	isBareArg := map[string][2]int{
+		"PlainInit":         {1, 0},
+		"PlainClone":        {1, 0},
+		"PlainCloneContext": {2, 1},
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.BasicLit:
-			if n.Kind == token.STRING && (n.Value == `"--bare"` || n.Value == `"--mirror"`) {
-				out = append(out, fmt.Sprintf("%d: git argument %s", fset.Position(n.Pos()).Line, n.Value))
+			if n.Kind != token.STRING {
+				return true
+			}
+			s, err := strconv.Unquote(n.Value)
+			if err != nil {
+				return true
+			}
+			for _, field := range strings.Fields(s) {
+				if bareFlags[field] {
+					out = append(out, fmt.Sprintf("%d: git argument %s in %s", fset.Position(n.Pos()).Line, field, n.Value))
+					break
+				}
 			}
 		case *ast.CallExpr:
 			s, ok := n.Fun.(*ast.SelectorExpr)
-			if !ok || (s.Sel.Name != "PlainInit" && s.Sel.Name != "PlainClone") || len(n.Args) < 2 {
+			if !ok {
 				return true
 			}
-			if notFalse(n.Args[1]) && !fixed(n.Pos()) {
-				out = append(out, fmt.Sprintf("%d: %s with isBare not false", fset.Position(n.Pos()).Line, s.Sel.Name))
+			idx, ok := isBareArg[s.Sel.Name]
+			if !ok || len(n.Args) <= idx[0] || !notFalse(n.Args[idx[0]]) {
+				return true
+			}
+			dirs, _ := fixedDirs(n.Pos())
+			if dir := types.ExprString(n.Args[idx[1]]); !dirs[dir] {
+				out = append(out, fmt.Sprintf("%d: %s(%s) with isBare not false and no gitfixture.NoAutoMaintenance(t, %s) in the function",
+					fset.Position(n.Pos()).Line, s.Sel.Name, dir, dir))
 			}
 		case *ast.CompositeLit:
 			name := ""
@@ -288,8 +341,10 @@ func bareRepoCreations(fset *token.FileSet, f *ast.File) []string {
 				if !ok {
 					continue
 				}
-				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Bare" && notFalse(kv.Value) && !fixed(n.Pos()) {
-					out = append(out, fmt.Sprintf("%d: %s{Bare: ...}", fset.Position(n.Pos()).Line, name))
+				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Bare" && notFalse(kv.Value) {
+					if _, called := fixedDirs(n.Pos()); !called {
+						out = append(out, fmt.Sprintf("%d: %s{Bare: ...}", fset.Position(n.Pos()).Line, name))
+					}
 				}
 			}
 		}
