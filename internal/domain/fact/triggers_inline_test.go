@@ -1,7 +1,9 @@
 package fact
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -78,13 +80,20 @@ func TestTriggers_InlineJSBlockScalarRoundTrips(t *testing.T) {
 // ontology blob, as an edit elsewhere in the file makes) compiles nothing;
 // a changed source compiles once. Sabotage: no cache → +1 on the recompile.
 func TestTriggers_InlineJSCachedBySource(t *testing.T) {
-	o1, err := ParseOntology([]byte(jsOntology("      - name: cached\n        on: learn\n        do: script\n        js: \"knomit.emit({v: 'cache-src-1'})\"\n")))
+	// The compile cache is process-wide and keyed by source, so a repeat
+	// iteration (-count>1) would find the "changed" source already compiled.
+	// A per-run nonce in the source gives every run its own cache entries.
+	nonce := time.Now().UnixNano()
+	entry := func(v int) string {
+		return jsOntology(fmt.Sprintf("      - name: cached\n        on: learn\n        do: script\n        js: \"knomit.emit({v: 'cache-src-%d-%d'})\"\n", v, nonce))
+	}
+	o1, err := ParseOntology([]byte(entry(1)))
 	require.NoError(t, err)
 	CompileTriggers(o1, validationIdentity, "b1")
 	n := InlineJSCompilesForTest()
 	CompileTriggers(o1, validationIdentity, "b2")
 	require.Equal(t, n, InlineJSCompilesForTest(), "same source, new blob: no compile")
-	o2, err := ParseOntology([]byte(jsOntology("      - name: cached\n        on: learn\n        do: script\n        js: \"knomit.emit({v: 'cache-src-2'})\"\n")))
+	o2, err := ParseOntology([]byte(entry(2)))
 	require.NoError(t, err)
 	CompileTriggers(o2, validationIdentity, "b3")
 	require.Equal(t, n+1, InlineJSCompilesForTest(), "a changed source compiles once")
