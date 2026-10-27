@@ -6,15 +6,17 @@ You are reviewing facts in a knowledge base for staleness, redundancy, and dupli
 
 For each fact, decide:
 - keep: fact is current and valuable
-- retract: fact is obsolete, superseded, or no longer true
+- retract: fact is obsolete, superseded, or no longer true (a hypothesis with a verdict: use settle)
 - update: fact needs confidence adjusted (provide new value)
+- settle: a hypothesis that other facts in the batch confirm or refute (see Hypothesis handling)
 
 Also identify facts that say the same thing and should be merged into a single unified fact.
 
 Respond as JSON (no markdown wrapping):
 {
   "decisions": [
-    { "path": "...", "action": "keep|retract|update", "confidence": 0.X }
+    { "path": "...", "action": "keep|retract|update", "confidence": 0.X },
+    { "path": "<hypothesis>", "action": "settle", "outcome": "confirmed|refuted", "by": ["<fact>"] }
   ],
   "merges": [
     {
@@ -54,7 +56,8 @@ Merge fidelity (mandatory):
 If the batch contains facts with type "hypothesis" alongside observations or synthesis facts:
 
 - Check whether observations corroborate or contradict the hypothesis's falsification condition.
-- Corroborated: action "update" with higher confidence. A merge cannot promote a hypothesis to another type: the merged fact takes the type of its non-hypothesis members, and a merge whose members are all hypotheses is refused.
-- Contradicted: action "update" with lower confidence, or "retract" if falsified.
+- Corroborated but not decisive: action "update" with higher confidence. A merge cannot promote a hypothesis to another type: the merged fact takes the type of its non-hypothesis members, and a merge whose members are all hypotheses is refused.
+- Decisive: action "settle" on the hypothesis with `outcome` "confirmed" or "refuted" and `by`, the observation or synthesis facts that decide it. Each `by` fact then cites the hypothesis and the hypothesis is retracted, with the outcome recorded. This replaces "retract" for a hypothesis.
+- Contradicted but not decisive: action "update" with lower confidence.
 - Neither: action "keep".
 - Only observations and synthesis facts count as confirmation. Other hypotheses do NOT count — predictions cannot confirm predictions.

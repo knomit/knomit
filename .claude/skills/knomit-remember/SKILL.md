@@ -14,7 +14,7 @@ Fire WHEN any of these occur:
 - **A bug fix exposed a hidden invariant** — the bug only happens when a non-obvious precondition is violated.
 - **You're about to claim X exists** based on a memory or training-data guess — if you had to verify it, that's a discovery worth keeping.
 
-For **predictions** (something that *might* be true but isn't observed yet): write as a fact with `type: hypothesis` instead of `observation`. Hypotheses carry uncertainty. A later observation that matches one in the merge scope settles it: the hypothesis is retracted in the same commit and the response notes it (name it in `distinct_from` to keep it).
+For **predictions** (something that *might* be true but isn't observed yet): write as a fact with `type: hypothesis` instead of `observation`. Hypotheses carry uncertainty. A fact that confirms or refutes one names it in `settles: [{path, outcome: confirmed|refuted}]`: it is cited, retracted in the same commit, and the verdict recorded as a `Knomit-Outcome` commit trailer. Without `settles`, a similar observation in the merge scope still retracts it, with a note and no verdict (name it in `distinct_from` to keep it).
 
 DON'T fire for:
 

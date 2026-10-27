@@ -48,8 +48,14 @@ func (f *FlexStrings) UnmarshalJSON(b []byte) error {
 // PruneDecision is the LLM's decision for a single fact.
 type PruneDecision struct {
 	Path       string  `json:"path"`
-	Action     string  `json:"action"` // "keep" | "retract" | "update"
+	Action     string  `json:"action"` // "keep" | "retract" | "update" | "settle"
 	Confidence float64 `json:"confidence,omitempty"`
+	// Outcome and By belong to "settle" (a hypothesis only): the verdict and
+	// the non-hypothesis facts that decide it. Each By fact gains the
+	// hypothesis in its refs, and the hypothesis is retracted in the same
+	// commit, which carries a Knomit-Outcome trailer.
+	Outcome string   `json:"outcome,omitempty"` // "confirmed" | "refuted"
+	By      []string `json:"by,omitempty"`
 }
 
 // MergedFact is the embedded merged fact object from the LLM response.
@@ -446,6 +452,10 @@ type ReviewProgress struct {
 type DistillResult struct {
 	Synthesize []DistillFact `json:"synthesize"`
 	Retract    []string      `json:"retract"`
+	// Settle is a hypothesis the batch confirms or refutes: retracted in the
+	// same commit as the synthesized fact that cites it, with the verdict in
+	// the commit's Knomit-Outcome trailer. It replaces Retract for hypotheses.
+	Settle []HypothesisOutcome `json:"settle,omitempty"`
 
 	// SubgroupsConsidered records the sub-groups weighed inside an unclustered
 	// remainder item, including rejected ones. Nothing branches on it; it is
@@ -470,6 +480,12 @@ type distillSubgroup struct {
 	Members     []string `json:"members"`
 	Mechanism   string   `json:"mechanism"`
 	Synthesized bool     `json:"synthesized"`
+}
+
+// HypothesisOutcome is a verdict on one stored hypothesis.
+type HypothesisOutcome struct {
+	Path    string `json:"path"`
+	Outcome string `json:"outcome"` // "confirmed" | "refuted"
 }
 
 // DistillFact is a synthesized fact returned by the LLM in a distill step.

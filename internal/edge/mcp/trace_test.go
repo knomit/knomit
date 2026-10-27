@@ -97,6 +97,7 @@ func TestTrace_RefusedNamesTheEntryAndWritesNothing(t *testing.T) {
 		{"knomit-trigger lowercase", map[string]any{"knomit-trigger": "wake"}, "knomit-trigger is reserved"},
 		{"KNOMIT-TRIGGER uppercase", map[string]any{"KNOMIT-TRIGGER": "wake"}, "KNOMIT-TRIGGER is reserved"},
 		{"invented Knomit-Foo", map[string]any{"Knomit-Foo": "x"}, "Knomit-Foo is reserved"},
+		{"Knomit-Outcome is knomit's too (#641)", map[string]any{"Knomit-Outcome": "kb/x.md confirmed"}, "Knomit-Outcome is reserved"},
 		{"invented knomit-foo lowercase", map[string]any{"knomit-foo": "x"}, "knomit-foo is reserved"},
 		{"Knomit-Merge is knomit's too", map[string]any{"Knomit-Merge": "x"}, "Knomit-Merge is reserved"},
 		{"knomit-trace lowercase, bad value", map[string]any{"knomit-trace": "two\nlines"}, "trace.knomit-trace: value must be one line"},

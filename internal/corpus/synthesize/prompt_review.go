@@ -17,8 +17,10 @@ const pruneResponseSchema = `{
       "items": {
         "properties": {
           "path": {"type": "string"},
-          "action": {"type": "string", "enum": ["keep", "retract", "update"]},
-          "confidence": {"type": "number"}
+          "action": {"type": "string", "enum": ["keep", "retract", "update", "settle"]},
+          "confidence": {"type": "number"},
+          "outcome": {"type": "string", "enum": ["confirmed", "refuted"], "description": "settle only: the verdict on the hypothesis."},
+          "by": {"type": "array", "items": {"type": "string"}, "description": "settle only: paths of the non-hypothesis facts that decide it. Each cites the hypothesis; the hypothesis is retracted."}
         },
         "required": ["path", "action"]
       }
@@ -71,6 +73,7 @@ const distillResponseSchema = `{
       }
     },
     "retract": {"type": "array", "items": {"type": "string"}},
+    "settle": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "outcome": {"type": "string", "enum": ["confirmed", "refuted"]}}, "required": ["path", "outcome"]}, "description": "Hypotheses to retract with the verdict recorded."},
     "subgroups_considered": {"type": "array", "items": {"type": "object", "properties": {"members": {"type": "array", "items": {"type": "string"}}, "mechanism": {"type": "string"}, "synthesized": {"type": "boolean"}}, "required": ["members"]}, "description": "Sub-groups weighed inside an unclustered remainder item, including the ones rejected. Records the choice a leftover set forces; nothing branches on it."},
     "declined_reason": {"type": "string", "enum": ["no-shared-mechanism", "members-conflict", "insufficient-instances", "already-covered-by-existing-fact", "rest-bucket-incoherent"], "description": "Required when synthesize is empty. Why no synthesis was written."},
     "declined_note": {"type": "string", "description": "One sentence: what you considered and why it did not hold. Required when synthesize is empty."}

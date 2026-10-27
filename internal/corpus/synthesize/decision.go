@@ -70,6 +70,15 @@ func ApplyPruneDecisions(ctx context.Context,
 	}
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
+	// Paths a merge in this response consumes. A settle may not rest on one:
+	// decisions run first, so the merge would later delete the citing fact.
+	mergeMembers := make(map[string]bool)
+	for _, m := range merges {
+		for _, p := range m.Paths {
+			mergeMembers[p] = true
+		}
+	}
+
 	// Apply decisions.
 	for _, d := range decisions {
 		switch d.Action {
@@ -89,6 +98,17 @@ func ApplyPruneDecisions(ctx context.Context,
 			// corpus.
 			deletedPaths[d.Path] = true
 			onProgress(step.ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
+			stats.Pruned++
+
+		case "settle":
+			if err := applyPruneSettle(ctx, gs, sysFiles, idx, localRepoID, agentBranch, recipeName, d, deletedPaths, mergeMembers); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: err.Error()})
+				continue
+			}
+			for _, by := range d.By {
+				rewrittenPaths[by] = true
+			}
+			onProgress(step.ProgressEvent{Phase: "detail-retract", Message: "settle " + d.Path + " " + d.Outcome})
 			stats.Pruned++
 
 		case "update":
@@ -372,6 +392,10 @@ func ApplyDistillDecisions(ctx context.Context,
 	idx *index.Facade,
 	synthesized []step.DistillFact,
 	retract []string,
+	// settle lists hypotheses the batch confirms or refutes. Each is retracted
+	// in the SAME commit as the synthesized fact that cites it, which records
+	// the verdict (Knomit-Outcome). One no synthesized fact cites stays.
+	settle []step.HypothesisOutcome,
 	recipeName string,
 	onProgress func(step.ProgressEvent),
 	agentBranch string,
@@ -384,6 +408,7 @@ func ApplyDistillDecisions(ctx context.Context,
 	stats := &step.ReviewStats{}
 	var written []step.DistillFact
 	gate := step.WriteGate(localRepoID, idx.FactQuery, sysFiles, agentBranch)
+	settledPaths := make(map[string]bool)
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -452,13 +477,54 @@ func ApplyDistillDecisions(ctx context.Context,
 			continue
 		}
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
-		if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
+		// Hypotheses this fact cites AND the judge settled leave in this very
+		// commit, with the verdict as its trailer.
+		var settledHere []step.HypothesisOutcome
+		cited := make(map[string]bool)
+		for _, p := range step.LocalFactRefPaths(f.Refs, localRepoID) {
+			cited[strings.ToLower(p)] = true
+		}
+		for _, h := range settle {
+			if settledPaths[h.Path] || !cited[strings.ToLower(h.Path)] {
+				continue
+			}
+			if err := readHypothesis(ctx, gs, agentBranch, h.Path); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: "distill settle: " + err.Error()})
+				continue
+			}
+			settledHere = append(settledHere, h)
+		}
+		if len(settledHere) > 0 {
+			var outs []model.Outcome
+			var dels []string
+			for _, h := range settledHere {
+				outs = append(outs, model.Outcome{Path: h.Path, Outcome: h.Outcome})
+				dels = append(dels, h.Path)
+			}
+			wctx := model.WithOutcomes(ctx, outs)
+			if _, _, err := gs.BatchWriteFactsMustExist(wctx, agentBranch, map[string]string{f.Path(): content}, dels, dels, msg, "subsume"); err != nil {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
+				continue
+			}
+			for _, h := range settledHere {
+				settledPaths[h.Path] = true
+				onProgress(step.ProgressEvent{Phase: "detail-distill-retract", Message: "settle " + h.Path + " " + h.Outcome})
+				stats.Pruned++
+				stats.Retired = append(stats.Retired, h.Path)
+			}
+		} else if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}
 		onProgress(step.ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
 		written = append(written, df)
+	}
+
+	for _, h := range settle {
+		if !settledPaths[h.Path] {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill settle %s: no written synthesized fact settles it; left live", h.Path)})
+		}
 	}
 
 	// Delete subsumed facts.
@@ -506,6 +572,9 @@ func ApplyReflectDecisions(
 	idx *index.Facade,
 	result step.ReflectResult,
 	sess *model.PipelineSession,
+	// since is the review watermark: where the walk for a deleted transition's
+	// deleting commit stops ("" walks the whole history).
+	since string,
 	// localRepoID is this repo's 12-hex id, for the ref gate below.
 	localRepoID string,
 	ontologyRoot string,
@@ -517,6 +586,9 @@ func ApplyReflectDecisions(
 	}
 
 	branch := sess.Branch
+	// written is facts.Settlements.Written, read lazily the first time a
+	// transition turns out to be deleted.
+	var written map[string][]string
 
 	// files accumulates everything to commit in this reflect application —
 	// proposed methodology facts plus reinforced transition facts (with
@@ -547,7 +619,8 @@ func ApplyReflectDecisions(
 			return fmt.Errorf("reinforce[%d]: %q is type %q, not methodology", i, e.MethodologyPath, mf.Type)
 		}
 
-		for _, tp := range e.TransitionPaths {
+		// stage binds the methodology to one live fact.
+		stage := func(tp string) error {
 			tr, err := gs.ReadFact(ctx, branch, tp, nil)
 			if err != nil {
 				return fmt.Errorf("reinforce[%d]: transition fact %q not found: %w", i, tp, err)
@@ -566,6 +639,41 @@ func ApplyReflectDecisions(
 				factsByPath[tf.Path()] = tf
 				refsByPath[tf.Path()] = tf.Refs
 				priorRefsByPath[tf.Path()] = before
+			}
+			return nil
+		}
+		for _, tp := range e.TransitionPaths {
+			live, err := gs.FactExists(ctx, branch, tp)
+			if err != nil {
+				return fmt.Errorf("reinforce[%d]: transition fact %q: %w", i, tp, err)
+			}
+			if live {
+				if err := stage(tp); err != nil {
+					return err
+				}
+				continue
+			}
+			// A settled or retracted hypothesis is a deleted path: reinforce
+			// the live facts the deleting commit wrote that cite it. With
+			// none, skip this transition with one warning; reflect must not
+			// fail whole on a deleted path.
+			if written == nil && sysFiles != nil {
+				// ONE walk per call, however many transitions were deleted.
+				st, err := sysFiles.SettlementsSince(ctx, branch, since)
+				if err != nil {
+					return fmt.Errorf("reinforce[%d]: %w", i, err)
+				}
+				written = st.Written
+			}
+			citers := livingCiters(ctx, gs, branch, written[tp], tp, localRepoID)
+			if len(citers) == 0 {
+				onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("reinforce[%d]: transition %s was deleted and no live fact written with its deletion cites it; skipped", i, tp)})
+				continue
+			}
+			for _, c := range citers {
+				if err := stage(c); err != nil {
+					return err
+				}
 			}
 		}
 		onProgress(step.ProgressEvent{Phase: "detail-reflect-reinforce",
@@ -866,6 +974,30 @@ func memberExpiries(ctx context.Context, gs *facts.Index, branch string, paths [
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s (expires %s)", p, f.Expires))
+	}
+	return out
+}
+
+// livingCiters returns the live facts written in the commit that deleted path
+// whose refs cite it.
+func livingCiters(ctx context.Context, gs *facts.Index, branch string, peers []string, path, localRepoID string) []string {
+	want := fact.ClassifyRef(path, localRepoID).Path
+	var out []string
+	for _, p := range peers {
+		r, err := gs.ReadFact(ctx, branch, p, nil)
+		if err != nil {
+			continue
+		}
+		f, err := fact.ParseFact(p, r.Content)
+		if err != nil {
+			continue
+		}
+		for _, ref := range f.Refs {
+			if c := fact.ClassifyRef(ref, localRepoID); c.Kind == fact.RefLocalFact && c.Path == want {
+				out = append(out, p)
+				break
+			}
+		}
 	}
 	return out
 }

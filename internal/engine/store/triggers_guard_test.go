@@ -68,6 +68,8 @@ var triggersAllowedCalls = map[string][]string{
 		// IsTrailerParagraph itself (moved here from conflict_merge.go so the
 		// commit path does not reach up into the merge cluster): a string test
 		"strings.ContainsAny",
+		// #641: the Knomit-Outcome verdict test, a pure string compare
+		"ValidOutcome",
 	},
 }
 

@@ -23,7 +23,76 @@ const (
 	// any Knomit- key but Trace, Cause and Run (internal/edge/mcp/trace.go).
 	TrailerTemplate       = "Knomit-Template"
 	TrailerTemplateSource = "Knomit-Template-Source"
+
+	// TrailerOutcome records the verdict on a hypothesis the commit retracted
+	// (#641): `Knomit-Outcome: <hypothesis path> confirmed|refuted`, one line
+	// per settled hypothesis. Only knomit stamps it (WithOutcomes); an agent's
+	// trace cannot carry it. Named generically: it may carry other outcomes.
+	TrailerOutcome = "Knomit-Outcome"
 )
+
+// Hypothesis outcomes, the last word of a Knomit-Outcome value.
+const (
+	OutcomeConfirmed = "confirmed"
+	OutcomeRefuted   = "refuted"
+)
+
+// ValidOutcome reports whether o is a hypothesis outcome.
+func ValidOutcome(o string) bool { return o == OutcomeConfirmed || o == OutcomeRefuted }
+
+// Outcome is one Knomit-Outcome line: a hypothesis path and its verdict.
+type Outcome struct{ Path, Outcome string }
+
+// WithOutcomes adds one Knomit-Outcome line per entry to the trailer set on
+// ctx, keeping whatever set (an agent's trace) is already there, so every
+// authored commit under ctx ends with them in its last paragraph. A repeated
+// pair is written once. No entries returns ctx unchanged.
+func WithOutcomes(ctx context.Context, outcomes []Outcome) context.Context {
+	if len(outcomes) == 0 {
+		return ctx
+	}
+	t, _ := ctx.Value(trailersCtxKey{}).(Trailers)
+	t.Extra = append([]TrailerEntry(nil), t.Extra...)
+	seen := map[string]bool{}
+	for _, o := range outcomes {
+		v := o.Path + " " + o.Outcome
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		t.Extra = append(t.Extra, TrailerEntry{Key: TrailerOutcome, Value: v})
+	}
+	return WithTrailers(ctx, t)
+}
+
+// TrailerValues returns every value of the key in the LAST paragraph of
+// message, in order (TrailerValue returns only the last occurrence).
+func TrailerValues(message, key string) []string {
+	msg := strings.TrimRight(message, "\n")
+	last := msg
+	if i := strings.LastIndex(msg, "\n\n"); i >= 0 {
+		last = msg[i+2:]
+	}
+	var out []string
+	for _, line := range strings.Split(last, "\n") {
+		if k, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(k), key) {
+			out = append(out, strings.TrimSpace(v))
+		}
+	}
+	return out
+}
+
+// ParseOutcome splits a Knomit-Outcome value into its hypothesis path and
+// outcome. ok is false for a value that is not "<path> <outcome>".
+func ParseOutcome(v string) (path, outcome string, ok bool) {
+	i := strings.LastIndex(strings.TrimSpace(v), " ")
+	if i < 0 {
+		return "", "", false
+	}
+	v = strings.TrimSpace(v)
+	path, outcome = strings.TrimSpace(v[:i]), v[i+1:]
+	return path, outcome, path != "" && ValidOutcome(outcome)
+}
 
 // TrailerValue returns the value of the `Key: value` trailer line in a commit
 // message, or "" when absent. go-git has no trailer parser and knomit's

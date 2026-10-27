@@ -42,8 +42,8 @@ func TestDistillPrompt_RetractionYieldsToTheHypothesisRule(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "The hypothesis rule below is separate and takes precedence",
 		"the retraction rule must yield, or it forbids the retraction the hypothesis section mandates")
-	require.Contains(t, content.Prompt, "type transition, not subsumption",
-		"the reason matters: a confirmed hypothesis is retracted despite not being a restatement")
+	require.Contains(t, content.Prompt, "settled, not retracted",
+		"the reason matters: a settled hypothesis is not a restatement")
 }
 
 // The retract limb must have a reachable live case, not just a narrower reason

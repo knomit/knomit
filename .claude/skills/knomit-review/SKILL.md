@@ -7,9 +7,9 @@ description: Use when the corpus needs maintenance — duplicates suspected afte
 
 Work-stealing KB-maintenance pipeline. Three phases run in order over the dirty-fact window:
 
-1. **Prune** — dedup near-identical facts (cosine ≥ 0.92); the winner inherits union of domains/entities and summed sources, hypothesis loses to observation regardless of confidence.
+1. **Prune** — dedup near-identical facts (cosine ≥ 0.92); the winner inherits union of domains/entities and summed sources. A hypothesis always loses to an observation, regardless of confidence, and then transfers nothing: the winner only cites it and it is retracted in the same commit (no verdict recorded; use a prune `settle` for that).
 2. **Distill** — synthesize clusters of related facts into higher-level `type: synthesis` facts; RAPTOR runs up to depth 3 through the same queue.
-3. **Reflect** — detect hypothesis transitions (confirmed/retracted) and optionally emit one new methodology (capped by `KNOMIT_REFLECT_PROPOSE_CAP`, novelty-gated by `KNOMIT_REFLECT_NOVELTY_THRESHOLD`).
+3. **Reflect** — detect hypothesis transitions (confirmed/refuted from the `Knomit-Outcome` trailer, else retracted) and optionally emit one new methodology (capped by `KNOMIT_REFLECT_PROPOSE_CAP`, novelty-gated by `KNOMIT_REFLECT_NOVELTY_THRESHOLD`).
 
 Use when:
 

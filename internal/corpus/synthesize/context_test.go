@@ -185,7 +185,7 @@ func TestApplyDistillDecisions_NewClaimInheritsNoContext(t *testing.T) {
 		Path: "kb/verdicts/synth.md", Title: "S", Body: "distilled", Type: "synthesis",
 		Domain: []string{"verdicts"}, Confidence: 0.9, Refs: []string{"kb/verdicts/a.md", "kb/verdicts/b.md"},
 	}
-	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil,
+	_, written, err := ApplyDistillDecisions(context.Background(), svc.Facts(), svc.FactsRepo(), svc.Search(), []step.DistillFact{df}, nil, nil,
 		"test", func(step.ProgressEvent) {}, branch, synthtest.BareRefFixture, "kb")
 	require.NoError(t, err)
 	require.Len(t, written, 1)
