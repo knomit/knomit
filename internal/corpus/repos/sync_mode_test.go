@@ -171,10 +171,19 @@ func startRealModeLoop(t *testing.T, ri *RepoInstance, originRoot string, mode *
 
 // pushToBareMain commits files onto the bare origin's main, as a peer or the
 // forge would.
+//
+// --no-local: a plain clone of a local path copies (or hardlinks) the bare
+// repo's objects/ directory file by file, and the manager's own sync round
+// may be pushing into that repo at the same moment (git-receive-pack stages
+// objects in objects/tmp_objdir-incoming-* and then moves or deletes them).
+// A file listed by the copy and gone before it is read fails the clone with
+// "failed to copy file to ...: No such file or directory". --no-local clones
+// through upload-pack, which reads the object database the way any fetch
+// does, so a concurrent push cannot pull files out from under it.
 func pushToBareMain(t *testing.T, bare string, files map[string]string) {
 	t.Helper()
 	work := t.TempDir()
-	runGit(t, "", "clone", bare, work)
+	runGit(t, "", "clone", "--no-local", bare, work)
 	for p, body := range files {
 		require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(p)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(work, p), []byte(body), 0o644))

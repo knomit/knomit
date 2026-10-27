@@ -419,7 +419,13 @@ func TestWalkthrough_Detach(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, o)
 
+	// The mount's heal index runs in the background, and a Detach sent while
+	// it runs is refused with ErrIndexing BEFORE any origin rule is read
+	// (indexing is checked first, by design: Attach/Detach/Swap are exclusive
+	// with the index job). Wait for the heal to settle so the refusal under
+	// test is the subscription's own.
 	_, sub, _ := buildSubscription(t)
+	waitIndexSettled(t, sub)
 	_, err = send(sub.env.m, sub, DetachOrigin())
 	require.ErrorIs(t, err, ErrSubscriptionOrigin)
 }
@@ -646,6 +652,24 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	peer := newConsensusPeer(t, host.url)
 	host.settle(t)
 
+	// Hold the merger between passes while the job takes the lock and the
+	// hook goes in. settle returns once a pass that started after it was
+	// called has ENDED, not once the merger is idle: its own second kick, or
+	// the peer reconcile loop's registration push (which lands whenever that
+	// loop runs), can leave a kick queued, and the pass it starts can reach
+	// its merge with no hook installed, park on the job's lock unseen, and
+	// hold every later pass (they are serial) so the hook never fires.
+	// runMu is what serialises passes: holding it means none is in flight,
+	// and every pass after the Unlock runs with the job holding the lock and
+	// the hook installed.
+	host.ri.consensus.runMu.Lock()
+	mergerHeld := true
+	t.Cleanup(func() {
+		if mergerHeld {
+			host.ri.consensus.runMu.Unlock()
+		}
+	})
+
 	// The index job: a full rebuild of the agent branch — the merger's merge
 	// target — parked in a batch, holding lockBranch(agent).
 	clearVectors(t, m, host.ri)
@@ -657,6 +681,8 @@ func TestWalkthrough_WorkerCrashDuringIndexing(t *testing.T) {
 	// A peer push kicks the merger, which parks on lockBranch(agent).
 	var parked atomic.Bool
 	setConsensusHooks(t, consensusHooks{beforeMerge: func(string) { parked.Store(true) }})
+	mergerHeld = false
+	host.ri.consensus.runMu.Unlock()
 	peer.write(t, "kb/tasks/peer.md", "peer")
 	peer.round(t)
 	require.Eventually(t, parked.Load, 10*time.Second, 5*time.Millisecond, "the merger reached its merge")

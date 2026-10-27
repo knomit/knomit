@@ -239,8 +239,22 @@ func (e *fakeEnv) spawns(t *testing.T) []spawnRecord {
 	if err != nil {
 		return nil
 	}
+	// The fake child appends each record with O_CREATE then one write of
+	// "<json>\n", and a reader (often a holder callback on another goroutine)
+	// can look in between: an empty file, or a record not yet terminated. A
+	// record exists once its newline is written, so only newline-terminated
+	// lines count; the rest is a write still in progress, not a bad record.
+	complete := string(b)
+	if i := strings.LastIndexByte(complete, '\n'); i >= 0 {
+		complete = complete[:i]
+	} else {
+		complete = ""
+	}
 	var out []spawnRecord
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+	for _, line := range strings.Split(complete, "\n") {
+		if line == "" {
+			continue
+		}
 		var r spawnRecord
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			t.Fatalf("spawn record %q: %v", line, err)
@@ -416,4 +430,38 @@ func captureLog(t *testing.T) *syncLog {
 	log.Logger = zerolog.New(buf)
 	t.Cleanup(func() { log.Logger = prev })
 	return buf
+}
+
+// A spawn record being written is not a record yet: the file can exist empty
+// (created, not written) or end in a line with no newline. Reading either is
+// what a holder callback does while the fake child is mid-append, and it must
+// count only finished records, never fail the test. (Before, an empty file
+// parsed as one "" record and t.Fatalf'd: TestSupervisor_Exit3SwitchesToAttach
+// on Windows, "spawn record \"\": unexpected end of JSON input".)
+func TestFakeEnv_SpawnsIgnoresARecordStillBeingWritten(t *testing.T) {
+	e := &fakeEnv{state: t.TempDir()}
+	path := filepath.Join(e.state, "spawns.jsonl")
+	rec, err := json.Marshal(spawnRecord{PID: 7, Args: []string{"serve"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		content string
+		want    int
+	}{
+		{"", 0},
+		{string(rec[:len(rec)/2]), 0},
+		{string(rec) + "\n", 1},
+		{string(rec) + "\n" + string(rec[:3]), 1},
+		{string(rec) + "\n" + string(rec) + "\n", 2},
+	} {
+		if err := os.WriteFile(path, []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.spawns(t); len(got) != c.want {
+			t.Fatalf("content %q: %d records, want %d", c.content, len(got), c.want)
+		} else if c.want > 0 && got[0].PID != 7 {
+			t.Fatalf("content %q: first record %+v, want pid 7", c.content, got[0])
+		}
+	}
 }
