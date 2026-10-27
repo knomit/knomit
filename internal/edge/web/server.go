@@ -37,6 +37,13 @@ type Server struct {
 	// OAuth API routers share one origin-session manager.
 	originSessionsOnce sync.Once
 	originSessions     chi.Router
+	// originSessionsReleased is the WaitGroup origins.Mount is given: its
+	// Wait returns once Lifetime has ended and the manager holds no file any
+	// more (at once when no router was built or Lifetime is nil: a manager
+	// that never releases is not counted, so Wait cannot hang). Only tests
+	// wait on it (an in-process server whose sessions dir is removed after
+	// it), so it is not exported.
+	originSessionsReleased sync.WaitGroup
 	// Lifetime is how long the server's own state lives: when it ends, the
 	// origin-session manager removes every session and its folder. nil means
 	// a lifetime that never ends (tests, a server built in-process).

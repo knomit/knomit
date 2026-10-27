@@ -34,7 +34,7 @@ func retractFact(t *testing.T, ctx context.Context, path string) {
 	t.Helper()
 	var req mcpgo.CallToolRequest
 	req.Params.Arguments = map[string]any{
-		"file": path, "moment_name": "retract", "reason": "superseded",
+		"file": path, "moment_name": "retract",
 	}
 	r, err := RetractHandler()(ctx, req)
 	require.NoError(t, err)

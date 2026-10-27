@@ -29,7 +29,7 @@ The fact's index entry is marked retracted. The file content stays in git histor
 
 ## Supersession pattern
 
-When replacing rather than just deleting:
+When replacing rather than just deleting, prefer ONE `knomit_learn` call that writes the replacement (with a `refs` entry pointing at the old path) and names the old path in its top-level `retract` argument: both land in one atomic commit, or neither does. Otherwise, in two steps:
 
 1. `/knomit-remember` (or `/knomit-decided`) — write the replacement first, including a `refs` entry pointing at the old path so provenance survives.
 2. `/knomit-retract <old-path>` — retract the old one, citing the replacement in `moment_name`.

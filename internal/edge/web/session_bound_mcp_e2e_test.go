@@ -106,7 +106,7 @@ func TestSessionBoundMCP_EndToEnd(t *testing.T) {
 
 	// knomit_repos needs NO handle: it is the discovery tool, and how the agent
 	// learns the names knomit_bind accepts. It answers before anything is
-	// bound, and the other seven tools fail closed until a handle exists.
+	// bound, and every binding-gated tool fails closed until a handle exists.
 	text, isErr := callTool(t, h, sid, "knomit_repos", `{}`)
 	require.False(t, isErr, "knomit_repos must work with no handle: %s", text)
 	require.Contains(t, text, `"name": "alpha"`)

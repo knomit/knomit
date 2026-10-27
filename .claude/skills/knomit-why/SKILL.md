@@ -19,11 +19,11 @@ DON'T fire for:
 
 ## How
 
-Call `knomit_explain` with the fact path. The tool returns:
+Call `knomit_explain` with `file` = the fact path. The tool returns:
 
 - The fact's own body
 - Outgoing refs (what this fact references — both source files and other facts), classified as `local` (other fact paths) and `external` (URLs, src:// anchors)
-- All resolved at the fact's anchor commit, NOT at HEAD
+- The fact itself at HEAD (or at `commit`, if you pass one); every linked fact as a summary read at the version this fact pointed to, NOT at HEAD. A summary flagged `deleted: true` (retracted since) or `superseded: true` (changed since) is knomit's own staleness signal for that link.
 
 `knomit_explain` does NOT return incoming references (no backlink index). If you need to find facts that reference this one, use `knomit_query` with the fact path as a search term.
 
@@ -50,4 +50,4 @@ For a `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surfac
 
 ## Important: knomit stores a HISTORICAL graph
 
-All refs and edges resolve at the fact's commit point in time, **never at HEAD**. The "stale" check you're doing is exactly the diff between fact-time and HEAD-time. Don't expect knomit to do this comparison for you — that's why this skill exists.
+Every edge resolves at the version the referrer pointed to, **never at HEAD**; only the `deleted`/`superseded` flags say how a linked fact stands now, and source refs are not checked at all. The "stale" check you're doing is exactly the diff between fact-time and HEAD-time. Don't expect knomit to do this comparison for you — that's why this skill exists.

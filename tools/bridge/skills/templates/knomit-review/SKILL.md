@@ -39,6 +39,7 @@ DON'T invoke:
    - For reflect items: emit hypothesis transitions and optionally one methodology.
 3. Continue: `knomit_review` with `session_id`, `item_id` and `response` (plus `binding` on the unscoped endpoint). `session_id` is required on every call after the first, and `item_id` with every response: the binding selects the knowledge base and does not identify the session. The result's `next` line names exactly what to pass. To see the current item again, call with `session_id` alone (when nothing is outstanding this takes the session's next step).
    - Server applies your decisions (writes new facts, retracts duplicates) and returns the next work item.
+   - A large item arrives in pages: while a result has `more_available: true`, call with `session_id`, `item_id` and `page` = the next page number, then answer once, passing the `completion_token` from the final page. An answer before the last page is rejected.
 4. Loop until response includes `done: true` — that completes the session and advances the watermark.
 
 ## Priority ordering inside the queue

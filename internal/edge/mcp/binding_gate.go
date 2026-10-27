@@ -44,26 +44,43 @@ func errMissingHandle(tool string) string {
 			"which knowledge base this call is for.", tool)
 }
 
-// bindingArg is the `binding` parameter, declared identically by every tool the
-// gate protects. Declaring it matters twice over: rejectUnknownArguments
-// derives its valid set from the tool's own schema, and the description is
-// where an agent reading tools/list learns the handle exists at all.
+// bindingArg is the `binding` parameter, declared by every tool the gate
+// protects. Declaring it matters twice over: rejectUnknownArguments derives its
+// valid set from the tool's own schema, and the description is where an agent
+// reading tools/list learns the handle exists at all.
+//
+// The two descriptions are separate texts, not one with a prefix: the required
+// text says REQUIRED, and an "Optional." stuck in front of it told knomit_repos
+// callers both things at once. TestBindingArg_DescriptionMatchesGateMode pins
+// each registration's text to its gate mode.
 func bindingArg(required bool) mcpgo.ToolOption {
-	desc := "The opaque handle returned by knomit_bind. REQUIRED on the unscoped /api/v1/mcp " +
+	if required {
+		return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingRequiredDescription))
+	}
+	return mcpgo.WithString(bindingArgument, mcpgo.Description(bindingOptionalDescription))
+}
+
+const (
+	// bindingRequiredDescription is gateRequired's `binding`.
+	bindingRequiredDescription = "The opaque handle returned by knomit_bind. REQUIRED on the unscoped /api/v1/mcp " +
 		"endpoint; must NOT be passed on a URL-scoped endpoint (a bridge started with --repo or " +
 		"--lens), which is bound by its URL. Pass the value verbatim — it is random, it is not the " +
 		"repo or lens name, and an invented one is refused."
-	if !required {
-		desc = "Optional. " + desc + " Without it, this tool reports the server catalogue with no `bound` section."
-	}
-	return mcpgo.WithString(bindingArgument, mcpgo.Description(desc))
-}
+	// bindingOptionalDescription is gateOptional's `binding` (knomit_repos):
+	// a missing handle passes, a bad one is reported in `bound`, and on a
+	// URL-scoped endpoint passing one is refused exactly as for every tool.
+	bindingOptionalDescription = "Optional, unscoped /api/v1/mcp endpoint only: a handle returned by knomit_bind. " +
+		"With it, the result also has a `bound` section describing what the handle names; a handle that " +
+		"does not resolve is reported there (status \"unresolvable\"), not raised. Without it there is no " +
+		"`bound` section. Must NOT be passed on a URL-scoped endpoint (a bridge started with --repo or " +
+		"--lens): it is refused there, and `bound` always describes the URL's binding."
+)
 
 // gateMode says what the gate does with the handle for one tool.
 type gateMode int
 
 const (
-	// gateRequired: the seven tools that operate on a knowledge base. No
+	// gateRequired: every tool that operates on a knowledge base. No
 	// handle, or an unrecognised one, is a tool error and the call never runs.
 	gateRequired gateMode = iota
 	// gateUngated: knomit_bind alone. It mints handles, so requiring one would

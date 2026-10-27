@@ -233,10 +233,14 @@ var errSessionsClosed = errors.New("origin sessions have shut down")
 // LIFETIME. The manager lives as long as the ctx it was built with. When ctx
 // ends it refuses further Creates and retires every session (a session in use
 // finalizes when its handler releases it), then, once every session has
-// finalized, removes its run directory and releases its lock. That runs on
-// its own goroutine (context.AfterFunc) and nothing waits for it, so a process
-// that exits right after can leave its run behind; the next manager over the
-// same base reclaims it, since the lock died with the process. The idle-expiry
+// finalized, removes its run directory and releases its lock, waits for the
+// startup sweep to finish, and only then closes released. That runs on its
+// own goroutine (context.AfterFunc). An owner that must not outlive the
+// manager's files (a test whose TempDir holds the base: Windows cannot remove
+// a file with an open handle, such as the held lock or a session's clone.db)
+// waits on released; one that does not wait (a process that exits right
+// after) can leave its run behind, and the next manager over the same base
+// reclaims it, since the lock died with the process. The idle-expiry
 // sweeper runs only while the manager holds at least one session (Create
 // starts it when none is running, and it exits on the first tick that finds
 // the map empty), so a manager with no sessions owns no goroutine.
@@ -246,8 +250,13 @@ type sessionManager struct {
 	done     <-chan struct{}  // the manager's lifetime; nil never ends
 
 	// staleDone is closed when the startup sweep of dead runs has finished
-	// (at once when there is no base to sweep), for tests.
+	// (at once when there is no base to sweep).
 	staleDone chan struct{}
+	// released is closed when the lifetime has ended and the manager holds
+	// nothing any more: every session finalized, the run and its lock
+	// removed (the lock file closed), the startup sweep finished (LIFETIME).
+	released  chan struct{}
+	closeOnce sync.Once
 
 	mu       sync.Mutex
 	sessions map[string]*originSession // by repo name
@@ -268,18 +277,25 @@ type sessionManager struct {
 // background sweep of dead runs in base, and no other goroutine: the first
 // Create starts the sweeper (see LIFETIME).
 func newSessionManager(ctx context.Context, base string) *sessionManager {
+	return newSessionManagerHooked(ctx, base, nil)
+}
+
+// newSessionManagerHooked is newSessionManager with test hooks for the startup
+// sweep (runHooks); h is nil outside tests.
+func newSessionManagerHooked(ctx context.Context, base string, h *runHooks) *sessionManager {
 	sm := &sessionManager{
 		now:       time.Now,
 		interval:  cleanupInterval,
 		done:      ctx.Done(),
 		staleDone: make(chan struct{}),
+		released:  make(chan struct{}),
 		base:      base,
 		sessions:  map[string]*originSession{},
 	}
 	if base != "" {
 		go func() {
 			defer close(sm.staleDone)
-			reclaimDeadRuns(base)
+			reclaimDeadRuns(base, h)
 		}()
 	} else {
 		close(sm.staleDone)
@@ -290,7 +306,7 @@ func newSessionManager(ctx context.Context, base string) *sessionManager {
 
 // reclaimDeadRuns removes every run in base whose owner is dead: whose lock
 // file it can lock. A run whose lock is held is left alone, whoever holds it.
-func reclaimDeadRuns(base string) {
+func reclaimDeadRuns(base string, h *runHooks) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -303,7 +319,7 @@ func reclaimDeadRuns(base string) {
 		if e.IsDir() || !strings.HasPrefix(name, runPrefix) || !strings.HasSuffix(name, runLockSuffix) {
 			continue
 		}
-		reclaimRun(base, filepath.Join(base, name), nil)
+		reclaimRun(base, filepath.Join(base, name), h)
 	}
 }
 
@@ -312,6 +328,7 @@ func reclaimDeadRuns(base string) {
 // are a parameter, not package variables, so the background sweeps other
 // tests start can never call them.
 type runHooks struct {
+	reclaimOpened   func(lockPath string) // reclaimRun has opened the lock file, not yet probed it
 	reclaimLocked   func(lockPath string) // reclaimRun holds the lock
 	reclaimUnlocked func(lockPath string) // reclaimRun has just released it
 	claimCreated    func(lockPath string) // claimRun has created the file, not yet locked it
@@ -327,6 +344,7 @@ func (h *runHooks) fire(f func(*runHooks) func(string), lockPath string) {
 	}
 }
 
+func hookReclaimOpened(h *runHooks) func(string)   { return h.reclaimOpened }
 func hookReclaimLocked(h *runHooks) func(string)   { return h.reclaimLocked }
 func hookReclaimUnlocked(h *runHooks) func(string) { return h.reclaimUnlocked }
 func hookClaimCreated(h *runHooks) func(string)    { return h.claimCreated }
@@ -344,6 +362,7 @@ func reclaimRun(base, lockPath string, h *runHooks) {
 	if err != nil {
 		return
 	}
+	h.fire(hookReclaimOpened, lockPath)
 	ctx, cancel := context.WithTimeout(context.Background(), runProbeWait)
 	err = pki.LockFile(ctx, f)
 	cancel()
@@ -640,9 +659,16 @@ func (sm *sessionManager) runCleanup() {
 }
 
 // close ends the manager's lifetime (LIFETIME). newSessionManager arranges
-// for it to run when ctx ends; it is idempotent. It blocks until every
-// session has finalized, which a handler still using one delays.
+// for it to run when ctx ends; it is idempotent, and a call made while
+// another is running returns when that one has finished. It blocks until
+// every session has finalized, which a handler still using one delays, and
+// returns after released is closed.
 func (sm *sessionManager) close() {
+	sm.closeOnce.Do(sm.shutdown)
+}
+
+// shutdown is close's body, run once.
+func (sm *sessionManager) shutdown() {
 	sm.mu.Lock()
 	sm.closed = true
 	all := sm.sessions
@@ -653,6 +679,11 @@ func (sm *sessionManager) close() {
 		s.retire()
 	}
 	sm.live.Wait()
+	// The startup sweep holds handles in base (the directory it lists, a lock
+	// file it probes) while it runs: released means none are left. Waited for
+	// before this manager removes its own run so only one of them ever removes
+	// a lock file (on Windows a probed file cannot be unlinked).
+	<-sm.staleDone
 
 	sm.runMu.Lock()
 	sm.runClosed = true
@@ -675,6 +706,7 @@ func (sm *sessionManager) close() {
 	if len(all) > 0 {
 		log.Debug().Int("sessions", len(all)).Msg("origin sessions: removed at shutdown")
 	}
+	close(sm.released)
 }
 
 // isChild reports whether p is a direct child of parent whose name starts

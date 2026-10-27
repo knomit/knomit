@@ -4,6 +4,7 @@ import (
 	"context"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -290,11 +291,16 @@ func (m *mcpStatusRecorder) Flush() {
 func (s *Server) originSessionsRouter() chi.Router {
 	s.originSessionsOnce.Do(func() {
 		ctx := s.Lifetime
+		// With no Lifetime the manager never releases, so it is not counted:
+		// a Wait on originSessionsReleased would block forever.
+		var released *sync.WaitGroup
 		if ctx == nil {
 			ctx = context.Background()
+		} else {
+			released = &s.originSessionsReleased
 		}
 		r := chi.NewRouter()
-		origins.Mount(ctx, r, s.Manager, s.AgentBranch, s.OriginSessionsDir)
+		origins.Mount(ctx, r, s.Manager, s.AgentBranch, s.OriginSessionsDir, released)
 		s.originSessions = r
 	})
 	return s.originSessions

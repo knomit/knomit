@@ -955,24 +955,60 @@ func TestScript_WriteIsNextAdvance(t *testing.T) {
 // Sabotage: arm the interrupt from the timer only. A lease held across phase
 // B is NOT caught here (the swap cancels the run before it drains the
 // leases); TestDispatch_PhaseBHoldsNoLease pins that.
+//
+// No wall-clock bound: the budget is set far beyond any test's life, so the
+// budget can never be what ends the script. The swap and the Serve restart
+// can then only complete by interrupting it; were either to wait for the
+// script, it would never return and the hang detector (or go test's
+// -timeout) fails the test. The script announces it is running through a
+// host call the hook answers without a lease, then spins.
 func TestScript_NoStoreHeldDuringScript(t *testing.T) {
-	m, ri, _ := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "spin"))
-	putScript(t, ri, "spin", `while (true) {}`)
+	m, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "spin"))
+	putScript(t, ri, "spin", `knomit.query({spinning: true}); while (true) {}`)
+	spinning := make(chan struct{}, 8)
+	tools.mu.Lock()
+	tools.hook = func(_ context.Context, _ string, args map[string]any) (string, bool, error, bool) {
+		if args["spinning"] != true {
+			return "", false, nil, false
+		}
+		select {
+		case spinning <- struct{}{}:
+		default:
+		}
+		return `{"facts":[]}`, false, nil, true // answered here: no Acquire, no lease
+	}
+	tools.mu.Unlock()
 	settle(t, ri)
-	setHooks(t, trigger.TestHooks{ScriptBudget: 5 * time.Second})
+	setHooks(t, trigger.TestHooks{ScriptBudget: 24 * time.Hour})
 	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
-	time.Sleep(300 * time.Millisecond) // the run is in phase B, spinning
+	waitSpinning := func(msg string) {
+		t.Helper()
+		select {
+		case <-spinning:
+		case <-time.After(30 * time.Second): // hang detector only
+			t.Fatal(msg)
+		}
+	}
+	waitSpinning("the script never started") // phase B, past its host call, spinning
 
 	require.NoError(t, ri.WithRead(func(svc *store.Service) { require.NoError(t, svc.Checkpoint()) }))
 	tmp := filepath.Join(t.TempDir(), "copy.db")
 	copyDB(t, m.RepoPath(ri.UID()), tmp)
-	started := time.Now()
-	require.NoError(t, swapStore(m, ri, tmp))
-	require.Less(t, time.Since(started), time.Second, "a swap must not wait behind a running script")
+	swapped := make(chan error, 1)
+	go func() { swapped <- swapStore(m, ri, tmp) }()
+	select {
+	case err := <-swapped:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second): // hang detector only: the budget is a day
+		t.Fatal("a swap must not wait behind a running script")
+	}
 
-	started = time.Now()
+	// The copy was taken before the fire was recorded, so the swapped-in
+	// store re-runs the range and the script spins again on the new Serve.
+	waitSpinning("the script did not run again on the swapped store")
+	// restartServe has its own hang detector; with a day-long budget it can
+	// only return if cancel interrupts the spinning script.
 	restartServe(t, ri)
-	require.Less(t, time.Since(started), 500*time.Millisecond, "cancel interrupts the script within the interrupt latency, not the 5 s budget")
 }
 
 // ---- T19: the private-path refusal
