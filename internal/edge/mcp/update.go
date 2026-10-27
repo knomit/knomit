@@ -42,7 +42,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.AdditionalProperties(false),
-			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn. Send updates, ops, or both."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either takes a fresh knomit_learn naming the old path in its retract argument (one atomic commit). Send updates, ops, or both."),
 			mcpgo.Properties(updateToolSchemaProperties()),
 		),
 		mcpgo.WithArray("ops",

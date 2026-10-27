@@ -66,7 +66,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one filter is required ("+queryFilterList+"), except with sort=recent or when paging with cursor. Set sort=recent to browse most-recently-updated facts, optionally filtered."),
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one filter is required ("+queryFilterList+"), except with sort=recent or when paging with cursor. Set sort=recent to browse most-recently-committed facts, optionally filtered; with text, sort=recent ranks by relevance instead (recency breaks ties)."),
 		bindingArg(true),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
@@ -76,7 +76,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("domain",
-			mcpgo.Description("Filter by domain tags."),
+			mcpgo.Description("Filter by domain tags. Several values are ANDed: a fact must match every one."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("applies_to",
@@ -99,7 +99,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Return full fact bodies instead of snippets. Page size is capped low (default 3, max 5). For a single fact's full body, prefer knomit_explain."),
 		),
 		mcpgo.WithString("sort",
-			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
+			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed — but combined with text it is ranked by relevance, recency breaking ties. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
 		),
 		mcpgo.WithString("cursor",
 			mcpgo.Description("Opaque page token from a previous response's `cursor`. When set, all filter arguments are ignored (the result set is frozen); only `limit` and `include_body` still apply."),
