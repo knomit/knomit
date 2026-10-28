@@ -253,7 +253,7 @@ func TestFindSameSubjectCandidates_AllGenericNeverRefuses(t *testing.T) {
 
 // A hypothesis in band is left to subsumeHypothesis, which settles it in the
 // same commit as the observation. Refusing would block the write that resolves
-// it, and the advice would be unactionable: knomit_update cannot change type.
+// it, and the advice would be unactionable: the write itself settles it.
 func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
 	th := modelparams.Defaults()
 	h := hit("kb/a.md", "A", inBand(th), "Ramp")

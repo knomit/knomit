@@ -332,6 +332,14 @@ export const SignalIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// frame: a square with an inner corner mark — a node of a thinking tree.
+export const FrameIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <polyline points="8 12 8 8 12 8"/>
+  </svg>
+);
+
 // ---------- TypeIcon dispatcher ----------
 
 export function TypeIcon({ type, color, size = 12 }: { type: string; color: string; size?: number }) {
@@ -349,6 +357,7 @@ export function TypeIcon({ type, color, size = 12 }: { type: string; color: stri
     case 'policy': return <PolicyIcon color={color} size={size} />;
     case 'heuristic': return <HeuristicIcon color={color} size={size} />;
     case 'signal': return <SignalIcon color={color} size={size} />;
+    case 'frame': return <FrameIcon color={color} size={size} />;
     default: return <UnknownIcon color={color} size={size} />;
   }
 }

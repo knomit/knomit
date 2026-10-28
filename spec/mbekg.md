@@ -211,6 +211,7 @@ Every `type` belongs to exactly one `kind`.
 | `policy` | A mandatory rule that should always be followed |
 | `heuristic` | A rule-of-thumb that biases decisions but is not absolute |
 | `signal` | Coordination content that is *consumed, not believed* — a task, message, ack, or membership claim. Its `confidence` is meaningless and must never be weighed; the verb is the topic, the addressee is the path, the sender is the commit author |
+| `frame` | A node of a mission's thinking process, *worked with, not believed*. Its `confidence` is meaningless. Being pragmatic keeps it out of synthesis seeding and review dedup; the same-subject refusal in `knomit_learn` never offers an existing frame as a collision candidate. Merge/dedup of an incoming frame is the topic's `learn_dedup` setting, not the type's |
 
 The asymmetry is deliberate: a `kind: pragmatic` file with no `type` is a
 **parse error**, while an epistemic file with no `type` falls back to
