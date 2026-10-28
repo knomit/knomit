@@ -204,7 +204,7 @@ func fleetSyncCmd() *cobra.Command {
 	var leaveOut []string
 	dropCmd := &cobra.Command{
 		Use:   "drop [<commit>]",
-		Short: "Rebuild this instance's branch on main without the commit that holds main back (default: the held commit)",
+		Short: "Drop the commit the fleet's rules refuse so this instance can sync again (default: the commit `sync` reports)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withFleetAPI(func(hc *http.Client) error {
@@ -232,7 +232,7 @@ func fleetSyncCmd() *cobra.Command {
 			})
 		},
 	}
-	dropCmd.Flags().StringSliceVar(&leaveOut, "leave-out", nil, "leave the whole merge out instead: the commit hashes a refusal listed")
+	dropCmd.Flags().StringSliceVar(&leaveOut, "leave-out", nil, "also drop these commits, exactly as a refused drop listed them (confirms the loss)")
 	syncCmd.AddCommand(dropCmd)
 	return syncCmd
 }
@@ -246,7 +246,7 @@ func withLeaveOutPlan(err error, commit string) error {
 		return err
 	}
 	var b strings.Builder
-	b.WriteString(le.Detail)
+	b.WriteString(plainLine(le.Detail))
 	hashes := make([]string, 0, len(le.LeaveOut))
 	for _, c := range le.LeaveOut {
 		who := c.Agent
@@ -260,10 +260,13 @@ func withLeaveOutPlan(err error, commit string) error {
 	return errors.New(b.String())
 }
 
-// plainLine keeps requester-supplied text on its line.
+// plainLine keeps requester-supplied text from steering the terminal: C0, DEL,
+// C1 and the Unicode bidi controls become a space.
 func plainLine(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		switch {
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f,
+			r == 0x200e, r == 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
 			return ' '
 		}
 		return r
@@ -392,9 +395,9 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 		case "":
 			fmt.Fprintln(out, "record: none")
 		case "pending":
-			fmt.Fprintln(out, "record: pending (on this instance's branch only; accepted once the fleet's master merges it into main)")
+			fmt.Fprintln(out, "record: pending (not yet accepted by the fleet (the master has not taken it))")
 		default:
-			fmt.Fprintf(out, "record: %s (on the fleet's main)\n", st.RecordState)
+			fmt.Fprintf(out, "record: %s (accepted by the fleet)\n", st.RecordState)
 		}
 		fmt.Fprintf(out, "fleet master: %t (fleet root directory: %s)\n", st.Master, st.RootDir)
 	}
@@ -414,7 +417,7 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 	case st.RecordCurrent != nil && !*st.RecordCurrent:
 		fmt.Fprintln(out, "record differs from knomit.toml / this binary: restart to update it")
 	case st.RecordPendingUpdate:
-		fmt.Fprintln(out, "record: pending update (waiting for the fleet's master to merge it into main)")
+		fmt.Fprintln(out, "record: pending update (waiting for the fleet's master to accept it)")
 	}
 	if st.Notice != "" {
 		fmt.Fprintf(out, "notice: %s\n", st.Notice)

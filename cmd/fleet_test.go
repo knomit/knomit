@@ -387,3 +387,25 @@ func TestFleetCLI_JoinCheckHitsTheCheckRoute(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/api/v1/fleet/join", path)
 }
+
+// A refusal's text is the server's, which can echo requester-supplied text:
+// no control or bidi rune reaches the terminal, and each commit stays on its
+// own line.
+func TestFleetCLI_RefusedDropTextCarriesNoControlRunes(t *testing.T) {
+	run := localFleetServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"bad \u001b[31mred\nline\u009b‮flip","code":"merge_commit","leave_out":[
+			{"commit":"aaaaaaaa11111111","agent":"bo\u001bx","author":"A","subject":"s\u001b[31m\nnext\u009bx‮y"}]}`))
+	})
+	_, err := run([]string{"sync", "drop", "cafe1234"})
+	require.EqualError(t, err, "bad  [31mred line  flip\n"+
+		"  aaaaaaaa bo x: s [31m next x y\n"+
+		"confirm with: knomit fleet sync drop cafe1234 --leave-out aaaaaaaa11111111")
+	for _, r := range err.Error() {
+		if r == '\n' {
+			continue
+		}
+		require.False(t, r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x202e, "control rune %U in the error", r)
+	}
+}
