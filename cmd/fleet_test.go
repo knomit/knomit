@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -225,13 +226,14 @@ func TestFleetCLI_DroppedConnectionIsAnError(t *testing.T) {
 	ln, cleanup, err := auth.ListenLocal(sock)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
-	hijacked := false
+	// The handler runs on the server goroutine, so the flag is atomic.
+	var hijacked atomic.Bool
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		conn, _, herr := w.(http.Hijacker).Hijack()
 		if herr != nil {
 			return
 		}
-		hijacked = true
+		hijacked.Store(true)
 		_ = conn.Close()
 	})}
 	go func() { _ = srv.Serve(ln) }()
@@ -239,7 +241,7 @@ func TestFleetCLI_DroppedConnectionIsAnError(t *testing.T) {
 
 	var out bytes.Buffer
 	err = fleetAPI(context.Background(), localAPIClient(sock), &out, http.MethodPost, "/fleet/decommission", nil)
-	require.True(t, hijacked, "the handler ran and dropped the connection")
+	require.True(t, hijacked.Load(), "the handler ran and dropped the connection")
 	require.Error(t, err, "a dropped connection is not success")
 	require.Empty(t, out.String())
 }
