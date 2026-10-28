@@ -35,7 +35,14 @@ func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstr
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 	url = seedBareRemote(t, filepath.Join(root, "remote.git"))
+	dbPath, upstream = initSubscriptionStore(t, m, uid, url)
+	return m, url, dbPath, upstream
+}
 
+// initSubscriptionStore registers uid on m and initialises its database as a
+// subscription to url, the way initSubscribe does, without mounting it.
+func initSubscriptionStore(t *testing.T, m *Manager, uid, url string) (dbPath, upstream string) {
+	t.Helper()
 	require.NoError(t, m.Repos().Insert(control.RepoRecord{UID: uid, Name: uid, State: control.StateActive, Profile: control.ProfileCode, CreatedAt: 1}))
 	dbPath = m.RepoPath(uid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
@@ -45,7 +52,7 @@ func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstr
 	upstream, err = svc.Remote().InitSubscription(context.Background(), url, nil, "", nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.Close())
-	return m, url, dbPath, upstream
+	return dbPath, upstream
 }
 
 // mountSubscription records origin as uid's origin row and mounts the repo
