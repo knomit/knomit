@@ -333,42 +333,8 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			attach = repos.AttachOriginReplacing
 		}
 		_, err = m.Send(r.Context(), ri, attach(spec))
-		switch {
-		case err == nil:
-		case httpx.IsLifecycleRefusal(err):
-			httpx.WriteLifecycleProblem(w, r, b, repoName, err)
-			return
-		case errors.Is(err, repos.ErrLocalOriginDenied):
-			hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
-				detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrOriginOntologyConflict):
-			hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
-			hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrOriginUnrelatedHistory):
-			hal.WriteProblem(w, http.StatusConflict, "Unrelated history", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrOriginNotInspected):
-			hal.WriteProblem(w, http.StatusConflict, "Origin not inspected", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrRegistryUnavailable):
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrOriginUnreachable):
-			log.Warn().Err(err).Str("repo", repoName).Msg("origin attach refused by its probe")
-			hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
-			return
-		case errors.Is(err, repos.ErrManagerStopped):
-			hal.WriteProblem(w, http.StatusServiceUnavailable, "Server stopping", err.Error(), r.URL.Path)
-			return
-		default:
-			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set origin", err.Error(), r.URL.Path)
+		if err != nil {
+			writeAttachRefusal(w, r, b, repoName, err, "Failed to set origin")
 			return
 		}
 
@@ -386,6 +352,43 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // upstreamRequest is the JSON body for PATCH /repos/{repo}/origin/upstream.
 type upstreamRequest struct {
 	Branch string `json:"branch"`
+	// ReplaceMain is PUT /origin's replace_main for the new branch: admit a
+	// branch that shares no history with the current consensus branch.
+	ReplaceMain bool `json:"replace_main,omitempty"`
+}
+
+// writeAttachRefusal maps an attach guard's refusal (PUT /origin's
+// AttachOrigin, PATCH /origin/upstream's CheckOriginBranch) onto its problem
+// document; anything it does not name is a 500 titled fallback.
+func writeAttachRefusal(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, repoName string, err error, fallback string) {
+	switch {
+	case httpx.IsLifecycleRefusal(err):
+		httpx.WriteLifecycleProblem(w, r, b, repoName, err)
+	case errors.Is(err, repos.ErrLocalOriginDenied):
+		hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
+			detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
+	case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput), errors.Is(err, pki.ErrUnsupportedOriginScheme):
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginOntologyConflict):
+		hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
+		hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginUnrelatedHistory):
+		hal.WriteProblem(w, http.StatusConflict, "Unrelated history", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginNotInspected):
+		hal.WriteProblem(w, http.StatusConflict, "Origin not inspected", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrRegistryUnavailable):
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginUnreachable):
+		log.Warn().Err(err).Str("repo", repoName).Msg("origin attach refused by its probe")
+		hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrManagerStopped):
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Server stopping", err.Error(), r.URL.Path)
+	case httpx.StoreUnavailable(err):
+		httpx.WriteStoreUnavailable(w, r)
+	default:
+		hal.WriteProblem(w, http.StatusInternalServerError, fallback, err.Error(), r.URL.Path)
+	}
 }
 
 // isValidUpstreamBranch applies a conservative subset of git's ref-name rules,
@@ -437,6 +440,32 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid branch name",
 				"branch name contains characters not allowed in a git ref", r.URL.Path)
 			return
+		}
+		// The new branch is a different consensus branch, so it is vetted
+		// like an attach (CheckOriginBranch: another repo's knowledge base,
+		// unrelated history) before the refspec moves. A guard only, not the
+		// AttachOrigin event: no indexing exclusivity, no Sync restart. With
+		// no stored origin there is nothing to vet, and setOriginUpstream
+		// refuses as before. A failed read is left to setOriginUpstream too:
+		// it reads the same origin first and fails the same way, before any
+		// change, so its error mapping stays the one the route documents.
+		existing, gerr := getOrigin(r.Context(), ri)
+		if gerr == nil && existing != nil && existing.URL != "" {
+			authMethod := existing.AuthMethod
+			if authMethod == "cert" {
+				// knomit's decision, not an input: the guard decides again,
+				// exactly as PUT /origin does.
+				authMethod = ""
+			}
+			if err := m.CheckOriginBranch(r.Context(), ri, repos.OriginSpec{
+				URL:        existing.URL,
+				Branch:     req.Branch,
+				AuthMethod: authMethod,
+				AuthToken:  existing.AuthToken,
+			}, req.ReplaceMain); err != nil {
+				writeAttachRefusal(w, r, b, repoName, err, "Failed to set upstream branch")
+				return
+			}
 		}
 		if err := setOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
 			if httpx.StoreUnavailable(err) {

@@ -311,6 +311,22 @@ func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec, replaceMain
 	return guardAttachIdentity(ctx, r, o, replaceMain)
 }
 
+// CheckOriginBranch runs the attach guard (guardAttach: the local-origin
+// policy, reachability, the ontology id and guardAttachIdentity) for o
+// against ri, OUTSIDE the lifecycle machine: no event, so no exclusivity with
+// indexing and no Sync restart. It is for a change that re-points the
+// repo's upstream to another branch of its stored origin without attaching
+// anew (PATCH /origin/upstream): the new branch is a different consensus
+// branch, so it must hold neither another active repo's knowledge base nor,
+// unless replaceMain, a history unrelated to the current consensus branch
+// while that branch holds facts. o carries the stored URL and credentials
+// and the NEW branch. A refusal changes nothing; the same errors as an attach.
+func (m *Manager) CheckOriginBranch(ctx context.Context, ri *RepoInstance, o OriginSpec, replaceMain bool) error {
+	gctx, cancel := guardContext(ctx, ri)
+	defer cancel()
+	return guardAttach(gctx, ri, o, replaceMain)
+}
+
 // guardAttachIdentity is the attach's identity check, in the order of its
 // cost:
 //

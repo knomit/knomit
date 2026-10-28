@@ -2088,6 +2088,17 @@ paths:
         URL and credentials are untouched. The branch name is validated against
         a conservative subset of git's ref-name rules before it is written into
         the fetch refspec. Requires the `operator` permission (403 otherwise).
+
+        The new branch becomes the consensus branch, so it is vetted like
+        PUT /origin before anything changes (the attach guard, run without an
+        attach: no indexing exclusivity, no sync restart): 409 "Knowledge
+        base already local" when the remote holds another active repository's
+        knowledge base (any advertised branch tip, the remote's claim, or the
+        new branch's root commit), 409 "Unrelated history" when the new branch
+        shares no history with the current consensus branch and that branch
+        holds facts (send `replace_main: true` to replace it), 409 "Origin not
+        inspected" past `[git].max_probe_bytes`, 502 when the remote cannot be
+        read, 503 when the registry cannot be.
       operationId: setOriginUpstream
       requestBody:
         required: true
@@ -2101,9 +2112,18 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/UpstreamSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: "fleet_repository: the fleet repository's consensus branch is fixed at create" }
+        "409":
+          description: |
+            fleet_repository: the fleet repository's consensus branch is fixed
+            at create. Or one of the identity refusals above.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions:
     parameters:
@@ -6324,6 +6344,12 @@ components:
             Upstream branch to track on origin. Required and non-empty;
             rejected with 400 if it contains characters not allowed in a git
             ref.
+        replace_main:
+          type: boolean
+          description: >-
+            Admit a branch that shares no history with the current consensus
+            branch, which the next sync then replaces. Never admits another
+            active repository's knowledge base.
 
     UpstreamSetResponse:
       type: object

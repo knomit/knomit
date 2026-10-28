@@ -722,3 +722,97 @@ func TestOriginEscalation_ClaimLayerAloneRefusesAnotherReposKB(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `\"y\"`)
 	f.requireNoOrigin(t, riX)
 }
+
+// --- PATCH /origin/upstream -------------------------------------------------------
+//
+// Re-pointing the upstream to another branch of the stored origin makes that
+// branch the consensus branch, so it is vetted like an attach.
+//
+// SABOTAGE (against the branch commit): delete the CheckOriginBranch call in
+// handleHALSetOriginUpstream -> ..._AnotherReposBranchIsRefused and
+// ..._UnrelatedBranchIsRefused red (200).
+
+// xAttachedToItsOwnRemote attaches X (whose main holds a fact) to a fresh
+// bare remote and runs one round, so the remote's main is X's history.
+func (f *escFixture) xAttachedToItsOwnRemote(t *testing.T, h http.Handler, tok string) (*repos.RepoInstance, string) {
+	t.Helper()
+	riX := f.createX(t)
+	publishOnMain(t, riX, "kb/own.md", "X-OWN-FACT")
+	bare := filepath.Join(f.root, "x.git")
+	require.NoError(t, os.MkdirAll(bare, 0o755))
+	gitfixture.InitBare(t, bare, "main")
+	rec := escDo(h, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+bare+`","branch":"main"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, riX.OriginRoundForTest(context.Background()))
+	// The round pushed X's agent branch; publish it as the remote's main too,
+	// so the remote's main is X's history (and the next round follows it).
+	pushBranch(t, bare, escAgent, bare, "main")
+	require.NoError(t, riX.OriginRoundForTest(context.Background()))
+	return riX, bare
+}
+
+// pushBranch pushes srcBranch of the git repo at srcURL to branch of bare.
+func pushBranch(t *testing.T, srcURL, srcBranch, bare, branch string) {
+	t.Helper()
+	work := t.TempDir()
+	runGitForTest(t, "", "clone", "-q", "-b", srcBranch, srcURL, work)
+	runGitForTest(t, work, "push", "-q", bare, "HEAD:refs/heads/"+branch)
+}
+
+// The reviewer's scenario: the remote's main is X's own history, and a second
+// branch holds Y's main. Attaching that branch is refused; re-pointing the
+// upstream to it must be too.
+func TestOriginEscalation_UpstreamToAnotherReposBranchIsRefused(t *testing.T) {
+	f := newEscFixture(t)
+	f.createYWithSecret(t)
+	oauthH := f.s.OAuthHandler()
+	tok := f.mintOperatorToken(t, "x")
+	riX, bare := f.xAttachedToItsOwnRemote(t, oauthH, tok)
+	plain := httptest.NewServer(f.s.Handler())
+	defer plain.Close()
+	// Re-pointing to a branch that shares X's history is admitted (checked
+	// before ybranch exists: once the remote advertises a tip Y holds, the
+	// held-tip layer refuses this remote whatever branch is named).
+	pushBranch(t, bare, "main", bare, "xcopy")
+	rec := escDo(oauthH, tok, http.MethodPatch, "/api/v1/repos/x/origin/upstream", `{"branch":"xcopy"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec = escDo(oauthH, tok, http.MethodPatch, "/api/v1/repos/x/origin/upstream", `{"branch":"main"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	pushBranch(t, plain.URL+"/git/y", "main", bare, "ybranch")
+
+	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+bare+`","branch":"ybranch"}`)
+	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
+	for _, body := range []string{`{"branch":"ybranch"}`, `{"branch":"ybranch","replace_main":true}`} {
+		rec = escDo(oauthH, tok, http.MethodPatch, "/api/v1/repos/x/origin/upstream", body)
+		escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
+	}
+	o, err := f.m.Origins().Get(riX.UID())
+	require.NoError(t, err)
+	require.Equal(t, "main", o.Branch, "the refused PATCH left the upstream where it was")
+	require.NoError(t, riX.OriginRoundForTest(context.Background()))
+	rec = escDo(oauthH, tok, http.MethodGet, "/api/v1/repos/x/branches/ybranch/facts/kb/secret.md", "")
+	require.NotContains(t, rec.Body.String(), escSecret)
+}
+
+// A branch holding an unrelated, unregistered knowledge base would replace the
+// consensus branch: refused unless replace_main, exactly as for PUT /origin.
+func TestOriginEscalation_UpstreamToAnUnrelatedBranchIsRefused(t *testing.T) {
+	f := newEscFixture(t)
+	oauthH := f.s.OAuthHandler()
+	tok := f.mintOperatorToken(t, "x")
+	riX, bare := f.xAttachedToItsOwnRemote(t, oauthH, tok)
+	pushBranch(t, f.seedForeignKB(t, "other-kb.git"), "main", bare, "foreign")
+
+	rec := escDo(oauthH, tok, http.MethodPatch, "/api/v1/repos/x/origin/upstream", `{"branch":"foreign"}`)
+	escProblem(t, rec, http.StatusConflict, "Unrelated history")
+	o, err := f.m.Origins().Get(riX.UID())
+	require.NoError(t, err)
+	require.Equal(t, "main", o.Branch)
+
+	rec = escDo(oauthH, tok, http.MethodPatch, "/api/v1/repos/x/origin/upstream", `{"branch":"foreign","replace_main":true}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	o, err = f.m.Origins().Get(riX.UID())
+	require.NoError(t, err)
+	require.Equal(t, "foreign", o.Branch)
+}
