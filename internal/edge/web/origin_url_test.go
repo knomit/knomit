@@ -223,7 +223,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 					name, strings.TrimSpace(rec.Body.String()))
 
 				list := httptest.NewRecorder()
-				r.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil))
+				r.ServeHTTP(list, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil)))
 				require.Equal(t, http.StatusOK, list.Code, list.Body.String())
 
 				var got struct {

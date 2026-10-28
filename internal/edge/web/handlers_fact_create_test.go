@@ -208,7 +208,7 @@ func TestHandleListSessions_EmptyList_Returns200(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -245,7 +245,7 @@ func TestHandleListSessions_AfterCreate_Returns1(t *testing.T) {
 
 	// List sessions.
 	listRec := httptest.NewRecorder()
-	listReq := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil)
+	listReq := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil))
 	r.ServeHTTP(listRec, listReq)
 
 	if listRec.Code != http.StatusOK {

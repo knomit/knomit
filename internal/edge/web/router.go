@@ -172,13 +172,17 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	branch.Use(httpx.BranchMiddleware)
 	lens := r.Route("/lenses/{lens}", func(chi.Router) {})
 
+	operator := requireOperator(g, s.authDisabled)
 	manage.Mount(r, repoOuter, repo, branch, lens,
 		s.Manager, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays,
-		requireOperator(g, s.authDisabled))
+		operator)
 
 	// The connect-a-remote wizard (api/origins). Inside the
-	// RepoMiddleware group: its handlers read the repo from context.
-	repo.Mount("/origin-sessions", s.originSessionsRouter())
+	// RepoMiddleware group: its handlers read the repo from context. Every
+	// route, reads included, is the operator's, like PUT /origin: a session
+	// clones the remote it names and previews its content, and its commit
+	// attaches or swaps in that remote.
+	repo.With(operator).Mount("/origin-sessions", s.originSessionsRouter())
 
 	// The lens subtree INSIDE LensMiddleware: the KB's federated reads and
 	// the lens MCP mount below. The CRUD (api/manage) sits outside it, on

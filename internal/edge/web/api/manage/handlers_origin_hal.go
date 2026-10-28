@@ -322,12 +322,17 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			return
 		}
 
-		_, err = m.Send(r.Context(), ri, repos.AttachOrigin(repos.OriginSpec{
+		spec := repos.OriginSpec{
 			URL:        u,
 			Branch:     req.Branch,
 			AuthMethod: authMethod,
 			AuthToken:  authToken,
-		}))
+		}
+		attach := repos.AttachOrigin
+		if req.ReplaceMain {
+			attach = repos.AttachOriginReplacing
+		}
+		_, err = m.Send(r.Context(), ri, attach(spec))
 		switch {
 		case err == nil:
 		case httpx.IsLifecycleRefusal(err):
@@ -342,6 +347,18 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			return
 		case errors.Is(err, repos.ErrOriginOntologyConflict):
 			hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
+			hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", err.Error(), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrOriginUnrelatedHistory):
+			hal.WriteProblem(w, http.StatusConflict, "Unrelated history", err.Error(), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrOriginNotInspected):
+			hal.WriteProblem(w, http.StatusConflict, "Origin not inspected", err.Error(), r.URL.Path)
+			return
+		case errors.Is(err, repos.ErrRegistryUnavailable):
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", err.Error(), r.URL.Path)
 			return
 		case errors.Is(err, repos.ErrOriginUnreachable):
 			log.Warn().Err(err).Str("repo", repoName).Msg("origin attach refused by its probe")

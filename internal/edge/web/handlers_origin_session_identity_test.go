@@ -320,7 +320,7 @@ func TestConnect_AlreadyRegisteredRemoteRejectedAtTest(t *testing.T) {
 	// /commit will act on, and beta still holds its own knowledge base.
 	// The session's state, read through GET /origin-sessions/{id}.
 	got := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/repos/beta/origin-sessions/"+sessID, nil))
+	s.NewAPIRouter().ServeHTTP(got, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/beta/origin-sessions/"+sessID, nil)))
 	if got.Code != http.StatusOK {
 		t.Fatalf("session vanished: GET %d %s", got.Code, got.Body.String())
 	}

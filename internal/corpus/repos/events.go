@@ -26,6 +26,7 @@ import (
 	"knomit/internal/corpus/repos/control"
 	"knomit/internal/corpus/repos/events"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/domain/fact"
@@ -126,9 +127,12 @@ type MachineEvent struct {
 
 	mount  MountSpec
 	origin OriginSpec
-	swap   SwapSpec
-	branch string
-	reason string
+	// replaceMain: this attach may replace the repo's consensus branch with
+	// an origin branch that shares no history with it (AttachOriginReplacing).
+	replaceMain bool
+	swap        SwapSpec
+	branch      string
+	reason      string
 
 	reply chan reply
 }
@@ -166,6 +170,17 @@ func Mount(spec MountSpec) MachineEvent {
 // the repo's consensus branch).
 func AttachOrigin(spec OriginSpec) MachineEvent {
 	return MachineEvent{kind: evAttachOrigin, target: StageSync, origin: spec}
+}
+
+// AttachOriginReplacing is AttachOrigin when the caller explicitly asked to
+// replace the repo's consensus branch: the attach guard then admits an origin
+// branch that shares no history with it (the next sync adopts the origin's
+// branch as fetched). Every other attach check still runs, the one-local-copy
+// check included.
+func AttachOriginReplacing(spec OriginSpec) MachineEvent {
+	e := AttachOrigin(spec)
+	e.replaceMain = true
+	return e
 }
 
 // DetachOrigin removes the origin and restarts Sync, which then runs the
@@ -242,7 +257,7 @@ func guardContext(parent context.Context, r *RepoInstance) (context.Context, con
 func (e *MachineEvent) guard(ctx context.Context, r *RepoInstance) error {
 	switch e.kind {
 	case evAttachOrigin:
-		return guardAttach(ctx, r, e.origin)
+		return guardAttach(ctx, r, e.origin, e.replaceMain)
 	case evSwapStore:
 		return guardSwap(ctx, r, e.swap)
 	}
@@ -256,15 +271,23 @@ func (e *MachineEvent) guard(ctx context.Context, r *RepoInstance) error {
 // auth-required are distinct, and only a confirmed different ontology is a
 // conflict.
 //
-// BUDGET: it makes TWO network reads in sequence on the driver goroutine —
-// ProbeOriginRefs, then CheckOriginOntology. Each derives its own
-// cfg.Git.NetworkTimeout deadline (probeCtx), but both run under the ONE ctx
+// After those, guardAttachIdentity decides WHICH knowledge base the origin
+// holds: never another active repo's (one local copy per knowledge base), and,
+// unless replaceMain, never an unrelated history over a consensus branch that
+// holds facts.
+//
+// BUDGET: it makes its network reads in sequence on the driver goroutine —
+// ProbeOriginRefs, CheckOriginOntology, then guardAttachIdentity's
+// advertisement and history fetch. Each derives its own
+// cfg.Git.NetworkTimeout deadline (probeCtx), but all run under the ONE ctx
 // guardContext made, whose deadline is also NetworkTimeout. So the driver
-// waits at most one NetworkTimeout for the pair, not two; the cost is that a
-// slow probe leaves the ontology check only the remainder, and an ontology
-// read that runs out refuses nothing (an unreadable remote decides neither
-// way). With NetworkTimeout 0 neither read is bounded.
-func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec) error {
+// waits at most one NetworkTimeout for all of them; the cost is that a slow
+// probe leaves the later reads only the remainder. An ontology read that runs
+// out refuses nothing (an unreadable remote decides neither way); an identity
+// read that runs out refuses the attach, because an origin whose identity is
+// unknown is exactly the one this guard must not admit. With NetworkTimeout 0
+// no read is bounded.
+func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec, replaceMain bool) error {
 	m := r.env.m
 	// The local-origin policy, re-asserted where the attach happens.
 	if err := m.ValidateLocalOrigin(o.URL); err != nil {
@@ -285,7 +308,114 @@ func guardAttach(ctx context.Context, r *RepoInstance, o OriginSpec) error {
 			return err
 		}
 	}
-	return nil
+	return guardAttachIdentity(ctx, r, o, replaceMain)
+}
+
+// guardAttachIdentity is the attach's identity check, in the order of its
+// cost:
+//
+//  1. the two cheap one-local-copy layers off the ref advertisement
+//     (refuseIfKnowledgeBaseIsLocal): the remote's knomit-repo-id claim, and
+//     an advertised tip another active repo already holds;
+//  2. the origin branch's history, fetched into memory against this store
+//     (remotesync ProbeBranchHistory, writing nothing): its root commit held
+//     by another active repo is the same verdict, the authoritative layer the
+//     swap guard reads from the incoming store;
+//  3. an origin branch that shares no history with the repo's consensus
+//     branch would REPLACE that branch on the next sync (the reconcile adopts
+//     the origin's main as fetched). Refused unless replaceMain, or unless the
+//     consensus branch holds no fact, so there is nothing to replace: a new
+//     repo attaching its first origin.
+//
+// An origin with no such branch (an empty remote, a backup target) passes:
+// it holds no knowledge base yet. A history this guard cannot read refuses.
+func guardAttachIdentity(ctx context.Context, r *RepoInstance, o OriginSpec, replaceMain bool) error {
+	m := r.env.m
+	rp, err := m.beginRemoteProbe(ctx, o)
+	if err != nil {
+		return err
+	}
+	defer rp.close()
+	if rp.authErr != nil {
+		return fmt.Errorf("%w: %v", ErrOriginUnreachable, rp.authErr)
+	}
+	if rp.advErr != nil {
+		return fmt.Errorf("%w: the remote is unreachable: %v", ErrOriginUnreachable, rp.advErr)
+	}
+	if err := refuseIfKnowledgeBaseIsLocal(m, r.uid, rp.identity()); err != nil {
+		return err
+	}
+	svc, release, err := r.Acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	existing, err := svc.Remote().GetRemote("origin")
+	if err != nil {
+		return err
+	}
+	consensus := svc.Remote().UpstreamBranch()
+	branch := attachBranch(svc, o, existing)
+	hist, err := svc.Remote().ProbeBranchHistory(rp.netCtx, rp.gitURL, rp.auth, branch, consensus, m.deps.Cfg.Git.MaxProbeBytes)
+	switch {
+	case errors.Is(err, remotesync.ErrHistoryProbeTooLarge):
+		return fmt.Errorf("%w: %v; [git].max_probe_bytes bounds it", ErrOriginNotInspected, err)
+	case err != nil:
+		return fmt.Errorf("%w: reading the origin's %s: %v", ErrOriginUnreachable, branch, err)
+	case hist.Absent:
+		return nil
+	}
+	holder, err := HeldByAnotherActiveRepo(m, r.uid, hist.Root)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrRegistryUnavailable, err)
+	}
+	if holder != "" {
+		return alreadyLocal(holder)
+	}
+	if hist.Shared || replaceMain {
+		return nil
+	}
+	empty, err := branchHoldsNoFacts(ctx, svc, consensus)
+	if err != nil {
+		return err
+	}
+	if empty {
+		return nil
+	}
+	return fmt.Errorf("%w: %s on %s shares no history with this repository's %s, and attaching it would replace %s; ask to replace it explicitly",
+		ErrOriginUnrelatedHistory, branch, o.URL, consensus, consensus)
+}
+
+// branchHoldsNoFacts reports whether branch carries no fact: a branch that
+// does not exist, or one with nothing under the fact root (a new repo's
+// consensus branch holds only its init commits).
+func branchHoldsNoFacts(ctx context.Context, svc *store.Service, branch string) (bool, error) {
+	if branch == "" {
+		return true, nil
+	}
+	tip, err := svc.HeadCommit(ctx, branch)
+	if err != nil || tip == "" {
+		return true, nil
+	}
+	changes, err := svc.DiffFacts(ctx, plumbing.ZeroHash, plumbing.NewHash(tip))
+	if err != nil {
+		return false, fmt.Errorf("read the facts on %s: %w", branch, err)
+	}
+	return len(changes) == 0, nil
+}
+
+// attachBranch is the upstream branch an attach of o records: the request,
+// else the stored one, else the repo's own consensus branch (recorded at
+// init, kept across a detach). The guard and applyAttach resolve it alike.
+func attachBranch(svc *store.Service, o OriginSpec, existing *remotesync.Remote) string {
+	branch := o.Branch
+	if branch == "" && existing != nil {
+		branch = existing.Branch
+	}
+	if branch == "" {
+		branch = svc.Remote().UpstreamBranch()
+	}
+	return branch
 }
 
 // guardSwap holds the checks that must come before the swap's point of no
@@ -413,16 +543,8 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 	if err != nil {
 		return err
 	}
-	// The upstream: the request, else the stored one, else the repo's own
-	// consensus branch (recorded at init, kept across a detach). With none,
-	// ConfigureRemote refuses.
-	branch := o.Branch
-	if branch == "" && existing != nil {
-		branch = existing.Branch
-	}
-	if branch == "" {
-		branch = svc.Remote().UpstreamBranch()
-	}
+	// The upstream (attachBranch). With none, ConfigureRemote refuses.
+	branch := attachBranch(svc, o, existing)
 	if err := ConfigureGitRemote(svc, o.URL, o.AuthMethod, branch, r.agentBranch); err != nil {
 		return err
 	}

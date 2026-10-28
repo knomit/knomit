@@ -40,8 +40,8 @@ import (
 // instance's agent branch, embeddingsEnabled whether the instance embeds, and
 // expiryDays [experiments].expiry_days; the repo, branch and lens reads
 // report them. operator is the gate that admits the host's operator only,
-// which the pushed-branch merge sits behind; the caller builds it from its
-// grants so this package does not know the auth model.
+// which the pushed-branch merge and the origin writes sit behind; the caller
+// builds it from its grants so this package does not know the auth model.
 func Mount(
 	top, repoOuter, repo, branch, lens chi.Router,
 	rm *repos.Manager,
@@ -211,10 +211,17 @@ func Mount(
 	// the source.
 	repo.Get("/templates", handleRepoTemplates(rm))
 
+	// Setting, re-pointing or removing the origin is the host's operator
+	// acting on the host, never a repo-scoped writer: an origin decides
+	// which knowledge base this repo's consensus branch holds and where its
+	// agent branch is pushed, so a caller confined to this repo could
+	// otherwise import another knowledge base into it and read it. writeGate
+	// still adds `write`. The local principals (socket, pipe, loopback per
+	// [auth].loopback_default) hold `operator` by default.
 	repo.Get("/origin", handleHALGetOrigin(b))
-	repo.Put("/origin", handleHALSetOrigin(b, rm))
-	repo.Patch("/origin/upstream", handleHALSetOriginUpstream(b, rm))
-	repo.Delete("/origin", handleHALDeleteOrigin(b, rm))
+	repo.With(operator).Put("/origin", handleHALSetOrigin(b, rm))
+	repo.With(operator).Patch("/origin/upstream", handleHALSetOriginUpstream(b, rm))
+	repo.With(operator).Delete("/origin", handleHALDeleteOrigin(b, rm))
 
 	// Cancels the repo's index job: an ACTION on the repo, a POST on a
 	// colon-suffixed sub-resource like /repo-creates/{id}:cancel. It is

@@ -1953,6 +1953,27 @@ paths:
       description: |
         Points an EXISTING repository at a remote.
 
+        Requires the `operator` permission (403 otherwise), like DELETE
+        /origin, PATCH /origin/upstream and every origin-session route: an
+        origin decides which knowledge base this repository's main holds, so
+        a caller confined to this repository must not choose it. The local
+        principals (socket, named pipe, loopback per
+        `[auth].loopback_default`) hold `operator` by default; a bearer token
+        needs it in its approved scopes.
+
+        409 "Knowledge base already local" when the remote holds the knowledge
+        base of ANOTHER active repository on this instance (one local copy per
+        knowledge base): by its knomit-repo-id claim, by an advertised tip that
+        repository holds, or by the root commit of the remote branch. Never
+        admitted, `replace_main` included.
+
+        409 "Unrelated history" when the remote branch shares no history with
+        this repository's main and that main holds facts: the next sync would
+        replace main with the remote's. Send `replace_main: true` to replace it
+        deliberately. A main that holds no fact yet (a new repository attaching
+        its first origin) needs no flag. 409 "Origin not inspected" when the
+        remote branch's history did not fit `[git].max_probe_bytes`.
+
         409 when that remote is a different knowledge base — it carries an
         ontology whose id is not this repository's. A repository's ontology is
         fixed when it is created and is never editable afterwards, so two
@@ -1988,13 +2009,16 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/OriginSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
           description: |
             Refused. "Repo is indexing" (origin changes are exclusive with
             indexing) carries `_links.cancel-index` {href, method: POST}: wait
-            for the index, or cancel it and retry. Otherwise the remote is a
-            different knowledge base (ontology id mismatch).
+            for the index, or cancel it and retry. "Knowledge base already
+            local", "Unrelated history" and "Origin not inspected" are the
+            identity checks above. Otherwise the remote is a different
+            knowledge base (ontology id mismatch).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2009,8 +2033,10 @@ paths:
       tags: [origin]
       summary: Remove origin configuration
       operationId: deleteOrigin
+      description: Requires the `operator` permission (403 otherwise).
       responses:
         "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
           description: >
@@ -2035,7 +2061,7 @@ paths:
         Changes only the upstream branch of the already-configured origin; the
         URL and credentials are untouched. The branch name is validated against
         a conservative subset of git's ref-name rules before it is written into
-        the fetch refspec.
+        the fetch refspec. Requires the `operator` permission (403 otherwise).
       operationId: setOriginUpstream
       requestBody:
         required: true
@@ -2060,6 +2086,10 @@ paths:
       tags: [origin]
       summary: List active origin sessions
       operationId: listOriginSessions
+      description: >-
+        Every /origin-sessions route requires the `operator` permission (403
+        otherwise): a session clones and previews the remote it names, and its
+        commit attaches or swaps it in.
       responses:
         "200":
           description: Sessions
@@ -6202,6 +6232,12 @@ components:
         token:       { type: string }
         user:        { type: string }
         password:    { type: string }
+        replace_main:
+          type: boolean
+          description: >-
+            PUT /origin only. Admit a remote branch that shares no history with
+            this repository's main, which the next sync then replaces with the
+            remote's. Never admits another active repository's knowledge base.
 
     OriginSetResponse:
       type: object

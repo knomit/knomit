@@ -187,7 +187,7 @@ func TestOriginSessions_GetSession_Returns200(t *testing.T) {
 
 	// Fetch the session.
 	getRec := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil)
+	getReq := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
 	r.ServeHTTP(getRec, getReq)
 
 	if getRec.Code != http.StatusOK {
@@ -213,7 +213,7 @@ func TestOriginSessions_GetSession_UnknownID_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/nonexistent", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/nonexistent", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -255,7 +255,7 @@ func TestOriginSessions_DeleteSession_Returns204(t *testing.T) {
 
 	// Confirm it's gone.
 	getRec := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil)
+	getReq := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
 	r.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusNotFound {
 		t.Errorf("after delete get: status %d, want 404", getRec.Code)
