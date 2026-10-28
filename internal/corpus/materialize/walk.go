@@ -161,9 +161,6 @@ type node struct {
 	included bool
 	refs     []resolved
 	resolved bool
-	// parents: the frames this frame cites as parents (ancestors), set for
-	// the starting frame and its ancestors only.
-	parents []key
 }
 
 type refKind int

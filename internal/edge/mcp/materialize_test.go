@@ -873,6 +873,21 @@ func TestMaterialize_FrameCycleBelowDoesNotLiftAChild(t *testing.T) {
 	require.Equal(t, []string{"Z", "Y", "X", "F"}, titles(nodes), "each ancestor before the frame citing it")
 }
 
+// Review B3: a parent reached BEFORE its child is still written before it.
+// U; T→U; C→T; F→T, C (separate commits, pinned). Breadth-first reaches T
+// before C, yet C cites T, so T (and U above it) come first: [U, T, C, F].
+func TestMaterialize_ParentReachedFirstStillPrecedesItsChild(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	frame(t, ri, "kb/frames/u.md", "U")
+	frame(t, ri, "kb/frames/t.md", "T", "kb/frames/u.md")
+	frame(t, ri, "kb/frames/c.md", "C", "kb/frames/t.md")
+	frame(t, ri, "kb/frames/f.md", "F", "kb/frames/t.md", "kb/frames/c.md")
+
+	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/f.md"})
+	require.Equal(t, []string{"U", "T", "C", "F"}, titles(nodes))
+}
+
 // N10: a frame retracted and learned again at the same path is read, through
 // a ref pinned before that, at the PINNED version; unpin reads the new one.
 func TestMaterialize_RelearnedFrameReadAtItsPinnedVersion(t *testing.T) {
