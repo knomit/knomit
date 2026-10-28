@@ -54,11 +54,18 @@ const (
 
 // Request is one materialization: the fact (bare, or kb://<id12>/… for a
 // mount of the binding), the anchor commit ("" = the tip of the fact's
-// mount branch, resolved now) and the options. Manager may be nil, in which
-// case only the binding's own mounts are reachable cross-KB.
+// mount branch, resolved now) and the options.
+//
+// Cross-KB, the binding's own mounts are always readable. Any other repo
+// registered in Manager is read only when MayRead says the CALLER may read
+// it by name (the edge answers from the caller's credential); a nil Manager
+// or a nil MayRead reaches no repo outside the binding. A repo refused here
+// reads exactly like one that does not exist (kb_unavailable), so the output
+// never tells a caller which repos it may not read.
 type Request struct {
 	Binding *repos.Binding
 	Manager *repos.Manager
+	MayRead func(repo string) bool
 	File    string
 	Commit  string
 	Options Options
@@ -192,7 +199,7 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 	if err := req.Options.Validate(); err != nil {
 		return nil, err
 	}
-	r := newReader(req.Binding, req.Manager)
+	r := newReader(req.Binding, req.Manager, req.MayRead)
 	defer r.close()
 	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}}
 

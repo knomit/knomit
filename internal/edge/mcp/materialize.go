@@ -15,6 +15,7 @@ import (
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	"knomit/internal/engine/store/model"
+	"knomit/internal/foundation/auth"
 )
 
 // The two audiences of knomit_materialize.
@@ -76,7 +77,7 @@ func materializeTool() mcpgo.Tool {
 			mcpgo.Description("true: read every ref at its target's latest version instead of the version that was cited; a target that is gone is left out without mention. Default false."),
 		),
 		mcpgo.WithBoolean("cross_kb",
-			mcpgo.Description("true: follow kb://<other-id>/… refs into another knowledge base registered on this server, read at its latest version. Default false: such refs are listed as not included."),
+			mcpgo.Description("true: follow kb://<other-id>/… refs into another knowledge base registered on this server that your credential can read, at its latest version; any other is listed as not available. Default false: such refs are listed as not included."),
 		),
 		mcpgo.WithString("cursor",
 			mcpgo.Description("The `cursor` from the previous page. With it, every other argument except `binding` and `limit` is refused: the document was fixed by the first call."),
@@ -181,7 +182,8 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 	}
 
 	doc, err := materialize.Plan(ctx, materialize.Request{
-		Binding: b, Manager: mgr, File: file, Commit: req.GetString("commit", ""), Options: opts,
+		Binding: b, Manager: mgr, MayRead: callerMayRead(ctx),
+		File: file, Commit: req.GetString("commit", ""), Options: opts,
 	})
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -259,7 +261,7 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 		}
 		env, nodes[i] = st.Env, st.Node
 	}
-	if err := materialize.ReadBodies(ctx, b, mgr, nodes); err != nil {
+	if err := materialize.ReadBodies(ctx, b, mgr, callerMayRead(ctx), nodes); err != nil {
 		// The frozen view references a repo or version that can no longer be
 		// read: it cannot be served consistently.
 		return mcpgo.NewToolResultError(errMaterializeExpired + " (" + err.Error() + ")"), nil
@@ -285,6 +287,14 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 		_ = sWrite.toolSession.UpdateToolSession(ctx, cursor, env.Anchor, "completed")
 	}
 	return marshalMaterializePage(page)
+}
+
+// callerMayRead is the cross-KB read check for a repo the binding does not
+// mount: the caller's credential must reach that repo's own routes
+// (auth.ReachesRepo). Read permission itself was already checked when the
+// call reached this tool.
+func callerMayRead(ctx context.Context) func(string) bool {
+	return func(repo string) bool { return auth.ReachesRepo(ctx, repo) }
 }
 
 // fillMaterializePage builds a page from the head of nodes: as many as fit

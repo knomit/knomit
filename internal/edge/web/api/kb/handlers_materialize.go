@@ -11,6 +11,7 @@ import (
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/foundation/auth"
 )
 
 // materializeSuffix is the fact sub-resource that returns the agent document
@@ -45,8 +46,12 @@ func serveMaterialize(w http.ResponseWriter, r *http.Request, b *repos.Binding, 
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 		return
 	}
-	doc, err := materialize.Plan(r.Context(), materialize.Request{
+	ctx := r.Context()
+	doc, err := materialize.Plan(ctx, materialize.Request{
 		Binding: b, Manager: mgr, File: file, Commit: commit, Options: opts,
+		// Cross-KB beyond the binding: only repos the caller's credential
+		// reaches by their own routes (auth.ReachesRepo).
+		MayRead: func(repo string) bool { return auth.ReachesRepo(ctx, repo) },
 	})
 	switch {
 	case notFound != nil && (errors.Is(err, materialize.ErrInvalid) || errors.Is(err, materialize.ErrNotFound)):

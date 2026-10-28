@@ -13,6 +13,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/foundation/auth"
 )
 
 // These tests drive knomit_materialize over real stores: every fact is
@@ -466,6 +467,13 @@ func TestMaterialize_CrossKB(t *testing.T) {
 	require.Equal(t, "kb://"+beta12+"/kb/b/y.md", y.Path)
 	require.Empty(t, y.Marks, "inside the other repo, refs are pinned by its own edges")
 	require.Equal(t, []string{zWire + "|kb_unavailable"}, omitted(nodes[0]))
+
+	// A caller whose credential does not reach beta (a bearer token confined
+	// to alpha) gets the SAME answer as for a repo that does not exist.
+	confined := auth.WithRepoReach(ctx, func(repo string) bool { return repo == "alpha" })
+	nodes, _ = humanFacts(t, confined, m, map[string]any{"file": "kb/a/r.md", "cross_kb": true})
+	require.Equal(t, []string{"R"}, titles(nodes))
+	require.Equal(t, []string{xWire + "|kb_unavailable", zWire + "|kb_unavailable"}, omitted(nodes[0]))
 
 	// Without the Manager only the binding's own mounts are reachable.
 	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/a/r.md", "cross_kb": true})

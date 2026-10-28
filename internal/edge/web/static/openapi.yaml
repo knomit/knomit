@@ -894,7 +894,10 @@ paths:
         value with a 400. By default every ref is read at the version that
         was cited; `unpin=true` reads latest versions and silently leaves out
         a target that is gone; `cross_kb=true` follows `kb://<id>/` refs into
-        any repo registered on this server, at its latest version. A frame
+        any repo registered on this server that the caller's own credential
+        reaches (a bearer token reaches only the repos under its audience),
+        at its latest version; any other id is listed as not available,
+        whether or not such a repo exists. A frame
         lists its ancestors first. 404 when the fact cannot be read at the
         branch tip.
 

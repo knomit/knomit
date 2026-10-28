@@ -26,11 +26,13 @@ type mount struct {
 
 // reader holds the mounts one materialization touches, acquired on first use
 // and released by close. A repo is resolved by its ROOT-COMMIT id: the
-// binding's own mount of it first (at the branch the binding pins), else any
-// repo registered on the server (repos.Manager.ByRootID, at its read branch).
+// binding's own mount of it first (at the branch the binding pins), else a
+// repo registered on the server (repos.Manager.ByRootID, at its read branch)
+// that the caller may read (mayRead).
 type reader struct {
 	b        *repos.Binding
 	mgr      *repos.Manager
+	mayRead  func(repo string) bool
 	mounts   map[string]*mount // by id12; a nil value records "not available"
 	releases []func()
 	edges    map[edgeKey]map[string]string
@@ -38,8 +40,8 @@ type reader struct {
 
 type edgeKey struct{ repo, rel, commit string }
 
-func newReader(b *repos.Binding, mgr *repos.Manager) *reader {
-	return &reader{b: b, mgr: mgr, mounts: map[string]*mount{}, edges: map[edgeKey]map[string]string{}}
+func newReader(b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool) *reader {
+	return &reader{b: b, mgr: mgr, mayRead: mayRead, mounts: map[string]*mount{}, edges: map[edgeKey]map[string]string{}}
 }
 
 func (r *reader) close() {
@@ -54,11 +56,14 @@ func (r *reader) target(id12 string) (*repos.RepoInstance, string, bool) {
 	if rt, ok := r.b.ByID(id12); ok {
 		return rt.RI, rt.Branch, true
 	}
-	if r.mgr == nil {
+	if r.mgr == nil || r.mayRead == nil {
 		return nil, "", false
 	}
 	ri, ok := r.mgr.ByRootID(id12)
-	if !ok {
+	// Not readable by this caller answers exactly like not registered: the
+	// two must stay indistinguishable, or a caller could probe which repos
+	// exist.
+	if !ok || !r.mayRead(ri.Name()) {
 		return nil, "", false
 	}
 	return ri, ri.ReadBranch(), true
@@ -197,9 +202,10 @@ func (r *reader) date(ctx context.Context, m *mount, rel, commit string) string 
 // commit). It is how a later page of a paged materialization gets its
 // bodies: the order and every version were frozen by the first call, so a
 // commit landing in between changes nothing. A repo that is no longer
-// reachable through b or mgr is an error: the frozen view cannot be served.
-func ReadBodies(ctx context.Context, b *repos.Binding, mgr *repos.Manager, nodes []Node) error {
-	r := newReader(b, mgr)
+// reachable through b, or through mgr for a caller mayRead admits, is an
+// error: the frozen view cannot be served.
+func ReadBodies(ctx context.Context, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, nodes []Node) error {
+	r := newReader(b, mgr, mayRead)
 	defer r.close()
 	for i := range nodes {
 		n := &nodes[i]

@@ -9,6 +9,7 @@ import (
 
 	"knomit/internal/edge/oauth"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/edge/web/httpx"
 	"knomit/internal/foundation/auth"
 )
 
@@ -55,13 +56,17 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 				invalid("malformed Authorization header")
 				return
 			}
-			principal, ceiling, err := v.Verify(r.Context(), tok, p)
+			principal, ceiling, reach, err := v.Verify(r.Context(), tok, p)
 			if err != nil {
 				invalid(err.Error())
 				return
 			}
 			ctx := auth.WithPrincipal(r.Context(), principal)
 			ctx = auth.WithCeiling(ctx, ceiling)
+			// A repo is reached when the token reaches its own routes.
+			ctx = auth.WithRepoReach(ctx, func(repo string) bool {
+				return reach(httpx.APIBase + "/repos/" + repo)
+			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

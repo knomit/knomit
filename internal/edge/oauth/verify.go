@@ -26,22 +26,26 @@ func NewVerifier(issuer string, store *Store) *Verifier {
 // front strips the issuer's own path before forwarding. It is in the token's
 // audience when it equals the token's resource or extends it at a "/"
 // boundary, so a token for one MCP endpoint does not work on its neighbour.
-func (v *Verifier) Verify(ctx context.Context, token, path string) (auth.Principal, auth.Set, error) {
+// reach answers the same question for any other path on this listener: the
+// token's audience, for a read that leaves the request's own resource.
+func (v *Verifier) Verify(ctx context.Context, token, path string) (p auth.Principal, ceiling auth.Set, reach func(path string) bool, err error) {
 	fam, err := v.store.LookupAccess(ctx, token)
 	if err != nil {
-		return auth.Principal{}, nil, err
+		return auth.Principal{}, nil, nil, err
 	}
 	// Both halves: the token's resource must be THIS issuer's (a token
 	// minted before the issuer moved, or gained a path, is not), and the
 	// request must sit under that resource.
 	if !resourceUnder(v.issuer, fam.Resource) || !inAudience(fam.Resource, v.issuer+path) {
-		return auth.Principal{}, nil, ErrWrongAudience
+		return auth.Principal{}, nil, nil, ErrWrongAudience
 	}
-	ceiling, err := auth.ParseSet(fam.Scopes)
+	ceiling, err = auth.ParseSet(fam.Scopes)
 	if err != nil {
-		return auth.Principal{}, nil, fmt.Errorf("oauth: token ceiling: %w", err)
+		return auth.Principal{}, nil, nil, fmt.Errorf("oauth: token ceiling: %w", err)
 	}
-	return TokenPrincipal(fam.Subject), ceiling, nil
+	resource, issuer := fam.Resource, v.issuer
+	reach = func(p string) bool { return inAudience(resource, issuer+p) }
+	return TokenPrincipal(fam.Subject), ceiling, reach, nil
 }
 
 // inAudience: url equals resource, or extends it at a "/" boundary.

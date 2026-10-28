@@ -28,7 +28,7 @@ func TestVerifier_PrincipalAndCeiling(t *testing.T) {
 	s, _ := newTestStore(t)
 	v := NewVerifier(vIssuer, s)
 	tok := mintFor(t, s, vIssuer, "read", "write")
-	p, ceiling, err := v.Verify(context.Background(), tok, "/api/v1/repos")
+	p, ceiling, _, err := v.Verify(context.Background(), tok, "/api/v1/repos")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestVerifier_Audience(t *testing.T) {
 		{work, "/api/v1/repos", false},
 		{work, "/api/v1/repos/other/branches/agent:x/mcp", false},
 	} {
-		_, _, err := v.Verify(context.Background(), tc.tok, tc.path)
+		_, _, _, err := v.Verify(context.Background(), tc.tok, tc.path)
 		if tc.ok && err != nil {
 			t.Errorf("%s: %v", tc.path, err)
 		}
@@ -78,7 +78,7 @@ func TestVerifier_IssuerChangeInvalidates(t *testing.T) {
 	s, _ := newTestStore(t)
 	tok := mintFor(t, s, vIssuer, "read")
 	v := NewVerifier("https://moved.example.com", s)
-	if _, _, err := v.Verify(context.Background(), tok, "/api/v1/repos"); !errors.Is(err, ErrWrongAudience) {
+	if _, _, _, err := v.Verify(context.Background(), tok, "/api/v1/repos"); !errors.Is(err, ErrWrongAudience) {
 		t.Fatalf("token for the old issuer: %v", err)
 	}
 }
@@ -86,17 +86,17 @@ func TestVerifier_IssuerChangeInvalidates(t *testing.T) {
 func TestVerifier_StoreRefusalsPassThrough(t *testing.T) {
 	s, c := newTestStore(t)
 	v := NewVerifier(vIssuer, s)
-	if _, _, err := v.Verify(context.Background(), "nope", "/"); !errors.Is(err, ErrUnknownToken) {
+	if _, _, _, err := v.Verify(context.Background(), "nope", "/"); !errors.Is(err, ErrUnknownToken) {
 		t.Fatalf("unknown: %v", err)
 	}
 	tok := mintFor(t, s, vIssuer, "read")
 	c.add(3 * time.Hour)
-	if _, _, err := v.Verify(context.Background(), tok, "/"); !errors.Is(err, ErrExpired) {
+	if _, _, _, err := v.Verify(context.Background(), tok, "/"); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expired: %v", err)
 	}
 	tok = mintFor(t, s, vIssuer, "read")
 	_ = s.Revoke(context.Background(), tok)
-	if _, _, err := v.Verify(context.Background(), tok, "/"); !errors.Is(err, ErrRevoked) {
+	if _, _, _, err := v.Verify(context.Background(), tok, "/"); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("revoked: %v", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestVerifier_UnknownScopeFailsClosed(t *testing.T) {
 	s, _ := newTestStore(t)
 	v := NewVerifier(vIssuer, s)
 	tok := mintFor(t, s, vIssuer, "read", "superpower")
-	if _, _, err := v.Verify(context.Background(), tok, "/"); err == nil {
+	if _, _, _, err := v.Verify(context.Background(), tok, "/"); err == nil {
 		t.Fatal("a token whose ceiling does not parse was accepted")
 	}
 }
@@ -118,7 +118,7 @@ func TestVerifier_IssuerGainedAPath(t *testing.T) {
 	s, _ := newTestStore(t)
 	tok := mintFor(t, s, vIssuer, "read")
 	v := NewVerifier(vIssuer+"/knomit", s)
-	if _, _, err := v.Verify(context.Background(), tok, "/api/v1/repos"); !errors.Is(err, ErrWrongAudience) {
+	if _, _, _, err := v.Verify(context.Background(), tok, "/api/v1/repos"); !errors.Is(err, ErrWrongAudience) {
 		t.Fatalf("a token for the origin under a path issuer: %v", err)
 	}
 }
