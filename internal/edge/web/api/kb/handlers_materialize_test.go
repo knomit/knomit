@@ -106,6 +106,7 @@ func TestMaterializeRoute_IsTheAgentDocument(t *testing.T) {
 	require.Equal(t, "text/markdown; charset=utf-8", ctype)
 	doc, err := materialize.Plan(context.Background(), materialize.Request{
 		Binding: repos.NewBindingOfRepo(alpha, branch), Manager: m, File: "kb/a/r.md",
+		MayRead: func(string) bool { return true }, // a local caller reaches every repo
 		Options: materialize.Options{Depth: 1, MaxNodes: materialize.DefaultMaxNodes, CrossKB: true},
 	})
 	require.NoError(t, err)
