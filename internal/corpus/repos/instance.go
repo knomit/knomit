@@ -115,6 +115,11 @@ type RepoInstance struct {
 	// simultaneously a subscription and writable on its agent branch, with
 	// nothing failing. NewTestInstanceWithDeps enforces the pairing; a
 	// production constructor has to uphold it itself.
+	//
+	// Fixed for the instance's whole life: set at construction, before the
+	// machine starts, and never written again. MachineEvent.standingRefusal
+	// reads it off the driver goroutine (via lifeFacts), so it must never be
+	// mutated.
 	subscribed bool
 	// fleetDoor admits an ontology with id `fleet` at Identify: the mount was
 	// opened by knomit's fleet code (fleet create or join), or it is a registered
@@ -845,3 +850,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	ri.setName(cfg.Name)
 	return ri
 }
+
+// lifeFacts snapshots the facts fixed for the instance's whole life, the only
+// instance state standingRefusal sees (see lifeFacts).
+func (ri *RepoInstance) lifeFacts() lifeFacts { return lifeFacts{subscribed: ri.subscribed} }

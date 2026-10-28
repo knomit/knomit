@@ -18,7 +18,8 @@ type Status struct {
 	Stage string
 	Index IndexStatus
 	// IndexRunning reports whether the index job is in flight — what makes
-	// Attach, Detach and Swap answer ErrIndexing.
+	// Attach, Detach and Swap answer ErrIndexing, unless a standing refusal
+	// (e.g. a subscription's Detach) answers first.
 	IndexRunning bool
 	Sync         struct {
 		Running bool
