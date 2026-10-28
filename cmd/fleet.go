@@ -14,9 +14,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/config"
 )
+
+// fleetMasterCmd is the `knomit fleet master` group name.
+const fleetMasterCmd = "master" // the fleet's master role (the command name), not a branch
 
 // fleetCmd is `knomit fleet`: a THIN client of the running server's
 // /api/v1/fleet over the local listener, like `knomit oauth`. It never boots
@@ -128,7 +130,7 @@ func fleetVerbs() []*cobra.Command {
 	revokeCmd.Flags().StringVar(&reason, "reason", "", "why, recorded with the revocation")
 	membersCmd.AddCommand(enrollCmd, revokeCmd)
 
-	masterCmd := fleetGroup(repos.HostingMaster, "Export, import or resign this instance's fleet root files")
+	masterCmd := fleetGroup(fleetMasterCmd, "Export, import or resign this instance's fleet root files")
 	masterCmd.AddCommand(
 		fleetVerb("export", "Print the fleet root files (the root key among them) as JSON", cobra.NoArgs,
 			http.MethodGet, "/fleet/root", nil),
