@@ -499,7 +499,7 @@ func TestMaterialize_FrameAncestors(t *testing.T) {
 	ctx := repos.WithRepoInstance(context.Background(), ri)
 	obs(t, ri, "kb/f/n1.md", "N1")
 	frame(t, ri, "kb/frames/t.md", "T")
-	frame(t, ri, "kb/frames/p1.md", "P1", "kb/frames/t.md", "kb/f/n1.md")
+	frame(t, ri, "kb/frames/p1.md", "P1", "kb/frames/t.md", "kb/f/n1.md", "kb://ffffffffffff/kb/q.md") // N1 and a cross-KB ref: neither expanded nor listed
 	frame(t, ri, "kb/frames/p2.md", "P2", "kb/frames/t.md")
 	frame(t, ri, "kb/frames/sib.md", "Sib", "kb/frames/p1.md") // a child of P1: never appears
 	obs(t, ri, "kb/f/g.md", "G")
