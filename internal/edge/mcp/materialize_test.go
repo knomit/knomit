@@ -587,14 +587,14 @@ func TestMaterialize_FrameUnpinAndCycle(t *testing.T) {
 	require.Equal(t, []string{"P1", "F"}, titles(nodes), "unpin: T left P1's refs, P2 is retracted and Q was reachable only through it")
 	require.Empty(t, nodeByTitle(t, nodes, "F").NotIncluded)
 
-	// Two frames that cite each other above the start (the frame-parent ruling).
+	// Two frames that cite each other above the start.
 	frame(t, ri, "kb/frames/g1.md", "G1")
 	frame(t, ri, "kb/frames/g2.md", "G2", "kb/frames/g1.md")
 	frame(t, ri, "kb/frames/g1.md", "G1", "kb/frames/g2.md")
 	frame(t, ri, "kb/frames/g2.md", "G2", "kb/frames/g1.md")
 	frame(t, ri, "kb/frames/h.md", "H", "kb/frames/g1.md")
 	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/h.md"})
-	require.Equal(t, []string{"G1", "H"}, titles(nodes), "G1 and G2 cite each other: G1, created first, is G2's parent, never its child")
+	require.Equal(t, []string{"G2", "G1", "H"}, titles(nodes), "G1 (reached first from H) is the child, G2 its parent; G2's ref back to G1 is a back-reference")
 }
 
 // T15: paging. Contiguous ordinals, constant total, instructions on page 1
@@ -805,34 +805,55 @@ func TestMaterialize_ResumeRechecksTheCallersReach(t *testing.T) {
 	require.Equal(t, "X body.", p2.Facts[0].Body)
 }
 
-// The frame-parent ruling: links point backwards. Two frames that ref each
-// other resolve to ONE parent, the one created first, decided by git
-// ancestry of their creation commits.
-func TestMaterialize_MutualFramesTheOlderIsTheParent(t *testing.T) {
-	ri := newLearnTestRepo(t, fact.CodeOntology())
-	ctx := repos.WithRepoInstance(context.Background(), ri)
-	frame(t, ri, "kb/frames/a.md", "A")
-	frame(t, ri, "kb/frames/b.md", "B", "kb/frames/a.md")
-	writeMat(t, ri, "kb/frames/a.md", "A", "A now cites its child.", fact.Frame, "kb/frames/b.md")
-	frame(t, ri, "kb/frames/b.md", "B", "kb/frames/a.md", "kb/frames/x.md") // re-pins A at the version that cites B
-	writeMat(t, ri, "kb/frames/x.md", "X", "x", fact.Observation)
-
-	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/b.md"})
-	require.Equal(t, "A", nodes[0].Title)
-	require.Equal(t, "ancestor", nodes[0].Role, "A, created first, is B's parent")
-	require.Equal(t, "B", nodes[1].Title)
-
-	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/a.md"})
-	require.Equal(t, "A", nodes[0].Title)
-	require.Equal(t, "focal", nodes[0].Role, "B, created after A, is never A's parent")
-	for _, n := range nodes {
-		require.NotEqual(t, "ancestor", n.Role, "%s", n.Title)
+// writeFramesOneCommit writes several frames in ONE commit (they may cite
+// each other: every ref is pinned at that commit).
+func writeFramesOneCommit(t *testing.T, ri *repos.RepoInstance, frames map[string][]string) string {
+	t.Helper()
+	files := map[string]string{}
+	for path, refs := range frames {
+		f := fact.NewFact(path)
+		f.Title = strings.ToUpper(strings.TrimSuffix(path[strings.LastIndex(path, "/")+1:], ".md"))
+		f.Body = f.Title + " frame body."
+		f.Type, f.Kind = fact.Frame, fact.Pragmatic
+		f.Domain, f.Entities, f.Refs = []string{"testing"}, []string{}, refs
+		f.Confidence, f.Sources = 0.9, 1
+		content, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		files[path] = content
 	}
+	var commit string
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		c, _, err := svc.Facts().BatchWriteFacts(context.Background(), explainTestBranch, files, nil, "write frames", "")
+		require.NoError(t, err)
+		commit = c
+	}))
+	return commit
 }
 
-// Review N2, the shape that misordered: F→X, X→Y, Y↔Z. Under the ruling Y
-// (created before Z) is Z's parent, never the reverse, so Z is not an
-// ancestor of F at all, and every ancestor precedes the frame citing it.
+// Round-3 ruling: the frame you are at is the child and every frame it refs
+// is a parent. Two frames at the SAME commit that ref each other: the
+// starting one is the child, the other its parent, whichever you start from.
+func TestMaterialize_SameCommitMutualFramesTheStartIsTheChild(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	writeFramesOneCommit(t, ri, map[string][]string{
+		"kb/frames/p.md": {"kb/frames/q.md"},
+		"kb/frames/q.md": {"kb/frames/p.md"},
+	})
+
+	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/q.md"})
+	require.Equal(t, []string{"P", "Q"}, titles(nodes))
+	require.Equal(t, []string{"ancestor", "focal"}, []string{nodes[0].Role, nodes[1].Role})
+	require.Equal(t, []int{2}, linkNs(nodes[0]), "P's ref back to Q is a back-reference, not a second copy")
+
+	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/p.md"})
+	require.Equal(t, []string{"Q", "P"}, titles(nodes), "started from P, P is the child")
+	require.Equal(t, []string{"ancestor", "focal"}, []string{nodes[0].Role, nodes[1].Role})
+}
+
+// Review N2's shape, F→X, X→Y, Y↔Z: the ancestor order never lifts a child
+// above its parent. Y is reached before Z, so Y is the child of Z and Z's ref
+// back to Y is a back-reference.
 func TestMaterialize_FrameCycleBelowDoesNotLiftAChild(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	ctx := repos.WithRepoInstance(context.Background(), ri)
@@ -843,5 +864,54 @@ func TestMaterialize_FrameCycleBelowDoesNotLiftAChild(t *testing.T) {
 	frame(t, ri, "kb/frames/f.md", "F", "kb/frames/x.md")
 
 	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/f.md", "depth": 0})
-	require.Equal(t, []string{"Y", "X", "F"}, titles(nodes))
+	require.Equal(t, []string{"Z", "Y", "X", "F"}, titles(nodes), "each ancestor before the frame citing it")
+}
+
+// N10: a frame retracted and learned again at the same path is read, through
+// a ref pinned before that, at the PINNED version; unpin reads the new one.
+func TestMaterialize_RelearnedFrameReadAtItsPinnedVersion(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	v1 := writeMat(t, ri, "kb/frames/a.md", "A", "A as first learned.", fact.Frame)
+	frame(t, ri, "kb/frames/b.md", "B", "kb/frames/a.md")
+	retractMat(t, ri, "kb/frames/a.md")
+	v2 := writeMat(t, ri, "kb/frames/a.md", "A", "A learned again.", fact.Frame)
+
+	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/b.md"})
+	require.Equal(t, []string{"A", "B"}, titles(nodes))
+	require.Equal(t, v1, nodes[0].Commit)
+	require.Equal(t, "A as first learned.", nodes[0].Body)
+
+	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/b.md", "unpin": true})
+	require.Equal(t, v2, nodes[0].Commit)
+	require.Equal(t, "A learned again.", nodes[0].Body)
+}
+
+// A frame's parent in ANOTHER repo is a cross-KB ref like any other: followed
+// with cross_kb and the caller's reach (latest version there, and the
+// ancestor walk continues in that repo under the same rules); "not included"
+// with cross_kb off; kb_unavailable for a caller that does not reach it.
+func TestMaterialize_CrossRepoFrameParent(t *testing.T) {
+	m, alpha, beta, _, _, _ := newLensE2E(t)
+	base := repos.WithRepoInstance(context.Background(), alpha)
+	wide := auth.WithRepoReach(base, auth.AllRepos)
+	beta12 := fact.ID12(beta.ID())
+	pWire := "kb://" + beta12 + "/kb/frames/p.md"
+	frame(t, beta, "kb/frames/t.md", "T")
+	frame(t, beta, "kb/frames/p.md", "P", "kb/frames/t.md")
+	frame(t, alpha, "kb/frames/f.md", "F", pWire)
+
+	nodes, _ := humanFacts(t, wide, m, map[string]any{"file": "kb/frames/f.md", "cross_kb": true})
+	require.Equal(t, []string{"T", "P", "F"}, titles(nodes), "the walk continues inside beta")
+	require.Equal(t, []string{"kb://" + beta12 + "/kb/frames/t.md", pWire, "kb/frames/f.md"}, []string{nodes[0].Path, nodes[1].Path, nodes[2].Path})
+	require.Equal(t, []string{"ancestor", "ancestor", "focal"}, []string{nodes[0].Role, nodes[1].Role, nodes[2].Role})
+	require.Equal(t, []string{materialize.MarkLatestOtherKB}, nodes[1].Marks)
+
+	nodes, _ = humanFacts(t, wide, m, map[string]any{"file": "kb/frames/f.md"})
+	require.Equal(t, []string{"F"}, titles(nodes))
+	require.Equal(t, []string{pWire + "|cross_kb_off"}, omitted(nodes[0]))
+
+	nodes, _ = humanFacts(t, base, m, map[string]any{"file": "kb/frames/f.md", "cross_kb": true})
+	require.Equal(t, []string{"F"}, titles(nodes), "no reach: refused")
+	require.Equal(t, []string{pWire + "|kb_unavailable"}, omitted(nodes[0]))
 }

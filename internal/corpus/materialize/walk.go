@@ -161,7 +161,7 @@ type node struct {
 	included bool
 	refs     []resolved
 	resolved bool
-	// parents: the frames this frame cites as parents (isParent), set for
+	// parents: the frames this frame cites as parents (ancestors), set for
 	// the starting frame and its ancestors only.
 	parents []key
 }
@@ -195,8 +195,6 @@ type walker struct {
 	writeID string
 	nodes   map[key]*node
 	incl    []*node
-	// creation caches each frame version's creation commit (isParent).
-	creation map[edgeKey]string
 }
 
 // Plan runs the walk and returns the document, bodies included.
@@ -206,7 +204,7 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 	}
 	r := newReader(req.Binding, req.Manager, req.MayRead)
 	defer r.close()
-	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}, creation: map[edgeKey]string{}}
+	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}}
 
 	root, err := w.root(req)
 	if err != nil {
