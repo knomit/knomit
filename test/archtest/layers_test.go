@@ -185,7 +185,10 @@ var sameLayerEdges = map[string]bool{
 	"engine/store/merge -> engine/store/model":           true,
 	"engine/store/remotesync -> engine/store/model":      true,
 	// corpus
-	"corpus/federate -> corpus/repos":    true,
+	"corpus/federate -> corpus/repos": true,
+	// materialize reads one fact's reference closure across the binding's
+	// mounts and, cross-KB, any repo the Manager registers (ByRootID).
+	"corpus/materialize -> corpus/repos": true,
 	"corpus/resolutions -> corpus/refs":  true,
 	"corpus/resolutions -> corpus/repos": true,
 	"corpus/synthesize -> corpus/repos":  true,

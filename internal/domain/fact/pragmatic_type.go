@@ -41,9 +41,11 @@ const (
 	// It does NOT switch off dedup or merge: an incoming frame is merged,
 	// refused or allowed to settle a hypothesis unless its topic sets
 	// `learn_dedup: off` (the mission template's frames/ topic does).
-	// It does NOT define a parent, a status or a topic: frame is a SHAPE,
-	// not a verb, so "the verb is the topic" still holds; parent rules and
-	// the `status` key belong to materialize and the template.
+	// It does NOT define a status or a topic: frame is a SHAPE, not a verb,
+	// so "the verb is the topic" still holds (an abandoned frame is a
+	// retracted one). A frame's parents are the frames it refs, any number of
+	// them; materialize orders them (ancestors first), and nothing validates
+	// them.
 	Frame Type = "frame"
 )
 

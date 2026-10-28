@@ -162,8 +162,9 @@ func readFact(
 }
 
 // handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
-// It also dispatches sub-resource requests (*/commits, */incoming, */outgoing).
-func handleHALFact(b hal.URLBuilder) http.HandlerFunc {
+// It also dispatches sub-resource requests (*/commits, */incoming, */outgoing,
+// */materialize).
+func handleHALFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := httpx.BranchFromContext(r.Context())
@@ -182,6 +183,10 @@ func handleHALFact(b hal.URLBuilder) http.HandlerFunc {
 		}
 
 		// Dispatch sub-resource requests before any other processing.
+		if factPath, ok := splitMaterialize(chi.URLParam(r, "*")); ok {
+			serveMaterialize(w, r, repos.NewBindingOfRepo(ri, branch), mgr, factPath, "", nil)
+			return
+		}
 		if dispatchFactSubResource(b, ri, repoName, branch, w, r) {
 			return
 		}

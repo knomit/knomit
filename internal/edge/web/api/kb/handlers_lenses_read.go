@@ -555,7 +555,7 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // how to do it. Registering the reader alone left those suffixes to fall
 // through into the fact read, where "<uuid>.md/incoming" is just a path that
 // does not exist — a deterministic 500 for every fact (issue #178).
-func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
+func handleHALLensFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 
@@ -582,6 +582,15 @@ func handleHALLensFact(b hal.URLBuilder) http.HandlerFunc {
 		// F25: every OTHER dot path is closed to the fact endpoints for reads
 		// too, on every mount and for every sub-resource.
 		if refusePrivateRead(w, r, raw) {
+			return
+		}
+
+		// /materialize addresses the fact as the lens does (bare = the write
+		// repo, kb://<id12>/... = that mount) and walks through the lens's own
+		// binding. Every way the fact cannot be addressed or read answers the
+		// same 404 as the fact route, so it reveals nothing about the mounts.
+		if factPath, ok := splitMaterialize(requested); ok {
+			serveMaterialize(w, r, bind, mgr, factPath, "", func() { lensFactNotFound(w, r, requested) })
 			return
 		}
 

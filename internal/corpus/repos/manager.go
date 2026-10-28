@@ -706,6 +706,51 @@ func (m *Manager) GetByUID(uid string) *RepoInstance {
 	return m.byUID[uid]
 }
 
+// ByRootID returns the registered repo whose ROOT-COMMIT id is id: the full
+// hash, or its 12-hex wire prefix as it appears in kb://<id12>/… paths. This
+// is the fact-addressing identity (RepoInstance.ID), NOT the registry uid
+// (GetByUID) and not the name (Get): the three are different namespaces with
+// different lifetimes.
+//
+// ok is false when no registered repo has the id, and ALSO when a 12-hex
+// prefix matches more than one repo. Two distinct knowledge bases can share a
+// prefix (checkMemberIDCollision keeps such a pair out of one lens, not out of
+// the server), and an ambiguous address must not silently pick one of them.
+// A repo whose id is not resolvable yet (its store never opened) matches
+// nothing.
+//
+// The instances are snapshotted under the read lock and their ids resolved
+// after it is released: RepoInstance.ID may open a read on the repo's store,
+// and nothing that can block belongs inside m.mu (see ForEach).
+func (m *Manager) ByRootID(id string) (*RepoInstance, bool) {
+	if id == "" {
+		return nil, false
+	}
+	m.mu.RLock()
+	instances := make([]*RepoInstance, 0, len(m.repos))
+	for _, ri := range m.repos {
+		if ri != nil {
+			instances = append(instances, ri)
+		}
+	}
+	m.mu.RUnlock()
+
+	var found *RepoInstance
+	for _, ri := range instances {
+		full := ri.ID()
+		if full == "" {
+			continue
+		}
+		if full == id || (len(id) == 12 && strings.HasPrefix(full, id)) {
+			if found != nil && found != ri {
+				return nil, false
+			}
+			found = ri
+		}
+	}
+	return found, found != nil
+}
+
 // ForEach calls fn for every registered repo while holding a read lock.
 func (m *Manager) ForEach(fn func(name string, ri *RepoInstance)) {
 	m.mu.RLock()

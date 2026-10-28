@@ -9,6 +9,7 @@ package kb
 import (
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/store/model"
@@ -33,12 +34,14 @@ import (
 // emb is the server's query embedder for the repo and lens search and the
 // lens facts read with text. When it is nil those handlers do not embed the
 // query themselves and leave it to each repo's store, as before the move.
-func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder) {
+// mgr is the server's repo registry: the facts/*/materialize sub-resource
+// follows cross-KB refs into any repo registered in it.
+func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr *repos.Manager) {
 	b := hal.URLBuilder{Base: httpx.APIBase}
 
 	branch.Get("/facts", handleHALFactsCollection(b))
 	branch.Post("/facts", handleFactCreate(b, ontologyRoot))
-	branch.Get("/facts/*", handleHALFact(b))
+	branch.Get("/facts/*", handleHALFact(b, mgr))
 	branch.Put("/facts/*", handleFactUpdate(b, ontologyRoot))
 	branch.Delete("/facts/*", handleFactDelete(b))
 
@@ -48,7 +51,7 @@ func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder) {
 	branch.Get("/changes", handleHALChanges(b))
 	branch.Get("/commits", handleHALCommitsList(b, ontologyRoot))
 	branch.Get("/commits/{sha}", handleHALCommitDetail(b, ontologyRoot))
-	branch.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b))
+	branch.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b, mgr))
 	branch.Get("/commits/{sha}/topics", handleCommitAnchoredTopicNode())
 	branch.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
 
@@ -64,7 +67,7 @@ func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder) {
 	branch.Get("/triggers", handleHALTriggers(b))
 
 	lens.Get("/facts", handleHALLensFacts(emb))
-	lens.Get("/facts/*", handleHALLensFact(b))
+	lens.Get("/facts/*", handleHALLensFact(b, mgr))
 	lens.Get("/search", handleHALLensSearch(emb))
 	lens.Get("/completions", handleHALLensCompletions())
 	lens.Get("/motifs", handleHALLensMotifs(b))

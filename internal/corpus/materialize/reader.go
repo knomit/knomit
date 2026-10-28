@@ -1,0 +1,228 @@
+package materialize
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/model"
+)
+
+// mount is one repo the walk reads: an acquired store at a branch, plus the
+// commit its LATEST versions are read as of (the walk's anchor for the
+// root's repo; the branch tip, resolved once, for a repo entered cross-KB).
+type mount struct {
+	ri     *repos.RepoInstance
+	id12   string
+	branch string
+	anchor string
+	svc    *store.Service
+}
+
+// reader holds the mounts one materialization touches, acquired on first use
+// and released by close. A repo is resolved by its ROOT-COMMIT id: the
+// binding's own mount of it first (at the branch the binding pins), else any
+// repo registered on the server (repos.Manager.ByRootID, at its read branch).
+type reader struct {
+	b        *repos.Binding
+	mgr      *repos.Manager
+	mounts   map[string]*mount // by id12; a nil value records "not available"
+	releases []func()
+	edges    map[edgeKey]map[string]string
+}
+
+type edgeKey struct{ repo, rel, commit string }
+
+func newReader(b *repos.Binding, mgr *repos.Manager) *reader {
+	return &reader{b: b, mgr: mgr, mounts: map[string]*mount{}, edges: map[edgeKey]map[string]string{}}
+}
+
+func (r *reader) close() {
+	for _, rel := range r.releases {
+		rel()
+	}
+	r.releases = nil
+}
+
+// target routes a root-commit id to a repo and the branch to read it at.
+func (r *reader) target(id12 string) (*repos.RepoInstance, string, bool) {
+	if rt, ok := r.b.ByID(id12); ok {
+		return rt.RI, rt.Branch, true
+	}
+	if r.mgr == nil {
+		return nil, "", false
+	}
+	ri, ok := r.mgr.ByRootID(id12)
+	if !ok {
+		return nil, "", false
+	}
+	return ri, ri.ReadBranch(), true
+}
+
+// open acquires the store of the repo with id12 at branch. anchor "" leaves
+// the mount's anchor to be set by the caller.
+func (r *reader) open(ri *repos.RepoInstance, branch string) (*mount, error) {
+	id12 := fact.ID12(ri.ID())
+	if m, ok := r.mounts[id12]; ok && m != nil {
+		return m, nil
+	}
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return nil, err
+	}
+	r.releases = append(r.releases, release)
+	m := &mount{ri: ri, id12: id12, branch: branch, svc: svc}
+	r.mounts[id12] = m
+	return m, nil
+}
+
+// foreign returns the mount for a repo entered through a cross-KB ref, read
+// at its branch tip (resolved once and frozen for the whole walk), or nil
+// when no registered repo has the id or its store cannot be opened.
+func (r *reader) foreign(ctx context.Context, id12 string) (*mount, error) {
+	if m, ok := r.mounts[id12]; ok {
+		return m, nil
+	}
+	ri, branch, ok := r.target(id12)
+	if !ok {
+		r.mounts[id12] = nil
+		return nil, nil
+	}
+	m, err := r.open(ri, branch)
+	if err != nil {
+		// Unavailable, not a failure of the walk: the store is closing,
+		// populating or gone. The ref is reported as not available.
+		r.mounts[id12] = nil
+		return nil, nil
+	}
+	if m.anchor == "" {
+		tip, err := m.svc.HeadCommit(ctx, m.branch)
+		if err != nil {
+			return nil, fmt.Errorf("resolve the tip of %s in repo %s: %w", m.branch, id12, err)
+		}
+		m.anchor = tip
+	}
+	return m, nil
+}
+
+// readAt reads path at commit. A version that is not in commit's tree falls
+// back to the latest version before it, as knomit_explain does for a target
+// retracted after it was cited: the cited content is still what the referrer
+// reasoned over. used is the commit the content came from.
+func (r *reader) readAt(ctx context.Context, m *mount, rel, commit string) (f fact.Fact, used string, ok bool, err error) {
+	res, err := m.svc.Facts().ReadFact(ctx, m.branch, rel, &facts.ReadFactOpts{AtCommit: commit})
+	used = commit
+	if errors.Is(err, model.ErrPathNotFound) {
+		res, err = m.svc.Facts().ReadFact(ctx, m.branch, rel, &facts.ReadFactOpts{BeforeCommit: commit})
+		used = res.FromCommit
+	}
+	if errors.Is(err, model.ErrPathNotFound) {
+		return fact.Fact{}, "", false, nil
+	}
+	if err != nil {
+		return fact.Fact{}, "", false, fmt.Errorf("read %s at %s: %w", rel, commit, err)
+	}
+	f, err = fact.ParseFact(rel, res.Content)
+	if err != nil {
+		return fact.Fact{}, "", false, fmt.Errorf("parse %s at %s: %w", rel, used, err)
+	}
+	return f, used, true, nil
+}
+
+// latest reads path's version live at the mount's anchor. ok is false when
+// the path is not in the anchor's tree: retracted, deleted or never written
+// by then. commit is the change that introduced that version (first-parent
+// resolution, never wall-clock), not the anchor itself.
+func (r *reader) latest(ctx context.Context, m *mount, rel string) (f fact.Fact, commit string, ok bool, err error) {
+	res, err := m.svc.Facts().ReadFact(ctx, m.branch, rel, &facts.ReadFactOpts{AtCommit: m.anchor})
+	if errors.Is(err, model.ErrPathNotFound) {
+		return fact.Fact{}, "", false, nil
+	}
+	if err != nil {
+		return fact.Fact{}, "", false, fmt.Errorf("read %s at %s: %w", rel, m.anchor, err)
+	}
+	commit, err = m.svc.HistoryQuery().LiveRevision(ctx, m.branch, rel, m.anchor)
+	if err != nil {
+		return fact.Fact{}, "", false, fmt.Errorf("resolve the version of %s at %s: %w", rel, m.anchor, err)
+	}
+	if commit == "" {
+		// Present in the tree but below the indexed history (a history
+		// boundary): the anchor is the only commit known to hold it.
+		commit = m.anchor
+	}
+	f, err = fact.ParseFact(rel, res.Content)
+	if err != nil {
+		return fact.Fact{}, "", false, fmt.Errorf("parse %s at %s: %w", rel, commit, err)
+	}
+	return f, commit, true, nil
+}
+
+// pins returns the versions (path, commit) cites: the target commit of each
+// DERIVED_FROM edge out of that version, by repo-relative target path.
+func (r *reader) pins(ctx context.Context, m *mount, rel, commit string) (map[string]string, error) {
+	k := edgeKey{m.id12, rel, commit}
+	if p, ok := r.edges[k]; ok {
+		return p, nil
+	}
+	out, err := m.svc.GraphStore().OutgoingAtCommit(ctx, m.branch, rel, commit)
+	if err != nil {
+		return nil, fmt.Errorf("outgoing refs of %s at %s: %w", rel, commit, err)
+	}
+	p := make(map[string]string, len(out))
+	for _, e := range out {
+		if _, dup := p[e.Path]; !dup {
+			p[e.Path] = e.Commit
+		}
+	}
+	r.edges[k] = p
+	return p, nil
+}
+
+// date is the yyyy-mm-dd commit date of the version of path at commit, or ""
+// when the index has no row for it.
+func (r *reader) date(ctx context.Context, m *mount, rel, commit string) string {
+	revs, err := m.svc.HistoryQuery().RevisionsBefore(ctx, m.branch, rel, commit, 1)
+	if err != nil || len(revs) == 0 || revs[0].CommittedAt == 0 {
+		return ""
+	}
+	return time.Unix(revs[0].CommittedAt, 0).UTC().Format("2006-01-02")
+}
+
+// ReadBodies fills each node's Body by reading it at its stored (repo,
+// commit). It is how a later page of a paged materialization gets its
+// bodies: the order and every version were frozen by the first call, so a
+// commit landing in between changes nothing. A repo that is no longer
+// reachable through b or mgr is an error: the frozen view cannot be served.
+func ReadBodies(ctx context.Context, b *repos.Binding, mgr *repos.Manager, nodes []Node) error {
+	r := newReader(b, mgr)
+	defer r.close()
+	for i := range nodes {
+		n := &nodes[i]
+		ri, branch, ok := r.target(n.Repo)
+		if !ok {
+			return fmt.Errorf("repo %s is no longer available", n.Repo)
+		}
+		m, err := r.open(ri, branch)
+		if err != nil {
+			return fmt.Errorf("repo %s: %w", n.Repo, err)
+		}
+		_, rel, _, err := fact.ParseKBPath(n.Path)
+		if err != nil {
+			return err
+		}
+		f, _, ok, err := r.readAt(ctx, m, rel, n.Commit)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%s is not readable at %s", n.Path, n.Commit)
+		}
+		n.Body = f.Body
+	}
+	return nil
+}
