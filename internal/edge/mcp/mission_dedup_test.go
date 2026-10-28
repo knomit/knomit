@@ -95,6 +95,57 @@ func signalReq(topic, category, task string, expires time.Time) mcpgo.CallToolRe
 	return req
 }
 
+// frameReq is one template-shaped frame: title and body differ only by the
+// frame's name, as two sibling frames in one category do.
+func frameReq(name string) mcpgo.CallToolRequest {
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"moment_name": "frame",
+		"facts": []any{map[string]any{
+			"topic": "frames", "category": "root", "kind": "pragmatic", "type": "frame",
+			"title": "Frame " + name, "body": "Question " + name + ": see the charter.",
+			"context": map[string]any{"status": "open"}, "confidence": 1, "sources": 1,
+		}},
+	}
+	return req
+}
+
+// The mission template's frames topic needs learn_dedup: off. Two sibling
+// frames are templated text that differs by a name, so with dedup on the
+// second is folded into the first (the same shape as the signal topics). The
+// names have equal length so the length embedder puts the two at cosine 1.0.
+//
+// SABOTAGE: delete `learn_dedup: off` under frames in the shipped template
+// ontology → the frames/shipped subtest sees one file for two frames → red.
+func TestMission_FramesTopicNeedsDedupOff(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		dedupOff bool
+	}{{"shipped", true}, {"without learn_dedup off", false}} {
+		t.Run("frames/"+c.name, func(t *testing.T) {
+			ctx, emb, _ := newMissionDedupRepo(t, missionOntology(t, "frames", c.dedupOff))
+			r1, err := LearnHandler(emb)(ctx, frameReq("alpha"))
+			require.NoError(t, err)
+			require.False(t, r1.IsError, resultText(t, r1))
+			first := mergedFactPath(t, r1)
+			r2, err := LearnHandler(emb)(ctx, frameReq("bravo"))
+			require.NoError(t, err)
+			if !c.dedupOff {
+				// Control: with dedup on, the second frame is not its own fact.
+				if r2.IsError {
+					require.Contains(t, resultText(t, r2), "dedup-merge")
+					return
+				}
+				require.Equal(t, first, mergedFactPath(t, r2), "control: the second frame folds into the first")
+				return
+			}
+			require.False(t, r2.IsError, resultText(t, r2))
+			require.NotEqual(t, first, mergedFactPath(t, r2),
+				"the frames topic must keep learn_dedup: off, so two sibling frames stay two files")
+		})
+	}
+}
+
 // SABOTAGE: delete `learn_dedup: off` under tasks in the shipped ontology →
 // the tasks/shipped subtest folds the second task → red.
 func TestMission_SignalTopicsNeedDedupOff(t *testing.T) {
