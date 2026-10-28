@@ -247,7 +247,8 @@ func newMachine(parent context.Context, r *RepoInstance, opts Options) *Machine 
 
 // Send delivers an event and waits for its reply, or for ctx. The cheap
 // refusals are answered from the status snapshot at once, so a caller is
-// refused even while the driver is inside a clone. Unmount cancels the root
+// refused even while the driver is inside a clone; a standing refusal comes
+// before ErrIndexing, as in handleExternal. Unmount cancels the root
 // context FIRST, from the caller's goroutine, so a Populate in flight aborts
 // and every life is told to stop before the driver drains them.
 func (m *Machine) Send(ctx context.Context, e MachineEvent) (Reply, error) {
@@ -266,7 +267,11 @@ func (m *Machine) Send(ctx context.Context, e MachineEvent) (Reply, error) {
 				return Reply{Status: st}, errNotOpenPopulating
 			}
 			return Reply{Status: st}, ErrNotOpen
-		case e.exclusiveWithIndex() && st.IndexRunning:
+		}
+		if err := e.standingRefusal(m.r); err != nil {
+			return Reply{Status: st}, err
+		}
+		if e.exclusiveWithIndex() && st.IndexRunning {
 			return Reply{Status: st}, ErrIndexing
 		}
 	}
@@ -362,6 +367,10 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 	}
 	if e.kind != evMount && m.lives[StageOpen] == nil {
 		answer(Reply{}, ErrNotOpen)
+		return false
+	}
+	if err := e.standingRefusal(m.r); err != nil {
+		answer(Reply{}, err)
 		return false
 	}
 	if e.exclusiveWithIndex() && m.indexRunning() {

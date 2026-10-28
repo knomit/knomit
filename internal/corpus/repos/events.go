@@ -9,7 +9,9 @@ package repos
 // target, guard, apply — and nothing anywhere else.
 //
 // A guard runs before anything is exited and may read the network (bounded by
-// cfg.Git.NetworkTimeout): a refusal leaves the repo exactly as it was. An
+// cfg.Git.NetworkTimeout): a refusal leaves the repo exactly as it was. A
+// standing refusal is the narrow exception that runs even earlier, ahead of
+// the index gate (see standingRefusal). An
 // apply runs after the exits and before the walk; its error is the event's
 // reply, never a reason to leave stages exited (rule 11).
 
@@ -37,7 +39,8 @@ var (
 	// reopened. Transient; the HTTP layer answers 503.
 	ErrNotOpen = errors.New("repo is not open yet")
 	// ErrIndexing refuses Attach, Detach and Swap while the index job runs
-	// (rule 3). The caller waits or cancels indexing (CancelIndex); the HTTP
+	// (rule 3), unless a standing refusal answers first. The caller waits or
+	// cancels indexing (CancelIndex); the HTTP
 	// layer answers 409 with a cancel-index link.
 	ErrIndexing = errors.New("repo is indexing")
 	// ErrIndexCancelled is the index result after CancelIndex: the status
@@ -53,7 +56,8 @@ var (
 	// was persisted and the running sync loop was never stopped.
 	ErrOriginUnreachable = errors.New("origin was not attached")
 	// ErrSubscriptionOrigin refuses detaching the origin of a subscription,
-	// which has no content of its own.
+	// which has no content of its own. A standing refusal: answered ahead of
+	// ErrIndexing, since no wait or cancel would ever let the detach through.
 	ErrSubscriptionOrigin = errors.New("a subscription requires its origin")
 )
 
@@ -199,6 +203,20 @@ func (e *MachineEvent) exclusiveWithIndex() bool {
 	return e.kind == evAttachOrigin || e.kind == evDetachOrigin || e.kind == evSwapStore
 }
 
+// standingRefusal is a refusal no wait can lift. It is checked AHEAD of the
+// index gate, at both of that gate's sites (Machine.Send's fast path and
+// handleExternal), so the caller is told the permanent reason at once rather
+// than ErrIndexing, which — once waited out or cancelled — would only give way
+// to it. A check belongs here only if it is cheap, local and reads state fixed
+// for the instance's whole life (Send calls it off the driver goroutine);
+// anything that can change, or reads the network or a store, stays in guard.
+func (e *MachineEvent) standingRefusal(r *RepoInstance) error {
+	if e.kind == evDetachOrigin && r.subscribed {
+		return ErrSubscriptionOrigin
+	}
+	return nil
+}
+
 // guardContext bounds a guard's network read by cfg.Git.NetworkTimeout. Zero
 // means NO LIMIT there — context.WithTimeout(ctx, 0) would mean already
 // expired — so a zero timeout gets a plain cancellable context.
@@ -210,15 +228,11 @@ func guardContext(parent context.Context, r *RepoInstance) (context.Context, con
 }
 
 // guard runs before anything is exited. It may read the network; a refusal
-// changes nothing.
+// changes nothing. The standing refusals have already been answered.
 func (e *MachineEvent) guard(ctx context.Context, r *RepoInstance) error {
 	switch e.kind {
 	case evAttachOrigin:
 		return guardAttach(ctx, r, e.origin)
-	case evDetachOrigin:
-		if r.subscribed {
-			return ErrSubscriptionOrigin
-		}
 	case evSwapStore:
 		return guardSwap(ctx, r, e.swap)
 	}

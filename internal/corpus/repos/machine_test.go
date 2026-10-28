@@ -126,6 +126,44 @@ func (f *mfix) holdIndex(t *testing.T) Reply {
 	return rep
 }
 
+// holdSubscription mounts a subscription beside the fixture's repo with its
+// heal index held at the index-job hook, and returns it once the job is
+// running. The fixture's own repo is settled first, so the hold is the
+// subscription's.
+func (f *mfix) holdSubscription(t *testing.T) *RepoInstance {
+	t.Helper()
+	waitIndexSettled(t, f.ri)
+	url := f.remote(t, "sub")
+	_, upstream := initSubscriptionStore(t, f.m, "uid-sub", url)
+	f.hk.armed.Store(true)
+	sub, err := mountSubscription(f.m, "uid-sub", control.Origin{URL: url, Branch: upstream, Mode: control.OriginModeSubscribe})
+	require.NoError(t, err)
+	f.m.Set("uid-sub", sub)
+	f.hk.g.waitArrived(t)
+	require.True(t, sub.Status().IndexRunning)
+	return sub
+}
+
+// sendPastFastPath hands e to ri's driver as Send does but WITHOUT Send's
+// snapshot refusals, so a test reaches handleExternal's own checks — the
+// second site of every refusal Send also answers early.
+func sendPastFastPath(t *testing.T, ri *RepoInstance, e MachineEvent) error {
+	t.Helper()
+	e.reply = make(chan reply, 1)
+	select {
+	case ri.machine.external <- &e:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the driver never took the event")
+	}
+	select {
+	case r := <-e.reply:
+		return r.err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the driver never answered the event")
+	}
+	return nil
+}
+
 // remote seeds a bare file:// remote carrying the default ontology (the repo's
 // own), under the fixture's local-origin root.
 func (f *mfix) remote(t *testing.T, name string) string {
@@ -201,6 +239,7 @@ func TestMachine_TransitionTable(t *testing.T) {
 		} {
 			_, err := send(f.m, f.ri, e)
 			require.ErrorIs(t, err, ErrIndexing, name)
+			require.ErrorIs(t, sendPastFastPath(t, f.ri, e), ErrIndexing, name+", at handleExternal")
 		}
 		require.Equal(t, gens, f.ri.snap().gens, "a refused event touches nothing")
 
@@ -419,15 +458,29 @@ func TestWalkthrough_Detach(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, o)
 
-	// The mount's heal index runs in the background, and a Detach sent while
-	// it runs is refused with ErrIndexing BEFORE any origin rule is read
-	// (indexing is checked first, by design: Attach/Detach/Swap are exclusive
-	// with the index job). Wait for the heal to settle so the refusal under
-	// test is the subscription's own.
+	// No wait for the mount's heal index: the subscription refusal is a
+	// standing one and answers ahead of ErrIndexing whether or not the heal
+	// is still running (TestWalkthrough_SubscriptionDetachDuringIndexing).
 	_, sub, _ := buildSubscription(t)
-	waitIndexSettled(t, sub)
 	_, err = send(sub.env.m, sub, DetachOrigin())
 	require.ErrorIs(t, err, ErrSubscriptionOrigin)
+}
+
+// Detaching a subscription's origin while its index runs answers the
+// permanent ErrSubscriptionOrigin, not the transient ErrIndexing — at Send's
+// fast path and at handleExternal alike — and touches nothing.
+func TestWalkthrough_SubscriptionDetachDuringIndexing(t *testing.T) {
+	f := newMFix(t, StageIndex, "index-job", true)
+	sub := f.holdSubscription(t)
+	gens := sub.snap().gens
+
+	_, err := send(f.m, sub, DetachOrigin())
+	require.ErrorIs(t, err, ErrSubscriptionOrigin, "the standing refusal, not ErrIndexing")
+	require.ErrorIs(t, sendPastFastPath(t, sub, DetachOrigin()), ErrSubscriptionOrigin, "at handleExternal too")
+
+	st := sub.snap()
+	require.Equal(t, gens, st.gens, "a refused event touches nothing")
+	require.True(t, st.IndexRunning, "the index job was not disturbed")
 }
 
 // Swap ok: cancel all, drain newest-first, install + origin, walk up again;
