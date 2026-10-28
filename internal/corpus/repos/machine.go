@@ -268,7 +268,7 @@ func (m *Machine) Send(ctx context.Context, e MachineEvent) (Reply, error) {
 			}
 			return Reply{Status: st}, ErrNotOpen
 		}
-		if err := e.standingRefusal(m.r); err != nil {
+		if err := e.standingRefusal(m.r.lifeFacts()); err != nil {
 			return Reply{Status: st}, err
 		}
 		if e.exclusiveWithIndex() && st.IndexRunning {
@@ -369,7 +369,7 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 		answer(Reply{}, ErrNotOpen)
 		return false
 	}
-	if err := e.standingRefusal(m.r); err != nil {
+	if err := e.standingRefusal(m.r.lifeFacts()); err != nil {
 		answer(Reply{}, err)
 		return false
 	}

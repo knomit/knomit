@@ -208,13 +208,23 @@ func (e *MachineEvent) exclusiveWithIndex() bool {
 // handleExternal), so the caller is told the permanent reason at once rather
 // than ErrIndexing, which — once waited out or cancelled — would only give way
 // to it. A check belongs here only if it is cheap, local and reads state fixed
-// for the instance's whole life (Send calls it off the driver goroutine);
-// anything that can change, or reads the network or a store, stays in guard.
-func (e *MachineEvent) standingRefusal(r *RepoInstance) error {
-	if e.kind == evDetachOrigin && r.subscribed {
+// for the instance's whole life; anything that can change, or reads the
+// network or a store, stays in guard. Send calls it off the driver goroutine,
+// so it takes lifeFacts, not the RepoInstance: driver-owned and store-derived
+// state is unreachable from here, and a check that wants it fails to compile.
+func (e *MachineEvent) standingRefusal(f lifeFacts) error {
+	if e.kind == evDetachOrigin && f.subscribed {
 		return ErrSubscriptionOrigin
 	}
 	return nil
+}
+
+// lifeFacts are the facts about a RepoInstance fixed for its whole life, set
+// before its machine starts and never written again: the only instance state
+// standingRefusal may read, because Machine.Send reads it off the driver
+// goroutine. A field belongs here only if it is immutable after construction.
+type lifeFacts struct {
+	subscribed bool
 }
 
 // guardContext bounds a guard's network read by cfg.Git.NetworkTimeout. Zero
