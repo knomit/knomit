@@ -104,7 +104,7 @@ func frameReq(name string) mcpgo.CallToolRequest {
 		"facts": []any{map[string]any{
 			"topic": "frames", "category": "root", "kind": "pragmatic", "type": "frame",
 			"title": "Frame " + name, "body": "Question " + name + ": see the charter.",
-			"context": map[string]any{"status": "open"}, "confidence": 1, "sources": 1,
+			"confidence": 1, "sources": 1,
 		}},
 	}
 	return req
