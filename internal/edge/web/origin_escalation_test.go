@@ -616,6 +616,9 @@ func TestOriginEscalation_CreateWithAnOriginNeedsTheOperator(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "operator", c.mode)
 		require.Nil(t, f.m.Get(c.name), "a refused %s create registered nothing", c.mode)
 	}
+	// The create is a background job, so "registered nothing" alone could be
+	// a job still running: no job may have started at all.
+	require.Empty(t, f.m.CreateJobs(), "a refused create must start no job")
 	require.Equal(t, emptyBefore, escRefs(t, empty), "nothing was pushed into the origin")
 
 	// A create without an origin stays a `write`.
