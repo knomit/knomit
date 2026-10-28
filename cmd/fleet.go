@@ -198,7 +198,7 @@ func fleetVerb(use, short string, args cobra.PositionalArgs, method, path string
 // as localCall's error, the server's detail.
 func fleetAPI(ctx context.Context, hc *http.Client, out io.Writer, method, path string, in any) error {
 	var raw json.RawMessage
-	if err := localCall(ctx, hc, method, path, in, &raw); err != nil && !errors.Is(err, io.EOF) {
+	if err := localCall(ctx, hc, method, path, in, &raw); err != nil && err != io.EOF { // identity: only the decoder's bare EOF on an empty 2xx body; a *url.Error wrapping EOF is a dropped connection
 		return err
 	}
 	if len(raw) == 0 {

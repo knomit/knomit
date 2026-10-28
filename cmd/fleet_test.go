@@ -216,3 +216,29 @@ func fleetLocalOnlyRoutes(t *testing.T) map[string]bool {
 	require.NotEmpty(t, out, "no fleet route found in the RequireLocalVia group: the pattern no longer matches mount.go")
 	return out
 }
+
+// A server that drops the connection without answering leaves the outcome of a
+// destructive verb unknown: that must be an error, never a silent exit 0.
+func TestFleetCLI_DroppedConnectionIsAnError(t *testing.T) {
+	sock := oauthLocalListenerPath(t)
+	ln, cleanup, err := auth.ListenLocal(sock)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	hijacked := false
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, herr := w.(http.Hijacker).Hijack()
+		if herr != nil {
+			return
+		}
+		hijacked = true
+		_ = conn.Close()
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	var out bytes.Buffer
+	err = fleetAPI(context.Background(), localAPIClient(sock), &out, http.MethodPost, "/fleet/decommission", nil)
+	require.True(t, hijacked, "the handler ran and dropped the connection")
+	require.Error(t, err, "a dropped connection is not success")
+	require.Empty(t, out.String())
+}
