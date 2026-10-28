@@ -33,6 +33,7 @@ import (
 	"knomit/internal/engine/store/migrate"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
+	"knomit/internal/testsupport/gitfixture"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -335,7 +336,7 @@ func TestOriginEscalation_OperatorTokenSetsAnOrigin(t *testing.T) {
 	tok := f.mintOperatorToken(t, "x")
 	bare := filepath.Join(f.root, "backup.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGitForTest(t, bare, "init", "-q", "--bare", "-b", "main")
+	gitfixture.InitBare(t, bare, "main")
 
 	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+bare+`","branch":"main"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -361,7 +362,7 @@ func TestOriginEscalation_LocalSocketCallerSetsAnOrigin(t *testing.T) {
 	}
 	bare := filepath.Join(f.root, "backup.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGitForTest(t, bare, "init", "-q", "--bare", "-b", "main")
+	gitfixture.InitBare(t, bare, "main")
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/repos/x/origin", strings.NewReader(`{"url":"`+bare+`","branch":"main"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -435,7 +436,7 @@ func TestOriginEscalation_OperatorRefusedAnotherReposKBByItsRoot(t *testing.T) {
 
 	zBare := filepath.Join(f.root, "z.git")
 	require.NoError(t, os.MkdirAll(zBare, 0o755))
-	runGitForTest(t, zBare, "init", "-q", "--bare", "-b", "main")
+	gitfixture.InitBare(t, zBare, "main")
 	work := t.TempDir()
 	runGitForTest(t, "", "clone", "-q", yBare, work)
 	require.NoError(t, os.MkdirAll(filepath.Join(work, "kb"), 0o755))
@@ -525,7 +526,7 @@ func TestOriginEscalation_RelatedOriginNeedsNoReplace(t *testing.T) {
 	// X's main, published by X's own first attach to an empty remote.
 	bare := filepath.Join(f.root, "x.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGitForTest(t, bare, "init", "-q", "--bare", "-b", "main")
+	gitfixture.InitBare(t, bare, "main")
 	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+bare+`","branch":"main"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NoError(t, riX.OriginRoundForTest(context.Background()))
