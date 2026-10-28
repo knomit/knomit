@@ -88,7 +88,7 @@ func newIssuerFixtureAt(t *testing.T, accessTTL time.Duration, prefix string) *i
 			w.WriteHeader(http.StatusUnauthorized)
 		case r.URL.Path == "/protected":
 			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			p, _, err := v.Verify(r.Context(), tok, r.URL.Path)
+			p, _, _, err := v.Verify(r.Context(), tok, r.URL.Path)
 			if err != nil {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="knomit", error="invalid_token"`)
 				w.WriteHeader(http.StatusUnauthorized)
