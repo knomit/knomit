@@ -40,7 +40,7 @@ var errNotSettingsWindow = errors.New("this action is available only from the Se
 // window. Wails puts the calling window in the call's context
 // (application.WindowKey), resolved from the window-name header it sets on
 // the webview's own request — not from anything the page sends — for every
-// named window, which is every window (wails v3.0.0-beta.3,
+// named window, which is every window (wails v3.0.0,
 // pkg/application/application.go webViewAssetRequest.Header,
 // webview_window.go default "window-<id>" names, messageprocessor.go
 // getTargetWindow). A call with no window is refused.

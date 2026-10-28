@@ -28,7 +28,7 @@ import (
 // which is exactly what that writer needs. macOS and Linux carry the same wire,
 // so there is one transport, not one per platform.
 //
-// Limits Wails imposes (v3.0.0-beta.28, pkg/application/stream*.go), which this
+// Limits Wails imposes (v3.0.0, pkg/application/stream*.go), which this
 // adapter inherits rather than re-enforces: 256 open streams per page, 16 stream
 // sessions per window, 4096 open streams per app; per window 8 MiB / 256 frames
 // queued toward the page (Send blocks when full, so a stalled page throttles the
