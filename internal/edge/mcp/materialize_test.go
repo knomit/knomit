@@ -849,6 +849,12 @@ func TestMaterialize_SameCommitMutualFramesTheStartIsTheChild(t *testing.T) {
 	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/p.md"})
 	require.Equal(t, []string{"Q", "P"}, titles(nodes), "started from P, P is the child")
 	require.Equal(t, []string{"ancestor", "focal"}, []string{nodes[0].Role, nodes[1].Role})
+
+	// The same pair ABOVE the start: S→P, P↔Q. P is reached first, so P is
+	// Q's child and Q comes first; the pair never deadlocks the order.
+	frame(t, ri, "kb/frames/s.md", "S", "kb/frames/p.md")
+	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/s.md"})
+	require.Equal(t, []string{"Q", "P", "S"}, titles(nodes))
 }
 
 // Review N2's shape, F→X, X→Y, Y↔Z: the ancestor order never lifts a child
