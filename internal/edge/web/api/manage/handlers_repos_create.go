@@ -64,7 +64,13 @@ const maxCreateBodyBytes = 6*maxOntologyBytes + 4*1024
 // that never comes back changes nothing — the job is bounded by its own
 // deadline and lands in a terminal state either way, which StartCreate also
 // logs for exactly the reader who is no longer here.
-func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+//
+// A create that names an origin (clone, initialize and subscribe all do)
+// chooses that repo's origin, so it passes the operator gate first, exactly as
+// PUT /origin does; a create without one needs only `write`. The gate is
+// applied here rather than on the route because only the body tells them
+// apart.
+func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ontology_yaml rides in this body for modes "custom" and "initialize", so the
 		// cap maxOntologyBytes names has to be applied here too — :validate
@@ -96,6 +102,13 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			spec.Template = &repos.TemplateRef{Repo: req.Template.Repo, Name: req.Template.Name}
 		}
 		if req.Origin != nil {
+			// The operator gate writes its own 403 and never calls through
+			// when the caller lacks the permission.
+			admitted := false
+			operator(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { admitted = true })).ServeHTTP(w, r)
+			if !admitted {
+				return
+			}
 			spec.Origin = &repos.OriginSpec{
 				URL:        httpx.TrimOriginURL(req.Origin.URL),
 				Branch:     req.Origin.Branch,

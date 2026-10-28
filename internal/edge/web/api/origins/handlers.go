@@ -948,20 +948,10 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) htt
 		if testResult.History == "shared" {
 			// Shared history means the remote holds the SAME knowledge base
 			// this repo already does, so the one-copy-per-knowledge-base rule
-			// bites here too. /test refuses this first; re-check while
-			// refusing is still free.
-			if rootCommit := ri.ID(); rootCommit != "" {
-				holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
-				if hErr != nil {
-					hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", hErr.Error(), r.URL.Path)
-					return
-				}
-				if holder != "" {
-					hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", fmt.Sprintf(
-						"this remote holds the same knowledge base as the repo %q; connect aborted before any change was made", holder), r.URL.Path)
-					return
-				}
-			}
+			// bites here too. /test refuses this first; at commit the
+			// AttachOrigin guard (guardAttachIdentity) is the one site that
+			// re-checks it, while refusing is still free.
+			//
 			// With neither a chosen branch nor the remote's default, the session
 			// established no consensus branch: record NO origin (the warning
 			// says why) rather than let the attach fall back to one.
@@ -1169,6 +1159,8 @@ func isCommitRefusal(err error) bool {
 	return httpx.IsLifecycleRefusal(err) ||
 		errors.Is(err, repos.ErrOriginOntologyConflict) ||
 		errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal) ||
+		errors.Is(err, repos.ErrOriginUnrelatedHistory) ||
+		errors.Is(err, repos.ErrOriginNotInspected) ||
 		errors.Is(err, repos.ErrFleetOntologyReserved) ||
 		errors.Is(err, repos.ErrOriginUnreachable) ||
 		errors.Is(err, repos.ErrLocalOriginDenied) ||
@@ -1184,6 +1176,10 @@ func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 		hal.WriteProblem(w, http.StatusConflict, "Different knowledge base", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
 		hal.WriteProblem(w, http.StatusConflict, "Knowledge base already local", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginUnrelatedHistory):
+		hal.WriteProblem(w, http.StatusConflict, "Unrelated history", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrOriginNotInspected):
+		hal.WriteProblem(w, http.StatusConflict, "Origin not inspected", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrFleetOntologyReserved):
 		// The fleet repository is never connected, and a fleet-id store never
 		// arrives by connect (guardSwap).

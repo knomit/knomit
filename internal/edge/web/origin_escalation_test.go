@@ -102,6 +102,11 @@ func (f *escFixture) mintOperatorToken(t *testing.T, repo string) string {
 }
 
 func (f *escFixture) mintToken(t *testing.T, repo, subject string, perms ...auth.Permission) string {
+	return f.mintTokenAt(t, "/api/v1/repos/"+repo, subject, perms...)
+}
+
+// mintTokenAt mints a token whose audience is the issuer plus resourcePath.
+func (f *escFixture) mintTokenAt(t *testing.T, resourcePath, subject string, perms ...auth.Permission) string {
 	t.Helper()
 	ctx := context.Background()
 	scopes := make([]string, 0, len(perms))
@@ -109,7 +114,7 @@ func (f *escFixture) mintToken(t *testing.T, repo, subject string, perms ...auth
 		scopes = append(scopes, string(p))
 	}
 	fam, err := f.store.CreateFamily(ctx, oauth.FamilySpec{ClientID: "kb", Subject: subject,
-		Scopes: scopes, Resource: testIssuer + "/api/v1/repos/" + repo})
+		Scopes: scopes, Resource: testIssuer + resourcePath})
 	require.NoError(t, err)
 	out, err := f.store.IssuePair(ctx, fam.ID)
 	require.NoError(t, err)
@@ -473,6 +478,18 @@ func TestOriginEscalation_UnrelatedMainIsRefused(t *testing.T) {
 	requireXMainLacksSecret(t, oauthH, tok)
 	rec = escDo(oauthH, tok, http.MethodGet, "/api/v1/repos/x/branches/main/facts/kb/own.md", "")
 	require.Equal(t, http.StatusOK, rec.Code, "X's main keeps its own fact: %s", rec.Body.String())
+
+	// The probe fetched the foreign history to decide, into memory only: X's
+	// store holds none of it.
+	//
+	// SABOTAGE (against the branch commit): make probeStorage.SetEncodedObject
+	// also write each object to p.local -> red.
+	tip, err := escGitOut(t, filepath.Join(f.root, "other-kb.git"), "rev-parse", "refs/heads/main")
+	require.NoError(t, err, tip)
+	tip = strings.TrimSpace(tip)
+	require.NoError(t, riX.WithRead(func(s *store.Service) {
+		require.False(t, s.HasObject(tip), "the refused attach's probe wrote the foreign tip %s into X's store", tip)
+	}))
 }
 
 // The explicit replace: the operator asks for it, and the next sync adopts
@@ -565,5 +582,122 @@ func TestOriginEscalation_OriginTooLargeToInspectIsRefused(t *testing.T) {
 		rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", body)
 		escProblem(t, rec, http.StatusConflict, "Origin not inspected")
 	}
+	f.requireNoOrigin(t, riX)
+}
+
+// --- Create with an origin, and the probes -------------------------------------
+//
+// SABOTAGE (against the branch commit): drop the operator check in
+// handleHALReposCreate's `req.Origin != nil` branch -> ..._CreateWithAnOrigin...
+// red (202, and in clone mode the new repo serves the foreign secret).
+// Drop .With(operator) from either probe route -> ..._ProbesNeedTheOperator red.
+
+// A token whose audience is the whole /repos collection reads every
+// REGISTERED repo, but not a knowledge base under local_origin_root that no
+// repo holds: creating a repo with that origin would import it.
+func TestOriginEscalation_CreateWithAnOriginNeedsTheOperator(t *testing.T) {
+	f := newEscFixture(t)
+	oauthH := f.s.OAuthHandler()
+	tok := f.mintTokenAt(t, "/api/v1/repos", "coll-client", auth.Read, auth.Write)
+	foreign := f.seedForeignKB(t, "other-kb.git")
+	empty := filepath.Join(f.root, "empty.git")
+	require.NoError(t, os.MkdirAll(empty, 0o755))
+	gitfixture.InitBare(t, empty, "main")
+	emptyBefore := escRefs(t, empty)
+
+	for _, c := range []struct{ name, mode, url string }{
+		{"z1", "clone", foreign},
+		{"z2", "subscribe", foreign},
+		{"z3", "initialize", empty}, // initialize pushes into the origin
+	} {
+		body := `{"name":"` + c.name + `","mode":"` + c.mode + `","ontology_preset":"general","origin":{"url":"` + c.url + `"}}`
+		rec := escDo(oauthH, tok, http.MethodPost, "/api/v1/repos", body)
+		escProblem(t, rec, http.StatusForbidden, "Permission denied")
+		require.Contains(t, rec.Body.String(), "operator", c.mode)
+		require.Nil(t, f.m.Get(c.name), "a refused %s create registered nothing", c.mode)
+	}
+	require.Equal(t, emptyBefore, escRefs(t, empty), "nothing was pushed into the origin")
+
+	// A create without an origin stays a `write`.
+	rec := escDo(oauthH, tok, http.MethodPost, "/api/v1/repos", `{"name":"plain","mode":"preset"}`)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+
+	// The operator still creates with an origin.
+	op := f.mintTokenAt(t, "/api/v1/repos", "coll-operator", auth.Read, auth.Write, auth.Operator)
+	rec = escDo(oauthH, op, http.MethodPost, "/api/v1/repos", `{"name":"z4","mode":"clone","origin":{"url":"`+foreign+`"}}`)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+}
+
+func TestOriginEscalation_ProbesNeedTheOperator(t *testing.T) {
+	f := newEscFixture(t)
+	oauthH := f.s.OAuthHandler()
+	url := f.seedForeignKB(t, "other-kb.git")
+	writer := f.mintTokenAt(t, "/api/v1", "api-client", auth.Read, auth.Write)
+	op := f.mintTokenAt(t, "/api/v1", "api-operator", auth.Read, auth.Write, auth.Operator)
+	for _, path := range []string{"/api/v1/repos:probe-origin", "/api/v1/repos:probe-initialized"} {
+		body := `{"url":"` + url + `","branch":"main"}`
+		rec := escDo(oauthH, writer, http.MethodPost, path, body)
+		escProblem(t, rec, http.StatusForbidden, "Permission denied")
+		rec = escDo(oauthH, op, http.MethodPost, path, body)
+		require.Equal(t, http.StatusOK, rec.Code, "%s: %s", path, rec.Body.String())
+	}
+}
+
+// --- Each cheap identity layer alone, on the attach path -------------------------
+//
+// The root layer runs only for a remote branch that exists, so an attach that
+// names a branch the remote does not have leaves the two advertisement layers
+// as the only check.
+//
+// SABOTAGE (against the branch commit): ignore refuseIfKnowledgeBaseIsLocal's
+// verdict in guardAttachIdentity -> both tests below red (200).
+
+// Held tip: y.git advertises Y's main and agent branch, which Y holds; a
+// plain git remote makes no knomit-repo-id claim.
+func TestOriginEscalation_HeldTipLayerAloneRefusesAnotherReposOrigin(t *testing.T) {
+	f := newEscFixture(t)
+	_, yURL, _ := f.yWithItsOwnOrigin(t)
+	riX := f.createX(t)
+	oauthH := f.s.OAuthHandler()
+	tok := f.mintOperatorToken(t, "x")
+
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+yURL+`","branch":"no-such-branch"}`)
+	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
+	f.requireNoOrigin(t, riX)
+}
+
+// Repo-id claim: another knomit instance serves a copy of Y whose branch tips
+// Y does not hold (its main is ahead), so only the knomit-repo-id capability
+// (the root of its consensus branch, Y's root) names Y.
+func TestOriginEscalation_ClaimLayerAloneRefusesAnotherReposKB(t *testing.T) {
+	f := newEscFixture(t)
+	ctx := context.Background()
+	yBare := filepath.Join(f.root, "y.git")
+	yURL := seedBareRemoteKBForTest(t, yBare)
+	riY, err := f.m.Create(ctx, repos.CreateSpec{Name: "y", Mode: "clone", Origin: &repos.OriginSpec{URL: yURL}}, nil)
+	require.NoError(t, err)
+
+	peer := newEscFixtureWith(t, func(c *config.Config) { c.LocalOriginRoot = f.root })
+	riPeer, err := peer.m.Create(ctx, repos.CreateSpec{Name: "ycopy", Mode: "clone", Origin: &repos.OriginSpec{URL: yURL}}, nil)
+	require.NoError(t, err)
+	publishOnMain(t, riPeer, "kb/ahead.md", "AHEAD-OF-Y")
+	peerSrv := httptest.NewServer(peer.s.Handler())
+	defer peerSrv.Close()
+	require.Equal(t, riY.ID(), riPeer.ID(), "precondition: the peer holds Y's knowledge base")
+	var peerMain string
+	require.NoError(t, riPeer.WithRead(func(s *store.Service) {
+		peerMain, err = s.HeadCommit(ctx, "main")
+	}))
+	require.NoError(t, err)
+	require.NoError(t, riY.WithRead(func(s *store.Service) {
+		require.False(t, s.HasObject(peerMain), "precondition: Y does not hold the peer's main, so the tip layer is silent")
+	}))
+
+	riX := f.createX(t)
+	oauthH := f.s.OAuthHandler()
+	tok := f.mintOperatorToken(t, "x")
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+peerSrv.URL+`/git/ycopy","branch":"no-such-branch"}`)
+	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
+	require.Contains(t, rec.Body.String(), `\"y\"`)
 	f.requireNoOrigin(t, riX)
 }

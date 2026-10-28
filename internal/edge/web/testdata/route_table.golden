@@ -166,8 +166,8 @@ POST /repos/{repo}/origin-sessions/ | requestID > recoverer > reportPanic > auth
 POST /repos/{repo}/origin-sessions/{sessionID}/apply | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleApply
 POST /repos/{repo}/origin-sessions/{sessionID}/commit | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleCommit
 POST /repos/{repo}/rename | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware | handleHALRepoRename
-POST /repos:probe-initialized | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleReposProbeInitialized
-POST /repos:probe-origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleReposProbeOrigin
+POST /repos:probe-initialized | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > require | handleReposProbeInitialized
+POST /repos:probe-origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > require | handleReposProbeOrigin
 PUT /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handlePutFleetRoot
 PUT /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 PUT /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm

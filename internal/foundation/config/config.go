@@ -46,6 +46,18 @@ type GitConfig struct {
 	// entry. A remote past this budget is reported as NOT ESTABLISHED rather
 	// than answered, because an answer nobody could obtain must not route a
 	// create. Default 64 MiB (set in Defaults); 0 disables the bound.
+	//
+	// The same budget bounds the origin-attach identity probe (PUT /origin,
+	// remotesync ProbeBranchHistory), which fetches the origin branch's
+	// history against the repo's own objects, so it pays only for what the
+	// repo lacks. An UNRELATED origin (for example a new repo's first origin)
+	// is fetched WHOLE, and an attach whose history exceeds the budget is
+	// refused ("Origin not inspected"), not admitted. Measured: a knowledge
+	// base of about 1,000 commits inflates to about 11 MiB, so the default
+	// admits roughly 5,000 commits of that shape; raise this to attach a
+	// larger one. The budget counts inflated objects as they are stored: it
+	// bounds what is admitted, not the transfer or peak memory (deltas are
+	// buffered before they are counted).
 	MaxProbeBytes int64 `toml:"max_probe_bytes"`
 	// LocalReconcileInterval is how often a repo with NO origin fast-forwards
 	// its consensus branch (main) from its own agent branch, so that branch
