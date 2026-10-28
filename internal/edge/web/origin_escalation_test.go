@@ -600,17 +600,32 @@ func TestOriginEscalation_CreateWithAnOriginNeedsTheOperator(t *testing.T) {
 	oauthH := f.s.OAuthHandler()
 	tok := f.mintTokenAt(t, "/api/v1/repos", "coll-client", auth.Read, auth.Write)
 	foreign := f.seedForeignKB(t, "other-kb.git")
-	empty := filepath.Join(f.root, "empty.git")
+	foreign2 := f.seedForeignKB(t, "other-kb2.git")
+	// initialize wants a remote with a branch and no knowledge base yet.
+	empty := filepath.Join(f.root, "plain.git")
 	require.NoError(t, os.MkdirAll(empty, 0o755))
 	gitfixture.InitBare(t, empty, "main")
+	work := t.TempDir()
+	runGitForTest(t, "", "clone", "-q", empty, work)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("plain\n"), 0o644))
+	runGitForTest(t, work, "add", "-A")
+	runGitForTest(t, work, "commit", "-q", "-m", "plain")
+	runGitForTest(t, work, "push", "-q", "origin", "main")
 	emptyBefore := escRefs(t, empty)
 
-	for _, c := range []struct{ name, mode, url string }{
-		{"z1", "clone", foreign},
-		{"z2", "subscribe", foreign},
-		{"z3", "initialize", empty}, // initialize pushes into the origin
-	} {
-		body := `{"name":"` + c.name + `","mode":"` + c.mode + `","ontology_preset":"general","origin":{"url":"` + c.url + `"}}`
+	// Each body is one the operator's create would accept (clone and
+	// subscribe take the remote's ontology; initialize needs one), so only
+	// the gate refuses it.
+	cases := []struct{ name, mode, url, extra string }{
+		{"z1", "clone", foreign, ""},
+		{"z2", "subscribe", foreign2, ""},
+		{"z3", "initialize", empty, `"ontology_preset":"general",`}, // initialize pushes into the origin
+	}
+	bodyOf := func(name, mode, url, extra string) string {
+		return `{"name":"` + name + `","mode":"` + mode + `",` + extra + `"origin":{"url":"` + url + `"}}`
+	}
+	for _, c := range cases {
+		body := bodyOf(c.name, c.mode, c.url, c.extra)
 		rec := escDo(oauthH, tok, http.MethodPost, "/api/v1/repos", body)
 		escProblem(t, rec, http.StatusForbidden, "Permission denied")
 		require.Contains(t, rec.Body.String(), "operator", c.mode)
@@ -625,10 +640,13 @@ func TestOriginEscalation_CreateWithAnOriginNeedsTheOperator(t *testing.T) {
 	rec := escDo(oauthH, tok, http.MethodPost, "/api/v1/repos", `{"name":"plain","mode":"preset"}`)
 	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 
-	// The operator still creates with an origin.
+	// The operator still creates with an origin, with the very bodies refused
+	// above: only the gate refused them.
 	op := f.mintTokenAt(t, "/api/v1/repos", "coll-operator", auth.Read, auth.Write, auth.Operator)
-	rec = escDo(oauthH, op, http.MethodPost, "/api/v1/repos", `{"name":"z4","mode":"clone","origin":{"url":"`+foreign+`"}}`)
-	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	for _, c := range cases {
+		rec = escDo(oauthH, op, http.MethodPost, "/api/v1/repos", bodyOf(c.name, c.mode, c.url, c.extra))
+		require.Equal(t, http.StatusAccepted, rec.Code, "%s: %s", c.mode, rec.Body.String())
+	}
 }
 
 func TestOriginEscalation_ProbesNeedTheOperator(t *testing.T) {
