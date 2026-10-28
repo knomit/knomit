@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { LayersIcon } from './icons';
+import { LayersIcon, TypeIcon, FrameIcon } from './icons';
 
 it('LayersIcon renders the Feather "layers" polygon and two polylines', () => {
   const { container } = render(<LayersIcon color="#a8a4f0" />);
@@ -18,4 +18,12 @@ it('LayersIcon applies color and size props like sibling icons', () => {
   expect(svg?.getAttribute('stroke')).toBe('#a8a4f0');
   expect(svg?.getAttribute('width')).toBe('20');
   expect(svg?.getAttribute('height')).toBe('20');
+});
+
+it('TypeIcon draws a frame with FrameIcon, not the UnknownIcon fallback', () => {
+  const frame = render(<TypeIcon type="frame" color="#4dd" />).container.innerHTML;
+  const own = render(<FrameIcon color="#4dd" size={12} />).container.innerHTML;
+  const unknown = render(<TypeIcon type="no-such-type" color="#4dd" />).container.innerHTML;
+  expect(frame).toBe(own);
+  expect(frame).not.toBe(unknown);
 });

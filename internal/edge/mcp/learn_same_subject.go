@@ -140,7 +140,7 @@ func findSameSubjectCandidates(
 		// A hypothesis belongs to subsumeHypothesis, which settles it in the
 		// same commit as the observation. Refusing here would block the very
 		// write that resolves it, and the refusal advice would be unactionable:
-		// knomit_update cannot change a fact's type.
+		// the hypothesis is settled by the write itself, not edited.
 		if r.Type == string(fact.Hypothesis) {
 			continue
 		}
@@ -151,6 +151,15 @@ func findSameSubjectCandidates(
 		// refusing either would block coordination traffic with advice
 		// ("update the existing fact") that makes no sense for a message.
 		if r.Type == string(fact.Signal) {
+			continue
+		}
+		// A frame is a node of a mission's thinking tree, worked with rather
+		// than believed. Sibling frames, or an observation about the same
+		// subject, are not restatements of one another, and the refusal
+		// advice ("update the existing fact") is wrong for a tree node. Only
+		// the CANDIDATE side is type-based: whether an INCOMING frame is
+		// merged is the topic's learn_dedup setting.
+		if r.Type == string(fact.Frame) {
 			continue
 		}
 		shared := sharedAnchors(anchors, r.Entities)

@@ -1,6 +1,7 @@
 package fact
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -302,4 +303,29 @@ func TestSerializeFact_RoundTrip_Signal(t *testing.T) {
 	require.Equal(t, f.Body, parsed.Body)
 	require.Equal(t, f.Entities, parsed.Entities)
 	require.Equal(t, f.Confidence, parsed.Confidence)
+}
+
+// A frame is pragmatic: it parses under kind pragmatic and is refused under
+// kind epistemic, so Kind.AllowsType is the only switch for it.
+func TestParseFact_Frame_KindAxis(t *testing.T) {
+	const body = `---
+%stype: frame
+domain: [mission]
+confidence: 1
+sources: 0
+entities: []
+refs: []
+---
+# Is the cache the bottleneck?
+
+Explore whether lookups dominate.
+`
+	f, err := ParseFact("kb/frames/m/a.md", fmt.Sprintf(body, "kind: pragmatic\n"))
+	require.NoError(t, err)
+	require.Equal(t, Pragmatic, f.Kind)
+	require.Equal(t, Frame, f.Type)
+
+	_, err = ParseFact("kb/frames/m/a.md", fmt.Sprintf(body, "kind: epistemic\n"))
+	require.Error(t, err, "frame is not an epistemic type")
+	require.Contains(t, err.Error(), "frame")
 }

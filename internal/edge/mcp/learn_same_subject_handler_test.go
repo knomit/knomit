@@ -650,3 +650,56 @@ func TestLearnHandler_TwoSameCategoryDupsSecondIsWrittenNotRefused(t *testing.T)
 		})
 	}
 }
+
+// An existing FRAME is never offered as a same-subject candidate, exactly as
+// an existing signal is not. Both rows use the identical probe, entities and
+// in-band cosine, in a different category directory from the seed; only the
+// seed's TYPE differs. The observation row is the control: it is refused, so
+// the frame row passing proves the type is the switch and not a fixture that
+// never reaches the gate.
+func TestLearnHandler_ExistingFrameIsNotASameSubjectCandidate(t *testing.T) {
+	th := modelparams.Defaults()
+	cases := []struct {
+		name, kind, typ string
+		refused         bool
+	}{
+		{"observation seed is refused", "epistemic", "observation", true},
+		{"frame seed is skipped", "pragmatic", "frame", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, modelparams.NomicModelID, th, inBand(th))
+
+			seedReq := sameSubjectLearnReq(
+				"seed", "decisions", "accepted/ramp/ai-index",
+				"Ramp AI Index shows adoption flat",
+				"The "+seedMarker+" records Ramp's spend data on paid AI adoption.",
+				[]any{"Ramp", "AI Index"}, nil)
+			seed := seedReq.Params.Arguments.(map[string]any)["facts"].([]any)[0].(map[string]any)
+			seed["kind"] = tc.kind
+			seed["type"] = tc.typ
+			sr, err := LearnHandler(emb)(ctx, seedReq)
+			require.NoError(t, err)
+			require.False(t, sr.IsError, "seed must be written: %s", resultText(t, sr))
+			seeded := mergedFactPath(t, sr)
+			before := liveFactCount(t, svc)
+
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
+				"probe", "gotchas", "tools/ai/spend",
+				"Enterprise AI spend is plateauing",
+				"A "+probeMarker+" note on Ramp's numbers for paid AI seats.",
+				[]any{"Ramp"}, nil))
+			require.NoError(t, err)
+
+			if tc.refused {
+				require.True(t, r.IsError, "control: an observation candidate must refuse; got %s", resultText(t, r))
+				require.Contains(t, resultText(t, r), seeded)
+				require.Equal(t, before, liveFactCount(t, svc))
+				return
+			}
+			require.False(t, r.IsError, "a frame candidate must not refuse: %s", resultText(t, r))
+			require.NotEqual(t, seeded, mergedFactPath(t, r), "the probe lands at its own path")
+			require.Equal(t, before+1, liveFactCount(t, svc), "the probe is added, not merged into the frame")
+		})
+	}
+}

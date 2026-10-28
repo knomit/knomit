@@ -27,6 +27,24 @@ const (
 	// identity is an ENTITY — which is what keeps the entity-anchored
 	// same-subject stage from ever anchoring on one.
 	Signal Type = "signal"
+	// Frame is a node of a mission's thinking process (a question, a
+	// stance, a branch being explored) that is WORKED WITH, not believed.
+	// Like a signal it is pragmatic, so its confidence is meaningless, and
+	// being pragmatic already keeps it out of synthesis seeding and review
+	// dedup (Kind.AllowsType is the switch; no per-type code is needed).
+	//
+	// The type switches exactly two things: it is accepted under kind
+	// pragmatic (and refused under epistemic), and the same-subject refusal
+	// in knomit_learn never offers an EXISTING frame as a collision
+	// candidate (internal/edge/mcp/learn_same_subject.go), as for signal.
+	//
+	// It does NOT switch off dedup or merge: an incoming frame is merged,
+	// refused or allowed to settle a hypothesis unless its topic sets
+	// `learn_dedup: off` (the mission template's frames/ topic does).
+	// It does NOT define a parent, a status or a topic: frame is a SHAPE,
+	// not a verb, so "the verb is the topic" still holds; parent rules and
+	// the `status` key belong to materialize and the template.
+	Frame Type = "frame"
 )
 
 // PragmaticTypes is the authoritative set of pragmatic Types.
@@ -34,9 +52,10 @@ var PragmaticTypes = map[Type]bool{
 	Policy:    true,
 	Heuristic: true,
 	Signal:    true,
+	Frame:     true,
 }
 
 // AllPragmaticTypes returns all pragmatic Types in a stable order.
 func AllPragmaticTypes() []Type {
-	return []Type{Policy, Heuristic, Signal}
+	return []Type{Policy, Heuristic, Signal, Frame}
 }

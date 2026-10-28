@@ -82,15 +82,15 @@ describe('typeStyles', () => {
   // enum, the spec and the MCP schema while the two web tables stayed at two
   // entries.
   //
-  // What this checks is that the three types named below have complete
+  // What this checks is that the four types named below have complete
   // entries. It does NOT catch a fourth: expectedTypes is a hand-written list,
   // exactly like the epistemic one above, so a new type has to be added here
   // too. The only assertion in this file that covers a new entry on its own is
   // the palette-distance test, which iterates Object.entries(typeStyles) — and
   // it can only judge a colour that is already in the table, so it fires when
   // the entry is wrong, never when it is missing.
-  it('has entries for all 3 pragmatic types', () => {
-    const expectedTypes = ['policy', 'heuristic', 'signal'];
+  it('has entries for all 4 pragmatic types', () => {
+    const expectedTypes = ['policy', 'heuristic', 'signal', 'frame'];
     for (const t of expectedTypes) {
       expect(typeStyles[t]).toBeDefined();
       expect(typeStyles[t].color).toBeTruthy();
@@ -103,6 +103,11 @@ describe('typeStyles', () => {
   it('signal has distinct styling', () => {
     expect(typeStyles.signal.color).toBe('#f63');
     expect(typeStyles.signal.icon).toBe('⇢');
+  });
+
+  it('frame has distinct styling', () => {
+    expect(typeStyles.frame.color).toBe('#4dd');
+    expect(typeStyles.frame.icon).toBe('▣');
   });
 
   it('defaultTypeStyle has unknown label', () => {

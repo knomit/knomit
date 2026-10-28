@@ -61,6 +61,7 @@ var factTypeDocs = map[fact.Type]typeDoc{
 	fact.Methodology: {"reasoning process lessons learned from hypothesis outcomes", "lives in meta/reasoning/"},
 	fact.Policy:      {"mandatory rule that should always be followed", `"Always rotate secrets quarterly"`},
 	fact.Heuristic:   {"rule-of-thumb to bias decisions, not absolute", `"Prefer small PRs"`},
+	fact.Frame:       {"a node of a mission's thinking process, worked with rather than believed", "its confidence is meaningless; it is exempt from the same-subject refusal as a candidate, but not from dedup or merge unless its topic sets learn_dedup: off"},
 	fact.Signal:      {"coordination content consumed once, never believed — a task, message, ack or membership claim", "act on it once and never weigh its confidence; the verb is the topic (tasks, inbox, acks), the addressee is the path, the sender is the commit author, the task id is an entity"},
 }
 
