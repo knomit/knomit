@@ -423,13 +423,15 @@ DESKTOP_LDFLAGS = $(VERSION_LDFLAGS)
 endif
 # Extra Go build tags for the desktop binary only, joined onto `desktop`.
 # Empty (the default, and what CI builds) selects Wails' GTK4 + WebKitGTK 6.0
-# Linux backend, which needs GTK >= 4.10. On an older distro (Debian 12 ships
-# GTK 4.8) use Wails' legacy GTK3 + WebKit2GTK 4.1 backend instead:
+# Linux backend, which needs GTK >= 4.14 (gdk_monitor_get_scale; GtkFileDialog
+# is the lower 4.10 requirement). On an older distro (Debian 12 ships GTK 4.8)
+# use Wails' legacy GTK3 + WebKit2GTK 4.1 backend instead:
 #   make desktop-deps DESKTOP_TAGS=gtk3 && make dist DESKTOP_TAGS=gtk3
-# Wails keeps the gtk3 tag only until v3.1.
+# Wails keeps the gtk3 tag only until v3.1. Tags may be space- or comma-separated.
 DESKTOP_TAGS ?=
 comma := ,
-DESKTOP_GOTAGS = $(subst $() ,$(comma),$(strip desktop $(DESKTOP_TAGS)))
+DESKTOP_TAGS_LIST = $(strip $(subst $(comma), ,$(DESKTOP_TAGS)))
+DESKTOP_GOTAGS = $(subst $() ,$(comma),$(strip desktop $(DESKTOP_TAGS_LIST)))
 DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags $(DESKTOP_GOTAGS) -ldflags "$(DESKTOP_LDFLAGS)"
 
 # Install the OS deps the desktop app (Wails v3, CGO) needs to BUILD. macOS and
@@ -439,7 +441,7 @@ DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags $(DESKTOP_GOTAGS) -ldfla
 # matching runtime libs, so after this the built binary also runs. Run once per
 # machine (needs sudo); not a prerequisite of `desktop` so normal builds and CI
 # never shell out to a package manager.
-ifneq ($(filter gtk3,$(DESKTOP_TAGS)),)
+ifneq ($(filter gtk3,$(DESKTOP_TAGS_LIST)),)
 DESKTOP_GTK_DEV = libgtk-3-dev libwebkit2gtk-4.1-dev
 DESKTOP_GTK_DESC = gtk3 + webkit2gtk-4.1
 else

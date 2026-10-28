@@ -49,7 +49,7 @@ and leaves an attached one running.
 ## Build & run
 
 ```sh
-make desktop-deps # Linux only: install the GTK4 + WebKitGTK build deps (once, sudo; GTK < 4.10: add DESKTOP_TAGS=gtk3 here and to make dist/desktop)
+make desktop-deps # Linux only: install the GTK4 + WebKitGTK build deps (once, sudo; GTK < 4.14: add DESKTOP_TAGS=gtk3 here and to make dist/desktop)
 make setup        # fetch native libs into dist/<platform>/lib (once)
 make dist         # everything end to end: server, then desktop
 make server       # server only: web UI + knomit, kb, knomit-okf in dist/<platform> (alias: make build)
@@ -60,8 +60,8 @@ make desktop-install # Linux only: install the .desktop launcher + app icon into
 
 On **Linux** the desktop app links GTK4 + WebKitGTK 6.0, so run `make
 desktop-deps` once first (it `apt-get install`s the dev packages; the `-dev`
-packages also pull the runtime libs). That backend needs GTK ≥ 4.10; on an
-older distro (Debian 12 ships GTK 4.8) build with Wails' legacy GTK3 +
+packages also pull the runtime libs). That backend needs GTK ≥ 4.14 (it calls
+gdk_monitor_get_scale); on an older distro (Debian 12 ships GTK 4.8) build with Wails' legacy GTK3 +
 WebKit2GTK 4.1 backend instead by passing `DESKTOP_TAGS=gtk3` to both:
 `make desktop-deps DESKTOP_TAGS=gtk3` installs `libgtk-3-dev
 libwebkit2gtk-4.1-dev` in place of the GTK4 pair, and `make dist
