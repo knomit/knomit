@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/foundation/config"
 )
 
@@ -127,7 +128,7 @@ func fleetVerbs() []*cobra.Command {
 	revokeCmd.Flags().StringVar(&reason, "reason", "", "why, recorded with the revocation")
 	membersCmd.AddCommand(enrollCmd, revokeCmd)
 
-	masterCmd := fleetGroup("master", "Export, import or resign this instance's fleet root files")
+	masterCmd := fleetGroup(repos.HostingMaster, "Export, import or resign this instance's fleet root files")
 	masterCmd.AddCommand(
 		fleetVerb("export", "Print the fleet root files (the root key among them) as JSON", cobra.NoArgs,
 			http.MethodGet, "/fleet/root", nil),
