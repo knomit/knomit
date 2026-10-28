@@ -29,7 +29,11 @@ func fleetCmd() *cobra.Command {
 		Long: `An instance is standalone until it creates or joins a fleet. Every fleet
 operation is a REST route on the local listener (/api/v1/fleet/...), used by the
 Fleet page. Each verb here sends one request to its route over that listener
-and prints the server's JSON answer; status prints GET /api/v1/fleet as text.`,
+and prints the server's JSON answer. Verbs are grouped by subject: members
+(list, enroll, revoke), master (export, import, resign), hosting (here,
+follow), sync (is it blocked; drop the commit that holds it) and index
+(rebuild). status and sync print GET /api/v1/fleet as text; a bare members
+lists the members.`,
 		// As `knomit identity`: a RunE makes `fleet <typo>` a non-zero exit.
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
@@ -49,9 +53,10 @@ and prints the server's JSON answer; status prints GET /api/v1/fleet as text.`,
 	return c
 }
 
-// fleetVerbs is one command per mutating route of the server's RequireLocalVia
-// fleet group (internal/edge/web/api/manage/mount.go). None checks, prompts
-// or confirms anything: running the verb is the request.
+// fleetVerbs is the verb tree, grouped by subject. Every leaf is one request
+// to one existing route (the mutating ones are the server's RequireLocalVia
+// fleet group, internal/edge/web/api/manage/mount.go). None checks, prompts or
+// confirms anything: running the verb is the request.
 func fleetVerbs() []*cobra.Command {
 	var create struct{ name, origin, branch, authMethod, authToken string }
 	createCmd := fleetVerb("create", "Found a fleet with a fresh root; this instance is its master", cobra.NoArgs,
@@ -72,53 +77,61 @@ func fleetVerbs() []*cobra.Command {
 	createCmd.Flags().StringVar(&create.authMethod, "auth-method", "", "with --origin: the origin's auth method")
 	createCmd.Flags().StringVar(&create.authToken, "auth-token", "", "with --origin: the origin's credential")
 
-	var address string
+	// join and join --check differ only in the route: the check is the same
+	// body to /fleet/join:check.
+	var join struct {
+		check                 bool
+		authMethod, authToken string
+	}
+	joinCmd := &cobra.Command{
+		Use:   "join <bundle-file|->",
+		Short: "Join the fleet the bundle names (bundle from the master's members enroll); --check only looks",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			bundle, err := readFileOrStdin(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			path := "/fleet/join"
+			if join.check {
+				path = "/fleet/join:check"
+			}
+			in := map[string]string{"bundle": string(bundle), "auth_method": join.authMethod, "auth_token": join.authToken}
+			return withFleetAPI(func(hc *http.Client) error {
+				return fleetAPI(cmd.Context(), hc, cmd.OutOrStdout(), http.MethodPost, path, in)
+			})
+		},
+	}
+	joinCmd.Flags().BoolVar(&join.check, "check", false, "do not join: show where the bundle points and its root fingerprint")
+	joinCmd.Flags().StringVar(&join.authMethod, "auth-method", "", "for a forge-hosted fleet: this instance's auth method")
+	joinCmd.Flags().StringVar(&join.authToken, "auth-token", "", "for a forge-hosted fleet: this instance's own credential")
+
+	leaveCmd := fleetVerb("leave", "Leave the fleet: push the left record once, then remove the fleet here", cobra.NoArgs,
+		http.MethodPost, "/fleet/leave", nil)
+	decommissionCmd := fleetVerb("decommission", "Master: end the fleet here and delete its root", cobra.NoArgs,
+		http.MethodPost, "/fleet/decommission", nil)
+
+	// members: bare is the read; enroll and revoke change it.
+	membersCmd := fleetVerb("members", "List the fleet's members (enroll and revoke below)", cobra.NoArgs,
+		http.MethodGet, "/fleet/members", nil)
+	var address, reason string
 	enrollCmd := fleetVerb("enroll <agent-id> <public-key>", "Master: issue a member's leaf and print its bundle", cobra.ExactArgs(2),
 		http.MethodPost, "/fleet/enroll", func(_ *cobra.Command, args []string) (any, error) {
 			return map[string]string{"agent_id": args[0], "public_key": args[1], "address": address}, nil
 		})
 	enrollCmd.Flags().StringVar(&address, "address", "", "which of this instance's external_addresses the bundle's fleet URL is built from")
-
-	join := func(use, short, path string) *cobra.Command {
-		var authMethod, authToken string
-		j := fleetVerb(use+" <bundle-file|->", short, cobra.ExactArgs(1),
-			http.MethodPost, path, func(cmd *cobra.Command, args []string) (any, error) {
-				bundle, err := readFileOrStdin(cmd, args[0])
-				if err != nil {
-					return nil, err
-				}
-				return map[string]string{"bundle": string(bundle), "auth_method": authMethod, "auth_token": authToken}, nil
-			})
-		j.Flags().StringVar(&authMethod, "auth-method", "", "for a forge-hosted fleet: this instance's auth method")
-		j.Flags().StringVar(&authToken, "auth-token", "", "for a forge-hosted fleet: this instance's own credential")
-		return j
-	}
-	joinCmd := join("join", "Join the fleet the bundle names (bundle from the master's enroll)", "/fleet/join")
-	joinCheckCmd := join("join-check", "Check a bundle without joining: where it points and its root fingerprint", "/fleet/join:check")
-
-	leaveCmd := fleetVerb("leave", "Leave the fleet: push the left record once, then remove the fleet here", cobra.NoArgs,
-		http.MethodPost, "/fleet/leave", nil)
-
-	var reason string
 	revokeCmd := fleetVerb("revoke <agent-id>", "Master: revoke a member's leaf", cobra.ExactArgs(1),
 		http.MethodPost, "/fleet/revoke", func(_ *cobra.Command, args []string) (any, error) {
 			return map[string]string{"agent_id": args[0], "reason": reason}, nil
 		})
 	revokeCmd.Flags().StringVar(&reason, "reason", "", "why, recorded with the revocation")
+	membersCmd.AddCommand(enrollCmd, revokeCmd)
 
-	decommissionCmd := fleetVerb("decommission", "Master: end the fleet here and delete its root", cobra.NoArgs,
-		http.MethodPost, "/fleet/decommission", nil)
-
-	rootCmd := &cobra.Command{
-		Use:   "root",
-		Short: "Get, put or delete this instance's fleet root files",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
-	}
-	rootCmd.AddCommand(
-		fleetVerb("get", "Print the fleet root files (the root key among them) as JSON", cobra.NoArgs,
+	masterCmd := fleetGroup("master", "Export, import or resign this instance's fleet root files")
+	masterCmd.AddCommand(
+		fleetVerb("export", "Print the fleet root files (the root key among them) as JSON", cobra.NoArgs,
 			http.MethodGet, "/fleet/root", nil),
-		fleetVerb("put <json-file|->", `Install another master's root files: the body {"files": {...}} as given`, cobra.ExactArgs(1),
+		fleetVerb("import <json-file|->", `Install another master's root files: the body {"files": {...}} as given`, cobra.ExactArgs(1),
 			http.MethodPut, "/fleet/root", func(cmd *cobra.Command, args []string) (any, error) {
 				raw, err := readFileOrStdin(cmd, args[0])
 				if err != nil {
@@ -129,17 +142,17 @@ func fleetVerbs() []*cobra.Command {
 				}
 				return json.RawMessage(raw), nil
 			}),
-		fleetVerb("delete", "Stand down as master: the root files go, the membership stays", cobra.NoArgs,
+		fleetVerb("resign", "Stand down as master: the root files go, the membership stays", cobra.NoArgs,
 			http.MethodDelete, "/fleet/root", nil),
 	)
 
+	hostingCmd := fleetGroup("hosting", "Where the fleet repository is hosted")
 	var confirmLoss bool
-	hostCmd := fleetVerb("host", "Host the fleet here: this copy drops its origin and becomes the hub", cobra.NoArgs,
+	hereCmd := fleetVerb("here", "Host the fleet here: this copy drops its origin and becomes the hub", cobra.NoArgs,
 		http.MethodPost, "/fleet/host", func(_ *cobra.Command, _ []string) (any, error) {
 			return map[string]bool{"confirm_loss": confirmLoss}, nil
 		})
-	hostCmd.Flags().BoolVar(&confirmLoss, "confirm-loss", false, "host even though the old master has not stood down")
-
+	hereCmd.Flags().BoolVar(&confirmLoss, "confirm-loss", false, "host even though the old master has not stood down")
 	var follow struct{ authMethod, authToken, user, password string }
 	followCmd := fleetVerb("follow <url>", "Point at the new host: follow the fleet from url", cobra.ExactArgs(1),
 		http.MethodPost, "/fleet/follow", func(_ *cobra.Command, args []string) (any, error) {
@@ -150,23 +163,126 @@ func fleetVerbs() []*cobra.Command {
 	followCmd.Flags().StringVar(&follow.authToken, "auth-token", "", "the new origin's credential")
 	followCmd.Flags().StringVar(&follow.user, "user", "", "with --auth-method basic: the user")
 	followCmd.Flags().StringVar(&follow.password, "password", "", "with --auth-method basic: the password")
+	hostingCmd.AddCommand(hereCmd, followCmd)
 
-	indexRebuildCmd := fleetVerb("index-rebuild", "Rebuild the fleet repository's index", cobra.NoArgs,
-		http.MethodPost, "/fleet/index-rebuild", nil)
+	indexCmd := fleetGroup("index", "The fleet repository's index")
+	indexCmd.AddCommand(fleetVerb("rebuild", "Rebuild the fleet repository's index", cobra.NoArgs,
+		http.MethodPost, "/fleet/index-rebuild", nil))
 
-	var drop struct {
-		leaveOutMerge bool
-		leftOut       []string
+	return []*cobra.Command{createCmd, joinCmd, leaveCmd, decommissionCmd, membersCmd, masterCmd, hostingCmd, fleetSyncCmd(), indexCmd}
+}
+
+// fleetGroup is a command that only groups verbs: as `knomit identity`, a
+// RunE makes an unknown subcommand a non-zero exit.
+func fleetGroup(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	dropCmd := fleetVerb("drop-commit <commit>", "Rebuild the fleet's agent branch on main without a commit that holds main back", cobra.ExactArgs(1),
-		http.MethodPost, "/fleet/drop-commit", func(_ *cobra.Command, args []string) (any, error) {
-			return map[string]any{"commit": args[0], "leave_out_merge": drop.leaveOutMerge, "left_out": drop.leftOut}, nil
-		})
-	dropCmd.Flags().BoolVar(&drop.leaveOutMerge, "leave-out-merge", false, "leave the whole merge out instead (needs --left-out)")
-	dropCmd.Flags().StringSliceVar(&drop.leftOut, "left-out", nil, "with --leave-out-merge: the commit hashes a refusal's leave_out listed")
+}
 
-	return []*cobra.Command{createCmd, enrollCmd, joinCmd, joinCheckCmd, leaveCmd, revokeCmd, decommissionCmd,
-		rootCmd, hostCmd, followCmd, indexRebuildCmd, dropCmd}
+// fleetSyncCmd is `sync` (reads GET /fleet and says whether the fleet's rules
+// hold this instance's branch back) and `sync drop`.
+func fleetSyncCmd() *cobra.Command {
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Show whether this instance's sync is blocked, and the last error (drop below)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return withFleetAPI(func(hc *http.Client) error {
+				var st fleetStatusJSON
+				if err := localCall(cmd.Context(), hc, http.MethodGet, "/fleet", nil, &st); err != nil {
+					return err
+				}
+				printFleetSync(cmd.OutOrStdout(), st)
+				return nil
+			})
+		},
+	}
+	var leaveOut []string
+	dropCmd := &cobra.Command{
+		Use:   "drop [<commit>]",
+		Short: "Rebuild this instance's branch on main without the commit that holds main back (default: the held commit)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withFleetAPI(func(hc *http.Client) error {
+				ctx := cmd.Context()
+				var commit string
+				if len(args) == 1 {
+					commit = args[0]
+				} else {
+					var st fleetStatusJSON
+					if err := localCall(ctx, hc, http.MethodGet, "/fleet", nil, &st); err != nil {
+						return err
+					}
+					if !st.LastErrorMainHeld || st.LastErrorMainHeldCommit == "" {
+						return errors.New("sync is not blocked: there is no commit to drop")
+					}
+					commit = st.LastErrorMainHeldCommit
+				}
+				in := map[string]any{"commit": commit}
+				if len(leaveOut) > 0 {
+					in["leave_out_merge"] = true
+					in["left_out"] = leaveOut
+				}
+				err := fleetAPI(ctx, hc, cmd.OutOrStdout(), http.MethodPost, "/fleet/drop-commit", in)
+				return withLeaveOutPlan(err, commit)
+			})
+		},
+	}
+	dropCmd.Flags().StringSliceVar(&leaveOut, "leave-out", nil, "leave the whole merge out instead: the commit hashes a refusal listed")
+	syncCmd.AddCommand(dropCmd)
+	return syncCmd
+}
+
+// withLeaveOutPlan turns a refused drop that carries a leave_out list into an
+// error that shows the list and the exact command that confirms it; any other
+// error passes through.
+func withLeaveOutPlan(err error, commit string) error {
+	var le *localError
+	if !errors.As(err, &le) || len(le.LeaveOut) == 0 {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString(le.Detail)
+	hashes := make([]string, 0, len(le.LeaveOut))
+	for _, c := range le.LeaveOut {
+		who := c.Agent
+		if who == "" {
+			who = c.Author
+		}
+		fmt.Fprintf(&b, "\n  %s %s: %s", short8(c.Commit), plainLine(who), plainLine(c.Subject))
+		hashes = append(hashes, c.Commit)
+	}
+	fmt.Fprintf(&b, "\nconfirm with: knomit fleet sync drop %s --leave-out %s", commit, strings.Join(hashes, ","))
+	return errors.New(b.String())
+}
+
+// plainLine keeps requester-supplied text on its line.
+func plainLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// printFleetSync is the `sync` read: blocked when the fleet's rules hold this
+// instance's branch back (last_error_main_held), else the last error if any.
+func printFleetSync(out io.Writer, st fleetStatusJSON) {
+	if st.LastErrorMainHeld && st.LastErrorMainHeldCommit != "" {
+		fmt.Fprintf(out, "sync blocked: the fleet's rules refuse commit %s on this instance's branch; nothing from this instance reaches the fleet until it is dropped. Retrying does not help.\n", short8(st.LastErrorMainHeldCommit))
+		fmt.Fprintf(out, "  refused: %s\n", st.LastError)
+		fmt.Fprintln(out, "  drop it: knomit fleet sync drop")
+		return
+	}
+	fmt.Fprintln(out, "sync: not blocked")
+	if st.LastError != "" {
+		fmt.Fprintf(out, "last error (%s): %s\n", st.LastAttempt, st.LastError)
+	}
 }
 
 // fleetVerb is one route as a command: body (nil for a route without one)
@@ -251,9 +367,11 @@ type fleetStatusJSON struct {
 		Addresses    []string          `json:"addresses"`
 		Capabilities map[string]string `json:"capabilities"`
 	} `json:"record"`
-	RecordCurrent       *bool  `json:"record_current"`
-	RecordPendingUpdate bool   `json:"record_pending_update"`
-	Notice              string `json:"notice"`
+	LastErrorMainHeld       bool   `json:"last_error_main_held"`
+	LastErrorMainHeldCommit string `json:"last_error_main_held_commit"`
+	RecordCurrent           *bool  `json:"record_current"`
+	RecordPendingUpdate     bool   `json:"record_pending_update"`
+	Notice                  string `json:"notice"`
 }
 
 func fleetCall(ctx context.Context, hc *http.Client, out io.Writer) error {
