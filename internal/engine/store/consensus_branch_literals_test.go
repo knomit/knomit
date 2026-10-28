@@ -79,6 +79,15 @@ func TestNoHardcodedBranchLiterals(t *testing.T) {
 							allowed[bl] = true
 						}
 					}
+					// cmd/fleet.go's fleetMasterCmd is the CLI command name of
+					// the fleet master role, not a branch. Scoped to that one
+					// file and that one constant, not to cmd/ or any "master".
+					if id.Name == "fleetMasterCmd" && i < len(vs.Values) &&
+						filepath.ToSlash(path) == filepath.ToSlash(filepath.Join(root, "cmd", "fleet.go")) {
+						if bl, ok := vs.Values[i].(*ast.BasicLit); ok {
+							allowed[bl] = true
+						}
+					}
 					// The fleet's master marker path (artifacts/fleet/master)
 					// names the master role too, not a branch.
 					if id.Name == "FleetMasterPath" && i < len(vs.Values) {
