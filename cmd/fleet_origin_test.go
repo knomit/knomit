@@ -84,6 +84,12 @@ func (h *headerLog) wrap(next http.Handler) http.Handler {
 	})
 }
 
+func (h *headerLog) hitList() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.hits...)
+}
+
 func (h *headerLog) tlsRequests() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -391,7 +397,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverTheFleetTransport(t *testing
 	// 4. S1: not one request on the TLS listener carried an Authorization
 	//    header, although A has a global token configured.
 	if n := hdrs.count("tls"); n != 0 {
-		t.Fatalf("%d fleet requests carried an Authorization header; the global forge token reached a peer: %v", n, hdrs.hits)
+		t.Fatalf("%d fleet requests carried an Authorization header; the global forge token reached a peer: %v", n, hdrs.hitList())
 	}
 
 	// 5. Positive control, and "nothing regressed" for plaintext origins: an

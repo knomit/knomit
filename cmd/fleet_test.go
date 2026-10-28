@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -27,12 +28,12 @@ func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 	ln, cleanup, err := auth.ListenLocal(sock)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
-	var methods []string
-	refuse := false
+	var methods recorded[string]
+	var refuse atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/fleet", func(w http.ResponseWriter, r *http.Request) {
-		methods = append(methods, r.Method)
-		if refuse {
+		methods.add(r.Method)
+		if refuse.Load() {
 			w.Header().Set("Content-Type", "application/problem+json")
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"detail":"control.db is not open"}`))
@@ -54,10 +55,10 @@ func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 	require.Contains(t, out.String(), "hosting: none")
 	require.Contains(t, out.String(), "fleet master: true (fleet root directory: /h/fleet)")
 
-	refuse = true
+	refuse.Store(true)
 	err = fleetCall(ctx, hc, &out)
 	require.ErrorContains(t, err, "control.db is not open")
-	require.Equal(t, []string{http.MethodGet, http.MethodGet}, methods, "status only ever GETs")
+	require.Equal(t, []string{http.MethodGet, http.MethodGet}, methods.all(), "status only ever GETs")
 }
 
 // F10: status prints the configured addresses, the record's advertised
@@ -138,14 +139,14 @@ func TestFleetCLI_EveryVerbIsOneRequestToItsRoute(t *testing.T) {
 	require.Equal(t, group, covered, "the verbs and the server's RequireLocalVia fleet group differ")
 
 	type got struct{ method, path, ctype, body string }
-	var reqs []got
-	refuse := false
+	var reqs recorded[got]
+	var refuse atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		reqs = append(reqs, got{r.Method, strings.TrimPrefix(r.URL.Path, "/api/v1"), r.Header.Get("Content-Type"), string(b)})
+		reqs.add(got{r.Method, strings.TrimPrefix(r.URL.Path, "/api/v1"), r.Header.Get("Content-Type"), string(b)})
 		switch {
-		case refuse:
+		case refuse.Load():
 			w.Header().Set("Content-Type", "application/problem+json")
 			w.WriteHeader(http.StatusConflict)
 			_, _ = w.Write([]byte(`{"detail":"this instance is the fleet's master","code":"master"}`))
@@ -177,17 +178,18 @@ func TestFleetCLI_EveryVerbIsOneRequestToItsRoute(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
-			reqs = nil
+			reqs.reset()
 			out, err := run(c.args, c.stdin)
 			require.NoError(t, err)
-			require.Len(t, reqs, 1, "one request per verb")
-			require.Equal(t, c.method, reqs[0].method)
-			require.Equal(t, c.path, reqs[0].path)
+			rs := reqs.all()
+			require.Len(t, rs, 1, "one request per verb")
+			require.Equal(t, c.method, rs[0].method)
+			require.Equal(t, c.path, rs[0].path)
 			if c.body == "" {
-				require.Empty(t, reqs[0].body)
+				require.Empty(t, rs[0].body)
 			} else {
-				require.Equal(t, "application/json", reqs[0].ctype)
-				require.JSONEq(t, c.body, reqs[0].body)
+				require.Equal(t, "application/json", rs[0].ctype)
+				require.JSONEq(t, c.body, rs[0].body)
 			}
 			if c.method == http.MethodDelete {
 				require.Empty(t, out, "a 204 prints nothing")
@@ -197,11 +199,11 @@ func TestFleetCLI_EveryVerbIsOneRequestToItsRoute(t *testing.T) {
 		})
 	}
 
-	refuse = true
-	reqs = nil
+	refuse.Store(true)
+	reqs.reset()
 	_, err = run([]string{"leave"}, "")
 	require.ErrorContains(t, err, "this instance is the fleet's master", "the refusal is the server's detail")
-	require.Len(t, reqs, 1)
+	require.Len(t, reqs.all(), 1)
 }
 
 // fleetLocalOnlyRoutes reads the `r.<Method>("/fleet/...")` lines of the
@@ -270,87 +272,116 @@ func localFleetServer(t *testing.T, handler http.HandlerFunc) func(args []string
 	}
 }
 
+// recorded is a slice the handler goroutines append to and the test reads;
+// socket I/O is not a synchronization point for the race detector.
+type recorded[T any] struct {
+	mu sync.Mutex
+	v  []T
+}
+
+func (r *recorded[T]) add(x T) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.v = append(r.v, x)
+}
+
+func (r *recorded[T]) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.v = nil
+}
+
+func (r *recorded[T]) all() []T {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]T(nil), r.v...)
+}
+
 const heldCommit = "3f2a91c4d5e6f708192a3b4c5d6e7f8091a2b3c4"
 
 func TestFleetCLI_MembersIsAReadAndGroupsRefuseTypos(t *testing.T) {
-	var got []string
+	var got recorded[string]
 	run := localFleetServer(t, func(w http.ResponseWriter, r *http.Request) {
-		got = append(got, r.Method+" "+r.URL.Path)
+		got.add(r.Method + " " + r.URL.Path)
 		_, _ = w.Write([]byte(`{"members":[]}`))
 	})
 	out, err := run([]string{"members"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"GET /api/v1/fleet/members"}, got)
+	require.Equal(t, []string{"GET /api/v1/fleet/members"}, got.all())
 	require.Equal(t, "{\n  \"members\": []\n}\n", out)
 	for _, g := range []string{"master", "hosting", "index"} {
 		_, err = run([]string{g, "nope"})
 		require.Error(t, err, "%s <typo> is a non-zero exit", g)
 	}
-	require.Len(t, got, 1, "the groups sent nothing")
+	require.Len(t, got.all(), 1, "the groups sent nothing")
 }
 
 func TestFleetCLI_SyncSaysWhetherItIsBlocked(t *testing.T) {
-	body := ""
-	run := localFleetServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+	var body atomic.Value
+	body.Store("")
+	run := localFleetServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body.Load().(string))) })
 
-	body = `{"state":"registered","last_attempt":"T1","last_error":"knomit: origin was not moved: commit ` + heldCommit + ` refused by verify_signatures=enforce: host-record: bad",
-		"last_error_main_held":true,"last_error_main_held_commit":"` + heldCommit + `"}`
+	body.Store(`{"state":"registered","last_attempt":"T1","last_error":"knomit: origin was not moved: commit ` + heldCommit + ` refused by verify_signatures=enforce: host-record: bad",
+		"last_error_main_held":true,"last_error_main_held_commit":"` + heldCommit + `"}`)
 	out, err := run([]string{"sync"})
 	require.NoError(t, err)
 	require.Equal(t, "sync blocked: the fleet's rules refuse commit 3f2a91c4 on this instance's branch; nothing from this instance reaches the fleet until it is dropped. Retrying does not help.\n"+
 		"  refused: knomit: origin was not moved: commit "+heldCommit+" refused by verify_signatures=enforce: host-record: bad\n"+
 		"  drop it: knomit fleet sync drop\n", out)
 
-	body = `{"state":"registered","last_attempt":"T2","last_error":"dial tcp: refused"}`
+	body.Store(`{"state":"registered","last_attempt":"T2","last_error":"dial tcp: refused"}`)
 	out, err = run([]string{"sync"})
 	require.NoError(t, err)
 	require.Equal(t, "sync: not blocked\nlast error (T2): dial tcp: refused\n", out)
 
-	body = `{"state":"registered"}`
+	body.Store(`{"state":"registered"}`)
 	out, err = run([]string{"sync"})
 	require.NoError(t, err)
 	require.Equal(t, "sync: not blocked\n", out)
 }
 
 func TestFleetCLI_SyncDropWithoutACommitDropsTheHeldOne(t *testing.T) {
-	status := `{"last_error_main_held":true,"last_error_main_held_commit":"` + heldCommit + `"}`
-	var reqs []string
+	var reqs recorded[string]
+	var status atomic.Value
+	status.Store(`{"last_error_main_held":true,"last_error_main_held_commit":"` + heldCommit + `"}`)
 	run := localFleetServer(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		reqs = append(reqs, r.Method+" "+r.URL.Path+" "+string(b))
+		reqs.add(r.Method + " " + r.URL.Path + " " + string(b))
 		if r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(status))
+			_, _ = w.Write([]byte(status.Load().(string)))
 			return
 		}
 		_, _ = w.Write([]byte(`{"dropped":1}`))
 	})
 	_, err := run([]string{"sync", "drop"})
 	require.NoError(t, err)
-	require.Len(t, reqs, 2)
-	require.Equal(t, "GET /api/v1/fleet ", reqs[0])
-	require.Equal(t, "POST /api/v1/fleet/drop-commit", reqs[1][:len("POST /api/v1/fleet/drop-commit")])
-	require.JSONEq(t, `{"commit":"`+heldCommit+`"}`, strings.TrimPrefix(reqs[1], "POST /api/v1/fleet/drop-commit "))
+	rs := reqs.all()
+	require.Len(t, rs, 2)
+	require.Equal(t, "GET /api/v1/fleet ", rs[0])
+	require.Equal(t, "POST /api/v1/fleet/drop-commit", rs[1][:len("POST /api/v1/fleet/drop-commit")])
+	require.JSONEq(t, `{"commit":"`+heldCommit+`"}`, strings.TrimPrefix(rs[1], "POST /api/v1/fleet/drop-commit "))
 
 	// A commit given is sent as given, with no lookup.
-	reqs = nil
+	reqs.reset()
 	_, err = run([]string{"sync", "drop", "abc"})
 	require.NoError(t, err)
-	require.Len(t, reqs, 1)
-	require.JSONEq(t, `{"commit":"abc"}`, strings.TrimPrefix(reqs[0], "POST /api/v1/fleet/drop-commit "))
+	rs = reqs.all()
+	require.Len(t, rs, 1)
+	require.JSONEq(t, `{"commit":"abc"}`, strings.TrimPrefix(rs[0], "POST /api/v1/fleet/drop-commit "))
 
 	// Not blocked: no commit to drop, and nothing is sent to the drop route.
-	status = `{"state":"registered"}`
-	reqs = nil
+	status.Store(`{"state":"registered"}`)
+	reqs.reset()
 	_, err = run([]string{"sync", "drop"})
 	require.EqualError(t, err, "sync is not blocked: there is no commit to drop")
-	require.Equal(t, []string{"GET /api/v1/fleet "}, reqs)
+	require.Equal(t, []string{"GET /api/v1/fleet "}, reqs.all())
 }
 
 func TestFleetCLI_RefusedDropShowsTheLeaveOutPlan(t *testing.T) {
-	var posts []string
+	var posts recorded[string]
 	run := localFleetServer(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		posts = append(posts, string(b))
+		posts.add(string(b))
 		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"detail":"that commit is a merge","code":"merge_commit","leave_out":[
@@ -362,7 +393,7 @@ func TestFleetCLI_RefusedDropShowsTheLeaveOutPlan(t *testing.T) {
 		"  aaaaaaaa box: first\n"+
 		"  bbbbbbbb Bea: second\n"+
 		"confirm with: knomit fleet sync drop cafe1234 --leave-out aaaaaaaa11111111,bbbbbbbb22222222")
-	require.Len(t, posts, 1)
+	require.Len(t, posts.all(), 1)
 
 	// A refusal without a list keeps the quoted detail, as every caller had.
 	run = localFleetServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -375,19 +406,19 @@ func TestFleetCLI_RefusedDropShowsTheLeaveOutPlan(t *testing.T) {
 }
 
 func TestFleetCLI_JoinCheckHitsTheCheckRoute(t *testing.T) {
-	var path string
+	var path atomic.Value
 	run := localFleetServer(t, func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
+		path.Store(r.URL.Path)
 		_, _ = w.Write([]byte(`{}`))
 	})
 	f := filepath.Join(t.TempDir(), "b")
 	require.NoError(t, os.WriteFile(f, []byte("B"), 0o600))
 	_, err := run([]string{"join", f, "--check"})
 	require.NoError(t, err)
-	require.Equal(t, "/api/v1/fleet/join:check", path)
+	require.Equal(t, "/api/v1/fleet/join:check", path.Load())
 	_, err = run([]string{"join", f})
 	require.NoError(t, err)
-	require.Equal(t, "/api/v1/fleet/join", path)
+	require.Equal(t, "/api/v1/fleet/join", path.Load())
 }
 
 // A refusal's text is the server's, which can echo requester-supplied text:

@@ -65,7 +65,10 @@ func newFakeIssuer(t *testing.T, clientName, redirect string) *fakeIssuer {
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/oauth/pending/"+signID:
-			_ = json.NewEncoder(w).Encode(f.desc)
+			f.mu.Lock()
+			desc := f.desc
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(desc)
 		case r.Method == http.MethodPost && r.URL.Path == "/oauth/approve":
 			b, _ := io.ReadAll(r.Body)
 			f.mu.Lock()
@@ -228,7 +231,9 @@ func TestOAuthSign_InstanceMustBeIssuedAndNotRevoked(t *testing.T) {
 func TestOAuthSign_RefusesAnInconsistentDescription(t *testing.T) {
 	dir, fp := signSetup(t)
 	fi := newFakeIssuer(t, "Claude Code", "http://localhost:52346/callback")
+	fi.mu.Lock()
 	fi.desc.RedirectURI = "https://evil.example/cb" // digest still covers the localhost one
+	fi.mu.Unlock()
 	_, _, err := runSplit(t, "", "oauth", "approve", signID, "--sign", fi.srv.URL, "--dir", dir,
 		"--instance", fp, "--as", "laptop", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "digest") {
