@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"knomit/internal/foundation/auth"
 )
@@ -26,26 +27,26 @@ func NewVerifier(issuer string, store *Store) *Verifier {
 // front strips the issuer's own path before forwarding. It is in the token's
 // audience when it equals the token's resource or extends it at a "/"
 // boundary, so a token for one MCP endpoint does not work on its neighbour.
-// reach answers the same question for any other path on this listener: the
-// token's audience, for a read that leaves the request's own resource.
-func (v *Verifier) Verify(ctx context.Context, token, path string) (p auth.Principal, ceiling auth.Set, reach func(path string) bool, err error) {
+// audience is the token's resource as a path on this listener (relative to
+// the issuer, "" for the issuer itself), for a read that leaves the request's
+// own resource: the caller decides what that path reaches.
+func (v *Verifier) Verify(ctx context.Context, token, path string) (p auth.Principal, ceiling auth.Set, audience string, err error) {
 	fam, err := v.store.LookupAccess(ctx, token)
 	if err != nil {
-		return auth.Principal{}, nil, nil, err
+		return auth.Principal{}, nil, "", err
 	}
 	// Both halves: the token's resource must be THIS issuer's (a token
 	// minted before the issuer moved, or gained a path, is not), and the
 	// request must sit under that resource.
 	if !resourceUnder(v.issuer, fam.Resource) || !inAudience(fam.Resource, v.issuer+path) {
-		return auth.Principal{}, nil, nil, ErrWrongAudience
+		return auth.Principal{}, nil, "", ErrWrongAudience
 	}
 	ceiling, err = auth.ParseSet(fam.Scopes)
 	if err != nil {
-		return auth.Principal{}, nil, nil, fmt.Errorf("oauth: token ceiling: %w", err)
+		return auth.Principal{}, nil, "", fmt.Errorf("oauth: token ceiling: %w", err)
 	}
-	resource, issuer := fam.Resource, v.issuer
-	reach = func(p string) bool { return inAudience(resource, issuer+p) }
-	return TokenPrincipal(fam.Subject), ceiling, reach, nil
+	// resourceUnder guarantees the resource starts with the issuer.
+	return TokenPrincipal(fam.Subject), ceiling, strings.TrimPrefix(fam.Resource, v.issuer), nil
 }
 
 // inAudience: url equals resource, or extends it at a "/" boundary.

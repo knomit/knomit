@@ -262,9 +262,16 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 		env, nodes[i] = st.Env, st.Node
 	}
 	if err := materialize.ReadBodies(ctx, b, mgr, callerMayRead(ctx), nodes); err != nil {
-		// The frozen view references a repo or version that can no longer be
-		// read: it cannot be served consistently.
-		return mcpgo.NewToolResultError(errMaterializeExpired + " (" + err.Error() + ")"), nil
+		// The frozen view references a repo this caller does not reach (a
+		// narrower credential resuming a wider caller's cursor: the binding
+		// pin is not per principal), or a repo or version that can no longer
+		// be read. Either way this caller gets nothing, and the answer is the
+		// expiry one, naming nothing. The page goes back on the queue: the
+		// refusal is about THIS caller, not the snapshot.
+		if qerr := sWrite.toolSession.EnqueuePaths(ctx, cursor, items); qerr != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", qerr)), nil
+		}
+		return mcpgo.NewToolResultError(errMaterializeExpired), nil
 	}
 	page, used, err := fillMaterializePage(env, nil, nodes, limit)
 	if err != nil {

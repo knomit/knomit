@@ -77,7 +77,11 @@ func (s *Server) authEdge() func(http.Handler) http.Handler {
 func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
+			// Every principal minted here is a local caller: grants carry no
+			// repo dimension and nothing confines it to a resource, so it
+			// reaches every repo's routes (auth.ReachesRepo is default-deny,
+			// so this must be recorded, not assumed).
+			ctx := auth.WithRepoReach(r.Context(), auth.AllRepos)
 			if disabled {
 				next.ServeHTTP(w, r.WithContext(
 					auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindAnonymous, Via: auth.ViaNone})))

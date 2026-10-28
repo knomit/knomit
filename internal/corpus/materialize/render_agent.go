@@ -154,19 +154,42 @@ func confidenceLabel(c float64) string {
 	}
 }
 
-var headingLine = regexp.MustCompile(`^#{1,6}\s`)
+// headingLine is an ATX heading: 1-6 '#' at the start of the line, then a
+// space, a tab or the end of the line.
+var headingLine = regexp.MustCompile(`^(#{1,6})([ \t]|$)`)
 
-// shiftHeadings pushes every markdown heading inside a body four levels
-// down, outside code fences, so a body never outranks the ### fact heading.
+// fenceOpen is a code-fence line: up to three spaces, then three or more
+// backticks or tildes.
+var fenceOpen = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
+
+// shiftHeadings moves every markdown heading inside a body below the ###
+// fact heading, outside code fences: a level-n heading becomes level
+// min(n+3, 6). Clamped rather than shifted further, because markdown has no
+// heading deeper than 6: "#######" is literal text, not a heading. The cost
+// of the clamp is that body levels 3 to 6 all render at 6; the order of the
+// body's own headings is kept, only their depth flattens at the bottom.
+// Fences open with ``` or ~~~ and close only with a run of the SAME
+// character at least as long (CommonMark).
 func shiftHeadings(body string) string {
 	lines := strings.Split(body, "\n")
-	fence := false
+	fence := ""
 	for i, ln := range lines {
-		if strings.HasPrefix(strings.TrimLeft(ln, " \t"), "```") {
-			fence = !fence
+		if m := fenceOpen.FindStringSubmatch(ln); m != nil {
+			switch {
+			case fence == "":
+				fence = m[1]
+				continue
+			case m[1][0] == fence[0] && len(m[1]) >= len(fence) && strings.TrimSpace(ln[len(m[0]):]) == "":
+				fence = ""
+				continue
+			}
 		}
-		if !fence && headingLine.MatchString(ln) {
-			lines[i] = "####" + ln
+		if fence != "" {
+			continue
+		}
+		if m := headingLine.FindStringSubmatch(ln); m != nil {
+			level := min(len(m[1])+3, 6)
+			lines[i] = strings.Repeat("#", level) + ln[len(m[1]):]
 		}
 	}
 	return strings.Join(lines, "\n")

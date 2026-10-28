@@ -161,6 +161,9 @@ type node struct {
 	included bool
 	refs     []resolved
 	resolved bool
+	// parents: the frames this frame cites as parents (isParent), set for
+	// the starting frame and its ancestors only.
+	parents []key
 }
 
 type refKind int
@@ -192,6 +195,8 @@ type walker struct {
 	writeID string
 	nodes   map[key]*node
 	incl    []*node
+	// creation caches each frame version's creation commit (isParent).
+	creation map[edgeKey]string
 }
 
 // Plan runs the walk and returns the document, bodies included.
@@ -201,7 +206,7 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 	}
 	r := newReader(req.Binding, req.Manager, req.MayRead)
 	defer r.close()
-	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}}
+	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}, creation: map[edgeKey]string{}}
 
 	root, err := w.root(req)
 	if err != nil {
@@ -350,7 +355,7 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 		if m == nil {
 			return resolved{kind: refOmit, omit: Omission{Path: wire, Reason: ReasonKBUnavail}}, true, nil
 		}
-		k.repo = m.id12 // the full id may have been given; key by the 12-hex form
+		k.repo = m.id12
 		f, commit, ok, err := w.r.latest(w.ctx, m, c.Path)
 		if err != nil {
 			return resolved{}, false, err

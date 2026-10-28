@@ -203,6 +203,12 @@ func mcpHTTPContext(ctx context.Context, r *http.Request) context.Context {
 	if c, ok := auth.CeilingFromContext(r.Context()); ok {
 		ctx = auth.WithCeiling(ctx, c)
 	}
+	// The repo reach travels with the principal too, for the same reason:
+	// auth.ReachesRepo is default-deny, so a context built from scratch
+	// would refuse every cross-KB read rather than widen one.
+	if reach, ok := auth.RepoReachFromContext(r.Context()); ok {
+		ctx = auth.WithRepoReach(ctx, reach)
+	}
 	if pid, ok := clientsessions.VerifiedPIDFromContext(r.Context()); ok {
 		ctx = clientsessions.WithVerifiedPID(ctx, pid)
 	}

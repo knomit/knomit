@@ -442,14 +442,20 @@ func TestMaterialize_RefKinds(t *testing.T) {
 // one the caller's binding does not mount), at that repo's LATEST version.
 func TestMaterialize_CrossKB(t *testing.T) {
 	m, alpha, beta, _, _, _ := newLensE2E(t)
-	ctx := repos.WithRepoInstance(context.Background(), alpha) // the binding mounts alpha alone
+	// The binding mounts alpha alone; the caller is a local one (every edge
+	// records a reach, and a local caller's is every repo).
+	ctx := auth.WithRepoReach(repos.WithRepoInstance(context.Background(), alpha), auth.AllRepos)
 	beta12 := fact.ID12(beta.ID())
 	xWire := "kb://" + beta12 + "/kb/b/x.md"
 	zWire := "kb://0123456789ab/kb/z.md"
 
 	obs(t, beta, "kb/b/y.md", "Y")
 	writeMat(t, beta, "kb/b/x.md", "X", "X first body.", fact.Observation, "kb/b/y.md")
-	obs(t, alpha, "kb/a/r.md", "R", xWire, zWire)
+	// N5: the same target spelled twice. The uppercase id and path classify
+	// to the same key as xWire, so they are ONE ref. (A full 40-hex id cannot
+	// be stored at all: kb:// wants exactly 12 hex, and SerializeFact refuses
+	// any other id.)
+	obs(t, alpha, "kb/a/r.md", "R", xWire, "kb://"+strings.ToUpper(beta12)+"/kb/B/X.md", zWire)
 	writeMat(t, beta, "kb/b/x.md", "X", "X second body.", fact.Observation, "kb/b/y.md") // after R cited it
 
 	nodes, _ := humanFacts(t, ctx, m, map[string]any{"file": "kb/a/r.md"})
@@ -459,6 +465,7 @@ func TestMaterialize_CrossKB(t *testing.T) {
 	nodes, first := humanFacts(t, ctx, m, map[string]any{"file": "kb/a/r.md", "cross_kb": true})
 	require.True(t, first.CrossKB)
 	require.Equal(t, []string{"R", "X", "Y"}, titles(nodes))
+	require.Equal(t, []int{2}, linkNs(nodes[0]), "one Builds-on link to X, however the ref was spelled")
 	x := nodeByTitle(t, nodes, "X")
 	require.Equal(t, xWire, x.Path)
 	require.Equal(t, "X second body.", x.Body, "a cross-KB ref has no cited version: the LATEST is read")
@@ -472,6 +479,13 @@ func TestMaterialize_CrossKB(t *testing.T) {
 	// to alpha) gets the SAME answer as for a repo that does not exist.
 	confined := auth.WithRepoReach(ctx, func(repo string) bool { return repo == "alpha" })
 	nodes, _ = humanFacts(t, confined, m, map[string]any{"file": "kb/a/r.md", "cross_kb": true})
+	require.Equal(t, []string{"R"}, titles(nodes))
+	require.Equal(t, []string{xWire + "|kb_unavailable", zWire + "|kb_unavailable"}, omitted(nodes[0]))
+
+	// A context with NO recorded reach reaches nothing beyond the binding:
+	// ReachesRepo is default-deny.
+	bare := repos.WithRepoInstance(context.Background(), alpha)
+	nodes, _ = humanFacts(t, bare, m, map[string]any{"file": "kb/a/r.md", "cross_kb": true})
 	require.Equal(t, []string{"R"}, titles(nodes))
 	require.Equal(t, []string{xWire + "|kb_unavailable", zWire + "|kb_unavailable"}, omitted(nodes[0]))
 
@@ -573,14 +587,14 @@ func TestMaterialize_FrameUnpinAndCycle(t *testing.T) {
 	require.Equal(t, []string{"P1", "F"}, titles(nodes), "unpin: T left P1's refs, P2 is retracted and Q was reachable only through it")
 	require.Empty(t, nodeByTitle(t, nodes, "F").NotIncluded)
 
-	// A cycle among frames above the start: each is written once.
+	// Two frames that cite each other above the start (the frame-parent ruling).
 	frame(t, ri, "kb/frames/g1.md", "G1")
 	frame(t, ri, "kb/frames/g2.md", "G2", "kb/frames/g1.md")
 	frame(t, ri, "kb/frames/g1.md", "G1", "kb/frames/g2.md")
 	frame(t, ri, "kb/frames/g2.md", "G2", "kb/frames/g1.md")
 	frame(t, ri, "kb/frames/h.md", "H", "kb/frames/g1.md")
 	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/h.md"})
-	require.Equal(t, []string{"G1", "G2", "H"}, titles(nodes), "the cycle is broken at the earliest-found frame")
+	require.Equal(t, []string{"G1", "H"}, titles(nodes), "G1 and G2 cite each other: G1, created first, is G2's parent, never its child")
 }
 
 // T15: paging. Contiguous ordinals, constant total, instructions on page 1
@@ -762,4 +776,72 @@ func TestMaterialize_LensReadMountRoot(t *testing.T) {
 	require.Equal(t, "kb://"+b12+"/kb/m/x.md", first.Root)
 	require.Equal(t, []string{"kb://" + b12 + "/kb/m/x.md", "kb://" + b12 + "/kb/m/y.md"}, []string{nodes[0].Path, nodes[1].Path})
 	require.Empty(t, nodes[1].Marks, "the root's own mount is not a cross-KB hop")
+}
+
+// B1: a cursor is a frozen view of ONE binding, and the binding pin is not
+// per principal: a whole-API caller and an alpha-confined caller on alpha's
+// endpoint share it. Resuming must re-check the RESUMING caller's reach, so a
+// confined caller cannot page through beta nodes a wider caller snapshotted.
+func TestMaterialize_ResumeRechecksTheCallersReach(t *testing.T) {
+	m, alpha, beta, _, _, _ := newLensE2E(t)
+	base := repos.WithRepoInstance(context.Background(), alpha)
+	wide := auth.WithRepoReach(base, auth.AllRepos)
+	confined := auth.WithRepoReach(base, func(repo string) bool { return repo == "alpha" })
+	xWire := "kb://" + fact.ID12(beta.ID()) + "/kb/b/x.md"
+	obs(t, beta, "kb/b/x.md", "X")
+	obs(t, alpha, "kb/a/r.md", "R", xWire)
+
+	p1 := matCall(t, wide, m, map[string]any{"file": "kb/a/r.md", "audience": "human", "cross_kb": true, "limit": 1})
+	require.Equal(t, []string{"R"}, titles(p1.Facts))
+	require.True(t, p1.HasMore, "X, from beta, is on page 2")
+
+	res, text := matCallRaw(t, confined, m, map[string]any{"cursor": *p1.Cursor, "limit": 1})
+	require.True(t, res.IsError, "a caller that does not reach beta must not read X through another caller's cursor: %s", text)
+	require.True(t, strings.HasPrefix(text, errMaterializeExpired), text)
+	require.NotContains(t, text, "X body.")
+
+	p2 := matCall(t, wide, m, map[string]any{"cursor": *p1.Cursor, "limit": 1})
+	require.Equal(t, []string{"X"}, titles(p2.Facts), "the refused page was not consumed")
+	require.Equal(t, "X body.", p2.Facts[0].Body)
+}
+
+// The frame-parent ruling: links point backwards. Two frames that ref each
+// other resolve to ONE parent, the one created first, decided by git
+// ancestry of their creation commits.
+func TestMaterialize_MutualFramesTheOlderIsTheParent(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	frame(t, ri, "kb/frames/a.md", "A")
+	frame(t, ri, "kb/frames/b.md", "B", "kb/frames/a.md")
+	writeMat(t, ri, "kb/frames/a.md", "A", "A now cites its child.", fact.Frame, "kb/frames/b.md")
+	frame(t, ri, "kb/frames/b.md", "B", "kb/frames/a.md", "kb/frames/x.md") // re-pins A at the version that cites B
+	writeMat(t, ri, "kb/frames/x.md", "X", "x", fact.Observation)
+
+	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/b.md"})
+	require.Equal(t, "A", nodes[0].Title)
+	require.Equal(t, "ancestor", nodes[0].Role, "A, created first, is B's parent")
+	require.Equal(t, "B", nodes[1].Title)
+
+	nodes, _ = humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/a.md"})
+	require.Equal(t, "A", nodes[0].Title)
+	require.Equal(t, "focal", nodes[0].Role, "B, created after A, is never A's parent")
+	for _, n := range nodes {
+		require.NotEqual(t, "ancestor", n.Role, "%s", n.Title)
+	}
+}
+
+// Review N2, the shape that misordered: F→X, X→Y, Y↔Z. Under the ruling Y
+// (created before Z) is Z's parent, never the reverse, so Z is not an
+// ancestor of F at all, and every ancestor precedes the frame citing it.
+func TestMaterialize_FrameCycleBelowDoesNotLiftAChild(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	frame(t, ri, "kb/frames/y.md", "Y")
+	frame(t, ri, "kb/frames/z.md", "Z", "kb/frames/y.md")
+	writeMat(t, ri, "kb/frames/y.md", "Y", "Y now cites Z.", fact.Frame, "kb/frames/z.md")
+	frame(t, ri, "kb/frames/x.md", "X", "kb/frames/y.md")
+	frame(t, ri, "kb/frames/f.md", "F", "kb/frames/x.md")
+
+	nodes, _ := humanFacts(t, ctx, nil, map[string]any{"file": "kb/frames/f.md", "depth": 0})
+	require.Equal(t, []string{"Y", "X", "F"}, titles(nodes))
 }

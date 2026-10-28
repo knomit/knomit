@@ -56,19 +56,43 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 				invalid("malformed Authorization header")
 				return
 			}
-			principal, ceiling, reach, err := v.Verify(r.Context(), tok, p)
+			principal, ceiling, audience, err := v.Verify(r.Context(), tok, p)
 			if err != nil {
 				invalid(err.Error())
 				return
 			}
 			ctx := auth.WithPrincipal(r.Context(), principal)
 			ctx = auth.WithCeiling(ctx, ceiling)
-			// A repo is reached when the token reaches its own routes.
-			ctx = auth.WithRepoReach(ctx, func(repo string) bool {
-				return reach(httpx.APIBase + "/repos/" + repo)
-			})
+			ctx = auth.WithRepoReach(ctx, tokenRepoReach(audience))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
+	}
+}
+
+// tokenRepoReach is which repos a token with this audience (a path on the
+// OAuth listener, "" for the whole issuer) can read:
+//   - a token whose audience covers a repo's routes (/, /api/v1, /api/v1/repos)
+//     reaches that repo;
+//   - a token for one repo's endpoint (/api/v1/repos/<name>/...) reaches that
+//     repo and no other;
+//   - a token for the UNSCOPED MCP endpoint (/api/v1/mcp) reaches every repo:
+//     its client binds a repo or lens after the token is issued, and that
+//     endpoint may bind any of them (decisions/mcp/session-binding/
+//     scoped-endpoint-bind 3408dd94; the scoped endpoints are the confined
+//     ones);
+//   - any other audience (a lens's endpoint, a non-repo route) reaches no
+//     repo by name; a lens binding's own mounts are readable through the
+//     binding, not through this.
+func tokenRepoReach(audience string) func(repo string) bool {
+	under := func(p, prefix string) bool {
+		return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
+	}
+	if audience == httpx.APIBase+"/mcp" {
+		return auth.AllRepos
+	}
+	return func(repo string) bool {
+		root := httpx.APIBase + "/repos/" + repo
+		return under(root, audience) || under(audience, root)
 	}
 }
 

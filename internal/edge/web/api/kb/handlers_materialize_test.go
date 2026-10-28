@@ -15,6 +15,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/testsupport/testsigner"
 )
@@ -74,6 +75,15 @@ func writeMatFact(t *testing.T, ri *repos.RepoInstance, branch, path, title, bod
 	return commit
 }
 
+// asLocalCaller records what AuthMiddleware records for a local caller: a
+// reach of every repo (auth.ReachesRepo is default-deny). newTestRouter runs
+// no auth edge.
+func asLocalCaller(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(auth.WithRepoReach(r.Context(), auth.AllRepos)))
+	})
+}
+
 func getMaterialize(t *testing.T, h http.Handler, url string) (int, string, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -98,7 +108,7 @@ func TestMaterializeRoute_IsTheAgentDocument(t *testing.T) {
 	c1 := writeMatFact(t, alpha, branch, "kb/a/b.md", "B", "B first.", "kb/a/c.md")
 	writeMatFact(t, alpha, branch, "kb/a/r.md", "R", "R body.", "kb/a/b.md", "kb://"+beta12+"/kb/b/x.md")
 	writeMatFact(t, alpha, branch, "kb/a/b.md", "B", "B second.", "kb/a/c.md")
-	h := newTestRouter(m)
+	h := asLocalCaller(newTestRouter(m))
 	base := "/repos/alpha/branches/" + urlBranch(branch)
 
 	code, ctype, body := getMaterialize(t, h, base+"/facts/kb/a/r.md/materialize?depth=1&cross_kb=true")
