@@ -368,8 +368,17 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     <div className="k-mat" data-testid="materialize-view">
       <div className="k-mat-bar" data-testid="mat-bar">
         <div className="k-mat-row">
-          <button type="button" className="k-mat-btn" data-testid="mat-back" onClick={() => { setFocus(false); onBack(); }} title="Back to the fact" aria-label="Back to the fact">
-            <ChevronLeftIcon color="currentColor" size={13} /> Fact
+          {/* The same bare chevron the library header and the timeline use for Back
+              (LibraryHeader's library-back, TimelineNav's timeline-back): the app's
+              ChevronLeftIcon at 13px in #888, no text, no border, 20x26. */}
+          <button type="button" data-testid="mat-back" onClick={() => { setFocus(false); onBack(); }}
+            title="Back to fact" aria-label="Back to fact"
+            style={{
+              background: 'none', border: 'none', outline: 'none',
+              width: 20, height: 26, padding: 0, flexShrink: 0,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            }}>
+            <ChevronLeftIcon color="#888" size={13} />
           </button>
           <span className="k-mat-title" data-testid="mat-title" title={rootTitle}>{rootTitle}</span>
           {/* The two actions on the materialization sit together: Focus, then Export. */}

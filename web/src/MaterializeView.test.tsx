@@ -9,6 +9,7 @@ import { fixtureId, makeFixtureApi } from './materializeFixture';
 import type { FixtureOptions } from './materializeFixture';
 import { DEFAULT_OPTIONS, MatError } from './materializeApi';
 import { writeMaterializeParams } from './materializeOptions';
+import { ChevronLeftIcon } from './icons';
 import type { MaterializeApi, MatNode, MatOptions, MatPage } from './materializeApi';
 import type { SaveOutcome } from './saveFile';
 
@@ -777,5 +778,25 @@ describe('focus mode', () => {
     expect(src('BrowseFacet.tsx')).toContain('data-shell-region="library"');
     expect(src('BrowseFacet.tsx')).toContain('testId="browse-toolbar"');
     expect(src('BrowseFacet.tsx')).toContain('testId="library-splitter"');
+  });
+});
+
+describe('back control', () => {
+  it('is the app\'s bare back chevron: ChevronLeftIcon, no text, no border, labelled "Back to fact", same box as the library and timeline back buttons', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const b = screen.getByTestId('mat-back');
+    expect(b.textContent).toBe('');
+    expect(b).toHaveAttribute('aria-label', 'Back to fact');
+    expect(b).toHaveAttribute('title', 'Back to fact');
+    expect(b.innerHTML).toBe(render(<ChevronLeftIcon color="#888" size={13} />).container.innerHTML);
+    expect(b).not.toHaveClass('k-mat-btn');                      // no bordered button chrome
+    expect(b.style.border === 'none' || b.style.borderStyle === 'none').toBe(true);
+    expect(b.style.background).toBe('none');
+    expect(b.style.width).toBe('20px');                          // LibraryHeader's library-back box
+    expect(b.style.height).toBe('26px');
+    const lib = readFileSync(resolve(__dirname, 'LibraryHeader.tsx'), 'utf8');
+    expect(lib).toContain('<ChevronLeftIcon color={canBack ?');   // the control it copies
+    expect(lib).toContain('width: 20, height: 26');
   });
 });
