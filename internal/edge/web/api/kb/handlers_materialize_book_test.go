@@ -1,18 +1,24 @@
 package kb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
+	"knomit/internal/edge/web/httpx"
+	"knomit/internal/engine/store"
 )
 
 const bookBase = "/repos/alpha/branches/agent:test/search/book"
@@ -352,7 +358,7 @@ func TestBook_TitleAndSearchLine(t *testing.T) {
 	h := asPrincipal("u1", newTestRouter(m))
 	code, p, body := getBook(t, h, bookBase+"?path=kb/u/&type=observation&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
-	require.Equal(t, "U", p.Title, "path only: its segments under the ontology root")
+	require.Equal(t, "Observations in U", p.Title, "no text, entities or domains: the fallback title from the other filters")
 	require.Equal(t, "path kb/u/ · type observation · sorted by relevance", p.SearchLine)
 	require.Equal(t, materialize.BookModeBook, p.Mode)
 	require.Equal(t, materialize.BookInstructions, p.Instructions)
@@ -395,7 +401,7 @@ func TestBook_ExportIsOneDocumentWithAnchors(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, `attachment; filename="`+materialize.BookExportFileName(p1.BookEnv, c)+`"`, rec.Header().Get("Content-Disposition"))
 	doc := rec.Body.String()
-	require.True(t, strings.HasPrefix(doc, "# U\n"), doc)
+	require.True(t, strings.HasPrefix(doc, "# Facts in U\n"), doc)
 	require.Equal(t, 2, strings.Count(doc, "\n## "), "one ## per unit:\n%s", doc)
 	for _, b := range []string{"r1 body.", "r2 body.", "s body.", "d body.", "m body."} {
 		require.Equal(t, 1, strings.Count(doc, b), "%q written once", b)
@@ -413,4 +419,171 @@ func TestBook_ExportIsOneDocumentWithAnchors(t *testing.T) {
 
 	code, _, _ = getMaterialize(t, asPrincipal("u2", newTestRouter(m)), bookBase+"/export?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code, "the export is owned like the pages")
+}
+
+// Over the export cap an export is refused at once: a 503 with
+// Retry-After, nothing streamed.
+//
+// Sabotage: map ErrBookExportsBusy to nothing special, and it is a 500.
+func TestBook_ExportCapIs503(t *testing.T) {
+	m := newMatStoreManager(t, "alpha")
+	seedShared(t, m.Get("alpha"))
+	h := asPrincipal("u1", newTestRouter(m))
+	code, p1, body := getBook(t, h, bookBase+"?path=kb/u/&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	release := materialize.ReserveBookExportsForTest(materialize.MaxConcurrentBookExports)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"/export?cursor="+*p1.Cursor, nil))
+	release()
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
+}
+
+// R11 (review of PR #692): a repo entered cross-KB has ONE tip for the
+// whole book, frozen by the unit that first read it, even when later units
+// are walked by later calls after that repo moved on. Unit 1 (r1) reads
+// beta's x; beta then rewrites x and adds y; unit 2 (r2 -> x, y), walked by
+// the next call, still reads beta at the frozen tip: x at the version unit
+// 1 wrote (no different_version), and y not there yet.
+//
+// Sabotage: read each call's cross-KB tip afresh (drop the frozen tips in
+// reader.foreign), and x's link is flagged and y is written.
+func TestBook_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
+	m := newMatStoreManager(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	const br = "agent/test"
+	b12 := fact.ID12(beta.ID())
+	x, y := "kb://"+b12+"/kb/b/x.md", "kb://"+b12+"/kb/b/y.md"
+	writeMatFact(t, beta, br, "kb/b/x.md", "X", "x first.")
+	writeMatFact(t, alpha, br, "kb/u/r2.md", "R2", "r2 body.", x, y)
+	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", x)
+	h := asPrincipal("u1", newTestRouter(m))
+
+	code, p, body := getBook(t, h, bookBase+"?path=kb/u/&cross_kb=true&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, 1, p.UnitsWalked, "only unit 1 is walked by the first call")
+	writeMatFact(t, beta, br, "kb/b/x.md", "X", "x second.")
+	writeMatFact(t, beta, br, "kb/b/y.md", "Y", "y body.")
+
+	nodes := p.Facts
+	for p.HasMore {
+		code, p, body = getBook(t, h, bookBase+"?cursor="+url.QueryEscape(*p.Cursor))
+		require.Equal(t, http.StatusOK, code, body)
+		nodes = append(nodes, p.Facts...)
+	}
+	at := byUnitPath(nodes)
+	x1, x2, r2 := at["1 "+x], at["2 "+x], at["2 kb/u/r2.md"]
+	require.True(t, x1.Written)
+	require.Equal(t, "x first.", x1.Body)
+	require.NotNil(t, x2.Link, "x was written in unit 1: a back link")
+	require.Equal(t, x1.Commit, x2.Commit, "unit 2 read x at the tip unit 1 froze")
+	require.False(t, x2.Link.DifferentVersion)
+	_, written := at["2 "+y]
+	require.False(t, written, "y is not at the frozen tip")
+	var reasons []string
+	for _, o := range r2.NotIncluded {
+		reasons = append(reasons, o.Path+" "+o.Reason)
+	}
+	require.Contains(t, reasons, y+" "+materialize.ReasonNotInThatKB)
+}
+
+// newEmbBook is a store with the cos test embedder (its vectors searched
+// for real) behind the kb routes, and the repo to write into.
+func newEmbBook(t *testing.T) (http.Handler, *repos.RepoInstance) {
+	t.Helper()
+	emb := &cosEmbedder{}
+	m := repos.New(context.Background(), repos.Deps{})
+	svc, err := store.Open(filepath.Join(t.TempDir(), "alpha.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	svc.SetEmbedder(emb)
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha", UID: "uid-alpha", AgentBranch: "agent/test", Svc: svc, OntologyRoot: "kb", Embedder: emb,
+	})
+	m.Set("alpha", ri)
+	r := chi.NewRouter()
+	repo := r.Route("/repos/{repo}", func(chi.Router) {})
+	repo.Use(repoFromURL(m))
+	branch := repo.Route("/branches/{branch}", func(chi.Router) {})
+	branch.Use(httpx.BranchMiddleware)
+	lens := r.Route("/lenses/{lens}", func(chi.Router) {})
+	lens.Use(lensFromURL(m))
+	Mount(branch, lens, "kb", emb, m)
+	return asPrincipal("u1", r), ri
+}
+
+// cosFacts writes path -> cosine facts in one commit; mod sets the type.
+func cosFacts(t *testing.T, ri *repos.RepoInstance, files map[string]float64, typ fact.Type) {
+	t.Helper()
+	out := map[string]string{}
+	for p, c := range files {
+		out[p] = factText(t, p, strings.TrimSuffix(p[strings.LastIndexByte(p, '/')+1:], ".md"), c, func(f *fact.Fact) { f.Type = typ })
+	}
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, _, err := svc.Facts().BatchWriteFacts(context.Background(), ri.AgentBranch(), out, nil, "add facts", "learn")
+		require.NoError(t, err)
+	}))
+}
+
+// N2 (review of PR #692): for a FILTERED TEXT search the book's first 50
+// units are exactly the UI's list (the /search call at limit 50), in its
+// order, though the store's nearest-neighbour window grows with the limit
+// and the filters apply after it:
+//   - 300 observations at cosine 0.9 fill the UI's window (5 x 50), so the
+//     type=hypothesis list holds only the 5 hypotheses at 0.95. The 25 at
+//     0.6 are inside a limit-500 window, so a book searching at limit 500
+//     had 30 units; it has the UI's 5.
+//   - 60 tied hypotheses at 0.9 (all inside the window): the UI lists the
+//     first 50 by path; the book's first 50 are those, then the other 10.
+//
+// Sabotage: search once at limit Facts (the old runBookSearch), and the
+// book holds 30 units where the list shows 5.
+func TestBook_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
+	h, ri := newEmbBook(t)
+	files := map[string]float64{}
+	for i := range 300 {
+		files[fmt.Sprintf("kb/n/o%03d.md", i)] = 0.9
+	}
+	cosFacts(t, ri, files, fact.Observation)
+	hyps := map[string]float64{}
+	for i := range 5 {
+		hyps[fmt.Sprintf("kb/n/h0%d.md", i)] = 0.95
+	}
+	for i := range 25 {
+		hyps[fmt.Sprintf("kb/n/h1%02d.md", i)] = 0.6
+	}
+	cosFacts(t, ri, hyps, fact.Hypothesis)
+
+	ui := searchPaths(t, h, "q=x&type=hypothesis&path=kb/n/&limit=50")
+	require.Equal(t, []string{"kb/n/h00.md", "kb/n/h01.md", "kb/n/h02.md", "kb/n/h03.md", "kb/n/h04.md"}, ui,
+		"the UI's window holds only the 5 hypotheses at 0.95")
+	nodes, pages := readBook(t, h, bookBase+"?q=x&type=hypothesis&path=kb/n/&depth=0&limit=5")
+	require.Equal(t, 5, pages[0].Units, "the book is the list the UI shows")
+	var roots []string
+	for _, n := range nodes {
+		roots = append(roots, n.Path)
+	}
+	require.Equal(t, ui, roots)
+
+	tied := map[string]float64{}
+	for i := range 60 {
+		tied[fmt.Sprintf("kb/m/t%02d.md", 59-i)] = 0.9
+	}
+	cosFacts(t, ri, tied, fact.Hypothesis)
+	ui = searchPaths(t, h, "q=x&type=hypothesis&path=kb/m/&limit=50")
+	require.Len(t, ui, 50)
+	for i, p := range ui {
+		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", i), p, "ties are listed by path")
+	}
+	nodes, pages = readBook(t, h, bookBase+"?q=x&type=hypothesis&path=kb/m/&depth=0&limit=5")
+	require.Equal(t, 60, pages[0].Units, "a full list extends past 50")
+	roots = roots[:0]
+	for _, n := range nodes {
+		roots = append(roots, n.Path)
+	}
+	require.Equal(t, ui, roots[:50], "the first 50 are the UI's list")
+	for i, p := range roots[50:] {
+		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", 50+i), p, "then the rest, deterministically")
+	}
 }

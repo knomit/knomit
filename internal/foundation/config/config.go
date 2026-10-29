@@ -269,7 +269,10 @@ type SessionConfig struct {
 	ClientRetention   string `toml:"client_retention"`
 	// BookMemoryMiB is the process-wide budget, in MiB, for materialize
 	// books' structure held in memory; past it the largest in-memory book
-	// is spilled to its file. 0 or unset is the default (64).
+	// is spilled to its file. 0 or unset is the default (64). It bounds
+	// books AT REST (their heap measured at about 1.16x what is counted);
+	// the working memory of a walk in progress is bounded by the cap on
+	// concurrent book walks (materialize.MaxConcurrentBookBuilds), not here.
 	BookMemoryMiB int `toml:"book_memory_mib"`
 }
 

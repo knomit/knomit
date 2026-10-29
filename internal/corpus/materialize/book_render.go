@@ -2,6 +2,7 @@ package materialize
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -16,7 +17,11 @@ const BookInstructionsVersion = "materialize-book/1"
 // server constant, on page 1 only, like HumanInstructions.
 const BookInstructions = `These pages are a BOOK: one materialization per search result, in search order. Each search result is a unit ("Fact" ` + "`unit`" + ` of ` + "`units`" + `), and each unit is that fact followed by what it builds on, walked as knomit_materialize walks one fact. Keep calling with the cursor until has_more is false; pass ` + "`unit`" + ` with the cursor to continue from another unit.
 
-Every node carries its unit, its section number (` + "`number`" + `: the unit root is "5", its sections "5.1", "5.1.2"; a frame's ancestors are unnumbered) and its tree depth. A fact is written ONCE in the book: a node with ` + "`written: true`" + ` carries the body; every other appearance has ` + "`written: false`" + `, no body, and a ` + "`link`" + ` to the written one (unit, n, number, anchor_id, direction forward or back; different_version when the version cited here has another body). Refer to the written section ("see 7.1.1") instead of repeating it. builds_on links point inside the same unit. Use only what the facts say, keep their caveats, and cite them by section number.`
+Every node carries its unit, its section number (` + "`number`" + `: the unit root is "5", its sections "5.1", "5.1.2"; a frame's ancestors are unnumbered) and its tree depth. A fact is written ONCE in the book: a node with ` + "`written: true`" + ` carries the body; every other appearance has ` + "`written: false`" + `, no body, and a ` + "`link`" + ` to the written one (unit, n, number, anchor_id, direction forward or back; different_version when the version cited here has another body). Refer to the written section ("see 7.1.1") instead of repeating it. builds_on links point inside the same unit. A unit root with ` + "`unavailable: true`" + ` is a search result deleted since the search: its title alone, nothing to read. Use only what the facts say, keep their caveats, and cite them by section number.`
+
+// UnavailableNote ends the heading of a unit whose result is gone at the
+// book's anchor (BookNode.Unavailable).
+const UnavailableNote = "(no longer available)"
 
 // BookExportFileName is the export's file name: ExportFileName's rule over
 // the book title and the cursor's first 8 characters.
@@ -51,6 +56,9 @@ func renderBookHeader(env BookEnv, sections int) string {
 // under "### <number> <title>"; a link is its heading alone, ending in a
 // "(see …)" in-document link.
 func renderBookNode(n BookNode) string {
+	if n.Unavailable {
+		return fmt.Sprintf("\n<a id=\"%s\"></a>\n## %d. %s %s\n", n.AnchorID, n.Unit, n.Title, UnavailableNote)
+	}
 	if n.Link != nil {
 		see := fmt.Sprintf("(see [%s](#%s))", n.Link.Number, n.Link.AnchorID)
 		if n.Link.Number == "" {
@@ -82,12 +90,73 @@ func headingTitle(n BookNode) string {
 // time: one chunk's bodies are in memory, never the book's.
 const exportChunk = 50
 
+// MaxConcurrentBookExports caps the book exports streaming at once,
+// server-wide; one over it is refused at once (ErrBookExportsBusy, a
+// retry-able 503). It is separate from MaxConcurrentBookBuilds: an export
+// takes a build slot only while it walks the units not walked yet, and gives
+// it back before it streams.
+const MaxConcurrentBookExports = 8
+
+// ErrBookExportsBusy: MaxConcurrentBookExports exports are streaming; retry.
+var ErrBookExportsBusy = errors.New("too many books are being exported right now; retry shortly")
+
+var exportSlots = make(chan struct{}, MaxConcurrentBookExports)
+
+func takeExportSlot() bool {
+	select {
+	case exportSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// BuildSlotsInUse is how many build slots calls hold right now (tests and
+// diagnostics).
+func BuildSlotsInUse() int { return len(buildSlots) }
+
+// ExportSlotsInUse is how many export slots calls hold right now (tests and
+// diagnostics).
+func ExportSlotsInUse() int { return len(exportSlots) }
+
+// ReserveBookExportsForTest takes n export slots and returns their release.
+// Never called in production.
+func ReserveBookExportsForTest(n int) func() {
+	for range n {
+		exportSlots <- struct{}{}
+	}
+	return func() {
+		for range n {
+			<-exportSlots
+		}
+	}
+}
+
+// bookExportFault, when set, runs before each chunk after the first and
+// fails the export with its error (a test seam for the mid-stream abort:
+// SetBookExportFaultForTest). Never set in production.
+var bookExportFault func(from int) error
+
+// SetBookExportFaultForTest sets the mid-stream export fault and returns its
+// restore. Never called in production.
+func SetBookExportFaultForTest(f func(from int) error) (restore func()) {
+	old := bookExportFault
+	bookExportFault = f
+	return func() { bookExportFault = old }
+}
+
 // BookExport writes the whole book of cursor to w as one agent document:
 // the header, then every unit under its own "##" heading, every section
 // once, links as in-document anchors. It streams exportChunk rows at a time
 // and leaves the cursor's reading position where it was. Every cursor the
 // caller cannot be served is ErrCursorExpired, before anything is written.
 func BookExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, start func(env BookEnv) io.Writer) error {
+	// An export holds a reader and one chunk's bodies for as long as its
+	// client reads: bounded server-wide, apart from the walk cap.
+	if !takeExportSlot() {
+		return ErrBookExportsBusy
+	}
+	defer func() { <-exportSlots }()
 	bk, _, err := openBook(ctx, sc, b, mgr, mayRead, cursor)
 	if err != nil {
 		return err
@@ -98,6 +167,9 @@ func BookExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repo
 	if err := bk.walkTo(len(bk.results), 0); err != nil {
 		return err
 	}
+	// The walk is done: its build slot goes back NOW, before streaming, so
+	// a slow or stalled download never keeps other books from being built.
+	bk.releaseSlot()
 	if err := sc.Sessions.TouchBook(ctx, cursor); err != nil {
 		return err
 	}
@@ -105,6 +177,11 @@ func BookExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repo
 	// refusal is still a clean ErrCursorExpired.
 	var w io.Writer
 	for from := 1; from <= bk.rows; from += exportChunk {
+		if f := bookExportFault; f != nil && w != nil {
+			if err := f(from); err != nil {
+				return err
+			}
+		}
 		rows, err := bk.f.Rows(ctx, from, exportChunk)
 		if err != nil {
 			return err

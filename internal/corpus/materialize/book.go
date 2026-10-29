@@ -26,9 +26,10 @@ import (
 //   - every other fact is written where the walk first reaches it.
 //
 // Units are walked lazily, in order, as pages need them, and each walked
-// unit is appended to the book's own file (sessions.BookFile) in one small
-// transaction: rows, the visits of what it wrote, its anchors. A seek to
-// unit N walks the units before N first if they are not walked yet.
+// unit is appended to the book's structure (sessions.Book: in memory,
+// spilled to a file of its own only when it must): rows, the visits of what
+// it wrote, its anchors. A seek to unit N walks the units before N first if
+// they are not walked yet.
 
 // Book bounds. Values and reasons: the experiment's decisions fact and the
 // PR report.
@@ -43,9 +44,13 @@ const (
 	// walked still page.
 	MaxBookRows = 100_000
 	// MaxConcurrentBookBuilds caps the calls WALKING book units at once,
-	// server-wide (a first call, or a page or seek that needs unwalked
-	// units); a call over it is refused at once (ErrBookBusy, retry-able).
-	// A page served from walked units takes no slot.
+	// server-wide (a first call, or a page, seek or export that needs
+	// unwalked units); a call over it is refused at once (ErrBookBusy,
+	// retry-able). A page served from walked units takes no slot, and an
+	// export gives its slot back before it streams. This cap, not the
+	// in-memory book budget (session.book_memory_mib, which bounds books at
+	// rest), is what bounds the walks' working memory: readers and version
+	// caches, measured at 2-3x the accounted size of what they append.
 	MaxConcurrentBookBuilds = 4
 )
 
@@ -66,9 +71,6 @@ var (
 	ErrBookBusy = errors.New("too many books are being built right now; retry shortly")
 	// ErrBookTooLarge: walking on would pass MaxBookRows.
 	ErrBookTooLarge = errors.New("book too large")
-	// ErrBookChanged: a result was not readable at the anchor resolved
-	// after the search (a write landed in between); retry.
-	ErrBookChanged = errors.New("the knowledge base changed while the book was built; retry")
 	// ErrCursorInUse: another call is reading this cursor right now (a 409, not
 	// pages.go's ErrCursorBusy, a busy store). A
 	// cursor has one reader at a time.
@@ -175,6 +177,11 @@ type BookNode struct {
 	Parent  int       `json:"parent,omitempty"`
 	Written bool      `json:"written"`
 	Link    *BookLink `json:"link,omitempty"`
+	// Unavailable is a unit root whose search result has no version at the
+	// book's anchor (deleted after the search): a heading alone, under the
+	// title the search listed, "(no longer available)"; written is false
+	// and there is no link. Other units' links to it still point here.
+	Unavailable bool `json:"unavailable,omitempty"`
 	// UnitTruncated is the unit's own walk cuts, on its root.
 	UnitTruncated *Truncation `json:"unit_truncated,omitempty"`
 }
@@ -233,10 +240,7 @@ type book struct {
 }
 
 func (bk *book) close() {
-	if bk.slot {
-		<-buildSlots
-		bk.slot = false
-	}
+	bk.releaseSlot()
 	if bk.r != nil {
 		bk.r.close()
 	}
@@ -275,7 +279,7 @@ func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPa
 	if err != nil {
 		return BookPage{}, bk.stats, err
 	}
-	paths, err := runBookSearch(ctx, wm, req)
+	hits, err := runBookSearch(ctx, wm, req)
 	if err != nil {
 		return BookPage{}, bk.stats, err
 	}
@@ -283,17 +287,18 @@ func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPa
 	if err != nil {
 		return BookPage{}, bk.stats, fmt.Errorf("resolve HEAD of %s: %w", wm.branch, err)
 	}
+	write := req.Binding.Write()
 	bk.env = BookEnv{
-		Mode: BookModeBook, Title: BookTitle(req.Search, req.Binding.Write().OntologyRoot()),
+		Mode: BookModeBook, Title: BookTitle(req.Search, write.OntologyRoot(), write.Name()),
 		SearchLine: SearchLine(req.Search), Search: req.Search, Anchor: anchor, Audience: AudienceHuman,
 		Unpinned: req.Options.Unpin, CrossKB: req.Options.CrossKB, Depth: req.Options.Depth,
-		MaxNodes: req.Options.MaxNodes, FactsLimit: req.Facts, Units: len(paths), InstructionsVersion: BookInstructionsVersion,
+		MaxNodes: req.Options.MaxNodes, FactsLimit: req.Facts, Units: len(hits), InstructionsVersion: BookInstructionsVersion,
 	}
-	if len(paths) == 0 {
+	if len(hits) == 0 {
 		return BookPage{BookEnv: bk.env, Facts: []BookNode{}}, bk.stats, nil
 	}
 	envJSON, _ := json.Marshal(bk.env)
-	id, err := sc.Sessions.CreateBook(ctx, bookTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, string(envJSON), reserveRootAnchors(paths))
+	id, err := sc.Sessions.CreateBook(ctx, bookTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, string(envJSON), reserveRootAnchors(hits))
 	if err != nil {
 		return BookPage{}, bk.stats, err
 	}
@@ -327,16 +332,16 @@ func takeSlot() bool {
 // reserveRootAnchors is every unit root's anchor, "f-<id8>", suffixed -2,
 // -3 in unit order when results share an id8: reserved up front so a
 // forward link to a unit not walked yet already knows its anchor.
-func reserveRootAnchors(paths []string) []sessions.BookResult {
+func reserveRootAnchors(hits []bookHit) []sessions.BookResult {
 	used := map[string]int{}
-	out := make([]sessions.BookResult, len(paths))
-	for i, p := range paths {
-		a := anchorIDPrefix + shortID(relOf(p))
+	out := make([]sessions.BookResult, len(hits))
+	for i, h := range hits {
+		a := anchorIDPrefix + shortID(relOf(h.path))
 		used[a]++
 		if c := used[a]; c > 1 {
 			a = fmt.Sprintf("%s-%d", a, c)
 		}
-		out[i] = sessions.BookResult{Unit: i + 1, Path: p, Anchor: a}
+		out[i] = sessions.BookResult{Unit: i + 1, Path: h.path, Anchor: a, Title: h.title}
 	}
 	return out
 }
@@ -392,7 +397,12 @@ func (bk *book) walkUnit(unit int) error {
 	})
 	bk.r.forget()
 	if errors.Is(err, ErrNotFound) {
-		return ErrBookChanged
+		// The result is gone at the anchor (deleted between the search and
+		// the HEAD the book is walked at). Its unit is kept, as a heading
+		// alone, the way the walk keeps a cited fact with no version as a
+		// title with its reason: a result is never dropped, and the unit
+		// numbers stay the result positions.
+		uw, err = goneUnit(res, fact12(bk.b)), nil
 	}
 	if err != nil {
 		return err
@@ -421,7 +431,39 @@ func (bk *book) walkUnit(unit int) error {
 	bk.stats.UnitsWalked++
 	bk.stats.Rows += len(rows)
 	bk.stats.Walk = bk.r.stats
+	if h := bookUnitWalkedHook; h != nil {
+		h(bk.id, unit)
+	}
 	return nil
+}
+
+// goneUnit is the unit of a result that has no version at the anchor: its
+// root alone, unavailable, under the title the search listed.
+func goneUnit(res sessions.BookResult, writeID string) *unitWalk {
+	n := Node{N: 1, Path: res.Path, Repo: writeID, Role: RoleRoot, Title: res.Title}
+	return &unitWalk{doc: &Document{Root: res.Path, RootTitle: res.Title, Nodes: []Node{n}},
+		parent: []int{-1}, blobs: []string{""}, links: []*bookTarget{nil}, gone: true}
+}
+
+// bookUnitWalkedHook, when set, runs after each unit is appended (a test
+// seam: SetBookUnitWalkedHookForTest). Never set in production.
+var bookUnitWalkedHook func(cursor string, unit int)
+
+// SetBookUnitWalkedHookForTest sets the hook run after every unit a book
+// call appends, and returns its restore. Never called in production.
+func SetBookUnitWalkedHookForTest(h func(cursor string, unit int)) (restore func()) {
+	old := bookUnitWalkedHook
+	bookUnitWalkedHook = h
+	return func() { bookUnitWalkedHook = old }
+}
+
+// releaseSlot gives the call's build slot back (the call has finished
+// walking).
+func (bk *book) releaseSlot() {
+	if bk.slot {
+		<-buildSlots
+		bk.slot = false
+	}
 }
 
 // visited is the book's visited-set lookup for a node the walk of unit
@@ -506,12 +548,13 @@ func (bk *book) unitRows(uw *unitWalk, unit int, res sessions.BookResult) ([]ses
 	var visits []sessions.BookVisit
 	for i, n := range nodes {
 		seq := bk.rows + i + 1
-		bn := BookNode{Node: n, Unit: unit, Seq: seq, Number: number[i], TreeDepth: depth[i], Written: uw.links[i] == nil}
+		bn := BookNode{Node: n, Unit: unit, Seq: seq, Number: number[i], TreeDepth: depth[i],
+			Written: uw.links[i] == nil && !uw.gone, Unavailable: uw.gone}
 		bn.AnchorID = anchor[i]
 		if p := uw.parent[i]; p >= 0 {
 			bn.Parent = nodes[p].N
 		}
-		if n.Role == RoleRoot || n.Role == RoleFocal {
+		if (n.Role == RoleRoot || n.Role == RoleFocal) && !uw.gone {
 			t := uw.doc.Truncated
 			bn.UnitTruncated = &t
 		}
@@ -574,69 +617,104 @@ func uniqueAnchorErr(base string, taken func(string) (bool, error)) (string, err
 	}
 }
 
+// UIListLimit is how many results the web UI's results list shows: the
+// limit it sends to the repo /search route and to the /facts collection
+// (web/src/api.ts, search and recent). A book's first UIListLimit units are
+// exactly that list.
+const UIListLimit = 50
+
+// bookHit is one search result as the book freezes it.
+type bookHit struct{ path, title string }
+
 // runBookSearch runs the frozen search on the write mount and returns the
-// ordered result paths, at most req.Facts. The search returns the facts'
-// rows (bodies included, a store detail); only their paths are kept.
-func runBookSearch(ctx context.Context, m *mount, req BookRequest) ([]string, error) {
+// ordered results, at most req.Facts.
+//
+// THE FIRST UIListLimit RESULTS ARE THE UI'S LIST, EXACTLY. A text search
+// takes a nearest-neighbour window that grows with its limit, and its
+// filters apply after that window, so the same search at limit 500 can rank
+// results the 50-row list never showed, or list more than it did. The book
+// therefore runs the very call the UI makes (limit UIListLimit) and freezes
+// its answer as the prefix. Only when that list is full and Facts asks for
+// more does it search again at limit Facts and append, in that call's
+// order, every result the prefix does not hold. A list the UI shows short
+// (fewer than UIListLimit) is the whole book: "you found 10, you see 10".
+// Ties are ordered by path in the store (index.FactQuery.Search), so both
+// calls are deterministic. A Facts below UIListLimit truncates the list.
+func runBookSearch(ctx context.Context, m *mount, req BookRequest) ([]bookHit, error) {
 	if req.NoResults {
 		return nil, nil
 	}
-	q := req.Search.options(req.Facts, req.PathsIn)
-	var paths []string
+	var vec []float32
+	if req.Search.Sort != SortRecent && req.Search.Text != "" && req.Embed != nil {
+		v, err := req.Embed(ctx, req.Search.Text)
+		if err != nil {
+			return nil, fmt.Errorf("search: embed query: %w", err)
+		}
+		if len(v) == 0 {
+			return nil, errors.New("search: embed query: embedder returned an empty vector")
+		}
+		vec = v
+	}
+	hits, err := bookSearchOnce(ctx, m, req, UIListLimit, vec)
+	if err != nil {
+		return nil, err
+	}
+	if len(hits) == UIListLimit && req.Facts > UIListLimit {
+		more, err := bookSearchOnce(ctx, m, req, req.Facts, vec)
+		if err != nil {
+			return nil, err
+		}
+		seen := make(map[string]bool, len(hits))
+		for _, h := range hits {
+			seen[h.path] = true
+		}
+		for _, h := range more {
+			if !seen[h.path] {
+				seen[h.path] = true
+				hits = append(hits, h)
+			}
+		}
+	}
+	if len(hits) > req.Facts {
+		hits = hits[:req.Facts]
+	}
+	return hits, nil
+}
+
+// bookSearchOnce is one search call at limit, as the UI's list makes it:
+// the repo /search route (sort relevance) or the /facts collection's
+// sort=recent. The search returns the facts' rows (bodies included, a store
+// detail); only their paths and titles are kept.
+func bookSearchOnce(ctx context.Context, m *mount, req BookRequest, limit int, vec []float32) ([]bookHit, error) {
+	q := req.Search.options(limit, req.PathsIn)
+	var hits []bookHit
 	if req.Search.Sort == SortRecent {
 		out, _, err := m.svc.FactQuery().RecentFacts(ctx, m.branch, q)
 		if err != nil {
 			return nil, fmt.Errorf("search: %w", err)
 		}
 		for _, e := range out {
-			paths = append(paths, e.Path)
+			hits = append(hits, bookHit{e.Path, e.Title})
 		}
-	} else {
-		if q.Text != "" && req.Embed != nil {
-			vec, err := req.Embed(ctx, q.Text)
-			if err != nil {
-				return nil, fmt.Errorf("search: embed query: %w", err)
-			}
-			if len(vec) == 0 {
-				return nil, errors.New("search: embed query: embedder returned an empty vector")
-			}
-			q.QueryVec = vec
-		}
-		out, err := m.svc.FactQuery().Search(ctx, m.branch, q)
-		if err != nil {
-			return nil, fmt.Errorf("search: %w", err)
-		}
-		for _, e := range out {
-			paths = append(paths, e.Path)
-		}
+		return hits, nil
 	}
-	if len(paths) > req.Facts {
-		paths = paths[:req.Facts]
+	q.QueryVec = vec
+	out, err := m.svc.FactQuery().Search(ctx, m.branch, q)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
 	}
-	return paths, nil
+	for _, e := range out {
+		hits = append(hits, bookHit{e.Path, e.Title})
+	}
+	return hits, nil
 }
 
 // openBook checks cursor against sc exactly as NextPage does (every
 // mismatch is ErrCursorExpired) and opens the book for this call.
 func openBook(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string) (*book, *sessions.BookInfo, error) {
-	session, err := sc.Sessions.GetToolSession(ctx, cursor)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session lookup error: %w", err)
-	}
-	if session == nil || session.Status != "active" || session.Binding == "" ||
-		session.Binding != sc.Pin || session.ReadSet != sc.ReadSet || session.Owner != sc.Owner {
-		return nil, nil, ErrCursorExpired
-	}
-	limit, ok := parseBookTool(session.Tool)
-	if !ok {
-		return nil, nil, ErrCursorExpired
-	}
-	info, err := sc.Sessions.GetBook(ctx, cursor)
+	limit, info, err := ownedBook(ctx, sc, cursor)
 	if err != nil {
 		return nil, nil, err
-	}
-	if info == nil {
-		return nil, nil, ErrCursorExpired
 	}
 	bk := &book{ctx: ctx, sc: sc, id: cursor, limit: limit, b: b, r: newReader(b, mgr, mayRead)}
 	if err := json.Unmarshal([]byte(info.Env), &bk.env); err != nil {
@@ -657,11 +735,44 @@ func openBook(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.
 	return bk, info, nil
 }
 
-// IsBookCursor reports whether cursor names a book in sc's session store
-// (whoever owns it), so an edge can route a resume to BookNextPage.
-func IsBookCursor(ctx context.Context, sc CursorScope, cursor string) (bool, error) {
+// ownedBook is the book cursor's frozen page size and position, with the
+// refusals every cursor makes (NextPage, explain.go): a cursor is a frozen
+// view of ONE binding's read set, owned by one endpoint and principal, and
+// every mismatch, a cursor of another tool included, is ErrCursorExpired.
+func ownedBook(ctx context.Context, sc CursorScope, cursor string) (int, *sessions.BookInfo, error) {
+	session, err := sc.Sessions.GetToolSession(ctx, cursor)
+	if err != nil {
+		return 0, nil, fmt.Errorf("session lookup error: %w", err)
+	}
+	if session == nil || session.Status != "active" || session.Binding == "" ||
+		session.Binding != sc.Pin || session.ReadSet != sc.ReadSet || session.Owner != sc.Owner {
+		return 0, nil, ErrCursorExpired
+	}
+	limit, ok := parseBookTool(session.Tool)
+	if !ok {
+		return 0, nil, ErrCursorExpired
+	}
 	info, err := sc.Sessions.GetBook(ctx, cursor)
-	return info != nil, err
+	if err != nil {
+		return 0, nil, err
+	}
+	if info == nil {
+		return 0, nil, ErrCursorExpired
+	}
+	return limit, info, nil
+}
+
+// IsBookCursor reports whether cursor names a book THIS caller may read
+// (sc's owner, pin and read set: the checks of every book call), so an edge
+// can route a resume to BookNextPage. Another owner's book cursor is false,
+// exactly like one that does not exist, so the edge's refusals cannot tell
+// the two apart (fact d870cc94: an unauthorized cursor reads as expired).
+func IsBookCursor(ctx context.Context, sc CursorScope, cursor string) (bool, error) {
+	_, _, err := ownedBook(ctx, sc, cursor)
+	if errors.Is(err, ErrCursorExpired) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // BookNextPage serves the next page of a book cursor, or, with unit > 0,
@@ -737,6 +848,15 @@ func (bk *book) page(at, from int, first bool) (BookPage, error) {
 		return BookPage{}, err
 	}
 	if !moved {
+		// The position moved under this call (another reader: 409), or the
+		// cursor is gone (reaped, replaced or deleted mid-call: the 404).
+		info, err := bk.sc.Sessions.GetBook(bk.ctx, bk.id)
+		if err != nil {
+			return BookPage{}, err
+		}
+		if info == nil {
+			return BookPage{}, ErrCursorExpired
+		}
 		return BookPage{}, ErrCursorInUse
 	}
 	id := bk.id

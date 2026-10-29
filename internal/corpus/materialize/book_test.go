@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,8 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/sessions"
 )
 
@@ -438,4 +441,275 @@ func envInt(k string, def int) int {
 		return v
 	}
 	return def
+}
+
+// seedFlat writes n results under kb/u/ that cite nothing: unit i is one
+// section, so the book has n rows.
+func seedFlat(t testing.TB, f *bookFixture, n int) {
+	t.Helper()
+	for i := range n {
+		f.write(t, fmt.Sprintf("kb/u/f%02d.md", i), fmt.Sprintf("F%02d", i), fmt.Sprintf("f%02d body.", i))
+	}
+}
+
+// noPanic runs fn and fails the test, instead of crashing the binary, when
+// it panics.
+func noPanic(t *testing.T, what string, fn func()) {
+	t.Helper()
+	var p any
+	func() {
+		defer func() { p = recover() }()
+		fn()
+	}()
+	require.Nil(t, p, "%s PANICKED: %v", what, p)
+}
+
+// B1 (review of PR #692): a book a call holds is never freed under it. A
+// far seek (the walk of 59 units) and an export (60 rows, two chunks) hold
+// their book while the same owner's new first call REPLACES it, or the
+// cursor is DELETED, in memory and after a spill. The holder never panics:
+// the seek ends as the expired cursor (the 404: its row is gone), the export
+// finishes whole from the book it holds, and the book is freed on that last
+// release, its file deleted with it.
+//
+// Sabotage: free the book at once in retireLocked (ignore holders), and the
+// holder's next read is a nil-pointer panic; answer a vanished row with
+// ErrCursorInUse in page (N4), and the seek is a 409, not the 404.
+func TestBook_HeldBookSurvivesReplacementAndDelete(t *testing.T) {
+	f := newBookFixture(t)
+	seedFlat(t, f, 60)
+	ti := f.svc.ToolSession()
+	ctx := context.Background()
+	for _, spilled := range []bool{false, true} {
+		for _, action := range []string{"replace", "delete"} {
+			for _, via := range []string{"seek", "export"} {
+				name := fmt.Sprintf("%s-%s-spilled=%v", via, action, spilled)
+				t.Run(name, func(t *testing.T) {
+					if spilled {
+						defer sessions.SetBookSpillBytesForTest(1)()
+					}
+					owner := "o-" + name
+					req := f.request("kb/u/")
+					req.Limit = 1
+					p1, _, err := BookFirstPage(ctx, f.scope(owner), req)
+					require.NoError(t, err)
+					id := *p1.Cursor
+					require.Equal(t, 1, p1.UnitsWalked)
+					inMem, onDisk := ti.LiveBooks()
+					before := inMem + onDisk
+					acted := false
+					act := func() {
+						acted = true
+						if action == "replace" {
+							_, _, err := BookFirstPage(ctx, f.scope(owner), req)
+							require.NoError(t, err)
+						} else {
+							require.NoError(t, ti.DeleteBook(ctx, id))
+						}
+						_, ok := ti.OpenBook(id)
+						require.False(t, ok, "a retired book is refused to new calls")
+					}
+					switch via {
+					case "seek":
+						defer SetBookUnitWalkedHookForTest(func(cursor string, unit int) {
+							if cursor == id && unit == 30 && !acted {
+								act()
+							}
+						})()
+						noPanic(t, "the seeking call", func() {
+							_, err = BookNextPage(ctx, f.scope(owner), f.b, nil, nil, id, 60)
+						})
+						require.ErrorIs(t, err, ErrCursorExpired, "its row is gone: the 404, never a 409")
+					case "export":
+						var doc strings.Builder
+						noPanic(t, "the exporting call", func() {
+							err = BookExport(ctx, f.scope(owner), f.b, nil, nil, id, func(BookEnv) io.Writer {
+								act() // chunk 1 is read; chunk 2 is read after this
+								return &doc
+							})
+						})
+						require.NoError(t, err)
+						require.Equal(t, 60, strings.Count(doc.String(), "\n## "), "the export is whole")
+					}
+					require.True(t, acted)
+					inMem, onDisk = ti.LiveBooks()
+					want := before
+					if action == "delete" {
+						want--
+					}
+					require.Equal(t, want, inMem+onDisk, "the old book was freed on its last release")
+					require.False(t, exists(ti.BookFilePath(id)), "and its file deleted")
+				})
+			}
+		}
+	}
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// B2: an export walks the units not walked yet under a build slot, then
+// gives the slot back BEFORE it streams: a stalled download holds an export
+// slot (bounded apart) and never a build slot. Over the export cap, an
+// export is refused at once.
+//
+// Sabotage: drop the releaseSlot after the walk, and the blocked export
+// still holds its build slot.
+func TestBook_ExportGivesItsBuildSlotBackBeforeStreaming(t *testing.T) {
+	f := newBookFixture(t)
+	fixtureTwo(t, f)
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Limit = 1
+	p1, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	require.NoError(t, err)
+	require.Equal(t, 1, p1.UnitsWalked, "unit 2 is left for the export to walk")
+	require.Zero(t, BuildSlotsInUse())
+
+	builds, exports := -1, -1
+	err = BookExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(BookEnv) io.Writer {
+		return writerFunc(func(p []byte) (int, error) {
+			if builds < 0 {
+				builds, exports = BuildSlotsInUse(), ExportSlotsInUse()
+			}
+			return len(p), nil
+		})
+	})
+	require.NoError(t, err)
+	require.Zero(t, builds, "a streaming export holds no build slot")
+	require.Equal(t, 1, exports, "it holds its export slot")
+	require.Zero(t, ExportSlotsInUse(), "and gives it back at the end")
+
+	for range MaxConcurrentBookExports {
+		exportSlots <- struct{}{}
+	}
+	err = BookExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(BookEnv) io.Writer { return io.Discard })
+	for range MaxConcurrentBookExports {
+		<-exportSlots
+	}
+	require.ErrorIs(t, err, ErrBookExportsBusy)
+}
+
+type writerFunc func(p []byte) (int, error)
+
+func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
+
+// tree_depth is the depth in the WALK TREE (reading order), not the BFS
+// distance (fact 33b57847): r cites a then b, a cites b. BFS puts a and b at
+// distance 1; the reading order writes b under a, at tree depth 2, numbered
+// 1.1.1.
+//
+// Sabotage: set tree_depth from the BFS depth, and b reads 1.
+func TestBook_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
+	f := newBookFixture(t)
+	f.write(t, "kb/z/b.md", "B", "b body.")
+	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/b.md")
+	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
+	req := f.request("kb/u/")
+	req.Limit = 5
+	p, _, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	require.NoError(t, err)
+	byPath := map[string]BookNode{}
+	for _, n := range p.Facts {
+		byPath[n.Path] = n
+	}
+	a, b := byPath["kb/z/a.md"], byPath["kb/z/b.md"]
+	require.Equal(t, 1, b.Depth, "BFS: b is one hop from r")
+	require.Equal(t, 2, b.TreeDepth, "the walk tree: b is under a")
+	require.Equal(t, "1.1.1", b.Number)
+	require.Equal(t, a.N, b.Parent)
+	require.Equal(t, 1, a.TreeDepth)
+}
+
+// different_version on a book link: unit 1 writes x at the version r1 cites
+// (its new body); unit 2's r2 cites x's OLD version, whose body differs, so
+// its back link is flagged. y was re-written with the same body (only its
+// confidence changed): a different commit alone is not a change.
+//
+// Sabotage: never set different_version on a book link, and x's link is
+// unflagged.
+func TestBook_LinkDifferentVersion(t *testing.T) {
+	f := newBookFixture(t)
+	f.write(t, "kb/z/x.md", "X", "x old body.")
+	f.write(t, "kb/z/y.md", "Y", "y body.")
+	f.write(t, "kb/u/r2.md", "R2", "r2 body.", "kb/z/x.md", "kb/z/y.md")
+	f.write(t, "kb/z/x.md", "X", "x new body.")
+	ff := fact.NewFact("kb/z/y.md")
+	ff.Title, ff.Body, ff.Type = "Y", "y body.", fact.Observation
+	ff.Domain, ff.Entities = []string{"testing"}, []string{}
+	ff.Confidence, ff.Sources = 0.9, 1
+	content, err := fact.SerializeFact(ff)
+	require.NoError(t, err)
+	_, err = f.svc.Facts().WriteFact(context.Background(), "agent/test", "kb/z/y.md", content, "y again", "")
+	require.NoError(t, err)
+	f.write(t, "kb/u/r1.md", "R1", "r1 body.", "kb/z/x.md", "kb/z/y.md")
+
+	req := f.request("kb/u/")
+	req.Limit = 5
+	ctx := context.Background()
+	p, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	require.NoError(t, err)
+	nodes := p.Facts
+	for p.HasMore {
+		p, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
+		require.NoError(t, err)
+		nodes = append(nodes, p.Facts...)
+	}
+	links := map[string]*BookLink{}
+	for _, n := range nodes {
+		if n.Unit == 2 && n.Link != nil {
+			links[n.Path] = n.Link
+		}
+	}
+	require.Equal(t, "kb/u/r1.md", nodes[0].Path, "r1 is unit 1 (newest)")
+	require.NotNil(t, links["kb/z/x.md"])
+	require.True(t, links["kb/z/x.md"].DifferentVersion, "r2 cites x at a version with another body")
+	require.NotNil(t, links["kb/z/y.md"])
+	require.False(t, links["kb/z/y.md"].DifferentVersion, "same body at another commit is not a change")
+}
+
+// N3: a result the search listed that is gone at the anchor (deleted
+// between the search and the HEAD the book is walked at) keeps its unit, as
+// a heading alone under the title the search listed: never a 503 "retry",
+// which every retry at the frozen anchor would answer again. Pages and the
+// export both serve it.
+//
+// Sabotage: make the gone result's walk error (the old ErrBookChanged), and
+// the unit is refused.
+func TestBook_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
+	f := newBookFixture(t)
+	fixtureTwo(t, f)
+	defer f.svc.Search().SetOverridesForTest(index.Overrides{Search: func(next index.SearchFunc) index.SearchFunc {
+		return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
+			out, err := next(ctx, branch, q)
+			gone := index.SearchResult{FactWithBody: facts.FactWithBody{FactRecord: facts.FactRecord{Path: "kb/u/gone.md", Title: "Gone fact"}}}
+			return append(out, gone), err
+		}
+	}})()
+	req := f.request("kb/u/")
+	req.Limit = 5
+	ctx := context.Background()
+	p, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	require.NoError(t, err)
+	require.Equal(t, 3, p.Units, "the gone result keeps its unit")
+	nodes := p.Facts
+	for p.HasMore {
+		p, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
+		require.NoError(t, err)
+		nodes = append(nodes, p.Facts...)
+	}
+	last := nodes[len(nodes)-1]
+	require.Equal(t, 3, last.Unit)
+	require.Equal(t, "kb/u/gone.md", last.Path)
+	require.True(t, last.Unavailable)
+	require.False(t, last.Written)
+	require.Nil(t, last.Link)
+	require.Equal(t, "Gone fact", last.Title)
+	require.Equal(t, "3", last.Number)
+
+	var doc strings.Builder
+	require.NoError(t, BookExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(BookEnv) io.Writer { return &doc }))
+	require.Contains(t, doc.String(), "## 3. Gone fact "+UnavailableNote)
 }

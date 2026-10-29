@@ -280,3 +280,119 @@ func TestBookFiles_SizeCapEvictsOldestFirst(t *testing.T) {
 	require.True(t, exists(ti.bookPath(b)))
 	require.True(t, exists(ti.bookPath(c)))
 }
+
+// B1 (review of PR #692): replacement, DeleteBook and CloseBooks never free
+// a book a call holds (invariant ad44382e's finalize rule). The book leaves
+// service at once (a new OpenBook is refused: its cursor reads as expired),
+// its holders keep reading AND appending, and it is freed, memory or file,
+// only when the LAST holder releases it.
+//
+// Sabotage: free it at once in retireLocked (ignore holders), and the
+// holder's next read panics on a nil book.
+func TestBooks_HeldBookIsFreedOnTheLastRelease(t *testing.T) {
+	ctx := context.Background()
+	for _, spilled := range []bool{false, true} {
+		for _, action := range []string{"replace", "delete", "close"} {
+			t.Run(fmt.Sprintf("%s-spilled=%v", action, spilled), func(t *testing.T) {
+				ti := newBookIndex(t)
+				id := newBook(t, ti, "o")
+				appendUnit(t, ti, id, 1, 1, 3, 10)
+				if spilled {
+					spill(t, ti, id)
+				}
+				h1, ok := ti.OpenBook(id)
+				require.True(t, ok)
+				h2, ok := ti.OpenBook(id)
+				require.True(t, ok)
+				switch action {
+				case "replace":
+					newBook(t, ti, "o")
+				case "delete":
+					require.NoError(t, ti.DeleteBook(ctx, id))
+				case "close":
+					ti.CloseBooks()
+				}
+				_, ok = ti.OpenBook(id)
+				require.False(t, ok, "a retired book is refused to new calls")
+				read := func(h *Book, want int) {
+					var rows []BookRow
+					var err error
+					func() {
+						defer func() {
+							if p := recover(); p != nil {
+								require.FailNow(t, "the holder's read PANICKED", "%v", p)
+							}
+						}()
+						rows, err = h.Rows(ctx, 1, 10)
+					}()
+					require.NoError(t, err)
+					require.Len(t, rows, want)
+				}
+				read(h1, 3)
+				require.NoError(t, h1.AppendUnit(ctx, 2, []BookRow{{Seq: 4, Unit: 2, N: 1, Path: "kb/b.md", Written: true, State: "{}"}}, nil, nil, nil),
+					"the holder can still walk on")
+				h1.Close()
+				read(h2, 4)
+				if spilled {
+					require.True(t, exists(ti.bookPath(id)), "the file stays while a call holds the book")
+				}
+				h2.Close()
+				ti.booksMu.Lock()
+				_, still := ti.books[id]
+				ti.booksMu.Unlock()
+				require.False(t, still, "the last release freed it")
+				require.False(t, exists(ti.bookPath(id)), "and deleted its file")
+			})
+		}
+	}
+}
+
+// R6 (review of PR #692): the per-book spill counts what the book ALREADY
+// holds: two units each under the threshold, together past it, spill.
+//
+// Sabotage: compare only the new unit's size with the threshold, and a book
+// of many small units never spills.
+func TestBooks_SpillCountsTheAccumulatedSize(t *testing.T) {
+	ti := newBookIndex(t)
+	defer SetBookSpillBytesForTest(100 << 10)()
+	id := newBook(t, ti, "o")
+	appendUnit(t, ti, id, 1, 1, 150, 400) // ~70 KiB
+	b, _ := ti.OpenBook(id)
+	require.False(t, b.Spilled(), "one unit is under the threshold")
+	b.Close()
+	appendUnit(t, ti, id, 2, 151, 150, 400) // ~70 KiB more: ~140 KiB in all
+	b, _ = ti.OpenBook(id)
+	defer b.Close()
+	require.True(t, b.Spilled(), "the two together pass it")
+}
+
+// N9 (review of PR #692): the process budget may spill ANOTHER caller's
+// book; when that spill fails, this call's append (already done) still
+// succeeds, and the failure is only logged.
+//
+// Sabotage: return enforceBookBudget's error from AppendUnit, and this
+// call fails for the other book's spill.
+func TestBooks_ABudgetSpillOfAnotherBookNeverFailsThisCall(t *testing.T) {
+	ctx := context.Background()
+	other := newBookIndex(t)
+	x := newBook(t, other, "x")
+	appendUnit(t, other, x, 1, 1, 200, 400) // the largest in-memory book
+	require.NoError(t, os.RemoveAll(other.booksDir))
+	require.NoError(t, os.WriteFile(other.booksDir, []byte("not a directory"), 0o600)) // x cannot spill
+
+	ti := newBookIndex(t)
+	y := newBook(t, ti, "y")
+	defer SetBookMemoryBudgetForTest(1)()
+	b, ok := ti.OpenBook(y)
+	require.True(t, ok)
+	defer b.Close()
+	err := b.AppendUnit(ctx, 1, []BookRow{{Seq: 1, Unit: 1, N: 1, Path: "kb/a.md", Written: true, State: "{}"}}, nil, nil, nil)
+	require.NoError(t, err, "another book's failed spill is not this call's failure")
+	rows, err := b.Rows(ctx, 1, 5)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	bx, ok := other.OpenBook(x)
+	require.True(t, ok)
+	defer bx.Close()
+	require.False(t, bx.Spilled(), "the other book's spill did fail")
+}

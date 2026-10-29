@@ -113,9 +113,12 @@ func MaterializeHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallTool
 		defer releaseWrite()
 
 		if cursor := req.GetString("cursor", ""); cursor != "" {
+			// Only a book THIS caller owns routes to the book resume; another
+			// owner's book cursor takes the path of a cursor that does not
+			// exist, so every refusal reads the same (d870cc94).
 			book, err := materialize.IsBookCursor(ctx, materializeScope(ctx, b, sWrite), cursor)
 			if err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
+				return bookToolError(err), nil
 			}
 			if book {
 				return materializeBookResume(ctx, req, b, mgr, sWrite, cursor)

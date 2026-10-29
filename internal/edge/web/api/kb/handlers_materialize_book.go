@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -161,7 +162,7 @@ func handleSearchBookExport(mgr *repos.Manager) http.HandlerFunc {
 				w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 				w.Header().Set("Content-Disposition", `attachment; filename="`+materialize.BookExportFileName(env, cursor)+`"`)
 				w.WriteHeader(http.StatusOK)
-				return w
+				return &deadlineWriter{w: w, rc: http.NewResponseController(w)}
 			})
 		switch {
 		case err == nil:
@@ -175,6 +176,25 @@ func handleSearchBookExport(mgr *repos.Manager) http.HandlerFunc {
 			panic(http.ErrAbortHandler)
 		}
 	}
+}
+
+// bookExportWriteTimeout bounds each write of an export's stream. The
+// listeners run with no WriteTimeout (a long download is legitimate), so
+// without it a client that stops reading would hold its export slot and
+// reader forever; with it, a write that cannot complete in this time fails,
+// and the export aborts (never a short file).
+const bookExportWriteTimeout = time.Minute
+
+// deadlineWriter sets the connection's write deadline before every write.
+// A ResponseWriter that cannot (a test recorder) just writes.
+type deadlineWriter struct {
+	w  io.Writer
+	rc *http.ResponseController
+}
+
+func (d *deadlineWriter) Write(p []byte) (int, error) {
+	_ = d.rc.SetWriteDeadline(time.Now().Add(bookExportWriteTimeout))
+	return d.w.Write(p)
 }
 
 // bookRequest parses a first call. On failure it has written the response.
@@ -268,11 +288,11 @@ func writeBookError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, materialize.ErrCursorInUse):
 		hal.WriteProblem(w, http.StatusConflict, "Cursor in use",
 			"another call is reading this cursor; a cursor has one reader at a time", r.URL.Path)
-	case errors.Is(err, materialize.ErrBookBusy), errors.Is(err, materialize.ErrStoreBusy), errors.Is(err, materialize.ErrBookChanged):
+	case errors.Is(err, materialize.ErrBookBusy), errors.Is(err, materialize.ErrStoreBusy), errors.Is(err, materialize.ErrBookExportsBusy):
 		w.Header().Set("Retry-After", materializeBusyRetryAfter)
 		detail := "the server is busy building other books; retry shortly"
-		if errors.Is(err, materialize.ErrBookChanged) {
-			detail = materialize.ErrBookChanged.Error()
+		if errors.Is(err, materialize.ErrBookExportsBusy) {
+			detail = materialize.ErrBookExportsBusy.Error()
 		} else if errors.Is(err, materialize.ErrStoreBusy) {
 			detail = errMaterializeCursorBusy
 		}

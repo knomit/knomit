@@ -903,6 +903,27 @@ func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	return fq.search(ctx, branch, q)
 }
 
+// searchCandidate is one vector-search hit with its metadata.
+type searchCandidate struct {
+	rec   facts.FactWithBody
+	score float64
+}
+
+// rankCandidates orders hits by cosine, highest first, and equal cosines by
+// path, so a tie has ONE order (the candidates come from an IN query with no
+// ORDER BY): the UI's results list and a book materializing it
+// (materialize.runBookSearch) read the same order. Stable insertion sort.
+func rankCandidates(c []searchCandidate) {
+	ahead := func(a, b searchCandidate) bool {
+		return a.score > b.score || (a.score == b.score && a.rec.Path < b.rec.Path)
+	}
+	for i := 1; i < len(c); i++ {
+		for j := i; j > 0 && ahead(c[j], c[j-1]); j-- {
+			c[j], c[j-1] = c[j-1], c[j]
+		}
+	}
+}
+
 // search is Search without the test override.
 func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
@@ -963,10 +984,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	}
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
-	type candidate struct {
-		rec   facts.FactWithBody
-		score float64
-	}
+	type candidate = searchCandidate
 
 	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
 	th := model.EmbedderThresholds(fq.rh.Embedder())
@@ -1155,11 +1173,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		return nil, nil
 	}
 
-	for i := 1; i < len(candidates); i++ {
-		for j := i; j > 0 && candidates[j].score > candidates[j-1].score; j-- {
-			candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
-		}
-	}
+	rankCandidates(candidates)
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}

@@ -1268,14 +1268,33 @@ paths:
         `exclude_type`, `kind`, `exclude_kind`, `origin`, `ep`, `motifs`,
         `motif_match`, `min_confidence`, `min_similarity`, `since_fork`),
         plus `sort` (`relevance`, the default, is `/search`; `recent` is the
-        `/facts` collection's order). The server runs the search itself, past
-        the UI's 50, up to `facts`. The book's options are `facts` (1-500,
-        default every result up to 500), `depth`, `max_nodes`, `unpin`,
-        `cross_kb` (as for one fact) and `limit` (sections per page, 1-5,
-        default 3). Any other parameter is a 400. The results are frozen
-        here; each walked unit's structure is stored on disk in the book's
-        own file, and pages read bodies at each section's frozen version. A
-        search with no results is a 200 page with `units: 0` and no cursor.
+        `/facts` collection's order). The server runs the search itself, up
+        to `facts`: its first 50 units are EXACTLY the list the UI shows (the
+        same call at limit 50, in its order; ties in a text search are
+        ordered by path), and only when that list is full does the book
+        extend past it, appending the further results of the same search at
+        limit `facts` in their order. A list shorter than 50 is the whole
+        book. The book's options are `facts` (1-500, default every result up
+        to 500), `depth`, `max_nodes`, `unpin`, `cross_kb` (as for one fact)
+        and `limit` (sections per page, 1-5, default 3). Any other parameter
+        is a 400. The results are frozen here; each walked unit's structure
+        is held in memory (spilled to a file of the book's own only past 8
+        MiB, or when the server's in-memory books pass
+        `session.book_memory_mib`), and pages read bodies at each section's
+        frozen version. A search with no results is a 200 page with
+        `units: 0` and no cursor. A result that is gone at the book's anchor
+        (deleted between the search and the walk) keeps its unit as a
+        heading alone (`unavailable: true`), never an error.
+
+        TITLE: free text as a sentence, then " for <entities>", then
+        " (<domains>)"; no text: the entities lead; domains only: the
+        domains. With none of the three, the other filters in words:
+        `[types as plurals, else kinds or origins + " facts", else "Facts"]
+        [about <motifs>] [in <path breadcrumb>] [qualifiers]`, e.g.
+        "Hypotheses about misattributed env defect", "Invariants in
+        Architecture › fleet", "Facts (confidence ≥ 0.8)"; motifs alone
+        are their words; no filter at all is "All facts in <repo>".
+        `search_line` always spells out the whole search.
 
         LATER CALLS: pass ONLY `cursor`, or `cursor` and `unit` to continue
         from that unit's first section (1 to `units`, forward or back; out
@@ -1289,12 +1308,17 @@ paths:
         principal (and the binding's read set); another owner's, an unknown
         or an idle-expired cursor answer the same 404, and consume nothing.
         One book per owner: a new first call replaces the owner's previous
-        book. A book holds at most 100000 sections: the walked units still
+        book; a call still reading the replaced book finishes from it, or
+        ends as the 404, and the book is freed when the last such call ends.
+        A book holds at most 100000 sections: the walked units still
         page, and the call that needs the next unit is a 422 naming the
         controls to lower. At most 4 calls walk book units at once on the
         server (a page from walked units walks nothing); a call over that,
         or one that finds the session store's lock taken past its timeout,
-        is a 503 with Retry-After. An idle cursor's book is deleted after
+        is a 503 with Retry-After. The in-memory budget
+        (`session.book_memory_mib`, 64 MiB) bounds books AT REST (measured
+        at about 1.16x the accounted bytes); a walk's working memory is
+        bounded by the 4-walk cap, not by that budget. An idle cursor's book is deleted after
         the idle expiry plus 5 minutes, and the oldest idle books are
         evicted when a store's book files pass 1 GiB; either reads as the
         404. Cross-KB refs are followed only into repos the caller
@@ -1356,7 +1380,15 @@ paths:
         every section once, and every link as an in-document anchor. It is
         never partial: a failure after the first bytes aborts the response.
         The cursor's reading position is left where it was. Owned like the
-        pages: another owner's or an unknown cursor is the same 404.
+        pages: another owner's or an unknown cursor is the same 404. Units
+        not walked yet are walked first, under one of the 4 walk slots,
+        which is given back before streaming. At most 8 exports stream at
+        once on the server (over that: a 503 with Retry-After), and each
+        write of the stream must complete within a minute, else the export
+        aborts. A 409 is a unit-append race with another call on the same
+        cursor; a 422 is a book at the 100000-section cap, which cannot be
+        exported whole even though its walked units still page; a 500 is
+        any other failure before the first byte.
       operationId: exportSearchBook
       parameters:
         - { name: cursor, in: query, required: true, schema: { type: string } }
@@ -1369,6 +1401,9 @@ paths:
             text/markdown: { schema: { type: string } }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/search:
@@ -5474,6 +5509,7 @@ components:
             tree_depth: { type: integer, description: "Depth in the unit's walk tree (not the BFS `depth`)." }
             parent:     { type: integer, description: "n of the tree parent in the unit; absent for the root and ancestors." }
             written:    { type: boolean }
+            unavailable: { type: boolean, description: "A unit root whose search result is gone at the book's anchor: a heading alone, under the title the search listed, \"(no longer available)\"; written is false and there is no link." }
             link:
               type: object
               description: Where this fact is written.

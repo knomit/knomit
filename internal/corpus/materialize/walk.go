@@ -239,6 +239,9 @@ type unitWalk struct {
 	blobs []string
 	// links[i] is node i's link target in a book; nil when it is written.
 	links []*bookTarget
+	// gone: a book unit whose result has no version at the anchor; its one
+	// node is the root, a heading only (goneUnit).
+	gone bool
 }
 
 // walkUnit runs one materialization's walk on r: metadata and edges only,

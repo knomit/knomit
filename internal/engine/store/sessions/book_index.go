@@ -20,9 +20,9 @@ import (
 // Book cursors: the session-DB half of "materialize a search as a book". A
 // book is a tool_sessions row (so ownership, binding pin, read set and the
 // idle reaper apply unchanged) plus a book_sessions row (its envelope and
-// reading position). Its structure lives in a FILE of its own (book_file.go),
-// written only by the book's one cursor holder, so a book never contends with
-// another book or another cursor on the shared session DB.
+// reading position). Its structure is held in memory, and spilled to a FILE
+// of its own only when it must (book_store.go, book_file.go), so a book never
+// contends with another book or another cursor on the shared session DB.
 //
 // WRITES to the shared session DB are small (one session row, one position
 // update per page) and each is one BEGIN IMMEDIATE transaction on a
@@ -173,23 +173,29 @@ func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, read
 	ti.booksMu.Lock()
 	ti.books[id] = bs
 	var old []*bookStore
+	var lost []string
 	for _, o := range replaced {
-		if b := ti.books[o]; b != nil {
+		b, known := ti.retireLocked(o)
+		if b != nil {
 			old = append(old, b)
-			delete(ti.books, o)
+		}
+		if !known {
+			lost = append(lost, o)
 		}
 	}
 	ti.booksMu.Unlock()
 	for _, b := range old {
 		b.drop()
 	}
-	for _, o := range replaced {
+	for _, o := range lost {
 		removeBookFile(ti.bookPath(o))
 	}
-	return id, enforceBookBudget(ctx)
+	enforceBookBudgetLogged(ctx)
+	return id, nil
 }
 
-// DeleteBook removes a book cursor and frees its book (memory or file).
+// DeleteBook removes a book cursor and frees its book (memory or file), or,
+// while a call holds it, retires it for the last holder's release to free.
 func (ti *ToolIndex) DeleteBook(ctx context.Context, id string) error {
 	err := ti.bookWrite(ctx, "DeleteBook", func(c *sql.Conn) error {
 		_, err := c.ExecContext(ctx, `DELETE FROM tool_sessions WHERE id = ?`, id)
@@ -199,16 +205,44 @@ func (ti *ToolIndex) DeleteBook(ctx context.Context, id string) error {
 	return err
 }
 
-// forgetBook drops book id from the registry and frees it.
+// forgetBook takes book id out of the registry and frees it, or, while a
+// call holds it, leaves that to the holder's release (retireLocked).
 func (ti *ToolIndex) forgetBook(id string) {
 	ti.booksMu.Lock()
-	bs := ti.books[id]
-	delete(ti.books, id)
+	bs, known := ti.retireLocked(id)
 	ti.booksMu.Unlock()
 	if bs != nil {
 		bs.drop()
 	}
-	removeBookFile(ti.bookPath(id))
+	if !known {
+		removeBookFile(ti.bookPath(id))
+	}
+}
+
+// retireLocked takes book id out of service; booksMu is held. Every drop
+// path that can meet a held book goes through it (replacement, DeleteBook,
+// CloseBooks; the sweeper skips held books), following the origin-session
+// finalize rule (invariant ad44382e):
+//   - a book no call holds leaves the registry at once and is returned, for
+//     the caller to drop outside the lock;
+//   - a book a call holds is only marked retired: OpenBook refuses it (its
+//     cursor reads as expired), its holders keep reading it, and the LAST
+//     holder's release drops it.
+//
+// A book is therefore never freed under a call that holds it. known is false
+// when the registry has no book id (lost with a restart): only then may the
+// caller delete a file at its path.
+func (ti *ToolIndex) retireLocked(id string) (dropNow *bookStore, known bool) {
+	bs := ti.books[id]
+	if bs == nil {
+		return nil, false
+	}
+	if bs.holders > 0 {
+		bs.retired = true
+		return nil, true
+	}
+	delete(ti.books, id)
+	return bs, true
 }
 
 // GetBook returns a book's envelope and position, nil when id is not a book.
@@ -262,21 +296,30 @@ func (ti *ToolIndex) TouchBook(ctx context.Context, id string) error {
 }
 
 // OpenBook holds book id for this call. ok is false when the book is gone
-// (replaced, expired, evicted, or lost with a restart). While held, the
-// sweeper never drops it: the hold is registered under booksMu, the lock
-// the sweeper drops books under, and Close releases it.
+// (replaced, deleted, expired, evicted, or lost with a restart), a retired
+// book another call still holds included. While held, no path frees the
+// book: the hold is registered under booksMu, the lock every drop path
+// takes (retireLocked, the sweeper); Close releases it, and the last
+// release of a retired book frees it.
 func (ti *ToolIndex) OpenBook(id string) (*Book, bool) {
 	ti.booksMu.Lock()
 	defer ti.booksMu.Unlock()
 	bs := ti.books[id]
-	if bs == nil {
+	if bs == nil || bs.retired {
 		return nil, false
 	}
 	bs.holders++
 	return &Book{bs: bs, release: func() {
 		ti.booksMu.Lock()
 		bs.holders--
+		last := bs.retired && bs.holders == 0
+		if last && ti.books[bs.id] == bs {
+			delete(ti.books, bs.id)
+		}
 		ti.booksMu.Unlock()
+		if last {
+			bs.drop()
+		}
 	}}, true
 }
 
@@ -339,13 +382,18 @@ func (ti *ToolIndex) OpenBookFiles() int {
 func (ti *ToolIndex) BookFilePath(id string) string { return ti.bookPath(id) }
 
 // CloseBooks frees every live book of this index (the store is closing):
-// their memory leaves the process budget and their files are closed.
+// their memory leaves the process budget and their files are closed. A book
+// a call still holds is retired instead, and freed on its last release.
 func (ti *ToolIndex) CloseBooks() {
 	ti.booksMu.Lock()
-	books := ti.books
-	ti.books = map[string]*bookStore{}
+	var drop []*bookStore
+	for id := range ti.books {
+		if bs, _ := ti.retireLocked(id); bs != nil {
+			drop = append(drop, bs)
+		}
+	}
 	ti.booksMu.Unlock()
-	for _, bs := range books {
+	for _, bs := range drop {
 		bs.drop()
 	}
 }

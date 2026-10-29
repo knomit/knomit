@@ -2,7 +2,11 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/domain/fact"
 	"knomit/internal/foundation/auth"
 )
@@ -106,6 +111,87 @@ func TestBook_RESTIsTheMCPBookPage(t *testing.T) {
 	// A book cursor refuses every other argument on MCP as on REST.
 	text, isErr = callToolAt(t, h, alphaMCP, sid, "knomit_materialize", `{"cursor":"`+mc+`","limit":5}`)
 	require.True(t, isErr, text)
+}
+
+// N1 (review of PR #692): on MCP, another owner's live book cursor and a
+// cursor that does not exist are refused with the SAME text, whatever
+// argument is added (fact d870cc94: an unauthorized cursor reads as
+// expired), so the refusal is no existence oracle.
+//
+// Sabotage: route on IsBookCursor ignoring the owner, and `unit` or
+// `limit` with the other owner's cursor answers a book-only text.
+func TestBook_MCPRefusalsDoNotTellAnotherOwnersCursorFromNone(t *testing.T) {
+	f := newOAuthWebFixture(t, testIssuer)
+	m, alpha, _ := newMaterializeRepos(t)
+	f.s.Manager = m
+	writeObs(t, alpha, "kb/u/r1.md", "R1")
+	writeObs(t, alpha, "kb/u/r2.md", "R2")
+	handler := func(subject string) (http.Handler, string) {
+		tok := f.mint(t, subject, testIssuer+"/api/v1", []string{"read"}, auth.Read)
+		h := withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
+		_, sid := rpcAt(t, h, alphaMCP, "", initBody)
+		return h, sid
+	}
+	hA, sidA := handler("laptop")
+	hB, sidB := handler("desktop")
+	first, isErr := callToolAt(t, hA, alphaMCP, sidA, "knomit_materialize", `{"search":{"path":"kb/u/"},"limit":1}`)
+	require.False(t, isErr, first)
+	mine := pageCursor(t, first)
+	const ghost = "00000000-0000-4000-8000-000000000000"
+	for _, extra := range []string{``, `,"unit":1`, `,"limit":2`, `,"depth":1`, `,"unit":1,"limit":2`} {
+		other, otherErr := callToolAt(t, hB, alphaMCP, sidB, "knomit_materialize", `{"cursor":"`+mine+`"`+extra+`}`)
+		none, noneErr := callToolAt(t, hB, alphaMCP, sidB, "knomit_materialize", `{"cursor":"`+ghost+`"`+extra+`}`)
+		require.True(t, otherErr, other)
+		require.True(t, noneErr, none)
+		require.Equal(t, none, other, "another owner's cursor reads like none, with %q", extra)
+	}
+	// The owner is still served (nothing was consumed).
+	text, isErr := callToolAt(t, hA, alphaMCP, sidA, "knomit_materialize", `{"cursor":"`+mine+`"}`)
+	require.False(t, isErr, text)
+}
+
+// R10 (review of PR #692): an export that fails after its first bytes
+// aborts the connection through the real router (chi's Recoverer and
+// reportPanic pass http.ErrAbortHandler through), so the client's read
+// fails: never a short file that ends cleanly.
+//
+// Sabotage: return instead of panic(http.ErrAbortHandler) on a mid-stream
+// failure, and the client reads a short body with a clean EOF.
+func TestBook_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
+	f := newOAuthWebFixture(t, testIssuer)
+	m, alpha, _ := newMaterializeRepos(t)
+	f.s.Manager = m
+	for i := range 60 {
+		writeObs(t, alpha, fmt.Sprintf("kb/e/f%02d.md", i), fmt.Sprintf("F%02d", i))
+	}
+	tok := f.mint(t, "laptop", testIssuer+"/api/v1", []string{"read"}, auth.Read)
+	h := withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
+	code, body := restGet(t, h, alphaBook+"?path=kb/e/&depth=0&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	cur := pageCursor(t, body)
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	// get is the download: its status and body, or the error that ended it
+	// (the request itself, when the abort comes before the buffered headers
+	// are flushed; the body read, after).
+	get := func() (int, []byte, error) {
+		resp, err := srv.Client().Get(srv.URL + alphaBook + "/export?cursor=" + url.QueryEscape(cur))
+		if err != nil {
+			return 0, nil, err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, b, err
+	}
+	st, whole, err := get()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, st)
+	require.Equal(t, 60, strings.Count(string(whole), "\n## "), "the whole export, before the fault")
+
+	defer materialize.SetBookExportFaultForTest(func(int) error { return errors.New("injected mid-stream failure") })()
+	st, part, err := get()
+	require.Error(t, err, "the download fails (status %d, %d of %d bytes read): never a short file that ends cleanly", st, len(part), len(whole))
 }
 
 // Reach: a book cannot be built on a repo the token does not reach (the

@@ -8,6 +8,7 @@ import (
 	"math"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
@@ -134,16 +135,31 @@ func materializeBookResume(ctx context.Context, req mcpgo.CallToolRequest, b *re
 	return marshalBookPage(page)
 }
 
+// bookToolError maps a book error to its tool error, with the REST route's
+// rule: the caller's own input errors and the book's bounds are named, and
+// anything else is a fixed text, the internal error only logged (it can
+// carry SQL or file-path text).
 func bookToolError(err error) *mcpgo.CallToolResult {
 	switch {
 	case errors.Is(err, materialize.ErrCursorExpired):
 		return mcpgo.NewToolResultError(errMaterializeExpired)
 	case errors.Is(err, materialize.ErrStoreBusy):
-		return mcpgo.NewToolResultError("the session store is busy; retry shortly")
-	default:
+		return mcpgo.NewToolResultError(errSessionBusy)
+	case errors.Is(err, materialize.ErrCursorInUse):
+		return mcpgo.NewToolResultError("another call is reading this cursor; a cursor has one reader at a time")
+	case errors.Is(err, materialize.ErrBookBusy):
+		return mcpgo.NewToolResultError(materialize.ErrBookBusy.Error())
+	case errors.Is(err, materialize.ErrInvalid), errors.Is(err, materialize.ErrBookTooLarge):
 		return mcpgo.NewToolResultError(err.Error())
+	default:
+		log.Error().Err(err).Msg("knomit_materialize book failed")
+		return mcpgo.NewToolResultError(errBookFailed)
 	}
 }
+
+// errBookFailed is the tool error of every book failure that is not the
+// caller's to fix.
+const errBookFailed = "the book could not be served; retry, or start over without cursor"
 
 func marshalBookPage(p materialize.BookPage) (*mcpgo.CallToolResult, error) {
 	out, err := json.Marshal(p)

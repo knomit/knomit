@@ -85,12 +85,15 @@ func (s BookSearch) options(limit int, pathsIn []string) index.SearchOptions {
 //   - then the domains in parentheses: " (cost, security)";
 //   - no text: the entities lead ("Anthropic (cost)");
 //   - domains only: the entity format, capitalized, no parentheses;
-//   - path only: its segments under the ontology root, "Architecture › fleet";
-//   - type, motif, kind, path (beside anything else), confidence, dates and
-//     origin never enter the title; nothing left: "Search results".
+//   - with any of text, entities or domains, the other filters stay out of
+//     the title (the search line spells them out).
 //
-// root is the ontology root the path is shown under.
-func BookTitle(s BookSearch, root string) string {
+// With no text, entities or domains (user ruling, 2026-10-29), the title is
+// built from the other filters, in words: fallbackTitle.
+//
+// root is the ontology root the path is shown under; name is the repo the
+// book reads, for "All facts in <name>".
+func BookTitle(s BookSearch, root, name string) string {
 	text := sentence(s.Text)
 	ents := listPhrase(s.Entities)
 	switch {
@@ -105,10 +108,91 @@ func BookTitle(s BookSearch, root string) string {
 	case len(s.Domains) > 0:
 		return capitalize(listPhrase(s.Domains))
 	}
-	if p := pathTitle(s.Path, root); p != "" {
-		return p
+	return fallbackTitle(s, root, name)
+}
+
+// fallbackTitle is the title of a search with no text, entities or domains
+// (user ruling, 2026-10-29), "[head] [about <motifs>] [in <path>]
+// [qualifiers]":
+//   - head: the types as plurals ("Hypotheses", "Hypotheses and policies"),
+//     else the kinds ("Pragmatic facts"), else the origins ("Distilled
+//     facts"), else "Facts";
+//   - motifs: each slug in words ("misattributed-env-defect" is
+//     "misattributed env defect"), listed "A and B" or "A, B and N more";
+//   - path: its breadcrumb under the ontology root, "Architecture › fleet";
+//   - qualifiers: "changed in this experiment" for since_fork, then
+//     "(confidence ≥ 0.8)";
+//   - motifs and nothing else: the motif words alone, "Misattributed env
+//     defect";
+//   - no filter at all: "All facts in <name>".
+//
+// The title is in sentence case: only its first letter is capitalized.
+// Excluded types and kinds, episodes and a similarity floor (inert without
+// text) stay out of it; the search line spells them out.
+func fallbackTitle(s BookSearch, root, name string) string {
+	head := ""
+	switch {
+	case len(s.Types) > 0:
+		plurals := make([]string, len(s.Types))
+		for i, t := range s.Types {
+			plurals[i] = pluralType(t)
+		}
+		head = listPhrase(plurals)
+	case len(s.Kinds) > 0:
+		head = listPhrase(s.Kinds) + " facts"
+	case len(s.Origins) > 0:
+		head = listPhrase(s.Origins) + " facts"
 	}
-	return "Search results"
+	motifs := make([]string, len(s.Motifs))
+	for i, m := range s.Motifs {
+		motifs[i] = strings.Join(strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '_' }), " ")
+	}
+	about := listPhrase(motifs)
+	where := pathTitle(s.Path, root)
+	var quals []string
+	if s.SinceFork {
+		quals = append(quals, "changed in this experiment")
+	}
+	if s.MinConfidence > 0 {
+		quals = append(quals, "(confidence ≥ "+strconv.FormatFloat(s.MinConfidence, 'f', -1, 64)+")")
+	}
+	if head == "" && about != "" && where == "" && len(quals) == 0 {
+		return capitalize(about)
+	}
+	if head == "" && about == "" && where == "" && len(quals) == 0 {
+		if name == "" {
+			return "All facts"
+		}
+		return "All facts in " + name
+	}
+	if head == "" {
+		head = "facts"
+	}
+	parts := []string{head}
+	if about != "" {
+		parts = append(parts, "about "+about)
+	}
+	if where != "" {
+		parts = append(parts, "in "+where)
+	}
+	parts = append(parts, quals...)
+	return capitalize(strings.Join(parts, " "))
+}
+
+// pluralType is a fact type's plural, in words: "hypothesis" is
+// "hypotheses", "policy" "policies", "process" "processes".
+func pluralType(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	switch {
+	case strings.HasSuffix(t, "is"):
+		return strings.TrimSuffix(t, "is") + "es"
+	case strings.HasSuffix(t, "y") && len(t) > 1 && !strings.ContainsRune("aeiou", rune(t[len(t)-2])):
+		return strings.TrimSuffix(t, "y") + "ies"
+	case strings.HasSuffix(t, "s"), strings.HasSuffix(t, "x"), strings.HasSuffix(t, "ch"), strings.HasSuffix(t, "sh"):
+		return t + "es"
+	default:
+		return t + "s"
+	}
 }
 
 // sentence is free text as a title sentence.

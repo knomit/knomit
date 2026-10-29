@@ -16,9 +16,11 @@ import (
 // rebuildable cache, never a record: journal_mode MEMORY and synchronous OFF,
 // and the directory is recreated empty at every Open.
 //
-// Lifecycle: created by CreateBook; deleted when the owner's next first call
-// replaces the book (CreateBook), by DeleteBook, by SweepBookFiles once the
-// idle reaper has deleted the cursor, and wholesale at Open and Close.
+// Lifecycle: created when an in-memory book spills (book_store.go); deleted
+// when the owner's next first call replaces the book (CreateBook), by
+// DeleteBook, by SweepBookFiles once the idle reaper has deleted the cursor,
+// and wholesale at Open and Close; never while a call holds the book (the
+// last holder's release deletes it then).
 
 const bookFileSuffix = ".db"
 
@@ -26,7 +28,8 @@ const bookFileSchema = `
 CREATE TABLE results (
     unit   INTEGER PRIMARY KEY,   -- 1..units, the search order
     path   TEXT NOT NULL UNIQUE,  -- wire path
-    anchor TEXT NOT NULL          -- the anchor reserved for the unit root
+    anchor TEXT NOT NULL,         -- the anchor reserved for the unit root
+    title  TEXT NOT NULL          -- the title the search listed
 );
 CREATE TABLE rows (
     seq     INTEGER PRIMARY KEY,  -- book order, 1..
@@ -77,6 +80,9 @@ type BookResult struct {
 	Unit   int
 	Path   string
 	Anchor string
+	// Title is the result's title as the search listed it: a unit whose
+	// fact is gone by the time it is walked is shown under it.
+	Title string
 }
 
 // BookRow is one appearance of a fact in book order.
@@ -136,7 +142,7 @@ func createBookFile(ctx context.Context, path string, results []BookResult) erro
 	}
 	defer tx.Rollback()
 	for _, r := range results {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO results(unit, path, anchor) VALUES (?, ?, ?)`, r.Unit, r.Path, r.Anchor); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO results(unit, path, anchor, title) VALUES (?, ?, ?, ?)`, r.Unit, r.Path, r.Anchor, r.Title); err != nil {
 			return fail(err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO anchors(anchor) VALUES (?)`, r.Anchor); err != nil {
@@ -179,7 +185,7 @@ func (f *BookFile) Close() error {
 
 // Results is every frozen search result, by unit.
 func (f *BookFile) Results(ctx context.Context) ([]BookResult, error) {
-	rows, err := f.db.QueryContext(ctx, `SELECT unit, path, anchor FROM results ORDER BY unit`)
+	rows, err := f.db.QueryContext(ctx, `SELECT unit, path, anchor, title FROM results ORDER BY unit`)
 	if err != nil {
 		return nil, fmt.Errorf("book results: %w", err)
 	}
@@ -187,7 +193,7 @@ func (f *BookFile) Results(ctx context.Context) ([]BookResult, error) {
 	var out []BookResult
 	for rows.Next() {
 		var r BookResult
-		if err := rows.Scan(&r.Unit, &r.Path, &r.Anchor); err != nil {
+		if err := rows.Scan(&r.Unit, &r.Path, &r.Anchor, &r.Title); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

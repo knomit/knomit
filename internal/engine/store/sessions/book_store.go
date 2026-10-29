@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"github.com/rs/zerolog/log"
 )
 
 // HYBRID BOOK STORAGE (user direction, 2026-10-29: "use the file only if the
@@ -21,7 +23,18 @@ import (
 // appends to its file. The lifecycle is the same either way: replacement,
 // DeleteBook and the sweeper's expiry drop the book from the registry (its
 // memory is freed, its file closed and deleted); a restart loses every book,
-// and their cursors read as expired.
+// and their cursors read as expired. A book a call holds is never freed
+// under it: replacement, DeleteBook and CloseBooks retire it and its last
+// release frees it, and the sweeper skips it (ToolIndex.retireLocked).
+//
+// WHAT THE BUDGET BOUNDS. The accounted size (rowBytes, visitBytes, the
+// anchors) is a book's structure AT REST; the heap of resting in-memory
+// books measured about 1.16x the accounted bytes, so the budget bounds
+// resting books. It does NOT bound a walk's working memory (the reader and
+// its version caches of up to 20,000 entries each, the unit's document),
+// measured at 2-3x the accounted size of what the walk appends: that is
+// bounded by materialize.MaxConcurrentBookBuilds, the cap on calls walking
+// at once.
 //
 // One caller per cursor still holds; each book's own mutex guards its data,
 // and the registry is guarded by booksMu. No code path holds two books'
@@ -80,8 +93,11 @@ type bookStore struct {
 	mem  *memData     // nil once spilled
 	file *BookFile    // set once spilled
 	size atomic.Int64 // accounted in-memory bytes (0 once spilled)
-	// holders is how many calls hold the book open (under booksMu).
+	// holders is how many calls hold the book open; retired says the book
+	// is out of service (replaced, deleted, store closing) while still held,
+	// so the last release frees it. Both under booksMu.
 	holders int
+	retired bool
 }
 
 func rowBytes(r BookRow) int64 { return int64(len(r.State)+len(r.Path)) + 64 }
@@ -96,7 +112,7 @@ func newMemBook(id, path string, results []BookResult) *bookStore {
 	var n int64
 	for _, r := range results {
 		m.anchors[r.Anchor] = true
-		n += int64(len(r.Path)+2*len(r.Anchor)) + 64
+		n += int64(len(r.Path)+2*len(r.Anchor)+len(r.Title)) + 64
 	}
 	bs.grow(n)
 	allBooksMu.Lock()
@@ -197,8 +213,18 @@ func enforceBookBudget(ctx context.Context) error {
 	return nil
 }
 
+// enforceBookBudgetLogged enforces the process budget after this call grew
+// it. The book it spills may be ANOTHER caller's, so a failed spill is
+// logged, never returned: this call's own write already succeeded, and the
+// budget is enforced again on the next growth anywhere.
+func enforceBookBudgetLogged(ctx context.Context) {
+	if err := enforceBookBudget(ctx); err != nil {
+		log.Warn().Err(err).Msg("book memory budget: spilling the largest in-memory book failed")
+	}
+}
+
 // Book is one call's handle on a live book (in memory or in its file).
-// Close releases it; while held, the sweeper never drops the book.
+// Close releases it; while held, no path frees the book (retireLocked).
 type Book struct {
 	bs      *bookStore
 	release func()
@@ -335,7 +361,8 @@ func (b *Book) AppendUnit(ctx context.Context, unit int, rows []BookRow, visits 
 	if err != nil {
 		return err
 	}
-	return enforceBookBudget(ctx)
+	enforceBookBudgetLogged(ctx)
+	return nil
 }
 
 // Rows returns up to limit rows from seq from, in book order.

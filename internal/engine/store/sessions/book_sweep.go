@@ -172,8 +172,9 @@ const (
 	// and is how old a stray file must be: longer than any page takes, so
 	// a page in flight or a file being created is never caught.
 	BookSweepGrace = 5 * time.Minute
-	// MaxBookDirBytes caps one session store's book directory: about 15
-	// books at the row cap (MaxBookRows, ~65 MiB each), far more than one
-	// owner per endpoint needs.
+	// MaxBookDirBytes caps one session store's book directory: about 19
+	// books at the row cap (MaxBookRows, ~53 MiB each as measured), far
+	// more than one owner per endpoint needs. It is enforced on the
+	// sweeper's tick, not on every write.
 	MaxBookDirBytes int64 = 1 << 30
 )
