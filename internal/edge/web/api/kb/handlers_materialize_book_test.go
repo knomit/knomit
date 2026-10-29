@@ -70,14 +70,16 @@ func searchPaths(t *testing.T, h http.Handler, query string) []string {
 	return out
 }
 
-// seedShared writes the write-once fixture under kb/u/ (the results) and
-// kb/z/ (what they build on):
+// seedShared writes the book fixture under kb/u/ (the results) and kb/z/
+// (what they build on):
 //
 //	u/r1 -> z/s, u/r2        z/s -> z/d
 //	u/r2 -> z/m              z/m -> z/s
 //
-// At depth 2, s has room 2 in r1's unit (s, d) and room 1 in r2's (d is at
-// distance 3 there). r2 is a result, so in r1's unit it is a link to unit r2.
+// The search lists r1 first (newest commit, and first by path on a tie). At
+// depth 2: unit 1 = r1, s, d, r2 (a result: forward link, not expanded);
+// unit 2 = r2, m, s (written in unit 1: back link, its child d not written
+// again).
 func seedShared(t *testing.T, alpha *repos.RepoInstance) {
 	t.Helper()
 	const br = "agent/test"
@@ -105,127 +107,124 @@ func unitOf(nodes []materialize.BookNode, root string) int {
 	return 0
 }
 
-// Every search result has its own unit, in search order, rooted at it; the
-// book's sections are exactly each unit's own walk; every fact is written
-// once and carries its body there; every other appearance is a heading-only
-// link to it, forward or back; a result is written in its own unit.
+// The book walk with its visited set seeded with the search results
+// (user ruling 2026-10-29): every result has its own unit, in search order,
+// rooted at it; a result reached in another unit is a forward link
+// "(see N)" and is not expanded there; a fact an earlier unit wrote is a
+// back link "(see N.x)" to its first appearance and its leftover children
+// are not written again; every fact is written once, with its body.
 //
-// Sabotage: drop `result DESC` from FinishBook's placement order (s's most
-// room loses to... r2's root is written in unit r1), or flip the direction
-// comparison, or drop room from the ORDER BY (earliest wins).
-func TestBook_WriteOnceAtMostRoomAndLinks(t *testing.T) {
+// Sabotage: drop the results from the visited set (r2 is expanded inside
+// unit 1), make a back link expand (d appears in unit 2), or flip the
+// direction comparison.
+func TestBook_SeededVisitedSetAndLinks(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
 
 	want := searchPaths(t, h, "path=kb/u/")
-	require.ElementsMatch(t, []string{"kb/u/r1.md", "kb/u/r2.md"}, want)
+	require.Equal(t, []string{"kb/u/r1.md", "kb/u/r2.md"}, want)
 
 	nodes, pages := readBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=5")
 	require.Equal(t, 2, pages[0].Units)
-	require.Equal(t, len(nodes), pages[0].Total)
+	last := pages[len(pages)-1]
+	require.Equal(t, 2, last.UnitsWalked)
+	require.Equal(t, len(nodes), last.Sections)
 	for i, p := range want {
 		require.Equal(t, i+1, unitOf(nodes, p), "unit %d is search result %d", i+1, i+1)
 	}
-	u1, u2 := unitOf(nodes, "kb/u/r1.md"), unitOf(nodes, "kb/u/r2.md")
-	at := byUnitPath(nodes)
-
-	// Unit r1: r1, s, d, r2 (link), m. Unit r2: r2, m, s (link).
+	var got []string
 	written := map[string]int{}
 	for i, n := range nodes {
 		require.Equal(t, i+1, n.Seq, "seq is book order")
+		mark := ""
 		if n.Written {
 			written[n.Path]++
 			require.NotEmpty(t, n.Body, "a written section carries its body")
 			require.Nil(t, n.Link)
 		} else {
+			mark = " (see " + n.Link.Number + ")"
 			require.Empty(t, n.Body, "a link carries no body")
 			require.Nil(t, n.BuildsOn)
-			require.NotNil(t, n.Link)
 		}
+		got = append(got, fmt.Sprintf("%s %s%s", n.Number, n.Title, mark))
 	}
+	require.Equal(t, []string{
+		"1 R1", "1.1 S", "1.1.1 D", "1.2 R2 (see 2)",
+		"2 R2", "2.1 M", "2.1.1 S (see 1.1)",
+	}, got)
 	for p, c := range written {
 		require.Equal(t, 1, c, "%s is written once", p)
 	}
-	require.Len(t, written, 5, "r1, r2, s, d, m are each written")
 
-	s1, s2 := at[fmt.Sprintf("%d kb/z/s.md", u1)], at[fmt.Sprintf("%d kb/z/s.md", u2)]
-	require.True(t, s1.Written, "s is written where it has the most room (unit r1: s and d)")
-	require.False(t, s2.Written)
-	require.Equal(t, s1.Seq, s2.Link.Seq)
-	require.Equal(t, s1.Number, s2.Link.Number)
-	require.Equal(t, s1.AnchorID, s2.Link.AnchorID)
-	require.Equal(t, s1.Unit, s2.Link.Unit)
-	wantDir := materialize.LinkBack
-	if s1.Seq > s2.Seq {
-		wantDir = materialize.LinkForward
-	}
-	require.Equal(t, wantDir, s2.Link.Direction)
+	at := byUnitPath(nodes)
+	fwd, back := at["1 kb/u/r2.md"].Link, at["2 kb/z/s.md"].Link
+	r2, s := at["2 kb/u/r2.md"], at["1 kb/z/s.md"]
+	require.Equal(t, materialize.LinkForward, fwd.Direction)
+	require.Equal(t, 2, fwd.Unit)
+	require.Equal(t, r2.AnchorID, fwd.AnchorID)
+	require.Equal(t, r2.Seq, fwd.Seq, "a forward link learns its seq once its unit is walked")
+	require.Equal(t, materialize.LinkBack, back.Direction)
+	require.Equal(t, s.Seq, back.Seq)
+	require.Equal(t, s.AnchorID, back.AnchorID)
 
-	// m: room 1 in r1's unit (s was already written above it there), room 2
-	// in r2's (m, s): written in r2's unit whichever unit comes first.
-	m1, m2 := at[fmt.Sprintf("%d kb/z/m.md", u1)], at[fmt.Sprintf("%d kb/z/m.md", u2)]
-	require.True(t, m2.Written, "m is written where it has the most room, not where it appears first")
-	require.False(t, m1.Written)
-	require.Equal(t, m2.Seq, m1.Link.Seq)
-
-	r2link := at[fmt.Sprintf("%d kb/u/r2.md", u1)]
-	r2root := at[fmt.Sprintf("%d kb/u/r2.md", u2)]
-	require.False(t, r2link.Written, "a result is written in its own unit, never where it is cited")
-	require.True(t, r2root.Written)
-	require.Equal(t, u2, r2link.Link.Unit)
-	require.Equal(t, fmt.Sprint(u2), r2link.Link.Number, "a link to a unit root reads (see <unit>)")
-	if u2 > u1 {
-		require.Equal(t, materialize.LinkForward, r2link.Link.Direction)
-	} else {
-		require.Equal(t, materialize.LinkBack, r2link.Link.Direction)
-	}
-
-	// Builds-on anchors point at the written appearance, wherever it is.
-	r1 := at[fmt.Sprintf("%d kb/u/r1.md", u1)]
+	// Builds-on anchors point where the fact is written.
 	anchors := map[string]string{}
-	for _, l := range r1.BuildsOn {
+	for _, l := range at["1 kb/u/r1.md"].BuildsOn {
 		anchors[l.Title] = l.AnchorID
 	}
-	require.Equal(t, s1.AnchorID, anchors["S"])
-	require.Equal(t, r2root.AnchorID, anchors["R2"])
+	require.Equal(t, s.AnchorID, anchors["S"])
+	require.Equal(t, r2.AnchorID, anchors["R2"])
 }
 
-// Numbering restarts in each unit under the unit's number: the root is "u",
-// its sections u.1, u.2, u.1.1, and the tree depth follows; it is fixed by
-// the structure, so it is the same on every read.
+// Units are walked lazily: page 1 walks only the units it needs; the rest
+// are walked as later pages reach them.
+//
+// Sabotage: walk every unit on the first call, and page 1 reports 2 units
+// walked.
+func TestBook_UnitsAreWalkedAsPagesNeedThem(t *testing.T) {
+	m := newMatStoreManager(t, "alpha")
+	seedShared(t, m.Get("alpha"))
+	h := asPrincipal("u1", newTestRouter(m))
+	code, p, body := getBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=2")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, 1, p.UnitsWalked, "page 1 needed unit 1 only")
+	require.Equal(t, 4, p.Sections)
+	require.True(t, p.HasMore)
+	// Page 3 (r2's forward link, then unit 2) walks unit 2.
+	code, p2, body := getBook(t, h, bookBase+"?cursor="+*p.Cursor)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, 1, p2.UnitsWalked, "rows 3-4 are in unit 1")
+	require.Equal(t, 0, p2.Facts[1].Link.Seq, "a forward link to a unit not walked yet has no seq yet")
+	code, p3, body := getBook(t, h, bookBase+"?cursor="+*p.Cursor)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, 2, p3.UnitsWalked)
+}
+
+// Numbering restarts in each unit under the unit's number, from the walk
+// tree, and the tree depth follows.
 //
 // Sabotage: number children from the unit's first node instead of their
-// tree parent, and d reads "u.2" instead of "u.1.1".
+// tree parent, and d reads "1.2" instead of "1.1.1".
 func TestBook_SectionNumbersPerUnit(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
 	nodes, _ := readBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=5")
-	u1, u2 := unitOf(nodes, "kb/u/r1.md"), unitOf(nodes, "kb/u/r2.md")
 	at := byUnitPath(nodes)
 	for _, c := range []struct {
-		unit      int
-		path, num string
+		key, num  string
 		treeDepth int
 	}{
-		{u1, "kb/u/r1.md", fmt.Sprint(u1), 0},
-		{u1, "kb/z/s.md", fmt.Sprintf("%d.1", u1), 1},
-		{u1, "kb/z/d.md", fmt.Sprintf("%d.1.1", u1), 2},
-		{u1, "kb/u/r2.md", fmt.Sprintf("%d.2", u1), 1},
-		{u2, "kb/u/r2.md", fmt.Sprint(u2), 0},
-		{u2, "kb/z/m.md", fmt.Sprintf("%d.1", u2), 1},
-		{u2, "kb/z/s.md", fmt.Sprintf("%d.1.1", u2), 2},
+		{"1 kb/u/r1.md", "1", 0}, {"1 kb/z/s.md", "1.1", 1}, {"1 kb/z/d.md", "1.1.1", 2}, {"1 kb/u/r2.md", "1.2", 1},
+		{"2 kb/u/r2.md", "2", 0}, {"2 kb/z/m.md", "2.1", 1}, {"2 kb/z/s.md", "2.1.1", 2},
 	} {
-		n, ok := at[fmt.Sprintf("%d %s", c.unit, c.path)]
-		require.True(t, ok, "%s in unit %d", c.path, c.unit)
-		require.Equal(t, c.num, n.Number, "%s in unit %d", c.path, c.unit)
-		require.Equal(t, c.treeDepth, n.TreeDepth, "%s in unit %d", c.path, c.unit)
+		n, ok := at[c.key]
+		require.True(t, ok, c.key)
+		require.Equal(t, c.num, n.Number, c.key)
+		require.Equal(t, c.treeDepth, n.TreeDepth, c.key)
 	}
-	n, ok := at[fmt.Sprintf("%d kb/z/m.md", u1)]
-	require.True(t, ok)
-	require.Equal(t, fmt.Sprintf("%d.2.1", u1), n.Number, "a link's walk children stay in place under it")
-	require.Len(t, nodes, 8)
+	require.Len(t, nodes, 7)
 }
 
 // Seek: cursor + unit continues from that unit's first section, forward or

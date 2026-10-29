@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"knomit/internal/engine/store/model"
@@ -24,6 +25,12 @@ type ToolIndex struct {
 	db *sql.DB
 	// waits records the book writes' lock waits (book_index.go).
 	waits bookLockWaits
+	// booksDir holds the book files (book_file.go); "" disables books.
+	booksDir string
+	// booksMu guards openBooks: how many calls hold each book file open
+	// right now. The sweeper never deletes a file with a holder.
+	booksMu   sync.Mutex
+	openBooks map[string]int
 }
 
 // CreateToolSession creates a new tool session for the given tool, branch, path

@@ -167,6 +167,11 @@ type node struct {
 	// parent is the node whose refs first reached this one in the reading
 	// order (the walk tree's edge); nil for the root and frame ancestors.
 	parent *node
+	// link, set only in a book, says this fact is in the book's visited set
+	// (a search result, or a fact an earlier unit wrote): the node is a
+	// heading with a link there, and is TERMINAL (its refs are never read,
+	// so its leftover children are not written here).
+	link *bookTarget
 }
 
 type refKind int
@@ -199,6 +204,11 @@ type walker struct {
 	writeID string
 	nodes   map[key]*node
 	incl    []*node
+	// visited, set only in a book, looks a newly reached fact up in the
+	// book's visited set (seeded with the search results, grown by every
+	// unit walked). nil in a single materialization.
+	visited func(n *node) (*bookTarget, error)
+	rootKey key
 }
 
 // Plan runs the walk and returns the document, bodies included.
@@ -208,7 +218,7 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 	}
 	r := newReader(req.Binding, req.Manager, req.MayRead)
 	defer r.close()
-	u, err := walkUnit(ctx, r, req)
+	u, err := walkUnit(ctx, r, req, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -227,18 +237,22 @@ type unitWalk struct {
 	parent []int
 	// blobs[i] is node i's blob hash ("" when read through the blob fallback).
 	blobs []string
+	// links[i] is node i's link target in a book; nil when it is written.
+	links []*bookTarget
 }
 
 // walkUnit runs one materialization's walk on r: metadata and edges only,
-// never a body. It is the walk of Plan and of every unit of a book, so a
-// unit is exactly the fact's own materialization.
-func walkUnit(ctx context.Context, r *reader, req Request) (*unitWalk, error) {
-	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}}
+// never a body. It is the walk of Plan and of every unit of a book.
+// visited is nil for Plan; a book passes its visited-set lookup, so a
+// reached fact that is in the set becomes a terminal link node.
+func walkUnit(ctx context.Context, r *reader, req Request, visited func(n *node) (*bookTarget, error)) (*unitWalk, error) {
+	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}, visited: visited}
 
 	root, err := w.root(req)
 	if err != nil {
 		return nil, err
 	}
+	w.rootKey = root.key
 	frame := root.f.Type == fact.Frame
 
 	var ancestors []*node
@@ -267,10 +281,11 @@ func walkUnit(ctx context.Context, r *reader, req Request) (*unitWalk, error) {
 		}
 	}
 	blobs := make([]string, len(order))
+	links := make([]*bookTarget, len(order))
 	for i, n := range order {
-		blobs[i] = n.blob
+		blobs[i], links[i] = n.blob, n.link
 	}
-	return &unitWalk{doc: doc, parent: parent, blobs: blobs}, nil
+	return &unitWalk{doc: doc, parent: parent, blobs: blobs, links: links}, nil
 }
 
 // root resolves the requested fact to its mount and reads it at its version
@@ -450,15 +465,30 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 // adopt records the target of r as a node first reached from a node at
 // distance dist-1. Its version is the one THIS ref cites: a path has one
 // version in a document, the one it was first reached at.
-func (w *walker) adopt(r resolved, dist int) *node {
+//
+// In a book, an included node whose fact is in the book's visited set is a
+// link (n.link set): it counts as a section of this unit, and it is never
+// expanded.
+func (w *walker) adopt(r resolved, dist int) (*node, error) {
 	n := &node{key: r.target, m: r.m, commit: r.commit, blob: r.blob, f: r.f, dist: dist, latest: r.latest}
 	w.nodes[n.key] = n
 	if len(w.incl) < w.opts.MaxNodes {
 		n.included = true
 		w.incl = append(w.incl, n)
+		if w.visited != nil && n.key != w.rootKey {
+			t, err := w.visited(n)
+			if err != nil {
+				return nil, err
+			}
+			n.link = t
+		}
 	}
-	return n
+	return n, nil
 }
+
+// expands reports whether an adopted node's refs are walked: it is
+// included and not a book link.
+func (n *node) expands() bool { return n.included && n.link == nil }
 
 // bfs decides the included set: shortest distance from the root, in refs
 // order, cut at MaxNodes. Ancestors are already included and are terminal.
@@ -483,7 +513,11 @@ func (w *walker) bfs(root *node) error {
 			if _, seen := w.nodes[r.target]; seen {
 				continue
 			}
-			if t := w.adopt(r, u.dist+1); t.included {
+			t, err := w.adopt(r, u.dist+1)
+			if err != nil {
+				return err
+			}
+			if t.expands() {
 				queue = append(queue, t)
 			}
 		}

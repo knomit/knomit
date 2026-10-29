@@ -25,7 +25,7 @@ func BookExportFileName(env BookEnv, cursor string) string {
 }
 
 // renderBookHeader opens the exported book.
-func renderBookHeader(env BookEnv) string {
+func renderBookHeader(env BookEnv, sections int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s\n\n", env.Title)
 	fmt.Fprintf(&sb, "Search: %s.\n", env.SearchLine)
@@ -38,7 +38,7 @@ func renderBookHeader(env BookEnv) string {
 	}
 	sb.WriteString(".\n")
 	fmt.Fprintf(&sb, "%d search result(s), one section per result, each followed by what it builds on (depth %d, up to %d facts per result); %d sections in all.\n",
-		env.Units, env.Depth, env.MaxNodes, env.Total)
+		env.Units, env.Depth, env.MaxNodes, sections)
 	sb.WriteString("Each fact is reproduced in full and unedited ONCE; every other appearance is a heading that links to it (\"see 7.1.1\").\n")
 	sb.WriteString("Each fact starts with: id, date of the version shown, confidence label for epistemic facts (well-established = 0.85 or above, likely = 0.65 to 0.84, tentative = below 0.65), and type.\n")
 	sb.WriteString("\"Builds on\" links point to another fact in this document. \"Related, not included\" lines are titles only, with the reason they were not expanded.\n")
@@ -88,30 +88,34 @@ const exportChunk = 50
 // and leaves the cursor's reading position where it was. Every cursor the
 // caller cannot be served is ErrCursorExpired, before anything is written.
 func BookExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, start func(env BookEnv) io.Writer) error {
-	info, env, _, err := openBook(ctx, sc, cursor)
+	bk, _, err := openBook(ctx, sc, b, mgr, mayRead, cursor)
 	if err != nil {
+		return err
+	}
+	defer bk.close()
+	// The export is the WHOLE book: the units not walked yet are walked
+	// first (a build slot, as for a far seek), before anything is written.
+	if err := bk.walkTo(len(bk.results), 0); err != nil {
 		return err
 	}
 	if err := sc.Sessions.TouchBook(ctx, cursor); err != nil {
 		return err
 	}
-	r := newReader(b, mgr, mayRead)
-	defer r.close()
 	// The first chunk is inflated before anything is written, so a reach
 	// refusal is still a clean ErrCursorExpired.
 	var w io.Writer
-	for from := 1; from <= info.Rows; from += exportChunk {
-		rows, err := sc.Sessions.BookRows(ctx, cursor, from, exportChunk)
+	for from := 1; from <= bk.rows; from += exportChunk {
+		rows, err := bk.f.Rows(ctx, from, exportChunk)
 		if err != nil {
 			return err
 		}
-		nodes, err := inflateRows(ctx, sc, r, cursor, env, rows, true)
+		nodes, err := bk.inflate(rows)
 		if err != nil {
 			return err
 		}
 		if w == nil {
-			w = start(env)
-			if _, err := io.WriteString(w, renderBookHeader(env)); err != nil {
+			w = start(bk.env)
+			if _, err := io.WriteString(w, renderBookHeader(bk.env, bk.rows)); err != nil {
 				return err
 			}
 		}

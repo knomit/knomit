@@ -39,7 +39,11 @@ type reader struct {
 	edges    map[edgeKey]map[string]string
 	metas    map[edgeKey]metaEntry
 	dates    map[edgeKey]string
-	stats    WalkStats
+	// tips are the frozen tips of repos entered cross-KB, by id12 (a book
+	// seeds them so every unit reads one repo at the tip its first read
+	// froze); a repo not in it is resolved once, now.
+	tips  map[string]string
+	stats WalkStats
 }
 
 // WalkStats counts how a reference walk read each version. Index is the fast
@@ -164,6 +168,10 @@ func (r *reader) foreign(ctx context.Context, id12 string) (*mount, error) {
 		// populating or gone. The ref is reported as not available.
 		r.mounts[id12] = nil
 		return nil, nil
+	}
+	if m.anchor == "" && r.tips[id12] != "" {
+		// A book froze this repo's tip when an earlier unit first read it.
+		m.anchor = r.tips[id12]
 	}
 	if m.anchor == "" {
 		tip, err := m.svc.HeadCommit(ctx, m.branch)

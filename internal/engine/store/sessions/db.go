@@ -42,6 +42,12 @@ func Open(mainPath string) (*sql.DB, string, error) {
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(sessionPath + suffix)
 	}
+	// The book files of the previous run are dead with their cursors: the
+	// startup sweep is recreating their directory empty.
+	_ = os.RemoveAll(BooksDirFor(sessionPath))
+	if err := os.MkdirAll(BooksDirFor(sessionPath), 0o700); err != nil {
+		return nil, "", fmt.Errorf("open: book directory: %w", err)
+	}
 
 	// Stock "sqlite3" driver — NO vec extension, so no need for
 	// _txlock=immediate or the warm/pinned pool the main DB requires.
@@ -75,9 +81,14 @@ func NewPipelineIndex(mainDB, sessionDB *sql.DB) *PipelineIndex {
 	return &PipelineIndex{db: mainDB, sessionDB: sessionDB}
 }
 
-// NewToolIndex returns the tool-session index over the session db.
-func NewToolIndex(sessionDB *sql.DB) *ToolIndex {
-	return &ToolIndex{db: sessionDB}
+// BooksDirFor is the directory of the book files that belong to the session
+// DB at sessionPath: "<session DB>.books".
+func BooksDirFor(sessionPath string) string { return sessionPath + ".books" }
+
+// NewToolIndex returns the tool-session index over the session db. booksDir
+// is where its book files live (BooksDirFor); "" disables books.
+func NewToolIndex(sessionDB *sql.DB, booksDir string) *ToolIndex {
+	return &ToolIndex{db: sessionDB, booksDir: booksDir, openBooks: map[string]int{}}
 }
 
 // ReapIdle deletes session rows whose last_used_at is older than the

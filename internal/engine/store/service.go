@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"golang.org/x/crypto/ssh"
 
@@ -194,7 +196,7 @@ func Open(path string) (*Service, error) {
 		mo:            mo,
 		search:        search,
 		pi:            sessions.NewPipelineIndex(rh.DB(), sessionDB),
-		ti:            sessions.NewToolIndex(sessionDB),
+		ti:            sessions.NewToolIndex(sessionDB, sessions.BooksDirFor(sessionPath)),
 		ri:            ri,
 		dbPath:        canonPath,
 		sessionDB:     sessionDB,
@@ -213,7 +215,19 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 	if s.sessionDB == nil {
 		return 0, nil
 	}
-	return sessions.ReapIdle(ctx, s.sessionDB, toolTTL, pipelineTTL)
+	n, err := sessions.ReapIdle(ctx, s.sessionDB, toolTTL, pipelineTTL)
+	if err != nil {
+		return n, err
+	}
+	// The book files ride the same tick (session.sweep_interval, 5 min by
+	// default): a book's file is garbage the moment the reap above deleted
+	// its cursor, so the reaper's cadence is the sweep's natural one.
+	st, serr := s.ti.SweepBookFiles(ctx, sessions.BookSweepPolicy{
+		Now: time.Now().UTC(), IdleTTL: toolTTL, Grace: sessions.BookSweepGrace, MaxBytes: sessions.MaxBookDirBytes,
+	})
+	log.Debug().Err(serr).Int("orphans", st.Orphans).Int("expired", st.Expired).Int("sidecars", st.Sidecars).
+		Int("evicted", st.Evicted).Int("skipped", st.Skipped).Int64("bytes", st.Bytes).Msg("book files swept")
+	return n, nil
 }
 
 // ConfigureRemote wires the git remote named "origin" so go-git can fetch and
@@ -371,6 +385,7 @@ func (s *Service) Close() error {
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			_ = os.Remove(s.sessionDBPath + suffix)
 		}
+		_ = os.RemoveAll(sessions.BooksDirFor(s.sessionDBPath))
 	}
 	return s.rh.DB().Close()
 }

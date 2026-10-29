@@ -40,9 +40,12 @@ func (w *walker) ancestors(start *node) ([]*node, error) {
 			if _, seen := w.nodes[r.target]; seen {
 				continue
 			}
-			a := w.adopt(r, f.dist+1)
+			a, err := w.adopt(r, f.dist+1)
+			if err != nil {
+				return nil, err
+			}
 			a.ancestor = true
-			if a.included {
+			if a.expands() {
 				queue = append(queue, a)
 			}
 			// Otherwise the cap is reached: it is recorded as cut, so the

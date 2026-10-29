@@ -9,49 +9,43 @@ import (
 	"strings"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/sessions"
 )
 
 // A BOOK materializes a search: every result is one unit, called a "Fact",
-// in search order, and each unit is that result's own materialization,
-// walked exactly as Plan walks it (walkUnit). Across the book a fact is
-// written once:
-//   - a fact that is itself a search result is written in its own unit, as
-//     that unit's root;
-//   - any other fact that appears in several units is written at the
-//     appearance with the MOST ROOM: the most sections in its walk subtree
-//     (the appearance itself included) inside its own unit's walk, which
-//     that unit's Depth and References limits already bounded; ties go to
-//     the earliest appearance in book order;
-//   - every other appearance is a heading-only node carrying a link to the
-//     written one, forward or back.
+// in search order, and each unit is that result's materialization, walked by
+// the same walk as Plan (walkUnit) with its visited set SEEDED with the
+// frozen search results and carried from unit to unit (user ruling,
+// 2026-10-29):
+//   - a reached fact that is a search result is a link "(see N)" to its own
+//     unit, where it is written as the root; the walk continues past it;
+//   - a reached fact an earlier unit already wrote is a link "(see N.x)"
+//     back to that first appearance, and its leftover children are not
+//     written here (the link node is terminal);
+//   - every other fact is written where the walk first reaches it.
 //
-// Nothing is pruned: every unit keeps every section of its own walk, so its
-// numbering is the unit's own and never changes, and a link's walk children
-// stay in place (each written there or itself a link). "Same fact" is the
-// same path; an appearance at another version is still a link and carries
-// different_version when the BODIES differ.
-//
-// The first call runs the search, walks every unit (index metadata and
-// edges only, never a body), and writes the whole structure to the session
-// DB, one unit per transaction; placement and anchors are computed there in
-// SQL. Pages read rows from the cursor's position and bodies at each row's
-// frozen commit, one page at a time.
+// Units are walked lazily, in order, as pages need them, and each walked
+// unit is appended to the book's own file (sessions.BookFile) in one small
+// transaction: rows, the visits of what it wrote, its anchors. A seek to
+// unit N walks the units before N first if they are not walked yet.
 
-// Book bounds. The values and why: kb/decisions/materialize/book (the
-// experiment's decisions fact) and the PR report.
+// Book bounds. Values and reasons: the experiment's decisions fact and the
+// PR report.
 const (
 	// DefaultBookFacts is the Facts control's default: every result, up to
 	// the cap (design §4).
 	DefaultBookFacts = MaxBookFacts
 	// MaxBookFacts caps the units, the same ceiling as max_nodes.
 	MaxBookFacts = 500
-	// MaxBookRows caps a book's structure rows (appearances, written and
-	// links). A first call that would pass it is refused before anything is
-	// served, with the message naming the controls to lower.
+	// MaxBookRows caps a book's sections (written and links). The walk
+	// that would pass it is refused (ErrBookTooLarge); the units already
+	// walked still page.
 	MaxBookRows = 100_000
-	// MaxConcurrentBookBuilds caps the first calls building at once,
-	// server-wide; a first call over it is refused (ErrBookBusy, retry-able).
+	// MaxConcurrentBookBuilds caps the calls WALKING book units at once,
+	// server-wide (a first call, or a page or seek that needs unwalked
+	// units); a call over it is refused at once (ErrBookBusy, retry-able).
+	// A page served from walked units takes no slot.
 	MaxConcurrentBookBuilds = 4
 )
 
@@ -68,9 +62,9 @@ func parseBookTool(tool string) (int, bool) {
 }
 
 var (
-	// ErrBookBusy: MaxConcurrentBookBuilds books are being built; retry.
+	// ErrBookBusy: MaxConcurrentBookBuilds calls are walking books; retry.
 	ErrBookBusy = errors.New("too many books are being built right now; retry shortly")
-	// ErrBookTooLarge: the structure would pass MaxBookRows.
+	// ErrBookTooLarge: walking on would pass MaxBookRows.
 	ErrBookTooLarge = errors.New("book too large")
 	// ErrBookChanged: a result was not readable at the anchor resolved
 	// after the search (a write landed in between); retry.
@@ -83,7 +77,7 @@ var (
 	ErrStoreBusy = sessions.ErrBusy
 )
 
-// buildSlots is the server-wide cap on concurrent book builds.
+// buildSlots is the server-wide cap on calls walking book units.
 var buildSlots = make(chan struct{}, MaxConcurrentBookBuilds)
 
 // maxBookRows is MaxBookRows; a test lowers it to drive the cap, or raises
@@ -137,7 +131,6 @@ type BookEnv struct {
 	MaxNodes            int        `json:"max_nodes"`
 	FactsLimit          int        `json:"facts_limit"`
 	Units               int        `json:"units"`
-	Total               int        `json:"total"`
 	InstructionsVersion string     `json:"instructions_version"`
 }
 
@@ -147,6 +140,11 @@ const BookModeBook = "book"
 // BookPage is one page of a book: whole sections in book order.
 type BookPage struct {
 	BookEnv
+	// UnitsWalked and Sections are how far the book is walked so far
+	// (units are walked as pages need them): Sections is exact for the
+	// walked units only.
+	UnitsWalked  int        `json:"units_walked"`
+	Sections     int        `json:"sections"`
 	Instructions string     `json:"instructions,omitempty"`
 	Facts        []BookNode `json:"facts"`
 	SeqFrom      int        `json:"seq_from"`
@@ -160,11 +158,11 @@ type BookPage struct {
 	HasMore bool    `json:"has_more"`
 }
 
-// BookNode is one appearance of a fact. Node is the unit's own walk node:
-// n is its ordinal inside the unit, builds_on point inside the unit (their
-// anchor_id is the written appearance's). A written node carries the body;
-// a link node carries no body, no builds_on, not_included or sources (its
-// edges are on the written appearance), and Link.
+// BookNode is one appearance of a fact. Node is the unit's walk node: n is
+// its ordinal inside the unit, builds_on point inside the unit (their
+// anchor_id is where the fact is written). A written node carries the body;
+// a link node carries no body, no builds_on, not_included or sources (it is
+// terminal: the walk did not expand it here), and Link.
 type BookNode struct {
 	Node
 	Unit      int    `json:"unit"`
@@ -180,11 +178,13 @@ type BookNode struct {
 	UnitTruncated *Truncation `json:"unit_truncated,omitempty"`
 }
 
-// BookLink is where a heading-only appearance's fact is written.
+// BookLink is where a heading-only appearance's fact is written. A forward
+// link to a unit not walked yet knows its unit, number and anchor; its n
+// and seq are 0 until that unit is walked (seek with the unit).
 type BookLink struct {
 	Unit             int    `json:"unit"`
-	N                int    `json:"n"`
-	Seq              int    `json:"seq"`
+	N                int    `json:"n,omitempty"`
+	Seq              int    `json:"seq,omitempty"`
 	Number           string `json:"number"`
 	AnchorID         string `json:"anchor_id"`
 	Direction        string `json:"direction"`
@@ -197,25 +197,56 @@ const (
 	LinkBack    = "back"
 )
 
-// bookRowState is a row's stored JSON: the node without its body, its
-// builds_on reduced to (n, different_version) and resolved per page.
-type bookRowState struct {
-	Node          Node        `json:"node"`
-	Parent        int         `json:"parent,omitempty"`
-	UnitTruncated *Truncation `json:"unit_truncated,omitempty"`
+// bookTarget is a visited-set hit: where the fact is (or will be) written,
+// and the version written there.
+type bookTarget struct {
+	unit, n, seq   int
+	number, anchor string
+	commit, blob   string
 }
 
-// BookBuildStats is what a first call measured, for the report and tests.
+// BookBuildStats is what one call's walking measured.
 type BookBuildStats struct {
-	Units int
-	Rows  int
-	Walk  WalkStats
+	UnitsWalked int
+	Rows        int
+	Walk        WalkStats
 }
 
-// BookFirstPage builds the book of req (see the package comment above) and
-// returns page 1 under a cursor owned by sc. Building takes one of
-// MaxConcurrentBookBuilds slots (else ErrBookBusy) and replaces the owner's
-// previous book.
+// book is one call's handle on a book: its cursor scope, file and reader.
+type book struct {
+	ctx     context.Context
+	sc      CursorScope
+	id      string
+	env     BookEnv
+	limit   int
+	f       *sessions.BookFile
+	r       *reader
+	b       *repos.Binding
+	req     Request // the per-unit walk request (File set per unit)
+	results []sessions.BookResult
+	byPath  map[string]sessions.BookResult
+	walked  int
+	rows    int
+	slot    bool
+	stats   BookBuildStats
+}
+
+func (bk *book) close() {
+	if bk.slot {
+		<-buildSlots
+		bk.slot = false
+	}
+	if bk.r != nil {
+		bk.r.close()
+	}
+	if bk.f != nil {
+		_ = bk.f.Close()
+	}
+}
+
+// BookFirstPage runs the search, freezes its results in a new book (the
+// owner's previous book is replaced), walks as many units as page 1 needs
+// and returns page 1 under a cursor owned by sc.
 func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPage, BookBuildStats, error) {
 	if err := req.Options.Validate(); err != nil {
 		return BookPage{}, BookBuildStats{}, err
@@ -232,96 +263,314 @@ func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPa
 	if req.Binding.IsLens() {
 		return BookPage{}, BookBuildStats{}, fmt.Errorf("%w: a book materializes one repository's search; this binding is a lens", ErrInvalid)
 	}
-	select {
-	case buildSlots <- struct{}{}:
-	default:
+	if !takeSlot() {
 		return BookPage{}, BookBuildStats{}, ErrBookBusy
 	}
-	id, env, stats, err := buildBook(ctx, sc, req)
-	<-buildSlots
-	if err != nil {
-		return BookPage{}, stats, err
-	}
-	if env.Units == 0 {
-		return BookPage{BookEnv: env, Facts: []BookNode{}}, stats, nil
-	}
-	page, err := bookPage(ctx, sc, req.Binding, req.Manager, req.MayRead, id, env, 1, 1, req.Limit, true)
-	return page, stats, err
-}
-
-// buildBook runs the search, walks every unit and stores the structure.
-func buildBook(ctx context.Context, sc CursorScope, req BookRequest) (string, BookEnv, BookBuildStats, error) {
-	var stats BookBuildStats
 	r := newReader(req.Binding, req.Manager, req.MayRead)
-	defer r.close()
+	bk := &book{ctx: ctx, sc: sc, r: r, b: req.Binding, limit: req.Limit, slot: true}
+	defer bk.close()
+
 	wm, err := r.open(req.Binding.Write(), req.Binding.WriteMountBranch())
 	if err != nil {
-		return "", BookEnv{}, stats, err
+		return BookPage{}, bk.stats, err
 	}
-	results, err := runBookSearch(ctx, wm, req)
+	paths, err := runBookSearch(ctx, wm, req)
 	if err != nil {
-		return "", BookEnv{}, stats, err
+		return BookPage{}, bk.stats, err
 	}
 	anchor, err := wm.svc.HeadCommit(ctx, wm.branch)
 	if err != nil {
-		return "", BookEnv{}, stats, fmt.Errorf("resolve HEAD of %s: %w", wm.branch, err)
+		return BookPage{}, bk.stats, fmt.Errorf("resolve HEAD of %s: %w", wm.branch, err)
 	}
-	env := BookEnv{
+	bk.env = BookEnv{
 		Mode: BookModeBook, Title: BookTitle(req.Search, req.Binding.Write().OntologyRoot()),
 		SearchLine: SearchLine(req.Search), Search: req.Search, Anchor: anchor, Audience: AudienceHuman,
 		Unpinned: req.Options.Unpin, CrossKB: req.Options.CrossKB, Depth: req.Options.Depth,
-		MaxNodes: req.Options.MaxNodes, FactsLimit: req.Facts, InstructionsVersion: BookInstructionsVersion,
+		MaxNodes: req.Options.MaxNodes, FactsLimit: req.Facts, Units: len(paths), InstructionsVersion: BookInstructionsVersion,
 	}
-	if len(results) == 0 {
-		return "", env, stats, nil
+	if len(paths) == 0 {
+		return BookPage{BookEnv: bk.env, Facts: []BookNode{}}, bk.stats, nil
 	}
-	envJSON, _ := json.Marshal(env)
-	id, err := sc.Sessions.CreateBook(ctx, bookTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, string(envJSON))
+	envJSON, _ := json.Marshal(bk.env)
+	id, err := sc.Sessions.CreateBook(ctx, bookTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, string(envJSON), reserveRootAnchors(paths))
 	if err != nil {
-		return "", env, stats, err
+		return BookPage{}, bk.stats, err
 	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = sc.Sessions.DeleteBook(context.WithoutCancel(ctx), id)
-		}
-	}()
+	bk.id = id
+	f, ok, err := sc.Sessions.OpenBookFile(id)
+	if err != nil || !ok {
+		_ = sc.Sessions.DeleteBook(context.WithoutCancel(ctx), id)
+		return BookPage{}, bk.stats, fmt.Errorf("open the new book: %v", err)
+	}
+	bk.f = f
+	if err := bk.load(req.Manager, req.MayRead); err != nil {
+		return BookPage{}, bk.stats, err
+	}
+	page, err := bk.page(1, 1, true)
+	if err != nil {
+		// The caller never got the cursor: nothing may stay behind.
+		_ = sc.Sessions.DeleteBook(context.WithoutCancel(ctx), id)
+	}
+	return page, bk.stats, err
+}
 
-	seq := 0
-	for u, path := range results {
-		unit := u + 1
-		uw, err := walkUnit(ctx, r, Request{
-			Binding: req.Binding, Manager: req.Manager, MayRead: req.MayRead,
-			File: path, Commit: anchor, Options: req.Options,
-		})
-		r.forget()
-		if errors.Is(err, ErrNotFound) {
-			return "", env, stats, ErrBookChanged
-		}
-		if err != nil {
-			return "", env, stats, err
-		}
-		if seq+len(uw.doc.Nodes) > maxBookRows {
-			return "", env, stats, fmt.Errorf("%w: it would hold more than %d sections (after %d of %d facts); lower Facts, Depth or References",
-				ErrBookTooLarge, maxBookRows, u, len(results))
-		}
-		rows, err := unitRows(uw, unit, seq)
-		if err != nil {
-			return "", env, stats, err
-		}
-		if err := sc.Sessions.AppendBookRows(ctx, id, rows); err != nil {
-			return "", env, stats, err
-		}
-		seq += len(rows)
+func takeSlot() bool {
+	select {
+	case buildSlots <- struct{}{}:
+		return true
+	default:
+		return false
 	}
-	env.Units, env.Total = len(results), seq
-	envJSON, _ = json.Marshal(env)
-	if err := sc.Sessions.FinishBook(ctx, id, string(envJSON), env.Units, env.Total); err != nil {
-		return "", env, stats, err
+}
+
+// reserveRootAnchors is every unit root's anchor, "f-<id8>", suffixed -2,
+// -3 in unit order when results share an id8: reserved up front so a
+// forward link to a unit not walked yet already knows its anchor.
+func reserveRootAnchors(paths []string) []sessions.BookResult {
+	used := map[string]int{}
+	out := make([]sessions.BookResult, len(paths))
+	for i, p := range paths {
+		a := anchorIDPrefix + shortID(relOf(p))
+		used[a]++
+		if c := used[a]; c > 1 {
+			a = fmt.Sprintf("%s-%d", a, c)
+		}
+		out[i] = sessions.BookResult{Unit: i + 1, Path: p, Anchor: a}
 	}
-	stats = BookBuildStats{Units: env.Units, Rows: seq, Walk: r.stats}
-	ok = true
-	return id, env, stats, nil
+	return out
+}
+
+// load reads the book's frozen results, walked extent and cross-KB tips.
+func (bk *book) load(mgr *repos.Manager, mayRead func(string) bool) error {
+	var err error
+	if bk.results, err = bk.f.Results(bk.ctx); err != nil {
+		return err
+	}
+	bk.byPath = make(map[string]sessions.BookResult, len(bk.results))
+	for _, res := range bk.results {
+		bk.byPath[res.Path] = res
+	}
+	if bk.walked, bk.rows, err = bk.f.Walked(bk.ctx); err != nil {
+		return err
+	}
+	if bk.r.tips, err = bk.f.Tips(bk.ctx); err != nil {
+		return err
+	}
+	bk.req = Request{
+		Binding: bk.b, Manager: mgr, MayRead: mayRead, Commit: bk.env.Anchor,
+		Options: Options{Depth: bk.env.Depth, MaxNodes: bk.env.MaxNodes, Unpin: bk.env.Unpinned, CrossKB: bk.env.CrossKB},
+	}
+	return nil
+}
+
+// walkTo walks units until at least rows sections exist and units are
+// walked, or the book is fully walked. Walking takes a build slot, once per
+// call.
+func (bk *book) walkTo(units, rows int) error {
+	for bk.walked < len(bk.results) && (bk.walked < units || bk.rows < rows) {
+		if !bk.slot {
+			if !takeSlot() {
+				return ErrBookBusy
+			}
+			bk.slot = true
+		}
+		if err := bk.walkUnit(bk.walked + 1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// walkUnit walks unit and appends it to the book file.
+func (bk *book) walkUnit(unit int) error {
+	res := bk.results[unit-1]
+	req := bk.req
+	req.File = res.Path
+	uw, err := walkUnit(bk.ctx, bk.r, req, func(n *node) (*bookTarget, error) {
+		return bk.visited(n, unit)
+	})
+	bk.r.forget()
+	if errors.Is(err, ErrNotFound) {
+		return ErrBookChanged
+	}
+	if err != nil {
+		return err
+	}
+	if bk.rows+len(uw.doc.Nodes) > maxBookRows {
+		return fmt.Errorf("%w: it would hold more than %d sections (unit %d of %d); lower Facts, Depth or References",
+			ErrBookTooLarge, maxBookRows, unit, len(bk.results))
+	}
+	rows, visits, anchors, err := bk.unitRows(uw, unit, res)
+	if err != nil {
+		return err
+	}
+	tips := map[string]string{}
+	for id12, m := range bk.r.mounts {
+		if m != nil && id12 != fact12(bk.b) && m.anchor != "" {
+			tips[id12] = m.anchor
+		}
+	}
+	if err := bk.f.AppendUnit(bk.ctx, unit, rows, visits, anchors, tips); err != nil {
+		if errors.Is(err, sessions.ErrBookUnitTaken) {
+			return ErrCursorBusy
+		}
+		return err
+	}
+	bk.walked, bk.rows = unit, bk.rows+len(rows)
+	bk.stats.UnitsWalked++
+	bk.stats.Rows += len(rows)
+	bk.stats.Walk = bk.r.stats
+	return nil
+}
+
+// visited is the book's visited-set lookup for a node the walk of unit
+// reached: its first written appearance if an earlier unit wrote it, else
+// the unit of a search result (written there as the root), else nil.
+func (bk *book) visited(n *node, unit int) (*bookTarget, error) {
+	wire := (&walker{writeID: fact12(bk.b)}).wire(n.key)
+	v, ok, err := bk.f.Visited(bk.ctx, wire)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return &bookTarget{unit: v.Unit, n: v.N, seq: v.Seq, number: v.Number, anchor: v.Anchor, commit: v.Commit, blob: v.Blob}, nil
+	}
+	res, isResult := bk.byPath[wire]
+	if !isResult || res.Unit == unit {
+		return nil, nil
+	}
+	// A result not walked yet: written as its unit's root, at its version
+	// live at the anchor.
+	t := &bookTarget{unit: res.Unit, number: strconv.Itoa(res.Unit), anchor: res.Anchor}
+	if !bk.env.Unpinned && n.m != nil {
+		if _, c, blob, ok, err := bk.r.latest(bk.ctx, n.m, n.rel); err == nil && ok {
+			t.commit, t.blob = c, blob
+		}
+	}
+	return t, nil
+}
+
+// fact12 is the binding's write repo id, the repo whose paths are bare.
+func fact12(b *repos.Binding) string { return fact.ID12(b.Write().ID()) }
+
+// unitRows turns one walked unit into rows from bk.rows+1: section numbers
+// from the walk tree (the root is the unit number, its children unit.1,
+// unit.2, ...; a frame's ancestors are unnumbered), anchors (a root's is
+// reserved; a written fact's "f-<id8>" is unique in the book; a link's is
+// "u<unit>-<id8>"), links, and the visits of the facts it writes.
+func (bk *book) unitRows(uw *unitWalk, unit int, res sessions.BookResult) ([]sessions.BookRow, []sessions.BookVisit, []string, error) {
+	nodes := uw.doc.Nodes
+	number := make([]string, len(nodes))
+	depth := make([]int, len(nodes))
+	kids := make([]int, len(nodes))
+	anchor := make([]string, len(nodes))
+	usedHere := map[string]bool{}
+	var newAnchors []string
+	byN := make(map[int]int, len(nodes))
+	for i, n := range nodes {
+		byN[n.N] = i
+		switch p := uw.parent[i]; {
+		case n.Role == RoleRoot || n.Role == RoleFocal:
+			number[i] = strconv.Itoa(unit)
+		case p < 0:
+			// A frame's ancestor: an unnumbered preamble, as in the single
+			// view.
+		default:
+			kids[p]++
+			number[i] = number[p] + "." + strconv.Itoa(kids[p])
+			depth[i] = depth[p] + 1
+		}
+		id8 := shortID(relOf(n.Path))
+		switch {
+		case uw.links[i] != nil:
+			anchor[i] = uniqueAnchor("u"+strconv.Itoa(unit)+"-"+id8, func(a string) (bool, error) { return usedHere[a], nil })
+		case n.Role == RoleRoot || n.Role == RoleFocal:
+			anchor[i] = res.Anchor
+		default:
+			a, err := uniqueAnchorErr(anchorIDPrefix+id8, func(a string) (bool, error) {
+				if usedHere[a] {
+					return true, nil
+				}
+				return bk.f.AnchorTaken(bk.ctx, a)
+			})
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			anchor[i] = a
+			newAnchors = append(newAnchors, a)
+		}
+		usedHere[anchor[i]] = true
+	}
+	rows := make([]sessions.BookRow, 0, len(nodes))
+	var visits []sessions.BookVisit
+	for i, n := range nodes {
+		seq := bk.rows + i + 1
+		bn := BookNode{Node: n, Unit: unit, Seq: seq, Number: number[i], TreeDepth: depth[i], Written: uw.links[i] == nil}
+		bn.AnchorID = anchor[i]
+		if p := uw.parent[i]; p >= 0 {
+			bn.Parent = nodes[p].N
+		}
+		if n.Role == RoleRoot || n.Role == RoleFocal {
+			t := uw.doc.Truncated
+			bn.UnitTruncated = &t
+		}
+		for j := range bn.BuildsOn {
+			l := &bn.BuildsOn[j]
+			k := byN[l.N]
+			l.AnchorID = anchor[k]
+			if t := uw.links[k]; t != nil {
+				l.AnchorID = t.anchor
+			}
+		}
+		if t := uw.links[i]; t != nil {
+			l := &BookLink{Unit: t.unit, N: t.n, Seq: t.seq, Number: t.number, AnchorID: t.anchor, Direction: LinkForward}
+			if t.unit < unit {
+				l.Direction = LinkBack
+			}
+			if !bk.env.Unpinned && t.commit != "" && n.Commit != t.commit {
+				m, err := bk.r.mountOf(n.Repo)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				differ, err := bk.r.bodiesDiffer(bk.ctx, m, relOf(n.Path), n.Commit, uw.blobs[i], t.commit, t.blob)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				l.DifferentVersion = differ
+			}
+			bn.Link = l
+			bn.BuildsOn, bn.NotIncluded, bn.Sources = nil, nil, nil
+		} else {
+			visits = append(visits, sessions.BookVisit{Path: n.Path, Unit: unit, N: n.N, Seq: seq, Number: number[i],
+				Anchor: anchor[i], Commit: n.Commit, Blob: uw.blobs[i]})
+		}
+		state, err := json.Marshal(bn)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		rows = append(rows, sessions.BookRow{Seq: seq, Unit: unit, N: n.N, Path: n.Path, Written: bn.Written, State: string(state)})
+	}
+	return rows, visits, newAnchors, nil
+}
+
+func uniqueAnchor(base string, taken func(string) (bool, error)) string {
+	a, _ := uniqueAnchorErr(base, taken)
+	return a
+}
+
+// uniqueAnchorErr is base, or base-2, base-3, ... the first not taken.
+func uniqueAnchorErr(base string, taken func(string) (bool, error)) (string, error) {
+	a := base
+	for k := 2; ; k++ {
+		t, err := taken(a)
+		if err != nil {
+			return "", err
+		}
+		if !t {
+			return a, nil
+		}
+		a = fmt.Sprintf("%s-%d", base, k)
+	}
 }
 
 // runBookSearch runs the frozen search on the write mount and returns the
@@ -366,89 +615,49 @@ func runBookSearch(ctx context.Context, m *mount, req BookRequest) ([]string, er
 	return paths, nil
 }
 
-// unitRows turns one unit's walk into structure rows from seq+1: section
-// numbers from the walk tree (the root is the unit number, its children
-// unit.1, unit.2, ...; a frame's ancestors are unnumbered), and each
-// appearance's room (its subtree size, itself included).
-func unitRows(uw *unitWalk, unit, seq int) ([]sessions.BookRow, error) {
-	nodes := uw.doc.Nodes
-	room := make([]int, len(nodes))
-	for i := len(nodes) - 1; i >= 0; i-- {
-		room[i]++
-		if p := uw.parent[i]; p >= 0 {
-			room[p] += room[i]
-		}
-	}
-	number := make([]string, len(nodes))
-	depth := make([]int, len(nodes))
-	kids := make([]int, len(nodes))
-	rows := make([]sessions.BookRow, 0, len(nodes))
-	for i, n := range nodes {
-		parentN := 0
-		switch p := uw.parent[i]; {
-		case n.Role == RoleRoot || n.Role == RoleFocal:
-			number[i] = strconv.Itoa(unit)
-		case p < 0:
-			// A frame's ancestor: an unnumbered preamble, as in the single
-			// view.
-		default:
-			kids[p]++
-			number[i] = number[p] + "." + strconv.Itoa(kids[p])
-			depth[i] = depth[p] + 1
-			parentN = nodes[p].N
-		}
-		st := bookRowState{Node: n, Parent: parentN}
-		st.Node.Body = ""
-		st.Node.BuildsOn = make([]Link, len(n.BuildsOn))
-		for j, l := range n.BuildsOn {
-			st.Node.BuildsOn[j] = Link{N: l.N, DifferentVersion: l.DifferentVersion}
-		}
-		if n.Role == RoleRoot || n.Role == RoleFocal {
-			t := uw.doc.Truncated
-			st.UnitTruncated = &t
-		}
-		state, err := json.Marshal(st)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, sessions.BookRow{
-			Seq: seq + i + 1, Unit: unit, N: n.N, Path: n.Path, Room: room[i],
-			Result: n.Role == RoleRoot || n.Role == RoleFocal, Number: number[i], TreeDepth: depth[i],
-			Title: n.Title, ShortID: shortID(relOf(n.Path)),
-			Anchor: "u" + strconv.Itoa(unit) + "-" + strings.TrimPrefix(n.AnchorID, anchorIDPrefix),
-			Commit: n.Commit, Blob: uw.blobs[i], State: string(state),
-		})
-	}
-	return rows, nil
-}
-
 // openBook checks cursor against sc exactly as NextPage does (every
-// mismatch is ErrCursorExpired) and returns the book.
-func openBook(ctx context.Context, sc CursorScope, cursor string) (*sessions.BookInfo, BookEnv, int, error) {
+// mismatch is ErrCursorExpired) and opens the book for this call.
+func openBook(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string) (*book, *sessions.BookInfo, error) {
 	session, err := sc.Sessions.GetToolSession(ctx, cursor)
 	if err != nil {
-		return nil, BookEnv{}, 0, fmt.Errorf("session lookup error: %w", err)
+		return nil, nil, fmt.Errorf("session lookup error: %w", err)
 	}
 	if session == nil || session.Status != "active" || session.Binding == "" ||
 		session.Binding != sc.Pin || session.ReadSet != sc.ReadSet || session.Owner != sc.Owner {
-		return nil, BookEnv{}, 0, ErrCursorExpired
+		return nil, nil, ErrCursorExpired
 	}
 	limit, ok := parseBookTool(session.Tool)
 	if !ok {
-		return nil, BookEnv{}, 0, ErrCursorExpired
+		return nil, nil, ErrCursorExpired
 	}
 	info, err := sc.Sessions.GetBook(ctx, cursor)
 	if err != nil {
-		return nil, BookEnv{}, 0, err
+		return nil, nil, err
 	}
-	if info == nil || !info.Ready {
-		return nil, BookEnv{}, 0, ErrCursorExpired
+	if info == nil {
+		return nil, nil, ErrCursorExpired
 	}
-	var env BookEnv
-	if err := json.Unmarshal([]byte(info.Env), &env); err != nil {
-		return nil, BookEnv{}, 0, fmt.Errorf("book envelope: %w", err)
+	bk := &book{ctx: ctx, sc: sc, id: cursor, limit: limit, b: b, r: newReader(b, mgr, mayRead)}
+	if err := json.Unmarshal([]byte(info.Env), &bk.env); err != nil {
+		bk.close()
+		return nil, nil, fmt.Errorf("book envelope: %w", err)
 	}
-	return info, env, limit, nil
+	f, ok, err := sc.Sessions.OpenBookFile(cursor)
+	if err != nil {
+		bk.close()
+		return nil, nil, err
+	}
+	if !ok {
+		// Swept or evicted: the cursor reads as expired, never an error.
+		bk.close()
+		return nil, nil, ErrCursorExpired
+	}
+	bk.f = f
+	if err := bk.load(mgr, mayRead); err != nil {
+		bk.close()
+		return nil, nil, err
+	}
+	return bk, info, nil
 }
 
 // IsBookCursor reports whether cursor names a book in sc's session store
@@ -460,156 +669,121 @@ func IsBookCursor(ctx context.Context, sc CursorScope, cursor string) (bool, err
 
 // BookNextPage serves the next page of a book cursor, or, with unit > 0,
 // seeks: the page starts at that unit's first section (1..units; anything
-// else is ErrInvalid). Every cursor this caller cannot be served is
-// ErrCursorExpired and moves nothing; a call racing another on the same
-// cursor is ErrCursorBusy.
+// else is ErrInvalid), walking the units before it first if they are not
+// walked yet. Every cursor this caller cannot be served is ErrCursorExpired
+// and moves nothing; a call racing another on the same cursor is
+// ErrCursorBusy.
 func BookNextPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, unit int) (BookPage, error) {
-	info, env, limit, err := openBook(ctx, sc, cursor)
-	if err != nil {
-		return BookPage{}, err
-	}
-	from := info.NextSeq
-	if unit != 0 {
-		if unit < 1 || unit > info.Units {
-			return BookPage{}, fmt.Errorf("%w: unit must be between 1 and %d, got %d", ErrInvalid, info.Units, unit)
-		}
-		if from, err = sc.Sessions.BookUnitStart(ctx, cursor, unit); err != nil {
-			return BookPage{}, err
-		}
-	} else if from > info.Rows {
-		return BookPage{}, ErrCursorExpired
-	}
-	return bookPage(ctx, sc, b, mgr, mayRead, cursor, env, info.NextSeq, from, limit, false)
+	page, _, err := BookNextPageStats(ctx, sc, b, mgr, mayRead, cursor, unit)
+	return page, err
 }
 
-// bookPage serves the page starting at seq from, moving the cursor from at
-// (its position when the call began) to after the page.
-func bookPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool,
-	id string, env BookEnv, at, from, limit int, first bool) (BookPage, error) {
-	rows, err := sc.Sessions.BookRows(ctx, id, from, limit)
+// BookNextPageStats is BookNextPage with what the call walked.
+func BookNextPageStats(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, unit int) (BookPage, BookBuildStats, error) {
+	bk, info, err := openBook(ctx, sc, b, mgr, mayRead, cursor)
+	if err != nil {
+		return BookPage{}, BookBuildStats{}, err
+	}
+	defer bk.close()
+	from := info.NextSeq
+	if unit != 0 {
+		if unit < 1 || unit > len(bk.results) {
+			return BookPage{}, bk.stats, fmt.Errorf("%w: unit must be between 1 and %d, got %d", ErrInvalid, len(bk.results), unit)
+		}
+		if err := bk.walkTo(unit, 0); err != nil {
+			return BookPage{}, bk.stats, err
+		}
+		if from, err = bk.f.UnitStart(ctx, unit); err != nil {
+			return BookPage{}, bk.stats, err
+		}
+	} else {
+		if err := bk.walkTo(0, from); err != nil {
+			return BookPage{}, bk.stats, err
+		}
+		if from > bk.rows {
+			return BookPage{}, bk.stats, ErrCursorExpired
+		}
+	}
+	page, err := bk.page(info.NextSeq, from, false)
+	return page, bk.stats, err
+}
+
+// page serves the page starting at seq from (walking units until the page
+// can be filled), moving the cursor from at (its position when the call
+// began) to after the page.
+func (bk *book) page(at, from int, first bool) (BookPage, error) {
+	if err := bk.walkTo(0, from+bk.limit-1); err != nil {
+		// At the row cap the units already walked still page: a short page
+		// is served, and the call that needs the next unit gets the 422.
+		if !errors.Is(err, ErrBookTooLarge) || bk.rows < from {
+			return BookPage{}, err
+		}
+	}
+	rows, err := bk.f.Rows(bk.ctx, from, bk.limit)
 	if err != nil {
 		return BookPage{}, err
 	}
 	if len(rows) == 0 {
 		return BookPage{}, ErrCursorExpired
 	}
-	r := newReader(b, mgr, mayRead)
-	defer r.close()
-	nodes, err := inflateRows(ctx, sc, r, id, env, rows, true)
+	nodes, err := bk.inflate(rows)
 	if err != nil {
 		return BookPage{}, err
 	}
-	page, used, err := fillBookPage(env, nodes, limit, first)
+	page, used, err := fillBookPage(bk.env, nodes, bk.limit, first)
 	if err != nil {
 		return BookPage{}, err
 	}
 	next := nodes[used-1].Seq + 1
-	moved, err := sc.Sessions.AdvanceBook(ctx, id, at, next)
+	moved, err := bk.sc.Sessions.AdvanceBook(bk.ctx, bk.id, at, next)
 	if err != nil {
 		return BookPage{}, err
 	}
 	if !moved {
 		return BookPage{}, ErrCursorBusy
 	}
+	id := bk.id
 	page.Cursor = &id
-	page.HasMore = next <= env.Total
+	page.UnitsWalked, page.Sections = bk.walked, bk.rows
+	page.HasMore = next <= bk.rows || bk.walked < len(bk.results)
 	return page, nil
 }
 
-// inflateRows turns stored rows into page nodes: builds_on titles, ids and
-// the written anchors from the same unit's rows, link targets from the
-// written appearances, and (withBodies) the written nodes' bodies at their
-// frozen commits. A row in a repo this caller cannot read (r's reach) makes
-// the whole call ErrCursorExpired: the frozen view is not this caller's.
-func inflateRows(ctx context.Context, sc CursorScope, r *reader, id string, env BookEnv, rows []sessions.BookRow, withBodies bool) ([]BookNode, error) {
+// inflate turns stored rows into page nodes with the written nodes' bodies
+// read at their frozen commits. A row in a repo this caller cannot read
+// makes the whole call ErrCursorExpired: the frozen view is not this
+// caller's.
+func (bk *book) inflate(rows []sessions.BookRow) ([]BookNode, error) {
 	out := make([]BookNode, len(rows))
-	targets := map[int]map[int]bool{} // unit -> builds_on ns
-	paths := map[string]bool{}
-	for i, row := range rows {
-		var st bookRowState
-		if err := json.Unmarshal([]byte(row.State), &st); err != nil {
-			return nil, fmt.Errorf("book row decode: %w", err)
-		}
-		if _, _, ok := r.target(st.Node.Repo); !ok {
-			return nil, ErrCursorExpired
-		}
-		out[i] = BookNode{Node: st.Node, Unit: row.Unit, Seq: row.Seq, Number: row.Number, TreeDepth: row.TreeDepth,
-			Parent: st.Parent, Written: row.Written, UnitTruncated: st.UnitTruncated}
-		out[i].AnchorID = row.Anchor
-		paths[row.Path] = true
-		if !row.Written {
-			continue
-		}
-		for _, l := range st.Node.BuildsOn {
-			if targets[row.Unit] == nil {
-				targets[row.Unit] = map[int]bool{}
-			}
-			targets[row.Unit][l.N] = true
-		}
-	}
-	unitRows := map[int]map[int]sessions.BookRow{}
-	for unit, ns := range targets {
-		list := make([]int, 0, len(ns))
-		for n := range ns {
-			list = append(list, n)
-		}
-		got, err := sc.Sessions.BookUnitRows(ctx, id, unit, list)
-		if err != nil {
-			return nil, err
-		}
-		unitRows[unit] = got
-		for _, t := range got {
-			paths[t.Path] = true
-		}
-	}
-	plist := make([]string, 0, len(paths))
-	for p := range paths {
-		plist = append(plist, p)
-	}
-	written, err := sc.Sessions.BookWritten(ctx, id, plist)
-	if err != nil {
-		return nil, err
-	}
 	var bodies []int
 	for i, row := range rows {
-		n := &out[i]
-		if !row.Written {
-			w, ok := written[row.Path]
-			if !ok {
-				return nil, fmt.Errorf("book row %d: %s has no written appearance", row.Seq, row.Path)
-			}
-			l := &BookLink{Unit: w.Unit, N: w.N, Seq: w.Seq, Number: w.Number, AnchorID: w.Anchor, Direction: LinkForward}
-			if w.Seq < row.Seq {
-				l.Direction = LinkBack
-			}
-			if !env.Unpinned && row.Commit != w.Commit {
-				m, err := r.mountOf(n.Repo)
-				if err != nil {
-					return nil, err
-				}
-				differ, err := r.bodiesDiffer(ctx, m, relOf(n.Path), row.Commit, row.Blob, w.Commit, w.Blob)
-				if err != nil {
-					return nil, err
-				}
-				l.DifferentVersion = differ
-			}
-			n.Link = l
-			n.BuildsOn, n.NotIncluded, n.Sources = nil, nil, nil
-			continue
+		if err := json.Unmarshal([]byte(row.State), &out[i]); err != nil {
+			return nil, fmt.Errorf("book row decode: %w", err)
 		}
-		for j := range n.BuildsOn {
-			l := &n.BuildsOn[j]
-			t := unitRows[row.Unit][l.N]
-			l.Title, l.ID, l.AnchorID = t.Title, t.ShortID, written[t.Path].Anchor
+		if _, _, ok := bk.r.target(out[i].Repo); !ok {
+			return nil, ErrCursorExpired
 		}
-		bodies = append(bodies, i)
+		if l := out[i].Link; l != nil && l.Seq == 0 {
+			// A forward link stored before its unit was walked: fill in
+			// where the root landed once it has.
+			v, ok, err := bk.f.Visited(bk.ctx, row.Path)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				l.N, l.Seq = v.N, v.Seq
+			}
+		}
+		if row.Written {
+			bodies = append(bodies, i)
+		}
 	}
-	if withBodies && len(bodies) > 0 {
+	if len(bodies) > 0 {
 		ns := make([]Node, len(bodies))
 		for k, i := range bodies {
 			ns[k] = out[i].Node
 		}
-		if err := r.readBodies(ctx, ns); err != nil {
+		if err := bk.r.readBodies(bk.ctx, ns); err != nil {
 			// The frozen version can no longer be read for this caller:
 			// answered like expiry, naming nothing.
 			return nil, ErrCursorExpired
@@ -646,6 +820,7 @@ func fillBookPage(env BookEnv, nodes []BookNode, limit int, first bool) (BookPag
 	for k := 2; k <= min(limit, len(nodes)); k++ {
 		p := build(k)
 		p.Cursor, p.HasMore = &placeholder, true
+		p.UnitsWalked, p.Sections = MaxBookFacts, MaxBookRows
 		out, err := json.Marshal(p)
 		if err != nil {
 			return BookPage{}, 0, err
