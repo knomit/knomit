@@ -3,7 +3,7 @@
 // backend does (materializeApi.ts), cut into pages of `pageSize` facts, and
 // records every call so a test can say exactly what was requested.
 
-import { MARK_LATEST_OTHER_KB, MatError } from './materializeApi';
+import { MARK_LATEST_OTHER_KB, MatError, PAGE_LIMIT } from './materializeApi';
 import type { MaterializeApi, MatNode, MatOptions, MatPage, MatTarget } from './materializeApi';
 
 export interface FixtureOptions {
@@ -68,7 +68,7 @@ export function fixtureNode(n: number, o: FixtureOptions = {}): MatNode {
 
 export function makeFixtureApi(o: FixtureOptions = {}) {
   const total = o.total ?? 12;
-  const pageSize = o.pageSize ?? 3;
+  const pageSize = o.pageSize ?? PAGE_LIMIT;
   const calls: FixtureCall[] = [];
   const failed = new Set<number>();
   const nodesFor = (opts: MatOptions): MatNode[] => {

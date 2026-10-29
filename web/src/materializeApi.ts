@@ -80,6 +80,9 @@ export interface MatOptions {
 export const DEFAULT_OPTIONS: MatOptions = { depth: 4, maxFacts: 200, crossKb: false, unpin: false };
 export const MAX_DEPTH = 10;
 export const MAX_FACTS = 500;
+/** Facts per page, asked for on a FIRST call only (the server accepts 1..5 and
+ *  freezes it in the cursor; a cursor call that carries it is refused: 400). */
+export const PAGE_LIMIT = 5;
 
 /** Which fact, on which branch, as of which commit. */
 export interface MatTarget {
@@ -156,7 +159,10 @@ export function dispositionName(h: string | null): string | undefined {
  *  agent document the export reads is `<fact URL>/materialize`. */
 export const materializeApi: MaterializeApi = {
   async page(target, options, cursor, signal) {
+    // A first call carries the options and the page size; a cursor call carries
+    // ONLY the cursor (the walk and its page size were fixed by the first call).
     const p = cursor ? new URLSearchParams({ cursor }) : optionParams(options);
+    if (!cursor) p.set('limit', String(PAGE_LIMIT));
     const url = `${factUrl(target)}/materialize/pages?${p}`;
     const r = await fetch(url, { signal });
     if (!r.ok) throw await failure(r, url);
@@ -182,7 +188,11 @@ export const materializeApi: MaterializeApi = {
         onProgress?.(got);
       }
       text += dec.decode();
-      const want = Number(r.headers.get('Content-Length'));
+      // Content-Length counts the bytes ON THE WIRE; when the body is compressed
+      // (Content-Encoding) fetch hands us the decoded bytes, so the two differ
+      // and only an uncompressed body can be checked this way. A truncated
+      // compressed body fails the read itself.
+      const want = r.headers.get('Content-Encoding') ? 0 : Number(r.headers.get('Content-Length'));
       if (want > 0 && got !== want) throw new MatError(`the document ended early (${got} of ${want} bytes)`);
     } else {
       text = await r.text();
