@@ -41,6 +41,12 @@ const materializeTimeout = 60 * time.Second
 // that changed. Deliberately indistinguishable (lenses RFC §7.3).
 const errMaterializeExpired = "session expired or not found — call knomit_materialize again without cursor to start over"
 
+// errSessionBusy is the answer of every cursor resume (knomit_materialize,
+// knomit_query, knomit_explain) whose dequeue found the session store locked
+// past its busy timeout: the dequeue was rolled back, so the same call with
+// the same cursor is safe to retry.
+const errSessionBusy = "the session store is busy; nothing was consumed — retry the same call with the same cursor"
+
 func materializeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_materialize",
 		mcpgo.WithDescription("Materialize ONE fact together with the facts it stands on, as one document in reading order, every fact in full. Use it to hand a fact and its foundations to someone at once (an agent's brief, a frame's context, a human-readable write-up); use knomit_explain instead to inspect a fact's provenance and history, and knomit_query to find facts. The content is the fact's refs walk: every fact it cites, recursively, to `depth` (default 4, max 10), at most `max_nodes` facts (default 200, max 500); a fact reached twice is written once and later citations link back to it; a cited fact that was not written is listed as \"not included\" with the reason. By default every ref is read at the version the citing fact cited (historical: the output depends only on the fact, the anchor `commit` and the options); `unpin: true` reads every ref at its latest version instead and silently leaves out a cited fact that is gone. A frame (type frame) is ordered differently: its ancestors (the frames it refs, recursively, whatever their distance, each with its own content only) come first, then the frame, then what it stands on. Refs into another knowledge base are followed only with `cross_kb: true`, at that knowledge base's latest version. `audience: \"agent\"` returns the document as markdown text in `text`; `audience: \"human\"` returns the facts as data in `facts`, plus `instructions` on the first page for writing them up as an article. Results are paged: while `has_more` is true, call again with `cursor` (and nothing else but `binding` and optionally `limit`). Read-only; never writes."),
@@ -160,6 +166,8 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 	switch {
 	case errors.Is(err, materialize.ErrCursorExpired):
 		return mcpgo.NewToolResultError(errMaterializeExpired), nil
+	case errors.Is(err, materialize.ErrCursorBusy):
+		return mcpgo.NewToolResultError(errSessionBusy), nil
 	case err != nil:
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}

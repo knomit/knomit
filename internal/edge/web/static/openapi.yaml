@@ -1051,6 +1051,14 @@ paths:
         refs are followed only into repos the caller's credential reaches;
         an unreachable repo is listed exactly like a missing one
         (`kb_unavailable`).
+
+        BUSY: when a cursor call cannot take the server's session store
+        within its wait (many walks paging at once), the answer is 503
+        ("Materialize busy") with a `Retry-After` header in seconds and a
+        fixed detail. Nothing was consumed: repeat the SAME request (same
+        cursor) after the delay and it serves the page the busy call did
+        not. Page one cursor from one caller at a time; to page several
+        materializations at once, use one cursor each.
       operationId: getMaterializePage
       parameters:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, no other parameter is accepted." }
@@ -1068,7 +1076,15 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
-        "503": { $ref: "#/components/responses/Problem" }
+        "503":
+          description: The session store is busy (or the repo is unavailable). On "Materialize busy", nothing was consumed; retry the same request after Retry-After.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying the same request (sent with "Materialize busy").
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /repos/{repo}/branches/{branch}/facts/{path}/commits:
     parameters:
