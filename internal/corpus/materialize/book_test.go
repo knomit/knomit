@@ -104,7 +104,11 @@ func TestBook_RowCap(t *testing.T) {
 	t.Cleanup(func() { maxBookRows = old })
 	ctx := context.Background()
 
-	maxBookRows = 3 // unit 1 (2 or 3 rows) fits, unit 2 does not
+	one := f.request("kb/u/")
+	one.Limit = 1
+	probe, _, err := BookFirstPage(ctx, f.scope("probe"), one)
+	require.NoError(t, err)
+	maxBookRows = probe.Sections // unit 1 fits exactly, unit 2 does not
 	p1, _, err := BookFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
 	require.NoError(t, err)
 	require.Equal(t, 1, p1.UnitsWalked)
@@ -121,10 +125,10 @@ func TestBook_RowCap(t *testing.T) {
 	require.ErrorIs(t, err, ErrBookTooLarge)
 	books, err := f.svc.ToolSession().BookCount(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, books, "the refused first call left no cursor")
+	require.Equal(t, 2, books, "the refused first call left no cursor (probe and o remain)")
 	files, _, err := f.svc.ToolSession().BookFiles()
 	require.NoError(t, err)
-	require.Equal(t, 1, files, "and no file")
+	require.Equal(t, 2, files, "and no file")
 }
 
 // Over the concurrent-walk cap a call that must walk is refused at once (no
