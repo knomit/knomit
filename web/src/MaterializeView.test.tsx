@@ -572,6 +572,17 @@ describe('polish: labels, numbering, bar', () => {
   });
 });
 
+describe('full width', () => {
+  it('puts no max-width (or centring margin) on the article or the pane it scrolls in', () => {
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    for (const sel of ['.k-mat-article', '.k-mat-scroll', '.k-mat']) {
+      const m = new RegExp(`^${sel.replace('.', '\\.')} \\{([^}]*)\\}`, 'm').exec(css);
+      expect(m, sel).not.toBeNull();
+      expect(m![1]).not.toMatch(/max-width|margin:\s*0 auto/);
+    }
+  });
+});
+
 describe('focus mode', () => {
   const on = () => document.documentElement.dataset.matFocus === '1';
   afterEach(() => { delete document.documentElement.dataset.matFocus; });
