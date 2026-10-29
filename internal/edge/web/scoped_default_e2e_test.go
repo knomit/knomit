@@ -363,3 +363,45 @@ func TestMarkScopedMount_MarksWithoutRebinding(t *testing.T) {
 	_, _, plain = repos.MountSessionFromContext(markScopedMount(mainCtx, m, "sid"))
 	require.False(t, plain, "a URL naming main is an address")
 }
+
+// Commit and rollback BY NAME say what happened — which experiment went into
+// which branch — and, only when a handle was passed, where that handle now
+// points. They never claim the connection default moved "back": it never left.
+// On a plain scoped mount, on a mount whose URL names the experiment, and with
+// a handle that is inside another experiment.
+func TestScopedDefault_CommitByNameSaysWhatHappened(t *testing.T) {
+	h, m := experimentServer(t)
+	mount := repoMount(t, m, "jobA-repo")
+	sid := initAt(t, h, mount)
+
+	// Plain scoped mount, no handle.
+	learnPathVia(t, h, mount, sid, openNoHandle(t, h, mount, sid, "by-name"), "in by-name")
+	env, text, isErr := callExperiment(t, h, mount, sid, `{"action":"commit","name":"by-name"}`)
+	require.False(t, isErr, text)
+	require.Regexp(t, `^experiment "by-name" merged into "agent/test" \([a-z-]+\) and deleted$`, env.Summary)
+
+	openNoHandle(t, h, mount, sid, "dropped")
+	env, text, isErr = callExperiment(t, h, mount, sid, `{"action":"rollback","name":"dropped"}`)
+	require.False(t, isErr, text)
+	require.Equal(t, `experiment "dropped" and everything on it are gone`, env.Summary)
+
+	// A mount whose URL NAMES the experiment, committing that same one.
+	learnPathVia(t, h, mount, sid, openNoHandle(t, h, mount, sid, "addressed"), "in addressed")
+	expMount := "/repos/jobA-repo/branches/exp:addressed/mcp"
+	env, text, isErr = callExperiment(t, h, expMount, initAt(t, h, expMount), `{"action":"commit","name":"addressed"}`)
+	require.False(t, isErr, text)
+	require.Regexp(t, `^experiment "addressed" merged into "agent/test" \([a-z-]+\) and deleted$`, env.Summary)
+
+	// With a handle inside ANOTHER experiment: say where the handle stays.
+	mine := openNoHandle(t, h, mount, sid, "mine")
+	learnPathVia(t, h, mount, sid, openNoHandle(t, h, mount, sid, "theirs"), "in theirs")
+	env, text, isErr = callExperiment(t, h, mount, sid, withBinding(mine, `{"action":"commit","name":"theirs"}`))
+	require.False(t, isErr, text)
+	require.Regexp(t, `^experiment "theirs" merged into "agent/test" \([a-z-]+\) and deleted; this handle stays on "exp/mine"$`, env.Summary)
+
+	// And with the handle's OWN experiment: say where it now points.
+	learnPathVia(t, h, mount, sid, mine, "in mine")
+	env, text, isErr = callExperiment(t, h, mount, sid, withBinding(mine, `{"action":"commit"}`))
+	require.False(t, isErr, text)
+	require.Regexp(t, `^experiment "mine" merged into "agent/test" \([a-z-]+\) and deleted; this handle is back on "agent/test"$`, env.Summary)
+}

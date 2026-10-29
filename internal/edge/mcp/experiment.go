@@ -490,13 +490,13 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 	// branch does not move. The experiment is still deleted, so the action did
 	// happen — but saying "merged into" would credit it with changes it did
 	// not make, and someone would go looking for a commit that never existed.
-	summary := fmt.Sprintf("experiment %q merged into %q (%s) and deleted; %s",
-		name, agent, result.Mode, where.note)
+	summary := fmt.Sprintf("experiment %q merged into %q (%s) and deleted", name, agent, result.Mode)
 	if result.Mode == merge.ModeNoop {
 		summary = fmt.Sprintf(
-			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted; %s",
-			name, agent, agent, where.note)
+			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted",
+			name, agent, agent)
 	}
+	summary += where.note
 	if s := settledSummary(result.Settled); s != "" {
 		summary += ". " + s
 	}
@@ -515,7 +515,10 @@ func errNoExperimentNamed(action string) string {
 		"A call without a handle is on the default branch, which is never inside an experiment", action)
 }
 
-// callerAfter is where the caller is after a commit or rollback.
+// callerAfter is where the caller is after a commit or rollback. note is
+// appended to the summary as-is: "; this handle …" when a handle was passed,
+// and "" when none was — the connection default never moves, so there is
+// nothing to say about it (#685).
 type callerAfter struct {
 	branch, active, note string
 }
@@ -526,12 +529,20 @@ type callerAfter struct {
 // unconditionally silently dropped it out of its own experiment.
 func leaveIfCurrent(ctx context.Context, mgr *repos.Manager, b *repos.Binding, name, active string) callerAfter {
 	agent := b.Write().AgentBranch()
+	handle := bindingHandleFromContext(ctx)
 	if name != active {
-		return callerAfter{branch: b.WriteBranch(), active: active,
-			note: fmt.Sprintf("%s stays on %q", callerNoun(ctx), b.WriteBranch())}
+		where := callerAfter{branch: b.WriteBranch(), active: active}
+		if handle != "" {
+			where.note = fmt.Sprintf("; this handle stays on %q", b.WriteBranch())
+		}
+		return where
 	}
-	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
-	return callerAfter{branch: agent, note: fmt.Sprintf("%s is back on %q", callerNoun(ctx), agent)}
+	clearHandleExperiment(ctx, mgr, handle)
+	where := callerAfter{branch: agent}
+	if handle != "" {
+		where.note = fmt.Sprintf("; this handle is back on %q", agent)
+	}
+	return where
 }
 
 // settledSummary says, per path, how a commit settled a conflict instead of
@@ -586,11 +597,9 @@ func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Serv
 	}
 	where := leaveIfCurrent(ctx, mgr, b, name, active)
 	return experimentResult{
-		Branch: where.branch,
-		Active: where.active,
-		Summary: fmt.Sprintf(
-			"experiment %q and everything on it are gone; %s",
-			name, where.note),
+		Branch:  where.branch,
+		Active:  where.active,
+		Summary: fmt.Sprintf("experiment %q and everything on it are gone", name) + where.note,
 	}, nil
 }
 

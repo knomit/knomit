@@ -354,10 +354,6 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle, mount string
 		if pin != mount {
 			return ctx, errors.New(errHandleFromOtherEndpoint(ctx))
 		}
-		// The HANDLE routes this call: the connection's mount marker is
-		// masked so nothing after the gate can mistake this call for the
-		// connection's default.
-		ctx = repos.WithoutMountState(ctx)
 	}
 	// The experiment this handle is working inside, if any. Read here rather
 	// than deeper because this is where the handle is known, and the handle

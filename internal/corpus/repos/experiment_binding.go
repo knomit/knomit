@@ -182,17 +182,3 @@ func MountSessionFromContext(ctx context.Context) (sessionID, mountUID string, o
 	}
 	return ms.SessionID, ms.MountUID, true
 }
-
-// WithoutMountState strips a URL-scoped mount's connection state from ctx: the
-// mount-session marker ScopedMountMiddleware set, and any lapsed-experiment
-// mark carried in with it.
-//
-// Used when a binding HANDLE routes a call on a URL-scoped mount. The handle
-// then decides the branch, exactly as on the unscoped mount, and nothing after
-// the gate may treat the call as the connection's default. (Since #685 the
-// connection default never moves and carries no experiment of its own, so this
-// is defence in depth rather than the only thing keeping callers apart.)
-func WithoutMountState(ctx context.Context) context.Context {
-	ctx = context.WithValue(ctx, mountSessionKey{}, nil)
-	return context.WithValue(ctx, lapsedExperimentKey{}, nil)
-}
