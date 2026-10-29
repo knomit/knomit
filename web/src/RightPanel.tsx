@@ -6,7 +6,10 @@ import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from '
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime } from './utils';
-import { RetractIcon } from './icons';
+import { RetractIcon, ScrollTextIcon } from './icons';
+import { MaterializeView } from './MaterializeView';
+import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
+import type { MatOptions } from './materializeApi';
 import { FactDiffView } from './FactDiffView';
 import { FactBody } from './FactBody';
 import { FactBand } from './FactBand';
@@ -89,6 +92,9 @@ function renderFact(
   // unremovable, and waiting to narrow the list the moment the reader returns
   // to live.
   filterable = true,
+  // Swap this fact's view for its materialization. Optional so the many call
+  // sites that render a fact without it (diff views, tests) stay unchanged.
+  onMaterialize?: () => void,
 ) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? readOnlyTitle : 'Retract fact';
@@ -274,6 +280,21 @@ function renderFact(
               >
                 retracted at {retractedAt}
               </span>
+            )}
+            {onMaterialize && (
+              <button
+                data-testid="materialize-btn"
+                title="Materialize"
+                aria-label="Materialize"
+                className="k-bare"
+                onClick={onMaterialize}
+                style={{
+                  background: 'none', border: 'none', padding: 2, color: '#8a96a8',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.75,
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.75'; }}
+              ><ScrollTextIcon color="currentColor" size={15} /></button>
             )}
             {onRetract && (
               <button
@@ -580,6 +601,18 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   const [error, setError] = useState<string | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [confirmRetract, setConfirmRetract] = useState(false);
+  // The materialized view replaces the fact view. Its options live in the
+  // page's query string (shareable, never persisted): read once at mount,
+  // written back on every change.
+  const [mat, setMat] = useState<{ open: boolean; options: MatOptions }>(
+    () => parseMaterializeParams(typeof window !== 'undefined' ? window.location.search : ''));
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const search = writeMaterializeParams(window.location.search, mat);
+    if (search !== window.location.search) {
+      window.history.replaceState(window.history.state, '', window.location.pathname + search + window.location.hash);
+    }
+  }, [mat]);
 
   // path → target_commit for the open fact's outgoing DERIVED_FROM edges, so an
   // in-body ref hop lands on the version the referrer reasoned over. See the
@@ -674,6 +707,8 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   if (factPath !== prevFactPath) {
     setPrevFactPath(factPath);
     setConnectionsOpen(null);
+    // Another fact: its own view, not the last fact's materialization.
+    if (mat.open) setMat(m => ({ ...m, open: false }));
   }
   const anchorCommit = selectAnchorCommit(state);
   const inDiff = state.asOf.mode === 'diff';
@@ -1044,6 +1079,21 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
 
   const readOnly = factReadOnly;
 
+  if (mat.open) {
+    const anchor = factHistoryAnchor(state, fact.path);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <MaterializeView
+          target={{ repo: anchor.repo, branch: anchor.branch, path: anchor.path, commit: anchorCommit ?? undefined }}
+          title={fact.title || fact.path}
+          options={mat.options}
+          onOptionsChange={options => setMat(m => ({ ...m, options }))}
+          onBack={() => setMat(m => ({ ...m, open: false }))}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {confirmRetract && (
@@ -1094,6 +1144,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           orderedMotifs,
           { open: motifOpen, onToggle: toggleMotif, onClose: closeMotif, onPivot: pivotMotif, panelId: motifPanelId },
           isLive(state),
+          () => setMat(m => ({ ...m, open: true })),
         )}
       </div>
     </div>

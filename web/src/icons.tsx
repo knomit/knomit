@@ -391,3 +391,26 @@ export const UserIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// scroll-text — the Materialize action: a fact and what it stands on, written
+// out as one document. A scroll with two lines of text; no other glyph in this
+// file looks like it (LayersIcon, the lens mark, is stacked diamonds, and
+// BookIcon, the repo mark, is a closed cover).
+export const ScrollTextIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15 12h-5"/>
+    <path d="M15 8h-5"/>
+    <path d="M19 17V5a2 2 0 0 0-2-2H4"/>
+    <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>
+  </svg>
+);
+
+// A tray with a downward arrow: save the whole document as a file. (ArchiveIcon
+// is a lidded box and is not a download mark.)
+export const DownloadIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="7 10 12 15 17 10"/>
+    <line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+
