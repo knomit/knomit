@@ -225,7 +225,7 @@ export function useMaterializeStream(api: MaterializeApi, target: MatTarget, opt
   // Re-run when the TARGET or any OPTION changes (api is the caller's seam and
   // is stable for a view's life). `sync` reads what changed itself.
   const tkey = targetKey(target);
-  const okey = `${options.depth}|${options.maxFacts}|${options.crossKb}|${options.unpin}`;
+  const okey = `${options.depth}|${options.references}|${options.crossKb}|${options.unpin}`;
   useEffect(() => {
     stream.sync({ api, target, options });
     // eslint-disable-next-line react-hooks/exhaustive-deps

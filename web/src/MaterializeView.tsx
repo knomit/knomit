@@ -4,9 +4,9 @@ import { markdownPlugins, markdownComponents } from './markdown';
 import { ArrowUpIcon, ChevronDownIcon, ChevronLeftIcon, DownloadIcon, FocusIcon } from './icons';
 import { saveExport, saveOutcomeLine } from './saveFile';
 import type { SaveOutcome } from './saveFile';
-import { MARK_LATEST_OTHER_KB, MAX_DEPTH, MAX_FACTS, materializeApi } from './materializeApi';
+import { MARK_LATEST_OTHER_KB, MAX_DEPTH, MAX_REFERENCES, materializeApi } from './materializeApi';
 import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './materializeApi';
-import { clampDepth, clampFacts, exportFilename, headingLevel, id8, optionChange } from './materializeOptions';
+import { clampDepth, clampReferences, exportFilename, headingLevel, id8, optionChange } from './materializeOptions';
 import { isHttpUrl } from './utils';
 import { useMaterializeStream } from './useMaterializeStream';
 import { treeInfo } from './materializeNumbering';
@@ -41,7 +41,7 @@ function Stepper({ label, value, max, min, step, onCommit, testid }: {
   onCommit: (n: number) => void; testid: string;
 }) {
   // What the reader is typing, until they commit it; otherwise the value itself.
-  // The range is the server's (depth 0..10, facts 1..500) and is enforced HERE:
+  // The range is the server's (depth 0..10, references 0..499) and is enforced HERE:
   // typing clamps as you type, blur and Enter clamp and commit, the buttons stop
   // at the ends, and an out-of-range number never reaches onCommit.
   const [draft, setDraft] = useState<string | null>(null);
@@ -482,8 +482,10 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   // ── Render ──
   const total = s.env?.total ?? 0;
   const shown = sections.length;
-  const raiseTo = Math.min(MAX_FACTS, Math.max(options.maxFacts + 1, options.maxFacts * 2));
+  const raiseTo = Math.min(MAX_REFERENCES, Math.max(options.references + 1, options.references * 2));
   const trunc = s.env?.truncated;
+  // The root is not a reference: count the references shown out of the most the walk can hold.
+  const progress = `${Math.max(0, shown - 1)} of ≤${Math.max(0, total - 1)} references`;
   const exporting = exp.kind === 'running';
 
   return (
@@ -524,8 +526,8 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           <div className="k-mat-controls">
             <Stepper label="Max depth" value={options.depth} min={0} max={MAX_DEPTH} step={1} testid="mat-depth"
               onCommit={n => change({ ...options, depth: clampDepth(n) })} />
-            <Stepper label="Max facts" value={options.maxFacts} min={1} max={MAX_FACTS} step={50} testid="mat-facts"
-              onCommit={n => change({ ...options, maxFacts: clampFacts(n) })} />
+            <Stepper label="References" value={options.references} min={0} max={MAX_REFERENCES} step={50} testid="mat-refs"
+              onCommit={n => change({ ...options, references: clampReferences(n) })} />
             <Switch label="Cross-KB" checked={options.crossKb} testid="mat-cross-kb" onChange={v => change({ ...options, crossKb: v })} />
             <Switch label="Unpin" checked={options.unpin} testid="mat-unpin" onChange={v => change({ ...options, unpin: v })} />
           </div>
@@ -534,7 +536,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           <span>{id8(target.path)}</span>
           {s.env && <span>at commit {s.env.anchor.slice(0, 7)} ({s.env.unpinned ? 'latest' : 'pinned'})</span>}
           <span className="k-mat-progress" data-testid="mat-progress" role="status">
-            {s.env ? `${shown} of ≤${total} facts · depth ${s.env.depth}` : 'Materializing…'}
+            {s.env ? `${progress} · depth ${s.env.depth}` : 'Materializing…'}
             {s.env && total > 0 && <span className="k-mat-bartrack"><span className="k-mat-barfill" style={{ width: `${Math.min(100, (shown / total) * 100)}%`, display: 'block' }} /></span>}
           </span>
         </div>
@@ -612,10 +614,10 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
                 </div>
                 {trunc && trunc.nodes > 0 && (
                   <div className="k-mat-endline" data-testid="mat-limit">
-                    <span>Stopped at your limit of {options.maxFacts} facts · {trunc.nodes} more not written.</span>
-                    {options.maxFacts < MAX_FACTS
+                    <span>Stopped at your limit of {options.references} {options.references === 1 ? 'reference' : 'references'} · {trunc.nodes} more not written.</span>
+                    {options.references < MAX_REFERENCES
                       ? <button type="button" className="k-mat-btn" data-testid="mat-raise"
-                          onClick={() => change({ ...options, maxFacts: raiseTo })}>Show up to {raiseTo}</button>
+                          onClick={() => change({ ...options, references: raiseTo })}>Show up to {raiseTo} references</button>
                       : <span>That is the most a read can hold.</span>}
                   </div>
                 )}

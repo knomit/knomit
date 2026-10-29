@@ -244,21 +244,21 @@ describe('article marks', () => {
 
 describe('changing options mid-read', () => {
   it('RAISING only the count continues in place: nothing is dimmed or replaced, no section repeats', async () => {
-    const { pageCalls } = setup({ total: 12, pageSize: 3 }, { initial: { ...DEFAULT_OPTIONS, maxFacts: 6 } });
+    const { pageCalls } = setup({ total: 12, pageSize: 3 }, { initial: { ...DEFAULT_OPTIONS, references: 5 } });
     await waitFor(() => expect(ns()).toEqual([1, 2, 3]));
     nearBottom();
     await waitFor(() => expect(screen.getByTestId('mat-limit')).toBeInTheDocument());
     expect(ns()).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(screen.getByTestId('mat-limit')).toHaveTextContent('Stopped at your limit of 6 facts · 6 more not written');
+    expect(screen.getByTestId('mat-limit')).toHaveTextContent('Stopped at your limit of 5 references · 6 more not written');
     const before = screen.getAllByTestId('mat-section')[0];
 
-    expect(screen.getByTestId('mat-raise')).toHaveTextContent('Show up to 12');
+    expect(screen.getByTestId('mat-raise')).toHaveTextContent('Show up to 10 references');
     fireEvent.click(screen.getByTestId('mat-raise'));
     await waitFor(() => expect(ns().length).toBeGreaterThan(6));
     expect(screen.getAllByTestId('mat-section')[0]).toBe(before);       // same DOM node: continued, not replaced
     expect(document.querySelector('[data-stale="true"]')).toBeNull();
     expect(ns()).toEqual(Array.from({ length: ns().length }, (_, i) => i + 1)); // contiguous, no repeats
-    expect(pageCalls().filter(c => c.cursor === null).at(-1)?.options.maxFacts).toBe(12);
+    expect(pageCalls().filter(c => c.cursor === null).at(-1)?.options.references).toBe(10);
   });
 
   it('changing the depth restarts from a new first call and dims the old text until page 1 arrives', async () => {
@@ -300,16 +300,16 @@ describe('changing options mid-read', () => {
   it('lowering the count restarts too', async () => {
     const { pageCalls } = setup({ total: 6, pageSize: 3 });
     await waitFor(() => expect(ns()).toHaveLength(3));
-    fireEvent.click(screen.getByLabelText('Lower Max facts'));
+    fireEvent.click(screen.getByLabelText('Lower References'));
     await waitFor(() => expect(pageCalls()).toHaveLength(2));
     expect(pageCalls()[1].cursor).toBeNull();
-    expect(pageCalls()[1].options.maxFacts).toBe(150);
+    expect(pageCalls()[1].options.references).toBe(149);
   });
 
   it('a count raise whose longer walk reorders what was read falls back to a restart that keeps the reader\'s place', async () => {
     // Breadth-first inclusion, depth-first order: raising the cap lets a new fact in
     // at position 2 and shifts everything after it, so "continue in place" cannot hold.
-    const { pageCalls } = setup({ total: 12, pageSize: 3, shiftAbove: 6 }, { initial: { ...DEFAULT_OPTIONS, maxFacts: 6 } });
+    const { pageCalls } = setup({ total: 12, pageSize: 3, shiftAbove: 6 }, { initial: { ...DEFAULT_OPTIONS, references: 5 } });
     await waitFor(() => expect(ns()).toEqual([1, 2, 3]));
     nearBottom();
     await waitFor(() => expect(ns()).toEqual([1, 2, 3, 4, 5, 6]));
@@ -353,7 +353,7 @@ describe('changing options mid-read', () => {
       setup({ total: 12, pageSize: 3 });
       await waitFor(() => expect(ns()).toHaveLength(3));
       const scrollTop = layout();
-      fireEvent.click(screen.getByLabelText('Lower Max facts'));          // 200 -> 150: a restart; section 3 survives
+      fireEvent.click(screen.getByLabelText('Lower References'));          // 199 -> 149 references: a restart; section 3 survives
       await waitFor(() => expect(scrollTop()).not.toBe(0));
       expect(scrollTop()).toBe(-36);                                        // section 3 is already at the top edge, less the path bar and the 8px gutter
       expect(screen.queryByTestId('mat-notice')).toBeNull();
@@ -363,8 +363,8 @@ describe('changing options mid-read', () => {
       setup({ total: 12, pageSize: 3 });
       await waitFor(() => expect(ns()).toHaveLength(3));
       const scrollTop = layout();
-      const input = screen.getByTestId('mat-facts');
-      fireEvent.change(input, { target: { value: '2' } });                 // the new walk has only §1 and §2
+      const input = screen.getByTestId('mat-refs');
+      fireEvent.change(input, { target: { value: '1' } });                 // 1 reference: the new walk has only §1 and §2
       fireEvent.blur(input);
       await waitFor(() => expect(ns()).toEqual([1, 2]));
       await waitFor(() => expect(scrollTop()).toBe(-136));                 // section 2, at (2-3)*100 - PATH_H - 8: the nearest earlier one
@@ -485,22 +485,22 @@ describe('top bar', () => {
     await waitFor(() => expect(ns()).toHaveLength(3));
     const bar = screen.getByTestId('mat-bar');
     expect(bar).toHaveTextContent('Max depth');
-    expect(bar).toHaveTextContent('Max facts');
+    expect(bar).toHaveTextContent('References');
     expect(bar.textContent).not.toMatch(/of 10|of 500/);                  // the limits are enforced, not printed
     expect(within(bar).getByTestId('mat-cross-kb')).not.toBeChecked();
     expect(within(bar).getByTestId('mat-unpin')).not.toBeChecked();
-    expect(screen.getByTestId('mat-progress')).toHaveTextContent('3 of ≤9 facts · depth 4');
+    expect(screen.getByTestId('mat-progress')).toHaveTextContent('2 of ≤8 references · depth 4');
     expect(screen.getByTestId('mat-export')).toHaveAttribute('aria-label', 'Export');
     fireEvent.click(screen.getByTestId('mat-back'));
     expect(onBack).toHaveBeenCalled();
   });
 
-  it('cannot raise the depth past 10 or the count past 500', async () => {
+  it('cannot raise the depth past 10 or the references past 499', async () => {
     const f = makeFixtureApi({ total: 3, pageSize: 3 });
-    render(<MaterializeView target={TARGET} title="T" options={{ ...DEFAULT_OPTIONS, depth: 10, maxFacts: 500 }} onOptionsChange={() => {}} onBack={() => {}} api={f.api} />);
+    render(<MaterializeView target={TARGET} title="T" options={{ ...DEFAULT_OPTIONS, depth: 10, references: 499 }} onOptionsChange={() => {}} onBack={() => {}} api={f.api} />);
     await waitFor(() => expect(ns()).toHaveLength(3));
     expect(screen.getByLabelText('Raise Max depth')).toBeDisabled();
-    expect(screen.getByLabelText('Raise Max facts')).toBeDisabled();
+    expect(screen.getByLabelText('Raise References')).toBeDisabled();
   });
 });
 
@@ -702,14 +702,14 @@ describe('focus mode', () => {
     }
   });
 
-  it('Esc INSIDE a text/number field (Max depth, Max facts) only leaves the field and keeps Focus', async () => {
+  it('Esc INSIDE a text/number field (Max depth, References) only leaves the field and keeps Focus', async () => {
     const shellEsc = vi.fn();
     const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
     window.addEventListener('keydown', shell);
     try {
       setup({ total: 3, pageSize: 3 });
       await waitFor(() => expect(ns()).toHaveLength(3));
-      for (const id of ['mat-depth', 'mat-facts']) {
+      for (const id of ['mat-depth', 'mat-refs']) {
         const input = screen.getByTestId(id) as HTMLInputElement;
         input.focus();
         expect(document.activeElement).toBe(input);
@@ -929,8 +929,8 @@ describe('export: the desktop asks, a browser downloads', () => {
   });
 });
 
-describe('Max depth / Max facts are clamped to the server\'s range', () => {
-  // The server refuses depth outside 0..10 and max_nodes outside 1..500 (materialize.Options.Validate).
+describe('Max depth / References are clamped to the server\'s range', () => {
+  // The server refuses depth outside 0..10 and max_nodes outside 1..500, which the UI keeps by sending references + 1 with references 0..499 (materialize.Options.Validate).
   async function typeIn(id: string, value: string, commit: 'blur' | 'enter' = 'blur') {
     const input = screen.getByTestId(id) as HTMLInputElement;
     fireEvent.change(input, { target: { value } });
@@ -940,15 +940,15 @@ describe('Max depth / Max facts are clamped to the server\'s range', () => {
   }
   const callOpts = (f: ReturnType<typeof makeFixtureApi>) => f.pageCalls().map(c => c.options);
 
-  it('Max facts: typing past 500 shows 500, typing 0 shows 1; blur commits the clamped value only', async () => {
+  it('References: typing past 499 shows 499, typing 0 shows 0; blur commits the clamped value only', async () => {
     const f = makeFixtureApi({ total: 3, pageSize: 3 });
     render(<Harness api={f.api} />);
     await waitFor(() => expect(ns()).toHaveLength(3));
-    expect(await typeIn('mat-facts', '99999')).toBe('500');
-    await waitFor(() => expect(callOpts(f).at(-1)?.maxFacts).toBe(500));
-    expect(await typeIn('mat-facts', '0')).toBe('1');
-    await waitFor(() => expect(callOpts(f).at(-1)?.maxFacts).toBe(1));
-    expect(callOpts(f).every(o => o.maxFacts >= 1 && o.maxFacts <= 500)).toBe(true);   // nothing out of range reached the server
+    expect(await typeIn('mat-refs', '99999')).toBe('499');
+    await waitFor(() => expect(callOpts(f).at(-1)?.references).toBe(499));
+    expect(await typeIn('mat-refs', '0')).toBe('0');
+    await waitFor(() => expect(callOpts(f).at(-1)?.references).toBe(0));
+    expect(callOpts(f).every(o => o.references >= 0 && o.references <= 499)).toBe(true);   // nothing out of range reached the server
   });
 
   it('Max depth: typing past 10 shows 10, and 0 is allowed (the server accepts 0..10); Enter commits too', async () => {
@@ -967,41 +967,51 @@ describe('Max depth / Max facts are clamped to the server\'s range', () => {
     render(<Harness api={f.api} />);
     await waitFor(() => expect(ns()).toHaveLength(3));
     const before = f.pageCalls().length;
-    expect(await typeIn('mat-facts', 'abc')).toBe('');
-    expect((screen.getByTestId('mat-facts') as HTMLInputElement).value).toBe('200');   // reverted
+    expect(await typeIn('mat-refs', 'abc')).toBe('');
+    expect((screen.getByTestId('mat-refs') as HTMLInputElement).value).toBe('199');   // reverted
     expect(f.pageCalls().length).toBe(before);
-    expect(await typeIn('mat-facts', '2x5')).toBe('25');
+    expect(await typeIn('mat-refs', '2x5')).toBe('25');
   });
 
   it('the steppers stop at both ends of both fields (disabled, so no out-of-range value can be sent)', async () => {
     const lo = makeFixtureApi({ total: 3, pageSize: 3 });
-    const { unmount } = render(<MaterializeView target={TARGET} title="T" options={{ depth: 0, maxFacts: 1, crossKb: false, unpin: false }} onOptionsChange={() => {}} onBack={() => {}} api={lo.api} />);
+    const { unmount } = render(<MaterializeView target={TARGET} title="T" options={{ depth: 0, references: 0, crossKb: false, unpin: false }} onOptionsChange={() => {}} onBack={() => {}} api={lo.api} />);
     await waitFor(() => expect(ns().length).toBeGreaterThan(0));
     expect(screen.getByLabelText('Lower Max depth')).toBeDisabled();
-    expect(screen.getByLabelText('Lower Max facts')).toBeDisabled();
+    expect(screen.getByLabelText('Lower References')).toBeDisabled();
     expect(screen.getByLabelText('Raise Max depth')).not.toBeDisabled();
-    expect(screen.getByLabelText('Raise Max facts')).not.toBeDisabled();
+    expect(screen.getByLabelText('Raise References')).not.toBeDisabled();
     unmount();
     const hi = makeFixtureApi({ total: 3, pageSize: 3 });
-    render(<MaterializeView target={TARGET} title="T" options={{ depth: 10, maxFacts: 500, crossKb: false, unpin: false }} onOptionsChange={() => {}} onBack={() => {}} api={hi.api} />);
+    render(<MaterializeView target={TARGET} title="T" options={{ depth: 10, references: 499, crossKb: false, unpin: false }} onOptionsChange={() => {}} onBack={() => {}} api={hi.api} />);
     await waitFor(() => expect(ns().length).toBeGreaterThan(0));
     expect(screen.getByLabelText('Raise Max depth')).toBeDisabled();
-    expect(screen.getByLabelText('Raise Max facts')).toBeDisabled();
+    expect(screen.getByLabelText('Raise References')).toBeDisabled();
     expect(screen.getByLabelText('Lower Max depth')).not.toBeDisabled();
   });
 
-  it('a step from 480 facts lands on 500, not 530; a step from 5 lands on 1, not -45', async () => {
+  it('a step from 480 references lands on 499, not 530; a step from 5 lands on 0, not -45', async () => {
     const f = makeFixtureApi({ total: 3, pageSize: 3 });
-    const { unmount } = render(<Harness api={f.api} initial={{ ...DEFAULT_OPTIONS, maxFacts: 480 }} />);
+    const { unmount } = render(<Harness api={f.api} initial={{ ...DEFAULT_OPTIONS, references: 480 }} />);
     await waitFor(() => expect(ns()).toHaveLength(3));
-    fireEvent.click(screen.getByLabelText('Raise Max facts'));
-    await waitFor(() => expect(callOpts(f).at(-1)?.maxFacts).toBe(500));
+    fireEvent.click(screen.getByLabelText('Raise References'));
+    await waitFor(() => expect(callOpts(f).at(-1)?.references).toBe(499));
     unmount();
     const g = makeFixtureApi({ total: 3, pageSize: 3 });
-    render(<Harness api={g.api} initial={{ ...DEFAULT_OPTIONS, maxFacts: 5 }} />);
+    render(<Harness api={g.api} initial={{ ...DEFAULT_OPTIONS, references: 5 }} />);
     await waitFor(() => expect(ns()).toHaveLength(3));
-    fireEvent.click(screen.getByLabelText('Lower Max facts'));
-    await waitFor(() => expect(callOpts(g).at(-1)?.maxFacts).toBe(1));
+    fireEvent.click(screen.getByLabelText('Lower References'));
+    await waitFor(() => expect(callOpts(g).at(-1)?.references).toBe(0));
+  });
+
+  it('the default request is unchanged and 0 references is just the fact: max_nodes 200 by default, 1 at 0, 500 at 499', async () => {
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(f.pageCalls()[0].options.references + 1).toBe(200);
+    expect(await typeIn('mat-refs', '0')).toBe('0');
+    await waitFor(() => expect(ns()).toEqual([1]));
+    expect(screen.getByTestId('mat-progress')).toHaveTextContent('0 of ≤0 references');
   });
 });
 

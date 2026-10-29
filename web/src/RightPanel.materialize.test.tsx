@@ -86,11 +86,11 @@ describe('the Materialize action in the fact header', () => {
   });
 
   it('opens straight into the view, with its options, from a shared URL', async () => {
-    window.history.replaceState(null, '', '/?materialize=1&mat_depth=7&mat_facts=120');
+    window.history.replaceState(null, '', '/?materialize=1&mat_depth=7&mat_refs=120');
     render(<RightPanel state={state} dispatch={vi.fn()} />);
     expect(await screen.findByTestId('materialize-view')).toBeInTheDocument();
     expect((screen.getByTestId('mat-depth') as HTMLInputElement).value).toBe('7');
-    expect((screen.getByTestId('mat-facts') as HTMLInputElement).value).toBe('120');
+    expect((screen.getByTestId('mat-refs') as HTMLInputElement).value).toBe('120');
   });
 
   const focusOn = () => document.documentElement.dataset.matFocus === '1';

@@ -19,7 +19,7 @@ describe('pages calls', () => {
     const f = stubFetch(() => new Response(JSON.stringify(page)));
     await materializeApi.page(T, DEFAULT_OPTIONS, null);
     await materializeApi.page(T, { ...DEFAULT_OPTIONS, depth: 7, unpin: true }, null); // a restart
-    await materializeApi.page(T, { ...DEFAULT_OPTIONS, maxFacts: 400 }, null); // a count raise
+    await materializeApi.page(T, { ...DEFAULT_OPTIONS, references: 399 }, null); // a count raise
     expect(PAGE_LIMIT).toBe(5);
     for (let i = 0; i < 3; i++) {
       const u = urlOf(f, i);
@@ -29,7 +29,16 @@ describe('pages calls', () => {
       expect(u.searchParams.has('depth')).toBe(true);
     }
     expect(urlOf(f, 1).searchParams.get('depth')).toBe('7');
-    expect(urlOf(f, 2).searchParams.get('max_nodes')).toBe('400');
+    expect(urlOf(f, 2).searchParams.get('max_nodes')).toBe('400');   // references + 1: the root counts on the server
+    expect(urlOf(f, 0).searchParams.get('max_nodes')).toBe('200');   // the default request is unchanged (199 references)
+  });
+
+  it('sends max_nodes = references + 1 at both ends: 0 -> 1, 499 -> 500', async () => {
+    const f = stubFetch(() => new Response(JSON.stringify(page)));
+    await materializeApi.page(T, { ...DEFAULT_OPTIONS, references: 0 }, null);
+    await materializeApi.page(T, { ...DEFAULT_OPTIONS, references: 499 }, null);
+    expect(urlOf(f, 0).searchParams.get('max_nodes')).toBe('1');
+    expect(urlOf(f, 1).searchParams.get('max_nodes')).toBe('500');
   });
 
   it('a CURSOR call sends only the cursor: no limit, no options (the server refuses them with a 400)', async () => {

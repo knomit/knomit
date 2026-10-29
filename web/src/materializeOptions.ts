@@ -1,14 +1,14 @@
 // Materialize options: clamping, the URL they live in, the export filename,
 // and what a change of options means for a stream already being read.
 
-import { DEFAULT_OPTIONS, MAX_DEPTH, MAX_FACTS } from './materializeApi';
+import { DEFAULT_OPTIONS, MAX_DEPTH, MAX_REFERENCES } from './materializeApi';
 import type { MatOptions } from './materializeApi';
 
 export function clampDepth(n: number): number {
   return Number.isFinite(n) ? Math.min(MAX_DEPTH, Math.max(0, Math.trunc(n))) : DEFAULT_OPTIONS.depth;
 }
-export function clampFacts(n: number): number {
-  return Number.isFinite(n) ? Math.min(MAX_FACTS, Math.max(1, Math.trunc(n))) : DEFAULT_OPTIONS.maxFacts;
+export function clampReferences(n: number): number {
+  return Number.isFinite(n) ? Math.min(MAX_REFERENCES, Math.max(0, Math.trunc(n))) : DEFAULT_OPTIONS.references;
 }
 
 // The options live in the page's query string so a view can be shared. They are
@@ -17,7 +17,7 @@ export function clampFacts(n: number): number {
 // URL stays short. `materialize=1` says the view is open.
 const P_OPEN = 'materialize';
 const P_DEPTH = 'mat_depth';
-const P_FACTS = 'mat_facts';
+const P_REFS = 'mat_refs';
 const P_XKB = 'mat_cross_kb';
 const P_UNPIN = 'mat_unpin';
 
@@ -33,7 +33,7 @@ export function parseMaterializeParams(search: string): MatUrlState {
     open: p.get(P_OPEN) === '1',
     options: {
       depth: num(P_DEPTH, DEFAULT_OPTIONS.depth, clampDepth),
-      maxFacts: num(P_FACTS, DEFAULT_OPTIONS.maxFacts, clampFacts),
+      references: num(P_REFS, DEFAULT_OPTIONS.references, clampReferences),
       crossKb: p.get(P_XKB) === '1',
       unpin: p.get(P_UNPIN) === '1',
     },
@@ -44,11 +44,11 @@ export function parseMaterializeParams(search: string): MatUrlState {
  *  keeping every parameter that is not ours. */
 export function writeMaterializeParams(search: string, s: MatUrlState): string {
   const p = new URLSearchParams(search);
-  for (const k of [P_OPEN, P_DEPTH, P_FACTS, P_XKB, P_UNPIN]) p.delete(k);
+  for (const k of [P_OPEN, P_DEPTH, P_REFS, P_XKB, P_UNPIN]) p.delete(k);
   if (s.open) {
     p.set(P_OPEN, '1');
     if (s.options.depth !== DEFAULT_OPTIONS.depth) p.set(P_DEPTH, String(s.options.depth));
-    if (s.options.maxFacts !== DEFAULT_OPTIONS.maxFacts) p.set(P_FACTS, String(s.options.maxFacts));
+    if (s.options.references !== DEFAULT_OPTIONS.references) p.set(P_REFS, String(s.options.references));
     if (s.options.crossKb) p.set(P_XKB, '1');
     if (s.options.unpin) p.set(P_UNPIN, '1');
   }
@@ -57,7 +57,7 @@ export function writeMaterializeParams(search: string, s: MatUrlState): string {
 }
 
 export function sameOptions(a: MatOptions, b: MatOptions): boolean {
-  return a.depth === b.depth && a.maxFacts === b.maxFacts && a.crossKb === b.crossKb && a.unpin === b.unpin;
+  return a.depth === b.depth && a.references === b.references && a.crossKb === b.crossKb && a.unpin === b.unpin;
 }
 
 /** How a change of options meets a stream being read.
@@ -68,7 +68,7 @@ export function sameOptions(a: MatOptions, b: MatOptions): boolean {
  *    every other argument). That includes LOWERING the count. */
 export function optionChange(prev: MatOptions, next: MatOptions): 'same' | 'continue' | 'restart' {
   if (sameOptions(prev, next)) return 'same';
-  if (next.maxFacts > prev.maxFacts && prev.depth === next.depth && prev.crossKb === next.crossKb && prev.unpin === next.unpin) return 'continue';
+  if (next.references > prev.references && prev.depth === next.depth && prev.crossKb === next.crossKb && prev.unpin === next.unpin) return 'continue';
   return 'restart';
 }
 
