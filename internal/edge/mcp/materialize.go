@@ -77,7 +77,17 @@ func materializeTool() mcpgo.Tool {
 			mcpgo.Description("The `cursor` from the previous page. With it, every other argument except `binding` and `limit` is refused: the document was fixed by the first call."),
 		),
 		mcpgo.WithNumber("limit",
-			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. The first call's limit is kept for every later page of its cursor; passing limit with cursor changes it for that page only. A page also stops before it would exceed the transport's size cap."),
+			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. The first call's limit is kept for every later page of its cursor; passing limit with cursor changes it for that page only (not for a book cursor, whose page size is fixed). A page also stops before it would exceed the transport's size cap."),
+		),
+		mcpgo.WithObject("search",
+			mcpgo.Description("BOOK MODE, instead of `file`: materialize a SEARCH as a book. The search runs on the server (the same filters as knomit_query and the UI's results list; sort relevance or recent) and every result, up to `facts`, becomes one unit: that result's own materialization under `depth` and `max_nodes`, in search order. A fact is written once in the book (a search result in its own unit, any other repeated fact where its walk reaches the most sections); every other appearance is a heading-only node with a `link` (unit, number, anchor, forward or back). Each node carries `unit`, `number` (\"5\", \"5.1.2\") and `tree_depth`; each page carries `title`, `search_line` and `units`. Human pages only (audience omitted or \"human\"), byte-identical to the REST GET …/search/book pages. Page with `cursor`; add `unit` to continue from another unit."),
+			mcpgo.Properties(bookSearchKeys),
+		),
+		mcpgo.WithNumber("facts",
+			mcpgo.Description("Book mode: the most search results (units), 1 to 500. Default: every result, up to 500. Fewer keeps the best matches."),
+		),
+		mcpgo.WithNumber("unit",
+			mcpgo.Description("Book mode, with `cursor` only: continue from this unit's first section (1 to the book's `units`), forward or back."),
 		),
 	)
 }
@@ -103,7 +113,25 @@ func MaterializeHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallTool
 		defer releaseWrite()
 
 		if cursor := req.GetString("cursor", ""); cursor != "" {
+			book, err := materialize.IsBookCursor(ctx, materializeScope(ctx, b, sWrite), cursor)
+			if err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			if book {
+				return materializeBookResume(ctx, req, b, mgr, sWrite, cursor)
+			}
+			if _, ok := req.GetArguments()["unit"]; ok {
+				return mcpgo.NewToolResultError("unit is for a book cursor only"), nil
+			}
 			return materializeResume(ctx, req, b, mgr, sWrite, cursor)
+		}
+		if isBookFirst(req) {
+			return materializeBookFirst(ctx, req, b, mgr, sWrite)
+		}
+		for _, k := range append(bookOnlyArgs, "unit") {
+			if _, ok := req.GetArguments()[k]; ok {
+				return mcpgo.NewToolResultError(k + " is for book mode only: pass `search` instead of `file`"), nil
+			}
 		}
 		return materializeFirst(ctx, req, b, mgr, sWrite)
 	}
