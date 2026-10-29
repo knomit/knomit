@@ -246,6 +246,7 @@ describe('changing options mid-read', () => {
     expect(screen.getByTestId('mat-limit')).toHaveTextContent('Stopped at your limit of 6 facts · 6 more not written');
     const before = screen.getAllByTestId('mat-section')[0];
 
+    expect(screen.getByTestId('mat-raise')).toHaveTextContent('Show up to 12');
     fireEvent.click(screen.getByTestId('mat-raise'));
     await waitFor(() => expect(ns().length).toBeGreaterThan(6));
     expect(screen.getAllByTestId('mat-section')[0]).toBe(before);       // same DOM node: continued, not replaced

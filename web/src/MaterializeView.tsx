@@ -394,7 +394,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
                     <span>Stopped at your limit of {options.maxFacts} facts · {trunc.nodes} more not written.</span>
                     {options.maxFacts < MAX_FACTS
                       ? <button type="button" className="k-mat-btn" data-testid="mat-raise"
-                          onClick={() => change({ ...options, maxFacts: raiseTo })}>Raise to {raiseTo} and continue</button>
+                          onClick={() => change({ ...options, maxFacts: raiseTo })}>Show up to {raiseTo}</button>
                       : <span>That is the most a read can hold.</span>}
                   </div>
                 )}
