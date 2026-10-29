@@ -43,7 +43,7 @@ function Harness({ api }: { api: MaterializeApi }) {
   return <MaterializeView target={TARGET} title="T" options={options} api={api} onOptionsChange={setOptions} onBack={() => {}} />;
 }
 
-describe('reviewer race probes', () => {
+describe('stream races', () => {
   it('a page of the OLD walk that lands after an option change is never appended (signal ignored by the server)', async () => {
     const held: Array<{ resolve: (p: MatPage) => void; depth: number; cursor: string | null }> = [];
     const api: MaterializeApi = {
@@ -143,7 +143,7 @@ describe('reviewer race probes', () => {
     act(() => result.current.loadMore());                       // new walk's page 2 in flight
     await waitFor(() => expect(held).toHaveLength(3));
     await act(async () => { held[0].resolve(mk('a', 4, 6, 'ca')); });   // the OLD page lands late
-    act(() => result.current.loadMore());                       // must still see a load in flight
+    act(() => result.current.retry());                          // must still see a load in flight (retry does not check tail)
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(held).toHaveLength(3);
   });
