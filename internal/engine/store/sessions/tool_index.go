@@ -22,6 +22,8 @@ import (
 // DB handle to reach for by mistake.
 type ToolIndex struct {
 	db *sql.DB
+	// waits records the book writes' lock waits (book_index.go).
+	waits bookLockWaits
 }
 
 // CreateToolSession creates a new tool session for the given tool, branch, path

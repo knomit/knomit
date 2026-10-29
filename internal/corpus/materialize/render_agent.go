@@ -68,7 +68,18 @@ func RenderAgentNode(n Node) string {
 	if n.Section != "" {
 		fmt.Fprintf(&sb, "\n## %s\n", n.Section)
 	}
-	fmt.Fprintf(&sb, "\n<a id=\"%s\"></a>\n### %s\n", n.AnchorID, n.Title)
+	sb.WriteString(renderNodeBlock(n, "### "+n.Title))
+	return sb.String()
+}
+
+// renderNodeBlock is one node's anchor, heading (none when heading is ""),
+// meta line, body, links, omissions and sources.
+func renderNodeBlock(n Node, heading string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\n<a id=\"%s\"></a>\n", n.AnchorID)
+	if heading != "" {
+		sb.WriteString(heading + "\n")
+	}
 	meta := []string{"`" + shortID(relOf(n.Path)) + "`"}
 	if n.Date != "" {
 		meta = append(meta, n.Date)

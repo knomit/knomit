@@ -225,6 +225,8 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 type unitWalk struct {
 	doc    *Document
 	parent []int
+	// blobs[i] is node i's blob hash ("" when read through the blob fallback).
+	blobs []string
 }
 
 // walkUnit runs one materialization's walk on r: metadata and edges only,
@@ -264,7 +266,11 @@ func walkUnit(ctx context.Context, r *reader, req Request) (*unitWalk, error) {
 			parent[i] = pos[n.parent]
 		}
 	}
-	return &unitWalk{doc: doc, parent: parent}, nil
+	blobs := make([]string, len(order))
+	for i, n := range order {
+		blobs[i] = n.blob
+	}
+	return &unitWalk{doc: doc, parent: parent, blobs: blobs}, nil
 }
 
 // root resolves the requested fact to its mount and reads it at its version

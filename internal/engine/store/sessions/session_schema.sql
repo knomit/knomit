@@ -42,6 +42,45 @@ CREATE TABLE tool_queue (
 );
 
 CREATE INDEX tool_queue_session_sort ON tool_queue(session_id, sort_key);
+
+-- Book cursors (materialize a search as a book). A book is a tool_sessions
+-- row (tool 'materialize-book:<limit>', owner = endpoint + principal) plus
+-- its frozen structure here, on disk: every appearance of every fact in book
+-- order, with its unit, section number and which appearance is written.
+-- Bodies are never stored; a page reads them at each row's frozen commit.
+-- Both tables cascade from tool_sessions, so the idle reaper and the
+-- one-book-per-owner replacement delete a book in one statement.
+CREATE TABLE book_sessions (
+    session_id TEXT PRIMARY KEY REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    env        TEXT NOT NULL,              -- JSON envelope (title, search, options, counts)
+    units      INTEGER NOT NULL DEFAULT 0,
+    rows       INTEGER NOT NULL DEFAULT 0,
+    next_seq   INTEGER NOT NULL DEFAULT 1, -- the cursor: the row the next page starts at
+    ready      INTEGER NOT NULL DEFAULT 0  -- 1 once the structure is complete and placed
+);
+
+CREATE TABLE book_rows (
+    session_id TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    seq        INTEGER NOT NULL,           -- book order, 1..rows
+    unit       INTEGER NOT NULL,           -- 1..units (= the result's position)
+    n          INTEGER NOT NULL,           -- ordinal inside the unit's own walk
+    path       TEXT NOT NULL,              -- wire path: same path = same fact
+    room       INTEGER NOT NULL,           -- sections in this appearance's walk subtree
+    result     INTEGER NOT NULL DEFAULT 0, -- 1 for a unit root (a search result)
+    written    INTEGER NOT NULL DEFAULT 0, -- 1 for the one appearance that carries the body
+    number     TEXT NOT NULL,              -- "5", "5.1.2"; "" for a frame ancestor
+    tree_depth INTEGER NOT NULL,
+    title      TEXT NOT NULL,
+    short_id   TEXT NOT NULL,              -- the fact's id8
+    anchor     TEXT NOT NULL,              -- this appearance's in-document anchor
+    commit_hash TEXT NOT NULL,
+    blob       TEXT NOT NULL DEFAULT '',
+    state      TEXT NOT NULL,              -- JSON node without body
+    PRIMARY KEY (session_id, seq)
+);
+
+CREATE INDEX book_rows_unit ON book_rows(session_id, unit, n);
+CREATE INDEX book_rows_path ON book_rows(session_id, path, written);
 CREATE INDEX tool_sessions_last_used ON tool_sessions(last_used_at);
 
 -- Pipeline work-stealing sessions (review/distill/reflect/hypothesize).
