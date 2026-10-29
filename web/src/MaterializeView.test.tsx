@@ -8,6 +8,7 @@ import { useMaterializeStream } from './useMaterializeStream';
 import { fixtureId, makeFixtureApi } from './materializeFixture';
 import type { FixtureOptions } from './materializeFixture';
 import { DEFAULT_OPTIONS, MatError } from './materializeApi';
+import { writeMaterializeParams } from './materializeOptions';
 import type { MaterializeApi, MatNode, MatOptions, MatPage } from './materializeApi';
 import type { SaveOutcome } from './saveFile';
 
@@ -508,7 +509,7 @@ describe('polish: labels, numbering, bar', () => {
     setup({ total: 3, pageSize: 3 });
     await waitFor(() => expect(ns()).toHaveLength(3));
     expect(document.body.textContent).not.toMatch(/MATERIALIZED/i);
-    for (const [id, label] of [['mat-export', 'Export'], ['mat-focus', 'Focus']]) {
+    for (const [id, label] of [['mat-export', 'Export'], ['mat-focus', 'Exit focus']]) {  // focus is ON when the view opens
       const b = screen.getByTestId(id);
       expect(b.textContent).toBe('');                    // no text, only the glyph
       expect(b.querySelector('svg')).not.toBeNull();
@@ -650,66 +651,117 @@ describe('focus mode', () => {
   const on = () => document.documentElement.dataset.matFocus === '1';
   afterEach(() => { delete document.documentElement.dataset.matFocus; });
 
-  it('is off by default, and the toggle hides the shell regions (data-mat-focus on <html>) and shows them again', async () => {
+  it('opens IN focus (the shell\'s regions are hidden by data-mat-focus on <html>); the toggle leaves and re-enters it', async () => {
     setup({ total: 3, pageSize: 3 });
     await waitFor(() => expect(ns()).toHaveLength(3));
     const t = screen.getByTestId('mat-focus');
-    expect(on()).toBe(false);
-    expect(t).toHaveAttribute('aria-pressed', 'false');
-    expect(t).toHaveAttribute('aria-label', 'Focus');
-    fireEvent.click(t);
     expect(on()).toBe(true);
     expect(t).toHaveAttribute('aria-pressed', 'true');
     expect(t).toHaveAttribute('aria-label', 'Exit focus');
     expect(t).toHaveAttribute('title', 'Exit focus');
     fireEvent.click(t);
     expect(on()).toBe(false);
+    expect(t).toHaveAttribute('aria-pressed', 'false');
+    expect(t).toHaveAttribute('aria-label', 'Focus');
+    fireEvent.click(t);
+    expect(on()).toBe(true);
   });
 
-  it('Esc leaves focus; Esc with focus off does nothing', async () => {
+  it('with focus OFF nothing is hidden: no attribute on <html>, and no inline style or class is put on the shell', async () => {
     setup({ total: 3, pageSize: 3 });
     await waitFor(() => expect(ns()).toHaveLength(3));
-    fireEvent.keyDown(window, { key: 'Escape' });
-    expect(on()).toBe(false);
     fireEvent.click(screen.getByTestId('mat-focus'));
-    expect(on()).toBe(true);
-    fireEvent.keyDown(window, { key: 'Escape' });
     expect(on()).toBe(false);
-    expect(screen.getByTestId('mat-focus')).toHaveAttribute('aria-pressed', 'false');
+    expect(document.documentElement.getAttribute('data-mat-focus')).toBeNull();
+    expect(document.documentElement.getAttribute('style')).toBeNull();
+    expect(document.body.getAttribute('style')).toBeNull();
+    // the hiding is only ever the stylesheet's rule keyed on that attribute
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    for (const line of css.split('\n').filter(l => /\.k-rail|library|browse-toolbar|facet-tabs/.test(l) && !l.startsWith('/*') && !l.startsWith(' '))) {
+      expect(line.startsWith('html[data-mat-focus]'), line).toBe(true);
+    }
   });
 
-  it('Esc in focus is kept from the shell\'s own Escape handler (which would clear the filters and close the fact)', async () => {
+  it('Esc OUTSIDE a field exits Focus; with focus already off the shell gets Esc back', async () => {
     const shellEsc = vi.fn();
     const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
     window.addEventListener('keydown', shell); // registered BEFORE the view's, as the app's is
     try {
       setup({ total: 3, pageSize: 3 });
       await waitFor(() => expect(ns()).toHaveLength(3));
-      fireEvent.click(screen.getByTestId('mat-focus'));
+      expect(on()).toBe(true);
+      (document.activeElement as HTMLElement | null)?.blur();
       fireEvent.keyDown(window, { key: 'Escape' });
       expect(on()).toBe(false);
-      expect(shellEsc).not.toHaveBeenCalled();
-      fireEvent.keyDown(window, { key: 'Escape' }); // focus is off: the shell has it again
+      expect(shellEsc).not.toHaveBeenCalled();          // the fact is never closed by it
+      expect(screen.getByTestId('materialize-view')).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: 'Escape' });      // focus is off: the shell has it again
       expect(shellEsc).toHaveBeenCalledTimes(1);
     } finally {
       window.removeEventListener('keydown', shell);
     }
   });
 
-  it('Back leaves focus, and so does leaving the view', async () => {
+  it('Esc INSIDE a text/number field (Max depth, Max facts) or any input only leaves the field and keeps Focus', async () => {
+    const shellEsc = vi.fn();
+    const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
+    window.addEventListener('keydown', shell);
+    try {
+      setup({ total: 3, pageSize: 3 });
+      await waitFor(() => expect(ns()).toHaveLength(3));
+      for (const id of ['mat-depth', 'mat-facts', 'mat-unpin']) {
+        const input = screen.getByTestId(id) as HTMLInputElement;
+        input.focus();
+        expect(document.activeElement).toBe(input);
+        fireEvent.keyDown(input, { key: 'Escape' });
+        expect(document.activeElement).not.toBe(input);   // left the field
+        expect(on()).toBe(true);                          // Focus kept
+      }
+      expect(shellEsc).not.toHaveBeenCalled();             // and the shell never saw it
+      // the next Esc, now outside any field, exits
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(on()).toBe(false);
+    } finally {
+      window.removeEventListener('keydown', shell);
+    }
+  });
+
+  it('Back leaves the view and restores everything, from Focus ON and from Focus OFF', async () => {
     const onBack = vi.fn();
     const f = makeFixtureApi({ total: 3, pageSize: 3 });
     const { unmount } = render(<MaterializeView target={TARGET} title="T" options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={onBack} api={f.api} />);
     await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(on()).toBe(true);
+    fireEvent.click(screen.getByTestId('mat-back'));      // from Focus on
+    expect(on()).toBe(false);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('mat-focus'));      // back in
+    fireEvent.click(screen.getByTestId('mat-focus'));      // and out again: focus off
+    expect(on()).toBe(false);
+    fireEvent.click(screen.getByTestId('mat-back'));      // from Focus off
+    expect(on()).toBe(false);
+    expect(onBack).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByTestId('mat-focus'));
     expect(on()).toBe(true);
-    fireEvent.click(screen.getByTestId('mat-back'));
+    unmount();                                              // leaving the view, however it happens
     expect(on()).toBe(false);
-    expect(onBack).toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('mat-focus'));
-    expect(on()).toBe(true);
-    unmount();
-    expect(on()).toBe(false);
+  });
+
+  it('the Focus glyph sits to the LEFT of the Export glyph, together in the bar\'s action group', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const focus = screen.getByTestId('mat-focus');
+    const exp = screen.getByTestId('mat-export');
+    const group = screen.getByTestId('mat-actions');
+    expect(focus.parentElement).toBe(group);
+    expect(exp.parentElement).toBe(group);
+    expect(focus.compareDocumentPosition(exp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect([...group.children].map(c => c.getAttribute('data-testid'))).toEqual(['mat-focus', 'mat-export']);
+  });
+
+  it('Focus is not part of the URL options (a reading preference, not what is materialized)', () => {
+    const search = writeMaterializeParams('', { open: true, options: DEFAULT_OPTIONS });
+    expect(search).not.toMatch(/focus/i);
   });
 
   it('the stylesheet hides exactly the Browse/Activity/Settings tabs, the rail, the library column with its splitter, and the browse toolbar under that attribute (the brand and gear stay), and the shell carries those hooks', () => {

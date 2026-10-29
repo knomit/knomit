@@ -206,21 +206,30 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   const rootTitle = s.env?.root_title || title;
   const nums = useMemo(() => numberSections(s.sections), [s.sections]);
 
-  // Focus: hide the app shell's rail, library column and browse toolbar (CSS
-  // keyed on this attribute, see materialize.css) so only the article and its
-  // own bar remain. Off by default, not remembered; Esc, the toggle and Back
-  // all end it, and so does leaving the view.
-  const [focus, setFocus] = useState(false);
+  // Focus: opening Materialize takes over the screen. The app shell's rail,
+  // library column, browse toolbar and facet tabs are hidden (CSS keyed on this
+  // attribute, see materialize.css); the app's top bar and the article's own bar
+  // remain. ON by default; with it off NOTHING is hidden and the view only
+  // replaces the right-hand panel. Not remembered and not in the URL (it is how
+  // the reader chooses to read, not what is materialized). The toggle, Esc and
+  // Back end it; Back and leaving the view also restore everything.
+  const [focus, setFocus] = useState(true);
   useEffect(() => {
     if (!focus) return;
     const root = document.documentElement;
     root.dataset.matFocus = '1';
-    // Esc ends focus and NOTHING ELSE: the shell's own Escape (clear the filters,
-    // which closes the open fact) must not also run, so this listens first, in
-    // the capture phase, and keeps the key to itself.
+    // Esc never reaches the shell while focus is on (its Escape clears the filters,
+    // which would close the open fact and this view), so this listens first, in
+    // the capture phase, and keeps the key to itself. In a text/number field or any
+    // input it only leaves the field; anywhere else it exits Focus.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopImmediatePropagation();
+      const a = document.activeElement as HTMLElement | null;
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)) {
+        a.blur();
+        return;
+      }
       setFocus(false);
     };
     window.addEventListener('keydown', onKey, true);
@@ -363,10 +372,22 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
             <ChevronLeftIcon color="currentColor" size={13} /> Fact
           </button>
           <span className="k-mat-title" data-testid="mat-title" title={rootTitle}>{rootTitle}</span>
+          {/* The two actions on the materialization sit together: Focus, then Export. */}
+          <span className="k-mat-actions" data-testid="mat-actions">
           <button type="button" className="k-bare k-mat-icon" data-testid="mat-focus" aria-pressed={focus} onClick={() => setFocus(f => !f)}
             title={focus ? 'Exit focus' : 'Focus'} aria-label={focus ? 'Exit focus' : 'Focus'}>
             <FocusIcon color="currentColor" size={15} />
           </button>
+          {/* Busy is the app's own spinning arc (as the search box shows it), in place
+              of the glyph; the tooltip carries the bytes so far, and a second click cancels. */}
+          <button type="button" className="k-bare k-mat-icon" data-testid="mat-export" onClick={runExport} data-busy={exporting ? 'true' : 'false'}
+            title={exporting ? (exp.bytes > 0 ? `Cancel export (${Math.max(1, Math.round(exp.bytes / 1024))} KB so far)` : 'Cancel export') : 'Export'}
+            aria-label={exporting ? 'Cancel export' : 'Export'}>
+            {exporting
+              ? <svg className="icon-spin" data-testid="mat-export-spinner" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              : <DownloadIcon color="currentColor" size={15} />}
+          </button>
+          </span>
         </div>
         <div className="k-mat-row">
           <div className="k-mat-controls">
@@ -377,16 +398,6 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
             <Switch label="Cross-KB" checked={options.crossKb} testid="mat-cross-kb" onChange={v => change({ ...options, crossKb: v })} />
             <Switch label="Unpin" checked={options.unpin} testid="mat-unpin" onChange={v => change({ ...options, unpin: v })} />
           </div>
-          <span style={{ flex: 1 }} />
-          {/* Busy is the app's own spinning arc (as the search box shows it), in place
-              of the glyph; the tooltip carries the bytes so far, and a second click cancels. */}
-          <button type="button" className="k-bare k-mat-icon" data-testid="mat-export" onClick={runExport} data-busy={exporting ? 'true' : 'false'}
-            title={exporting ? (exp.bytes > 0 ? `Cancel export (${Math.max(1, Math.round(exp.bytes / 1024))} KB so far)` : 'Cancel export') : 'Export'}
-            aria-label={exporting ? 'Cancel export' : 'Export'}>
-            {exporting
-              ? <svg className="icon-spin" data-testid="mat-export-spinner" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              : <DownloadIcon color="currentColor" size={15} />}
-          </button>
         </div>
         <div className="k-mat-meta2">
           <span>{id8(target.path)}</span>

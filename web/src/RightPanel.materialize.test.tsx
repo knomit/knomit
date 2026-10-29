@@ -83,4 +83,39 @@ describe('the Materialize action in the fact header', () => {
     expect((screen.getByTestId('mat-depth') as HTMLInputElement).value).toBe('7');
     expect((screen.getByTestId('mat-facts') as HTMLInputElement).value).toBe('120');
   });
+
+  const focusOn = () => document.documentElement.dataset.matFocus === '1';
+
+  it('opens in Focus; Back restores everything and shows the fact again', async () => {
+    render(<RightPanel state={state} dispatch={vi.fn()} />);
+    expect(focusOn()).toBe(false);
+    fireEvent.click(await screen.findByTestId('materialize-btn'));
+    await screen.findByTestId('materialize-view');
+    expect(focusOn()).toBe(true);
+    fireEvent.click(screen.getByTestId('mat-back'));
+    expect(await screen.findByTestId('retract-btn')).toBeInTheDocument();
+    expect(focusOn()).toBe(false);
+  });
+
+  it('with Focus OFF nothing is hidden, the view still replaces only the fact view, and Back restores it', async () => {
+    render(<RightPanel state={state} dispatch={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('materialize-btn'));
+    await screen.findByTestId('materialize-view');
+    fireEvent.click(screen.getByTestId('mat-focus'));
+    expect(focusOn()).toBe(false);
+    expect(screen.queryByTestId('retract-btn')).toBeNull();    // the right-hand panel is what is replaced
+    fireEvent.click(screen.getByTestId('mat-back'));
+    expect(await screen.findByTestId('retract-btn')).toBeInTheDocument();
+    expect(focusOn()).toBe(false);
+  });
+
+  it('Esc in Focus never closes the fact or the view', async () => {
+    render(<RightPanel state={state} dispatch={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('materialize-btn'));
+    await screen.findByTestId('materialize-view');
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(focusOn()).toBe(false);
+    expect(screen.getByTestId('materialize-view')).toBeInTheDocument();
+  });
 });
