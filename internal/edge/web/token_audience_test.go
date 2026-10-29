@@ -160,6 +160,10 @@ func TestOAuthLensPatch_LensTokenCannotAddARepoItDoesNotReach(t *testing.T) {
 	}
 	asUnknown(patch(h, "/api/v1/lenses/eng", fmt.Sprintf(`{"write":{"uid":%q}}`, uid("gamma"))), "gamma")
 	asUnknown(patch(h, "/api/v1/lenses/eng", fmt.Sprintf(`{"reads":[{"uid":%q,"branch":"main"}]}`, uid("gamma"))), "gamma")
+	// And not in one combined PATCH either: move the write to gamma AND
+	// re-send the old write repo alpha as a read (every read pair kept).
+	asUnknown(patch(h, "/api/v1/lenses/eng", fmt.Sprintf(`{"write":{"uid":%q},"reads":[{"uid":%q},{"uid":%q}]}`,
+		uid("gamma"), uid("alpha"), uid("gamma"))), "gamma")
 	l, _, err := m.LensRegistry().Get("eng")
 	require.NoError(t, err)
 	require.Equal(t, uid("alpha"), l.WriteUID, "the write repo did not move")
@@ -331,5 +335,64 @@ func TestEveryAuthEdgeRecordsALensReach(t *testing.T) {
 	ctx := mcpHTTPContext(context.Background(), r)
 	if !auth.ReachesLens(ctx, "eng") || auth.ReachesLens(ctx, "ops") {
 		t.Fatal("the request's lens reach must be copied, unchanged")
+	}
+}
+
+// User ruling on review N1 (2026-10-29): a token whose audience is any path
+// the router serves as the unscoped MCP endpoint (/api/v1/mcp, and every path
+// under it) reaches the whole API, like the exact /api/v1/mcp audience. Its
+// knomit_repos lists every repo and lens, and knomit_bind still binds.
+//
+// Sabotage: special-case only the exact /api/v1/mcp in IsUnscopedMCP and this
+// token lists nothing while bind still serves beta.
+func TestOAuthMCP_UnscopedSuffixTokenReachesTheWholeAPI(t *testing.T) {
+	f, _ := newAudienceLensFixture(t)
+	const mount = "/api/v1/mcp/claude"
+	tok := f.mint(t, "suffix", testIssuer+mount, []string{"read"}, auth.Read)
+	h := withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
+
+	gotRepos, gotLenses, raw := reposCatalogue(t, h, mount)
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, gotRepos, raw)
+	require.Equal(t, []string{"eng"}, gotLenses, raw)
+
+	_, sid := rpcAt(t, h, mount, "", initBody)
+	text, isErr := callToolAt(t, h, mount, sid, "knomit_bind", `{"repo":"beta"}`)
+	require.False(t, isErr, "bind on the unscoped endpoint: %s", text)
+	require.Contains(t, text, `"name": "beta"`)
+}
+
+// The N1 widening is the unscoped endpoint's ONLY: a scoped endpoint's
+// audience (one repo's or one lens's MCP URL, which also ends in /mcp) and a
+// path that merely starts with the same letters reach exactly what they did.
+//
+// Sabotage: make IsUnscopedMCP match any path containing "/mcp" (or drop its
+// "/" boundary) and a scoped or look-alike audience widens to everything.
+func TestUnscopedMCPReach_DoesNotWidenAScopedAudience(t *testing.T) {
+	reach := func(audience string) string {
+		out := ""
+		for _, repo := range []string{"alpha", "beta"} {
+			if tokenRepoReach(audience)(repo) {
+				out += repo[:1]
+			}
+		}
+		for _, lens := range []string{"eng", "ops"} {
+			if tokenLensReach(audience)(lens) {
+				out += lens[:1]
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct{ audience, want string }{
+		{"/api/v1/mcp", "abeo"},
+		{"/api/v1/mcp/claude", "abeo"},
+		{"/api/v1/mcp/a/b", "abeo"},
+		{alphaMCP, "a"},
+		{alphaMCP + "/x", "a"},
+		{"/api/v1/lenses/eng/mcp", "e"},
+		{"/api/v1/lenses/eng/mcp/x", "e"},
+		{"/api/v1/mcpx", ""},
+		{"/api/v1/mcp-other/x", ""},
+	} {
+		require.Equal(t, tc.want, reach(tc.audience), "audience %s", tc.audience)
 	}
 }

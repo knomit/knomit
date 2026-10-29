@@ -76,7 +76,9 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 //     reaches that repo;
 //   - a token for one repo's endpoint (/api/v1/repos/<name>/...) reaches that
 //     repo and no other;
-//   - a token for the UNSCOPED MCP endpoint (/api/v1/mcp) reaches every repo:
+//   - a token for the UNSCOPED MCP endpoint (/api/v1/mcp, or any path under
+//     it: httpx.IsUnscopedMCP, the set the router serves unscoped) reaches
+//     every repo:
 //     its client binds a repo or lens after the token is issued, and that
 //     endpoint may bind any of them (decisions/mcp/session-binding/
 //     scoped-endpoint-bind 3408dd94; the scoped endpoints are the confined
@@ -85,7 +87,7 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 //     repo by name; a lens binding's own mounts are readable through the
 //     binding, not through this.
 func tokenRepoReach(audience string) func(repo string) bool {
-	if audience == httpx.APIBase+"/mcp" {
+	if httpx.IsUnscopedMCP(audience) {
 		return auth.AllRepos
 	}
 	return func(repo string) bool {
@@ -100,7 +102,7 @@ func tokenRepoReach(audience string) func(repo string) bool {
 // endpoint's token reaches every lens (its client may bind any); a token for
 // one repo reaches no lens.
 func tokenLensReach(audience string) func(lens string) bool {
-	if audience == httpx.APIBase+"/mcp" {
+	if httpx.IsUnscopedMCP(audience) {
 		return auth.AllLenses
 	}
 	return func(lens string) bool {
