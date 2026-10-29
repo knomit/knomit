@@ -152,8 +152,11 @@ type node struct {
 	key
 	m      *mount
 	commit string
-	f      fact.Fact
-	dist   int
+	// blob is the version's blob hash, "" when the walk read it through the
+	// blob fallback; f carries no body (the walk reads metadata only).
+	blob string
+	f    fact.Fact
+	dist int
 	// latest: reached through a cross-KB hop, so read at its repo's latest
 	// version rather than a cited one.
 	latest   bool
@@ -161,6 +164,9 @@ type node struct {
 	included bool
 	refs     []resolved
 	resolved bool
+	// parent is the node whose refs first reached this one in the reading
+	// order (the walk tree's edge); nil for the root and frame ancestors.
+	parent *node
 }
 
 type refKind int
@@ -178,6 +184,7 @@ type resolved struct {
 	target key
 	m      *mount
 	commit string
+	blob   string
 	f      fact.Fact
 	latest bool
 	omit   Omission
@@ -201,6 +208,29 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 	}
 	r := newReader(req.Binding, req.Manager, req.MayRead)
 	defer r.close()
+	u, err := walkUnit(ctx, r, req)
+	if err != nil {
+		return nil, err
+	}
+	// The walk read metadata only; the one-shot document carries bodies.
+	if err := r.readBodies(ctx, u.doc.Nodes); err != nil {
+		return nil, err
+	}
+	return u.doc, nil
+}
+
+// unitWalk is one walked materialization: its document WITHOUT bodies, and
+// the walk tree as positions in doc.Nodes (parent[i] is the index of node
+// i's tree parent, -1 for the root and frame ancestors).
+type unitWalk struct {
+	doc    *Document
+	parent []int
+}
+
+// walkUnit runs one materialization's walk on r: metadata and edges only,
+// never a body. It is the walk of Plan and of every unit of a book, so a
+// unit is exactly the fact's own materialization.
+func walkUnit(ctx context.Context, r *reader, req Request) (*unitWalk, error) {
 	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}}
 
 	root, err := w.root(req)
@@ -219,7 +249,22 @@ func Plan(ctx context.Context, req Request) (*Document, error) {
 		return nil, err
 	}
 	order := w.order(root, ancestors)
-	return w.document(root, order, frame)
+	doc, err := w.document(root, order, frame)
+	if err != nil {
+		return nil, err
+	}
+	pos := make(map[*node]int, len(order))
+	for i, n := range order {
+		pos[n] = i
+	}
+	parent := make([]int, len(order))
+	for i, n := range order {
+		parent[i] = -1
+		if n.parent != nil {
+			parent[i] = pos[n.parent]
+		}
+	}
+	return &unitWalk{doc: doc, parent: parent}, nil
 }
 
 // root resolves the requested fact to its mount and reads it at its version
@@ -260,14 +305,14 @@ func (w *walker) root(req Request) (*node, error) {
 	if commit == "" {
 		return nil, fmt.Errorf(errRootNotFoundFmt, ErrNotFound, req.File, m.anchor)
 	}
-	f, used, ok, err := w.r.readAt(w.ctx, m, rel, commit)
+	f, used, blob, ok, err := w.r.readAt(w.ctx, m, rel, commit)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return nil, fmt.Errorf(errRootNotFoundFmt, ErrNotFound, req.File, m.anchor)
 	}
-	n := &node{key: key{m.id12, rel}, m: m, commit: used, f: f, included: true}
+	n := &node{key: key{m.id12, rel}, m: m, commit: used, blob: blob, f: f, included: true}
 	w.nodes[n.key] = n
 	w.incl = append(w.incl, n)
 	return n, nil
@@ -351,7 +396,7 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 			return resolved{kind: refOmit, omit: Omission{Path: wire, Reason: ReasonKBUnavail}}, true, nil
 		}
 		k.repo = m.id12
-		f, commit, ok, err := w.r.latest(w.ctx, m, c.Path)
+		f, commit, blob, ok, err := w.r.latest(w.ctx, m, c.Path)
 		if err != nil {
 			return resolved{}, false, err
 		}
@@ -361,18 +406,18 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 			}
 			return resolved{kind: refOmit, omit: Omission{Path: w.wire(k), Reason: ReasonNotInThatKB}}, true, nil
 		}
-		return resolved{kind: refNode, target: k, m: m, commit: commit, f: f, latest: true}, true, nil
+		return resolved{kind: refNode, target: k, m: m, commit: commit, blob: blob, f: f, latest: true}, true, nil
 	}
 
 	if w.opts.Unpin {
-		f, commit, ok, err := w.r.latest(w.ctx, n.m, c.Path)
+		f, commit, blob, ok, err := w.r.latest(w.ctx, n.m, c.Path)
 		if err != nil {
 			return resolved{}, false, err
 		}
 		if !ok {
 			return resolved{}, false, nil
 		}
-		return resolved{kind: refNode, target: k, m: n.m, commit: commit, f: f}, true, nil
+		return resolved{kind: refNode, target: k, m: n.m, commit: commit, blob: blob, f: f}, true, nil
 	}
 
 	if *pins == nil {
@@ -386,21 +431,21 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 	if !ok {
 		return resolved{kind: refOmit, omit: Omission{Path: wire, Reason: ReasonNoVersion}}, true, nil
 	}
-	f, used, ok, err := w.r.readAt(w.ctx, n.m, c.Path, pinned)
+	f, used, blob, ok, err := w.r.readAt(w.ctx, n.m, c.Path, pinned)
 	if err != nil {
 		return resolved{}, false, err
 	}
 	if !ok {
 		return resolved{kind: refOmit, omit: Omission{Path: wire, Reason: ReasonNoVersion}}, true, nil
 	}
-	return resolved{kind: refNode, target: k, m: n.m, commit: used, f: f}, true, nil
+	return resolved{kind: refNode, target: k, m: n.m, commit: used, blob: blob, f: f}, true, nil
 }
 
 // adopt records the target of r as a node first reached from a node at
 // distance dist-1. Its version is the one THIS ref cites: a path has one
 // version in a document, the one it was first reached at.
 func (w *walker) adopt(r resolved, dist int) *node {
-	n := &node{key: r.target, m: r.m, commit: r.commit, f: r.f, dist: dist, latest: r.latest}
+	n := &node{key: r.target, m: r.m, commit: r.commit, blob: r.blob, f: r.f, dist: dist, latest: r.latest}
 	w.nodes[n.key] = n
 	if len(w.incl) < w.opts.MaxNodes {
 		n.included = true
@@ -462,6 +507,7 @@ func (w *walker) order(root *node, ancestors []*node) []*node {
 				continue
 			}
 			written[t.key] = true
+			t.parent = u
 			out = append(out, t)
 			visit(t)
 		}
@@ -519,7 +565,6 @@ func (w *walker) document(root *node, order []*node, frame bool) (*Document, err
 			Kind:       kindOf(n.f),
 			Confidence: n.f.Confidence,
 			Date:       w.r.date(w.ctx, n.m, n.rel, n.commit),
-			Body:       n.f.Body,
 			AnchorID:   anchors[n.key],
 		}
 		switch {
@@ -561,7 +606,13 @@ func (w *walker) document(root *node, order []*node, frame bool) (*Document, err
 					// One version per path: a citation of another version is
 					// marked only when the BODY differs (a commit difference
 					// alone is the 77%-false-alarm proxy).
-					l.DifferentVersion = !w.opts.Unpin && r.commit != t.commit && r.f.Body != t.f.Body
+					if !w.opts.Unpin && r.commit != t.commit {
+						differ, err := w.r.bodiesDiffer(w.ctx, t.m, t.rel, r.commit, r.blob, t.commit, t.blob)
+						if err != nil {
+							return nil, err
+						}
+						l.DifferentVersion = differ
+					}
 					out.BuildsOn = append(out.BuildsOn, l)
 					continue
 				}

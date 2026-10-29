@@ -10,6 +10,7 @@ import (
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/model"
 )
 
@@ -36,6 +37,20 @@ type reader struct {
 	mounts   map[string]*mount // by id12; a nil value records "not available"
 	releases []func()
 	edges    map[edgeKey]map[string]string
+	stats    WalkStats
+}
+
+// WalkStats counts how a reference walk read each version. Index is the fast
+// path: the version's row in the index (its blob's facts row: title, type,
+// kind, confidence, refs), with no blob read. Parsed is the fallback that
+// reads and parses the blob (a version the index never saw, a legacy
+// mixed-case path, or one that is read before its commit). Bodies counts the
+// bodies read only to decide different_version, which compares bodies, never
+// commits; they are compared and dropped.
+type WalkStats struct {
+	Index  int `json:"index"`
+	Parsed int `json:"parsed"`
+	Bodies int `json:"bodies"`
 }
 
 type edgeKey struct{ repo, rel, commit string }
@@ -49,6 +64,13 @@ func (r *reader) close() {
 		rel()
 	}
 	r.releases = nil
+}
+
+// forget drops the per-walk caches (edges), keeping the acquired mounts. A
+// book walks one unit after another through one reader; forgetting between
+// units keeps the build's memory to one unit's working set.
+func (r *reader) forget() {
+	r.edges = map[edgeKey]map[string]string{}
 }
 
 // target routes a root-commit id to a repo and the branch to read it at.
@@ -115,11 +137,39 @@ func (r *reader) foreign(ctx context.Context, id12 string) (*mount, error) {
 	return m, nil
 }
 
-// readAt reads path at commit. A version that is not in commit's tree falls
-// back to the latest version before it, as knomit_explain does for a target
-// retracted after it was cited: the cited content is still what the referrer
-// reasoned over. used is the commit the content came from.
-func (r *reader) readAt(ctx context.Context, m *mount, rel, commit string) (f fact.Fact, used string, ok bool, err error) {
+// readAt reads the METADATA of path at commit: title, type, kind, confidence
+// and refs, with Body left empty (the walk never holds a body). A version
+// that is not in commit's tree falls back to the latest version before it,
+// as knomit_explain does for a target retracted after it was cited: the
+// cited content is still what the referrer reasoned over. used is the commit
+// the content came from; blob is its blob hash, "" when only the fallback
+// could read it.
+func (r *reader) readAt(ctx context.Context, m *mount, rel, commit string) (f fact.Fact, used, blob string, ok bool, err error) {
+	meta, hit, err := m.svc.FactQuery().VersionMetaAt(ctx, rel, commit)
+	if err != nil {
+		return fact.Fact{}, "", "", false, err
+	}
+	if hit {
+		r.stats.Index++
+		return metaFact(rel, meta), commit, meta.Blob, true, nil
+	}
+	r.stats.Parsed++
+	f, used, ok, err = r.parseAt(ctx, m, rel, commit)
+	f.Body = ""
+	return f, used, "", ok, err
+}
+
+// metaFact is an index row as a body-less fact.
+func metaFact(rel string, meta index.VersionMeta) fact.Fact {
+	f := fact.NewFact(rel)
+	f.Title, f.Kind, f.Type = meta.Title, fact.Kind(meta.Kind), fact.Type(meta.Type)
+	f.Confidence, f.Refs = meta.Confidence, meta.Refs
+	return f
+}
+
+// parseAt reads and parses the blob of path at commit, with readAt's
+// before-the-commit fallback; the body is included.
+func (r *reader) parseAt(ctx context.Context, m *mount, rel, commit string) (f fact.Fact, used string, ok bool, err error) {
 	res, err := m.svc.Facts().ReadFact(ctx, m.branch, rel, &facts.ReadFactOpts{AtCommit: commit})
 	used = commit
 	if errors.Is(err, model.ErrPathNotFound) {
@@ -139,32 +189,62 @@ func (r *reader) readAt(ctx context.Context, m *mount, rel, commit string) (f fa
 	return f, used, true, nil
 }
 
-// latest reads path's version live at the mount's anchor. ok is false when
-// the path is not in the anchor's tree: retracted, deleted or never written
-// by then. commit is the change that introduced that version (first-parent
-// resolution, never wall-clock), not the anchor itself.
-func (r *reader) latest(ctx context.Context, m *mount, rel string) (f fact.Fact, commit string, ok bool, err error) {
-	res, err := m.svc.Facts().ReadFact(ctx, m.branch, rel, &facts.ReadFactOpts{AtCommit: m.anchor})
-	if errors.Is(err, model.ErrPathNotFound) {
-		return fact.Fact{}, "", false, nil
+// bodiesDiffer reports whether two versions of one fact differ in BODY (the
+// "changed since cited" rule: never commit inequality alone). The same
+// commit or the same blob is the same body without a read; otherwise both
+// bodies are read, compared and dropped.
+func (r *reader) bodiesDiffer(ctx context.Context, m *mount, rel, commitA, blobA, commitB, blobB string) (bool, error) {
+	if commitA == commitB || (blobA != "" && blobA == blobB) {
+		return false, nil
 	}
+	r.stats.Bodies += 2
+	a, _, okA, err := r.parseAt(ctx, m, rel, commitA)
 	if err != nil {
-		return fact.Fact{}, "", false, fmt.Errorf("read %s at %s: %w", rel, m.anchor, err)
+		return false, err
+	}
+	b, _, okB, err := r.parseAt(ctx, m, rel, commitB)
+	if err != nil {
+		return false, err
+	}
+	return okA && okB && a.Body != b.Body, nil
+}
+
+// latest reads the METADATA of path's version live at the mount's anchor. ok
+// is false when the path is not in the anchor's tree: retracted, deleted or
+// never written by then. commit is the change that introduced that version
+// (first-parent resolution, never wall-clock), not the anchor itself.
+func (r *reader) latest(ctx context.Context, m *mount, rel string) (f fact.Fact, commit, blob string, ok bool, err error) {
+	meta, hit, err := m.svc.FactQuery().VersionMetaAt(ctx, rel, m.anchor)
+	if err != nil {
+		return fact.Fact{}, "", "", false, err
+	}
+	if hit {
+		r.stats.Index++
+		f, blob = metaFact(rel, meta), meta.Blob
+	} else {
+		r.stats.Parsed++
+		res, err := m.svc.Facts().ReadFact(ctx, m.branch, rel, &facts.ReadFactOpts{AtCommit: m.anchor})
+		if errors.Is(err, model.ErrPathNotFound) {
+			return fact.Fact{}, "", "", false, nil
+		}
+		if err != nil {
+			return fact.Fact{}, "", "", false, fmt.Errorf("read %s at %s: %w", rel, m.anchor, err)
+		}
+		if f, err = fact.ParseFact(rel, res.Content); err != nil {
+			return fact.Fact{}, "", "", false, fmt.Errorf("parse %s at %s: %w", rel, m.anchor, err)
+		}
+		f.Body = ""
 	}
 	commit, err = m.svc.HistoryQuery().LiveRevision(ctx, m.branch, rel, m.anchor)
 	if err != nil {
-		return fact.Fact{}, "", false, fmt.Errorf("resolve the version of %s at %s: %w", rel, m.anchor, err)
+		return fact.Fact{}, "", "", false, fmt.Errorf("resolve the version of %s at %s: %w", rel, m.anchor, err)
 	}
 	if commit == "" {
 		// Present in the tree but below the indexed history (a history
 		// boundary): the anchor is the only commit known to hold it.
 		commit = m.anchor
 	}
-	f, err = fact.ParseFact(rel, res.Content)
-	if err != nil {
-		return fact.Fact{}, "", false, fmt.Errorf("parse %s at %s: %w", rel, commit, err)
-	}
-	return f, commit, true, nil
+	return f, commit, blob, true, nil
 }
 
 // pins returns the versions (path, commit) cites: the target commit of each
@@ -207,6 +287,11 @@ func (r *reader) date(ctx context.Context, m *mount, rel, commit string) string 
 func ReadBodies(ctx context.Context, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, nodes []Node) error {
 	r := newReader(b, mgr, mayRead)
 	defer r.close()
+	return r.readBodies(ctx, nodes)
+}
+
+// readBodies is ReadBodies on an open reader.
+func (r *reader) readBodies(ctx context.Context, nodes []Node) error {
 	for i := range nodes {
 		n := &nodes[i]
 		ri, branch, ok := r.target(n.Repo)
@@ -221,7 +306,7 @@ func ReadBodies(ctx context.Context, b *repos.Binding, mgr *repos.Manager, mayRe
 		if err != nil {
 			return err
 		}
-		f, _, ok, err := r.readAt(ctx, m, rel, n.Commit)
+		f, _, ok, err := r.parseAt(ctx, m, rel, n.Commit)
 		if err != nil {
 			return err
 		}
