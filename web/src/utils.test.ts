@@ -301,12 +301,35 @@ describe('clampTitle', () => {
 
   it('cuts an over-cap title at the last word boundary and appends an ellipsis', () => {
     const t = 'x'.repeat(100) + ' tail that runs well past the cap ' + 'y'.repeat(40);
-    expect(clampTitle(t)).toBe('x'.repeat(100) + ' tail that runs well…');
+    expect(clampTitle(t)).toBe('x'.repeat(100) + ' tail that runs…');
     const words = 'word '.repeat(40).trim();
     expect(clampTitle(words)).toBe('word '.repeat(23) + 'word…');
   });
 
-  it('cuts hard at the cap when the first 120 characters hold no space', () => {
-    expect(clampTitle('z'.repeat(150) + ' end')).toBe('z'.repeat(120) + '…');
+  it('counts the ellipsis toward the cap: a hard cut is 119 characters plus "…"', () => {
+    const r = clampTitle('z'.repeat(150) + ' end');
+    expect(r).toBe('z'.repeat(LIST_TITLE_MAX - 1) + '…');
+    expect(r.length).toBe(LIST_TITLE_MAX);
+    expect(clampTitle('ab '.repeat(60)).length).toBeLessThanOrEqual(LIST_TITLE_MAX);
+    // a space at index 119 keeps 119 characters of text
+    expect(clampTitle('q'.repeat(119) + ' ' + 'q'.repeat(10))).toBe('q'.repeat(119) + '…');
+  });
+
+  it('drops whitespace left at the end of the kept text before the ellipsis', () => {
+    const t = 'a'.repeat(100) + '     ' + 'b'.repeat(30);
+    expect(clampTitle(t)).toBe('a'.repeat(100) + '…');
+  });
+
+  it('never ends a hard cut in a lone surrogate', () => {
+    const e = '\u{1F600}';
+    // the emoji at units 118-119 straddles the 119-unit budget
+    const r = clampTitle('aa' + e.repeat(100));
+    expect(r).toBe('aa' + e.repeat(58) + '…');
+    // an emoji that ends exactly at the budget is kept whole
+    expect(clampTitle('a' + e.repeat(100))).toBe('a' + e.repeat(59) + '…');
+  });
+
+  it('does not collapse to a bare ellipsis when only leading spaces precede the first word', () => {
+    expect(clampTitle('   ' + 'a'.repeat(150))).toBe('   ' + 'a'.repeat(116) + '…');
   });
 });

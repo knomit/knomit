@@ -285,19 +285,28 @@ export const EDGE_ERROR = '#f66';
  */
 export const noMouseFocus = (e: React.MouseEvent) => e.preventDefault();
 
-/** Longest fact title the Browse list shows before cutting it. */
+/** Longest fact title the Browse list shows, counting the "…" a clamp appends. */
 export const LIST_TITLE_MAX = 120;
 
 /**
- * clampTitle caps a fact title for list display: at most LIST_TITLE_MAX
- * characters, cut at the last space at or before the cap with "…" appended; a
- * title with no space in its first LIST_TITLE_MAX characters is cut hard there.
- * Shorter titles pass through unchanged. The full title belongs in the row's
- * title attribute, not here.
+ * clampTitle caps a fact title for list display. The cap counts the "…": a
+ * clamped result is at most LIST_TITLE_MAX UTF-16 units including it, so a
+ * fully hard-cut result is (LIST_TITLE_MAX - 1) units of text plus "…". A title
+ * of LIST_TITLE_MAX units or fewer passes through unchanged. Otherwise the cut
+ * falls at the last space that leaves non-blank text before it; if there is
+ * none (no space, or only leading whitespace before the first word) it is a
+ * hard cut that never splits a surrogate pair. The full title belongs in the
+ * row's title attribute, not here.
  */
 export function clampTitle(title: string, max: number = LIST_TITLE_MAX): string {
   if (title.length <= max) return title;
-  const cut = title.lastIndexOf(' ', max);
-  const head = cut > 0 ? title.slice(0, cut) : title.slice(0, max);
-  return head.trimEnd() + '…';
+  const room = max - 1;
+  const cut = title.lastIndexOf(' ', room);
+  if (cut > 0 && title.slice(0, cut).trim() !== '') {
+    return title.slice(0, cut).trimEnd() + '…';
+  }
+  let end = room;
+  const last = title.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1; // do not strand a high surrogate
+  return title.slice(0, end) + '…';
 }
