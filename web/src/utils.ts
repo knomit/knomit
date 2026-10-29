@@ -284,3 +284,20 @@ export const EDGE_ERROR = '#f66';
  * of it says nothing the highlight has not.
  */
 export const noMouseFocus = (e: React.MouseEvent) => e.preventDefault();
+
+/** Longest fact title the Browse list shows before cutting it. */
+export const LIST_TITLE_MAX = 120;
+
+/**
+ * clampTitle caps a fact title for list display: at most LIST_TITLE_MAX
+ * characters, cut at the last space at or before the cap with "…" appended; a
+ * title with no space in its first LIST_TITLE_MAX characters is cut hard there.
+ * Shorter titles pass through unchanged. The full title belongs in the row's
+ * title attribute, not here.
+ */
+export function clampTitle(title: string, max: number = LIST_TITLE_MAX): string {
+  if (title.length <= max) return title;
+  const cut = title.lastIndexOf(' ', max);
+  const head = cut > 0 ? title.slice(0, cut) : title.slice(0, max);
+  return head.trimEnd() + '…';
+}
