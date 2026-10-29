@@ -143,4 +143,17 @@ func TestBook_ReachIsEnforced(t *testing.T) {
 	code, body = restGet(t, wide, alphaBook+"?cursor="+url.QueryEscape(cur))
 	require.Equal(t, http.StatusOK, code, "and the refusal consumed nothing: %s", body)
 	require.Contains(t, body, `"X body."`)
+
+	// A page whose only foreign row is a LINK (no body to read) is refused
+	// too: the link's title and anchor come from the unreachable repo.
+	writeObs(t, alpha, "kb/v/r1.md", "V1", xWire)
+	writeObs(t, alpha, "kb/v/r2.md", "V2", xWire)
+	code, body = restGet(t, wide, alphaBook+"?path=kb/v/&cross_kb=true&limit=2")
+	require.Equal(t, http.StatusOK, code, body)
+	cur = pageCursor(t, body)
+	code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
+	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X's link: %s", body)
+	code, body = restGet(t, wide, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Contains(t, body, `"link":`, "unit 2 holds X as a link")
 }
