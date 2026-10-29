@@ -186,6 +186,7 @@ export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
     <FacetColumns
       testId={testid}
       scrollRef={scrollRef}
+      indexMaxWidth={SETTINGS_INDEX_MAX_PX}
       left={
         // The index is what replaced a tab strip. Sticky by construction: it
         // is its own column, so it never scrolls away with the blocks — it is
@@ -209,10 +210,17 @@ export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
   );
 }
 
+// The index is a column of short section names; 240px fits "Pushed branches"
+// and the counts with room to spare, and everything beyond it is content.
+const SETTINGS_INDEX_MAX_PX = 240;
+
 // ── styles ──
-// A settings column reads worse the wider it gets, so the blocks are measured
-// rather than stretched across a wide window.
-const blocks: React.CSSProperties = { maxWidth: 760, padding: '8px 32px 48px' };
+// The blocks fill the pane beside the index and follow the window as it is
+// resized. There is deliberately no max-width: a cap left a dead band to the
+// right of the page on a wide window. Readable line length is the job of the
+// prose inside a block, not of the column.
+// minWidth 0 lets the column shrink in a flex row instead of overflowing.
+const blocks: React.CSSProperties = { padding: '8px 32px 48px', minWidth: 0, boxSizing: 'border-box' };
 // Blocks are separated by a rule rather than boxed: a page of seven bordered
 // cards reads as seven unrelated things, and these are one object's settings.
 const block: React.CSSProperties = {

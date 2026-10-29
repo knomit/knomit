@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { FacetColumns, FACET_NARROW_PX } from './FacetColumns';
 import { IndexColumn } from './IndexColumn';
+import { FacetLayoutProvider } from './facetLayout';
 
 // #531 re-review S5: below FACET_NARROW_PX of its own width the facet
 // stacks its index above the content, so the content keeps the whole width.
@@ -24,6 +25,18 @@ describe('FacetColumns', () => {
     render(<FacetColumns left={<nav>index</nav>} testId="cols"><div>content</div></FacetColumns>);
     expect(screen.getByTestId('cols')).not.toHaveAttribute('data-layout');
     expect(screen.getByTestId('facet-splitter')).toBeInTheDocument();
+  });
+
+  // Settings caps its index below the Library's width; Browse does not.
+  // SABOTAGE: ignore indexMaxWidth -> the index is 448 -> red.
+  it('caps the index at indexMaxWidth and drops the splitter, only when asked', () => {
+    at(FACET_NARROW_PX + 400);
+    const layout = { width: 448, onSplitterDown: () => {} };
+    const { rerender } = render(<FacetLayoutProvider value={layout}><FacetColumns left={<nav>i</nav>} indexMaxWidth={240}><div>c</div></FacetColumns></FacetLayoutProvider>);
+    expect(screen.getByTestId('facet-index-column').style.width).toBe('240px');
+    expect(screen.getByTestId('facet-splitter').getAttribute('title')).toBeNull();
+    rerender(<FacetLayoutProvider value={layout}><FacetColumns left={<nav>i</nav>}><div>c</div></FacetColumns></FacetLayoutProvider>);
+    expect(screen.getByTestId('facet-index-column').style.width).toBe('448px');
   });
 
   // #533 review N4: stacked, the index is ONE horizontal strip with no
