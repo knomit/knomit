@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch, rowPath } from './utils';
+import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch, rowPath, clampTitle, LIST_TITLE_MAX } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -289,5 +289,24 @@ describe('rowPath', () => {
 
   it('honours a non-default ontology root', () => {
     expect(rowPath('facts/a/b.md', 'facts', 'facts')).toBe('facts/a/b.md');
+  });
+});
+
+describe('clampTitle', () => {
+  it('leaves a title at or under the cap unchanged', () => {
+    const exact = 'a'.repeat(LIST_TITLE_MAX);
+    expect(clampTitle('Short title')).toBe('Short title');
+    expect(clampTitle(exact)).toBe(exact);
+  });
+
+  it('cuts an over-cap title at the last word boundary and appends an ellipsis', () => {
+    const t = 'x'.repeat(100) + ' tail that runs well past the cap ' + 'y'.repeat(40);
+    expect(clampTitle(t)).toBe('x'.repeat(100) + ' tail that runs well…');
+    const words = 'word '.repeat(40).trim();
+    expect(clampTitle(words)).toBe('word '.repeat(23) + 'word…');
+  });
+
+  it('cuts hard at the cap when the first 120 characters hold no space', () => {
+    expect(clampTitle('z'.repeat(150) + ' end')).toBe('z'.repeat(120) + '…');
   });
 });

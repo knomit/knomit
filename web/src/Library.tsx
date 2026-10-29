@@ -6,7 +6,7 @@ import { api } from './api';
 import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, isLive, isLensContext, canGoBack } from './state';
-import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath, rowPath } from './utils';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath, rowPath, clampTitle } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import { useMotifClusters } from './useMotifClusters';
@@ -93,6 +93,9 @@ const EntryRow = memo(function EntryRow({
   ontologyRoot, sourceRepo, truncateTitle, onSelect, onEnterDir, onOpenFact, registerRef,
 }: EntryRowProps) {
   const ts = (type && typeStyles[type]) || defaultTypeStyle;
+  const fullTitle = title || name;
+  const shownTitle = isDir ? fullTitle : clampTitle(fullTitle);
+  const clamped = shownTitle !== fullTitle;
   const sub = isDir ? '' : rowPath(path || `${dirPath}/${name}`, dirPath, ontologyRoot);
   const setRef = useCallback((el: HTMLDivElement | null) => registerRef(index, el), [registerRef, index]);
   const onClick = useCallback(() => {
@@ -109,6 +112,8 @@ const EntryRow = memo(function EntryRow({
       data-name={name}
       data-isdir={String(isDir)}
       data-path={path}
+      title={clamped ? fullTitle : undefined}
+      aria-label={clamped ? fullTitle : undefined}
       ref={setRef}
       onClick={onClick}
       onMouseEnter={selected ? undefined : e => { e.currentTarget.style.background = ENTRY_HOVER; }}
@@ -130,7 +135,7 @@ const EntryRow = memo(function EntryRow({
           stacks them for the same reason. A folder, and any row with no mount,
           stays one line. */}
       <span style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0 }}>
-        <span style={truncateTitle ? entryTitleTruncated : entryTitle}>{title || name}</span>
+        <span style={truncateTitle ? entryTitleTruncated : entryTitle}>{shownTitle}</span>
         {/* The same meta line the flat union row carries, so a fact looks like
             a fact in both views. `sub` is the part of the path the breadcrumb
             above is not already showing — inside a directory that is the
