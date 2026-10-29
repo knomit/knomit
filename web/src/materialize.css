@@ -60,7 +60,6 @@ h4.k-mat-h { font-size: 16px; }
 h5.k-mat-h { font-size: 14.5px; }
 h6.k-mat-h { font-size: 13.5px; }
 .k-mat-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; font-family: var(--k-font-mono); font-size: 10.5px; color: #5d6676; margin-bottom: 12px; min-width: 0; overflow-wrap: anywhere; }
-.k-mat-meta .k-mat-n { color: #7f8b9c; }
 .k-mat-repo { color: #c9a0f0; border: 1px solid rgba(201,160,240,0.35); border-radius: 3px; padding: 0 5px; }
 .k-mat-frozen { color: #c9a0f0; }
 .k-mat-body { color: #d6dde8; font-size: 14px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; }
@@ -92,14 +91,23 @@ h6.k-mat-h { font-size: 13.5px; }
   .k-mat-article { padding: 20px 14px 48px; }
 }
 
-/* Builds on / Sources: small labels with a count, closed until clicked. */
-.k-mat-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 12px; }
-.k-mat-chip { display: inline-flex; align-items: center; gap: 5px; background: none; border: 1px solid #2a3040; border-radius: 10px; color: #8a96a8; font-family: var(--k-font-mono); font-size: 10.5px; letter-spacing: 0.04em; padding: 1px 9px; cursor: pointer; }
-.k-mat-chip:hover { border-color: #3d4a66; color: #cfd8e6; }
-.k-mat-chip[aria-expanded='true'] { color: #b8c4d4; border-color: #34507f; }
-.k-mat-chip:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
-.k-mat-chev { font-size: 9px; }
+/* Builds on / Sources: the small uppercase label, now a button that opens and
+   closes its list (closed until clicked). Text only, no border or chip. */
+.k-mat-toggles { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; }
+.k-mat-toggle { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; padding: 0; cursor: pointer; font-family: var(--k-font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #5d6676; }
+.k-mat-toggle:hover, .k-mat-toggle[aria-expanded='true'] { color: #9aa6b6; }
+.k-mat-toggle:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 3px; border-radius: 2px; }
+.k-mat-arrow { display: inline-flex; transition: transform 0.12s; }
+.k-mat-arrow[data-open='false'] { transform: rotate(-90deg); }
 .k-mat-dot { width: 6px; height: 6px; border-radius: 50%; background: #e5a23c; display: inline-block; }
+.k-mat-hnum { color: #7f8b9c; font-weight: 500; }
+
+/* Icon-only bar buttons: the fact header's action style (RightPanel's Materialize
+   and retract buttons): bare, 2px padding, 15px glyph, dimmed until hovered. */
+.k-mat-icon { background: none; border: none; padding: 2px; color: #8a96a8; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.75; flex-shrink: 0; }
+.k-mat-icon:hover { opacity: 1; }
+.k-mat-icon:active { opacity: 0.55; }
+.k-mat-icon[aria-pressed='true'], .k-mat-icon[data-busy='true'] { opacity: 1; color: #8ab4f8; }
 
 /* Focus mode (the Focus toggle in the bar sets data-mat-focus on <html>): the
    shell's repositories rail, the library column with its splitter, and the

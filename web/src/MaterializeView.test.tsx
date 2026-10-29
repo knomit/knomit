@@ -319,7 +319,8 @@ describe('changing options mid-read', () => {
       const y = n ? (Number(n) - 3) * 100 : 0; // the section at the top of the pane is §3
       return { top: y, bottom: y + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y, toJSON() {} } as DOMRect;
     });
-    const titleOfTop = screen.getAllByTestId('mat-section')[2].querySelector('.k-mat-h')?.textContent;
+    const bare = (el: Element) => el.querySelector('.k-mat-h')?.textContent?.replace(/^[\d.]+ /, '');
+    const titleOfTop = bare(screen.getAllByTestId('mat-section')[2]);
 
     fireEvent.click(screen.getByTestId('mat-raise'));
     // the fallback dims the old text like any restart ...
@@ -327,7 +328,7 @@ describe('changing options mid-read', () => {
     // ... and the place the reader was at comes back, on the section's NEW position
     await waitFor(() => expect(top).toBe(92)); // moved from §3 to §4: (4-3)*100 - 8
     const secs = screen.getAllByTestId('mat-section');
-    expect(secs[3].querySelector('.k-mat-h')?.textContent).toBe(titleOfTop);
+    expect(bare(secs[3])).toBe(titleOfTop);
     expect(document.querySelector('[data-stale="true"]')).toBeNull();
     expect(screen.queryByTestId('mat-notice')).toBeNull();
   });
@@ -436,10 +437,10 @@ describe('Export .md', () => {
     gateOn = true;
     const btn = screen.getByTestId('mat-export');
     fireEvent.click(btn);
-    await waitFor(() => expect(btn).toHaveTextContent('Cancel'));
+    await waitFor(() => expect(btn).toHaveAttribute('aria-label', 'Cancel export'));
     fireEvent.click(btn);
     release();
-    await waitFor(() => expect(btn).not.toHaveTextContent('Cancel'));
+    await waitFor(() => expect(btn).toHaveAttribute('aria-label', 'Export'));
     await settle();
     expect(save).not.toHaveBeenCalled();
     expect(screen.queryByTestId('mat-export-failed')).toBeNull();
@@ -488,7 +489,7 @@ describe('top bar', () => {
     expect(within(bar).getByTestId('mat-cross-kb')).not.toBeChecked();
     expect(within(bar).getByTestId('mat-unpin')).not.toBeChecked();
     expect(screen.getByTestId('mat-progress')).toHaveTextContent('3 of ≤9 facts · depth 4');
-    expect(screen.getByTestId('mat-export').textContent?.trim()).toBe('Export');
+    expect(screen.getByTestId('mat-export')).toHaveAttribute('aria-label', 'Export');
     fireEvent.click(screen.getByTestId('mat-back'));
     expect(onBack).toHaveBeenCalled();
   });
@@ -503,12 +504,43 @@ describe('top bar', () => {
 });
 
 describe('polish: labels, numbering, bar', () => {
-  it('has no MATERIALIZED label, and the export button reads "Export" (no .md)', async () => {
+  it('has no MATERIALIZED label; Export and Focus are icon-only buttons with an aria-label and a tooltip, styled as the fact header\'s icon buttons', async () => {
     setup({ total: 3, pageSize: 3 });
     await waitFor(() => expect(ns()).toHaveLength(3));
     expect(document.body.textContent).not.toMatch(/MATERIALIZED/i);
-    expect(screen.getByTestId('mat-export').textContent?.trim()).toBe('Export');
-    expect(screen.getByTestId('mat-export').textContent).not.toContain('.md');
+    for (const [id, label] of [['mat-export', 'Export'], ['mat-focus', 'Focus']]) {
+      const b = screen.getByTestId(id);
+      expect(b.textContent).toBe('');                    // no text, only the glyph
+      expect(b.querySelector('svg')).not.toBeNull();
+      expect(b).toHaveAttribute('aria-label', label);
+      expect(b).toHaveAttribute('title', label);         // the tooltip
+      expect(b).toHaveClass('k-mat-icon');
+      expect(b).toHaveClass('k-bare');                   // the app's bare-button focus treatment
+    }
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = /^\.k-mat-icon \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).toMatch(/padding: 2px/);                // RightPanel's materialize/retract buttons
+    expect(rule).toMatch(/opacity: 0\.75/);
+    expect(css).toMatch(/\.k-mat-icon:hover \{ opacity: 1/);
+    expect(css).toMatch(/\.k-mat-icon:active/);
+  });
+
+  it('while exporting, the Export icon becomes the app\'s spinning arc, the tooltip carries the bytes, and a second click cancels', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>(r => { release = r; });
+    let gateOn = false;
+    const f = makeFixtureApi({ total: 3, pageSize: 3, gate: () => (gateOn ? hold : Promise.resolve()) });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const btn = screen.getByTestId('mat-export');
+    expect(screen.queryByTestId('mat-export-spinner')).toBeNull();
+    gateOn = true;
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByTestId('mat-export-spinner')).toHaveClass('icon-spin'));
+    expect(btn).toHaveAttribute('title', expect.stringContaining('Cancel export'));
+    expect(btn.textContent).toBe('');
+    release();
+    await waitFor(() => expect(screen.queryByTestId('mat-export-spinner')).toBeNull());
   });
 
   it('Builds on and Sources are collapsed labels with counts; click expands in place, click again collapses', async () => {
@@ -537,6 +569,25 @@ describe('polish: labels, numbering, bar', () => {
     expect(built.tagName).toBe('BUTTON');
   });
 
+  it('the labels read as the old small uppercase labels (no chip), with a disclosure arrow that turns when open', async () => {
+    setup({ total: 4, pageSize: 4 });
+    await waitFor(() => expect(ns()).toHaveLength(4));
+    const sec = screen.getAllByTestId('mat-section')[3];
+    const built = within(sec).getByTestId('mat-builds-toggle');
+    const arrow = () => built.querySelector('.k-mat-arrow') as HTMLElement;
+    expect(arrow().querySelector('svg')).not.toBeNull();
+    expect(arrow()).toHaveAttribute('data-open', 'false');
+    fireEvent.click(built);
+    expect(arrow()).toHaveAttribute('data-open', 'true');
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = /^\.k-mat-toggle \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).toMatch(/text-transform: uppercase/);
+    expect(rule).toMatch(/border: none/);
+    expect(rule).toMatch(/background: none/);
+    expect(rule).not.toMatch(/border-radius/);
+    expect(css).toMatch(/\.k-mat-arrow\[data-open='false'\] \{ transform: rotate\(-90deg\)/);
+  });
+
   it('a section with no builds-on or sources shows no label', async () => {
     setup({ total: 1, pageSize: 1 });
     await waitFor(() => expect(ns()).toEqual([1]));
@@ -557,18 +608,27 @@ describe('polish: labels, numbering, bar', () => {
     setup({ total: 4, pageSize: 4, tree: { 1: [2, 4], 2: [3], 4: [3] } });
     await waitFor(() => expect(ns()).toHaveLength(4));
     const secs = screen.getAllByTestId('mat-section');
-    const num = (i: number) => secs[i].querySelector('[data-testid="mat-num"]')?.textContent ?? '';
-    expect([0, 1, 2, 3].map(num)).toEqual(['', '§1', '§1.1', '§2']);
+    const num = (i: number) => (secs[i].querySelector('[data-testid="mat-num"]')?.textContent ?? '').trim();
+    expect([0, 1, 2, 3].map(num)).toEqual(['', '1.', '1.1', '2.']);
+    // the number is a prefix of the heading text itself, and no longer in the meta line
+    expect(secs[1].querySelector('.k-mat-h')?.textContent).toMatch(/^1\. Fact number 2/);
+    expect(secs[2].querySelector('.k-mat-h')?.textContent).toMatch(/^1\.1 Fact number 3/);
+    expect(secs[0].querySelector('.k-mat-h')?.textContent).toMatch(/^Fact number 1/);
+    for (const sec of secs) expect(within(sec).getByTestId('mat-meta').textContent).not.toMatch(/§|^\d/);
+    expect(secs[1].querySelector('[data-testid="mat-meta"] [data-testid="mat-num"]')).toBeNull();
     fireEvent.click(within(secs[3]).getByTestId('mat-builds-toggle'));
-    expect(within(secs[3]).getByTestId('mat-builds-link')).toHaveTextContent('§1.1');
+    expect(within(secs[3]).getByTestId('mat-builds-link')).toHaveTextContent('1.1');
   });
 
   it('a frame: ancestors are an unnumbered preamble, the frame the unnumbered top, numbers start at its children', async () => {
     // 1 ancestor, 2 the frame (cites 3 and 5), 3 cites 4
     setup({ total: 5, pageSize: 5, ancestors: 1, tree: { 2: [3, 5], 3: [4] } });
     await waitFor(() => expect(ns()).toHaveLength(5));
-    const nums = screen.getAllByTestId('mat-section').map(sec => sec.querySelector('[data-testid="mat-num"]')?.textContent ?? '');
-    expect(nums).toEqual(['', '', '§1', '§1.1', '§2']);
+    const secs = screen.getAllByTestId('mat-section');
+    const nums = secs.map(sec => (sec.querySelector('[data-testid="mat-num"]')?.textContent ?? '').trim());
+    expect(nums).toEqual(['', '', '1.', '1.1', '2.']);
+    expect(secs[0].querySelector('.k-mat-h')?.textContent).toMatch(/^Fact number 1/); // an ancestor: no number
+    expect(secs[2].querySelector('.k-mat-h')?.textContent).toMatch(/^1\. Fact number 3/);
   });
 });
 
@@ -593,9 +653,12 @@ describe('focus mode', () => {
     const t = screen.getByTestId('mat-focus');
     expect(on()).toBe(false);
     expect(t).toHaveAttribute('aria-pressed', 'false');
+    expect(t).toHaveAttribute('aria-label', 'Focus');
     fireEvent.click(t);
     expect(on()).toBe(true);
     expect(t).toHaveAttribute('aria-pressed', 'true');
+    expect(t).toHaveAttribute('aria-label', 'Exit focus');
+    expect(t).toHaveAttribute('title', 'Exit focus');
     fireEvent.click(t);
     expect(on()).toBe(false);
   });
