@@ -144,10 +144,13 @@ func getOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, e
 //
 // vettedURL is the origin URL the caller's CheckOriginBranch judged the new
 // branch against. The change applies only while the origin is still that URL:
-// checked first against what this closure reads (refused before anything is
-// touched), and again by Origins.SetBranch's compare-and-set in the UPDATE
-// that makes the change durable, which catches an attach that lands in
-// between. Either refusal is control.ErrOriginChanged.
+// Origins.SetBranch is a compare-and-set on it, in the UPDATE that makes the
+// change durable, so an attach or detach that landed after the check is
+// refused (control.ErrOriginChanged) instead of having the vetted branch
+// applied to a remote nobody checked. On that refusal control.db records the
+// write that won, so the git remote is restored to IT, not to what this
+// closure read: restoring the stale read would re-point the git remote away
+// from the origin that attach just stored.
 func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, vettedURL, branch string) error {
 	origins, oerr := originsOf(m)
 	if oerr != nil {
@@ -164,17 +167,17 @@ func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstan
 			err = fmt.Errorf("SetOriginUpstream: %w", errNoOrigin)
 			return
 		}
-		if existing.URL != vettedURL {
-			err = fmt.Errorf("SetOriginUpstream: %w since the branch was checked", control.ErrOriginChanged)
-			return
-		}
 		if cerr := repos.ConfigureGitRemote(svc, existing.URL, existing.AuthMethod, branch, ri.AgentBranch()); cerr != nil {
 			err = cerr
 			return
 		}
 		if serr := origins.SetBranch(ri.UID(), vettedURL, branch); serr != nil {
 			err = serr
-			restoreRemoteConfig(svc, ri, existing, "SetOriginUpstream")
+			prev := existing
+			if errors.Is(serr, control.ErrOriginChanged) {
+				prev = recordedOrigin(origins, ri, existing)
+			}
+			restoreRemoteConfig(svc, ri, prev, "SetOriginUpstream")
 			return
 		}
 		svc.Remote().SetOrigin(&remotesync.Origin{
@@ -187,6 +190,22 @@ func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstan
 		return aerr
 	}
 	return err
+}
+
+// recordedOrigin is the origin control.db records for ri now, as the git
+// remote restore wants it: nil when there is none (a detach won). When it
+// cannot be read, fallback is kept and the failure logged.
+func recordedOrigin(origins *control.Origins, ri *repos.RepoInstance, fallback *remotesync.Remote) *remotesync.Remote {
+	cur, err := origins.Get(ri.UID())
+	if err != nil {
+		log.Error().Err(err).Str("repo", ri.Name()).
+			Msg("origin: cannot read the recorded origin after a refused upstream change; restoring the git remote to the one read before it")
+		return fallback
+	}
+	if cur == nil {
+		return nil
+	}
+	return &remotesync.Remote{URL: cur.URL, Branch: cur.Branch, AuthMethod: cur.AuthMethod}
 }
 
 // originView is the HAL response body for GET /repos/{repo}/origin. It mirrors

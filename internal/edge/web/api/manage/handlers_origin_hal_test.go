@@ -13,62 +13,22 @@ import (
 	"testing"
 )
 
-// setOriginUpstream shares that ordering and therefore that window: a refspec
-// rewritten to the new branch while GetRemote still reports the old one leaves
-// reconcileNow reconciling against a refs/remotes/origin/<old> nothing updates
-// any more. The restore has to put the refspec back.
+// The vetted branch is applied only to the origin URL it was vetted against,
+// and a refused change leaves the git remote matching what control.db
+// records. setOriginUpstream rewrites the refspec before the control.db write
+// (the ordering it inherited from SetUpstreamBranch), so a refused write must
+// put the git remote back; since the refusal means another write won, back
+// means to THAT write's origin, not to what the closure read.
 //
-// The forced failure is a live repo whose control.db row is gone — the injected
-// origin still answers GetRemote, so the call gets past its "no origin
-// configured" guard and into ConfigureRemote, and Origins.SetBranch then
-// updates no rows and says so.
-func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
-	originsRoot := t.TempDir()
-	m, ri := newControlDBManager(t, originsRoot)
-
-	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	if _, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
-		URL: url, Branch: "main", AuthMethod: "none",
-	})); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	if err := m.Origins().Delete(ri.UID()); err != nil {
-		t.Fatalf("Origins().Delete: %v", err)
-	}
-
-	if err := setOriginUpstream(context.Background(), m, ri, url, "develop"); err == nil {
-		t.Fatal("SetBranch against a missing row must fail the call")
-	}
-
-	var refspecs []string
-	ri.WithRead(func(svc *store.Service) { refspecs = storetest.FetchRefspecs(svc, "origin") })
-	got := make(map[string]bool, len(refspecs))
-	for _, rs := range refspecs {
-		got[rs] = true
-	}
-	if !got["+refs/heads/main:refs/remotes/origin/main"] {
-		t.Errorf("the upstream refspec must be restored after a failed persist; got %v", refspecs)
-	}
-	if got["+refs/heads/develop:refs/remotes/origin/develop"] {
-		t.Errorf("the refspec still tracks a branch nothing recorded; got %v", refspecs)
-	}
-	if !got["+refs/heads/"+ri.AgentBranch()+":refs/remotes/origin/"+ri.AgentBranch()] {
-		t.Errorf("the agent-branch refspec must survive the restore; got %v", refspecs)
-	}
-}
-
-// The branch is applied only to the origin URL it was vetted against. Two
-// windows, one test each step:
-//   - the origin the closure reads is no longer the vetted URL (an attach
-//     re-pointed it after CheckOriginBranch): refused before the refspec moves;
-//   - the closure still reads the vetted URL but control.db already records
-//     another one (an attach whose durable write landed in between): the
-//     compare-and-set in Origins.SetBranch refuses, and the refspec is put
-//     back.
+// Three races, each forced by writing control.db directly while the live
+// (injected) origin still reads as the vetted URL:
+//  1. vetted against another URL than the one stored: refused, nothing moves;
+//  2. an attach stored R2 after the check: refused, the git remote follows R2;
+//  3. a detach removed the origin after the check: refused, no git remote.
 //
-// SABOTAGE: drop the `existing.URL != vettedURL` check -> the first step
-// rewrites the refspec -> red; pass existing.URL instead of vettedURL to
-// SetBranch with the WHERE url dropped -> the second step stores ybranch -> red.
+// SABOTAGE: drop `AND url = ?` from Origins.SetBranch -> step 1 stores ybranch
+// -> red; restore `existing` instead of the recorded origin -> the git remote
+// stays on the stale URL in step 2 and survives in step 3 -> red.
 func TestSetOriginUpstream_AppliesOnlyToTheVettedURL(t *testing.T) {
 	originsRoot := t.TempDir()
 	m, ri := newControlDBManager(t, originsRoot)
@@ -78,45 +38,62 @@ func TestSetOriginUpstream_AppliesOnlyToTheVettedURL(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	refspecs := func() map[string]bool {
-		var rs []string
-		ri.WithRead(func(svc *store.Service) { rs = storetest.FetchRefspecs(svc, "origin") })
+	gitRemote := func() (map[string]bool, []string) {
+		var rs, urls []string
+		ri.WithRead(func(svc *store.Service) {
+			rs = storetest.FetchRefspecs(svc, "origin")
+			urls = storetest.RemoteURLs(svc, "origin")
+		})
 		got := make(map[string]bool, len(rs))
 		for _, s := range rs {
 			got[s] = true
 		}
-		return got
+		return got, urls
 	}
-	const ybranch = "+refs/heads/ybranch:refs/remotes/origin/ybranch"
+	const (
+		mainSpec = "+refs/heads/main:refs/remotes/origin/main"
+		ySpec    = "+refs/heads/ybranch:refs/remotes/origin/ybranch"
+	)
+	agentSpec := "+refs/heads/" + ri.AgentBranch() + ":refs/remotes/origin/" + ri.AgentBranch()
 
-	// Step 1: vetted against another URL than the one stored now.
+	// 1. Vetted against another URL than the one stored.
 	err := setOriginUpstream(context.Background(), m, ri, "https://vetted.example/kb.git", "ybranch")
 	if !errors.Is(err, control.ErrOriginChanged) {
-		t.Fatalf("a changed origin must be refused with ErrOriginChanged; got %v", err)
+		t.Fatalf("step 1: a changed origin must be refused with ErrOriginChanged; got %v", err)
 	}
-	if refspecs()[ybranch] {
-		t.Fatal("the refspec moved for an origin nobody vetted")
+	if stored, _ := m.Origins().Get(ri.UID()); stored == nil || stored.Branch != "main" {
+		t.Fatalf("step 1: the stored branch moved: %+v", stored)
+	}
+	if specs, urls := gitRemote(); specs[ySpec] || !specs[mainSpec] || !specs[agentSpec] || len(urls) != 1 || urls[0] != url {
+		t.Fatalf("step 1: the git remote must be back on %s main; got %v %v", url, specs, urls)
 	}
 
-	// Step 2: the durable record moved to R2 under a live origin that still
-	// reads as the vetted URL.
+	// 2. An attach stored R2 between the check and the write.
 	const r2 = "https://r2.example/kb.git"
 	if err := m.Origins().Set(ri.UID(), control.Origin{URL: r2, Branch: "main", AuthMethod: "none"}); err != nil {
 		t.Fatalf("Origins().Set: %v", err)
 	}
 	err = setOriginUpstream(context.Background(), m, ri, url, "ybranch")
 	if !errors.Is(err, control.ErrOriginChanged) {
-		t.Fatalf("the compare-and-set must refuse a record that moved; got %v", err)
+		t.Fatalf("step 2: the compare-and-set must refuse a record that moved; got %v", err)
 	}
-	stored, gerr := m.Origins().Get(ri.UID())
-	if gerr != nil {
-		t.Fatal(gerr)
+	if stored, _ := m.Origins().Get(ri.UID()); stored == nil || stored.URL != r2 || stored.Branch != "main" {
+		t.Fatalf("step 2: the branch vetted against %s landed on %s: %+v", url, r2, stored)
 	}
-	if stored.URL != r2 || stored.Branch != "main" {
-		t.Fatalf("the branch vetted against %s landed on %s: %+v", url, r2, stored)
+	if specs, urls := gitRemote(); specs[ySpec] || !specs[mainSpec] || len(urls) != 1 || urls[0] != r2 {
+		t.Fatalf("step 2: the git remote must follow the attach that won (%s main); got %v %v", r2, specs, urls)
 	}
-	if got := refspecs(); got[ybranch] || !got["+refs/heads/main:refs/remotes/origin/main"] {
-		t.Fatalf("the refspec must be put back after the refused write; got %v", got)
+
+	// 3. A detach removed the origin between the check and the write.
+	if err := m.Origins().Delete(ri.UID()); err != nil {
+		t.Fatalf("Origins().Delete: %v", err)
+	}
+	err = setOriginUpstream(context.Background(), m, ri, url, "ybranch")
+	if !errors.Is(err, control.ErrOriginChanged) {
+		t.Fatalf("step 3: a removed origin must be refused with ErrOriginChanged; got %v", err)
+	}
+	if specs, urls := gitRemote(); len(specs) != 0 || len(urls) != 0 {
+		t.Fatalf("step 3: the git remote must follow the detach that won (none); got %v %v", specs, urls)
 	}
 }
 
