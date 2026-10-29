@@ -68,7 +68,7 @@ func TestOrigins_RefuseAnEmptyBranch(t *testing.T) {
 	require.Nil(t, got, "nothing is stored for a refused write")
 
 	require.NoError(t, o.Set("u1", control.Origin{URL: "https://example.test/kb.git", Branch: "trunk"}))
-	require.ErrorIs(t, o.SetBranch("u1", ""), model.ErrNoConsensusBranch)
+	require.ErrorIs(t, o.SetBranch("u1", "https://example.test/kb.git", ""), model.ErrNoConsensusBranch)
 	got, err = o.Get("u1")
 	require.NoError(t, err)
 	require.Equal(t, "trunk", got.Branch, "the stored branch is unchanged")

@@ -23,6 +23,9 @@ import (
 var (
 	errOriginURLRequired = errors.New("url is required")
 	errOriginInvalidURL  = errors.New("invalid url")
+	// errNoOrigin: PATCH /origin/upstream on a repo with no origin. There is
+	// no branch to re-point and nothing to vet one against.
+	errNoOrigin = errors.New("no origin configured")
 )
 
 // originsOf returns the manager's control.db origin tenant, refusing rather
@@ -138,7 +141,14 @@ func getOrigin(_ context.Context, ri *repos.RepoInstance) (*remotesync.Remote, e
 // reconcileNow reconciling against a refs/remotes/origin/<old> nothing updates
 // any more. So the same rollback applies — restore the refspec, then return the
 // error.
-func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, branch string) error {
+//
+// vettedURL is the origin URL the caller's CheckOriginBranch judged the new
+// branch against. The change applies only while the origin is still that URL:
+// checked first against what this closure reads (refused before anything is
+// touched), and again by Origins.SetBranch's compare-and-set in the UPDATE
+// that makes the change durable, which catches an attach that lands in
+// between. Either refusal is control.ErrOriginChanged.
+func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstance, vettedURL, branch string) error {
 	origins, oerr := originsOf(m)
 	if oerr != nil {
 		return oerr
@@ -151,14 +161,18 @@ func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstan
 			return
 		}
 		if existing == nil || existing.URL == "" {
-			err = fmt.Errorf("SetOriginUpstream: no origin configured")
+			err = fmt.Errorf("SetOriginUpstream: %w", errNoOrigin)
+			return
+		}
+		if existing.URL != vettedURL {
+			err = fmt.Errorf("SetOriginUpstream: %w since the branch was checked", control.ErrOriginChanged)
 			return
 		}
 		if cerr := repos.ConfigureGitRemote(svc, existing.URL, existing.AuthMethod, branch, ri.AgentBranch()); cerr != nil {
 			err = cerr
 			return
 		}
-		if serr := origins.SetBranch(ri.UID(), branch); serr != nil {
+		if serr := origins.SetBranch(ri.UID(), vettedURL, branch); serr != nil {
 			err = serr
 			restoreRemoteConfig(svc, ri, existing, "SetOriginUpstream")
 			return
@@ -391,6 +405,14 @@ func writeAttachRefusal(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 	}
 }
 
+// writeNoOrigin answers an upstream change on a repo with no origin: 409,
+// because the request conflicts with the repo's state (attach one first).
+func writeNoOrigin(w http.ResponseWriter, r *http.Request) {
+	hal.WriteProblem(w, http.StatusConflict, "No origin",
+		"this repo has no origin, so there is no upstream branch to change; attach one with PUT /origin",
+		r.URL.Path)
+}
+
 // isValidUpstreamBranch applies a conservative subset of git's ref-name rules,
 // enough to keep a caller-supplied branch from breaking the fetch refspec it is
 // woven into (`+refs/heads/<branch>:refs/remotes/origin/<branch>`). It rejects
@@ -441,39 +463,62 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 				"branch name contains characters not allowed in a git ref", r.URL.Path)
 			return
 		}
+		// A stopped manager is refused first, as setOriginUpstream would,
+		// so its answer stays the one the route documents.
+		if _, err := originsOf(m); err != nil {
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set upstream branch",
+				err.Error(), r.URL.Path)
+			return
+		}
 		// The new branch is a different consensus branch, so it is vetted
 		// like an attach (CheckOriginBranch: another repo's knowledge base,
 		// unrelated history) before the refspec moves. A guard only, not the
-		// AttachOrigin event: no indexing exclusivity, no Sync restart. With
-		// no stored origin there is nothing to vet, and setOriginUpstream
-		// refuses as before. A failed read is left to setOriginUpstream too:
-		// it reads the same origin first and fails the same way, before any
-		// change, so its error mapping stays the one the route documents.
+		// AttachOrigin event: no indexing exclusivity, no Sync restart.
+		// FAIL CLOSED: an origin that cannot be read, or no origin at all,
+		// is refused here; nothing is ever re-pointed without the check.
 		existing, gerr := getOrigin(r.Context(), ri)
-		if gerr == nil && existing != nil && existing.URL != "" {
-			authMethod := existing.AuthMethod
-			if authMethod == "cert" {
-				// knomit's decision, not an input: the guard decides again,
-				// exactly as PUT /origin does.
-				authMethod = ""
-			}
-			if err := m.CheckOriginBranch(r.Context(), ri, repos.OriginSpec{
-				URL:        existing.URL,
-				Branch:     req.Branch,
-				AuthMethod: authMethod,
-				AuthToken:  existing.AuthToken,
-			}, req.ReplaceMain); err != nil {
-				writeAttachRefusal(w, r, b, repoName, err, "Failed to set upstream branch")
-				return
-			}
+		switch {
+		case httpx.StoreUnavailable(gerr):
+			httpx.WriteStoreUnavailable(w, r)
+			return
+		case gerr != nil:
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to get origin", gerr.Error(), r.URL.Path)
+			return
+		case existing == nil || existing.URL == "":
+			writeNoOrigin(w, r)
+			return
 		}
-		if err := setOriginUpstream(r.Context(), m, ri, req.Branch); err != nil {
-			if httpx.StoreUnavailable(err) {
+		authMethod := existing.AuthMethod
+		if authMethod == "cert" {
+			// knomit's decision, not an input: the guard decides again,
+			// exactly as PUT /origin does.
+			authMethod = ""
+		}
+		if err := m.CheckOriginBranch(r.Context(), ri, repos.OriginSpec{
+			URL:        existing.URL,
+			Branch:     req.Branch,
+			AuthMethod: authMethod,
+			AuthToken:  existing.AuthToken,
+		}, req.ReplaceMain); err != nil {
+			writeAttachRefusal(w, r, b, repoName, err, "Failed to set upstream branch")
+			return
+		}
+		// Applied only to the URL just vetted (a compare-and-set): an origin
+		// re-pointed or removed since the check is refused, not re-pointed.
+		if err := setOriginUpstream(r.Context(), m, ri, existing.URL, req.Branch); err != nil {
+			switch {
+			case httpx.StoreUnavailable(err):
 				httpx.WriteStoreUnavailable(w, r)
-				return
+			case errors.Is(err, errNoOrigin):
+				writeNoOrigin(w, r)
+			case errors.Is(err, control.ErrOriginChanged):
+				hal.WriteProblem(w, http.StatusConflict, "Origin changed",
+					"the origin was changed while the new branch was being checked; nothing was changed, so read the origin and retry",
+					r.URL.Path)
+			default:
+				hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set upstream branch",
+					err.Error(), r.URL.Path)
 			}
-			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to set upstream branch",
-				err.Error(), r.URL.Path)
 			return
 		}
 

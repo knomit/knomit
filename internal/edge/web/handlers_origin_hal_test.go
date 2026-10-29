@@ -722,12 +722,17 @@ func TestPutOrigin_PersistsToControlDB(t *testing.T) {
 	}
 }
 
-// TestPatchOriginUpstream_NoOriginIsRejected pins the guard that
-// SetOriginUpstream inherited from the deleted store.SetUpstreamBranch:
-// changing the upstream on a repo that has no origin is an error, not a silent
-// no-op that would wire up a git remote with an empty URL.
+// TestPatchOriginUpstream_NoOriginIsRejected: changing the upstream on a repo
+// that has no origin is refused (409 "No origin") by the handler itself,
+// before the branch guard and before setOriginUpstream, and nothing is
+// written: no git remote with an empty URL, no control.db row. The handler
+// used to skip the guard and fall through here, which is fail-open the moment
+// an origin appears between its read and setOriginUpstream's.
+//
+// SABOTAGE: drop the `existing == nil` case in handleHALSetOriginUpstream ->
+// the guard runs on an empty URL and answers otherwise -> red.
 func TestPatchOriginUpstream_NoOriginIsRejected(t *testing.T) {
-	s, _, _ := newControlDBTestServer(t, t.TempDir())
+	s, m, ri := newControlDBTestServer(t, t.TempDir())
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
@@ -736,10 +741,17 @@ func TestPatchOriginUpstream_NoOriginIsRejected(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
 	p := originProblem(t, rec)
-	require.Equal(t, "Failed to set upstream branch", p.Title)
-	require.Equal(t, "SetOriginUpstream: no origin configured", p.Detail)
+	require.Equal(t, "No origin", p.Title)
+	require.Equal(t, "/repos/alpha/origin/upstream", p.Instance)
+
+	stored, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Nil(t, stored, "a refused PATCH stores no origin")
+	var refspecs []string
+	ri.WithRead(func(svc *store.Service) { refspecs = storetest.FetchRefspecs(svc, "origin") })
+	require.Empty(t, refspecs, "a refused PATCH configures no git remote")
 }
 
 // TestPatchOriginUpstream_PersistsToControlDB exercises setOriginUpstream

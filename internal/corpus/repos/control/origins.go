@@ -166,16 +166,25 @@ func (o *Origins) Set(uid string, org Origin) error {
 	return nil
 }
 
-// SetBranch changes the consensus upstream branch WITHOUT touching stored auth.
-// It is the control.db half of an upstream change: the caller
-// (SetOriginUpstream) rewrites the git fetch refspec FIRST and only calls this
-// on success, so the stored branch and the refspec can never be left
-// permanently inconsistent.
-func (o *Origins) SetBranch(uid, branch string) error {
+// ErrOriginChanged is SetBranch's refusal when no origin with the url the
+// caller vetted is stored any more: another write re-pointed or removed the
+// origin in between, so the branch change would apply to a remote nobody
+// checked. Nothing is written.
+var ErrOriginChanged = errors.New("the origin changed")
+
+// SetBranch changes the consensus upstream branch WITHOUT touching stored auth,
+// and only while the stored url is still url: the compare-and-set is the WHERE
+// of the one UPDATE that makes the change, so an attach that re-points the
+// origin between the caller's check and this write cannot have the branch
+// applied to its new remote. It is the control.db half of an upstream change:
+// the caller (setOriginUpstream) rewrites the git fetch refspec FIRST and only
+// calls this on success, so the stored branch and the refspec can never be
+// left permanently inconsistent.
+func (o *Origins) SetBranch(uid, url, branch string) error {
 	if branch == "" {
 		return fmt.Errorf("origins set branch: %w", model.ErrNoConsensusBranch)
 	}
-	res, err := o.db.Exec(`UPDATE repo_origins SET branch = ? WHERE repo_uid = ?`, branch, uid)
+	res, err := o.db.Exec(`UPDATE repo_origins SET branch = ? WHERE repo_uid = ? AND url = ?`, branch, uid, url)
 	if err != nil {
 		return fmt.Errorf("origins set branch: %w", err)
 	}
@@ -184,7 +193,7 @@ func (o *Origins) SetBranch(uid, branch string) error {
 		return fmt.Errorf("origins set branch: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("origins set branch: no origin configured for %q", uid)
+		return fmt.Errorf("origins set branch: %w: no origin with the checked url is configured for %q", ErrOriginChanged, uid)
 	}
 	return nil
 }

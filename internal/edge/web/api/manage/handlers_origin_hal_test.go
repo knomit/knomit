@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/storetest"
 	"knomit/internal/foundation/config"
@@ -35,7 +36,7 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 		t.Fatalf("Origins().Delete: %v", err)
 	}
 
-	if err := setOriginUpstream(context.Background(), m, ri, "develop"); err == nil {
+	if err := setOriginUpstream(context.Background(), m, ri, url, "develop"); err == nil {
 		t.Fatal("SetBranch against a missing row must fail the call")
 	}
 
@@ -53,6 +54,69 @@ func TestSetOriginUpstream_FailedPersistRestoresTheRefspec(t *testing.T) {
 	}
 	if !got["+refs/heads/"+ri.AgentBranch()+":refs/remotes/origin/"+ri.AgentBranch()] {
 		t.Errorf("the agent-branch refspec must survive the restore; got %v", refspecs)
+	}
+}
+
+// The branch is applied only to the origin URL it was vetted against. Two
+// windows, one test each step:
+//   - the origin the closure reads is no longer the vetted URL (an attach
+//     re-pointed it after CheckOriginBranch): refused before the refspec moves;
+//   - the closure still reads the vetted URL but control.db already records
+//     another one (an attach whose durable write landed in between): the
+//     compare-and-set in Origins.SetBranch refuses, and the refspec is put
+//     back.
+//
+// SABOTAGE: drop the `existing.URL != vettedURL` check -> the first step
+// rewrites the refspec -> red; pass existing.URL instead of vettedURL to
+// SetBranch with the WHERE url dropped -> the second step stores ybranch -> red.
+func TestSetOriginUpstream_AppliesOnlyToTheVettedURL(t *testing.T) {
+	originsRoot := t.TempDir()
+	m, ri := newControlDBManager(t, originsRoot)
+	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
+	if _, err := m.Send(context.Background(), ri, repos.AttachOrigin(repos.OriginSpec{
+		URL: url, Branch: "main", AuthMethod: "none",
+	})); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	refspecs := func() map[string]bool {
+		var rs []string
+		ri.WithRead(func(svc *store.Service) { rs = storetest.FetchRefspecs(svc, "origin") })
+		got := make(map[string]bool, len(rs))
+		for _, s := range rs {
+			got[s] = true
+		}
+		return got
+	}
+	const ybranch = "+refs/heads/ybranch:refs/remotes/origin/ybranch"
+
+	// Step 1: vetted against another URL than the one stored now.
+	err := setOriginUpstream(context.Background(), m, ri, "https://vetted.example/kb.git", "ybranch")
+	if !errors.Is(err, control.ErrOriginChanged) {
+		t.Fatalf("a changed origin must be refused with ErrOriginChanged; got %v", err)
+	}
+	if refspecs()[ybranch] {
+		t.Fatal("the refspec moved for an origin nobody vetted")
+	}
+
+	// Step 2: the durable record moved to R2 under a live origin that still
+	// reads as the vetted URL.
+	const r2 = "https://r2.example/kb.git"
+	if err := m.Origins().Set(ri.UID(), control.Origin{URL: r2, Branch: "main", AuthMethod: "none"}); err != nil {
+		t.Fatalf("Origins().Set: %v", err)
+	}
+	err = setOriginUpstream(context.Background(), m, ri, url, "ybranch")
+	if !errors.Is(err, control.ErrOriginChanged) {
+		t.Fatalf("the compare-and-set must refuse a record that moved; got %v", err)
+	}
+	stored, gerr := m.Origins().Get(ri.UID())
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if stored.URL != r2 || stored.Branch != "main" {
+		t.Fatalf("the branch vetted against %s landed on %s: %+v", url, r2, stored)
+	}
+	if got := refspecs(); got[ybranch] || !got["+refs/heads/main:refs/remotes/origin/main"] {
+		t.Fatalf("the refspec must be put back after the refused write; got %v", got)
 	}
 }
 
@@ -76,7 +140,7 @@ func TestOriginWrites_RefuseAStoppedManager(t *testing.T) {
 		run  func() error
 	}{
 		{"setOriginUpstream", func() error {
-			return setOriginUpstream(context.Background(), m, nil, "main")
+			return setOriginUpstream(context.Background(), m, nil, "", "main")
 		}},
 	}
 	for _, c := range calls {
