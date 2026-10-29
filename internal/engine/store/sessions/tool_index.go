@@ -163,12 +163,30 @@ func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items [
 // queue, ordered by sort_key ASC then rowid ASC (breadth-first for explain;
 // rank order for query). It also bumps the session's last_used_at in the same
 // transaction so an actively-paged session is never reaped as idle.
+//
+// BEGIN IMMEDIATE, on a connection of its own (as createPipelineSession): the
+// transaction reads the queue and then deletes from it, and a DEFERRED
+// transaction whose read began before another cursor call committed fails its
+// first write with SQLITE_BUSY ("database is locked") at once, which the busy
+// timeout cannot wait out. The session DB is one file for every cursor, so two
+// walks on DIFFERENT cursors collide this way too. Taking the write lock up
+// front makes a concurrent dequeue wait its turn, then read the queue as the
+// winner left it, so no item is ever handed to two callers.
 func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]model.QueueItem, error) {
-	tx, err := ti.db.BeginTx(ctx, nil)
+	tx, err := ti.db.Conn(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("DequeuePaths conn: %w", err)
+	}
+	defer tx.Close()
+	if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = tx.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		}
+	}()
 
 	rows, err := tx.QueryContext(ctx,
 		`SELECT rowid, path, commit_hash, sort_key, state FROM tool_queue
@@ -213,9 +231,10 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 		return nil, fmt.Errorf("DequeuePaths touch: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, fmt.Errorf("DequeuePaths commit: %w", err)
 	}
+	committed = true
 	return items, nil
 }
 
