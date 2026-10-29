@@ -147,6 +147,26 @@ func TestOAuthLensPatch_LensTokenCannotAddARepoItDoesNotReach(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, makeBetaWrite.Code, "the write repo is a member too: %s", makeBetaWrite.Body.String())
 	require.NotContains(t, readsOf(), "beta")
 
+	// Nor may it gain anything through a member the lens already has: promoting
+	// read member gamma to the write repo would let it write into gamma, and
+	// re-pinning gamma to another branch would let it read that branch. Both
+	// are refused with the same body as an unknown uid.
+	asUnknown := func(rec *httptest.ResponseRecorder, member string) {
+		t.Helper()
+		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+		require.Equal(t,
+			strings.ReplaceAll(unknown.Body.String(), "no-such-uid", "X"),
+			strings.ReplaceAll(rec.Body.String(), uid(member), "X"))
+	}
+	asUnknown(patch(h, "/api/v1/lenses/eng", fmt.Sprintf(`{"write":{"uid":%q}}`, uid("gamma"))), "gamma")
+	asUnknown(patch(h, "/api/v1/lenses/eng", fmt.Sprintf(`{"reads":[{"uid":%q,"branch":"main"}]}`, uid("gamma"))), "gamma")
+	l, _, err := m.LensRegistry().Get("eng")
+	require.NoError(t, err)
+	require.Equal(t, uid("alpha"), l.WriteUID, "the write repo did not move")
+	for _, rd := range l.Reads {
+		require.Empty(t, rd.Branch, "no member was re-pinned")
+	}
+
 	// What the lens already has stays editable by its own token.
 	same := patch(h, "/api/v1/lenses/eng", fmt.Sprintf(`{"write":{"uid":%q},"reads":[{"uid":%q}],"description":"d"}`, uid("alpha"), uid("gamma")))
 	require.Equal(t, http.StatusOK, same.Code, same.Body.String())

@@ -55,6 +55,11 @@ func callerOwner(ctx context.Context) string {
 // tell "exists, not yours" from "never existed".
 const errTaskNotFound = "task not found"
 
+// errUnreadableRequest refuses a request the task-ownership hook cannot read.
+// mcp-go has already parsed the envelope before the hook runs, so this is
+// unreachable through the transport today; it exists so the hook fails closed.
+const errUnreadableRequest = "invalid request"
+
 // taskOwnerRetention is how long a finished task's owner stays recorded. A
 // task is refused to everyone once its owner is forgotten, the owner
 // included, so this bounds the record without ever widening access: mcp-go
@@ -100,23 +105,33 @@ func (t *taskOwners) addHooks(hooks *mcpserver.Hooks, taskHooks *mcpserver.TaskH
 	taskHooks.AddOnTaskCancelled(finished)
 
 	// The one hook that runs before every request AND can refuse it.
+	//
+	// It FAILS CLOSED: a request it cannot read is refused, never waved
+	// through. mcp-go parses the same bytes after this hook, and a request this
+	// hook could not read may still be one mcp-go reads (a different decoder, a
+	// future field type); refusing it here is what keeps a task request from
+	// reaching mcp-go unchecked.
 	hooks.AddOnRequestInitialization(func(ctx context.Context, _ any, message any) error {
 		raw, ok := message.(json.RawMessage)
 		if !ok {
-			return nil
+			var err error
+			if raw, err = json.Marshal(message); err != nil {
+				return errors.New(errUnreadableRequest)
+			}
 		}
-		var msg struct {
+		var envelope struct {
 			Method mcpgo.MCPMethod `json:"method"`
-			Params struct {
-				TaskID string `json:"taskId"`
-			} `json:"params"`
+			Params json.RawMessage `json:"params"`
 		}
-		if json.Unmarshal(raw, &msg) != nil {
-			return nil // mcp-go answers the malformed request itself
+		if json.Unmarshal(raw, &envelope) != nil {
+			return errors.New(errUnreadableRequest)
 		}
-		switch msg.Method {
+		switch envelope.Method {
 		case mcpgo.MethodTasksGet, mcpgo.MethodTasksResult, mcpgo.MethodTasksCancel:
-			if !t.owns(ctx, msg.Params.TaskID) {
+			var params struct {
+				TaskID string `json:"taskId"`
+			}
+			if json.Unmarshal(envelope.Params, &params) != nil || !t.owns(ctx, params.TaskID) {
 				return errors.New(errTaskNotFound)
 			}
 		}

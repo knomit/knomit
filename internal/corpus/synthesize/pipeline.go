@@ -247,13 +247,23 @@ func (p *Pipeline) currentItemHint(sessionID string) string {
 
 // activeSession loads a session a call is about to act on, refusing one that
 // is missing, no longer active, or still planning.
+//
+// A caller that names its branch (p.branch: the MCP handlers pass the
+// binding's write branch) reaches only sessions opened on that branch. A
+// session on another branch reads exactly as missing: a session_id is a
+// shared secret, not a reach, and without this a caller confined to some
+// branches of the write repo (a lens's) could continue a session on a branch
+// it does not serve. Work-stealing workers share a branch, so they are
+// unaffected. An in-process caller with no branch is not checked, so the
+// session's own branch stays the only one the engine reads after creation
+// (invariants/synthesize/session-branch-binding).
 func (p *Pipeline) activeSession(ctx context.Context, d step.Deps, sessionID string) (*model.PipelineSession, error) {
 	tool := p.strategy.Tool()
 	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, step.Wrapf(tool, err, "get session")
 	}
-	if sess == nil {
+	if sess == nil || p.branch != "" && sess.Branch != p.branch {
 		return nil, step.Errf(tool, "session %q not found", sessionID)
 	}
 	if sess.Status != "active" {

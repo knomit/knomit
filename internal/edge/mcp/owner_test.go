@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
@@ -132,4 +133,31 @@ func TestCallerOwner_EndpointAndPrincipal(t *testing.T) {
 	require.Equal(t, a, callerOwner(asCaller(base, ownerEndpointA+"/", "alice")), "a trailing / is the same endpoint")
 	require.NotEqual(t, a, callerOwner(asCaller(base, ownerEndpointA, "bob")))
 	require.NotEqual(t, a, callerOwner(asCaller(base, ownerEndpointB, "alice")))
+}
+
+// The task-ownership hook FAILS CLOSED: a tasks/* request whose params it
+// cannot read is refused as "task not found", never waved through to mcp-go
+// unchecked, and an unreadable request is refused outright. The owner's
+// well-formed request (positive control) and a non-task method pass.
+//
+// Sabotage: return nil on a params decode error (the old behaviour) and the
+// unreadable tasks/get rows pass.
+func TestTaskOwnerHook_FailsClosedOnAnUnreadableRequest(t *testing.T) {
+	hooks, taskHooks := &mcpserver.Hooks{}, &mcpserver.TaskHooks{}
+	newTaskOwners().addHooks(hooks, taskHooks)
+	owner := asCaller(context.Background(), ownerEndpointA, "alice")
+	taskHooks.OnTaskCreated[0](owner, mcpserver.TaskMetrics{TaskID: "t1"})
+	hook := hooks.OnRequestInitialization[0]
+
+	require.NoError(t, hook(owner, 1, json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tasks/get","params":{"taskId":"t1"}}`)))
+	require.NoError(t, hook(owner, 1, json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	for _, raw := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tasks/get","params":{"taskId":5}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tasks/result","params":"t1"}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tasks/cancel","params":[{"taskId":"t1"}]}`,
+	} {
+		err := hook(owner, 1, json.RawMessage(raw))
+		require.EqualError(t, err, errTaskNotFound, raw)
+	}
+	require.EqualError(t, hook(owner, 1, json.RawMessage(`not json`)), errUnreadableRequest)
 }
