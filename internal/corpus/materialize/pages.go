@@ -74,6 +74,12 @@ const PageCap = 32 << 10
 // nothing.
 var ErrCursorExpired = errors.New("materialize cursor expired or not found")
 
+// ErrCursorBusy is NextPage's answer when the session store stayed locked
+// past its busy timeout while dequeuing the page (model.ErrSessionBusy). The
+// dequeue was rolled back: nothing was consumed, and the same cursor call may
+// be retried. The edge answers it as retryable (REST 503 with Retry-After).
+var ErrCursorBusy = errors.New("materialize cursor busy; retry the same call")
+
 // PageEnv is what every page repeats about the document, and what each
 // snapshot item stores so a later page can repeat it. Its JSON is the wire
 // envelope of knomit_materialize AND of the REST pages route: one struct, so
@@ -205,6 +211,9 @@ func NextPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.
 	}
 
 	items, err := sc.Sessions.DequeuePaths(ctx, cursor, limit)
+	if errors.Is(err, model.ErrSessionBusy) {
+		return Page{}, fmt.Errorf("%w: %w", ErrCursorBusy, err)
+	}
 	if err != nil {
 		return Page{}, fmt.Errorf("dequeue error: %w", err)
 	}

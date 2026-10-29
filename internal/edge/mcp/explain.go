@@ -750,6 +750,9 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// Retry dequeue up to 3 times if all items in a batch fail.
 	for range 3 {
 		items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, explainPageSize)
+		if errors.Is(err, model.ErrSessionBusy) {
+			return mcpgo.NewToolResultError(errSessionBusy), nil
+		}
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("dequeue error: %v", err)), nil
 		}

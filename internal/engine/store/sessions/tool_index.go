@@ -4,12 +4,14 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"knomit/internal/engine/store/model"
 
 	"github.com/google/uuid"
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 // ToolIndex persists tool-session paging state. It targets the ephemeral
@@ -175,11 +177,11 @@ func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items [
 func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]model.QueueItem, error) {
 	tx, err := ti.db.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("DequeuePaths conn: %w", err)
+		return nil, busy(fmt.Errorf("DequeuePaths conn: %w", err))
 	}
 	defer tx.Close()
 	if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
+		return nil, busy(fmt.Errorf("DequeuePaths begin: %w", err))
 	}
 	committed := false
 	defer func() {
@@ -196,7 +198,7 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 		sessionID, limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("DequeuePaths select: %w", err)
+		return nil, busy(fmt.Errorf("DequeuePaths select: %w", err))
 	}
 
 	var items []model.QueueItem
@@ -206,20 +208,20 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 		var item model.QueueItem
 		if err := rows.Scan(&rowID, &item.Path, &item.CommitHash, &item.SortKey, &item.State); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("DequeuePaths scan: %w", err)
+			return nil, busy(fmt.Errorf("DequeuePaths scan: %w", err))
 		}
 		items = append(items, item)
 		rowIDs = append(rowIDs, rowID)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("DequeuePaths rows: %w", err)
+		return nil, busy(fmt.Errorf("DequeuePaths rows: %w", err))
 	}
 
 	// Delete the dequeued rows.
 	for _, rowID := range rowIDs {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_queue WHERE rowid = ?`, rowID); err != nil {
-			return nil, fmt.Errorf("DequeuePaths delete: %w", err)
+			return nil, busy(fmt.Errorf("DequeuePaths delete: %w", err))
 		}
 	}
 
@@ -228,14 +230,25 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE tool_sessions SET last_used_at = ? WHERE id = ?`, now, sessionID,
 	); err != nil {
-		return nil, fmt.Errorf("DequeuePaths touch: %w", err)
+		return nil, busy(fmt.Errorf("DequeuePaths touch: %w", err))
 	}
 
 	if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
-		return nil, fmt.Errorf("DequeuePaths commit: %w", err)
+		return nil, busy(fmt.Errorf("DequeuePaths commit: %w", err))
 	}
 	committed = true
 	return items, nil
+}
+
+// busy marks err with model.ErrSessionBusy when SQLite reports the session DB
+// busy or locked (the busy timeout ran out). DequeuePaths alone uses it: its
+// transaction is rolled back on every error, so the caller may retry.
+func busy(err error) error {
+	var se sqlite3.Error
+	if errors.As(err, &se) && (se.Code == sqlite3.ErrBusy || se.Code == sqlite3.ErrLocked) {
+		return fmt.Errorf("%w: %w", model.ErrSessionBusy, err)
+	}
+	return err
 }
 
 // QueueSize returns the number of items in the queue for a session.

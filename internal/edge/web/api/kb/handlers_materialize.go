@@ -71,6 +71,14 @@ func materializePageLimit(q url.Values) (int, error) {
 // finished one and another caller's read the same.
 const errMaterializeCursorExpired = "the cursor is expired or not found; start over without a cursor"
 
+// errMaterializeCursorBusy is the REST answer when the session store stayed
+// locked while dequeuing a page (materialize.ErrCursorBusy): fixed text, no
+// internal error, and nothing was consumed, so the same call can be retried.
+const errMaterializeCursorBusy = "the server is busy; nothing was consumed, retry the same request"
+
+// materializeBusyRetryAfter is the Retry-After (seconds) sent with that 503.
+const materializeBusyRetryAfter = "1"
+
 // splitMaterialize reports whether path addresses the materialize document
 // sub-resource, and returns the fact path without the suffix.
 func splitMaterialize(path string) (string, bool) {
@@ -190,6 +198,11 @@ func serveMaterializePages(w http.ResponseWriter, r *http.Request, b *repos.Bind
 	switch {
 	case errors.Is(err, materialize.ErrCursorExpired):
 		hal.WriteProblem(w, http.StatusNotFound, "Cursor not found", errMaterializeCursorExpired, r.URL.Path)
+		return
+	case errors.Is(err, materialize.ErrCursorBusy):
+		log.Warn().Err(err).Str("file", file).Msg("materialize page: session store busy")
+		w.Header().Set("Retry-After", materializeBusyRetryAfter)
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Materialize busy", errMaterializeCursorBusy, r.URL.Path)
 		return
 	case err != nil:
 		log.Error().Err(err).Str("file", file).Msg("materialize page failed")

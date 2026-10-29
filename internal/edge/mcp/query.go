@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -889,6 +890,9 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	// until a window yields a readable row or the queue drains.
 	for range 3 {
 		items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, pageSize)
+		if errors.Is(err, model.ErrSessionBusy) {
+			return mcpgo.NewToolResultError(errSessionBusy), nil
+		}
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("page error: %v", err)), nil
 		}

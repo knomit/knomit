@@ -1,5 +1,15 @@
 package model
 
+import "errors"
+
+// ErrSessionBusy wraps a DequeuePaths failure caused by the session DB staying
+// locked past its busy timeout (SQLITE_BUSY / SQLITE_LOCKED). The dequeue was
+// rolled back, so nothing was consumed and the same call may be retried.
+// Only DequeuePaths returns it: a busy error on a later write of a page (a
+// re-enqueue after the dequeue committed) is NOT safe to retry and is never
+// marked with it.
+var ErrSessionBusy = errors.New("session store busy")
+
 // ToolSession represents a paginated tool session for a branch.
 type ToolSession struct {
 	ID         string
