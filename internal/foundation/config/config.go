@@ -57,8 +57,10 @@ type GitConfig struct {
 	// admits roughly 5,000 commits of that shape; raise this to attach a
 	// larger one. For both probes the budget is applied twice: to the raw
 	// pack as it arrives, before any of it is parsed (the fetch stops there),
-	// and to the inflated objects the parse stores. Peak memory is about twice
-	// the budget plus go-git's bounded parse cache.
+	// and to the inflated objects the parse stores. Nothing is admitted past
+	// either bound, but this is not a hard memory cap: one object is inflated
+	// whole before it is counted, so a highly compressible object can be held
+	// transiently beyond the budget before it is refused.
 	MaxProbeBytes int64 `toml:"max_probe_bytes"`
 	// LocalReconcileInterval is how often a repo with NO origin fast-forwards
 	// its consensus branch (main) from its own agent branch, so that branch

@@ -88,3 +88,26 @@ func TestProbeStorage_PackWithinBudgetIsParsed(t *testing.T) {
 		t.Fatalf("inflated bytes counted %d, want at least %d", overlay.spent, n*(64<<10))
 	}
 }
+
+// The second bound, through Close: a pack whose RAW size fits the budget but
+// whose objects inflate past it is refused by the parse (SetEncodedObject's
+// inflated count), and Close returns that refusal.
+//
+// SABOTAGE: make budgetedPackWriter.Close return nil on a Parse error -> the
+// over-inflated pack is admitted -> red.
+func TestProbeStorage_InflatedOverBudgetIsRefusedInClose(t *testing.T) {
+	const budget = 1 << 20
+	pack := gitfixture.BlobPack(t, make([]byte, 4<<20)) // 4 MiB of zeros, a few KiB raw
+	if len(pack) >= budget {
+		t.Fatalf("precondition: the raw pack (%d bytes) must fit the %d-byte budget", len(pack), budget)
+	}
+	overlay := newTestProbeStorage(t, budget)
+
+	err := packfile.UpdateObjectStorage(overlay, bytes.NewReader(pack))
+	if !errors.Is(err, ErrHistoryProbeTooLarge) {
+		t.Fatalf("a pack that inflates past the budget must be refused with ErrHistoryProbeTooLarge; got %v", err)
+	}
+	if n := len(overlay.Storage.ObjectStorage.Objects); n != 0 {
+		t.Fatalf("%d objects were stored from a refused pack", n)
+	}
+}

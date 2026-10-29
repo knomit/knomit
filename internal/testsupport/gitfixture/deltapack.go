@@ -52,6 +52,23 @@ func DeltaPack(t testing.TB, n, insert int) []byte {
 	return pack.Bytes()
 }
 
+// BlobPack returns a version-2 git packfile holding blobs as plain (non-delta)
+// blob objects. A large blob of zeros packs to a few KiB raw: the shape whose
+// raw size is far below its inflated size.
+func BlobPack(t testing.TB, blobs ...[]byte) []byte {
+	t.Helper()
+	var pack bytes.Buffer
+	pack.WriteString("PACK")
+	_ = binary.Write(&pack, binary.BigEndian, uint32(2))
+	_ = binary.Write(&pack, binary.BigEndian, uint32(len(blobs)))
+	for _, b := range blobs {
+		writePackObject(t, &pack, 3, b)
+	}
+	sum := sha1.Sum(pack.Bytes())
+	pack.Write(sum[:])
+	return pack.Bytes()
+}
+
 func writePackObject(t testing.TB, w *bytes.Buffer, typ byte, content []byte) {
 	writeObjectHeader(w, typ, len(content))
 	writeZlib(t, w, content)

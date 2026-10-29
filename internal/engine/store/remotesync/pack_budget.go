@@ -26,8 +26,14 @@ import (
 // of the deltas, into target. target receives every object through its own
 // SetEncodedObject, so a store that also counts inflated bytes there keeps
 // that second bound, and a thin pack resolves its external bases through
-// target's reads. Peak memory is therefore the raw pack (at most budget), the
-// objects target admits, and the parser's bounded LRU cache.
+// target's reads.
+//
+// What is bounded: the raw pack by the budget, and the objects target admits
+// by the budget. What is not: go-git inflates ONE object fully before
+// SetEncodedObject counts it, so a highly compressible object can be held
+// transiently beyond the budget (its compressed size times the zlib ratio:
+// a 4 MiB blob of zeros packs to about 8 KiB) before it is refused. Nothing
+// is admitted unchecked; the bound on memory is not "twice the budget".
 func NewBudgetedPackWriter(target storer.EncodedObjectStorer, budget int64, tooLarge error) io.WriteCloser {
 	return &budgetedPackWriter{target: target, budget: budget, tooLarge: tooLarge}
 }
