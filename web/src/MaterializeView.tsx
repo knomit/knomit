@@ -14,6 +14,12 @@ import './materialize.css';
 /** How far below the viewport the next page is asked for. */
 export const NEAR_BOTTOM_PX = 600;
 
+/** The last path segment of a header-supplied name, so a name can never
+ *  carry a directory into the save. */
+function fileNameOnly(n: string | undefined): string {
+  return (n ?? '').split(/[\\/]/).pop()?.trim() ?? '';
+}
+
 type Save = (name: string, text: string, type?: string) => Promise<SaveOutcome>;
 
 type ExportState =
@@ -267,7 +273,9 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
         if (!ctl.signal.aborted) setExp({ kind: 'running', bytes });
       });
       if (ctl.signal.aborted) { setExp({ kind: 'idle' }); return; }
-      const name = exportFilename(rootTitle, target.path);
+      // The server names its own download (Content-Disposition, and it sanitizes
+      // the id part); our builder is only the fallback for a missing header.
+      const name = fileNameOnly(doc.serverName) || exportFilename(rootTitle, target.path);
       const out = await save(name, doc.text, 'text/markdown');
       setExp({ kind: 'done', line: out.kind === 'saved' ? `Saved ${out.where}` : saveOutcomeLine(out) });
     } catch (e) {

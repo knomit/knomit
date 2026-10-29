@@ -147,4 +147,30 @@ describe('stream races', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(held).toHaveLength(3);
   });
+
+  it('a stale load FAILING late does not clear the current load\'s busy flag either (catch path)', async () => {
+    const held: Array<{ resolve: (p: MatPage) => void; reject: (e: Error) => void }> = [];
+    const api: MaterializeApi = {
+      page: vi.fn((_t, o, cursor) => {
+        if (o.depth === 4 && cursor === null) return Promise.resolve(mk('a', 1, 3, 'ca'));
+        return new Promise<MatPage>((resolve, reject) => held.push({ resolve, reject }));
+      }),
+      exportMarkdown: vi.fn(),
+    };
+    const { result, rerender } = renderHook(({ o }) => useMaterializeStream(api, TARGET, o), { initialProps: { o: DEFAULT_OPTIONS } });
+    await waitFor(() => expect(result.current.sections).toHaveLength(3));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(held).toHaveLength(1));
+    rerender({ o: { ...DEFAULT_OPTIONS, depth: 5 } });
+    await waitFor(() => expect(held).toHaveLength(2));
+    await act(async () => { held[1].resolve(mk('b', 1, 3, 'cb')); });
+    await waitFor(() => expect(result.current.sections[0].title).toBe('b1'));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(held).toHaveLength(3));
+    await act(async () => { held[0].reject(new Error('old walk failed')); });   // the OLD load fails late
+    expect(result.current.tail).toBe('loading');                                 // and says nothing about the new walk
+    act(() => result.current.retry());
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(held).toHaveLength(3);
+  });
 });

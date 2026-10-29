@@ -383,6 +383,24 @@ describe('Export .md', () => {
     expect(await screen.findByTestId('mat-export-done')).toHaveTextContent('Saved /home/me/exports/x.md');
   });
 
+  it('saves under the name the server sent in Content-Disposition, not its own', async () => {
+    const save = vi.fn().mockResolvedValue(saved);
+    setup({ total: 3, pageSize: 3, serverName: 'server-chosen-name-0badf00d.md', rootTitle: 'Some other title' }, { save });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0][0]).toBe('server-chosen-name-0badf00d.md');
+  });
+
+  it('never lets a header name carry a directory (the no-header fallback is the slug test above)', async () => {
+    const save = vi.fn().mockResolvedValue(saved);
+    setup({ total: 3, pageSize: 3, serverName: '../../etc/evil.md' }, { save });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0][0]).toBe('evil.md');
+  });
+
   it('writes no file when the export fails, says so, and Retry then saves the whole document', async () => {
     const save = vi.fn().mockResolvedValue(saved);
     const f = makeFixtureApi({ total: 3, pageSize: 3 });

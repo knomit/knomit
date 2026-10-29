@@ -28,6 +28,8 @@ export interface FixtureOptions {
   /** Page-2 cursors are valid for this options key only (see api.calls). */
   exportText?: string;
   exportFails?: boolean;
+  /** The Content-Disposition filename the export answers with, if any. */
+  serverName?: string;
 }
 
 export interface FixtureCall {
@@ -134,7 +136,7 @@ export function makeFixtureApi(o: FixtureOptions = {}) {
       if (o.exportFails) throw new MatError('the document ended early', 500);
       const text = o.exportText ?? `# Materialized\n\n${nodesFor(options).map(n => `### ${n.title}\n`).join('\n')}`;
       onProgress?.(text.length);
-      return { text };
+      return { text, serverName: o.serverName };
     },
   };
   return { api, calls, pageCalls: () => calls.filter(c => c.kind === 'page') };
