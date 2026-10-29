@@ -36,6 +36,16 @@ var ErrKnowledgeBaseAlreadyLocal = errors.New("this knowledge base is already re
 // fine — so it gets its own error and its own status.
 var ErrRegistryUnavailable = errors.New("repo registry unavailable")
 
+// ErrOriginUnrelatedHistory refuses an attach whose origin branch shares no
+// history with the repo's consensus branch while that branch holds facts: the
+// next sync would replace it. An explicit replace (AttachOriginReplacing)
+// admits it.
+var ErrOriginUnrelatedHistory = errors.New("the origin's branch shares no history with this repository")
+
+// ErrOriginNotInspected refuses an attach whose origin history could not be
+// read within the probe budget: which knowledge base it holds is unknown.
+var ErrOriginNotInspected = errors.New("the origin could not be inspected")
+
 // alreadyLocal wraps ErrKnowledgeBaseAlreadyLocal with the holder's name, in
 // the wording the origin-session flow already uses for the same verdict, so a
 // user meets ONE description of this situation rather than two.
@@ -145,15 +155,18 @@ const capKnomitRepoID = "knomit-repo-id"
 // must therefore never be read as "not a duplicate", and must never skip the
 // authoritative root-commit check after the clone.
 //
+// selfUID is the repo allowed to hold them already (an attach re-pointing a
+// repo at its own remote); "" or a create's fresh uid excludes nothing.
+//
 // Bounded by (advertised tips × active repos) local object lookups, no
 // network.
-func tipHeldLocally(m *Manager, tips []plumbing.Hash) string {
+func tipHeldLocally(m *Manager, selfUID string, tips []plumbing.Hash) string {
 	if m == nil || len(tips) == 0 {
 		return ""
 	}
 	var holder string
 	m.ForEach(func(name string, ri *RepoInstance) {
-		if holder != "" || ri == nil {
+		if holder != "" || ri == nil || (selfUID != "" && ri.UID() == selfUID) {
 			return
 		}
 		_ = ri.WithRead(func(svc *store.Service) {
@@ -204,7 +217,7 @@ func refuseIfKnowledgeBaseIsLocal(m *Manager, selfUID string, id RemoteIdentity)
 			return alreadyLocal(holder)
 		}
 	}
-	if holder := tipHeldLocally(m, id.Tips); holder != "" {
+	if holder := tipHeldLocally(m, selfUID, id.Tips); holder != "" {
 		return alreadyLocal(holder)
 	}
 	return nil

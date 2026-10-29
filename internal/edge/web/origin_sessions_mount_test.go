@@ -74,7 +74,7 @@ func walkFull(r chi.Routes, prefix string, parent []string, out *[]routeChain) {
 // The origin-session routes api/origins' Mount registers sit where the inline
 // r.Route block put them before 12d: the same eight method+pattern pairs,
 // under exactly the middleware of the /repos/{repo} RepoMiddleware group (the
-// chain GET /repos/{repo}/branches runs), so fleetRepoRefused and
+// chain GET /repos/{repo}/branches runs) plus the operator gate, so fleetRepoRefused and
 // RepoMiddleware still run before every handler.
 //
 // SABOTAGE: mount /origin-sessions outside the RepoMiddleware group, or drop
@@ -113,9 +113,13 @@ func TestRouter_OriginSessionsMountedInTheRepoGroup(t *testing.T) {
 	if !slices.ContainsFunc(group, func(n string) bool { return strings.Contains(n, ".RepoMiddleware.") }) {
 		t.Fatalf("non-vacuity: the reference route's chain has no RepoMiddleware: %q", group)
 	}
+	// The group's chain, then the operator gate (Require(operator)): the
+	// wizard clones, previews and attaches the remote it names, so every
+	// route of it, reads included, is the operator's like PUT /origin.
 	for _, r := range routes {
-		if !slices.Equal(chains[r], group) {
-			t.Errorf("%s runs\n%q\nwant the /repos/{repo} RepoMiddleware group's chain\n%q", r, chains[r], group)
+		c := chains[r]
+		if len(c) != len(group)+1 || !slices.Equal(c[:len(group)], group) || !strings.Contains(strings.ToLower(c[len(c)-1]), "require") {
+			t.Errorf("%s runs\n%q\nwant the /repos/{repo} RepoMiddleware group's chain, then the operator gate\n%q", r, c, group)
 		}
 	}
 }
@@ -145,7 +149,7 @@ func TestRouter_OriginSessionsShareOneManagerAcrossRouters(t *testing.T) {
 	}
 
 	got := httptest.NewRecorder()
-	second.ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+created.SessionID, nil))
+	second.ServeHTTP(got, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+created.SessionID, nil)))
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), created.SessionID) {
 		t.Fatalf("the second router does not know the session the first opened: %d %s", got.Code, got.Body.String())
 	}

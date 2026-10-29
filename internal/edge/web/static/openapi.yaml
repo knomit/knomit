@@ -187,6 +187,11 @@ paths:
         id `fleet` or a template whose ontology has it, in every mode; a
         clone or subscribe of a fleet repository is refused the same way
         when the create reads the remote's ontology.
+
+        A body that carries `origin` (modes clone, initialize, subscribe)
+        chooses the new repository's origin, so it requires the `operator`
+        permission like PUT /repos/{repo}/origin (403 otherwise). A create
+        without `origin` needs only `write`.
       operationId: createRepo
       requestBody:
         required: true
@@ -208,6 +213,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RepoCreateStatus"
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
@@ -319,6 +325,9 @@ paths:
         corresponding flag set, NOT HTTP errors — both are states the wizard
         renders and recovers from. Only a refused request (a missing url, or
         a local origin the local-origin gate rejects) is a 400.
+
+        Requires the `operator` permission (403 otherwise), as does
+        `/repos:probe-initialized`: both read a remote the caller names.
       operationId: probeOrigin
       requestBody:
         required: true
@@ -332,6 +341,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProbeOriginResult" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /repos:probe-initialized:
     post:
@@ -365,7 +375,8 @@ paths:
         Every outcome — including a remote that could not be read, a branch
         that does not exist, and a remote with no refs at all — is a 200 with
         the field absent and a `detail`. Only a refused request (a missing url,
-        or a local origin the local-origin gate rejects) is a 400.
+        or a local origin the local-origin gate rejects) is a 400. Requires
+        the `operator` permission (403 otherwise).
       operationId: probeInitialized
       requestBody:
         required: true
@@ -379,6 +390,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProbeInitializedResult" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /ontologies:validate:
     post:
@@ -1953,6 +1965,34 @@ paths:
       description: |
         Points an EXISTING repository at a remote.
 
+        Requires the `operator` permission (403 otherwise), like DELETE
+        /origin, PATCH /origin/upstream and every origin-session route: an
+        origin decides which knowledge base this repository's main holds, so
+        a caller confined to this repository must not choose it. The local
+        principals (socket, named pipe, loopback per
+        `[auth].loopback_default`) hold `operator` by default; a bearer token
+        needs it in its approved scopes.
+
+        409 "Knowledge base already local" when the remote holds the knowledge
+        base of ANOTHER active repository on this instance (one local copy per
+        knowledge base): by its knomit-repo-id claim, by an advertised tip that
+        repository holds, or by the root commit of the remote branch. Never
+        admitted, `replace_main` included.
+
+        409 "Unrelated history" when the remote branch shares no history with
+        this repository's main and that main holds facts: the next sync would
+        replace main with the remote's. Send `replace_main: true` to replace it
+        deliberately. A main that holds no fact yet (a new repository attaching
+        its first origin) needs no flag. 409 "Origin not inspected" when the
+        remote branch's history did not fit `[git].max_probe_bytes`. The
+        probe pays only for what this repository lacks, but an unrelated
+        remote (a new repository's first origin) is fetched whole: at the
+        64 MiB default that is roughly 5,000 commits of a typical knowledge
+        base; raise the budget to attach a larger one.
+
+        503 "Registry unavailable" when the one-local-copy check could not
+        read the repo registry; nothing changed.
+
         409 when that remote is a different knowledge base — it carries an
         ontology whose id is not this repository's. A repository's ontology is
         fixed when it is created and is never editable afterwards, so two
@@ -1988,13 +2028,16 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/OriginSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
           description: |
             Refused. "Repo is indexing" (origin changes are exclusive with
             indexing) carries `_links.cancel-index` {href, method: POST}: wait
-            for the index, or cancel it and retry. Otherwise the remote is a
-            different knowledge base (ontology id mismatch).
+            for the index, or cancel it and retry. "Knowledge base already
+            local", "Unrelated history" and "Origin not inspected" are the
+            identity checks above. Otherwise the remote is a different
+            knowledge base (ontology id mismatch).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2004,13 +2047,22 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
-        "503": { $ref: "#/components/responses/Problem" }
+        "503":
+          description: |
+            "Registry unavailable": the one-local-copy check could not read the
+            repo registry; nothing changed. Or "Repo not ready" while the repo's
+            store is not open.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
     delete:
       tags: [origin]
       summary: Remove origin configuration
       operationId: deleteOrigin
+      description: Requires the `operator` permission (403 otherwise).
       responses:
         "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
           description: >
@@ -2035,7 +2087,18 @@ paths:
         Changes only the upstream branch of the already-configured origin; the
         URL and credentials are untouched. The branch name is validated against
         a conservative subset of git's ref-name rules before it is written into
-        the fetch refspec.
+        the fetch refspec. Requires the `operator` permission (403 otherwise).
+
+        The new branch becomes the consensus branch, so it is vetted like
+        PUT /origin before anything changes (the attach guard, run without an
+        attach: no indexing exclusivity, no sync restart): 409 "Knowledge
+        base already local" when the remote holds another active repository's
+        knowledge base (any advertised branch tip, the remote's claim, or the
+        new branch's root commit), 409 "Unrelated history" when the new branch
+        shares no history with the current consensus branch and that branch
+        holds facts (send `replace_main: true` to replace it), 409 "Origin not
+        inspected" past `[git].max_probe_bytes`, 502 when the remote cannot be
+        read, 503 when the registry cannot be.
       operationId: setOriginUpstream
       requestBody:
         required: true
@@ -2049,9 +2112,18 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/UpstreamSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: "fleet_repository: the fleet repository's consensus branch is fixed at create" }
+        "409":
+          description: |
+            fleet_repository: the fleet repository's consensus branch is fixed
+            at create. Or one of the identity refusals above.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions:
     parameters:
@@ -2060,6 +2132,10 @@ paths:
       tags: [origin]
       summary: List active origin sessions
       operationId: listOriginSessions
+      description: >-
+        Every /origin-sessions route requires the `operator` permission (403
+        otherwise): a session clones and previews the remote it names, and its
+        commit attaches or swaps it in.
       responses:
         "200":
           description: Sessions
@@ -6202,6 +6278,12 @@ components:
         token:       { type: string }
         user:        { type: string }
         password:    { type: string }
+        replace_main:
+          type: boolean
+          description: >-
+            PUT /origin only. Admit a remote branch that shares no history with
+            this repository's main, which the next sync then replaces with the
+            remote's. Never admits another active repository's knowledge base.
 
     OriginSetResponse:
       type: object
@@ -6262,6 +6344,12 @@ components:
             Upstream branch to track on origin. Required and non-empty;
             rejected with 400 if it contains characters not allowed in a git
             ref.
+        replace_main:
+          type: boolean
+          description: >-
+            Admit a branch that shares no history with the current consensus
+            branch, which the next sync then replaces. Never admits another
+            active repository's knowledge base.
 
     UpstreamSetResponse:
       type: object

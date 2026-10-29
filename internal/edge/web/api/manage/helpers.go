@@ -46,4 +46,9 @@ type setOriginRequest struct {
 	Token      string `json:"token"`
 	User       string `json:"user"`
 	Password   string `json:"password"`
+	// ReplaceMain admits an origin whose branch shares no history with the
+	// repo's consensus branch, which the next sync then replaces with the
+	// origin's. Without it such an attach is refused (409) unless the
+	// consensus branch holds no fact.
+	ReplaceMain bool `json:"replace_main,omitempty"`
 }

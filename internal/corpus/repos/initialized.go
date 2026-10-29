@@ -328,7 +328,7 @@ func (p *remoteProbe) alreadyLocalHolder() string {
 	if holder, err := HeldByAnotherActiveRepo(p.m, "", id.RepoID); err == nil && holder != "" {
 		return holder
 	}
-	return tipHeldLocally(p.m, id.Tips)
+	return tipHeldLocally(p.m, "", id.Tips)
 }
 
 // initialized answers it for the branch a create would ADOPT, derived from

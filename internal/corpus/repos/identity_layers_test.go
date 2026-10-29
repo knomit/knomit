@@ -207,7 +207,7 @@ func TestPreflight_Layer1_KnomitOriginAdvertisesItsIdentity(t *testing.T) {
 	defer rp.close()
 	id := rp.identity()
 	require.Equal(t, f.rootCommit, id.RepoID, "the origin must advertise knomit-repo-id")
-	require.Empty(t, tipHeldLocally(f.m, id.Tips),
+	require.Empty(t, tipHeldLocally(f.m, "", id.Tips),
 		"no advertised tip may be local, or layer 2 would be what fires here")
 	f.recorder.reset()
 
@@ -264,7 +264,7 @@ func TestCreate_Layer3_RefusesBeforeRegistrationWhenLocalCopyIsBehind(t *testing
 	rp.close()
 	require.Empty(t, id.RepoID, "the bare mirror advertises no knomit identity")
 	require.NotEmpty(t, id.Tips)
-	require.Empty(t, tipHeldLocally(f.m, id.Tips),
+	require.Empty(t, tipHeldLocally(f.m, "", id.Tips),
 		"the local copy must NOT hold any advertised tip, or layer 2 would fire instead")
 	require.NoError(t, f.m.CreatePreflight(ctx, CreateSpec{
 		Name: "second", Mode: "subscribe", Origin: &OriginSpec{URL: ahead},
