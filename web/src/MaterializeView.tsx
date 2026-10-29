@@ -1,7 +1,7 @@
-import { createElement, memo, useCallback, useEffect, useRef, useState } from 'react';
+import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
-import { ChevronLeftIcon, DownloadIcon } from './icons';
+import { ChevronLeftIcon, DownloadIcon, FocusIcon } from './icons';
 import { saveOutcomeLine, saveTextFile } from './saveFile';
 import type { SaveOutcome } from './saveFile';
 import { MARK_LATEST_OTHER_KB, MAX_DEPTH, MAX_FACTS, materializeApi } from './materializeApi';
@@ -9,6 +9,7 @@ import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './
 import { clampDepth, clampFacts, exportFilename, headingLevel, id8, optionChange } from './materializeOptions';
 import { isHttpUrl } from './utils';
 import { useMaterializeStream } from './useMaterializeStream';
+import { numberSections } from './materializeNumbering';
 import './materialize.css';
 
 /** How far below the viewport the next page is asked for. */
@@ -83,11 +84,40 @@ const Body = memo(function Body({ text }: { text: string }) {
   );
 });
 
-const Section = memo(function Section({ node, group, onGoto }: {
-  node: MatNode; group: string | null; onGoto: (l: MatLink) => void;
+/** A small label that opens and closes the list below it, with the count. */
+function Disclosure({ label, count, open, onToggle, testid, flag }: {
+  label: string; count: number; open: boolean; onToggle: () => void; testid: string;
+  /** An amber note on the label itself, for what the closed list would hide. */
+  flag?: string;
+}) {
+  return (
+    <button type="button" className="k-mat-chip" data-testid={testid} aria-expanded={open} onClick={onToggle}>
+      <span aria-hidden="true" className="k-mat-chev">{open ? '▾' : '▸'}</span>
+      {label} · {count}
+      {flag && <span className="k-mat-dot" role="img" aria-label={flag} title={flag} />}
+    </button>
+  );
+}
+
+function sameNums(a: (string | undefined)[], b: (string | undefined)[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+const Section = memo(function Section({ node, group, num, linkNums, onGoto }: {
+  node: MatNode; group: string | null;
+  /** The outline number ('' for the top and a frame's ancestors). */
+  num: string;
+  /** The outline number of each builds_on target, once it has arrived. */
+  linkNums: (string | undefined)[];
+  onGoto: (l: MatLink) => void;
 }) {
   const level = headingLevel(node.depth);
   const cross = node.marks?.includes(MARK_LATEST_OTHER_KB);
+  // Open/closed is the reader's, per section, and not remembered anywhere.
+  const [builtOpen, setBuiltOpen] = useState(false);
+  const [srcOpen, setSrcOpen] = useState(false);
+  const built = node.builds_on ?? [];
+  const sources = node.sources ?? [];
   return (
     <>
       {group && <div className="k-mat-group" data-testid="mat-group">{group}</div>}
@@ -95,7 +125,7 @@ const Section = memo(function Section({ node, group, onGoto }: {
         aria-labelledby={`${node.anchor_id}-h`}>
         {createElement(`h${level}`, { id: `${node.anchor_id}-h`, className: 'k-mat-h', 'data-level': level }, node.title || node.path)}
         <div className="k-mat-meta" data-testid="mat-meta">
-          <span className="k-mat-n">§{String(node.n).padStart(2, '0')}</span>
+          {num && <span className="k-mat-n" data-testid="mat-num">§{num}</span>}
           <span>{node.path}</span>
           {cross && <span className="k-mat-repo" data-testid="mat-repo-badge">repo {node.repo.slice(0, 8)}</span>}
           {cross && <span className="k-mat-frozen" data-testid="mat-frozen">latest · frozen</span>}
@@ -105,19 +135,38 @@ const Section = memo(function Section({ node, group, onGoto }: {
           {node.date && <span>{node.date}</span>}
         </div>
         {node.body ? <Body text={node.body} /> : null}
-        {node.builds_on && node.builds_on.length > 0 && (
+        {(built.length > 0 || sources.length > 0) && (
+          <div className="k-mat-chips">
+            {built.length > 0 && (
+              <Disclosure label="Builds on" count={built.length} open={builtOpen} onToggle={() => setBuiltOpen(o => !o)} testid="mat-builds-toggle"
+                flag={built.some(l => l.different_version) ? 'a cited version changed since it was cited' : undefined} />
+            )}
+            {sources.length > 0 && (
+              <Disclosure label="Sources" count={sources.length} open={srcOpen} onToggle={() => setSrcOpen(o => !o)} testid="mat-sources-toggle" />
+            )}
+          </div>
+        )}
+        {builtOpen && built.length > 0 && (
           <div className="k-mat-rel" data-testid="mat-builds-on">
-            <span className="k-mat-label">Builds on</span>
-            {node.builds_on.map(l => (
+            {built.map((l, i) => (
               <span key={l.anchor_id}>
                 <button type="button" className="k-mat-link" data-testid="mat-builds-link" onClick={() => onGoto(l)}
-                  title={`Go to §${l.n}`}>
-                  ↪ {l.title} <span className="k-mat-n">§{String(l.n).padStart(2, '0')} · {l.id.slice(0, 8)}</span>
+                  title={linkNums[i] ? `Go to §${linkNums[i]}` : 'Go to this section'}>
+                  ↪ {l.title} <span className="k-mat-n">{linkNums[i] ? `§${linkNums[i]} · ` : ''}{l.id.slice(0, 8)}</span>
                 </button>
                 {l.different_version && (
                   <span className="k-mat-changed" data-testid="mat-changed"
                     title="The version cited here has a different body from the one written in this document">changed since cited</span>
                 )}
+              </span>
+            ))}
+          </div>
+        )}
+        {srcOpen && sources.length > 0 && (
+          <div className="k-mat-rel" data-testid="mat-sources">
+            {sources.map(src => (
+              <span key={src.label + (src.url ?? '')} className="k-mat-src">
+                {isHttpUrl(src.url) ? <a href={src.url} target="_blank" rel="noopener noreferrer">{src.label}</a> : src.label}
               </span>
             ))}
           </div>
@@ -128,20 +177,10 @@ const Section = memo(function Section({ node, group, onGoto }: {
             {node.not_included.map(o => <span key={o.path} className="k-mat-src">{o.title || o.id || o.path} ({o.reason})</span>)}
           </div>
         )}
-        {node.sources && node.sources.length > 0 && (
-          <div className="k-mat-rel">
-            <span className="k-mat-label">Sources</span>
-            {node.sources.map(s => (
-              <span key={s.label + (s.url ?? '')} className="k-mat-src">
-                {isHttpUrl(s.url) ? <a href={s.url} target="_blank" rel="noopener noreferrer">{s.label}</a> : s.label}
-              </span>
-            ))}
-          </div>
-        )}
       </section>
     </>
   );
-});
+}, (a, b) => a.node === b.node && a.group === b.group && a.num === b.num && a.onGoto === b.onGoto && sameNums(a.linkNums, b.linkNums));
 
 // ── The view ────────────────────────────────────────────────────────────────
 
@@ -164,6 +203,21 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   const exportCtl = useRef<AbortController | null>(null);
 
   const rootTitle = s.env?.root_title || title;
+  const nums = useMemo(() => numberSections(s.sections), [s.sections]);
+
+  // Focus: hide the app shell's rail, library column and browse toolbar (CSS
+  // keyed on this attribute, see materialize.css) so only the article and its
+  // own bar remain. Off by default, not remembered; Esc, the toggle and Back
+  // all end it, and so does leaving the view.
+  const [focus, setFocus] = useState(false);
+  useEffect(() => {
+    if (!focus) return;
+    const root = document.documentElement;
+    root.dataset.matFocus = '1';
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFocus(false); };
+    window.addEventListener('keydown', onKey);
+    return () => { delete root.dataset.matFocus; window.removeEventListener('keydown', onKey); };
+  }, [focus]);
 
   // The section at the top of the reading pane, by anchor and ordinal.
   const topSection = useCallback((): Goto | null => {
@@ -297,11 +351,14 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     <div className="k-mat" data-testid="materialize-view">
       <div className="k-mat-bar" data-testid="mat-bar">
         <div className="k-mat-row">
-          <button type="button" className="k-mat-btn" data-testid="mat-back" onClick={onBack} title="Back to the fact" aria-label="Back to the fact">
+          <button type="button" className="k-mat-btn" data-testid="mat-back" onClick={() => { setFocus(false); onBack(); }} title="Back to the fact" aria-label="Back to the fact">
             <ChevronLeftIcon color="currentColor" size={13} /> Fact
           </button>
-          <span className="k-mat-badge">MATERIALIZED</span>
           <span className="k-mat-title" data-testid="mat-title" title={rootTitle}>{rootTitle}</span>
+          <button type="button" className="k-mat-btn" data-testid="mat-focus" aria-pressed={focus} onClick={() => setFocus(f => !f)}
+            title={focus ? 'Leave focus (Esc)' : 'Focus: hide the rail, library and toolbar'}>
+            <FocusIcon color="currentColor" size={13} /> Focus
+          </button>
         </div>
         <div className="k-mat-row">
           <div className="k-mat-controls">
@@ -316,7 +373,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           <button type="button" className="k-mat-btn k-mat-primary" data-testid="mat-export" onClick={runExport}
             title={exporting ? 'Cancel the export' : 'Download the whole materialization as markdown'}>
             <DownloadIcon color="currentColor" size={13} />
-            {exporting ? (exp.bytes > 0 ? `Exporting ${Math.max(1, Math.round(exp.bytes / 1024))} KB · Cancel` : 'Exporting · Cancel') : 'Export .md'}
+            {exporting ? (exp.bytes > 0 ? `Exporting ${Math.max(1, Math.round(exp.bytes / 1024))} KB · Cancel` : 'Exporting · Cancel') : 'Export'}
           </button>
         </div>
         <div className="k-mat-meta2">
@@ -363,7 +420,8 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           )}
 
           {sections.map((n, i) => (
-            <Section key={n.n} node={n} onGoto={onGoto}
+            <Section key={n.n} node={n} onGoto={onGoto} num={nums.get(n.n) ?? ''}
+              linkNums={(n.builds_on ?? []).map(l => nums.get(l.n))}
               group={n.section && n.section !== sections[i - 1]?.section ? n.section : null} />
           ))}
 

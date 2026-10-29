@@ -414,3 +414,14 @@ export const DownloadIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+
+// Four corner brackets: fill the window with the article (the materialize view's
+// focus mode). Not the chevrons of a disclosure and not the download tray.
+export const FocusIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+    <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+    <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+  </svg>
+);

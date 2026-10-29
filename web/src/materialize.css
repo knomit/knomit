@@ -12,7 +12,6 @@
 .k-mat-bar { flex-shrink: 0; min-width: 0; padding: 8px 28px 8px; background: #101014; border-bottom: 1px solid #1e222a; display: flex; flex-direction: column; gap: 6px; }
 .k-mat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
 .k-mat-title { flex: 1 1 200px; min-width: 0; font-family: var(--k-font-display); font-size: 13px; font-weight: 600; color: #e8eef6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.k-mat-badge { font-family: var(--k-font-mono); font-size: 10px; letter-spacing: 0.08em; color: #8af; background: rgba(136,170,255,0.1); border: 1px solid rgba(136,170,255,0.3); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
 .k-mat-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
 .k-mat-ctl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11.5px; color: #9aa6b6; min-width: 0; max-width: 100%; }
 
@@ -45,7 +44,7 @@
 .k-mat-status.k-mat-bad { color: #f88; }
 
 .k-mat-scroll { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; }
-.k-mat-article { max-width: 780px; margin: 0 auto; padding: 26px 28px 56px; min-width: 0; transition: opacity 0.15s; }
+.k-mat-article { padding: 26px 28px 56px; min-width: 0; transition: opacity 0.15s; }
 .k-mat-article[data-stale='true'] { opacity: 0.38; }
 
 .k-mat-notice { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: #c9b27a; background: rgba(229,162,60,0.08); border: 1px solid rgba(229,162,60,0.25); border-radius: 4px; padding: 6px 10px; margin-bottom: 18px; }
@@ -92,3 +91,21 @@ h6.k-mat-h { font-size: 13.5px; }
   .k-mat-bar { padding-left: 14px; padding-right: 14px; }
   .k-mat-article { padding: 20px 14px 48px; }
 }
+
+/* Builds on / Sources: small labels with a count, closed until clicked. */
+.k-mat-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 12px; }
+.k-mat-chip { display: inline-flex; align-items: center; gap: 5px; background: none; border: 1px solid #2a3040; border-radius: 10px; color: #8a96a8; font-family: var(--k-font-mono); font-size: 10.5px; letter-spacing: 0.04em; padding: 1px 9px; cursor: pointer; }
+.k-mat-chip:hover { border-color: #3d4a66; color: #cfd8e6; }
+.k-mat-chip[aria-expanded='true'] { color: #b8c4d4; border-color: #34507f; }
+.k-mat-chip:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
+.k-mat-chev { font-size: 9px; }
+.k-mat-dot { width: 6px; height: 6px; border-radius: 50%; background: #e5a23c; display: inline-block; }
+
+/* Focus mode (the Focus toggle in the bar sets data-mat-focus on <html>): the
+   shell's repositories rail, the library column with its splitter, and the
+   browse toolbar (branch + search) step aside; nothing else in the shell is
+   touched. !important because the shell positions these with inline styles. */
+html[data-mat-focus] .k-rail,
+html[data-mat-focus] [data-testid='browse-toolbar'],
+html[data-mat-focus] [data-shell-region='library'],
+html[data-mat-focus] [data-testid='library-splitter'] { display: none !important; }

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { MaterializeView } from './MaterializeView';
 import { useMaterializeStream } from './useMaterializeStream';
 import { fixtureId, makeFixtureApi } from './materializeFixture';
@@ -207,6 +209,7 @@ describe('article marks', () => {
     expect(within(secs[6]).getByTestId('mat-frozen')).toHaveTextContent('latest · frozen');
     expect(within(secs[5]).queryByTestId('mat-repo-badge')).toBeNull();
     // n=5 cites n=4 at a different version: the mark sits on its builds-on link
+    fireEvent.click(within(secs[4]).getByTestId('mat-builds-toggle'));
     expect(within(secs[4]).getByTestId('mat-changed')).toHaveTextContent('changed since cited');
     expect(within(secs[3]).queryByTestId('mat-changed')).toBeNull();
     // the meta line carries path, confidence and the pinned commit
@@ -224,6 +227,7 @@ describe('article marks', () => {
       const y = n ? Number(n) * 100 - top : 0;
       return { top: y, bottom: y + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y, toJSON() {} } as DOMRect;
     });
+    fireEvent.click(within(screen.getAllByTestId('mat-section')[3]).getByTestId('mat-builds-toggle'));
     const link = within(screen.getAllByTestId('mat-section')[3]).getByTestId('mat-builds-link');
     fireEvent.click(link);
     await waitFor(() => expect(top).toBeGreaterThan(0));
@@ -456,12 +460,14 @@ describe('source links', () => {
   it.each([['javascript:alert(1)'], ['data:text/html,<script>1</script>']])('renders %s as plain text, not a link', async url => {
     render(<Harness api={pageWith(url)} />);
     await waitFor(() => expect(ns()).toEqual([1]));
+    fireEvent.click(screen.getByTestId('mat-sources-toggle'));
     expect(screen.getByText('the source')).toBeInTheDocument();
     expect(screen.getByTestId('mat-section').querySelector('a')).toBeNull();
   });
   it('renders an https url as a link with that href, opened safely', async () => {
     render(<Harness api={pageWith('https://example.com/a?b=1')} />);
     await waitFor(() => expect(ns()).toEqual([1]));
+    fireEvent.click(screen.getByTestId('mat-sources-toggle'));
     const a = screen.getByText('the source').closest('a')!;
     expect(a).toHaveAttribute('href', 'https://example.com/a?b=1');
     expect(a).toHaveAttribute('rel', 'noopener noreferrer');
@@ -482,7 +488,7 @@ describe('top bar', () => {
     expect(within(bar).getByTestId('mat-cross-kb')).not.toBeChecked();
     expect(within(bar).getByTestId('mat-unpin')).not.toBeChecked();
     expect(screen.getByTestId('mat-progress')).toHaveTextContent('3 of ≤9 facts · depth 4');
-    expect(screen.getByTestId('mat-export')).toHaveTextContent('Export .md');
+    expect(screen.getByTestId('mat-export').textContent?.trim()).toBe('Export');
     fireEvent.click(screen.getByTestId('mat-back'));
     expect(onBack).toHaveBeenCalled();
   });
@@ -493,5 +499,133 @@ describe('top bar', () => {
     await waitFor(() => expect(ns()).toHaveLength(3));
     expect(screen.getByLabelText('Raise Max depth')).toBeDisabled();
     expect(screen.getByLabelText('Raise Max facts')).toBeDisabled();
+  });
+});
+
+describe('polish: labels, numbering, bar', () => {
+  it('has no MATERIALIZED label, and the export button reads "Export" (no .md)', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(document.body.textContent).not.toMatch(/MATERIALIZED/i);
+    expect(screen.getByTestId('mat-export').textContent?.trim()).toBe('Export');
+    expect(screen.getByTestId('mat-export').textContent).not.toContain('.md');
+  });
+
+  it('Builds on and Sources are collapsed labels with counts; click expands in place, click again collapses', async () => {
+    setup({ total: 4, pageSize: 4 });
+    await waitFor(() => expect(ns()).toHaveLength(4));
+    const sec = screen.getAllByTestId('mat-section')[3]; // n=4: cites n=3 and has one source
+    const built = within(sec).getByTestId('mat-builds-toggle');
+    const srcs = within(sec).getByTestId('mat-sources-toggle');
+    expect(built).toHaveTextContent('Builds on · 1');
+    expect(srcs).toHaveTextContent('Sources · 1');
+    expect(built).toHaveAttribute('aria-expanded', 'false');
+    expect(srcs).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sec).queryByTestId('mat-builds-on')).toBeNull();
+    expect(within(sec).queryByTestId('mat-sources')).toBeNull();
+
+    fireEvent.click(built);
+    expect(built).toHaveAttribute('aria-expanded', 'true');
+    expect(within(sec).getByTestId('mat-builds-on')).toBeInTheDocument();
+    expect(within(sec).queryByTestId('mat-sources')).toBeNull(); // the other stays closed
+    fireEvent.click(srcs);
+    expect(within(sec).getByTestId('mat-sources')).toHaveTextContent('file4.go');
+    fireEvent.click(built);
+    expect(built).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sec).queryByTestId('mat-builds-on')).toBeNull();
+    // they are real buttons (keyboard reachable)
+    expect(built.tagName).toBe('BUTTON');
+  });
+
+  it('a section with no builds-on or sources shows no label', async () => {
+    setup({ total: 1, pageSize: 1 });
+    await waitFor(() => expect(ns()).toEqual([1]));
+    expect(screen.queryByTestId('mat-builds-toggle')).toBeNull();
+    expect(screen.queryByTestId('mat-sources-toggle')).toBeNull();
+  });
+
+  it('flags a changed-since-cited link on the closed label', async () => {
+    setup({ total: 5, pageSize: 5 });
+    await waitFor(() => expect(ns()).toHaveLength(5));
+    const fifth = screen.getAllByTestId('mat-section')[4]; // n=5 cites n=4 at a different version
+    expect(within(fifth.querySelector('[data-testid="mat-builds-toggle"]') as HTMLElement).getByRole('img')).toHaveAttribute('aria-label', expect.stringContaining('changed'));
+    expect(within(screen.getAllByTestId('mat-section')[1]).getByTestId('mat-builds-toggle').querySelector('[role="img"]')).toBeNull();
+  });
+
+  it('numbers sections like a document: the root is the unnumbered top, children 1 and 2, grandchildren 1.1, and a repeat links to its first number', async () => {
+    // root(1) cites A(2) and D(4); A cites S(3); D also cites S (reached first under A)
+    setup({ total: 4, pageSize: 4, tree: { 1: [2, 4], 2: [3], 4: [3] } });
+    await waitFor(() => expect(ns()).toHaveLength(4));
+    const secs = screen.getAllByTestId('mat-section');
+    const num = (i: number) => secs[i].querySelector('[data-testid="mat-num"]')?.textContent ?? '';
+    expect([0, 1, 2, 3].map(num)).toEqual(['', '§1', '§1.1', '§2']);
+    fireEvent.click(within(secs[3]).getByTestId('mat-builds-toggle'));
+    expect(within(secs[3]).getByTestId('mat-builds-link')).toHaveTextContent('§1.1');
+  });
+
+  it('a frame: ancestors are an unnumbered preamble, the frame the unnumbered top, numbers start at its children', async () => {
+    // 1 ancestor, 2 the frame (cites 3 and 5), 3 cites 4
+    setup({ total: 5, pageSize: 5, ancestors: 1, tree: { 2: [3, 5], 3: [4] } });
+    await waitFor(() => expect(ns()).toHaveLength(5));
+    const nums = screen.getAllByTestId('mat-section').map(sec => sec.querySelector('[data-testid="mat-num"]')?.textContent ?? '');
+    expect(nums).toEqual(['', '', '§1', '§1.1', '§2']);
+  });
+});
+
+describe('focus mode', () => {
+  const on = () => document.documentElement.dataset.matFocus === '1';
+  afterEach(() => { delete document.documentElement.dataset.matFocus; });
+
+  it('is off by default, and the toggle hides the shell regions (data-mat-focus on <html>) and shows them again', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const t = screen.getByTestId('mat-focus');
+    expect(on()).toBe(false);
+    expect(t).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(t);
+    expect(on()).toBe(true);
+    expect(t).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(t);
+    expect(on()).toBe(false);
+  });
+
+  it('Esc leaves focus; Esc with focus off does nothing', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(on()).toBe(false);
+    fireEvent.click(screen.getByTestId('mat-focus'));
+    expect(on()).toBe(true);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(on()).toBe(false);
+    expect(screen.getByTestId('mat-focus')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('Back leaves focus, and so does leaving the view', async () => {
+    const onBack = vi.fn();
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    const { unmount } = render(<MaterializeView target={TARGET} title="T" options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={onBack} api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-focus'));
+    expect(on()).toBe(true);
+    fireEvent.click(screen.getByTestId('mat-back'));
+    expect(on()).toBe(false);
+    expect(onBack).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('mat-focus'));
+    expect(on()).toBe(true);
+    unmount();
+    expect(on()).toBe(false);
+  });
+
+  it('the stylesheet hides exactly the rail, the library column with its splitter, and the browse toolbar under that attribute, and the shell carries those hooks', () => {
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = css.slice(css.indexOf("html[data-mat-focus]"));
+    for (const sel of [".k-rail", "[data-testid='browse-toolbar']", "[data-shell-region='library']", "[data-testid='library-splitter']"]) expect(rule).toContain(sel);
+    expect(rule).toContain('display: none !important');
+    const src = (f: string) => readFileSync(resolve(__dirname, f), 'utf8');
+    expect(src('TargetRail.tsx')).toContain('className="k-rail"');
+    expect(src('BrowseFacet.tsx')).toContain('data-shell-region="library"');
+    expect(src('BrowseFacet.tsx')).toContain('testId="browse-toolbar"');
+    expect(src('BrowseFacet.tsx')).toContain('testId="library-splitter"');
   });
 });
