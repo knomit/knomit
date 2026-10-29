@@ -28,7 +28,7 @@ const (
 // measured against materialize.PageCap.
 const (
 	materializeHumanDefaultLimit = materialize.HumanDefaultLimit
-	materializeHumanMaxLimit     = 5
+	materializeHumanMaxLimit     = materialize.HumanMaxLimit
 	materializeAgentDefaultLimit = 25
 	materializeAgentMaxLimit     = 100
 )
@@ -71,7 +71,7 @@ func materializeTool() mcpgo.Tool {
 			mcpgo.Description("The `cursor` from the previous page. With it, every other argument except `binding` and `limit` is refused: the document was fixed by the first call."),
 		),
 		mcpgo.WithNumber("limit",
-			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. A page also stops before it would exceed the transport's size cap."),
+			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. The first call's limit is kept for every later page of its cursor; passing limit with cursor changes it for that page only. A page also stops before it would exceed the transport's size cap."),
 		),
 	)
 }
@@ -129,7 +129,7 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 	}
 	opts.Unpin = req.GetBool("unpin", false)
 	opts.CrossKB = req.GetBool("cross_kb", false)
-	limit, err := materializeLimit(req, audience)
+	limit, err := materializeLimit(req, audience, materializeDefaultLimit(audience))
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -156,7 +156,7 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 		}
 	}
 	page, err := materialize.NextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor,
-		func(audience string) (int, error) { return materializeLimit(req, audience) })
+		func(audience string, frozen int) (int, error) { return materializeLimit(req, audience, frozen) })
 	switch {
 	case errors.Is(err, materialize.ErrCursorExpired):
 		return mcpgo.NewToolResultError(errMaterializeExpired), nil
@@ -192,11 +192,15 @@ func marshalMaterializePage(p materialize.Page) (*mcpgo.CallToolResult, error) {
 }
 
 // materializeLimit is the page's fact limit: the caller's, clamped to the
-// audience's maximum, or the audience's default.
-func materializeLimit(req mcpgo.CallToolRequest, audience string) (int, error) {
-	def, max := materializeAgentDefaultLimit, materializeAgentMaxLimit
+// audience's maximum, or else def. A first call passes the audience's
+// default (materializeDefaultLimit); a resume passes the limit its first
+// call froze in the cursor, so a cursor paged without `limit` keeps the
+// first call's page size (the REST pages route, which refuses `limit` on a
+// resume, serves the same pages).
+func materializeLimit(req mcpgo.CallToolRequest, audience string, def int) (int, error) {
+	max := materializeAgentMaxLimit
 	if audience == audienceHuman {
-		def, max = materializeHumanDefaultLimit, materializeHumanMaxLimit
+		max = materializeHumanMaxLimit
 	}
 	v, present, err := intArgument(req, "limit")
 	if err != nil {
@@ -209,6 +213,15 @@ func materializeLimit(req mcpgo.CallToolRequest, audience string) (int, error) {
 		return 0, errors.New("limit must be at least 1")
 	}
 	return min(v, max), nil
+}
+
+// materializeDefaultLimit is the audience's page size when the first call
+// names no `limit`.
+func materializeDefaultLimit(audience string) int {
+	if audience == audienceHuman {
+		return materializeHumanDefaultLimit
+	}
+	return materializeAgentDefaultLimit
 }
 
 // intArgument reads an integer argument. present is false when the key is

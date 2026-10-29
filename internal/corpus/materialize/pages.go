@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"knomit/internal/corpus/repos"
@@ -20,15 +21,43 @@ const (
 	AudienceHuman = "human"
 )
 
-// HumanDefaultLimit is a human page's default fact count: knomit_materialize
-// without `limit`, and every page of the REST pages route, so the two serve
-// the same page for the same input.
-const HumanDefaultLimit = 3
+// The human page's fact count: the default when the first call names no
+// `limit`, and its ceiling. knomit_materialize (audience human) and the REST
+// pages route share them, so the two serve the same page for the same input.
+const (
+	HumanDefaultLimit = 3
+	HumanMaxLimit     = 5
+)
 
-// toolPrefix prefixes the tool-session `tool` value; the audience follows it,
-// so a resume knows its page size before it dequeues anything, and a cursor
-// minted by another tool is refused.
+// toolPrefix prefixes the tool-session `tool` value. The value is
+// "materialize:<audience>:<limit>": the audience and the first call's page
+// limit, frozen with the snapshot, so a resume knows its page size before it
+// dequeues anything, and a cursor minted by another tool is refused.
 const toolPrefix = "materialize:"
+
+// sessionTool is the tool-session `tool` value of a cursor for audience
+// whose pages hold at most limit facts.
+func sessionTool(audience string, limit int) string {
+	return toolPrefix + audience + ":" + strconv.Itoa(limit)
+}
+
+// parseSessionTool is the inverse of sessionTool. ok is false for another
+// tool's session or a malformed value (which reads as expired).
+func parseSessionTool(tool string) (audience string, limit int, ok bool) {
+	rest, ok := strings.CutPrefix(tool, toolPrefix)
+	if !ok {
+		return "", 0, false
+	}
+	audience, n, ok := strings.Cut(rest, ":")
+	if !ok {
+		return "", 0, false
+	}
+	limit, err := strconv.Atoi(n)
+	if err != nil || limit < 1 {
+		return "", 0, false
+	}
+	return audience, limit, true
+}
 
 // PageCap is the most bytes a page may marshal to: the MCP client's
 // tool-result cap, used by every surface that pages (knomit_materialize and
@@ -116,8 +145,9 @@ func NewPageEnv(doc *Document, audience string) PageEnv {
 
 // FirstPage returns page 1 of doc (at most limit nodes, measured against
 // PageCap) and, when nodes remain, snapshots them under a new cursor owned by
-// sc. The order and every node's version are frozen here: a resume reads
-// only the snapshot.
+// sc. The order, every node's version and limit are frozen here: a resume
+// reads only the snapshot, and its pages hold at most limit facts unless the
+// edge overrides it per page.
 func FirstPage(ctx context.Context, sc CursorScope, doc *Document, audience string, limit int) (Page, error) {
 	env := NewPageEnv(doc, audience)
 	page, used, err := fillPage(env, doc, doc.Nodes, limit)
@@ -128,7 +158,7 @@ func FirstPage(ctx context.Context, sc CursorScope, doc *Document, audience stri
 	if len(rest) == 0 {
 		return page, nil
 	}
-	session, err := sc.Sessions.CreateToolSession(ctx, toolPrefix+audience, sc.Branch, doc.Root, sc.Pin, sc.ReadSet, sc.Owner)
+	session, err := sc.Sessions.CreateToolSession(ctx, sessionTool(audience, limit), sc.Branch, doc.Root, sc.Pin, sc.ReadSet, sc.Owner)
 	if err != nil {
 		return Page{}, fmt.Errorf("create session error: %w", err)
 	}
@@ -145,12 +175,13 @@ func FirstPage(ctx context.Context, sc CursorScope, doc *Document, audience stri
 }
 
 // NextPage serves the next page of cursor. limitFor gives the page's node
-// limit for the cursor's audience (known only once the session is read).
-// Every cursor this caller cannot be served — unknown, another tool's,
+// limit from the cursor's audience and the limit frozen by its first call
+// (both known only once the session is read); an edge with no per-page
+// override returns frozen. Every cursor this caller cannot be served — unknown, another tool's,
 // another binding's, read set or owner, exhausted, or one whose frozen nodes
 // the caller may not read (mayRead is asked again here) — is
 // ErrCursorExpired, and leaves the queue exactly as it was.
-func NextPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, limitFor func(audience string) (int, error)) (Page, error) {
+func NextPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, limitFor func(audience string, frozen int) (int, error)) (Page, error) {
 	session, err := sc.Sessions.GetToolSession(ctx, cursor)
 	if err != nil {
 		return Page{}, fmt.Errorf("session lookup error: %w", err)
@@ -161,12 +192,14 @@ func NextPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.
 	// another tool is refused the same way.
 	if session == nil || session.Status != "active" || session.Binding == "" ||
 		session.Binding != sc.Pin || session.ReadSet != sc.ReadSet ||
-		session.Owner != sc.Owner ||
-		!strings.HasPrefix(session.Tool, toolPrefix) {
+		session.Owner != sc.Owner {
 		return Page{}, ErrCursorExpired
 	}
-	audience := strings.TrimPrefix(session.Tool, toolPrefix)
-	limit, err := limitFor(audience)
+	audience, frozen, ok := parseSessionTool(session.Tool)
+	if !ok {
+		return Page{}, ErrCursorExpired
+	}
+	limit, err := limitFor(audience, frozen)
 	if err != nil {
 		return Page{}, err
 	}

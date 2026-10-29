@@ -156,6 +156,42 @@ func TestMaterializePages_WholeFactsUnderTheBudget(t *testing.T) {
 	require.Equal(t, 6, seen)
 }
 
+// `limit` is read on the first call only (1-5, default 3; out of range is a
+// 400, never a clamp) and frozen in the cursor: every page holds that many
+// facts until the last. The export route takes no `limit`.
+//
+// Sabotage: make the REST resume answer the default limit instead of the
+// frozen one, and pages 2.. hold 3 facts.
+func TestMaterializePages_LimitIsFrozenAtTheFirstCall(t *testing.T) {
+	m := newMatStoreManager(t, "alpha")
+	seedChain(t, m.Get("alpha"))
+	h := asPrincipal("u1", newTestRouter(m))
+	base := "/repos/alpha/branches/agent:test/facts/kb/a/r.md/materialize/pages"
+
+	for _, c := range []struct {
+		q     string
+		sizes []int
+	}{
+		{"", []int{3, 3, 2}},
+		{"?limit=2", []int{2, 2, 2, 2}},
+		{"?limit=5", []int{5, 3}},
+		{"?limit=1&depth=1", []int{1, 1, 1, 1, 1, 1, 1, 1}},
+	} {
+		var sizes []int
+		for _, p := range pageAll(t, h, base+c.q) {
+			sizes = append(sizes, len(p.Facts))
+		}
+		require.Equal(t, c.sizes, sizes, "limit %q", c.q)
+	}
+	for _, q := range []string{"limit=0", "limit=6", "limit=x", "limit=-1"} {
+		code, _, body := getPage(t, h, base+"?"+q)
+		require.Equal(t, http.StatusBadRequest, code, "%s: %s", q, body)
+	}
+	code, _, body := getMaterialize(t, asLocalCaller(newTestRouter(m)),
+		"/repos/alpha/branches/agent:test/facts/kb/a/r.md/materialize?limit=2")
+	require.Equal(t, http.StatusBadRequest, code, "the export is always whole: %s", body)
+}
+
 // A cursor refuses every other argument, and the refusal consumes nothing.
 //
 // Sabotage: drop the "any other parameter" loop, and depth=1 with the cursor

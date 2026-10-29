@@ -44,8 +44,9 @@ func pageCursor(t *testing.T, raw string) string {
 // the SAME bytes for the same input, page for page; only the cursor id
 // differs (each surface mints its own, owned by its own endpoint).
 //
-// Sabotage: rename a Page field's JSON tag on one surface only (or give REST
-// a different page limit), and a page differs.
+// Sabotage: rename a Page field's JSON tag on one surface only, give REST a
+// different page limit, or let either surface forget the first call's limit
+// on a resume, and a page differs.
 func TestMaterializePages_RESTIsTheMCPHumanPage(t *testing.T) {
 	f := newOAuthWebFixture(t, testIssuer)
 	m, alpha, beta := newMaterializeRepos(t)
@@ -53,7 +54,7 @@ func TestMaterializePages_RESTIsTheMCPHumanPage(t *testing.T) {
 	beta12 := fact.ID12(beta.ID())
 	writeObs(t, beta, "kb/b/x.md", "X")
 	var refs []string
-	for _, n := range []string{"a1", "a2", "a3", "a4", "a5"} {
+	for _, n := range []string{"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"} {
 		writeObs(t, alpha, "kb/a/"+n+".md", strings.ToUpper(n))
 		refs = append(refs, "kb/a/"+n+".md")
 	}
@@ -62,35 +63,51 @@ func TestMaterializePages_RESTIsTheMCPHumanPage(t *testing.T) {
 	tok := f.mint(t, "laptop", testIssuer+"/api/v1", []string{"read"}, auth.Read)
 	h := withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
 
-	var mcpPages []string
-	_, sid := rpcAt(t, h, alphaMCP, "", initBody)
-	args := `{"file":"kb/a/r.md","audience":"human","cross_kb":true,"depth":3}`
-	for {
-		text, isErr := callToolAt(t, h, alphaMCP, sid, "knomit_materialize", args)
-		require.False(t, isErr, text)
-		c := pageCursor(t, text)
-		mcpPages = append(mcpPages, strings.ReplaceAll(text, `"`+c+`"`, `"CURSOR"`))
-		if c == "" {
-			break
-		}
-		args = `{"cursor":"` + c + `"}`
-	}
+	for _, c := range []struct {
+		name, mcpLimit, restLimit string
+		facts                     []int
+	}{
+		{"default limit", "", "", []int{3, 3, 3, 3}},
+		{"limit 5, frozen for the cursor", `,"limit":5`, "&limit=5", []int{5, 5, 2}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var mcpPages []string
+			var sizes []int
+			_, sid := rpcAt(t, h, alphaMCP, "", initBody)
+			args := `{"file":"kb/a/r.md","audience":"human","cross_kb":true,"depth":3` + c.mcpLimit + `}`
+			for {
+				text, isErr := callToolAt(t, h, alphaMCP, sid, "knomit_materialize", args)
+				require.False(t, isErr, text)
+				cur := pageCursor(t, text)
+				mcpPages = append(mcpPages, strings.ReplaceAll(text, `"`+cur+`"`, `"CURSOR"`))
+				var p struct {
+					Facts []json.RawMessage `json:"facts"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(text), &p))
+				sizes = append(sizes, len(p.Facts))
+				if cur == "" {
+					break
+				}
+				args = `{"cursor":"` + cur + `"}`
+			}
+			require.Equal(t, c.facts, sizes, "MCP keeps the first call's limit on every page")
 
-	var restPages []string
-	u := alphaPages + "?cross_kb=true&depth=3"
-	for {
-		code, body := restGet(t, h, u)
-		require.Equal(t, http.StatusOK, code, body)
-		c := pageCursor(t, body)
-		restPages = append(restPages, strings.ReplaceAll(body, `"`+c+`"`, `"CURSOR"`))
-		if c == "" {
-			break
-		}
-		u = alphaPages + "?cursor=" + url.QueryEscape(c)
+			var restPages []string
+			u := alphaPages + "?cross_kb=true&depth=3" + c.restLimit
+			for {
+				code, body := restGet(t, h, u)
+				require.Equal(t, http.StatusOK, code, body)
+				cur := pageCursor(t, body)
+				restPages = append(restPages, strings.ReplaceAll(body, `"`+cur+`"`, `"CURSOR"`))
+				if cur == "" {
+					break
+				}
+				u = alphaPages + "?cursor=" + url.QueryEscape(cur)
+			}
+			require.Equal(t, mcpPages, restPages)
+			require.Contains(t, restPages[len(restPages)-1], `"cursor":null`)
+		})
 	}
-	require.Greater(t, len(mcpPages), 1, "the fixture pages")
-	require.Equal(t, mcpPages, restPages)
-	require.Contains(t, restPages[len(restPages)-1], `"cursor":null`)
 }
 
 // Route level: a token that does not reach a repo gets exactly the answer of

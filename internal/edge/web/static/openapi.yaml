@@ -917,8 +917,10 @@ paths:
         `<slug>` is the root fact's title lowercased, every run of characters
         other than `a-z0-9` made one `-`, cut at a word boundary to at most 48
         characters, and `<id8>` is the fact's file id (a title with no
-        `a-z0-9` gives `<id8>.md`). To stream the same materialization page
-        by page, use `/materialize/pages`.
+        `a-z0-9` gives `<id8>.md`). The body is gzip-compressed for a client
+        that accepts it. `limit` is not a parameter here: the export is always
+        whole. To stream the same materialization page by page, use
+        `/materialize/pages`.
 
         A file under `.knomit/` named by its exact path (case kept; no empty,
         `.` or `..` segment) is returned RAW, read-only: 200 with the file's
@@ -1024,8 +1026,10 @@ paths:
 
         FIRST CALL (no `cursor`): reads `depth` (0-10, default 4),
         `max_nodes` (1-500, default 200), `unpin` and `cross_kb` (booleans,
-        default false), with the same rules and 400s as `/materialize`. The
-        walk and the reading order are computed ONCE, here, and every node's
+        default false), with the same rules and 400s as `/materialize`, and
+        `limit`, the most facts per page (1-5, default 3; out of range is a
+        400). The walk, the reading order and `limit` are fixed ONCE, here,
+        and every node's
         version is frozen (including the latest versions `unpin` and
         `cross_kb` read), so every later page comes from one snapshot. The
         commit-anchored route (`/repos/{repo}/branches/{branch}/commits/{sha}/facts/{path}/materialize/pages`)
@@ -1035,8 +1039,10 @@ paths:
 
         LATER CALLS: pass ONLY `cursor` (the previous page's `cursor`), on
         the same URL. Any other parameter with it is a 400: new options mean
-        a new first call. Pages hold whole facts: at most 3, and as many as
-        fit in 32 KiB of JSON; a fact larger than that comes alone, whole.
+        a new first call, and that includes `limit`: every later page keeps
+        the first call's. Pages hold whole facts: at most `limit`, and as
+        many as fit in 32 KiB of JSON; a fact larger than that comes alone,
+        whole.
 
         A cursor belongs to the URL it was minted on and to the caller's
         principal, and to the binding's read set. An unknown, finished or
@@ -1052,6 +1058,7 @@ paths:
         - { name: max_nodes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
         - { name: unpin, in: query, required: false, schema: { type: boolean, default: false } }
         - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 5, default: 3 }, description: "First call only: the most facts per page, frozen in the cursor." }
       responses:
         "200":
           description: One page
