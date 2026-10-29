@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -158,9 +159,26 @@ func TestBook_ReachIsEnforced(t *testing.T) {
 	code, body = restGet(t, wide, alphaBook+"?path=kb/v/&cross_kb=true&limit=2")
 	require.Equal(t, http.StatusOK, code, body)
 	cur = pageCursor(t, body)
-	code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
-	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X's link: %s", body)
 	code, body = restGet(t, wide, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Contains(t, body, `"link":`, "unit 2 holds X as a link")
+	code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
+	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X's link: %s", body)
+
+	// A unit the NARROWER credential walks reads only what it reaches: X is
+	// listed as kb_unavailable there (units are walked with the reach of the
+	// call that walks them).
+	writeObs(t, alpha, "kb/w/r1.md", "W1")
+	writeObs(t, alpha, "kb/w/r2.md", "W2", xWire)
+	code, body = restGet(t, confined, alphaBook+"?path=kb/w/&cross_kb=true&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	cur = pageCursor(t, body)
+	var all strings.Builder
+	for u := 1; u <= 2; u++ {
+		code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit="+strconv.Itoa(u))
+		require.Equal(t, http.StatusOK, code, body)
+		all.WriteString(body)
+	}
+	require.Contains(t, all.String(), xWire+`","reason":"kb_unavailable"`)
+	require.NotContains(t, all.String(), `"X body."`)
 }
