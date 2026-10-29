@@ -368,111 +368,7 @@ describe('Activity sessions binding groups', () => {
     expect(detail.querySelector('[title="ONLYONEaaaaaaaaaaaaaaaaaaaaaaaaa"]')).not.toBeNull();
   });
 
-  // A handle carries a branch pin OR an experiment, never both
-  // (kb/invariants/mcp/experiments/one-answer-per-handle) — so a non-empty
-  // `branch` IS this handle's answer and a mount's experiment must not
-  // overwrite it. The mount only fills an EMPTY branch.
-  it('lets a handle\'s own branch beat a mount experiment on the same target', async () => {
-    withBindings(
-      [
-        bindingRow({ handle: 'PINNEDaaaaaaaaaaaaaaaaaaaaaaaaaa', branch: 'agent/foo' }),
-        bindingRow({ handle: 'UNPINNEDaaaaaaaaaaaaaaaaaaaaaaaa', branch: '' }),
-      ],
-      {
-        mounts: [{
-          mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
-          experiment: 'exp-a', branch: 'exp/exp-a', set_at: '2026-09-14T11:30:00Z',
-        }],
-      },
-    );
-    render(<ActivityFacet target={CORE} />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-
-    // The two handles genuinely disagree, so the line shows both chips.
-    const group = screen.getAllByTestId('session-binding-group')[0];
-    expect(within(group).getAllByTestId('session-branch-chip')).toHaveLength(2);
-    expect(group).toHaveTextContent('agent/foo');
-    expect(group).toHaveTextContent('exp-a');
-
-    fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
-    const lines = within(screen.getByTestId('session-detail')).getAllByTestId('session-detail-row');
-    expect(lines[0]).toHaveTextContent('agent/foo');
-    expect(lines[0]).not.toHaveTextContent('exp-a');
-    expect(lines[1]).toHaveTextContent('exp-a');
-  });
-
-  // The mount join is by kind AND uid. A repo and a lens that happen to share
-  // a uid are different targets, and matching on uid alone would put one's
-  // experiment on the other's line.
-  it('does not match a mount to a target of a different kind with the same uid', async () => {
-    withBindings(
-      [bindingRow({ handle: 'LENSHANDLEaaaaaaaaaaaaaaaaaaaaaa', kind: 'lens', uid: 'u1', name: 'eng', branch: '' })],
-      {
-        mounts: [{
-          mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
-          experiment: 'repo-side', branch: 'exp/repo-side', set_at: '2026-09-14T11:30:00Z',
-        }],
-      },
-    );
-    render(<ActivityFacet target={{ kind: 'lens', uid: 'u1' }} />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-
-    const groups = screen.getAllByTestId('session-binding-group');
-    const lensLine = groups.find(g => g.textContent?.includes('eng')) as HTMLElement;
-    expect(within(lensLine).queryAllByTestId('session-branch-chip')).toHaveLength(0);
-  });
-
-  // The old Branch column rendered `mounts` unconditionally. An experiment on
-  // a target this session has presented no handle for still has to be visible
-  // — it is a real experiment the session has open.
-  it('gives a mount no binding names a target line of its own', async () => {
-    withBindings(
-      [bindingRow({ handle: 'ELSEWHEREaaaaaaaaaaaaaaaaaaaaaaa', uid: 'u1', name: 'core' })],
-      {
-        mounts: [{
-          mount: 'repo:zz9', kind: 'repo', uid: 'zz9', name: 'other-repo',
-          experiment: 'orphan-exp', branch: 'exp/orphan-exp', set_at: '2026-09-14T11:30:00Z',
-        }],
-      },
-    );
-    render(<ActivityFacet target={{ kind: 'repo', uid: 'zz9' }} />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-
-    const groups = screen.getAllByTestId('session-binding-group');
-    // The session's own binding is to another target, so only the mount's line is drawn.
-    expect(groups).toHaveLength(1);
-    const orphan = groups.find(g => g.textContent?.includes('other-repo')) as HTMLElement;
-    expect(orphan).toHaveTextContent('orphan-exp');
-    // No handles stand behind it, so there is no count to show.
-    expect(orphan).not.toHaveTextContent('×');
-  });
-
-  // The experiment attribution used to live in its own Branch column, one per
-  // SESSION. It sits on the target line now, because `mounts` is per mount and
-  // two targets can disagree.
-  it('shows the experiment chip on the target line its mount names', async () => {
-    withBindings(
-      [bindingRow({ handle: 'INEXPaaaaaaaaaaaaaaaaaaaaaaaaaaa', uid: 'u1', name: 'core' })],
-      {
-        branch: 'agent/h-1',
-        mounts: [{
-          mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
-          experiment: 'pr-237-ui', branch: 'exp/pr-237-ui', set_at: '2026-09-14T11:30:00Z',
-        }],
-      },
-    );
-    render(<ActivityFacet target={CORE} />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-
-    const group = screen.getAllByTestId('session-binding-group')[0];
-    expect(group).toHaveTextContent('pr-237-ui');
-    expect(group.querySelector('[title="Experiment pr-237-ui"]')).not.toBeNull();
-    // The client's own git branch is a DIFFERENT thing and is no longer shown
-    // anywhere: the Branch column that used to carry it is gone.
-    expect(screen.getByTestId('session-row')).not.toHaveTextContent('agent/h-1');
-  });
-
-  it('shows the ordinary branch chip when the handle names one and no mount claims the target', async () => {
+  it('shows the ordinary branch chip when the handle names one', async () => {
     withBindings([bindingRow({ handle: 'ONBRANCHaaaaaaaaaaaaaaaaaaaaaaaa', branch: 'main' })]);
     render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
@@ -481,7 +377,7 @@ describe('Activity sessions binding groups', () => {
 
   // "" means the target's own branch — there is nothing to say, and a chip
   // saying nothing is worse than no chip.
-  it('shows no chip for a handle with no mount and no branch', async () => {
+  it('shows no chip for a handle with no branch', async () => {
     withBindings([bindingRow({ handle: 'PLAINaaaaaaaaaaaaaaaaaaaaaaaaaaa', branch: '' })]);
     render(<ActivityFacet target={CORE} />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
@@ -510,19 +406,6 @@ describe('Activity sessions binding groups', () => {
     expect(screen.getByTestId('session-bindings')).toHaveTextContent('core');
     expect(screen.getByTestId('session-bindings')).not.toHaveTextContent('×');
     expect(screen.queryByRole('button', { name: /handle/ })).toBeNull();
-  });
-
-  it('puts the experiment chip on the singular binding too', async () => {
-    withBindings([], {
-      binding: { kind: 'repo', uid: 'u1', name: 'core' },
-      mounts: [{
-        mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
-        experiment: 'url-scoped', branch: 'exp/url-scoped', set_at: '2026-09-14T11:30:00Z',
-      }],
-    });
-    render(<ActivityFacet target={CORE} />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-    expect(screen.getByTestId('session-bindings')).toHaveTextContent('url-scoped');
   });
 
   it('renders an unresolvable target as kind:uid', async () => {
@@ -556,9 +439,7 @@ describe('Activity sessions binding groups', () => {
 
 // The Branch column showed the branch the BRIDGE declares about itself, which
 // it fills only in --repo mode: empty in lens and unscoped mode, and the same
-// agent branch the binding already names when it is set. The only live content
-// it carried was the experiment attribution, which now sits beside the target
-// it applies to.
+// agent branch the binding already names when it is set.
 describe('Activity sessions — no Branch column', () => {
   it('has no Branch header', async () => {
     render(<ActivityFacet target={CORE} />);

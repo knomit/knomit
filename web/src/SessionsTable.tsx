@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { ClientSession, ClientSessionBindingRow, ClientSessionMount, ClientSessionPolicy } from './api';
-import { BookIcon, ChevronDownIcon, FlaskIcon, GitBranchIcon, LayersIcon } from './icons';
+import type { ClientSession, ClientSessionBindingRow, ClientSessionPolicy } from './api';
+import { BookIcon, ChevronDownIcon, GitBranchIcon, LayersIcon } from './icons';
 import { LENS } from './utils';
 import type { SessionTarget } from './useTargetSessions';
 import { tableWrap, th, policyFooter } from './tableStyles';
@@ -29,76 +29,35 @@ const STATE_COLOR: Record<ClientSession['state'], string> = { live: '#4ade80', i
 // the distinction the handle exists to make. This grouping is PRESENTATION
 // over that set: the count and the detail row keep every handle reachable, so
 // nothing the key separates is lost.
-type WriteChip = { branch: string; experiment?: string };
+type WriteChip = { branch: string };
 type BindingGroup = {
   key: string; kind: string; uid: string; name: string | null;
   count: number; chips: WriteChip[];
 };
 
-const chipKey = (c: WriteChip): string => (c.experiment ? `e:${c.experiment}` : `b:${c.branch}`);
-
-// mountFor finds the URL-scoped mount for a target, matched on KIND AND UID.
-// Uid alone would let a repo and a lens that happen to share one put each
-// other's experiment on the wrong line.
-function mountFor(kind: string, uid: string, mounts: ClientSessionMount[] | undefined): ClientSessionMount | undefined {
-  return mounts?.find(m => m.kind === kind && m.uid === uid && m.experiment);
-}
-
-// writeChip says what a handle on this target WRITES to, or null when there is
-// nothing to say.
-//
-// THE HANDLE'S OWN BRANCH WINS. kb/invariants/mcp/experiments/one-answer-per-handle
-// makes "a branch pin AND an experiment" unrepresentable — a handle carries one
-// or the other — so a non-empty `branch` IS this handle's answer, and a mount's
-// experiment must not overwrite it. An empty branch means the handle named
-// nothing, and there the mount is the only thing that knows: `mounts` is the
-// STORED answer for a URL-scoped mount, and a session that opened an experiment
-// writes to exp/<name>, which is why
-// kb/invariants/mcp/experiments/mount-eligibility-from-the-route has it stored
-// rather than re-derived from the URL. Neither → no chip, because "" means the
-// target's own branch and a chip saying nothing is worse than no chip.
-//
-// The mount half is a DISPLAY join, not a routing claim: mounts are per
-// URL-scoped mount and bindings are per handle. See
-// kb/gotchas/web/ui/manage-page/sessions-binding-groups.
-function writeChip(kind: string, uid: string, branch: string, mounts: ClientSessionMount[] | undefined): WriteChip | null {
-  if (branch) return { branch };
-  const mo = mountFor(kind, uid, mounts);
-  return mo ? { branch: mo.branch, experiment: mo.experiment } : null;
+// writeChip says what a handle on this target WRITES to: its own branch pin,
+// or null when it named none ("" means the target's own branch, and a chip
+// saying nothing is worse than no chip).
+function writeChip(branch: string): WriteChip | null {
+  return branch ? { branch } : null;
 }
 
 // targetLines is every line the Binding cell draws for one session: the
 // grouped handles, or the singular `binding` fallback when the session
-// presented none, PLUS any mount whose target no line already names.
-//
-// That last part is not cosmetic. The Branch column this replaced rendered
-// `r.mounts` UNCONDITIONALLY, so an experiment on a target the session has
-// presented no handle for used to be visible and would otherwise now be shown
-// nowhere at all.
+// presented none.
 function targetLines(r: ClientSession): BindingGroup[] {
-  const lines = groupBindings(r.bindings, r.mounts);
+  const lines = groupBindings(r.bindings);
   if (lines.length === 0) {
-    const mo = mountFor(r.binding.kind, r.binding.uid, r.mounts);
     lines.push({
       key: `${r.binding.kind}:${r.binding.uid}`,
       kind: r.binding.kind, uid: r.binding.uid, name: r.binding.name,
-      count: 1, chips: mo ? [{ branch: mo.branch, experiment: mo.experiment }] : [],
-    });
-  }
-  for (const mo of r.mounts ?? []) {
-    if (!mo.experiment) continue;
-    const key = `${mo.kind}:${mo.uid}`;
-    if (lines.some(l => l.key === key)) continue;
-    // count 0: no handle stands behind this line, so there is no count to show.
-    lines.push({
-      key, kind: mo.kind, uid: mo.uid, name: mo.name,
-      count: 0, chips: [{ branch: mo.branch, experiment: mo.experiment }],
+      count: 1, chips: [],
     });
   }
   return lines;
 }
 
-function groupBindings(bindings: ClientSessionBindingRow[], mounts: ClientSessionMount[] | undefined): BindingGroup[] {
+function groupBindings(bindings: ClientSessionBindingRow[]): BindingGroup[] {
   // A Map keeps insertion order, which is first appearance, which — because
   // the server returns the set most-recently-used first — puts the target used
   // most recently on top.
@@ -108,11 +67,11 @@ function groupBindings(bindings: ClientSessionBindingRow[], mounts: ClientSessio
     let g = byTarget.get(key);
     if (!g) { g = { key, kind: b.kind, uid: b.uid, name: b.name, count: 0, chips: [] }; byTarget.set(key, g); }
     g.count++;
-    const chip = writeChip(b.kind, b.uid, b.branch, mounts);
+    const chip = writeChip(b.branch);
     // Distinct branches only: the common case is N handles writing to one
     // branch, and repeating the chip N times would be noise. When they
     // genuinely diverge, both chips show.
-    if (chip && !g.chips.some(c => chipKey(c) === chipKey(chip))) g.chips.push(chip);
+    if (chip && !g.chips.some(c => c.branch === chip.branch)) g.chips.push(chip);
   }
   return [...byTarget.values()];
 }
@@ -134,25 +93,20 @@ function TargetName({ kind, uid, name }: { kind: string; uid: string; name: stri
 }
 
 // BranchChip is the top bar's branch button, at table scale: blue fork on
-// transparent for an ordinary branch, green flask on #11201a with a #2a4a3a
-// border for an experiment. Copied rather than shared — TopBar's own chip
-// carries a caret, a drag-region opt-out and a click target that mean nothing
-// here, and factoring the two together would drag all of it into this file.
-function BranchChip({ branch, experiment }: WriteChip) {
-  const exp = Boolean(experiment);
+// transparent. Copied rather than shared — TopBar's own chip carries a caret, a
+// drag-region opt-out and a click target that mean nothing here, and factoring
+// the two together would drag all of it into this file.
+function BranchChip({ branch }: WriteChip) {
   return (
-    <span data-testid="session-branch-chip"
-          title={exp ? `Experiment ${experiment}` : branch}
+    <span data-testid="session-branch-chip" title={branch}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
             fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1.5,
             borderRadius: 3, padding: '0 5px',
-            color: exp ? '#7c9' : '#8af',
-            background: exp ? '#11201a' : 'transparent',
-            border: '1px solid ' + (exp ? '#2a4a3a' : 'transparent'),
+            color: '#8af', background: 'transparent', border: '1px solid transparent',
           }}>
-      {exp ? <FlaskIcon color="currentColor" size={10} /> : <GitBranchIcon color="currentColor" size={10} />}
-      {exp ? experiment : branch}
+      <GitBranchIcon color="currentColor" size={10} />
+      {branch}
     </span>
   );
 }
@@ -219,10 +173,7 @@ export function SessionsTable({ rows, policy, error, now, target }: {
                   BRIDGE declares about itself in its client header, which it
                   fills only in --repo mode and leaves empty in lens and
                   unscoped mode, and which repeats the binding's own agent
-                  branch when it is set. The one live thing it carried was the
-                  experiment attribution from `mounts`, and that now sits on
-                  the target line, where it can also disagree per target
-                  instead of per session. */}
+                  branch when it is set. */}
               <th style={th}></th><th style={th}>Client</th><th style={th}>Parent</th><th style={th}>Host · cwd</th><th style={th}>Binding</th><th style={th}>Last seen</th><th style={th}>Requests</th>
             </tr>
           </thead>
@@ -267,16 +218,14 @@ export function SessionsTable({ rows, policy, error, now, target }: {
 
                       Falls back to the singular `binding` for a session that
                       presented no handle at all (a URL-scoped caller), which
-                      is the only case the array is empty — and appends a line
-                      for any mount whose target no handle named, which the
-                      Branch column used to render unconditionally. */}
+                      is the only case the array is empty. */}
                   <td data-testid="session-bindings">
                     <div style={targetsCol}>
                       {lines.map(g => (
                         <div key={g.key} data-testid="session-binding-group" style={targetLine}>
                           <TargetName kind={g.kind} uid={g.uid} name={g.name} />
                           {g.count > 1 && <span style={handleCount}>×{g.count}</span>}
-                          {g.chips.map(c => <BranchChip key={chipKey(c)} {...c} />)}
+                          {g.chips.map(c => <BranchChip key={c.branch} {...c} />)}
                         </div>
                       ))}
                       {expandable && (
@@ -318,7 +267,7 @@ export function SessionsTable({ rows, policy, error, now, target }: {
                           </thead>
                           <tbody>
                             {bindings.map((b, i) => {
-                              const chip = writeChip(b.kind, b.uid, b.branch, r.mounts);
+                              const chip = writeChip(b.branch);
                               return (
                                 // The first entry is the one that made the
                                 // most recent call; it is brighter because
