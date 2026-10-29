@@ -66,9 +66,9 @@ describe('export filename', () => {
     expect(slug.endsWith('-')).toBe(false);
     expect(slugTitle('x'.repeat(100))).toHaveLength(48);
   });
-  it('strips accents and punctuation, and falls back when nothing is left', () => {
-    expect(slugTitle('Café — “Résumé”!')).toBe('cafe-resume');
-    expect(exportFilename('???', 'kb/a/b/abcdef0123456789.md')).toBe('materialized-abcdef01.md');
+  it('treats anything but a-z and 0-9 as a separator (as the server does), and is just the id8 when nothing is left', () => {
+    expect(slugTitle('Café — “Résumé”!')).toBe('caf-r-sum');
+    expect(exportFilename('???', 'kb/a/b/abcdef0123456789.md')).toBe('abcdef01.md');
   });
   it('id8 is the first 8 characters of the file name', () => {
     expect(id8('kb/decisions/x/16ccefe6.md')).toBe('16ccefe6');

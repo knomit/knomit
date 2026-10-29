@@ -77,7 +77,9 @@ export const SLUG_MAX = 48;
 /** A title as a filename stem: lower-case ASCII words joined by '-', at most
  *  SLUG_MAX characters, cut at a word boundary when it has to be cut. */
 export function slugTitle(title: string): string {
-  const full = title.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  // Same rule as the server's materialize.ExportFileName (its Content-Disposition
+  // name): other letters are separators, not transliterated.
+  const full = title.toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   if (full.length <= SLUG_MAX) return full;
   let cut = full.slice(0, SLUG_MAX);
@@ -96,8 +98,8 @@ export function id8(path: string): string {
 
 /** `<slugged title, up to 48 chars>-<id8>.md` */
 export function exportFilename(title: string, path: string): string {
-  const slug = slugTitle(title) || 'materialized';
-  return `${slug}-${id8(path)}.md`;
+  const slug = slugTitle(title);
+  return slug ? `${slug}-${id8(path)}.md` : `${id8(path)}.md`;
 }
 
 /** The heading level for a section at walk depth d: the root is an h2 (the
