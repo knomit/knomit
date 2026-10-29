@@ -39,10 +39,9 @@ func handleCommitAnchoredFact(b hal.URLBuilder, mgr *repos.Manager) http.Handler
 			return
 		}
 
-		// Dispatch /materialize: the agent document anchored at this commit.
-		if factPath, ok := splitMaterialize(path); ok {
-			ri := repos.RepoFromContext(r.Context())
-			serveMaterialize(w, r, repos.NewBindingOfRepo(ri, branch), mgr, factPath, sha, nil)
+		// Dispatch /materialize (the agent document) and /materialize/pages
+		// (its paged data), anchored at this commit.
+		if serveMaterializeSub(w, r, repos.NewBindingOfRepo(repos.RepoFromContext(r.Context()), branch), mgr, path, sha, nil) {
 			return
 		}
 

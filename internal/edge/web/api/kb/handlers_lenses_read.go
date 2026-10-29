@@ -589,8 +589,7 @@ func handleHALLensFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 		// repo, kb://<id12>/... = that mount) and walks through the lens's own
 		// binding. Every way the fact cannot be addressed or read answers the
 		// same 404 as the fact route, so it reveals nothing about the mounts.
-		if factPath, ok := splitMaterialize(requested); ok {
-			serveMaterialize(w, r, bind, mgr, factPath, "", func() { lensFactNotFound(w, r, requested) })
+		if serveMaterializeSub(w, r, bind, mgr, requested, "", func() { lensFactNotFound(w, r, requested) }) {
 			return
 		}
 

@@ -652,6 +652,39 @@ func TestMaterialize_Paging(t *testing.T) {
 	require.Equal(t, errMaterializeExpired, text)
 }
 
+// The first call's limit is frozen in the cursor: a resume that passes only
+// the cursor keeps it (human and agent alike), and an explicit limit with the
+// cursor changes that one page only. This is what keeps an MCP human page
+// byte-identical to the REST pages route, which refuses limit on a resume.
+//
+// Sabotage: make materializeResume pass the audience default instead of the
+// frozen limit, and the cursor-only pages hold 3 (human) or 25 (agent).
+func TestMaterialize_ResumeKeepsTheFirstCallsLimit(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	seedT1(t, ri) // five facts
+
+	sizes := func(first map[string]any, resumeLimit ...int) []int {
+		t.Helper()
+		p := matCall(t, ctx, nil, first)
+		out := []int{p.NTo - p.NFrom + 1}
+		for i := 0; p.HasMore; i++ {
+			next := map[string]any{"cursor": *p.Cursor}
+			if i < len(resumeLimit) {
+				next["limit"] = resumeLimit[i]
+			}
+			p = matCall(t, ctx, nil, next)
+			out = append(out, p.NTo-p.NFrom+1)
+		}
+		return out
+	}
+	require.Equal(t, []int{2, 2, 1}, sizes(map[string]any{"file": "kb/t1/r.md", "audience": "human", "limit": 2}))
+	require.Equal(t, []int{1, 1, 1, 1, 1}, sizes(map[string]any{"file": "kb/t1/r.md", "audience": "agent", "limit": 1}))
+	require.Equal(t, []int{3, 2}, sizes(map[string]any{"file": "kb/t1/r.md", "audience": "human"}), "no limit: the default")
+	require.Equal(t, []int{1, 3, 1}, sizes(map[string]any{"file": "kb/t1/r.md", "audience": "human", "limit": 1}, 3),
+		"an explicit limit with cursor changes that page only; the next one is back at the frozen 1")
+}
+
 // The page cap is measured: facts whose bodies together exceed it are split
 // across pages even under a large limit, and a fact larger than the cap
 // alone is still delivered.
@@ -685,9 +718,9 @@ func TestMaterialize_PagesStayUnderTheCap(t *testing.T) {
 		}
 		require.Equal(t, []int{3, 1, 1}, counts, "%s: R+A+B fit under the cap, C does not join them; Huge goes alone", audience)
 		for i, n := range sizes[:2] {
-			require.LessOrEqual(t, n, materializePageCap, "%s page %d", audience, i+1)
+			require.LessOrEqual(t, n, materialize.PageCap, "%s page %d", audience, i+1)
 		}
-		require.Greater(t, sizes[2], materializePageCap, "%s: the oversized fact is still delivered, alone", audience)
+		require.Greater(t, sizes[2], materialize.PageCap, "%s: the oversized fact is still delivered, alone", audience)
 	}
 }
 

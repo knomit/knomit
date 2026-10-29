@@ -183,8 +183,7 @@ func handleHALFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 		}
 
 		// Dispatch sub-resource requests before any other processing.
-		if factPath, ok := splitMaterialize(chi.URLParam(r, "*")); ok {
-			serveMaterialize(w, r, repos.NewBindingOfRepo(ri, branch), mgr, factPath, "", nil)
+		if serveMaterializeSub(w, r, repos.NewBindingOfRepo(ri, branch), mgr, chi.URLParam(r, "*"), "", nil) {
 			return
 		}
 		if dispatchFactSubResource(b, ri, repoName, branch, w, r) {

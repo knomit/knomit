@@ -230,7 +230,7 @@ func TestAPI_OpenAPISpecIsGzipped(t *testing.T) {
 // media type at ";" before matching, so the bare "text/yaml" entry has to be
 // the thing that matches — this pins that, without needing a live ontology.
 func TestCompressor_MatchesYAMLWithCharsetParameter(t *testing.T) {
-	for _, ct := range []string{"text/yaml; charset=utf-8", "application/yaml", "application/hal+json"} {
+	for _, ct := range []string{"text/yaml; charset=utf-8", "application/yaml", "application/hal+json", "text/markdown; charset=utf-8"} {
 		t.Run(ct, func(t *testing.T) {
 			h := compressor()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", ct)

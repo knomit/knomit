@@ -911,7 +911,16 @@ paths:
         at its latest version; any other id is listed as not available,
         whether or not such a repo exists. A frame
         lists its ancestors first. 404 when the fact cannot be read at the
-        branch tip.
+        branch tip. This is the EXPORT: always the whole materialization at
+        the requested depth and count, sent as a download with
+        `Content-Disposition: attachment; filename="<slug>-<id8>.md"`, where
+        `<slug>` is the root fact's title lowercased, every run of characters
+        other than `a-z0-9` made one `-`, cut at a word boundary to at most 48
+        characters, and `<id8>` is the fact's file id (a title with no
+        `a-z0-9` gives `<id8>.md`). The body is gzip-compressed for a client
+        that accepts it. `limit` is not a parameter here: the export is always
+        whole. To stream the same materialization page by page, use
+        `/materialize/pages`.
 
         A file under `.knomit/` named by its exact path (case kept; no empty,
         `.` or `..` segment) is returned RAW, read-only: 200 with the file's
@@ -925,13 +934,21 @@ paths:
       operationId: getFact
       responses:
         "200":
-          description: Fact or ref collection
+          description: Fact or ref collection, or (`/materialize`) the agent document
+          headers:
+            Content-Disposition:
+              description: >
+                Only on `/materialize`: `attachment; filename="<slug>-<id8>.md"`
+                (see the description).
+              schema: { type: string }
           content:
             application/hal+json:
               schema:
                 oneOf:
                   - { $ref: "#/components/schemas/Fact" }
                   - { $ref: "#/components/schemas/RefsCollection" }
+            text/markdown:
+              schema: { type: string }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -992,6 +1009,67 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/branches/{branch}/facts/{path}/materialize/pages:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/FactPath"
+    get:
+      tags: [facts]
+      summary: Page a fact's materialization as data (server-side cursor)
+      description: |
+        The same materialization as `/materialize`, as data, one page at a
+        time: each response is BYTE FOR BYTE the page `knomit_materialize`
+        returns with `audience: human` for the same input (same field names
+        and structure; `instructions` on page 1 only). A whole
+        materialization never comes back in one response.
+
+        FIRST CALL (no `cursor`): reads `depth` (0-10, default 4),
+        `max_nodes` (1-500, default 200), `unpin` and `cross_kb` (booleans,
+        default false), with the same rules and 400s as `/materialize`, and
+        `limit`, the most facts per page (1-5, default 3; out of range is a
+        400). The walk, the reading order and `limit` are fixed ONCE, here,
+        and every node's
+        version is frozen (including the latest versions `unpin` and
+        `cross_kb` read), so every later page comes from one snapshot. The
+        commit-anchored route (`/repos/{repo}/branches/{branch}/commits/{sha}/facts/{path}/materialize/pages`)
+        materializes as of that commit; the lens route
+        (`/lenses/{lens}/facts/{path}/materialize/pages`) walks through the
+        lens.
+
+        LATER CALLS: pass ONLY `cursor` (the previous page's `cursor`), on
+        the same URL. Any other parameter with it is a 400: new options mean
+        a new first call, and that includes `limit`: every later page keeps
+        the first call's. Pages hold whole facts: at most `limit`, and as
+        many as fit in 32 KiB of JSON; a fact larger than that comes alone,
+        whole.
+
+        A cursor belongs to the URL it was minted on and to the caller's
+        principal, and to the binding's read set. An unknown, finished or
+        idle-expired cursor, and another caller's, answer the SAME 404
+        ("Cursor not found"), and the refusal consumes nothing. Cross-KB
+        refs are followed only into repos the caller's credential reaches;
+        an unreachable repo is listed exactly like a missing one
+        (`kb_unavailable`).
+      operationId: getMaterializePage
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, no other parameter is accepted." }
+        - { name: depth, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 10, default: 4 } }
+        - { name: max_nodes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+        - { name: unpin, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 5, default: 3 }, description: "First call only: the most facts per page, frozen in the cursor." }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaterializePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches/{branch}/facts/{path}/commits:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -1034,7 +1112,11 @@ paths:
         When the path terminates with `/materialize`, the response is the
         fact's agent document (see the branch-anchored route) anchored at
         this commit: the fact as it stood there and, with `unpin=true`, every
-        ref at its latest version as of this commit.
+        ref at its latest version as of this commit. It is a download with the
+        same `Content-Disposition` as the branch-anchored route. When the path
+        terminates with `/materialize/pages`, the response is one page of the
+        same materialization as data, anchored at this commit (see
+        `/repos/{repo}/branches/{branch}/facts/{path}/materialize/pages`).
 
         When the path terminates with `/incoming` or `/outgoing`, the
         response is a `RefsCollection` of referencing/referenced facts at
@@ -3881,8 +3963,10 @@ paths:
 
         `/materialize` returns the agent document (see the repo route) walked
         through this lens: a `kb://<id12>/…` fact is materialized from that
-        mount and its nodes keep the qualified form. Every not-found case
-        returns the same byte-identical 404 as the fact itself.
+        mount and its nodes keep the qualified form, as a download with the
+        repo route's `Content-Disposition`. `/materialize/pages` pages the
+        same materialization as data (see the repo route). Every not-found
+        case returns the same byte-identical 404 as the fact itself.
 
         Sub-resources match the repo route: when the path terminates with
         `/commits`, `/incoming` or `/outgoing`, the suffix is stripped before
@@ -5155,6 +5239,87 @@ components:
                 refs:
                   type: array
                   items: { $ref: "#/components/schemas/Ref" }
+
+    MaterializePage:
+      type: object
+      description: >
+        One page of a materialization: the knomit_materialize human page
+        (internal/corpus/materialize Page). The envelope fields repeat on
+        every page; `facts` holds whole facts in reading order.
+      required: [root, anchor, order, audience, unpinned, cross_kb, depth, max_nodes, total, truncated, n_from, n_to, cursor, has_more]
+      properties:
+        root:      { type: string, description: "The materialized fact's path (kb://<id12>/… outside the write repo)." }
+        anchor:    { type: string, description: "The commit the walk was planned at." }
+        order:     { type: string, enum: [refs, frame] }
+        audience:  { type: string, enum: [human] }
+        unpinned:  { type: boolean }
+        cross_kb:  { type: boolean }
+        depth:     { type: integer }
+        max_nodes: { type: integer }
+        total:     { type: integer, description: "Facts in the whole materialization (exact: the walk is planned up front)." }
+        truncated:
+          type: object
+          description: Distinct cited facts not written, by reason.
+          properties:
+            depth: { type: integer }
+            nodes: { type: integer }
+        instructions_version: { type: string }
+        instructions: { type: string, description: "Writing instructions, page 1 only." }
+        facts:
+          type: array
+          items: { $ref: "#/components/schemas/MaterializeNode" }
+        n_from:   { type: integer, description: "Ordinal of the first fact on this page." }
+        n_to:     { type: integer, description: "Ordinal of the last fact on this page." }
+        cursor:   { type: string, nullable: true, description: "Pass it back alone for the next page; null on the last page." }
+        has_more: { type: boolean }
+
+    MaterializeNode:
+      type: object
+      required: [n, path, repo, commit, depth, role, title, type, kind, confidence, anchor_id]
+      properties:
+        n:          { type: integer, description: "Ordinal in reading order, from 1." }
+        path:       { type: string }
+        repo:       { type: string, description: "The fact's repo id (12 hex)." }
+        commit:     { type: string, description: "The version written (pinned, or the latest version frozen on the first call)." }
+        depth:      { type: integer, description: "Shortest ref distance from the root; an ancestor's upward hop count." }
+        role:       { type: string, enum: [root, ancestor, focal, ref] }
+        title:      { type: string }
+        type:       { type: string }
+        kind:       { type: string }
+        confidence: { type: number, format: double }
+        date:       { type: string }
+        body:       { type: string }
+        builds_on:
+          type: array
+          items:
+            type: object
+            properties:
+              n:                 { type: integer }
+              title:             { type: string }
+              id:                { type: string }
+              anchor_id:         { type: string }
+              different_version: { type: boolean, description: "The citing fact cited a version whose BODY differs from the one written (changed since cited)." }
+        not_included:
+          type: array
+          items:
+            type: object
+            properties:
+              title:  { type: string }
+              id:     { type: string }
+              path:   { type: string }
+              reason: { type: string, enum: [depth, size, no_version, cross_kb_off, kb_unavailable, not_in_that_kb, system_file] }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              label: { type: string }
+              url:   { type: string }
+        marks:
+          type: array
+          items: { type: string, enum: [latest_other_kb] }
+        anchor_id: { type: string }
+        section:   { type: string, description: "A frame's group heading written before this fact, if any." }
 
     FactCreateRequest:
       type: object

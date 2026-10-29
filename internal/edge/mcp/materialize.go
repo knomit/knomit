@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -14,36 +13,25 @@ import (
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
-	"knomit/internal/engine/store/model"
 	"knomit/internal/foundation/auth"
 )
 
 // The two audiences of knomit_materialize.
 const (
-	audienceAgent = "agent"
-	audienceHuman = "human"
+	audienceAgent = materialize.AudienceAgent
+	audienceHuman = materialize.AudienceHuman
 )
-
-// materializeToolPrefix prefixes the tool-session `tool` value; the audience
-// follows it, so a resume knows its page size before it dequeues anything,
-// and a cursor minted by another tool is refused.
-const materializeToolPrefix = "materialize:"
 
 // Page sizes, in facts. A human page carries full bodies for a model to
 // write from, so it is as small as knomit_query's include_body pages; an
-// agent page is text the caller reads straight through.
+// agent page is text the caller reads straight through. Every page is also
+// measured against materialize.PageCap.
 const (
-	materializeHumanDefaultLimit = 3
-	materializeHumanMaxLimit     = 5
+	materializeHumanDefaultLimit = materialize.HumanDefaultLimit
+	materializeHumanMaxLimit     = materialize.HumanMaxLimit
 	materializeAgentDefaultLimit = 25
 	materializeAgentMaxLimit     = 100
 )
-
-// materializePageCap is the most bytes a page may marshal to: the MCP
-// client's tool-result cap. Pages are MEASURED against it (each page is
-// marshalled as it is filled), never predicted, so there is no envelope
-// reserve to drift. A single fact larger than the cap is still sent, alone.
-const materializePageCap = 32 << 10
 
 // materializeTimeout bounds one call. A first call walks up to 500 facts.
 const materializeTimeout = 60 * time.Second
@@ -83,44 +71,9 @@ func materializeTool() mcpgo.Tool {
 			mcpgo.Description("The `cursor` from the previous page. With it, every other argument except `binding` and `limit` is refused: the document was fixed by the first call."),
 		),
 		mcpgo.WithNumber("limit",
-			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. A page also stops before it would exceed the transport's size cap."),
+			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. The first call's limit is kept for every later page of its cursor; passing limit with cursor changes it for that page only. A page also stops before it would exceed the transport's size cap."),
 		),
 	)
-}
-
-// materializeEnv is what every page repeats about the document, and what
-// each snapshot item stores so a later page can repeat it.
-type materializeEnv struct {
-	Root                string                 `json:"root"`
-	Anchor              string                 `json:"anchor"`
-	Order               string                 `json:"order"`
-	Audience            string                 `json:"audience"`
-	Unpinned            bool                   `json:"unpinned"`
-	CrossKB             bool                   `json:"cross_kb"`
-	Depth               int                    `json:"depth"`
-	MaxNodes            int                    `json:"max_nodes"`
-	Total               int                    `json:"total"`
-	Truncated           materialize.Truncation `json:"truncated"`
-	InstructionsVersion string                 `json:"instructions_version,omitempty"`
-}
-
-// materializePage is one response.
-type materializePage struct {
-	materializeEnv
-	Instructions string             `json:"instructions,omitempty"`
-	Text         *string            `json:"text,omitempty"`
-	Facts        []materialize.Node `json:"facts,omitempty"`
-	NFrom        int                `json:"n_from"`
-	NTo          int                `json:"n_to"`
-	Cursor       *string            `json:"cursor"`
-	HasMore      bool               `json:"has_more"`
-}
-
-// materializeItem is one snapshot row's state: the envelope and the node,
-// without its body (read again at the node's frozen commit).
-type materializeItem struct {
-	Env  materializeEnv   `json:"env"`
-	Node materialize.Node `json:"node"`
 }
 
 // MaterializeHandler serves knomit_materialize. mgr reaches every repo
@@ -176,7 +129,7 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 	}
 	opts.Unpin = req.GetBool("unpin", false)
 	opts.CrossKB = req.GetBool("cross_kb", false)
-	limit, err := materializeLimit(req, audience)
+	limit, err := materializeLimit(req, audience, materializeDefaultLimit(audience))
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -188,34 +141,9 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-
-	env := materializeEnv{
-		Root: doc.Root, Anchor: doc.Anchor, Order: doc.Order, Audience: audience,
-		Unpinned: opts.Unpin, CrossKB: opts.CrossKB, Depth: opts.Depth, MaxNodes: opts.MaxNodes,
-		Total: len(doc.Nodes), Truncated: doc.Truncated,
-	}
-	if audience == audienceHuman {
-		env.InstructionsVersion = materialize.InstructionsVersion
-	}
-	page, used, err := fillMaterializePage(env, doc, doc.Nodes, limit)
+	page, err := materialize.FirstPage(ctx, materializeScope(ctx, b, sWrite), doc, audience, limit)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	rest := doc.Nodes[used:]
-	if len(rest) > 0 {
-		session, err := sWrite.toolSession.CreateToolSession(ctx, materializeToolPrefix+audience, b.WriteMountBranch(), doc.Root, b.PinID(), federate.ReadSetFingerprint(b), callerOwner(ctx))
-		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
-		}
-		items, err := materializeItems(env, rest)
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if err := sWrite.toolSession.EnqueuePaths(ctx, session.ID, items); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
-		}
-		page.Cursor = &session.ID
-		page.HasMore = true
 	}
 	return marshalMaterializePage(page)
 }
@@ -227,74 +155,24 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 			return mcpgo.NewToolResultError(fmt.Sprintf("%s cannot be passed with cursor: the document was fixed by the first call — pass only cursor (and binding, limit)", k)), nil
 		}
 	}
-	session, err := sWrite.toolSession.GetToolSession(ctx, cursor)
-	if err != nil {
-		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
-	}
-	// The same refusals as every other cursor (explain.go): a cursor is a
-	// frozen view of ONE binding's read set, and every mismatch reads as
-	// expiry. A cursor minted by another tool is refused the same way.
-	if session == nil || session.Status != "active" || session.Binding == "" ||
-		session.Binding != b.PinID() || session.ReadSet != federate.ReadSetFingerprint(b) ||
-		session.Owner != callerOwner(ctx) ||
-		!strings.HasPrefix(session.Tool, materializeToolPrefix) {
+	page, err := materialize.NextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor,
+		func(audience string, frozen int) (int, error) { return materializeLimit(req, audience, frozen) })
+	switch {
+	case errors.Is(err, materialize.ErrCursorExpired):
 		return mcpgo.NewToolResultError(errMaterializeExpired), nil
-	}
-	audience := strings.TrimPrefix(session.Tool, materializeToolPrefix)
-	limit, err := materializeLimit(req, audience)
-	if err != nil {
+	case err != nil:
 		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-
-	items, err := sWrite.toolSession.DequeuePaths(ctx, cursor, limit)
-	if err != nil {
-		return mcpgo.NewToolResultError(fmt.Sprintf("dequeue error: %v", err)), nil
-	}
-	if len(items) == 0 {
-		return mcpgo.NewToolResultError(errMaterializeExpired), nil
-	}
-	nodes := make([]materialize.Node, len(items))
-	var env materializeEnv
-	for i, it := range items {
-		var st materializeItem
-		if err := json.Unmarshal([]byte(it.State), &st); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
-		}
-		env, nodes[i] = st.Env, st.Node
-	}
-	if err := materialize.ReadBodies(ctx, b, mgr, callerMayRead(ctx), nodes); err != nil {
-		// The frozen view references a repo this caller does not reach (a
-		// narrower credential resuming a wider caller's cursor: the binding
-		// pin is not per principal), or a repo or version that can no longer
-		// be read. Either way this caller gets nothing, and the answer is the
-		// expiry one, naming nothing. The page goes back on the queue: the
-		// refusal is about THIS caller, not the snapshot.
-		if qerr := sWrite.toolSession.EnqueuePaths(ctx, cursor, items); qerr != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", qerr)), nil
-		}
-		return mcpgo.NewToolResultError(errMaterializeExpired), nil
-	}
-	page, used, err := fillMaterializePage(env, nil, nodes, limit)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	// Nodes that did not fit go back at their own ordinals, ahead of the rest.
-	if used < len(items) {
-		if err := sWrite.toolSession.EnqueuePaths(ctx, cursor, items[used:]); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
-		}
-	}
-	left, err := sWrite.toolSession.QueueSize(ctx, cursor)
-	if err != nil {
-		return mcpgo.NewToolResultError(fmt.Sprintf("queue size error: %v", err)), nil
-	}
-	if left > 0 {
-		page.Cursor = &cursor
-		page.HasMore = true
-	} else {
-		_ = sWrite.toolSession.UpdateToolSession(ctx, cursor, env.Anchor, "completed")
 	}
 	return marshalMaterializePage(page)
+}
+
+// materializeScope pins a cursor to the binding (pin and read set) and to
+// the caller (endpoint + principal, callerOwner).
+func materializeScope(ctx context.Context, b *repos.Binding, sWrite mcpStore) materialize.CursorScope {
+	return materialize.CursorScope{
+		Sessions: sWrite.toolSession, Branch: b.WriteMountBranch(), Pin: b.PinID(),
+		ReadSet: federate.ReadSetFingerprint(b), Owner: callerOwner(ctx),
+	}
 }
 
 // callerMayRead is the cross-KB read check for a repo the binding does not
@@ -305,65 +183,7 @@ func callerMayRead(ctx context.Context) func(string) bool {
 	return func(repo string) bool { return auth.ReachesRepo(ctx, repo) }
 }
 
-// fillMaterializePage builds a page from the head of nodes: as many as fit
-// under materializePageCap, at most limit, at least one. doc is non-nil only
-// on page 1, which carries the agent header or the human instructions. used
-// is how many nodes the page holds.
-func fillMaterializePage(env materializeEnv, doc *materialize.Document, nodes []materialize.Node, limit int) (materializePage, int, error) {
-	build := func(k int) materializePage {
-		p := materializePage{materializeEnv: env, NFrom: nodes[0].N, NTo: nodes[k-1].N}
-		if env.Audience == audienceAgent {
-			var sb strings.Builder
-			if doc != nil {
-				sb.WriteString(materialize.RenderAgentHeader(doc))
-			}
-			for _, n := range nodes[:k] {
-				sb.WriteString(materialize.RenderAgentNode(n))
-			}
-			text := sb.String()
-			p.Text = &text
-		} else {
-			if doc != nil {
-				p.Instructions = materialize.HumanInstructions
-			}
-			p.Facts = nodes[:k]
-		}
-		return p
-	}
-	// Measure with a cursor present: the largest form the page can take.
-	placeholder := strings.Repeat("0", 36)
-	used := 1
-	for k := 2; k <= min(limit, len(nodes)); k++ {
-		p := build(k)
-		p.Cursor, p.HasMore = &placeholder, true
-		out, err := json.Marshal(p)
-		if err != nil {
-			return materializePage{}, 0, err
-		}
-		if len(out) > materializePageCap {
-			break
-		}
-		used = k
-	}
-	return build(used), used, nil
-}
-
-// materializeItems turns nodes into snapshot rows: sort_key is the ordinal,
-// the state is the envelope and the node without its body.
-func materializeItems(env materializeEnv, nodes []materialize.Node) ([]model.QueueItem, error) {
-	items := make([]model.QueueItem, 0, len(nodes))
-	for _, n := range nodes {
-		n.Body = ""
-		st, err := json.Marshal(materializeItem{Env: env, Node: n})
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, model.QueueItem{Path: n.Path, CommitHash: n.Commit, SortKey: n.N, State: string(st)})
-	}
-	return items, nil
-}
-
-func marshalMaterializePage(p materializePage) (*mcpgo.CallToolResult, error) {
+func marshalMaterializePage(p materialize.Page) (*mcpgo.CallToolResult, error) {
 	out, err := json.Marshal(p)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
@@ -372,11 +192,15 @@ func marshalMaterializePage(p materializePage) (*mcpgo.CallToolResult, error) {
 }
 
 // materializeLimit is the page's fact limit: the caller's, clamped to the
-// audience's maximum, or the audience's default.
-func materializeLimit(req mcpgo.CallToolRequest, audience string) (int, error) {
-	def, max := materializeAgentDefaultLimit, materializeAgentMaxLimit
+// audience's maximum, or else def. A first call passes the audience's
+// default (materializeDefaultLimit); a resume passes the limit its first
+// call froze in the cursor, so a cursor paged without `limit` keeps the
+// first call's page size (the REST pages route, which refuses `limit` on a
+// resume, serves the same pages).
+func materializeLimit(req mcpgo.CallToolRequest, audience string, def int) (int, error) {
+	max := materializeAgentMaxLimit
 	if audience == audienceHuman {
-		def, max = materializeHumanDefaultLimit, materializeHumanMaxLimit
+		max = materializeHumanMaxLimit
 	}
 	v, present, err := intArgument(req, "limit")
 	if err != nil {
@@ -389,6 +213,15 @@ func materializeLimit(req mcpgo.CallToolRequest, audience string) (int, error) {
 		return 0, errors.New("limit must be at least 1")
 	}
 	return min(v, max), nil
+}
+
+// materializeDefaultLimit is the audience's page size when the first call
+// names no `limit`.
+func materializeDefaultLimit(audience string) int {
+	if audience == audienceHuman {
+		return materializeHumanDefaultLimit
+	}
+	return materializeAgentDefaultLimit
 }
 
 // intArgument reads an integer argument. present is false when the key is
