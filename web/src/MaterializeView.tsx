@@ -105,16 +105,10 @@ function numberPrefix(num: string): string {
   return num.includes('.') ? num : `${num}.`;
 }
 
-function sameNums(a: (string | undefined)[], b: (string | undefined)[]): boolean {
-  return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-
-const Section = memo(function Section({ node, group, num, linkNums, onGoto }: {
+const Section = memo(function Section({ node, group, num, onGoto }: {
   node: MatNode; group: string | null;
   /** The outline number ('' for the top and a frame's ancestors). */
   num: string;
-  /** The outline number of each builds_on target, once it has arrived. */
-  linkNums: (string | undefined)[];
   onGoto: (l: MatLink) => void;
 }) {
   const level = headingLevel(node.depth);
@@ -155,11 +149,11 @@ const Section = memo(function Section({ node, group, num, linkNums, onGoto }: {
         )}
         {builtOpen && built.length > 0 && (
           <div className="k-mat-rel" data-testid="mat-builds-on">
-            {built.map((l, i) => (
+            {built.map(l => (
               <span key={l.anchor_id}>
                 <button type="button" className="k-mat-link" data-testid="mat-builds-link" onClick={() => onGoto(l)}
-                  title={linkNums[i] ? `Go to section ${linkNums[i]}` : 'Go to this section'}>
-                  ↪ {linkNums[i] ? `${numberPrefix(linkNums[i]!)} ` : ''}{l.title} <span className="k-mat-n">{l.id.slice(0, 8)}</span>
+                  title="Go to this section">
+                  ↪ {l.title} <span className="k-mat-n">{l.id.slice(0, 8)}</span>
                 </button>
                 {l.different_version && (
                   <span className="k-mat-changed" data-testid="mat-changed"
@@ -187,7 +181,7 @@ const Section = memo(function Section({ node, group, num, linkNums, onGoto }: {
       </section>
     </>
   );
-}, (a, b) => a.node === b.node && a.group === b.group && a.num === b.num && a.onGoto === b.onGoto && sameNums(a.linkNums, b.linkNums));
+}, (a, b) => a.node === b.node && a.group === b.group && a.num === b.num && a.onGoto === b.onGoto);
 
 // ── The view ────────────────────────────────────────────────────────────────
 
@@ -439,7 +433,6 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
 
           {sections.map((n, i) => (
             <Section key={n.n} node={n} onGoto={onGoto} num={nums.get(n.n) ?? ''}
-              linkNums={(n.builds_on ?? []).map(l => nums.get(l.n))}
               group={n.section && n.section !== sections[i - 1]?.section ? n.section : null} />
           ))}
 

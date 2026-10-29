@@ -110,10 +110,12 @@ h6.k-mat-h { font-size: 13.5px; }
 .k-mat-icon[aria-pressed='true'], .k-mat-icon[data-busy='true'] { opacity: 1; color: #8ab4f8; }
 
 /* Focus mode (the Focus toggle in the bar sets data-mat-focus on <html>): the
-   shell's repositories rail, the library column with its splitter, and the
+   shell's Browse / Activity / Settings tabs (with the divider before them), the repositories rail, the library column with its splitter, and the
    browse toolbar (branch + search) step aside; nothing else in the shell is
    touched. !important because the shell positions these with inline styles. */
 html[data-mat-focus] .k-rail,
+html[data-mat-focus] [data-testid='facet-tabs'],
+html[data-mat-focus] [data-testid='bar-divider'],
 html[data-mat-focus] [data-testid='browse-toolbar'],
 html[data-mat-focus] [data-shell-region='library'],
 html[data-mat-focus] [data-testid='library-splitter'] { display: none !important; }

@@ -603,7 +603,7 @@ describe('polish: labels, numbering, bar', () => {
     expect(within(screen.getAllByTestId('mat-section')[1]).getByTestId('mat-builds-toggle').querySelector('[role="img"]')).toBeNull();
   });
 
-  it('numbers sections like a document: the root is the unnumbered top, children 1 and 2, grandchildren 1.1, and a repeat links to its first number', async () => {
+  it('numbers sections like a document: the root is the unnumbered top, children 1 and 2, grandchildren 1.1, and a repeated fact\'s link names its target by title only', async () => {
     // root(1) cites A(2) and D(4); A cites S(3); D also cites S (reached first under A)
     setup({ total: 4, pageSize: 4, tree: { 1: [2, 4], 2: [3], 4: [3] } });
     await waitFor(() => expect(ns()).toHaveLength(4));
@@ -617,7 +617,10 @@ describe('polish: labels, numbering, bar', () => {
     for (const sec of secs) expect(within(sec).getByTestId('mat-meta').textContent).not.toMatch(/§|^\d/);
     expect(secs[1].querySelector('[data-testid="mat-meta"] [data-testid="mat-num"]')).toBeNull();
     fireEvent.click(within(secs[3]).getByTestId('mat-builds-toggle'));
-    expect(within(secs[3]).getByTestId('mat-builds-link').textContent).toMatch(/^↪ 1\.1 Fact number 3/);
+    const link = within(secs[3]).getByTestId('mat-builds-link');
+    // the link names its target by title only: no section number, as prefix or suffix
+    expect(link.textContent).toMatch(/^↪ Fact number 3 [0-9a-f]{8}$/);
+    expect(link.textContent).not.toMatch(/§|1\.1/);
   });
 
   it('a frame: ancestors are an unnumbered preamble, the frame the unnumbered top, numbers start at its children', async () => {
@@ -709,13 +712,16 @@ describe('focus mode', () => {
     expect(on()).toBe(false);
   });
 
-  it('the stylesheet hides exactly the rail, the library column with its splitter, and the browse toolbar under that attribute, and the shell carries those hooks', () => {
+  it('the stylesheet hides exactly the Browse/Activity/Settings tabs, the rail, the library column with its splitter, and the browse toolbar under that attribute (the brand and gear stay), and the shell carries those hooks', () => {
     const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
     const rule = css.slice(css.indexOf("html[data-mat-focus]"));
-    for (const sel of [".k-rail", "[data-testid='browse-toolbar']", "[data-shell-region='library']", "[data-testid='library-splitter']"]) expect(rule).toContain(sel);
+    for (const sel of [".k-rail", "[data-testid='facet-tabs']", "[data-testid='browse-toolbar']", "[data-shell-region='library']", "[data-testid='library-splitter']"]) expect(rule).toContain(sel);
     expect(rule).toContain('display: none !important');
+    // the top bar's brand, rail toggle, gear and server tabs are NOT in the hiding rule
+    for (const keep of ['bar-brand', 'rail-toggle', 'server-toggle', 'server-tabs', 'toknomitr-bar']) expect(rule).not.toContain(keep);
     const src = (f: string) => readFileSync(resolve(__dirname, f), 'utf8');
     expect(src('TargetRail.tsx')).toContain('className="k-rail"');
+    expect(src('TopBar.tsx')).toContain('data-testid="facet-tabs"');
     expect(src('BrowseFacet.tsx')).toContain('data-shell-region="library"');
     expect(src('BrowseFacet.tsx')).toContain('testId="browse-toolbar"');
     expect(src('BrowseFacet.tsx')).toContain('testId="library-splitter"');
