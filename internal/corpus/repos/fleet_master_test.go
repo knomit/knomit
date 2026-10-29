@@ -135,7 +135,7 @@ func roundOnPush(t *testing.T, ri *RepoInstance, onPush func(string, error)) {
 	require.NoError(t, err)
 	defer release()
 	runReconcileLoop(context.Background(), svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
-		makeRemoteAuthFn(config.RemoteAuthConfig{}, ""), ri.env.cfg.LocalOriginRoot, false, onPush, nil, nil, nil, nil, ri.peers, true)
+		makeRemoteAuthFn(config.RemoteAuthConfig{}, ""), ri.env.cfg.LocalOriginRoot, false, onPush, nil, nil, nil, nil, ri.peers, nil, true)
 }
 
 // settleMerger waits for a merger run that STARTED after this call (the

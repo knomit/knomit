@@ -489,7 +489,7 @@ func TestDue_SweepRunsOnReconcileTick_FailedRemoteTick(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.Kick, nil, nil, nil, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.Kick, nil, nil, nil, nil, nil, false)
 	}()
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "a tick that fails before Sync must still kick the sweep")

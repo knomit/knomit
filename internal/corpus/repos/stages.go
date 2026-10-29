@@ -343,6 +343,16 @@ func (identifyStage) Enter(ctx context.Context, _ *Life, r *RepoInstance) error 
 		log.Warn().Str("repo", r.Name()).Msg("root commit unresolved; registry identity not recorded")
 		return nil
 	}
+	return r.recordIdentity(id)
+}
+
+// recordIdentity records id, the root commit of r's read branch, as r's
+// knowledge base in the registry: the one RecordRepoID call for a mounted
+// repo. Identify calls it on every mount, and reidentifyAfterRewind after a
+// sync round that replaced the consensus branch with another history.
+// Another ACTIVE repo already holding id is identityConflict; any other
+// failure is logged and leaves the record as it was, for the next call.
+func (r *RepoInstance) recordIdentity(id string) error {
 	reg := r.env.m.Repos()
 	if reg == nil || r.uid == "" {
 		return nil
@@ -351,12 +361,44 @@ func (identifyStage) Enter(ctx context.Context, _ *Life, r *RepoInstance) error 
 		// Another ACTIVE repo already holds this knowledge base: two local
 		// copies would both write agent/<host> and clobber each other on push.
 		if errors.Is(err, control.ErrRepoAlreadyRegistered) {
-			return identityConflict{short: r.ShortID(), err: err}
+			short := id
+			if len(short) > 12 {
+				short = short[:12]
+			}
+			return identityConflict{short: short, err: err}
 		}
-		// A transient failure leaves repo_id unset; the next Identify retries.
+		// A transient failure leaves repo_id as it was; the next call retries.
 		log.Warn().Err(err).Str("repo", r.Name()).Msg("recording repo identity failed")
 	}
 	return nil
+}
+
+// reidentifyAfterRewind runs after a sync round that force-updated the
+// consensus branch (remotesync ModeRewound): an attach that admitted an
+// unrelated history (replace_main, PATCH /origin/upstream with replace_main)
+// has just replaced it, and the agent branch was replayed onto it, so the
+// root of the read branch, the repo's knowledge base, may now be the
+// origin's. It is recorded at once, with Identify's rule (recordIdentity on
+// RootCommit of the read branch), so HeldByAnotherActiveRepo names this repo
+// for that knowledge base from this round on rather than from its next
+// mount; a second local copy is then refused at create. A round whose agent
+// branch kept its root records the same id again, which changes nothing.
+//
+// The attach guard has already refused a root another active repo held at
+// the time of the attach. A conflict here means one was registered between
+// that check and this round: it is logged, and the next mount's Identify
+// turns this repo Unavailable as it always has. The in-memory ID (kb://
+// addressing) is not touched; the next Identify re-reads it.
+func (r *RepoInstance) reidentifyAfterRewind(ctx context.Context, svc *store.Service) {
+	root, err := svc.RootCommit(ctx, r.ReadBranch())
+	if err != nil || root == "" {
+		log.Warn().Err(err).Str("repo", r.Name()).Msg("re-identify after a rewound consensus branch: root commit unresolved")
+		return
+	}
+	if err := r.recordIdentity(root); err != nil {
+		log.Error().Err(err).Str("repo", r.Name()).
+			Msg("the replaced consensus branch holds a knowledge base another active repo holds; this repo will be Unavailable at its next mount")
+	}
 }
 
 // identityConflict is Identify's fatal error: the knowledge base is already
@@ -812,7 +854,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 		name = "reconcile"
 		run = func(ctx context.Context) {
 			runReconcileLoop(ctx, svc, r.pub, r.remoteEdgeSink(), r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
-				env.onPush, r.triggers.Kick, r.syncWake, r.breakers, mode(), r.peers, once)
+				env.onPush, r.triggers.Kick, r.syncWake, r.breakers, mode(), r.peers, r.reidentifyAfterRewind, once)
 		}
 	}
 	// The local-upstream repair runs on the life's goroutine, never on the

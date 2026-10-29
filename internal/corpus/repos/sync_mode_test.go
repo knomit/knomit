@@ -136,7 +136,7 @@ func startModeLoop(t *testing.T, ri *RepoInstance, agent, upstream string, mode 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), agent, auth, "", false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, mode, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), agent, auth, "", false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, mode, nil, nil, false)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -164,7 +164,7 @@ func startRealModeLoop(t *testing.T, ri *RepoInstance, originRoot string, mode *
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, mode, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, mode, nil, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks

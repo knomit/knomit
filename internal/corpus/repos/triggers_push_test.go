@@ -183,7 +183,7 @@ func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, "", false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, l.mode, nil, false)
+		runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, "", false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, l.mode, nil, nil, false)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -535,7 +535,7 @@ func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, nil, nil, false)
+		runReconcileLoop(ctx, testService(t, ri), ri.pub, ri.remoteEdgeSink(), ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggers.Kick, ri.syncWake, ri.breakers, nil, nil, nil, false)
 	}()
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
