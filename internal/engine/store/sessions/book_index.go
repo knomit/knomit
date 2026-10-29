@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	sqlite3 "github.com/mattn/go-sqlite3"
+
+	"knomit/internal/engine/store/model"
 )
 
 // Book cursors: the session-DB half of "materialize a search as a book". A
@@ -37,7 +39,7 @@ const BookToolPrefix = "materialize-book:"
 
 // ErrBusy is a session-DB write that could not take the write lock within
 // the busy timeout. Nothing was written; the caller may retry.
-var ErrBusy = errors.New("session store busy")
+var ErrBusy = model.ErrSessionBusy
 
 // BookInfo is a book's envelope and cursor position.
 type BookInfo struct {

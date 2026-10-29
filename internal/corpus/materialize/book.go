@@ -69,9 +69,10 @@ var (
 	// ErrBookChanged: a result was not readable at the anchor resolved
 	// after the search (a write landed in between); retry.
 	ErrBookChanged = errors.New("the knowledge base changed while the book was built; retry")
-	// ErrCursorBusy: another call is reading this cursor right now. A
+	// ErrCursorInUse: another call is reading this cursor right now (a 409, not
+	// pages.go's ErrCursorBusy, a busy store). A
 	// cursor has one reader at a time.
-	ErrCursorBusy = errors.New("the cursor is being read by another call")
+	ErrCursorInUse = errors.New("the cursor is being read by another call")
 	// ErrStoreBusy: the session store's write lock could not be taken in
 	// time; nothing changed, retry.
 	ErrStoreBusy = sessions.ErrBusy
@@ -300,7 +301,7 @@ func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPa
 	f, ok := sc.Sessions.OpenBook(id)
 	if !ok {
 		_ = sc.Sessions.DeleteBook(context.WithoutCancel(ctx), id)
-		return BookPage{}, bk.stats, ErrCursorBusy
+		return BookPage{}, bk.stats, ErrCursorInUse
 	}
 	bk.f = f
 	if err := bk.load(req.Manager, req.MayRead); err != nil {
@@ -412,7 +413,7 @@ func (bk *book) walkUnit(unit int) error {
 	}
 	if err := bk.f.AppendUnit(bk.ctx, unit, rows, visits, anchors, tips); err != nil {
 		if errors.Is(err, sessions.ErrBookUnitTaken) {
-			return ErrCursorBusy
+			return ErrCursorInUse
 		}
 		return err
 	}
@@ -668,7 +669,7 @@ func IsBookCursor(ctx context.Context, sc CursorScope, cursor string) (bool, err
 // else is ErrInvalid), walking the units before it first if they are not
 // walked yet. Every cursor this caller cannot be served is ErrCursorExpired
 // and moves nothing; a call racing another on the same cursor is
-// ErrCursorBusy.
+// ErrCursorInUse.
 func BookNextPage(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, unit int) (BookPage, error) {
 	page, _, err := BookNextPageStats(ctx, sc, b, mgr, mayRead, cursor, unit)
 	return page, err
@@ -736,7 +737,7 @@ func (bk *book) page(at, from int, first bool) (BookPage, error) {
 		return BookPage{}, err
 	}
 	if !moved {
-		return BookPage{}, ErrCursorBusy
+		return BookPage{}, ErrCursorInUse
 	}
 	id := bk.id
 	page.Cursor = &id

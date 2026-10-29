@@ -371,7 +371,7 @@ func TestBook_ConcurrentBuildCapIs503(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"?path=kb/u/", nil))
 	release()
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
-	require.Equal(t, "2", rec.Header().Get("Retry-After"))
+	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
 	code, _, body := getBook(t, h, bookBase+"?path=kb/u/")
 	require.Equal(t, http.StatusOK, code, "a slot freed is a slot: %s", body)
 }

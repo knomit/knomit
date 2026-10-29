@@ -219,7 +219,7 @@ func TestBook_StalePositionIsRefused(t *testing.T) {
 	defer bk.close()
 	// Position is 2 now; a call that read position 1 loses.
 	_, err = bk.page(1, 1, false)
-	require.ErrorIs(t, err, ErrCursorBusy)
+	require.ErrorIs(t, err, ErrCursorInUse)
 	p2, err := BookNextPage(ctx, sc, f.b, nil, nil, *p1.Cursor, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, p2.SeqFrom)

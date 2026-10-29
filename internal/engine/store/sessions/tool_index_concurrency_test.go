@@ -14,10 +14,10 @@ import (
 
 func newToolIndexForTest(t *testing.T) *ToolIndex {
 	t.Helper()
-	db, _, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	db, path, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return NewToolIndex(db)
+	return NewToolIndex(db, BooksDirFor(path))
 }
 
 func queueItems(n int) []model.QueueItem {

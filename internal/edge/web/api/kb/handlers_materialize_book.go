@@ -265,16 +265,16 @@ func writeBookError(w http.ResponseWriter, r *http.Request, err error) {
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", err.Error(), r.URL.Path)
 	case errors.Is(err, materialize.ErrBookTooLarge):
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Book too large", err.Error(), r.URL.Path)
-	case errors.Is(err, materialize.ErrCursorBusy):
+	case errors.Is(err, materialize.ErrCursorInUse):
 		hal.WriteProblem(w, http.StatusConflict, "Cursor in use",
 			"another call is reading this cursor; a cursor has one reader at a time", r.URL.Path)
 	case errors.Is(err, materialize.ErrBookBusy), errors.Is(err, materialize.ErrStoreBusy), errors.Is(err, materialize.ErrBookChanged):
-		w.Header().Set("Retry-After", "2")
+		w.Header().Set("Retry-After", materializeBusyRetryAfter)
 		detail := "the server is busy building other books; retry shortly"
 		if errors.Is(err, materialize.ErrBookChanged) {
 			detail = materialize.ErrBookChanged.Error()
 		} else if errors.Is(err, materialize.ErrStoreBusy) {
-			detail = "the session store is busy; retry shortly"
+			detail = errMaterializeCursorBusy
 		}
 		hal.WriteProblem(w, http.StatusServiceUnavailable, "Busy", detail, r.URL.Path)
 	default:
