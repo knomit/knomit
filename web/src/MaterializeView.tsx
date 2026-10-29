@@ -213,7 +213,9 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     const hit = box.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(goto.anchor)}"]`);
     if (hit) { scrollToEl(hit); setGoto(null); return; }
     const last = sections[sections.length - 1];
-    if (tail === 'idle' && last && last.n < goto.n) { loadMore(); return; }
+    // A jump knows its ordinal. A restored place does not: the new walk may have
+    // put other facts before it, so read on until it shows up or the walk ends.
+    if (tail === 'idle' && last && (goto.kind === 'restore' || last.n < goto.n)) { loadMore(); return; }
     if (tail === 'loading') return;
     if (tail === 'failed') { setGoto(null); return; }
     // The walk is exhausted (or has already gone past it) and it is not there.
@@ -227,6 +229,12 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     }
     setGoto(null);
   }, [goto, epoch, stale, phase, tail, sections, loadMore, scrollToEl]);
+  // A restart the reader did not start (the count raise whose longer walk does
+  // not begin with what was read) dims the text like any other: remember the
+  // place now, while the old text is still on screen, and return to it.
+  useEffect(() => {
+    if (stale && !goto) setGoto(placeNow());
+  }, [stale, goto, placeNow]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Infinite scroll: ask for the next page only when the tail sentinel comes

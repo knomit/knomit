@@ -299,6 +299,34 @@ describe('changing options mid-read', () => {
     expect(pageCalls()[1].options.maxFacts).toBe(150);
   });
 
+  it('a count raise whose longer walk reorders what was read falls back to a restart that keeps the reader\'s place', async () => {
+    // Breadth-first inclusion, depth-first order: raising the cap lets a new fact in
+    // at position 2 and shifts everything after it, so "continue in place" cannot hold.
+    const { pageCalls } = setup({ total: 12, pageSize: 3, shiftAbove: 6 }, { initial: { ...DEFAULT_OPTIONS, maxFacts: 6 } });
+    await waitFor(() => expect(ns()).toEqual([1, 2, 3]));
+    nearBottom();
+    await waitFor(() => expect(ns()).toEqual([1, 2, 3, 4, 5, 6]));
+    const box = screen.getByTestId('mat-scroll');
+    let top = 0;
+    Object.defineProperty(box, 'scrollTop', { get: () => top, set: v => { top = v; }, configurable: true });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const n = (this as HTMLElement).dataset?.matN;
+      const y = n ? (Number(n) - 3) * 100 : 0; // the section at the top of the pane is §3
+      return { top: y, bottom: y + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y, toJSON() {} } as DOMRect;
+    });
+    const titleOfTop = screen.getAllByTestId('mat-section')[2].querySelector('.k-mat-h')?.textContent;
+
+    fireEvent.click(screen.getByTestId('mat-raise'));
+    // the fallback dims the old text like any restart ...
+    await waitFor(() => expect(pageCalls().filter(c => c.cursor === null)).toHaveLength(3)); // first, raise, fallback
+    // ... and the place the reader was at comes back, on the section's NEW position
+    await waitFor(() => expect(top).toBe(92)); // moved from §3 to §4: (4-3)*100 - 8
+    const secs = screen.getAllByTestId('mat-section');
+    expect(secs[3].querySelector('.k-mat-h')?.textContent).toBe(titleOfTop);
+    expect(document.querySelector('[data-stale="true"]')).toBeNull();
+    expect(screen.queryByTestId('mat-notice')).toBeNull();
+  });
+
   describe('keeping the place', () => {
     function layout() {
       const box = screen.getByTestId('mat-scroll');

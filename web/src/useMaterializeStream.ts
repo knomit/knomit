@@ -159,7 +159,9 @@ export class MaterializeStream {
     try {
       page = await this.inputs.api.page(this.inputs.target, this.walkOptions, this.cursor, ctl.signal);
     } catch (e) {
-      this.busy = false;
+      // Only the CURRENT load owns the busy flag: a stale one finishing late
+      // must not clear the newer load's.
+      if (this.gen === gen) this.busy = false;
       if (this.gen !== gen || ctl.signal.aborted) return;
       const msg = e instanceof Error ? e.message : String(e);
       if (first && this.mode === 'restart') {
@@ -169,8 +171,8 @@ export class MaterializeStream {
       }
       return;
     }
-    this.busy = false;
     if (this.gen !== gen) return;
+    this.busy = false;
 
     const replace = first && this.mode === 'restart';
     const secs = replace ? [] : this.state.sections.slice();

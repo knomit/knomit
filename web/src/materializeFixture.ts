@@ -19,6 +19,10 @@ export interface FixtureOptions {
   /** Frames: the first `ancestors` facts are ancestors, then the focal frame. */
   ancestors?: number;
   rootTitle?: string;
+  /** Breadth-first inclusion, depth-first order: a cap ABOVE this count lets a
+   *  new fact in at position 2, shifting every fact after it (as a real walk
+   *  does when the cap rises). */
+  shiftAbove?: number;
   /** Cited facts left unexpanded by the depth limit (the envelope's truncated.depth). */
   depthBeyond?: number;
   /** Page-2 cursors are valid for this options key only (see api.calls). */
@@ -73,7 +77,14 @@ export function makeFixtureApi(o: FixtureOptions = {}) {
   const failed = new Set<number>();
   const nodesFor = (opts: MatOptions): MatNode[] => {
     const cap = Math.min(total, opts.maxFacts);
-    return Array.from({ length: cap }, (_, i) => fixtureNode(i + 1, o));
+    const out = Array.from({ length: cap }, (_, i) => fixtureNode(i + 1, o));
+    if (o.shiftAbove !== undefined && opts.maxFacts > o.shiftAbove && cap >= 2) {
+      // a newly admitted fact (identity 900) lands second; the rest move down
+      const inserted = fixtureNode(900, o);
+      const order = [out[0], inserted, ...out.slice(1, cap - 1)];
+      return order.map((node, i) => ({ ...node, n: i + 1 }));
+    }
+    return out;
   };
   // A cursor is "<options-json>|<next index>" so a cursor call can find its walk.
   const encode = (opts: MatOptions, next: number) => `${JSON.stringify(opts)}|${next}`;
