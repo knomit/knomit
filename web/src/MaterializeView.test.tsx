@@ -617,7 +617,7 @@ describe('polish: labels, numbering, bar', () => {
     for (const sec of secs) expect(within(sec).getByTestId('mat-meta').textContent).not.toMatch(/§|^\d/);
     expect(secs[1].querySelector('[data-testid="mat-meta"] [data-testid="mat-num"]')).toBeNull();
     fireEvent.click(within(secs[3]).getByTestId('mat-builds-toggle'));
-    expect(within(secs[3]).getByTestId('mat-builds-link')).toHaveTextContent('1.1');
+    expect(within(secs[3]).getByTestId('mat-builds-link').textContent).toMatch(/^↪ 1\.1 Fact number 3/);
   });
 
   it('a frame: ancestors are an unnumbered preamble, the frame the unnumbered top, numbers start at its children', async () => {

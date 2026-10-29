@@ -101,7 +101,7 @@ function Disclosure({ label, count, open, onToggle, testid, flag }: {
 }
 
 /** The number as a heading prefix: "1." for a top-level section, "1.1" below it. */
-export function numberPrefix(num: string): string {
+function numberPrefix(num: string): string {
   return num.includes('.') ? num : `${num}.`;
 }
 
@@ -159,7 +159,7 @@ const Section = memo(function Section({ node, group, num, linkNums, onGoto }: {
               <span key={l.anchor_id}>
                 <button type="button" className="k-mat-link" data-testid="mat-builds-link" onClick={() => onGoto(l)}
                   title={linkNums[i] ? `Go to section ${linkNums[i]}` : 'Go to this section'}>
-                  ↪ {l.title} <span className="k-mat-n">{linkNums[i] ? `${linkNums[i]} · ` : ''}{l.id.slice(0, 8)}</span>
+                  ↪ {linkNums[i] ? `${numberPrefix(linkNums[i]!)} ` : ''}{l.title} <span className="k-mat-n">{l.id.slice(0, 8)}</span>
                 </button>
                 {l.different_version && (
                   <span className="k-mat-changed" data-testid="mat-changed"

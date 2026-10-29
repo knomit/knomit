@@ -117,3 +117,4 @@ html[data-mat-focus] .k-rail,
 html[data-mat-focus] [data-testid='browse-toolbar'],
 html[data-mat-focus] [data-shell-region='library'],
 html[data-mat-focus] [data-testid='library-splitter'] { display: none !important; }
+.k-mat-link .k-mat-n { color: #7f8b9c; font-family: var(--k-font-mono); font-size: 10.5px; margin-left: 4px; }
