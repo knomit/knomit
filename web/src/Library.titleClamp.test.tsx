@@ -26,7 +26,7 @@ describe('Library — browse list title cap', () => {
     render(<Library state={state} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
     const [long, short] = screen.getAllByTestId('dir-entry');
-    expect(long.textContent).toContain('x'.repeat(100) + ' tail that runs well…');
+    expect(long.textContent).toContain('x'.repeat(100) + ' tail that runs…');
     expect(long.textContent).not.toContain('y'.repeat(40));
     expect(long.getAttribute('title')).toBe(LONG);
     expect(long.getAttribute('aria-label')).toBe(LONG);
