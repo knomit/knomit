@@ -49,17 +49,17 @@ const liveObservers = () => MockIO.all.filter(o => o.live).length;
 const ns = () => screen.queryAllByTestId('mat-section').map(e => Number((e as HTMLElement).dataset.matN));
 const settle = () => act(() => new Promise<void>(r => setTimeout(r, 15)));
 
-function Harness({ api, save, initial = DEFAULT_OPTIONS, onOptions, canChoose = () => true }: {
-  api: MaterializeApi; save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions; onOptions?: (o: MatOptions) => void; canChoose?: () => boolean;
+function Harness({ api, save, initial = DEFAULT_OPTIONS, onOptions }: {
+  api: MaterializeApi; save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions; onOptions?: (o: MatOptions) => void;
 }) {
   const [options, setOptions] = useState(initial);
   return (
-    <MaterializeView target={TARGET} title="Fact number 1" options={options} api={api} save={save} canChoose={canChoose}
+    <MaterializeView target={TARGET} title="Fact number 1" options={options} api={api} save={save}
       onOptionsChange={o => { setOptions(o); onOptions?.(o); }} onBack={() => {}} />
   );
 }
 
-function setup(fx: FixtureOptions = {}, extra: { save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions; canChoose?: () => boolean } = {}) {
+function setup(fx: FixtureOptions = {}, extra: { save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome> ; initial?: MatOptions } = {}) {
   const f = makeFixtureApi(fx);
   const utils = render(<Harness api={f.api} {...extra} />);
   return { ...f, ...utils };
@@ -702,14 +702,14 @@ describe('focus mode', () => {
     }
   });
 
-  it('Esc INSIDE a text/number field (Max depth, Max facts) or any input only leaves the field and keeps Focus', async () => {
+  it('Esc INSIDE a text/number field (Max depth, Max facts) only leaves the field and keeps Focus', async () => {
     const shellEsc = vi.fn();
     const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
     window.addEventListener('keydown', shell);
     try {
       setup({ total: 3, pageSize: 3 });
       await waitFor(() => expect(ns()).toHaveLength(3));
-      for (const id of ['mat-depth', 'mat-facts', 'mat-unpin']) {
+      for (const id of ['mat-depth', 'mat-facts']) {
         const input = screen.getByTestId(id) as HTMLInputElement;
         input.focus();
         expect(document.activeElement).toBe(input);
@@ -723,6 +723,48 @@ describe('focus mode', () => {
       expect(on()).toBe(false);
     } finally {
       window.removeEventListener('keydown', shell);
+    }
+  });
+
+  it('Esc after clicking a checkbox (Cross-KB, Unpin) exits Focus right away: only text fields hold Esc', async () => {
+    const shellEsc = vi.fn();
+    const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
+    window.addEventListener('keydown', shell);
+    try {
+      setup({ total: 3, pageSize: 3 });
+      await waitFor(() => expect(ns()).toHaveLength(3));
+      for (const id of ['mat-cross-kb', 'mat-unpin']) {
+        if (!on()) fireEvent.click(screen.getByTestId('mat-focus'));
+        expect(on()).toBe(true);
+        const box = screen.getByTestId(id) as HTMLInputElement;
+        box.focus();
+        expect(document.activeElement).toBe(box);
+        expect(box.type).toBe('checkbox');
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(on()).toBe(false);                      // the FIRST Esc exits Focus
+      }
+      expect(shellEsc).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', shell);
+    }
+  });
+
+  it('which elements hold Esc: text-like inputs, textarea and contenteditable do; checkbox, radio, button, range and select do not', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const mk = (html: string) => { const d = document.createElement('div'); d.innerHTML = html; document.body.appendChild(d); return d.firstElementChild as HTMLElement; };
+    const holds = ['<input type="text">', '<input>', '<input type="number">', '<input type="search">', '<input type="password">', '<textarea></textarea>'];
+    const lets = ['<input type="checkbox">', '<input type="radio">', '<input type="range">', '<input type="button" value="b">', '<select><option>a</option></select>', '<button>b</button>'];
+    for (const [list, expectsHeld] of [[holds, true], [lets, false]] as const) {
+      for (const html of list) {
+        if (!on()) fireEvent.click(screen.getByTestId('mat-focus'));
+        const el = mk(html);
+        el.focus();
+        expect(document.activeElement, html).toBe(el);
+        fireEvent.keyDown(el, { key: 'Escape' });
+        expect(on(), html).toBe(expectsHeld);
+        el.remove();
+      }
     }
   });
 
@@ -842,8 +884,8 @@ describe('end of the article: more, and back to top', () => {
   });
 });
 
-describe('export asks where to save', () => {
-  const saved: SaveOutcome = { kind: 'saved', where: '/home/me/doc.md' };
+describe('export: the desktop asks, a browser downloads', () => {
+  const saved: SaveOutcome = { kind: 'saved', where: '/home/me/Downloads/doc.md' };
 
   it('a cancelled save dialog writes nothing and shows nothing alarming (no status, no error, button back to idle)', async () => {
     const save = vi.fn().mockResolvedValue({ kind: 'cancelled' } as SaveOutcome);
@@ -857,53 +899,32 @@ describe('export asks where to save', () => {
     expect(document.body.textContent).not.toMatch(/cancel|Not saved/i);
   });
 
-  it('a browser that cannot ask where to save says where the file will go BEFORE exporting; Cancel exports nothing', async () => {
-    const save = vi.fn().mockResolvedValue(saved);
-    const { calls } = setup({ total: 3, pageSize: 3 }, { save, canChoose: () => false });
-    await waitFor(() => expect(ns()).toHaveLength(3));
-    fireEvent.click(screen.getByTestId('mat-export'));
-    const note = await screen.findByTestId('mat-export-confirm');
-    expect(note).toHaveTextContent('cannot ask where to save');
-    expect(note).toHaveTextContent('download location');
-    expect(calls.filter(c => c.kind === 'export')).toHaveLength(0);
-    expect(save).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('mat-export-nevermind'));
-    await settle();
-    expect(screen.queryByTestId('mat-export-confirm')).toBeNull();
-    expect(calls.filter(c => c.kind === 'export')).toHaveLength(0);
-    expect(save).not.toHaveBeenCalled();
-  });
-
-  it('...and Download goes ahead, saving once', async () => {
+  it('there is no "cannot ask where to save" confirmation and no "Save as…" step: one click exports and saves, in every browser', async () => {
     const save = vi.fn().mockResolvedValue({ kind: 'downloaded', name: 'x.md' } as SaveOutcome);
-    const { calls } = setup({ total: 3, pageSize: 3 }, { save, canChoose: () => false });
-    await waitFor(() => expect(ns()).toHaveLength(3));
-    fireEvent.click(screen.getByTestId('mat-export'));
-    fireEvent.click(await screen.findByTestId('mat-export-go'));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    expect(calls.filter(c => c.kind === 'export')).toHaveLength(1);
-  });
-
-  it('a dialog the browser will not open without a fresh click: the export waits, "Save as…" opens it, and nothing is lost', async () => {
-    const save = vi.fn()
-      .mockResolvedValueOnce({ kind: 'needs-gesture' } as SaveOutcome)
-      .mockResolvedValueOnce(saved);
     const { calls } = setup({ total: 3, pageSize: 3 }, { save });
     await waitFor(() => expect(ns()).toHaveLength(3));
     fireEvent.click(screen.getByTestId('mat-export'));
-    const ready = await screen.findByTestId('mat-export-ready');
-    expect(ready).toHaveTextContent('ready');
-    expect(screen.queryByTestId('mat-export-done')).toBeNull();
-    fireEvent.click(screen.getByTestId('mat-export-saveas'));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-    expect(save.mock.calls[1][1]).toBe(save.mock.calls[0][1]);             // the same fetched document, not a second export
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(calls.filter(c => c.kind === 'export')).toHaveLength(1);
-    expect(await screen.findByTestId('mat-export-done')).toHaveTextContent('Saved /home/me/doc.md');
+    expect(screen.queryByTestId('mat-export-confirm')).toBeNull();
+    expect(screen.queryByTestId('mat-export-saveas')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/cannot ask|Save as/);
+    expect(await screen.findByTestId('mat-export-done')).toHaveTextContent('handed to the browser');
+    const src = readFileSync(resolve(__dirname, 'MaterializeView.tsx'), 'utf8');
+    expect(src).not.toMatch(/showSaveFilePicker|needs-gesture|canChoose/);
   });
 
-  it('is wired to the asking save, not the silent one', () => {
+  it('the desktop path saves through the dialog result and shows the path the user chose', async () => {
+    const save = vi.fn().mockResolvedValue(saved);
+    setup({ total: 3, pageSize: 3 }, { save });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    expect(await screen.findByTestId('mat-export-done')).toHaveTextContent('Saved /home/me/Downloads/doc.md');
+  });
+
+  it('is wired to saveExport (dialog on the desktop, download elsewhere), not the silent exports-dir save', () => {
     const src = readFileSync(resolve(__dirname, 'MaterializeView.tsx'), 'utf8');
-    expect(src).toContain('save = saveTextFileAs');
+    expect(src).toContain('save = saveExport');
     expect(src).not.toMatch(/save = saveTextFile\b[^A]/);
   });
 });

@@ -21,10 +21,6 @@ export type SaveOutcome =
   | { kind: 'saved'; where: string }
   | { kind: 'downloaded'; name: string }
   | { kind: 'cancelled' }
-  /** saveTextFileAs only: the browser's save dialog refused to open because the
-   *  click that started the export is too old (the export took a while). The
-   *  caller offers a button, and the click on THAT opens the dialog. */
-  | { kind: 'needs-gesture' }
   | { kind: 'failed'; message: string };
 
 /** NativeService.WriteFile's bound name: packagePath.TypeName.MethodName,
@@ -95,39 +91,21 @@ export async function saveTextFile(name: string, text: string, type = 'text/plai
   }
 }
 
-/** Whether this environment can ASK where to save: the desktop's native dialog,
- *  or a browser with showSaveFilePicker (Chrome, Edge). Safari and Firefox
- *  cannot; a caller that must not drop a file somewhere unasked tells the user
- *  first (see MaterializeView's export confirmation). */
-export function canChooseLocation(env: SaveEnv = defaultSaveEnv()): boolean {
-  return env.desktop || Boolean(env.picker);
-}
-
-/** saveTextFileAs saves text as name AFTER ASKING where: the desktop's native
- *  save dialog (suggesting name), else the browser's showSaveFilePicker. A
- *  cancelled dialog writes nothing and is `cancelled`. Where neither exists it
- *  falls back to a plain download, which the browser places itself; callers
- *  check canChooseLocation first and say so. It never throws. */
-export async function saveTextFileAs(name: string, text: string, type = 'text/plain', env: SaveEnv = defaultSaveEnv()): Promise<SaveOutcome> {
+/** saveExport saves text as name for the Export action:
+ *  - the DESKTOP app ALWAYS asks, with the operating system's native save dialog
+ *    (NativeService.SaveFileAs: opened in the Downloads folder, suggesting name);
+ *    cancelling writes nothing and is `cancelled`;
+ *  - a BROWSER does a normal download into the browser's configured download
+ *    location, the same in every browser (no showSaveFilePicker: it needs a fresh
+ *    click, leaves an empty file behind when an export then fails, and does not
+ *    exist in Safari or Firefox anyway).
+ *  It never throws. */
+export async function saveExport(name: string, text: string, type = 'text/plain', env: SaveEnv = defaultSaveEnv()): Promise<SaveOutcome> {
   try {
     if (env.desktop) {
       if (!env.nativeSaveAs) throw new Error('the desktop app has no save dialog');
       const where = await env.nativeSaveAs(name, text);
       return where ? { kind: 'saved', where } : { kind: 'cancelled' };
-    }
-    if (env.picker) {
-      let handle;
-      try {
-        handle = await env.picker({ suggestedName: name });
-      } catch (e) {
-        if (e instanceof Error && e.name === 'AbortError') return { kind: 'cancelled' };
-        if (e instanceof Error && (e.name === 'SecurityError' || e.name === 'NotAllowedError')) return { kind: 'needs-gesture' };
-        throw e;
-      }
-      const out = await handle.createWritable();
-      await out.write(new Blob([text], { type }));
-      await out.close();
-      return { kind: 'saved', where: handle.name || name };
     }
     env.download(name, text, type);
     return { kind: 'downloaded', name };
@@ -153,7 +131,6 @@ export function saveOutcomeLine(o: SaveOutcome): string {
     case 'saved': return `Saved ${o.where}`;
     case 'downloaded': return `${o.name} was handed to the browser as a download; check that it arrived.`;
     case 'cancelled': return 'Not saved: the save was cancelled.';
-    case 'needs-gesture': return 'Not saved yet: choose where to save it.';
     case 'failed': return `Not saved: ${o.message}`;
   }
 }

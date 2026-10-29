@@ -232,10 +232,14 @@ func TestSaveFileAs_WritesToTheChosenPathAndSuggestsTheName(t *testing.T) {
 		t.Fatal(err)
 	}
 	var suggested string
-	n := &NativeService{pickSavePath: func(name string) (string, error) { suggested = name; return chosen, nil }}
+	var openedIn string
+	n := &NativeService{downloadsDir: func() string { return "/home/me/Downloads" }, pickSavePath: func(dir, name string) (string, error) { openedIn, suggested = dir, name; return chosen, nil }}
 	got, err := n.SaveFileAs("some/dir/title-ab12cd34.md", "# doc")
 	if err != nil || got != chosen {
 		t.Fatalf("got %q, %v; want %q", got, err, chosen)
+	}
+	if openedIn != "/home/me/Downloads" {
+		t.Errorf("dialog opened in %q, want the Downloads folder", openedIn)
 	}
 	if suggested != "title-ab12cd34.md" {
 		t.Errorf("suggested name %q, want the base name only", suggested)
@@ -252,7 +256,7 @@ func TestSaveFileAs_WritesToTheChosenPathAndSuggestsTheName(t *testing.T) {
 
 func TestSaveFileAs_CancelWritesNothing(t *testing.T) {
 	sandboxHome(t)
-	n := &NativeService{pickSavePath: func(string) (string, error) { return "", nil }}
+	n := &NativeService{pickSavePath: func(string, string) (string, error) { return "", nil }}
 	got, err := n.SaveFileAs("x.md", "data")
 	if err != nil || got != "" {
 		t.Fatalf("cancel: got %q, %v; want empty and no error", got, err)
@@ -266,7 +270,7 @@ func TestSaveFileAs_CancelWritesNothing(t *testing.T) {
 
 func TestSaveFileAs_DialogErrorIsAnErrorAndWritesNothing(t *testing.T) {
 	sandboxHome(t)
-	n := &NativeService{pickSavePath: func(string) (string, error) { return "", errors.New("boom") }}
+	n := &NativeService{pickSavePath: func(string, string) (string, error) { return "", errors.New("boom") }}
 	if got, err := n.SaveFileAs("x.md", "data"); err == nil || got != "" {
 		t.Fatalf("want an error, got %q, %v", got, err)
 	}

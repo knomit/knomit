@@ -2,7 +2,7 @@ import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState 
 import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { ArrowUpIcon, ChevronDownIcon, ChevronLeftIcon, DownloadIcon, FocusIcon } from './icons';
-import { canChooseLocation, saveOutcomeLine, saveTextFileAs } from './saveFile';
+import { saveExport, saveOutcomeLine } from './saveFile';
 import type { SaveOutcome } from './saveFile';
 import { MARK_LATEST_OTHER_KB, MAX_DEPTH, MAX_FACTS, materializeApi } from './materializeApi';
 import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './materializeApi';
@@ -28,10 +28,6 @@ type ExportState =
   | { kind: 'idle' }
   | { kind: 'running'; bytes: number }
   | { kind: 'failed'; message: string }
-  /** This browser cannot ask where to save: say where the file will go, first. */
-  | { kind: 'confirm' }
-  /** Fetched, but the browser's save dialog needs a fresh click to open. */
-  | { kind: 'ready'; text: string; name: string }
   | { kind: 'done'; line: string };
 
 /** Where to scroll once the section is on screen. 'restore' is the place the
@@ -132,6 +128,19 @@ export const NESTING = {
   /** Characters a " › " separator costs. */
   SEP_COST: 3,
 } as const;
+/** Input types in which Esc is a text-editing key (leave the field). A checkbox, radio,
+ *  button, range and the like do not hold Esc: it exits Focus right away. */
+const TEXT_INPUT_TYPES = new Set(['text', 'number', 'search', 'email', 'url', 'tel', 'password', 'date', 'time', 'datetime-local', 'month', 'week']);
+
+/** Whether Esc, pressed with el focused, only leaves el (a text or number field, a textarea,
+ *  an editable region) rather than exiting Focus. */
+function holdsEsc(el: HTMLElement): boolean {
+  if (el.isContentEditable) return true;
+  if (el.tagName === 'TEXTAREA') return true;
+  if (el.tagName === 'INPUT') return TEXT_INPUT_TYPES.has(((el as HTMLInputElement).type || 'text').toLowerCase());
+  return false;
+}
+
 /** The height (px) of the sticky section path. */
 export const PATH_H = 28;
 
@@ -273,7 +282,7 @@ const Section = memo(function Section({ node, group, num, td, onGoto }: {
 /** How far (px) the reader must scroll before the back-to-top arrow appears. */
 export const BACK_TO_TOP_PX = 600;
 
-export function MaterializeView({ target, title, options, onOptionsChange, onBack, api = materializeApi, save = saveTextFileAs, canChoose = canChooseLocation }: {
+export function MaterializeView({ target, title, options, onOptionsChange, onBack, api = materializeApi, save = saveExport }: {
   target: MatTarget;
   /** The viewed fact's title; the stream's own root_title wins when it sends one. */
   title: string;
@@ -281,10 +290,8 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   onOptionsChange: (o: MatOptions) => void;
   onBack: () => void;
   api?: MaterializeApi;
-  /** Saves AFTER asking where (saveTextFileAs). */
+  /** Saves the exported text: the desktop's native save dialog, or a browser download (saveExport). */
   save?: Save;
-  /** Whether this environment can ask where to save (else the reader is told first). */
-  canChoose?: () => boolean;
 }) {
   const s = useMaterializeStream(api, target, options);
   const scroller = useRef<HTMLDivElement>(null);
@@ -322,7 +329,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
       if (e.key !== 'Escape') return;
       e.stopImmediatePropagation();
       const a = document.activeElement as HTMLElement | null;
-      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)) {
+      if (a && holdsEsc(a)) {
         a.blur();
         return;
       }
@@ -445,16 +452,11 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     setGoto({ anchor: l.anchor_id, n: l.n, kind: 'jump', title: l.title, epoch: 0 });
   }, []);
 
-  // ── Export: always the whole document, never what has scrolled in, and always
-  // to a place the READER chose (the native dialog or showSaveFilePicker); a
-  // cancelled dialog writes nothing and says nothing. ──
-  const finishSave = useCallback((out: SaveOutcome, text: string, name: string) => {
-    if (out.kind === 'cancelled') setExp({ kind: 'idle' });
-    else if (out.kind === 'needs-gesture') setExp({ kind: 'ready', text, name });
-    else setExp({ kind: 'done', line: out.kind === 'saved' ? `Saved ${out.where}` : saveOutcomeLine(out) });
-  }, []);
-
-  const doExport = useCallback(async () => {
+  // ── Export: always the whole document, never what has scrolled in. The desktop app
+  // asks where to save (native dialog, opened in Downloads); a browser downloads into
+  // its own download location. A cancelled dialog writes nothing and says nothing. ──
+  const runExport = useCallback(async () => {
+    if (exp.kind === 'running') { exportCtl.current?.abort(); return; }
     const ctl = new AbortController();
     exportCtl.current = ctl;
     setExp({ kind: 'running', bytes: 0 });
@@ -466,25 +468,14 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
       // The server names its own download (Content-Disposition, and it sanitizes
       // the id part); our builder is only the fallback for a missing header.
       const name = fileNameOnly(doc.serverName) || exportFilename(rootTitle, target.path);
-      finishSave(await save(name, doc.text, 'text/markdown'), doc.text, name);
+      const out = await save(name, doc.text, 'text/markdown');
+      if (out.kind === 'cancelled') setExp({ kind: 'idle' });
+      else setExp({ kind: 'done', line: out.kind === 'saved' ? `Saved ${out.where}` : saveOutcomeLine(out) });
     } catch (e) {
       if (ctl.signal.aborted) { setExp({ kind: 'idle' }); return; }
       setExp({ kind: 'failed', message: e instanceof Error ? e.message : String(e) });
     }
-  }, [api, finishSave, options, rootTitle, save, target]);
-
-  const runExport = useCallback(() => {
-    if (exp.kind === 'running') { exportCtl.current?.abort(); return; }
-    // A browser that cannot ask where to save (Safari, Firefox) would drop the file
-    // into its download folder: say so and let the reader decide, before fetching.
-    if (!canChoose() && exp.kind !== 'confirm') { setExp({ kind: 'confirm' }); return; }
-    void doExport();
-  }, [canChoose, doExport, exp.kind]);
-
-  const saveReady = useCallback(async () => {
-    if (exp.kind !== 'ready') return;
-    finishSave(await save(exp.name, exp.text, 'text/markdown'), exp.text, exp.name);
-  }, [exp, finishSave, save]);
+  }, [api, exp.kind, options, rootTitle, save, target]);
 
   useEffect(() => () => exportCtl.current?.abort(), []);
 
@@ -554,20 +545,6 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           </div>
         )}
         {exp.kind === 'done' && <div className="k-mat-status" data-testid="mat-export-done" role="status">{exp.line}</div>}
-        {exp.kind === 'confirm' && (
-          <div className="k-mat-status" data-testid="mat-export-confirm" role="status">
-            This browser cannot ask where to save. The file will go to your browser's download location.
-            <button type="button" className="k-mat-btn" data-testid="mat-export-go" onClick={() => void doExport()}>Download</button>
-            <button type="button" className="k-mat-btn" data-testid="mat-export-nevermind" onClick={() => setExp({ kind: 'idle' })}>Cancel</button>
-          </div>
-        )}
-        {exp.kind === 'ready' && (
-          <div className="k-mat-status" data-testid="mat-export-ready" role="status">
-            The export is ready.
-            <button type="button" className="k-mat-btn" data-testid="mat-export-saveas" onClick={() => void saveReady()}>Save as…</button>
-            <button type="button" className="k-mat-btn" onClick={() => setExp({ kind: 'idle' })}>Discard</button>
-          </div>
-        )}
       </div>
 
       <div className="k-mat-scroll" ref={scroller} data-testid="mat-scroll"

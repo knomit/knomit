@@ -141,10 +141,12 @@ type NativeService struct {
 	// an error the Settings window can show rather than a button that waits
 	// forever.
 	restartWait time.Duration
-	// pickSavePath shows the OS save dialog suggesting a file name and returns
+	// pickSavePath shows the OS save dialog, opened in dir, suggesting a file name, and returns
 	// the path chosen, "" when cancelled. Wired in app.go once the Wails app
 	// exists; nil in tests that do not exercise SaveFileAs.
-	pickSavePath func(suggestedName string) (string, error)
+	pickSavePath func(dir, suggestedName string) (string, error)
+	// downloadsDir overrides paths.DownloadsDir in tests.
+	downloadsDir func() string
 	// saveMu serialises SaveSettings: write, then reload, then ack must not
 	// interleave with another save's.
 	saveMu sync.Mutex
@@ -184,8 +186,9 @@ func (n *NativeService) WriteFile(name, contents string) (string, error) {
 }
 
 // SaveFileAs asks the USER where to save: it opens the operating system's
-// native save dialog, suggesting name, and writes contents to the path they
-// choose. It returns that absolute path, or "" with no error when they cancel
+// native save dialog in the Downloads folder, suggesting name, and writes
+// contents to the path they choose. It never writes anywhere the user did not pick
+// (not the app's folder, not the exports directory). It returns that absolute path, or "" with no error when they cancel
 // (nothing is written). The page never supplies a path, only a suggested file
 // name and the bytes, so a script that calls this can do no more than put a
 // dialog in front of the user; unlike WriteFile it is not confined to the
@@ -198,7 +201,11 @@ func (n *NativeService) SaveFileAs(name, contents string) (string, error) {
 	if suggested == "." || suggested == string(filepath.Separator) || suggested == "" {
 		suggested = "export.md"
 	}
-	path, err := n.pickSavePath(suggested)
+	dir := paths.DownloadsDir()
+	if n.downloadsDir != nil {
+		dir = n.downloadsDir()
+	}
+	path, err := n.pickSavePath(dir, suggested)
 	if err != nil {
 		return "", fmt.Errorf("save dialog: %w", err)
 	}

@@ -230,12 +230,14 @@ func run(ctx context.Context) error {
 	window.SetURL("/")
 	// Export asks where to save: the native save dialog, attached to the main
 	// window. The page only suggests a name; the user picks the path.
-	nativeSvc.pickSavePath = func(suggested string) (string, error) {
-		return wapp.Dialog.SaveFile().
+	nativeSvc.pickSavePath = func(dir, suggested string) (string, error) {
+		d := wapp.Dialog.SaveFile().
 			AttachToWindow(window).
-			SetFilename(suggested).
-			CanCreateDirectories(true).
-			PromptForSingleSelection()
+			SetFilename(suggested)
+		if dir != "" {
+			d = d.SetDirectory(dir)
+		}
+		return d.CanCreateDirectories(true).PromptForSingleSelection()
 	}
 
 	// Hide (don't destroy) the window when closed, so "Open Knomit" can bring
