@@ -2,12 +2,18 @@ import { createContext, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useFacetLayout } from './facetLayout';
 
-// The column split a facet body shares with Browse: a left column exactly as
-// wide as the Library, the same splitter, and a right column that takes the
-// rest. The width and the drag handler are App's (`leftPanelWidth`,
-// `startSplitterDrag`), so dragging the splitter on Settings moves Browse's
-// too and the edge sits at the same x whichever facet is showing. The width
-// and handler arrive through facetLayout.ts's context.
+// The column split a facet body shares with Browse: a left column, the same
+// splitter, and a right column that takes the rest. By default the left column
+// is exactly as wide as the Library, so the edge sits at the same x whichever
+// facet is showing, and dragging the splitter moves the Library's width. The
+// width and the drag handler are App's (`leftPanelWidth`, `startSplitterDrag`),
+// and arrive through facetLayout.ts's context.
+//
+// `indexMaxWidth` is the opt-in exception. Settings passes 240: its index is a
+// short list of section names, so it is capped at 240px, the splitter is not
+// offered while the cap applies, and its edge sits at a different x than
+// Browse's. Browse and the wizards omit it and keep the shared, draggable
+// Library width; `knomit.leftPanelWidth` is never touched by the cap.
 
 /** FacetSplitter is the drag handle between the left and right columns: a 1px
  *  rule with a wider hit zone. Browse and every facet column use THIS one, so
