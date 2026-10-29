@@ -9,7 +9,8 @@ import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './
 import { clampDepth, clampFacts, exportFilename, headingLevel, id8, optionChange } from './materializeOptions';
 import { isHttpUrl } from './utils';
 import { useMaterializeStream } from './useMaterializeStream';
-import { numberSections } from './materializeNumbering';
+import { treeInfo } from './materializeNumbering';
+import type { TreeInfo } from './materializeNumbering';
 import './materialize.css';
 
 /** How far below the viewport the next page is asked for. */
@@ -112,27 +113,81 @@ function Disclosure({ label, count, open, onToggle, testid, flag }: {
   );
 }
 
-/** How many levels of the outline carry a printed number: "1.", "1.1", "1.1.1".
- *  Deeper sections are unnumbered and show their depth as an indented guide line;
- *  their full position is in the heading's tooltip. */
-export const NUMBERED_LEVELS = 3;
+/** The knobs of the nesting presentation (from the deep-nesting prototype, variant C). */
+export const NESTING = {
+  /** Only tree depths 1..NUMBER_LEVELS print a number ("1.", "1.1", "1.1.1"). */
+  NUMBER_LEVELS: 3,
+  /** Most ticks in the depth gutter; a deeper section shows this many, the last in the cap colour. */
+  GUTTER_CAP: 6,
+  /** The heading ladder: level = tree depth + 1; levels past this repeat its style. */
+  LADDER_MAX_LEVEL: 5,
+  /** Each title in the section path is clipped to this many characters. */
+  PATH_TITLE_CHARS: 30,
+  /** The path's character budget (also limited by the pane width). */
+  PATH_MAX_CHARS: 190,
+  /** First ancestors that survive the path's middle truncation. */
+  PATH_KEEP_HEAD: 1,
+  /** Average glyph width at the path's 11px size, to turn pane width into characters. */
+  CHAR_PX: 6.3,
+  /** Characters a " › " separator costs. */
+  SEP_COST: 3,
+} as const;
+/** The height (px) of the sticky section path. */
+export const PATH_H = 28;
 
 /** The number as a heading prefix: "1." for a top-level section, "1.1" below it. */
 function numberPrefix(num: string): string {
   return num.includes('.') ? num : `${num}.`;
 }
 
-const Section = memo(function Section({ node, group, num, onGoto }: {
+const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t);
+
+interface PathItem { n: number; full: string; label: string; gap?: boolean }
+
+/** Middle-truncate a path: keep the first PATH_KEEP_HEAD items and as many of the
+ *  last as fit the budget, with a gap marker between. */
+function midTruncate(items: PathItem[], budget: number): PathItem[] {
+  const cost = (i: PathItem) => i.label.length + NESTING.SEP_COST;
+  const total = items.reduce((t, i) => t + cost(i), 0);
+  const keep = NESTING.PATH_KEEP_HEAD;
+  if (total <= budget || items.length <= keep + 1) return items;
+  const head = items.slice(0, keep);
+  let used = head.reduce((t, i) => t + cost(i), 0) + 1 + NESTING.SEP_COST;
+  const tail: PathItem[] = [];
+  for (let i = items.length - 1; i >= keep; i--) {
+    const c = cost(items[i]);
+    if (used + c > budget && tail.length) break;
+    tail.unshift(items[i]);
+    used += c;
+  }
+  return [...head, { n: -1, full: '', label: '…', gap: true }, ...tail];
+}
+
+/** The path root..n through the walk tree. */
+function pathTo(n: number, tree: Map<number, TreeInfo>, byN: Map<number, MatNode>): PathItem[] {
+  const chain: number[] = [];
+  for (let c: number | null = n; c !== null && tree.has(c); c = tree.get(c)!.parent) chain.unshift(c);
+  return chain.map(k => {
+    const ti = tree.get(k)!;
+    const t = byN.get(k)?.title ?? '';
+    const num = ti.num && ti.depth <= NESTING.NUMBER_LEVELS ? `${ti.num} ` : '';
+    return { n: k, full: `${ti.num ? `${ti.num} ` : ''}${t}`, label: num + clip(t, NESTING.PATH_TITLE_CHARS) };
+  });
+}
+
+const Section = memo(function Section({ node, group, num, td, onGoto }: {
   node: MatNode; group: string | null;
-  /** The outline number ('' for the top and a frame's ancestors). */
+  /** The full outline number ('' for the top and a frame's ancestors). */
   num: string;
+  /** TREE depth (0 for the top): what the ladder, the gutter and the numbers follow.
+   *  Not node.depth, which is the BFS distance from the root. */
+  td: number;
   onGoto: (l: MatLink) => void;
 }) {
-  const level = headingLevel(node.depth);
-  // The outline level of this section (1.1.1 is level 3); beyond NUMBERED_LEVELS it is
-  // unnumbered and indented one guide-line step per level past it.
-  const outline = num ? num.split('.').length : 0;
-  const deep = Math.max(0, outline - NUMBERED_LEVELS);
+  const lv = Math.min(td + 1, NESTING.LADDER_MAX_LEVEL);
+  const tag = `h${headingLevel(td)}`;
+  const numbered = num !== '' && td <= NESTING.NUMBER_LEVELS;
+  const ticks = Math.min(td, NESTING.GUTTER_CAP);
   const cross = node.marks?.includes(MARK_LATEST_OTHER_KB);
   // Open/closed is the reader's, per section, and not remembered anywhere.
   const [builtOpen, setBuiltOpen] = useState(false);
@@ -142,11 +197,18 @@ const Section = memo(function Section({ node, group, num, onGoto }: {
   return (
     <>
       {group && <div className="k-mat-group" data-testid="mat-group">{group}</div>}
-      <section className={deep > 0 ? 'k-mat-sec k-mat-deep' : 'k-mat-sec'} data-mat-n={node.n}
-        data-deep={deep > 0 ? deep : undefined} style={deep > 0 ? ({ '--k-deep': deep } as React.CSSProperties) : undefined} data-anchor={node.anchor_id} data-testid="mat-section"
+      <section className="k-mat-sec" data-mat-n={node.n} data-lv={lv} data-td={td} data-anchor={node.anchor_id} data-testid="mat-section"
         aria-labelledby={`${node.anchor_id}-h`}>
-        {createElement(`h${level}`, { id: `${node.anchor_id}-h`, className: 'k-mat-h', 'data-level': level, title: deep > 0 ? num : undefined },
-          num && deep === 0 ? <span className="k-mat-hnum" data-testid="mat-num">{numberPrefix(num)}{' '}</span> : null,
+        <div className="k-mat-gut" data-testid="mat-gutter" data-ticks={ticks} title={num ? `Position ${num} · depth ${td}` : undefined}>
+          {ticks > 0 && (
+            <div className="k-mat-gut-m">
+              {Array.from({ length: ticks }, (_, i) => <i key={i} className={td > NESTING.GUTTER_CAP && i === ticks - 1 ? 'cap' : undefined} />)}
+            </div>
+          )}
+        </div>
+        <div className="k-mat-main">
+        {createElement(tag, { id: `${node.anchor_id}-h`, className: 'k-mat-h', 'data-lv': lv, title: num ? `Position ${num}` : undefined },
+          numbered ? <span className="k-mat-hnum" data-testid="mat-num">{numberPrefix(num)}{' '}</span> : null,
           node.title || node.path)}
         <div className="k-mat-meta" data-testid="mat-meta">
           <span>{node.path}</span>
@@ -200,10 +262,11 @@ const Section = memo(function Section({ node, group, num, onGoto }: {
             {node.not_included.map(o => <span key={o.path} className="k-mat-src">{o.title || o.id || o.path} ({o.reason})</span>)}
           </div>
         )}
+        </div>
       </section>
     </>
   );
-}, (a, b) => a.node === b.node && a.group === b.group && a.num === b.num && a.onGoto === b.onGoto);
+}, (a, b) => a.node === b.node && a.group === b.group && a.num === b.num && a.td === b.td && a.onGoto === b.onGoto);
 
 // ── The view ────────────────────────────────────────────────────────────────
 
@@ -232,7 +295,12 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   const exportCtl = useRef<AbortController | null>(null);
 
   const rootTitle = s.env?.root_title || title;
-  const nums = useMemo(() => numberSections(s.sections), [s.sections]);
+  // The walk TREE (parents, numbers, tree depth). The payload's `depth` is BFS distance and
+  // says nothing about nesting, so nothing below uses it for presentation.
+  const tree = useMemo(() => treeInfo(s.sections), [s.sections]);
+  const byN = useMemo(() => new Map(s.sections.map(x => [x.n, x])), [s.sections]);
+  const [curN, setCurN] = useState<number | null>(null);
+  const [pathBudget, setPathBudget] = useState<number>(NESTING.PATH_MAX_CHARS);
 
   // Focus: opening Materialize takes over the screen. The app shell's rail,
   // library column, browse toolbar and facet tabs are hidden (CSS keyed on this
@@ -270,7 +338,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     if (!box) return null;
     const top = box.getBoundingClientRect().top;
     for (const el of Array.from(box.querySelectorAll<HTMLElement>('[data-mat-n]'))) {
-      if (el.getBoundingClientRect().bottom > top + 4) {
+      if (el.getBoundingClientRect().bottom > top + PATH_H + 4) {
         return {
           anchor: el.dataset.anchor ?? '', n: Number(el.dataset.matN), kind: 'restore', epoch: 0,
           title: el.querySelector('.k-mat-h')?.textContent ?? '',
@@ -285,7 +353,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   const scrollToEl = useCallback((el: HTMLElement) => {
     const box = scroller.current;
     if (!box) return;
-    box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
+    box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - PATH_H - 8;
   }, []);
 
   const epoch = s.epoch;
@@ -352,6 +420,26 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     io.observe(el);
     return () => io.disconnect();
   }, [tail, stale, phase, sections.length, loadMore]);
+
+  // The section at the top of the pane, for the sticky path (below the bar itself).
+  const trackCurrent = useCallback(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const line = box.getBoundingClientRect().top + PATH_H + 24;
+    let cur: number | null = null;
+    for (const el of Array.from(box.querySelectorAll<HTMLElement>('[data-mat-n]'))) {
+      if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.matN); else break;
+    }
+    setCurN(prev => (prev === cur ? prev : cur));
+    const w = box.clientWidth;
+    const b = Math.max(20, Math.min(NESTING.PATH_MAX_CHARS, Math.floor((w - 90) / NESTING.CHAR_PX)));
+    setPathBudget(prev => (prev === b ? prev : b));
+  }, []);
+  useEffect(() => { trackCurrent(); }, [trackCurrent, sections.length, stale]);
+  useEffect(() => {
+    window.addEventListener('resize', trackCurrent);
+    return () => window.removeEventListener('resize', trackCurrent);
+  }, [trackCurrent]);
 
   const onGoto = useCallback((l: MatLink) => {
     setGoto({ anchor: l.anchor_id, n: l.n, kind: 'jump', title: l.title, epoch: 0 });
@@ -483,7 +571,23 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
       </div>
 
       <div className="k-mat-scroll" ref={scroller} data-testid="mat-scroll"
-        onScroll={e => setScrolled(e.currentTarget.scrollTop > BACK_TO_TOP_PX)}>
+        onScroll={e => { setScrolled(e.currentTarget.scrollTop > BACK_TO_TOP_PX); trackCurrent(); }}>
+        {sections.length > 0 && (
+          <nav className="k-mat-path" data-testid="mat-path" aria-label="Section path">
+            {midTruncate(pathTo(curN ?? sections[0].n, tree, byN), pathBudget).map((it, i, all) => (
+              <span key={`${it.n}-${i}`} style={{ display: 'contents' }}>
+                {i > 0 && <span className="sep" aria-hidden="true">›</span>}
+                {it.gap
+                  ? <span className="gap" data-testid="mat-path-gap">…</span>
+                  : <button type="button" data-testid="mat-path-item" data-n={it.n} title={it.full} className={i === all.length - 1 ? 'cur' : undefined}
+                      onClick={() => {
+                        const el = scroller.current?.querySelector<HTMLElement>(`[data-mat-n="${it.n}"]`);
+                        if (el) scrollToEl(el);
+                      }}>{it.label}</button>}
+              </span>
+            ))}
+          </nav>
+        )}
         <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'}>
           {phase === 'loading' && sections.length === 0 && (
             <div data-testid="mat-loading" aria-label="Loading">
@@ -503,7 +607,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           )}
 
           {sections.map((n, i) => (
-            <Section key={n.n} node={n} onGoto={onGoto} num={nums.get(n.n) ?? ''}
+            <Section key={n.n} node={n} onGoto={onGoto} num={tree.get(n.n)?.num ?? ''} td={tree.get(n.n)?.depth ?? 0}
               group={n.section && n.section !== sections[i - 1]?.section ? n.section : null} />
           ))}
 

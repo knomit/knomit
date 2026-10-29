@@ -76,7 +76,7 @@ describe('export filename', () => {
   });
 });
 
-describe('heading level by walk depth', () => {
+describe('heading level by tree depth', () => {
   it('steps down one level per hop and stops at h6', () => {
     expect([0, 1, 2, 3, 4, 9].map(headingLevel)).toEqual([2, 3, 4, 5, 6, 6]);
   });

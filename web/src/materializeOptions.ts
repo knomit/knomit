@@ -102,8 +102,8 @@ export function exportFilename(title: string, path: string): string {
   return slug ? `${slug}-${id8(path)}.md` : `${id8(path)}.md`;
 }
 
-/** The heading level for a section at walk depth d: the root is an h2 (the
- *  view's own title is the h1), each hop a level down, h6 at the floor. */
+/** The heading level for a section at TREE depth d (not the payload's BFS `depth`): the root is
+ *  an h2 (the view's own title is the h1), each level of nesting one down, h6 at the floor. */
 export function headingLevel(depth: number): 2 | 3 | 4 | 5 | 6 {
   return Math.min(6, Math.max(2, 2 + Math.trunc(depth))) as 2 | 3 | 4 | 5 | 6;
 }

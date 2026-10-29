@@ -3,7 +3,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@te
 import { useState } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { BACK_TO_TOP_PX, MaterializeView } from './MaterializeView';
+import { BACK_TO_TOP_PX, MaterializeView, PATH_H } from './MaterializeView';
 import { useMaterializeStream } from './useMaterializeStream';
 import { fixtureId, makeFixtureApi } from './materializeFixture';
 import type { FixtureOptions } from './materializeFixture';
@@ -198,13 +198,13 @@ describe('first-page states', () => {
 });
 
 describe('article marks', () => {
-  it('sets the heading level by walk depth, groups a frame, and marks cross-KB, changed-since-cited and builds-on', async () => {
+  it('sets the heading level by TREE depth, groups a frame, and marks cross-KB, changed-since-cited and builds-on', async () => {
     setup({ total: 8, pageSize: 8, ancestors: 1 });
     await waitFor(() => expect(ns()).toHaveLength(8));
     const secs = screen.getAllByTestId('mat-section');
     expect(secs[0].querySelector('h2')).not.toBeNull();            // ancestor, depth 0
     expect(secs[2].querySelector('h3')).not.toBeNull();            // depth 1
-    expect(secs[3].querySelector('h4')).not.toBeNull();            // depth 2
+    expect(secs[3].querySelector('h3')).not.toBeNull();            // this fixture's facts each cite the one before, so all are children of the frame
     expect(screen.getAllByTestId('mat-group').map(g => g.textContent)).toEqual(['Ancestors', 'This frame', 'What it stands on']);
     // n=7 is another KB's fact: repo badge and "latest · frozen", only there
     expect(within(secs[6]).getByTestId('mat-repo-badge')).toBeInTheDocument();
@@ -328,7 +328,7 @@ describe('changing options mid-read', () => {
     // the fallback dims the old text like any restart ...
     await waitFor(() => expect(pageCalls().filter(c => c.cursor === null)).toHaveLength(3)); // first, raise, fallback
     // ... and the place the reader was at comes back, on the section's NEW position
-    await waitFor(() => expect(top).toBe(92)); // moved from §3 to §4: (4-3)*100 - 8
+    await waitFor(() => expect(top).toBe(64)); // moved from §3 to §4: (4-3)*100 - PATH_H - 8
     const secs = screen.getAllByTestId('mat-section');
     expect(bare(secs[3])).toBe(titleOfTop);
     expect(document.querySelector('[data-stale="true"]')).toBeNull();
@@ -355,7 +355,7 @@ describe('changing options mid-read', () => {
       const scrollTop = layout();
       fireEvent.click(screen.getByLabelText('Lower Max facts'));          // 200 -> 150: a restart; section 3 survives
       await waitFor(() => expect(scrollTop()).not.toBe(0));
-      expect(scrollTop()).toBe(-8);                                        // section 3 is already at the top edge, less the 8px gutter
+      expect(scrollTop()).toBe(-36);                                        // section 3 is already at the top edge, less the path bar and the 8px gutter
       expect(screen.queryByTestId('mat-notice')).toBeNull();
     });
 
@@ -367,7 +367,7 @@ describe('changing options mid-read', () => {
       fireEvent.change(input, { target: { value: '2' } });                 // the new walk has only §1 and §2
       fireEvent.blur(input);
       await waitFor(() => expect(ns()).toEqual([1, 2]));
-      await waitFor(() => expect(scrollTop()).toBe(-108));                 // section 2, at (2-3)*100 - 8: the nearest earlier one
+      await waitFor(() => expect(scrollTop()).toBe(-136));                 // section 2, at (2-3)*100 - PATH_H - 8: the nearest earlier one
       expect(screen.queryByTestId('mat-notice')).toBeNull();
       expect(document.body.textContent).not.toMatch(/not in this walk any more|nearest earlier section/);
     });
@@ -984,61 +984,182 @@ describe('Max depth / Max facts are clamped to the server\'s range', () => {
   });
 });
 
-describe('deep section numbers: three levels, then a guide line', () => {
-  // 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7: a chain, so 2 is "1.", 3 "1.1", 4 "1.1.1", 5 "1.1.1.1", 6 "1.1.1.1.1" ...
-  const chain = { 1: [2], 2: [3], 3: [4], 4: [5], 5: [6], 6: [7] };
-  const head = (i: number) => screen.getAllByTestId('mat-section')[i];
-  const hnum = (i: number) => head(i).querySelector('[data-testid="mat-num"]')?.textContent?.trim() ?? '';
+// ── Deep nesting (variant C of the deep-nesting prototype): everything below follows TREE depth ──
+describe('deep nesting: ladder, gutter, numbers, section path', () => {
+  // a linear chain: 1 -> 2 -> ... -> 14, so section k has tree depth k-1 (up to 13, past anything the BFS `depth` shows)
+  const N = 14;
+  const chain: Record<number, number[]> = Object.fromEntries(Array.from({ length: N - 1 }, (_, i) => [i + 1, [i + 2]]));
+  const sec = (i: number) => screen.getAllByTestId('mat-section')[i];
+  const hd = (i: number) => sec(i).querySelector('.k-mat-h') as HTMLElement;
 
-  it('levels 1-3 carry a number; level 4 and deeper carry none but a guide line, one indent step per extra level', async () => {
-    setup({ total: 7, pageSize: 7, tree: chain });
-    await waitFor(() => expect(ns()).toHaveLength(7));
-    expect([0, 1, 2, 3, 4, 5, 6].map(hnum)).toEqual(['', '1.', '1.1', '1.1.1', '', '', '']);
-    expect(head(3).className).not.toMatch(/k-mat-deep/);               // 1.1.1 is still a numbered level
-    expect(head(4)).toHaveClass('k-mat-deep');
-    expect(head(4).getAttribute('data-deep')).toBe('1');
-    expect(head(5).getAttribute('data-deep')).toBe('2');
-    expect(head(6).getAttribute('data-deep')).toBe('3');
-    expect(head(4).style.getPropertyValue('--k-deep')).toBe('1');
-    expect(head(6).style.getPropertyValue('--k-deep')).toBe('3');
+  // the fixture's BFS-style `depth` field is deliberately SHALLOW on a long chain (what a real walk does:
+  // a depth-35 chain reports depth <= 6), so a view that used it would show the wrong thing
+  async function open() {
+    const f = makeFixtureApi({ total: N, pageSize: N, tree: chain });
+    const real = f.api.page;
+    f.api.page = async (...a) => { const p = await real(...a); return { ...p, facts: p.facts.map(x => ({ ...x, depth: Math.min(x.depth, 6) })) }; };
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(N));
+  }
+
+  it('NOTHING is indented by depth: every section has the same left edge (no margin, no padding-left, no transform)', async () => {
+    await open();
+    for (let i = 0; i < N; i++) {
+      const style = sec(i).getAttribute('style') ?? '';
+      expect(style).not.toMatch(/margin|padding|transform|left/);
+      expect(sec(i).className).toBe('k-mat-sec');
+    }
     const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
-    const rule = /^\.k-mat-deep \{([^}]*)\}/m.exec(css)![1];
-    expect(rule).toMatch(/border-left: 1px solid #2a3040/);            // thin, in the theme's muted line colour
-    expect(rule).toMatch(/margin-left: calc\(var\(--k-deep, 1\) \* 14px\)/);
-    expect(head(4).querySelector('.k-mat-h')?.textContent).toBe('Fact number 5: what it decided and why it matters to the one citing it');   // no number prefix text
+    expect(css).not.toMatch(/k-mat-deep/);
+    const rule = /^\.k-mat-sec \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).not.toMatch(/margin-left|padding-left|border-left/);
   });
 
-  it('a deep heading\'s tooltip carries its FULL position; numbered headings need none; builds-on links still show no number', async () => {
-    setup({ total: 7, pageSize: 7, tree: chain });
-    await waitFor(() => expect(ns()).toHaveLength(7));
-    expect(head(4).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1');
-    expect(head(5).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1.1');
-    expect(head(6).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1.1.1');
-    expect(head(3).querySelector('.k-mat-h')?.hasAttribute('title')).toBe(false);
-    fireEvent.click(within(head(4)).getByTestId('mat-builds-toggle'));
-    expect(within(head(4)).getByTestId('mat-builds-link').textContent).not.toMatch(/\d\.\d/);
+  it('the heading ladder follows TREE depth (level = depth + 1) and repeats L5 beyond it, past depth 10', async () => {
+    await open();
+    const lv = (i: number) => hd(i).getAttribute('data-lv');
+    expect([0, 1, 2, 3, 4, 5, 9, 13].map(lv)).toEqual(['1', '2', '3', '4', '5', '5', '5', '5']);
+    // the tag follows it too, capped at h6
+    expect([0, 1, 2, 3, 4, 5, 13].map(i => hd(i).tagName)).toEqual(['H2', 'H3', 'H4', 'H5', 'H6', 'H6', 'H6']);
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    // the prototype's ladder, exactly
+    for (const v of ['--lv1-size: 24px; --lv1-weight: 700', '--lv2-size: 19px; --lv2-weight: 600', '--lv3-size: 15.5px; --lv3-weight: 700',
+      '--lv4-size: 14px; --lv4-weight: 600; --lv4-color: #b4becc; --lv4-style: normal; --lv4-caps: small-caps', '--lv5-size: 13.5px; --lv5-weight: 500; --lv5-color: #98a4b6; --lv5-style: italic']) {
+      expect(css).toContain(v);
+    }
   });
 
-  it('the heading level still follows depth and is capped at h6', async () => {
-    setup({ total: 7, pageSize: 7, tree: chain });
-    await waitFor(() => expect(ns()).toHaveLength(7));
-    const levels = [0, 1, 2, 3, 4, 5, 6].map(i => head(i).querySelector('.k-mat-h')?.tagName);
-    expect(levels.every(l => /^H[2-6]$/.test(l ?? ''))).toBe(true);
+  it('a fixed-width gutter (44px) shows one tick per tree level, capped at 6, the last in the cap colour past 6', async () => {
+    await open();
+    const ticks = (i: number) => Number(sec(i).querySelector('[data-testid="mat-gutter"]')!.getAttribute('data-ticks'));
+    expect([0, 1, 2, 5, 6, 7, 13].map(ticks)).toEqual([0, 1, 2, 5, 6, 6, 6]);
+    const marks = (i: number) => [...sec(i).querySelectorAll('.k-mat-gut-m i')];
+    expect(marks(6)).toHaveLength(6);
+    expect(marks(6).some(m => m.classList.contains('cap'))).toBe(false);   // depth 6: exactly at the cap, still normal
+    expect(marks(7)).toHaveLength(6);
+    expect(marks(7).filter(m => m.classList.contains('cap'))).toHaveLength(1);
+    expect(marks(7)[5]).toHaveClass('cap');                                // ...the LAST one
+    expect(marks(13).filter(m => m.classList.contains('cap'))).toHaveLength(1);
+    expect(marks(0)).toHaveLength(0);                                      // the root has none
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    expect(css).toContain('--gutter-w: 44px');
+    expect(css).toContain('--gutter-mark-cap: #e5a23c');
+    expect(css).toMatch(/\.k-mat-gut-m i\.cap \{ background: var\(--gutter-mark-cap\)/);
+    expect(css).toMatch(/grid-template-columns: var\(--gutter-w\) minmax\(0, 1fr\)/);
   });
 
-  it('numbers (and tooltips) do not change as pages append', async () => {
-    setup({ total: 7, pageSize: 2, tree: chain });
-    await waitFor(() => expect(ns()).toHaveLength(2));
-    const snap = () => screen.getAllByTestId('mat-section').map(sec => [sec.querySelector('[data-testid="mat-num"]')?.textContent ?? '', sec.querySelector('.k-mat-h')?.getAttribute('title') ?? '']);
+  it('numbers only for tree depths 1-3; every non-root heading carries its FULL position as a tooltip; builds-on links stay unnumbered', async () => {
+    await open();
+    const num = (i: number) => (sec(i).querySelector('[data-testid="mat-num"]')?.textContent ?? '').trim();
+    expect([0, 1, 2, 3, 4, 5, 13].map(num)).toEqual(['', '1.', '1.1', '1.1.1', '', '', '']);
+    expect(hd(0).hasAttribute('title')).toBe(false);                        // the root
+    expect(hd(1)).toHaveAttribute('title', 'Position 1');
+    expect(hd(3)).toHaveAttribute('title', 'Position 1.1.1');
+    expect(hd(4)).toHaveAttribute('title', 'Position 1.1.1.1');
+    expect(hd(13)).toHaveAttribute('title', 'Position 1.1.1.1.1.1.1.1.1.1.1.1.1');
+    fireEvent.click(within(sec(4)).getByTestId('mat-builds-toggle'));
+    expect(within(sec(4)).getByTestId('mat-builds-link').textContent).not.toMatch(/\d\.\d/);
+  });
+
+  it('numbers (and tooltips, ticks, ladder level) do not change as pages append', async () => {
+    const f = makeFixtureApi({ total: N, pageSize: 3, tree: chain });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const snap = () => screen.getAllByTestId('mat-section').map(x => [x.querySelector('[data-testid="mat-num"]')?.textContent ?? '', x.querySelector('.k-mat-h')?.getAttribute('title') ?? '', x.querySelector('[data-testid="mat-gutter"]')?.getAttribute('data-ticks') ?? '', x.querySelector('.k-mat-h')?.getAttribute('data-lv') ?? '']);
     let before = snap();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       nearBottom();
       await waitFor(() => expect(ns().length).toBeGreaterThan(before.length));
       const after = snap();
-      expect(after.slice(0, before.length)).toEqual(before);        // every earlier section keeps its number and tooltip
+      expect(after.slice(0, before.length)).toEqual(before);
       before = after;
     }
-    expect(ns()).toHaveLength(7);
-    expect(head(6).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1.1.1');
+  });
+
+  describe('the sticky section path', () => {
+    // Every section's top sits (n - 1) * 100 below the pane's top, minus the scroll offset.
+    function pane(scrollTop: number, width = 1200) {
+      const box = screen.getByTestId('mat-scroll');
+      Object.defineProperty(box, 'clientWidth', { value: width, configurable: true });
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const n = (this as HTMLElement).dataset?.matN;
+        const y = n ? (Number(n) - 1) * 100 - scrollTop : 0;
+        return { top: y, bottom: y + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y, toJSON() {} } as DOMRect;
+      });
+      return box;
+    }
+    const items = () => screen.getAllByTestId('mat-path-item').map(b => b.textContent);
+
+    const clipT = (n: number) => { const t = `Fact number ${n}: what it decided and why it matters to the one citing it`; return t.slice(0, 29).trimEnd() + '…'; };
+
+    it('shows the ancestors of the section at the top as you scroll, numbering only the first three levels', async () => {
+      await open();
+      const box = pane(0);
+      fireEvent.scroll(box);
+      expect(items()).toEqual([clipT(1)]);                                        // at the top: just the root, title clipped to 30
+      const box2 = pane(250 + 24 + 28);                                          // section 4 (n=4) is the last whose top is above the line
+      fireEvent.scroll(box2);
+      await waitFor(() => expect(items()).toHaveLength(4));
+      expect(items()).toEqual([clipT(1), `1 ${clipT(2)}`, `1.1 ${clipT(3)}`, `1.1.1 ${clipT(4)}`]);
+      expect(screen.getAllByTestId('mat-path-item').at(-1)).toHaveClass('cur');
+    });
+
+    it('past level 3 the items carry no number, and each title is clipped to 30 characters', async () => {
+      await open();
+      const box = pane(8 * 100);                                                 // around n=9
+      fireEvent.scroll(box);
+      await waitFor(() => expect(screen.getAllByTestId('mat-path-item').at(-1)?.getAttribute('data-n')).toBe('9'));
+      const last = screen.getAllByTestId('mat-path-item').at(-1)!;
+      expect(last.textContent).toBe(clipT(9));
+      expect(last.textContent!.length).toBeLessThanOrEqual(30);
+      expect(last).toHaveAttribute('title', expect.stringContaining('Fact number 9: what it decided and why it matters to the one citing it'));
+    });
+
+    it('truncates in the MIDDLE for a long path: keeps the first ancestor, a gap, and the last items that fit', async () => {
+      await open();
+      const box = pane(12 * 100, 700);                                           // a narrow pane: a small character budget
+      fireEvent.scroll(box);
+      await waitFor(() => expect(screen.queryByTestId('mat-path-gap')).not.toBeNull());
+      const its = screen.getAllByTestId('mat-path-item');
+      expect(its[0].getAttribute('data-n')).toBe('1');                           // the head (BC_KEEP_HEAD = 1) survives
+      expect(its.at(-1)!.getAttribute('data-n')).toBe('13');                     // and the current section
+      expect(its.length).toBeLessThan(13);
+      const path = screen.getByTestId('mat-path');
+      expect(path.textContent!.replace(/›/g, '').length).toBeLessThanOrEqual(Math.floor((700 - 90) / 6.3) + 40);
+    });
+
+    it('clicking an item scrolls to that section (below the bar)', async () => {
+      await open();
+      const box = pane(7 * 100);
+      let top = 7 * 100;
+      Object.defineProperty(box, 'scrollTop', { get: () => top, set: v => { top = v; }, configurable: true });
+      fireEvent.scroll(box);
+      await waitFor(() => expect(screen.getAllByTestId('mat-path-item').length).toBeGreaterThan(2));
+      const target = screen.getAllByTestId('mat-path-item')[0];                  // the head: the root
+      expect(target.getAttribute('data-n')).toBe('1');
+      fireEvent.click(target);
+      // the root sits at (1-1)*100 - scrollTop (700) = -700 from the pane's top; the bar and 8px gutter are kept clear
+      expect(top).toBe(700 - 700 - PATH_H - 8);
+    });
+
+    it('is in the scroll pane itself, so it works with Focus on AND off', async () => {
+      await open();
+      const path = screen.getByTestId('mat-path');
+      expect(screen.getByTestId('mat-scroll').contains(path)).toBe(true);
+      fireEvent.click(screen.getByTestId('mat-focus'));                          // Focus off
+      expect(screen.getByTestId('mat-path')).toBeInTheDocument();
+      const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+      const rule = /^\.k-mat-path \{([^}]*)\}/m.exec(css)![1];
+      expect(rule).toMatch(/position: sticky/);
+      expect(rule).toMatch(/top: 0/);
+      expect(rule).toMatch(/height: var\(--path-h\)/);
+      expect(css).toContain('--path-h: 28px');
+    });
+  });
+
+  it('the BFS `depth` field plays no part in presentation: the view never reads node.depth', () => {
+    const src = readFileSync(resolve(__dirname, 'MaterializeView.tsx'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(src).not.toMatch(/node\.depth/);
+    expect(src).toContain('treeInfo(');
   });
 });
