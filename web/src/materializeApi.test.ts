@@ -8,11 +8,11 @@ const page = { facts: [], cursor: null, has_more: false };
 afterEach(() => vi.unstubAllGlobals());
 
 function stubFetch(res: () => Response) {
-  const f = vi.fn(async (..._a: unknown[]) => res());
+  const f = vi.fn(async (url: string) => (url ? res() : res()));
   vi.stubGlobal('fetch', f);
   return f;
 }
-const urlOf = (f: ReturnType<typeof stubFetch>, i: number) => new URL(String(f.mock.calls[i][0]), 'http://x');
+const urlOf = (f: ReturnType<typeof stubFetch>, i: number) => new URL(f.mock.calls[i][0], 'http://x');
 
 describe('pages calls', () => {
   it('a FIRST call sends limit=5 with the options, including after a restart or a count raise', async () => {
