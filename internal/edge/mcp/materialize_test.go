@@ -685,9 +685,9 @@ func TestMaterialize_PagesStayUnderTheCap(t *testing.T) {
 		}
 		require.Equal(t, []int{3, 1, 1}, counts, "%s: R+A+B fit under the cap, C does not join them; Huge goes alone", audience)
 		for i, n := range sizes[:2] {
-			require.LessOrEqual(t, n, materializePageCap, "%s page %d", audience, i+1)
+			require.LessOrEqual(t, n, materialize.PageCap, "%s page %d", audience, i+1)
 		}
-		require.Greater(t, sizes[2], materializePageCap, "%s: the oversized fact is still delivered, alone", audience)
+		require.Greater(t, sizes[2], materialize.PageCap, "%s: the oversized fact is still delivered, alone", audience)
 	}
 }
 

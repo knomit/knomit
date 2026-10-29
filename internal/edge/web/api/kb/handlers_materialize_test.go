@@ -34,7 +34,7 @@ func newMatStoreManager(t *testing.T, names ...string) *repos.Manager {
 		t.Cleanup(func() { _ = svc.Close() })
 		require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
 		m.Set(name, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
-			Name: name, AgentBranch: "agent/test", Svc: svc, OntologyRoot: "kb",
+			Name: name, UID: "uid-" + name, AgentBranch: "agent/test", Svc: svc, OntologyRoot: "kb",
 		}))
 	}
 	return m
