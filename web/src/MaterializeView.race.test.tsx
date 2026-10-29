@@ -24,7 +24,8 @@ afterEach(() => { globalThis.IntersectionObserver = realIO; vi.restoreAllMocks()
 function nearBottom() {
   act(() => { for (const o of MockIO.all.filter(x => x.live)) o.cb([{ isIntersecting: true } as IntersectionObserverEntry], o as unknown as IntersectionObserver); });
 }
-const titles = () => screen.queryAllByTestId('mat-section').map(e => e.querySelector('.k-mat-h')?.textContent);
+// the heading's text without its section-number prefix
+const titles = () => screen.queryAllByTestId('mat-section').map(e => e.querySelector('.k-mat-h')?.textContent?.replace(/^[\d.]+ /, ''));
 
 const TARGET = { repo: 'kb', branch: 'main', path: 'kb/x/abc12345.md' };
 function mk(tag: string, from: number, to: number, cursor: string | null): MatPage {

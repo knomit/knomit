@@ -19,6 +19,9 @@ export interface FixtureOptions {
   /** Frames: the first `ancestors` facts are ancestors, then the focal frame. */
   ancestors?: number;
   rootTitle?: string;
+  /** Explicit outline: ordinal -> the ordinals it cites (its children first). Without it each
+   *  fact cites the one before it. */
+  tree?: Record<number, number[]>;
   /** Breadth-first inclusion, depth-first order: a cap ABOVE this count lets a
    *  new fact in at position 2, shifting every fact after it (as a real walk
    *  does when the cap rises). */
@@ -48,7 +51,10 @@ export function fixtureNode(n: number, o: FixtureOptions = {}): MatNode {
   const isFocal = ancestors > 0 && n === ancestors + 1;
   const depth = ancestors > 0 ? (isAncestor ? 0 : isFocal ? 0 : 1 + ((n - ancestors - 2) % 4)) : (n === 1 ? 0 : 1 + ((n - 2) % 4));
   const id = fixtureId(n);
-  const builds: MatNode['builds_on'] = n > 1
+  const link = (c: number) => ({ n: c, title: `Fact number ${c}`, id: fixtureId(c), anchor_id: `f-${fixtureId(c)}`, different_version: c % 5 === 0 ? false : undefined });
+  const builds: MatNode['builds_on'] = o.tree
+    ? (o.tree[n] ?? []).map(link)
+    : n > 1
     ? [{ n: n - 1, title: `Fact number ${n - 1}`, id: fixtureId(n - 1), anchor_id: `f-${fixtureId(n - 1)}`, different_version: n % 5 === 0 }]
     : undefined;
   return {

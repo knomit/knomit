@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { MaterializeView } from './MaterializeView';
 import { useMaterializeStream } from './useMaterializeStream';
 import { fixtureId, makeFixtureApi } from './materializeFixture';
 import type { FixtureOptions } from './materializeFixture';
 import { DEFAULT_OPTIONS, MatError } from './materializeApi';
+import { writeMaterializeParams } from './materializeOptions';
+import { ChevronLeftIcon } from './icons';
 import type { MaterializeApi, MatNode, MatOptions, MatPage } from './materializeApi';
 import type { SaveOutcome } from './saveFile';
 
@@ -207,6 +211,7 @@ describe('article marks', () => {
     expect(within(secs[6]).getByTestId('mat-frozen')).toHaveTextContent('latest · frozen');
     expect(within(secs[5]).queryByTestId('mat-repo-badge')).toBeNull();
     // n=5 cites n=4 at a different version: the mark sits on its builds-on link
+    fireEvent.click(within(secs[4]).getByTestId('mat-builds-toggle'));
     expect(within(secs[4]).getByTestId('mat-changed')).toHaveTextContent('changed since cited');
     expect(within(secs[3]).queryByTestId('mat-changed')).toBeNull();
     // the meta line carries path, confidence and the pinned commit
@@ -224,6 +229,7 @@ describe('article marks', () => {
       const y = n ? Number(n) * 100 - top : 0;
       return { top: y, bottom: y + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y, toJSON() {} } as DOMRect;
     });
+    fireEvent.click(within(screen.getAllByTestId('mat-section')[3]).getByTestId('mat-builds-toggle'));
     const link = within(screen.getAllByTestId('mat-section')[3]).getByTestId('mat-builds-link');
     fireEvent.click(link);
     await waitFor(() => expect(top).toBeGreaterThan(0));
@@ -315,7 +321,8 @@ describe('changing options mid-read', () => {
       const y = n ? (Number(n) - 3) * 100 : 0; // the section at the top of the pane is §3
       return { top: y, bottom: y + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y, toJSON() {} } as DOMRect;
     });
-    const titleOfTop = screen.getAllByTestId('mat-section')[2].querySelector('.k-mat-h')?.textContent;
+    const bare = (el: Element) => el.querySelector('.k-mat-h')?.textContent?.replace(/^[\d.]+ /, '');
+    const titleOfTop = bare(screen.getAllByTestId('mat-section')[2]);
 
     fireEvent.click(screen.getByTestId('mat-raise'));
     // the fallback dims the old text like any restart ...
@@ -323,7 +330,7 @@ describe('changing options mid-read', () => {
     // ... and the place the reader was at comes back, on the section's NEW position
     await waitFor(() => expect(top).toBe(92)); // moved from §3 to §4: (4-3)*100 - 8
     const secs = screen.getAllByTestId('mat-section');
-    expect(secs[3].querySelector('.k-mat-h')?.textContent).toBe(titleOfTop);
+    expect(bare(secs[3])).toBe(titleOfTop);
     expect(document.querySelector('[data-stale="true"]')).toBeNull();
     expect(screen.queryByTestId('mat-notice')).toBeNull();
   });
@@ -432,10 +439,10 @@ describe('Export .md', () => {
     gateOn = true;
     const btn = screen.getByTestId('mat-export');
     fireEvent.click(btn);
-    await waitFor(() => expect(btn).toHaveTextContent('Cancel'));
+    await waitFor(() => expect(btn).toHaveAttribute('aria-label', 'Cancel export'));
     fireEvent.click(btn);
     release();
-    await waitFor(() => expect(btn).not.toHaveTextContent('Cancel'));
+    await waitFor(() => expect(btn).toHaveAttribute('aria-label', 'Export'));
     await settle();
     expect(save).not.toHaveBeenCalled();
     expect(screen.queryByTestId('mat-export-failed')).toBeNull();
@@ -456,12 +463,14 @@ describe('source links', () => {
   it.each([['javascript:alert(1)'], ['data:text/html,<script>1</script>']])('renders %s as plain text, not a link', async url => {
     render(<Harness api={pageWith(url)} />);
     await waitFor(() => expect(ns()).toEqual([1]));
+    fireEvent.click(screen.getByTestId('mat-sources-toggle'));
     expect(screen.getByText('the source')).toBeInTheDocument();
     expect(screen.getByTestId('mat-section').querySelector('a')).toBeNull();
   });
   it('renders an https url as a link with that href, opened safely', async () => {
     render(<Harness api={pageWith('https://example.com/a?b=1')} />);
     await waitFor(() => expect(ns()).toEqual([1]));
+    fireEvent.click(screen.getByTestId('mat-sources-toggle'));
     const a = screen.getByText('the source').closest('a')!;
     expect(a).toHaveAttribute('href', 'https://example.com/a?b=1');
     expect(a).toHaveAttribute('rel', 'noopener noreferrer');
@@ -482,7 +491,7 @@ describe('top bar', () => {
     expect(within(bar).getByTestId('mat-cross-kb')).not.toBeChecked();
     expect(within(bar).getByTestId('mat-unpin')).not.toBeChecked();
     expect(screen.getByTestId('mat-progress')).toHaveTextContent('3 of ≤9 facts · depth 4');
-    expect(screen.getByTestId('mat-export')).toHaveTextContent('Export .md');
+    expect(screen.getByTestId('mat-export')).toHaveAttribute('aria-label', 'Export');
     fireEvent.click(screen.getByTestId('mat-back'));
     expect(onBack).toHaveBeenCalled();
   });
@@ -493,5 +502,301 @@ describe('top bar', () => {
     await waitFor(() => expect(ns()).toHaveLength(3));
     expect(screen.getByLabelText('Raise Max depth')).toBeDisabled();
     expect(screen.getByLabelText('Raise Max facts')).toBeDisabled();
+  });
+});
+
+describe('polish: labels, numbering, bar', () => {
+  it('has no MATERIALIZED label; Export and Focus are icon-only buttons with an aria-label and a tooltip, styled as the fact header\'s icon buttons', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(document.body.textContent).not.toMatch(/MATERIALIZED/i);
+    for (const [id, label] of [['mat-export', 'Export'], ['mat-focus', 'Exit focus']]) {  // focus is ON when the view opens
+      const b = screen.getByTestId(id);
+      expect(b.textContent).toBe('');                    // no text, only the glyph
+      expect(b.querySelector('svg')).not.toBeNull();
+      expect(b).toHaveAttribute('aria-label', label);
+      expect(b).toHaveAttribute('title', label);         // the tooltip
+      expect(b).toHaveClass('k-mat-icon');
+      expect(b).toHaveClass('k-bare');                   // the app's bare-button focus treatment
+    }
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = /^\.k-mat-icon \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).toMatch(/padding: 2px/);                // RightPanel's materialize/retract buttons
+    expect(rule).toMatch(/opacity: 0\.75/);
+    expect(css).toMatch(/\.k-mat-icon:hover \{ opacity: 1/);
+    expect(css).toMatch(/\.k-mat-icon:active/);
+  });
+
+  it('while exporting, the Export icon becomes the app\'s spinning arc, the tooltip carries the bytes, and a second click cancels', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>(r => { release = r; });
+    let gateOn = false;
+    const f = makeFixtureApi({ total: 3, pageSize: 3, gate: () => (gateOn ? hold : Promise.resolve()) });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const btn = screen.getByTestId('mat-export');
+    expect(screen.queryByTestId('mat-export-spinner')).toBeNull();
+    gateOn = true;
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByTestId('mat-export-spinner')).toHaveClass('icon-spin'));
+    expect(btn).toHaveAttribute('title', expect.stringContaining('Cancel export'));
+    expect(btn.textContent).toBe('');
+    release();
+    await waitFor(() => expect(screen.queryByTestId('mat-export-spinner')).toBeNull());
+  });
+
+  it('Builds on and Sources are collapsed labels with counts; click expands in place, click again collapses', async () => {
+    setup({ total: 4, pageSize: 4 });
+    await waitFor(() => expect(ns()).toHaveLength(4));
+    const sec = screen.getAllByTestId('mat-section')[3]; // n=4: cites n=3 and has one source
+    const built = within(sec).getByTestId('mat-builds-toggle');
+    const srcs = within(sec).getByTestId('mat-sources-toggle');
+    expect(built).toHaveTextContent('Builds on · 1');
+    expect(srcs).toHaveTextContent('Sources · 1');
+    expect(built).toHaveAttribute('aria-expanded', 'false');
+    expect(srcs).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sec).queryByTestId('mat-builds-on')).toBeNull();
+    expect(within(sec).queryByTestId('mat-sources')).toBeNull();
+
+    fireEvent.click(built);
+    expect(built).toHaveAttribute('aria-expanded', 'true');
+    expect(within(sec).getByTestId('mat-builds-on')).toBeInTheDocument();
+    expect(within(sec).queryByTestId('mat-sources')).toBeNull(); // the other stays closed
+    fireEvent.click(srcs);
+    expect(within(sec).getByTestId('mat-sources')).toHaveTextContent('file4.go');
+    fireEvent.click(built);
+    expect(built).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sec).queryByTestId('mat-builds-on')).toBeNull();
+    // they are real buttons (keyboard reachable)
+    expect(built.tagName).toBe('BUTTON');
+  });
+
+  it('the labels read as the old small uppercase labels (no chip), with a disclosure arrow that turns when open', async () => {
+    setup({ total: 4, pageSize: 4 });
+    await waitFor(() => expect(ns()).toHaveLength(4));
+    const sec = screen.getAllByTestId('mat-section')[3];
+    const built = within(sec).getByTestId('mat-builds-toggle');
+    const arrow = () => built.querySelector('.k-mat-arrow') as HTMLElement;
+    expect(arrow().querySelector('svg')).not.toBeNull();
+    expect(arrow()).toHaveAttribute('data-open', 'false');
+    fireEvent.click(built);
+    expect(arrow()).toHaveAttribute('data-open', 'true');
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = /^\.k-mat-toggle \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).toMatch(/text-transform: uppercase/);
+    expect(rule).toMatch(/border: none/);
+    expect(rule).toMatch(/background: none/);
+    expect(rule).not.toMatch(/border-radius/);
+    expect(css).toMatch(/\.k-mat-arrow\[data-open='false'\] \{ transform: rotate\(-90deg\)/);
+  });
+
+  it('a section with no builds-on or sources shows no label', async () => {
+    setup({ total: 1, pageSize: 1 });
+    await waitFor(() => expect(ns()).toEqual([1]));
+    expect(screen.queryByTestId('mat-builds-toggle')).toBeNull();
+    expect(screen.queryByTestId('mat-sources-toggle')).toBeNull();
+  });
+
+  it('flags a changed-since-cited link on the closed label', async () => {
+    setup({ total: 5, pageSize: 5 });
+    await waitFor(() => expect(ns()).toHaveLength(5));
+    const fifth = screen.getAllByTestId('mat-section')[4]; // n=5 cites n=4 at a different version
+    expect(within(fifth.querySelector('[data-testid="mat-builds-toggle"]') as HTMLElement).getByRole('img')).toHaveAttribute('aria-label', expect.stringContaining('changed'));
+    expect(within(screen.getAllByTestId('mat-section')[1]).getByTestId('mat-builds-toggle').querySelector('[role="img"]')).toBeNull();
+  });
+
+  it('numbers sections like a document: the root is the unnumbered top, children 1 and 2, grandchildren 1.1, and a repeated fact\'s link names its target by title only', async () => {
+    // root(1) cites A(2) and D(4); A cites S(3); D also cites S (reached first under A)
+    setup({ total: 4, pageSize: 4, tree: { 1: [2, 4], 2: [3], 4: [3] } });
+    await waitFor(() => expect(ns()).toHaveLength(4));
+    const secs = screen.getAllByTestId('mat-section');
+    const num = (i: number) => (secs[i].querySelector('[data-testid="mat-num"]')?.textContent ?? '').trim();
+    expect([0, 1, 2, 3].map(num)).toEqual(['', '1.', '1.1', '2.']);
+    // the number is a prefix of the heading text itself, and no longer in the meta line
+    expect(secs[1].querySelector('.k-mat-h')?.textContent).toMatch(/^1\. Fact number 2/);
+    expect(secs[2].querySelector('.k-mat-h')?.textContent).toMatch(/^1\.1 Fact number 3/);
+    expect(secs[0].querySelector('.k-mat-h')?.textContent).toMatch(/^Fact number 1/);
+    for (const sec of secs) expect(within(sec).getByTestId('mat-meta').textContent).not.toMatch(/§|^\d/);
+    expect(secs[1].querySelector('[data-testid="mat-meta"] [data-testid="mat-num"]')).toBeNull();
+    fireEvent.click(within(secs[3]).getByTestId('mat-builds-toggle'));
+    const link = within(secs[3]).getByTestId('mat-builds-link');
+    // the link names its target by title only: no section number, as prefix or suffix
+    expect(link.textContent).toMatch(/^↪ Fact number 3 [0-9a-f]{8}$/);
+    expect(link.textContent).not.toMatch(/§|1\.1/);
+  });
+
+  it('a frame: ancestors are an unnumbered preamble, the frame the unnumbered top, numbers start at its children', async () => {
+    // 1 ancestor, 2 the frame (cites 3 and 5), 3 cites 4
+    setup({ total: 5, pageSize: 5, ancestors: 1, tree: { 2: [3, 5], 3: [4] } });
+    await waitFor(() => expect(ns()).toHaveLength(5));
+    const secs = screen.getAllByTestId('mat-section');
+    const nums = secs.map(sec => (sec.querySelector('[data-testid="mat-num"]')?.textContent ?? '').trim());
+    expect(nums).toEqual(['', '', '1.', '1.1', '2.']);
+    expect(secs[0].querySelector('.k-mat-h')?.textContent).toMatch(/^Fact number 1/); // an ancestor: no number
+    expect(secs[2].querySelector('.k-mat-h')?.textContent).toMatch(/^1\. Fact number 3/);
+  });
+});
+
+describe('full width', () => {
+  it('puts no max-width (or centring margin) on the article or the pane it scrolls in', () => {
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    for (const sel of ['.k-mat-article', '.k-mat-scroll', '.k-mat']) {
+      const m = new RegExp(`^${sel.replace('.', '\\.')} \\{([^}]*)\\}`, 'm').exec(css);
+      expect(m, sel).not.toBeNull();
+      expect(m![1]).not.toMatch(/max-width|margin:\s*0 auto/);
+    }
+  });
+});
+
+describe('focus mode', () => {
+  const on = () => document.documentElement.dataset.matFocus === '1';
+  afterEach(() => { delete document.documentElement.dataset.matFocus; });
+
+  it('opens IN focus (the shell\'s regions are hidden by data-mat-focus on <html>); the toggle leaves and re-enters it', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const t = screen.getByTestId('mat-focus');
+    expect(on()).toBe(true);
+    expect(t).toHaveAttribute('aria-pressed', 'true');
+    expect(t).toHaveAttribute('aria-label', 'Exit focus');
+    expect(t).toHaveAttribute('title', 'Exit focus');
+    fireEvent.click(t);
+    expect(on()).toBe(false);
+    expect(t).toHaveAttribute('aria-pressed', 'false');
+    expect(t).toHaveAttribute('aria-label', 'Focus');
+    fireEvent.click(t);
+    expect(on()).toBe(true);
+  });
+
+  it('with focus OFF nothing is hidden: no attribute on <html>, and no inline style or class is put on the shell', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-focus'));
+    expect(on()).toBe(false);
+    expect(document.documentElement.getAttribute('data-mat-focus')).toBeNull();
+    expect(document.documentElement.getAttribute('style')).toBeNull();
+    expect(document.body.getAttribute('style')).toBeNull();
+    // the hiding is only ever the stylesheet's rule keyed on that attribute
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    for (const line of css.split('\n').filter(l => /\.k-rail|library|browse-toolbar|facet-tabs/.test(l) && !l.startsWith('/*') && !l.startsWith(' '))) {
+      expect(line.startsWith('html[data-mat-focus]'), line).toBe(true);
+    }
+  });
+
+  it('Esc OUTSIDE a field exits Focus; with focus already off the shell gets Esc back', async () => {
+    const shellEsc = vi.fn();
+    const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
+    window.addEventListener('keydown', shell); // registered BEFORE the view's, as the app's is
+    try {
+      setup({ total: 3, pageSize: 3 });
+      await waitFor(() => expect(ns()).toHaveLength(3));
+      expect(on()).toBe(true);
+      (document.activeElement as HTMLElement | null)?.blur();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(on()).toBe(false);
+      expect(shellEsc).not.toHaveBeenCalled();          // the fact is never closed by it
+      expect(screen.getByTestId('materialize-view')).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: 'Escape' });      // focus is off: the shell has it again
+      expect(shellEsc).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', shell);
+    }
+  });
+
+  it('Esc INSIDE a text/number field (Max depth, Max facts) or any input only leaves the field and keeps Focus', async () => {
+    const shellEsc = vi.fn();
+    const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
+    window.addEventListener('keydown', shell);
+    try {
+      setup({ total: 3, pageSize: 3 });
+      await waitFor(() => expect(ns()).toHaveLength(3));
+      for (const id of ['mat-depth', 'mat-facts', 'mat-unpin']) {
+        const input = screen.getByTestId(id) as HTMLInputElement;
+        input.focus();
+        expect(document.activeElement).toBe(input);
+        fireEvent.keyDown(input, { key: 'Escape' });
+        expect(document.activeElement).not.toBe(input);   // left the field
+        expect(on()).toBe(true);                          // Focus kept
+      }
+      expect(shellEsc).not.toHaveBeenCalled();             // and the shell never saw it
+      // the next Esc, now outside any field, exits
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(on()).toBe(false);
+    } finally {
+      window.removeEventListener('keydown', shell);
+    }
+  });
+
+  it('Back leaves the view and restores everything, from Focus ON and from Focus OFF', async () => {
+    const onBack = vi.fn();
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    const { unmount } = render(<MaterializeView target={TARGET} title="T" options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={onBack} api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(on()).toBe(true);
+    fireEvent.click(screen.getByTestId('mat-back'));      // from Focus on
+    expect(on()).toBe(false);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('mat-focus'));      // back in
+    fireEvent.click(screen.getByTestId('mat-focus'));      // and out again: focus off
+    expect(on()).toBe(false);
+    fireEvent.click(screen.getByTestId('mat-back'));      // from Focus off
+    expect(on()).toBe(false);
+    expect(onBack).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByTestId('mat-focus'));
+    expect(on()).toBe(true);
+    unmount();                                              // leaving the view, however it happens
+    expect(on()).toBe(false);
+  });
+
+  it('the Focus glyph sits to the LEFT of the Export glyph, together in the bar\'s action group', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const focus = screen.getByTestId('mat-focus');
+    const exp = screen.getByTestId('mat-export');
+    const group = screen.getByTestId('mat-actions');
+    expect(focus.parentElement).toBe(group);
+    expect(exp.parentElement).toBe(group);
+    expect(focus.compareDocumentPosition(exp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect([...group.children].map(c => c.getAttribute('data-testid'))).toEqual(['mat-focus', 'mat-export']);
+  });
+
+  it('Focus is not part of the URL options (a reading preference, not what is materialized)', () => {
+    const search = writeMaterializeParams('', { open: true, options: DEFAULT_OPTIONS });
+    expect(search).not.toMatch(/focus/i);
+  });
+
+  it('the stylesheet hides exactly the Browse/Activity/Settings tabs, the rail, the library column with its splitter, and the browse toolbar under that attribute (the brand and gear stay), and the shell carries those hooks', () => {
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = css.slice(css.indexOf("html[data-mat-focus]"));
+    for (const sel of [".k-rail", "[data-testid='facet-tabs']", "[data-testid='browse-toolbar']", "[data-shell-region='library']", "[data-testid='library-splitter']"]) expect(rule).toContain(sel);
+    expect(rule).toContain('display: none !important');
+    // the top bar's brand, rail toggle, gear and server tabs are NOT in the hiding rule
+    for (const keep of ['bar-brand', 'rail-toggle', 'server-toggle', 'server-tabs', 'toknomitr-bar']) expect(rule).not.toContain(keep);
+    const src = (f: string) => readFileSync(resolve(__dirname, f), 'utf8');
+    expect(src('TargetRail.tsx')).toContain('className="k-rail"');
+    expect(src('TopBar.tsx')).toContain('data-testid="facet-tabs"');
+    expect(src('BrowseFacet.tsx')).toContain('data-shell-region="library"');
+    expect(src('BrowseFacet.tsx')).toContain('testId="browse-toolbar"');
+    expect(src('BrowseFacet.tsx')).toContain('testId="library-splitter"');
+  });
+});
+
+describe('back control', () => {
+  it('is the app\'s bare back chevron: ChevronLeftIcon, no text, no border, labelled "Back to fact", same box as the library and timeline back buttons', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const b = screen.getByTestId('mat-back');
+    expect(b.textContent).toBe('');
+    expect(b).toHaveAttribute('aria-label', 'Back to fact');
+    expect(b).toHaveAttribute('title', 'Back to fact');
+    expect(b.innerHTML).toBe(render(<ChevronLeftIcon color="#888" size={13} />).container.innerHTML);
+    expect(b).not.toHaveClass('k-mat-btn');                      // no bordered button chrome
+    expect(b.style.border === 'none' || b.style.borderStyle === 'none').toBe(true);
+    expect(b.style.background).toBe('none');
+    expect(b.style.width).toBe('20px');                          // LibraryHeader's library-back box
+    expect(b.style.height).toBe('26px');
+    const lib = readFileSync(resolve(__dirname, 'LibraryHeader.tsx'), 'utf8');
+    expect(lib).toContain('<ChevronLeftIcon color={canBack ?');   // the control it copies
+    expect(lib).toContain('width: 20, height: 26');
   });
 });
