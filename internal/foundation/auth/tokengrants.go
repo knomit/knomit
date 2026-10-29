@@ -42,6 +42,47 @@ func WithCeiling(ctx context.Context, s Set) context.Context {
 	return context.WithValue(ctx, ceilingKey{}, s)
 }
 
+type repoReachKey struct{}
+
+// WithRepoReach records which repos the caller on this request can reach by
+// their own routes; reach answers for a repo NAME. EVERY edge that mints a
+// principal records one:
+//   - the OAuth listener (BearerMiddleware): the verified token's audience. A
+//     token is issued for ONE resource (RFC 8707) and is refused anywhere
+//     outside it, so a token for one repo's or one lens's endpoint cannot
+//     read another repo's routes;
+//   - the local edges (AuthMiddleware: socket or named pipe, TLS
+//     certificate, loopback, and auth disabled): AllRepos, because grants
+//     carry no repo dimension and such a caller can already call every
+//     repo's routes.
+//
+// It exists for reads that leave the request's own repo on the server side
+// (materialize's cross-KB refs): such a read must not take a confined token
+// further than the token could go itself.
+func WithRepoReach(ctx context.Context, reach func(repo string) bool) context.Context {
+	return context.WithValue(ctx, repoReachKey{}, reach)
+}
+
+// ReachesRepo reports whether the caller's credential reaches the named
+// repo's routes. DEFAULT DENY, like Allowed: a context with no recorded reach
+// reaches nothing, so a new edge that forgets WithRepoReach (another listener,
+// a context detached in a goroutine) fails closed instead of widening to every
+// repo. It does NOT replace Allowed: a caller that reaches a repo still needs
+// the permission for what it does there.
+func ReachesRepo(ctx context.Context, repo string) bool {
+	reach, ok := RepoReachFromContext(ctx)
+	return ok && reach(repo)
+}
+
+// RepoReachFromContext returns the reach WithRepoReach recorded, or false.
+func RepoReachFromContext(ctx context.Context) (func(repo string) bool, bool) {
+	reach, ok := ctx.Value(repoReachKey{}).(func(string) bool)
+	return reach, ok && reach != nil
+}
+
+// AllRepos is the reach of a caller no credential confines: every repo.
+func AllRepos(string) bool { return true }
+
 // CeilingFromContext returns the ceiling WithCeiling recorded, or false.
 func CeilingFromContext(ctx context.Context) (Set, bool) {
 	s, ok := ctx.Value(ceilingKey{}).(Set)

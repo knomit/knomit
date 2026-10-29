@@ -18,10 +18,10 @@ import (
 // GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/*.
 //
 // It behaves like handleHALFact but pins the anchor to a specific commit SHA.
-// Sub-resources /incoming and /outgoing are both supported; /commits is not
+// Sub-resources /incoming, /outgoing and /materialize are supported; /commits is not
 // (a commit-anchored fact IS at a specific commit — use the branch-anchored
 // /facts/.../commits for history).
-func handleCommitAnchoredFact(b hal.URLBuilder) http.HandlerFunc {
+func handleCommitAnchoredFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		branch := httpx.BranchFromContext(r.Context())
@@ -36,6 +36,13 @@ func handleCommitAnchoredFact(b hal.URLBuilder) http.HandlerFunc {
 		// F25: every OTHER dot path is closed to the fact endpoints for reads
 		// too, sub-resources included.
 		if refusePrivateRead(w, r, path) {
+			return
+		}
+
+		// Dispatch /materialize: the agent document anchored at this commit.
+		if factPath, ok := splitMaterialize(path); ok {
+			ri := repos.RepoFromContext(r.Context())
+			serveMaterialize(w, r, repos.NewBindingOfRepo(ri, branch), mgr, factPath, sha, nil)
 			return
 		}
 

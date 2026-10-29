@@ -48,7 +48,7 @@ func newTestRouter(m *repos.Manager) http.Handler {
 	branch.Use(httpx.BranchMiddleware)
 	lens := r.Route("/lenses/{lens}", func(chi.Router) {})
 	lens.Use(lensFromURL(m))
-	Mount(branch, lens, "kb", nil)
+	Mount(branch, lens, "kb", nil, m)
 	return r
 }
 

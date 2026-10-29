@@ -896,6 +896,23 @@ paths:
         specific version (source for `/incoming`, target for `/outgoing`)
         and `_links.self` is anchored to that commit.
 
+        When the path terminates with `/materialize`, the response is the
+        fact's AGENT DOCUMENT as `text/markdown; charset=utf-8`: the fact and
+        the facts it stands on, every one in full, in reading order (the same
+        document `knomit_materialize` pages with `audience: agent`, byte for
+        byte). It reads the query parameters `depth` (0-10, default 4),
+        `max_nodes` (1-500, default 200), `unpin` and `cross_kb` (booleans,
+        default false), and refuses any other parameter or an out-of-range
+        value with a 400. By default every ref is read at the version that
+        was cited; `unpin=true` reads latest versions and silently leaves out
+        a target that is gone; `cross_kb=true` follows `kb://<id>/` refs into
+        any repo registered on this server that the caller's own credential
+        reaches (a bearer token reaches only the repos under its audience),
+        at its latest version; any other id is listed as not available,
+        whether or not such a repo exists. A frame
+        lists its ancestors first. 404 when the fact cannot be read at the
+        branch tip.
+
         A file under `.knomit/` named by its exact path (case kept; no empty,
         `.` or `..` segment) is returned RAW, read-only: 200 with the file's
         bytes as `text/plain; charset=utf-8` (or `application/octet-stream`
@@ -1014,6 +1031,11 @@ paths:
       tags: [facts, commits]
       summary: Read a fact anchored at a specific commit
       description: |
+        When the path terminates with `/materialize`, the response is the
+        fact's agent document (see the branch-anchored route) anchored at
+        this commit: the fact as it stood there and, with `unpin=true`, every
+        ref at its latest version as of this commit.
+
         When the path terminates with `/incoming` or `/outgoing`, the
         response is a `RefsCollection` of referencing/referenced facts at
         this anchor instead of a fact view. Each entry's `commit` field
@@ -3847,6 +3869,11 @@ paths:
         Every not-found case — unknown mount id, malformed `kb://` path,
         missing or retracted fact — returns a byte-identical 404, so a caller
         cannot probe the lens's mount topology.
+
+        `/materialize` returns the agent document (see the repo route) walked
+        through this lens: a `kb://<id12>/…` fact is materialized from that
+        mount and its nodes keep the qualified form. Every not-found case
+        returns the same byte-identical 404 as the fact itself.
 
         Sub-resources match the repo route: when the path terminates with
         `/commits`, `/incoming` or `/outgoing`, the suffix is stripped before

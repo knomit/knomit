@@ -26,6 +26,7 @@ import (
 	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/foundation/config"
 )
@@ -706,6 +707,67 @@ func (m *Manager) GetByUID(uid string) *RepoInstance {
 	return m.byUID[uid]
 }
 
+// hostContext is the ctx a trigger's script or recipe host runs its
+// in-process tools under. It is built here, not at an edge, so no edge
+// records anything on it; it carries:
+//   - the repo's own binding at its agent branch (the tools resolve their
+//     branch from it), and
+//   - an explicit repo reach of THIS repo only (auth.WithRepoReach). The reach
+//     check is default-deny (auth.ReachesRepo), so a host ctx without one would
+//     be refused every read that leaves the binding; and a trigger is the
+//     server acting on ONE repo's own events, so it reaches that repo and no
+//     other. Never all repos: nothing on this path is a caller whose access
+//     covers the server. The name is read at call time, so a rename keeps it.
+func (ri *RepoInstance) hostContext(ctx context.Context, agentBranch string) context.Context {
+	ctx = WithBinding(ctx, NewBindingOfRepo(ri, agentBranch))
+	return auth.WithRepoReach(ctx, func(repo string) bool { return repo == ri.Name() })
+}
+
+// ByRootID returns the registered repo whose ROOT-COMMIT id is id: the full
+// hash, or its 12-hex wire prefix as it appears in kb://<id12>/… paths. This
+// is the fact-addressing identity (RepoInstance.ID), NOT the registry uid
+// (GetByUID) and not the name (Get): the three are different namespaces with
+// different lifetimes.
+//
+// ok is false when no registered repo has the id, and ALSO when a 12-hex
+// prefix matches more than one repo. Two distinct knowledge bases can share a
+// prefix (checkMemberIDCollision keeps such a pair out of one lens, not out of
+// the server), and an ambiguous address must not silently pick one of them.
+// A repo whose id is not resolvable yet (its store never opened) matches
+// nothing.
+//
+// The instances are snapshotted under the read lock and their ids resolved
+// after it is released: RepoInstance.ID may open a read on the repo's store,
+// and nothing that can block belongs inside m.mu (see ForEach).
+func (m *Manager) ByRootID(id string) (*RepoInstance, bool) {
+	if id == "" {
+		return nil, false
+	}
+	m.mu.RLock()
+	instances := make([]*RepoInstance, 0, len(m.repos))
+	for _, ri := range m.repos {
+		if ri != nil {
+			instances = append(instances, ri)
+		}
+	}
+	m.mu.RUnlock()
+
+	var found *RepoInstance
+	for _, ri := range instances {
+		full := ri.ID()
+		if full == "" {
+			continue
+		}
+		if full == id || (len(id) == 12 && strings.HasPrefix(full, id)) {
+			if found != nil && found != ri {
+				return nil, false
+			}
+			found = ri
+		}
+	}
+	return found, found != nil
+}
+
 // ForEach calls fn for every registered repo while holding a read lock.
 func (m *Manager) ForEach(fn func(name string, ri *RepoInstance)) {
 	m.mu.RLock()
@@ -901,7 +963,7 @@ func (m *Manager) newInstance(name, uid string, subscribed bool) *RepoInstance {
 			cfg.Triggers.ScriptRatePerMinute, m.deps.ScriptTools, cfg.Home, m.ServerAddress, ri.pub,
 			ri.Acquire, ri.wakeSync,
 			func() bool { return ri.Status().Index.State == events.IndexStateReady },
-			func(ctx context.Context) context.Context { return WithBinding(ctx, NewBindingOfRepo(ri, agentBranch)) })
+			func(ctx context.Context) context.Context { return ri.hostContext(ctx, agentBranch) })
 		ri.consensus = newConsensusMerger(ri, name, agentBranch)
 		ri.peers = newFleetPeers(ri.actsAsFleetMaster, ri.publishesFleetMain)
 		ri.peers.claim = ri.fleetMasterClaimRound

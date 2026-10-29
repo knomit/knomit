@@ -26,6 +26,7 @@ import (
 	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/storetest"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/testsupport/gitfixture"
@@ -1265,4 +1266,36 @@ func TestScript_AgentTraceJoinsTheStory(t *testing.T) {
 	fires := firesOf(t, ri, "t1")
 	require.Len(t, fires, 1)
 	require.Equal(t, "task-7f3a", fires[0].Trace, "change.trace is the agent's Knomit-Trace")
+}
+
+// A script host's ctx is built inside the server, not at an edge, so it must
+// carry its OWN explicit repo reach (auth.ReachesRepo is default-deny): this
+// repo, and no other. Proven on the ctx the host actually hands a tool.
+func TestScript_HostContextReachesOnlyItsOwnRepo(t *testing.T) {
+	t.Parallel()
+	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "host"))
+	putScript(t, ri, "host", `knomit.emit({q: knomit.query({text: "x"})});`)
+	type seen struct{ own, other, recorded bool }
+	got := make(chan seen, 1)
+	tools.mu.Lock()
+	tools.hook = func(ctx context.Context, tool string, _ map[string]any) (string, bool, error, bool) {
+		if tool == "query" {
+			_, recorded := auth.RepoReachFromContext(ctx)
+			select {
+			case got <- seen{auth.ReachesRepo(ctx, ri.Name()), auth.ReachesRepo(ctx, "some-other-repo"), recorded}:
+			default:
+			}
+		}
+		return "", false, nil, false
+	}
+	tools.mu.Unlock()
+	sink := subscribePayloads(t, ri, "t1")
+	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	settle(t, ri)
+	sink.wait(t, 1)
+
+	s := <-got
+	require.True(t, s.recorded, "the host records a reach explicitly")
+	require.True(t, s.own, "a trigger reaches its own repo")
+	require.False(t, s.other, "and no other")
 }
