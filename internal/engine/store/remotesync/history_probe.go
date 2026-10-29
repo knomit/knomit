@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -41,8 +42,9 @@ type BranchHistory struct {
 // store, so the fetch advertises the store's branch heads as haves and the
 // remote sends only what the store lacks (a remote ahead of the local branch
 // costs its new commits, an unrelated one its whole history). budget bounds
-// that transfer in object bytes (<= 0: unbounded); past it the answer is
-// ErrHistoryProbeTooLarge.
+// that transfer twice (<= 0: unbounded): the raw pack as it arrives, before
+// any of it is parsed, and the inflated objects the parse stores. Past either
+// the answer is ErrHistoryProbeTooLarge.
 //
 // The caller gates url (the local-origin policy) and resolves auth; this is a
 // clone/fetch primitive like FetchOrigin and validates nothing itself.
@@ -113,6 +115,14 @@ type probeStorage struct {
 	local  *storegit.Storer
 	budget int64
 	spent  int64
+}
+
+// PackfileWriter bounds the fetched RAW pack by the budget as it arrives
+// (NewBudgetedPackWriter); SetEncodedObject then bounds the inflated objects
+// the parse stores. The parse targets p, so a thin pack's bases are read
+// through to the store.
+func (p *probeStorage) PackfileWriter() (io.WriteCloser, error) {
+	return NewBudgetedPackWriter(p, p.budget, ErrHistoryProbeTooLarge), nil
 }
 
 func (p *probeStorage) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error) {

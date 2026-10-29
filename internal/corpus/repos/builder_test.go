@@ -43,7 +43,7 @@ func TestReconcileLoop_UnreadableRemoteIsLoggedAndSkipped(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, taskPub := events.NewTaskHub(ctx)
-		runReconcileLoop(ctx, svc, taskPub, remoteEdgeSink{}, "beta", "agent/x", nil, "", false, nil, nil, nil, nil, nil, nil, false)
+		runReconcileLoop(ctx, svc, taskPub, remoteEdgeSink{}, "beta", "agent/x", nil, "", false, nil, nil, nil, nil, nil, nil, nil, false)
 	}()
 
 	require.Eventually(t, func() bool {

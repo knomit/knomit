@@ -2121,6 +2121,14 @@ paths:
         holds facts (send `replace_main: true` to replace it), 409 "Origin not
         inspected" past `[git].max_probe_bytes`, 502 when the remote cannot be
         read, 503 when the registry cannot be.
+
+        It fails closed: a repo with no origin is refused 409 "No origin", and
+        a stored origin that cannot be read is refused (503 "Repo not ready",
+        or 500 "Failed to get origin") before anything is vetted or changed.
+        The change applies only to the origin URL that was vetted: when the
+        origin is re-pointed or removed while the new branch is being checked,
+        nothing changes and the answer is 409 "Origin changed"; read the
+        origin and retry.
       operationId: setOriginUpstream
       requestBody:
         required: true
@@ -2139,7 +2147,8 @@ paths:
         "409":
           description: |
             fleet_repository: the fleet repository's consensus branch is fixed
-            at create. Or one of the identity refusals above.
+            at create. Or one of the identity refusals above, "No origin", or
+            "Origin changed".
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }

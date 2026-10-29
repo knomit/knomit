@@ -81,11 +81,31 @@ func TestOrigins_SetBranchPreservesAuth(t *testing.T) {
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
 	require.NoError(t, o.Set("u1", Origin{URL: "u", Branch: "main", AuthMethod: "token", AuthToken: "s3cret"}))
 
-	require.NoError(t, o.SetBranch("u1", "release"))
+	require.NoError(t, o.SetBranch("u1", "u", "release"))
 	got, err := o.Get("u1")
 	require.NoError(t, err)
 	require.Equal(t, "release", got.Branch)
 	require.Equal(t, "s3cret", got.AuthToken)
+}
+
+// SetBranch is a compare-and-set on the url: a branch vetted against one
+// origin is never written onto another one that replaced it, nor onto a
+// removed one.
+//
+// SABOTAGE: drop `AND url = ?` from the UPDATE -> the write lands on R2 -> red.
+func TestOrigins_SetBranchRefusesAChangedURL(t *testing.T) {
+	r, o := openTestOrigins(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	require.NoError(t, o.Set("u1", Origin{URL: "https://r2.test/kb.git", Branch: "main"}))
+
+	require.ErrorIs(t, o.SetBranch("u1", "https://r1.test/kb.git", "ybranch"), ErrOriginChanged)
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, "https://r2.test/kb.git", got.URL)
+	require.Equal(t, "main", got.Branch, "a branch vetted against R1 must not land on R2")
+
+	require.NoError(t, o.Delete("u1"))
+	require.ErrorIs(t, o.SetBranch("u1", "https://r2.test/kb.git", "ybranch"), ErrOriginChanged)
 }
 
 // Origin uniqueness is now one indexed query instead of opening every repo.

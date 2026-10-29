@@ -45,6 +45,7 @@ type escFixture struct {
 	store  *oauth.Store
 	grants *auth.SQLGrants
 	root   string
+	deps   repos.Deps
 }
 
 func newEscFixture(t *testing.T) *escFixture {
@@ -61,12 +62,13 @@ func newEscFixtureWith(t *testing.T, tune func(*config.Config)) *escFixture {
 	if tune != nil {
 		tune(&cfg)
 	}
-	m := repos.New(context.Background(), repos.Deps{
+	deps := repos.Deps{
 		Cfg:     cfg,
 		AgentID: testsigner.FixtureAgentID(escAgent), AgentBranch: escAgent,
 		KeyPath: keyPath,
 		Machine: repos.Options{Synchronous: true},
-	})
+	}
+	m := repos.New(context.Background(), deps)
 	t.Cleanup(func() { _ = m.Close() })
 	require.NoError(t, m.Start())
 
@@ -75,7 +77,7 @@ func newEscFixtureWith(t *testing.T, tune func(*config.Config)) *escFixture {
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	require.NoError(t, migrate.Control(db))
-	f := &escFixture{m: m, root: root, grants: auth.NewSQLGrants(db), store: oauth.NewStore(db, 2*time.Hour, 14*24*time.Hour)}
+	f := &escFixture{m: m, root: root, deps: deps, grants: auth.NewSQLGrants(db), store: oauth.NewStore(db, 2*time.Hour, 14*24*time.Hour)}
 	f.s = &Server{
 		Manager:    m,
 		GitHandler: GitRemoteHandler(m), // [git].serve defaults to true
