@@ -179,7 +179,7 @@ func TestGate_MintedHandleWhoseRepoIsGone(t *testing.T) {
 }
 
 // scopedCtx is a URL-scoped request for repo alpha at its agent branch: a
-// RepoInstance, the URL branch, the mount marker MountExperimentMiddleware sets
+// RepoInstance, the URL branch, the mount marker ScopedMountMiddleware sets
 // on a mount a handle may steer, and NO session-scoped marker.
 func scopedCtx(t *testing.T, m *repos.Manager, repo string) context.Context {
 	t.Helper()

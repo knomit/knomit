@@ -101,6 +101,8 @@ type experimentEnvelope struct {
 	Repo   string `json:"repo"`
 	Branch string `json:"branch"`
 	Active string `json:"active_experiment"`
+	// Binding is the handle `open` leaves inside the experiment.
+	Binding string `json:"binding"`
 	// Kept on the envelope though the server no longer sets it: the tests
 	// assert it is ABSENT, which needs the field to decode into.
 	ReconnectURL string `json:"reconnect_url"`

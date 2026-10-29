@@ -149,17 +149,19 @@ type mountSession struct {
 }
 
 // WithMountSession marks this request as arriving on a URL-scoped mount whose
-// URL names a PLAIN branch — one where session state may decide the branch —
-// and carries the session id when there is one.
+// URL names a PLAIN branch — the repo's own agent branch, or a lens's default —
+// where a binding HANDLE may choose the branch, and carries the mount identity
+// handles are minted against (and the session id, informational only).
+//
+// It never makes the SESSION decide anything: since #685 a URL-scoped
+// connection's default binding is fixed to the URL's branch, and an experiment
+// is reached only through a handle.
 //
 // It lives here rather than in internal/edge/web because internal/edge/mcp must READ it
 // and cannot import internal/edge/web.
 //
-// THE MARKER IS SET EVEN WITH AN EMPTY SESSION ID, and that distinction is
-// load-bearing: "this mount accepts session state but you sent no session id"
-// and "this mount addresses an experiment by URL" are different refusals with
-// different fixes, and a caller told the wrong one goes looking in the wrong
-// place. Presence answers the first question, SessionID the second.
+// THE MARKER IS SET EVEN WITH AN EMPTY SESSION ID: presence answers "may a
+// handle steer this mount", which does not depend on the session.
 func WithMountSession(ctx context.Context, sessionID, mountUID string) context.Context {
 	if mountUID == "" {
 		return ctx
@@ -170,10 +172,9 @@ func WithMountSession(ctx context.Context, sessionID, mountUID string) context.C
 // MountSessionFromContext returns the session id and mount identity for a
 // URL-scoped MCP request on a PLAIN-branch mount.
 //
-// ok is false on the unscoped mount, on a mount whose URL names an experiment,
-// and on every REST route — none of which may record or read a mount
-// experiment. ok true with an empty sessionID means the mount would accept
-// session state but the client sent no session id.
+// ok is false on the unscoped mount, on a mount whose URL names a specific
+// branch (main, a foreign agent branch, an experiment), and on every REST
+// route — none of which a handle may steer.
 func MountSessionFromContext(ctx context.Context) (sessionID, mountUID string, ok bool) {
 	ms, found := ctx.Value(mountSessionKey{}).(mountSession)
 	if !found {
@@ -182,15 +183,15 @@ func MountSessionFromContext(ctx context.Context) (sessionID, mountUID string, o
 	return ms.SessionID, ms.MountUID, true
 }
 
-// WithoutMountState strips a URL-scoped mount's SESSION state from ctx: the
-// mount-session marker and any lapsed-experiment mark MountExperimentMiddleware
-// set.
+// WithoutMountState strips a URL-scoped mount's connection state from ctx: the
+// mount-session marker ScopedMountMiddleware set, and any lapsed-experiment
+// mark carried in with it.
 //
 // Used when a binding HANDLE routes a call on a URL-scoped mount. The handle
-// then decides the branch, exactly as on the unscoped mount, and the
-// connection's session-keyed experiment must neither apply to that call nor be
-// opened, committed or cleared by it: two callers sharing the connection, one
-// with a handle and one without, would otherwise move each other.
+// then decides the branch, exactly as on the unscoped mount, and nothing after
+// the gate may treat the call as the connection's default. (Since #685 the
+// connection default never moves and carries no experiment of its own, so this
+// is defence in depth rather than the only thing keeping callers apart.)
 func WithoutMountState(ctx context.Context) context.Context {
 	ctx = context.WithValue(ctx, mountSessionKey{}, nil)
 	return context.WithValue(ctx, lapsedExperimentKey{}, nil)

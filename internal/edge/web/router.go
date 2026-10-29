@@ -197,13 +197,13 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// Synthesis-run and index-rebuild jobs (api/jobs).
 	jobs.Mount(branch, s.Manager, s.LLMAdapter)
 
-	// ONLY the MCP mount gets the session's experiment applied.
-	// The REST routes above name their branch in the URL and must
-	// keep meaning exactly that: a GET of
-	// /branches/agent:x/facts is a question about agent:x
-	// whoever asks it.
+	// ONLY the MCP mount is marked as one where a binding handle may
+	// choose the branch. The REST routes above name their branch in the
+	// URL and must keep meaning exactly that: a GET of
+	// /branches/agent:x/facts is a question about agent:x whoever asks
+	// it.
 	branch.Group(func(r chi.Router) {
-		r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
+		r.Use(ScopedMountMiddleware(s.Manager))
 		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
 		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
@@ -217,11 +217,11 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 		r.HandleFunc(httpx.UnscopedMCPPattern, mcpDispatch.ServeHTTP)
 	})
 
-	// As on the repo subtree: the session's experiment applies to the lens
-	// MCP mount only. The KB's lens reads (kb.Mount above) federate at each
+	// As on the repo subtree: the handle marker applies to the lens MCP
+	// mount only. The KB's lens reads (kb.Mount above) federate at each
 	// member's own pinned branch and must keep doing so.
 	lensBound.Group(func(r chi.Router) {
-		r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
+		r.Use(ScopedMountMiddleware(s.Manager))
 		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
 		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})

@@ -1,10 +1,17 @@
 // knomit_experiment: the lifecycle of an `exp/<name>` branch, from the agent's
 // side.
 //
-// Nothing here is special-cased per tool. Opening an experiment moves where
-// the CALLER is, and every other tool then works on it unchanged — that is the
-// whole design, and the reason this file is about the binding and not about
-// facts.
+// Nothing here is special-cased per tool. Opening an experiment puts a HANDLE
+// inside it, and every other tool called with that handle then works on it
+// unchanged — that is the whole design, and the reason this file is about the
+// binding and not about facts.
+//
+// THE DEFAULT NEVER MOVES (#685). On a URL-scoped endpoint a call without a
+// handle is always on the repo's or lens's default branch. Subagents share
+// their parent's MCP session and nothing on the wire tells them apart, so a
+// movable default would move every agent on the session: stale reads, and
+// writes landing in someone else's experiment. `open` without a handle
+// therefore MINTS one and returns it, and leaves the default alone.
 package mcp
 
 import (
@@ -24,22 +31,24 @@ import (
 	"knomit/internal/corpus/resolutions"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/merge"
+	"knomit/internal/foundation/clientsessions"
 )
 
 // experimentTool declares knomit_experiment.
 //
 // The description carries the two things an agent cannot discover by trying:
-// that `open` MOVES this session (on the unscoped mount) rather than just
-// creating a branch, and that a commit can be REFUSED with a list of paths,
-// which is a state it has to know how to leave.
+// that `open` hands back a HANDLE inside the experiment, which every later call
+// must pass (a URL-scoped connection's default never moves, #685), and that a
+// commit can be REFUSED with a list of paths, which is a state it has to know
+// how to leave.
 func experimentTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_experiment",
-		mcpgo.WithDescription("Work on an isolated branch of this knowledge base. `open` forks exp/<name> from the agent branch and MOVES YOUR BINDING onto it (on the unscoped endpoint, the handle you called with; on a URL-scoped one, this session): every later call — learn, update, retract, query, review — reads and writes the experiment until you commit or roll back. `commit` merges it into the agent branch and deletes it. If both sides changed the same path, the repo's `conflicts` setting (read at its consensus branch; under `consensus: auto` an absent setting means facts: merge / state: consensus) settles what it can, with the agent branch as the consensus side, and the summary names each settled path and any version it DROPPED. Whatever the setting does not settle (every conflict, when the repo has no setting) makes the commit REFUSED: nothing changes, and you are told the conflicting paths plus THREE COMMITS for each: the fork point, the experiment's version, and the agent branch's version. Read the fact at all three with knomit_explain {file, commit}, decide per path, and retry `commit` with `resolutions`. `rollback` throws the work away. `sync` brings the agent branch's changes into the experiment and keeps you inside it: where both changed a fact, the agent branch's version wins — except for an experiment open across an upstream rewind, which sync rebuilds and where a conflict is REFUSED instead (settle it with `commit` and `resolutions`, or roll back). `list` shows this repo's experiments and marks the one you are in. Experiments are local: never pushed, never fetched, never visible to a peer. An experiment with no commits for the configured expiry is rolled back automatically.\n\nOURS AND THEIRS: `commit` merges the EXPERIMENT INTO the agent branch, so the experiment is the merge SOURCE. From where you are sitting — inside the experiment — \"ours\" is the experiment's version and \"theirs\" is the agent branch's. That is the OPPOSITE of git's own merge convention, where \"ours\" is the branch being merged into. If you are used to git, read these two words carefully.\n\nRESOLVING: when the merge is obvious — a fact you wrote this session, or two edits that plainly compose — resolve it yourself and commit. When the two versions disagree about a CLAIM rather than its wording, or the other version is someone else's work, show the human ours, theirs and your proposed merge, and commit with their picks. That choice is yours to make; there is no flag for it."),
+		mcpgo.WithDescription("Work on an isolated branch of this knowledge base. `open` forks exp/<name> from the agent branch and returns a `binding` HANDLE inside it: the handle you called with, moved into the experiment, or — on a URL-scoped endpoint called without one — a NEW handle. Pass that handle as `binding` on EVERY call that should read or write the experiment — learn, update, retract, query, review — and on commit, rollback and sync. Never rely on the connection default: on a URL-scoped endpoint a call without `binding` always works on the agent branch, and nothing moves it there. `commit` merges the experiment into the agent branch and deletes it. If both sides changed the same path, the repo's `conflicts` setting (read at its consensus branch; under `consensus: auto` an absent setting means facts: merge / state: consensus) settles what it can, with the agent branch as the consensus side, and the summary names each settled path and any version it DROPPED. Whatever the setting does not settle (every conflict, when the repo has no setting) makes the commit REFUSED: nothing changes, and you are told the conflicting paths plus THREE COMMITS for each: the fork point, the experiment's version, and the agent branch's version. Read the fact at all three with knomit_explain {file, commit}, decide per path, and retry `commit` with `resolutions`. `rollback` throws the work away. `sync` brings the agent branch's changes into the experiment and keeps you inside it: where both changed a fact, the agent branch's version wins — except for an experiment open across an upstream rewind, which sync rebuilds and where a conflict is REFUSED instead (settle it with `commit` and `resolutions`, or roll back). `commit`, `rollback` and `sync` act on `name`, or else on the experiment the passed handle is in; with neither they are refused. `list` shows this repo's experiments and marks the one the passed handle is in. Experiments are local: never pushed, never fetched, never visible to a peer. An experiment with no commits for the configured expiry is rolled back automatically.\n\nOURS AND THEIRS: `commit` merges the EXPERIMENT INTO the agent branch, so the experiment is the merge SOURCE. From where you are sitting — inside the experiment — \"ours\" is the experiment's version and \"theirs\" is the agent branch's. That is the OPPOSITE of git's own merge convention, where \"ours\" is the branch being merged into. If you are used to git, read these two words carefully.\n\nRESOLVING: when the merge is obvious — a fact you wrote this session, or two edits that plainly compose — resolve it yourself and commit. When the two versions disagree about a CLAIM rather than its wording, or the other version is someone else's work, show the human ours, theirs and your proposed merge, and commit with their picks. That choice is yours to make; there is no flag for it."),
 		mcpgo.WithString("action", mcpgo.Required(),
 			mcpgo.Enum("list", "open", "commit", "rollback", "sync"),
 			mcpgo.Description("One of: list, open, commit, rollback, sync.")),
 		mcpgo.WithString("name",
-			mcpgo.Description("The experiment name: kebab-case, unique in this repo (e.g. \"widen-the-gate\"). Required for open; for commit/rollback/sync it defaults to the experiment you are currently in.")),
+			mcpgo.Description("The experiment name: kebab-case, unique in this repo (e.g. \"widen-the-gate\"). Required for open; for commit/rollback/sync it defaults to the experiment the passed `binding` handle is in, and without a handle it is required.")),
 		mcpgo.WithObject("resolutions",
 			mcpgo.Description("Only for `commit`, and only after one was refused: how to settle each conflicting path, keyed by the fact path exactly as the refusal listed it. Each value is \"ours\" (keep THIS EXPERIMENT's version — it is the merge source, the opposite of git's \"ours\"), \"theirs\" (take the agent branch's version), or {\"body\": \"<full merged fact text>\"} to land content that is neither. Every path in the refusal needs an entry — one left out is refused again, and a path that did not conflict is an error rather than a no-op. With a `conflicts` setting on, your entries override it for the paths you name and the setting still settles the rest. The merge is still ONE merge: everything else merges exactly as it would have.")),
 		mcpgo.WithString("description",
@@ -70,8 +79,13 @@ type experimentResult struct {
 	Repo   string `json:"repo"`
 	RepoID string `json:"repo_id,omitempty"`
 	Branch string `json:"branch,omitempty"`
-	// Active is the experiment this session is in AFTER the call.
-	Active      string           `json:"active_experiment,omitempty"`
+	// Active is the experiment the caller's handle is in AFTER the call. On
+	// `open` it is the experiment the returned Binding is in.
+	Active string `json:"active_experiment,omitempty"`
+	// Binding is the handle `open` leaves inside the experiment: the one the
+	// caller passed, or the one it minted on a URL-scoped endpoint called
+	// without one. Every later call for the experiment must pass it.
+	Binding     string           `json:"binding,omitempty"`
 	Experiments []experimentView `json:"experiments,omitempty"`
 	// A refused commit is NOT a field here: it is a tool ERROR, because the
 	// action did not happen, and the conflicting paths are named in that
@@ -298,17 +312,18 @@ func experimentList(ctx context.Context, svc *store.Service, b *repos.Binding, a
 	}
 	summary := fmt.Sprintf("%d experiment(s) on %q", len(views), b.Write().Name())
 	if active != "" {
-		summary += fmt.Sprintf("; this session is inside %q", active)
+		summary += fmt.Sprintf("; %s is inside %q", callerNoun(ctx), active)
 	} else {
-		summary += fmt.Sprintf("; this session is on %q", b.WriteBranch())
+		summary += fmt.Sprintf("; %s is on %q", callerNoun(ctx), b.WriteBranch())
 	}
 	return experimentResult{
 		Branch: b.WriteBranch(), Active: active, Experiments: views, Summary: summary,
 	}, nil
 }
 
-// experimentOpen forks or resumes, and then moves the caller onto it when the
-// mount can be moved.
+// experimentOpen forks or resumes, and then puts a handle inside it: the
+// caller's own, or one minted for this endpoint when the caller passed none.
+// It never moves a connection's default binding.
 func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name, description, active string) (experimentResult, error) {
 	ri := b.Write()
 	if name == "" {
@@ -341,24 +356,21 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 
 	res := experimentResult{Branch: exp.Branch(), Active: exp.Name}
 
-	// WHERE THE CALLER IS NAMED decides how it gets moved. A handle names one
-	// logical caller on a shared connection; a URL-scoped mount names none, so
-	// there the session id plus the mount is the only pair available — and it
-	// is usable precisely because the URL has already fixed the repo, so the
-	// state can only choose a BRANCH within it. Migration 000008 carries that
-	// argument in full.
+	// A HANDLE is what goes into the experiment — never the connection. With
+	// one, it is the caller's own handle, exactly as on the unscoped endpoint.
+	// Without one (only possible on a URL-scoped endpoint, where `binding` is
+	// optional) a new handle is minted for this endpoint and returned: the
+	// connection's default binding is FIXED to the default branch and nothing
+	// moves it (#685), because every agent sharing the MCP session would move
+	// with it.
 	handle := bindingHandleFromContext(ctx)
 	if handle == "" {
-		sessionID, mountUID, plainMount := repos.MountSessionFromContext(ctx)
+		_, _, plainMount := repos.MountSessionFromContext(ctx)
 
-		// NOT a plain-branch mount: the URL names the experiment it serves.
-		// Refused rather than silently ignored, because a caller that believed
-		// it had switched would attribute its next write to the wrong one.
-		//
-		// Decided by the MARKER, never by the binding's current branch: a
-		// session already inside an experiment on a plain mount has a binding
-		// whose write branch is an experiment, and reading that would refuse
-		// the perfectly ordinary act of opening a second one.
+		// NOT a plain-branch mount: the URL names the branch it serves, and
+		// such an endpoint accepts no handle. Refused rather than silently
+		// ignored, because a caller that believed it had switched would
+		// attribute its next write to the wrong one.
 		if !plainMount {
 			// Named from the ROUTE, not from b.WriteBranch(): that is "" on a
 			// mount this instance cannot write, so a URL naming `main` would
@@ -374,42 +386,73 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 				return res, nil
 			}
 			return experimentResult{}, fmt.Errorf(
-				"experiment %q was created, but this endpoint is bound to branch %q by its URL and cannot be switched. "+
-					"Only a mount that names this repo's own agent branch follows a session into an experiment: "+
-					"connect to the mount for %q, or to the agent branch's mount",
+				"experiment %q was created, but this endpoint is bound to branch %q by its URL and accepts no handle. "+
+					"Connect to the mount for %q, or to the agent branch's mount and use the handle knomit_experiment open returns there",
 				exp.Name, urlBranch, exp.Branch())
 		}
-		if sessionID == "" {
-			// FAIL CLOSED. Keying on an empty session id would put every
-			// anonymous caller of this mount into one shared experiment.
-			return experimentResult{}, fmt.Errorf(
-				"experiment %q was created, but this connection sent no MCP session id, so there is nothing to attach it to. "+
-					"Reconnect with a session, or bind on the unscoped mount",
-				exp.Name)
+		minted, merr := mintEndpointHandle(ctx, mgr)
+		if merr != nil {
+			return experimentResult{}, fmt.Errorf("experiment %q was created, but %v", exp.Name, merr)
 		}
-		if err := setMountExperiment(ctx, mgr, sessionID, mountUID, exp.Name); err != nil {
+		handle = minted
+		if err := setHandleExperiment(ctx, mgr, handle, exp.Name); err != nil {
 			return experimentResult{}, err
 		}
+		res.Binding = handle
 		res.Summary = fmt.Sprintf(
-			"experiment %q is open on branch %q and THIS SESSION IS NOW INSIDE IT: every call on this connection now writes to %q, "+
-				"until you commit or roll back. No reconnect needed.",
-			exp.Name, exp.Branch(), exp.Branch())
+			"experiment %q is open on branch %q. Its handle is %q: pass it as `binding` on EVERY call that should read or write the experiment, "+
+				"and on commit, rollback and sync. Calls without `binding` stay on %q: this connection's default never moves.",
+			exp.Name, exp.Branch(), handle, b.WriteBranch())
 		return res, nil
 	}
 	if err := setHandleExperiment(ctx, mgr, handle, exp.Name); err != nil {
 		return experimentResult{}, err
 	}
+	res.Binding = handle
 	res.Summary = fmt.Sprintf(
-		"experiment %q is open on branch %q and THIS SESSION IS NOW INSIDE IT: every later call reads and writes there until you commit or roll back.",
+		"experiment %q is open on branch %q and THIS HANDLE IS NOW INSIDE IT: every later call that passes it as `binding` reads and writes there until you commit or roll back.",
 		exp.Name, exp.Branch())
 	return res, nil
+}
+
+// mintEndpointHandle mints a new handle on the URL-scoped endpoint this request
+// arrived on, at the endpoint's default branch — what knomit_bind with no
+// arguments mints there, through the same scopedBindTarget.
+func mintEndpointHandle(ctx context.Context, mgr *repos.Manager) (string, error) {
+	_, pin, mount, err := scopedBindTarget(ctx, mgr, "", "")
+	if err != nil {
+		return "", err
+	}
+	st := mgr.ClientSessions()
+	if st == nil {
+		return "", errors.New("the session store is unavailable, so no handle could be minted for it")
+	}
+	handle, err := clientsessions.NewBindingHandle()
+	if err != nil {
+		log.Error().Err(err).Msg("knomit_experiment: minting a handle failed")
+		return "", errors.New("no handle could be generated for it; ask the operator to check the server log")
+	}
+	if err := st.MintBindingHandleOnMount(ctx, handle, pin, mount, time.Now()); err != nil {
+		log.Warn().Err(err).Str("pin", pin).Msg("knomit_experiment: recording the minted handle failed")
+		return "", errors.New("no handle could be recorded for it; ask the operator to check the server log")
+	}
+	return handle, nil
+}
+
+// callerNoun names who a result's "where are you" sentence is about: the
+// handle the call passed, or — on a URL-scoped endpoint called without one —
+// the connection's default binding, which never moves.
+func callerNoun(ctx context.Context) string {
+	if bindingHandleFromContext(ctx) != "" {
+		return "this handle"
+	}
+	return "this connection's default binding"
 }
 
 // experimentCommit merges into the agent branch and leaves the experiment.
 func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name, active string, resolutions map[string]merge.Resolution) (experimentResult, error) {
 	if name == "" {
-		return experimentResult{}, errors.New(
-			"knomit_experiment commit needs a `name`, or a session that is inside an experiment")
+		return experimentResult{}, errors.New(errNoExperimentNamed("commit"))
 	}
 	result, err := svc.Merge().CommitExperiment(ctx, name, resolutions)
 	if err != nil {
@@ -464,25 +507,31 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 	}, nil
 }
 
+// errNoExperimentNamed refuses commit, rollback or sync that names no
+// experiment: no `name`, and no handle inside one. The connection default can
+// never be inside an experiment, so it cannot stand in for one.
+func errNoExperimentNamed(action string) string {
+	return fmt.Sprintf("knomit_experiment %s needs a `name`, or the `binding` handle knomit_experiment open returned. "+
+		"A call without a handle is on the default branch, which is never inside an experiment", action)
+}
+
 // callerAfter is where the caller is after a commit or rollback.
 type callerAfter struct {
 	branch, active, note string
 }
 
-// leaveIfCurrent takes the caller out of name — clearing its handle's or its
-// mount session's experiment — ONLY when name is the experiment the caller is
-// in. Committing or rolling back SOMEONE ELSE's experiment by name (a lead
+// leaveIfCurrent takes the caller out of name — clearing its handle's
+// experiment — ONLY when name is the experiment the caller is in. Committing or rolling back SOMEONE ELSE's experiment by name (a lead
 // agent landing a subagent's work) must leave the caller where it is; clearing
 // unconditionally silently dropped it out of its own experiment.
 func leaveIfCurrent(ctx context.Context, mgr *repos.Manager, b *repos.Binding, name, active string) callerAfter {
 	agent := b.Write().AgentBranch()
 	if name != active {
 		return callerAfter{branch: b.WriteBranch(), active: active,
-			note: fmt.Sprintf("this session stays on %q", b.WriteBranch())}
+			note: fmt.Sprintf("%s stays on %q", callerNoun(ctx), b.WriteBranch())}
 	}
 	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
-	clearMountExperiment(ctx, mgr)
-	return callerAfter{branch: agent, note: fmt.Sprintf("this session is back on %q", agent)}
+	return callerAfter{branch: agent, note: fmt.Sprintf("%s is back on %q", callerNoun(ctx), agent)}
 }
 
 // settledSummary says, per path, how a commit settled a conflict instead of
@@ -530,8 +579,7 @@ func settledSummary(settled []merge.SettledPath) string {
 // experimentRollback discards the experiment.
 func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name, active string) (experimentResult, error) {
 	if name == "" {
-		return experimentResult{}, errors.New(
-			"knomit_experiment rollback needs a `name`, or a session that is inside an experiment")
+		return experimentResult{}, errors.New(errNoExperimentNamed("rollback"))
 	}
 	if err := svc.Merge().RollbackExperiment(ctx, name); err != nil {
 		return experimentResult{}, err
@@ -551,8 +599,7 @@ func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Serv
 // you stay in one.
 func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, name string) (experimentResult, error) {
 	if name == "" {
-		return experimentResult{}, errors.New(
-			"knomit_experiment sync needs a `name`, or a session that is inside an experiment")
+		return experimentResult{}, errors.New(errNoExperimentNamed("sync"))
 	}
 	result, err := svc.Merge().SyncExperiment(ctx, name)
 	if err != nil {
@@ -590,45 +637,6 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 	}, nil
 }
 
-// setMountExperiment moves a URL-scoped session into an experiment. The mount
-// twin of setHandleExperiment, and it fails the same way: the experiment
-// exists either way, so a failure here must be REPORTED rather than swallowed —
-// a caller told it is inside would write its next fact to the branch the URL
-// names.
-func setMountExperiment(ctx context.Context, mgr *repos.Manager, sessionID, mountUID, name string) error {
-	if mgr == nil {
-		return errStoreUnavailable
-	}
-	st := mgr.ClientSessions()
-	if st == nil {
-		return errors.New("session store unavailable — the experiment exists, but this session could not be moved into it")
-	}
-	if err := st.SetMountExperiment(ctx, sessionID, mountUID, name, time.Now()); err != nil {
-		log.Warn().Err(err).Str("experiment", name).
-			Msg("knomit_experiment: recording the mount's experiment failed")
-		return errors.New("the experiment exists, but this session could not be moved into it; ask the operator to check the server log")
-	}
-	return nil
-}
-
-// clearMountExperiment puts a URL-scoped session back on the branch its URL
-// names. Best effort, like clearHandleExperiment: by the time it runs the
-// experiment is already gone from the store, so a failed clear self-corrects at
-// the next resolution, which finds nothing to apply.
-func clearMountExperiment(ctx context.Context, mgr *repos.Manager) {
-	sessionID, mountUID, ok := repos.MountSessionFromContext(ctx)
-	if !ok || mgr == nil {
-		return
-	}
-	st := mgr.ClientSessions()
-	if st == nil {
-		return
-	}
-	if err := st.ClearMountExperiment(ctx, sessionID, mountUID); err != nil {
-		log.Warn().Err(err).Msg("knomit_experiment: clearing the mount's experiment failed; it heals at the next resolution")
-	}
-}
-
 // setHandleExperiment moves the caller's handle into an experiment.
 //
 // A failure here is REPORTED, not swallowed: the branch exists at this point,
@@ -640,12 +648,12 @@ func setHandleExperiment(ctx context.Context, mgr *repos.Manager, handle, name s
 	}
 	st := mgr.ClientSessions()
 	if st == nil {
-		return errors.New("session store unavailable — the experiment exists, but this session could not be moved into it")
+		return errors.New("session store unavailable — the experiment exists, but this handle could not be moved into it")
 	}
 	if err := st.SetHandleExperiment(ctx, handle, name, time.Now()); err != nil {
 		log.Warn().Err(err).Str("experiment", name).
 			Msg("knomit_experiment: recording the session's experiment failed")
-		return errors.New("the experiment exists, but this session could not be moved into it; ask the operator to check the server log")
+		return errors.New("the experiment exists, but this handle could not be moved into it; ask the operator to check the server log")
 	}
 	return nil
 }

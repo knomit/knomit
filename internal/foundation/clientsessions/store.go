@@ -416,14 +416,12 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 		`DELETE FROM handle_mounts WHERE handle NOT IN (SELECT handle FROM binding_handles)`); err != nil {
 		return n, fmt.Errorf("purge handle_mounts: %w", err)
 	}
-	// A mount's experiment dies with its SESSION, not with a handle: these
-	// rows are keyed on the session id, so they are collected against
-	// client_sessions and this runs after that delete. Without it a reused
-	// session id would inherit an experiment from a session that ended —
-	// which is a silent branch switch, the exact failure this whole feature
-	// is careful about everywhere else.
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM mount_experiments WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
+	// mount_experiments is NO LONGER READ OR WRITTEN (#685): a URL-scoped
+	// connection's default binding never moves, and an experiment is reached
+	// only through a handle. Rows a server from before that change left
+	// behind are dropped here, all of them: none can mean anything now. The
+	// table itself stays, because the control chain only ever adds.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM mount_experiments`); err != nil {
 		return n, fmt.Errorf("purge mount_experiments: %w", err)
 	}
 	// A session's verified peer describes that session and nothing else, so
