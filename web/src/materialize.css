@@ -1,0 +1,94 @@
+/* The materialize view: a top bar of controls over one continuous article.
+   The palette is the fact view's (FactBand's #101014 band, #1e222a hairlines,
+   #7f8b9c secondary text), so the swap between the two reads as one surface.
+
+   Every flex child that holds text has min-width:0 and the long strings wrap
+   anywhere: at a narrow pane the controls wrap onto further rows and the page
+   never scrolls sideways (the same shrink-starvation the top bar's tab strip
+   had to be defended against). */
+
+.k-mat { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #141414; }
+
+.k-mat-bar { flex-shrink: 0; min-width: 0; padding: 8px 28px 8px; background: #101014; border-bottom: 1px solid #1e222a; display: flex; flex-direction: column; gap: 6px; }
+.k-mat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
+.k-mat-title { flex: 1 1 200px; min-width: 0; font-family: var(--k-font-display); font-size: 13px; font-weight: 600; color: #e8eef6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-mat-badge { font-family: var(--k-font-mono); font-size: 10px; letter-spacing: 0.08em; color: #8af; background: rgba(136,170,255,0.1); border: 1px solid rgba(136,170,255,0.3); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
+.k-mat-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
+.k-mat-ctl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11.5px; color: #9aa6b6; min-width: 0; max-width: 100%; }
+
+.k-mat-btn { max-width: 100%; display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid #2a3040; color: #b8c4d4; font: inherit; font-size: 11.5px; padding: 3px 9px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.k-mat-btn:hover { border-color: #3d4a66; color: #fff; }
+.k-mat-btn:focus-visible, .k-mat-step button:focus-visible, .k-mat-switch input:focus-visible + span, .k-mat-link:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
+.k-mat-btn.k-mat-primary { border-color: #34507f; color: #8ab4f8; background: rgba(74,122,181,0.08); }
+.k-mat-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.k-mat-step { display: inline-flex; align-items: center; border: 1px solid #2a3040; border-radius: 4px; overflow: hidden; }
+.k-mat-step button { background: none; border: none; color: #8a96a8; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; line-height: 1; }
+.k-mat-step button:hover:not(:disabled) { color: #fff; background: #1a1e28; }
+.k-mat-step button:disabled { opacity: 0.35; cursor: not-allowed; }
+.k-mat-step input { width: 42px; text-align: center; background: none; border: none; color: #e8eef6; font-family: var(--k-font-mono); font-size: 12px; -moz-appearance: textfield; appearance: textfield; }
+.k-mat-step input::-webkit-outer-spin-button, .k-mat-step input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.k-mat-of { color: #4d5666; font-family: var(--k-font-mono); font-size: 10.5px; }
+
+.k-mat-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: #9aa6b6; cursor: pointer; white-space: nowrap; }
+.k-mat-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.k-mat-switch span { position: relative; width: 26px; height: 14px; border-radius: 7px; background: #2a3040; transition: background 0.12s; flex-shrink: 0; }
+.k-mat-switch span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #8a96a8; transition: transform 0.12s; }
+.k-mat-switch input:checked + span { background: #34507f; }
+.k-mat-switch input:checked + span::after { transform: translateX(12px); background: #cfe0ff; }
+
+.k-mat-meta2 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-family: var(--k-font-mono); font-size: 10.5px; color: #5d6676; min-width: 0; }
+.k-mat-progress { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: #8a96a8; min-width: 0; }
+.k-mat-bartrack { width: 120px; max-width: 100%; flex-shrink: 1; height: 3px; background: #1e222a; border-radius: 2px; overflow: hidden; }
+.k-mat-barfill { height: 100%; background: #4a7ab5; transition: width 0.2s; }
+.k-mat-status { font-family: inherit; font-size: 11.5px; color: #9aa6b6; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.k-mat-status.k-mat-bad { color: #f88; }
+
+.k-mat-scroll { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; }
+.k-mat-article { max-width: 780px; margin: 0 auto; padding: 26px 28px 56px; min-width: 0; transition: opacity 0.15s; }
+.k-mat-article[data-stale='true'] { opacity: 0.38; }
+
+.k-mat-notice { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: #c9b27a; background: rgba(229,162,60,0.08); border: 1px solid rgba(229,162,60,0.25); border-radius: 4px; padding: 6px 10px; margin-bottom: 18px; }
+.k-mat-notice button { margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; }
+
+.k-mat-group { font-family: var(--k-font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #5d6676; margin: 30px 0 4px; }
+.k-mat-sec { padding: 22px 0 22px; border-top: 1px solid #1e222a; min-width: 0; }
+.k-mat-sec:first-child, .k-mat-group + .k-mat-sec { border-top: none; padding-top: 4px; }
+.k-mat-h { font-family: var(--k-font-display); font-weight: 600; color: #f0f4fa; letter-spacing: -0.2px; line-height: 1.25; margin: 0 0 6px; overflow-wrap: anywhere; }
+h2.k-mat-h { font-size: 22px; }
+h3.k-mat-h { font-size: 18px; }
+h4.k-mat-h { font-size: 16px; }
+h5.k-mat-h { font-size: 14.5px; }
+h6.k-mat-h { font-size: 13.5px; }
+.k-mat-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; font-family: var(--k-font-mono); font-size: 10.5px; color: #5d6676; margin-bottom: 12px; min-width: 0; overflow-wrap: anywhere; }
+.k-mat-meta .k-mat-n { color: #7f8b9c; }
+.k-mat-repo { color: #c9a0f0; border: 1px solid rgba(201,160,240,0.35); border-radius: 3px; padding: 0 5px; }
+.k-mat-frozen { color: #c9a0f0; }
+.k-mat-body { color: #d6dde8; font-size: 14px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; }
+.k-mat-body pre { overflow-x: auto; max-width: 100%; }
+.k-mat-body table { display: block; overflow-x: auto; max-width: 100%; }
+.k-mat-rel { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 12px; font-size: 12px; min-width: 0; }
+.k-mat-rel > .k-mat-label { font-family: var(--k-font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #5d6676; }
+.k-mat-link { background: none; border: none; padding: 0; font: inherit; color: #8ab4f8; cursor: pointer; text-align: left; border-bottom: 1px dotted #34507f; overflow-wrap: anywhere; }
+.k-mat-link:hover { color: #b8d0ff; }
+.k-mat-link[aria-disabled='true'] { color: #7f8b9c; border-bottom-color: #3a4252; }
+.k-mat-changed { font-family: var(--k-font-mono); font-size: 10px; color: #e5a23c; border: 1px solid rgba(229,162,60,0.35); border-radius: 3px; padding: 0 5px; margin-left: 6px; white-space: nowrap; }
+.k-mat-src { color: #7f8b9c; font-size: 11.5px; overflow-wrap: anywhere; }
+
+.k-mat-tail { margin-top: 8px; min-width: 0; }
+.k-mat-skel { display: flex; flex-direction: column; gap: 10px; padding: 22px 0 8px; border-top: 1px solid #1e222a; }
+.k-mat-skel i { display: block; height: 11px; border-radius: 3px; background: linear-gradient(90deg, #1a1e26, #222834, #1a1e26); background-size: 200% 100%; animation: k-mat-shimmer 1.4s linear infinite; }
+@keyframes k-mat-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .k-mat-skel i { animation: none; } }
+.k-mat-reading { font-family: var(--k-font-mono); font-size: 10.5px; color: #5d6676; display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; }
+.k-mat-end { border-top: 1px solid #1e222a; padding-top: 16px; font-family: var(--k-font-mono); font-size: 11px; color: #5d6676; display: flex; flex-direction: column; gap: 6px; }
+.k-mat-end .k-mat-endline { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.k-mat-fail { border: 1px solid rgba(255,120,120,0.3); background: rgba(255,120,120,0.05); color: #f99; border-radius: 4px; padding: 8px 12px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; overflow-wrap: anywhere; }
+.k-mat-state { padding: 48px 0; color: #7f8b9c; font-size: 13px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+
+/* A narrow pane (the library column and rail keep their width, so at ~900px the
+   reading pane is a few hundred px, or less): tighter gutters. */
+@media (max-width: 1100px) {
+  .k-mat-bar { padding-left: 14px; padding-right: 14px; }
+  .k-mat-article { padding: 20px 14px 48px; }
+}

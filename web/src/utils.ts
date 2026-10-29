@@ -310,3 +310,15 @@ export function clampTitle(title: string, max: number = LIST_TITLE_MAX): string 
   if (last >= 0xd800 && last <= 0xdbff) end -= 1; // do not strand a high surrogate
   return title.slice(0, end) + '…';
 }
+
+/** True only for an absolute http: or https: URL. Anything else (javascript:,
+ *  data:, a relative string, junk) is not safe to render as a link href. */
+export function isHttpUrl(raw: string | undefined | null): raw is string {
+  if (!raw) return false;
+  try {
+    const p = new URL(raw).protocol;
+    return p === 'http:' || p === 'https:';
+  } catch {
+    return false;
+  }
+}
