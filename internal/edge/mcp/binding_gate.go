@@ -347,14 +347,14 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle, mount string
 		}
 		return ctx, errors.New(errHandleFromOtherEndpoint(ctx))
 	}
-	if mount != "" {
-		// Unreachable while knomit_bind mints scoped handles with the mount's
-		// own pin. Checked anyway: a handle naming another base here would be
-		// the 2026-09-17 incident on a scoped endpoint.
-		if pin != mount {
-			return ctx, errors.New(errHandleFromOtherEndpoint(ctx))
-		}
-	}
+	// No pin check follows, and none is needed: on a URL-scoped endpoint the
+	// handle's pin IS its mount. MintBindingHandleOnMount writes one value as
+	// both, nothing ever rewrites either, and both are uids (repo:<uid>,
+	// lens:<uid>), so a rename, a lens write-repo change or a server restart
+	// cannot pull them apart. A handle whose pin names another knowledge base
+	// than the endpoint it works on is unrepresentable rather than refused
+	// here. TestScopedHandle_PinIsItsMountOnEveryPath pins that for every path
+	// that creates or moves a scoped handle.
 	// The experiment this handle is working inside, if any. Read here rather
 	// than deeper because this is where the handle is known, and the handle
 	// is the key — the MCP session id is NOT, and must never become one

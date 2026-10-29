@@ -145,7 +145,9 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		if mount == "" {
 			err = store.MintBindingHandle(ctx, handle, pin, "", time.Now())
 		} else {
-			err = store.MintBindingHandleOnMount(ctx, handle, pin, mount, time.Now())
+			// scopedBindTarget has already refused pin != mount, and the
+			// store takes the mount alone: the mount IS the pin.
+			err = store.MintBindingHandleOnMount(ctx, handle, mount, time.Now())
 		}
 		if err != nil {
 			// Worth a log line: the likely cause is a control.db that never got
