@@ -37,6 +37,8 @@ type reader struct {
 	mounts   map[string]*mount // by id12; a nil value records "not available"
 	releases []func()
 	edges    map[edgeKey]map[string]string
+	metas    map[edgeKey]metaEntry
+	dates    map[edgeKey]string
 	stats    WalkStats
 }
 
@@ -56,7 +58,8 @@ type WalkStats struct {
 type edgeKey struct{ repo, rel, commit string }
 
 func newReader(b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool) *reader {
-	return &reader{b: b, mgr: mgr, mayRead: mayRead, mounts: map[string]*mount{}, edges: map[edgeKey]map[string]string{}}
+	return &reader{b: b, mgr: mgr, mayRead: mayRead, mounts: map[string]*mount{}, edges: map[edgeKey]map[string]string{},
+		metas: map[edgeKey]metaEntry{}, dates: map[edgeKey]string{}}
 }
 
 func (r *reader) close() {
@@ -66,11 +69,46 @@ func (r *reader) close() {
 	r.releases = nil
 }
 
-// forget drops the per-walk caches (edges), keeping the acquired mounts. A
-// book walks one unit after another through one reader; forgetting between
-// units keeps the build's memory to one unit's working set.
+// readerCacheMax bounds each version cache of a reader (edges, metadata,
+// dates). A version's edges, index row and date never change (a version is
+// immutable), so the caches only save repeated reads of facts several units
+// share; past the bound a cache is dropped and refilled, so a book build's
+// memory stays bounded whatever the corpus.
+const readerCacheMax = 20_000
+
+// forget drops the version caches once one passes readerCacheMax. A book
+// calls it between units: the mounts stay acquired, and facts shared by
+// several units are read once while the caches stay small.
 func (r *reader) forget() {
-	r.edges = map[edgeKey]map[string]string{}
+	if len(r.edges) > readerCacheMax {
+		r.edges = map[edgeKey]map[string]string{}
+	}
+	if len(r.metas) > readerCacheMax {
+		r.metas = map[edgeKey]metaEntry{}
+	}
+	if len(r.dates) > readerCacheMax {
+		r.dates = map[edgeKey]string{}
+	}
+}
+
+// metaEntry is one cached index row (hit false: the index cannot answer).
+type metaEntry struct {
+	meta index.VersionMeta
+	hit  bool
+}
+
+// versionMeta is VersionMetaAt, cached per (repo, path, commit).
+func (r *reader) versionMeta(ctx context.Context, m *mount, rel, commit string) (index.VersionMeta, bool, error) {
+	k := edgeKey{m.id12, rel, commit}
+	if e, ok := r.metas[k]; ok {
+		return e.meta, e.hit, nil
+	}
+	meta, hit, err := m.svc.FactQuery().VersionMetaAt(ctx, rel, commit)
+	if err != nil {
+		return index.VersionMeta{}, false, err
+	}
+	r.metas[k] = metaEntry{meta, hit}
+	return meta, hit, nil
 }
 
 // target routes a root-commit id to a repo and the branch to read it at.
@@ -145,7 +183,7 @@ func (r *reader) foreign(ctx context.Context, id12 string) (*mount, error) {
 // the content came from; blob is its blob hash, "" when only the fallback
 // could read it.
 func (r *reader) readAt(ctx context.Context, m *mount, rel, commit string) (f fact.Fact, used, blob string, ok bool, err error) {
-	meta, hit, err := m.svc.FactQuery().VersionMetaAt(ctx, rel, commit)
+	meta, hit, err := r.versionMeta(ctx, m, rel, commit)
 	if err != nil {
 		return fact.Fact{}, "", "", false, err
 	}
@@ -214,7 +252,7 @@ func (r *reader) bodiesDiffer(ctx context.Context, m *mount, rel, commitA, blobA
 // never written by then. commit is the change that introduced that version
 // (first-parent resolution, never wall-clock), not the anchor itself.
 func (r *reader) latest(ctx context.Context, m *mount, rel string) (f fact.Fact, commit, blob string, ok bool, err error) {
-	meta, hit, err := m.svc.FactQuery().VersionMetaAt(ctx, rel, m.anchor)
+	meta, hit, err := r.versionMeta(ctx, m, rel, m.anchor)
 	if err != nil {
 		return fact.Fact{}, "", "", false, err
 	}
@@ -271,11 +309,20 @@ func (r *reader) pins(ctx context.Context, m *mount, rel, commit string) (map[st
 // date is the yyyy-mm-dd commit date of the version of path at commit, or ""
 // when the index has no row for it.
 func (r *reader) date(ctx context.Context, m *mount, rel, commit string) string {
-	revs, err := m.svc.HistoryQuery().RevisionsBefore(ctx, m.branch, rel, commit, 1)
-	if err != nil || len(revs) == 0 || revs[0].CommittedAt == 0 {
-		return ""
+	k := edgeKey{m.id12, rel, commit}
+	if d, ok := r.dates[k]; ok {
+		return d
 	}
-	return time.Unix(revs[0].CommittedAt, 0).UTC().Format("2006-01-02")
+	d := ""
+	revs, err := m.svc.HistoryQuery().RevisionsBefore(ctx, m.branch, rel, commit, 1)
+	if err != nil {
+		return "" // not cached: a failed lookup is retried
+	}
+	if len(revs) > 0 && revs[0].CommittedAt != 0 {
+		d = time.Unix(revs[0].CommittedAt, 0).UTC().Format("2006-01-02")
+	}
+	r.dates[k] = d
+	return d
 }
 
 // ReadBodies fills each node's Body by reading it at its stored (repo,

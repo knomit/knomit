@@ -427,3 +427,15 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// BookCount reports how many book cursors and structure rows the session DB
+// holds (every owner's).
+func (ti *ToolIndex) BookCount(ctx context.Context) (books, rows int, err error) {
+	if err = ti.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_sessions`).Scan(&books); err != nil {
+		return 0, 0, fmt.Errorf("BookCount: %w", err)
+	}
+	if err = ti.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_rows`).Scan(&rows); err != nil {
+		return 0, 0, fmt.Errorf("BookCount: %w", err)
+	}
+	return books, rows, nil
+}

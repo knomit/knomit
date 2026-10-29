@@ -86,6 +86,10 @@ var (
 // buildSlots is the server-wide cap on concurrent book builds.
 var buildSlots = make(chan struct{}, MaxConcurrentBookBuilds)
 
+// maxBookRows is MaxBookRows; a test lowers it to drive the cap, or raises
+// it to measure a book past it.
+var maxBookRows = MaxBookRows
+
 // ReserveBookBuildsForTest takes n build slots and returns their release,
 // so a test can drive the cap without timing. Never called in production.
 func ReserveBookBuildsForTest(n int) func() {
@@ -297,9 +301,9 @@ func buildBook(ctx context.Context, sc CursorScope, req BookRequest) (string, Bo
 		if err != nil {
 			return "", env, stats, err
 		}
-		if seq+len(uw.doc.Nodes) > MaxBookRows {
+		if seq+len(uw.doc.Nodes) > maxBookRows {
 			return "", env, stats, fmt.Errorf("%w: it would hold more than %d sections (after %d of %d facts); lower Facts, Depth or References",
-				ErrBookTooLarge, MaxBookRows, u, len(results))
+				ErrBookTooLarge, maxBookRows, u, len(results))
 		}
 		rows, err := unitRows(uw, unit, seq)
 		if err != nil {
