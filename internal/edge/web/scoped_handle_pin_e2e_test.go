@@ -193,24 +193,26 @@ func TestScopedHandle_PinIsItsMountOnEveryPath(t *testing.T) {
 	require.True(t, branchHolding(t, m, "jobB-repo", "agent/test", "after rename via handle"))
 	sweep("lens rename")
 
-	// SERVER RESTART: the control DB is closed and reopened by a new store and a
-	// new router; every MCP session is new. The persisted handles route as
-	// before, and the reopened store holds no handle off its mount.
+	// CONTROL-DB REOPEN, the half of a restart that holds routing state: the
+	// control DB is closed and reopened by a new store and a new router, and
+	// every MCP session is new. The repo manager is NOT restarted. The persisted
+	// handles route as before, and the reopened store holds no handle off its
+	// mount.
 	require.NoError(t, db.Close())
 	st, db = openControlStore(t, controlPath)
 	h = serverOn(m, st)
-	sweep("after restart")
+	sweep("after control-DB reopen")
 	sidR, sidL = initAt(t, h, repoM), initAt(t, h, lensM)
-	learnVia(t, h, repoM, sidR, hR, "after restart via repo handle")
-	learnVia(t, h, lensM, sidL, hL, "after restart via lens handle")
-	require.True(t, branchHolding(t, m, "jobA-repo", "agent/test", "after restart via repo handle"))
-	require.True(t, branchHolding(t, m, "jobB-repo", "agent/test", "after restart via lens handle"))
-	requirePinIs(t, st, hR, repoPin, "repo handle after restart")
-	requirePinIs(t, st, hL, lensPin, "lens handle after restart")
+	learnVia(t, h, repoM, sidR, hR, "after control-DB reopen via repo handle")
+	learnVia(t, h, lensM, sidL, hL, "after control-DB reopen via lens handle")
+	require.True(t, branchHolding(t, m, "jobA-repo", "agent/test", "after control-DB reopen via repo handle"))
+	require.True(t, branchHolding(t, m, "jobB-repo", "agent/test", "after control-DB reopen via lens handle"))
+	requirePinIs(t, st, hR, repoPin, "repo handle after control-DB reopen")
+	requirePinIs(t, st, hL, lensPin, "lens handle after control-DB reopen")
 	hAfter := bindAt(t, h, repoM, sidR, `{}`)
 	scoped++
-	requirePinIs(t, st, hAfter, repoPin, "bind after restart")
-	sweep("bind after restart")
+	requirePinIs(t, st, hAfter, repoPin, "bind after control-DB reopen")
+	sweep("bind after control-DB reopen")
 
 	// The lens is deleted and recreated under the same name: same URL, new uid.
 	// The old handle's pin AND mount both name the old uid, so it is refused by
