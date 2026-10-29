@@ -214,9 +214,16 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     if (!focus) return;
     const root = document.documentElement;
     root.dataset.matFocus = '1';
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFocus(false); };
-    window.addEventListener('keydown', onKey);
-    return () => { delete root.dataset.matFocus; window.removeEventListener('keydown', onKey); };
+    // Esc ends focus and NOTHING ELSE: the shell's own Escape (clear the filters,
+    // which closes the open fact) must not also run, so this listens first, in
+    // the capture phase, and keeps the key to itself.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopImmediatePropagation();
+      setFocus(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => { delete root.dataset.matFocus; window.removeEventListener('keydown', onKey, true); };
   }, [focus]);
 
   // The section at the top of the reading pane, by anchor and ordinal.

@@ -612,6 +612,24 @@ describe('focus mode', () => {
     expect(screen.getByTestId('mat-focus')).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('Esc in focus is kept from the shell\'s own Escape handler (which would clear the filters and close the fact)', async () => {
+    const shellEsc = vi.fn();
+    const shell = (e: KeyboardEvent) => { if (e.key === 'Escape') shellEsc(); };
+    window.addEventListener('keydown', shell); // registered BEFORE the view's, as the app's is
+    try {
+      setup({ total: 3, pageSize: 3 });
+      await waitFor(() => expect(ns()).toHaveLength(3));
+      fireEvent.click(screen.getByTestId('mat-focus'));
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(on()).toBe(false);
+      expect(shellEsc).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, { key: 'Escape' }); // focus is off: the shell has it again
+      expect(shellEsc).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', shell);
+    }
+  });
+
   it('Back leaves focus, and so does leaving the view', async () => {
     const onBack = vi.fn();
     const f = makeFixtureApi({ total: 3, pageSize: 3 });
