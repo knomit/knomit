@@ -83,7 +83,14 @@ func TestBook_RESTIsTheMCPBookPage(t *testing.T) {
 	require.Contains(t, restPages[0], `"search_line":"path kb/u/ · type observation · sorted by relevance"`)
 	require.Contains(t, strings.Join(restPages, ""), `"latest_other_kb"`, "cross-KB is followed in a unit")
 
+	// The defaults (no limit, no depth, every result) are the same too.
+	md := mcpCall(`{"search":{"path":"kb/u/"}}`)
+	rd := restCall(alphaBook + "?path=kb/u/")
+	require.Equal(t, strings.ReplaceAll(md, pageCursor(t, md), "CURSOR"), strings.ReplaceAll(rd, pageCursor(t, rd), "CURSOR"))
+
 	// A seek page is the same on both surfaces too.
+	mcpFirst = mcpCall(`{"search":{"path":"kb/u/","type":["observation"]},"cross_kb":true,"depth":2,"limit":2}`)
+	restFirst = restCall(alphaBook + "?path=kb/u/&type=observation&cross_kb=true&depth=2&limit=2")
 	mc := pageCursor(t, mcpFirst)
 	rc := pageCursor(t, restFirst)
 	ms := strings.ReplaceAll(mcpCall(`{"cursor":"`+mc+`","unit":3}`), mc, "CURSOR")
