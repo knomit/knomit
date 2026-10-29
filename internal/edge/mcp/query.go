@@ -412,7 +412,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 	// through the shared resume path, so body hydration + paging match relevance
 	// mode. Each row's WIRE path (bare for the write mount, kb://-qualified for a
 	// foreign mount — RFC §6.2 uniformity) carries the mount identity on resume.
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b), callerOwner(ctx))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -747,7 +747,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 
 	// Snapshot the remainder ([pageSize:]) into the write repo's session DB; the
 	// first page is rendered directly (full bodies available, no re-fetch).
-	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
+	sess, err := sWrite.toolSession.CreateToolSession(ctx, "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b), callerOwner(ctx))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
@@ -848,6 +848,12 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 	// colliding on a shared prefix. Reject an empty sess.Binding outright,
 	// before the equality check gets the chance to agree with itself.
 	if sess.Binding == "" || sess.Binding != b.PinID() {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
+	}
+	// A cursor also belongs to the endpoint and principal that minted it
+	// (callerOwner): the same binding reached through another endpoint, or by
+	// another principal, reads it as expired too.
+	if sess.Owner != callerOwner(ctx) {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new query"), nil
 	}
 	// A cursor is a frozen view of the binding's READ SET at mint time — and the

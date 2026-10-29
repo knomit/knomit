@@ -26,8 +26,9 @@ type ToolIndex struct {
 // prefix, binding, and read-set fingerprint. The binding pins the cursor to one
 // binding's identity and readSet pins its read set (each mount at its branch);
 // resume through another binding, or against a re-pinned read set, is rejected
-// (lenses RFC §7.3).
-func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet string) (*model.ToolSession, error) {
+// (lenses RFC §7.3). owner is who may resume it (the MCP endpoint plus the
+// caller's principal); the resuming handler compares it.
+func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPrefix, binding, readSet, owner string) (*model.ToolSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	s := &model.ToolSession{
@@ -37,6 +38,7 @@ func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 		PathPrefix: pathPrefix,
 		Binding:    binding,
 		ReadSet:    readSet,
+		Owner:      owner,
 		LastCommit: "",
 		Status:     "active",
 		CreatedAt:  now,
@@ -44,8 +46,8 @@ func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 	}
 
 	_, err := ti.db.ExecContext(ctx,
-		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, binding, read_set, last_commit, status, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.PathPrefix, s.Binding, s.ReadSet, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt, now,
+		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, binding, read_set, owner, last_commit, status, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.PathPrefix, s.Binding, s.ReadSet, s.Owner, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("CreateToolSession: %w", err)
@@ -57,8 +59,8 @@ func (ti *ToolIndex) CreateToolSession(ctx context.Context, tool, branch, pathPr
 func (ti *ToolIndex) GetToolSession(ctx context.Context, id string) (*model.ToolSession, error) {
 	var s model.ToolSession
 	err := ti.db.QueryRowContext(ctx,
-		`SELECT id, tool, branch, path_prefix, binding, read_set, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.Binding, &s.ReadSet, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, path_prefix, binding, read_set, owner, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.Binding, &s.ReadSet, &s.Owner, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

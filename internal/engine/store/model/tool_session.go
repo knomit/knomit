@@ -8,6 +8,9 @@ type ToolSession struct {
 	PathPrefix string
 	Binding    string
 	ReadSet    string
+	// Owner is the endpoint + principal that minted the session; only the
+	// same owner may resume it.
+	Owner      string
 	LastCommit string
 	Status     string // "active", "completed", "abandoned"
 	CreatedAt  string

@@ -292,7 +292,7 @@ func TestGate_NonObjectArgumentsKeepTheirOwnError(t *testing.T) {
 // what went wrong.
 func TestGate_ReposIsOptionalAndReportsRatherThanRaises(t *testing.T) {
 	m, _, _ := bindFixture(t)
-	ctx := repos.WithSessionScoped(context.Background())
+	ctx := localReach(repos.WithSessionScoped(context.Background()))
 	gated := gateBinding(m, reposTool(), gateOptional, ReposHandler(m))
 
 	// No handle: the catalogue, no `bound`.
@@ -366,7 +366,7 @@ func TestGate_ReposAnswersOnURLScopedEndpoint(t *testing.T) {
 
 	var req mcpgo.CallToolRequest
 	req.Params.Arguments = map[string]any{"binding": "anything"}
-	res, err := gateBinding(m, reposTool(), gateOptional, ReposHandler(m))(scopedCtx(t, m, "alpha"), req)
+	res, err := gateBinding(m, reposTool(), gateOptional, ReposHandler(m))(localReach(scopedCtx(t, m, "alpha")), req)
 	require.NoError(t, err)
 	require.False(t, res.IsError, resultText(t, res))
 

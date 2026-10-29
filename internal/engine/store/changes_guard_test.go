@@ -64,6 +64,9 @@ var changesAllowedCalls = map[string][]string{
 		// the undeclared-argument refusal (#122): compares the call's keys
 		// with the tool's own schema, no store and no clock.
 		"rejectUnknownArguments", "changesTool",
+		// the lens branch rule: in-memory binding and instance fields plus a
+		// branch-name shape test, no store read.
+		"b.FromLens", "b.Name", "?.AgentBranch", "model.IsExperimentBranch", "lensServesBranch", "lensBranchRefusal",
 	},
 	"internal/edge/web/api/kb/handlers_changes.go": {
 		"repos.RepoFromContext", "httpx.BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",

@@ -83,6 +83,41 @@ func RepoReachFromContext(ctx context.Context) (func(repo string) bool, bool) {
 // AllRepos is the reach of a caller no credential confines: every repo.
 func AllRepos(string) bool { return true }
 
+type lensReachKey struct{}
+
+// WithLensReach records which lenses the caller on this request can reach by
+// their own routes; reach answers for a lens NAME. It is the repo reach's
+// sibling, recorded at the same edges:
+//   - the OAuth listener (BearerMiddleware): a token for one lens's endpoint
+//     reaches that lens, a token for the unscoped MCP endpoint or for the
+//     whole API reaches every lens, a token for one repo reaches none;
+//   - the local edges (AuthMiddleware): AllLenses.
+//
+// A lens reach does NOT widen the repo reach: a token confined to lens L
+// still reaches no repo by name (ReachesRepo), and L's members are readable
+// through L's binding, not through this. What reaching L buys is seeing L —
+// and L's own members — where the server lists what a caller may address
+// (knomit_repos).
+func WithLensReach(ctx context.Context, reach func(lens string) bool) context.Context {
+	return context.WithValue(ctx, lensReachKey{}, reach)
+}
+
+// ReachesLens reports whether the caller's credential reaches the named
+// lens's routes. DEFAULT DENY, exactly like ReachesRepo.
+func ReachesLens(ctx context.Context, lens string) bool {
+	reach, ok := LensReachFromContext(ctx)
+	return ok && reach(lens)
+}
+
+// LensReachFromContext returns the reach WithLensReach recorded, or false.
+func LensReachFromContext(ctx context.Context) (func(lens string) bool, bool) {
+	reach, ok := ctx.Value(lensReachKey{}).(func(string) bool)
+	return reach, ok && reach != nil
+}
+
+// AllLenses is the lens reach of a caller no credential confines.
+func AllLenses(string) bool { return true }
+
 // CeilingFromContext returns the ceiling WithCeiling recorded, or false.
 func CeilingFromContext(ctx context.Context) (Set, bool) {
 	s, ok := ctx.Value(ceilingKey{}).(Set)

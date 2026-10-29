@@ -65,7 +65,7 @@ func TestToolSession_BindingRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ti := svc.ti
 
-	created, err := ti.CreateToolSession(ctx, "query", "agent/x", "", "my-lens", "")
+	created, err := ti.CreateToolSession(ctx, "query", "agent/x", "", "my-lens", "", "")
 	require.NoError(t, err)
 	require.Equal(t, "my-lens", created.Binding, "created session must carry the binding")
 
@@ -84,7 +84,7 @@ func TestToolSession_ReadSetRoundTrip(t *testing.T) {
 	ti := svc.ti
 
 	const fp = "aaaaaaaaaaaa@agent/x,bbbbbbbbbbbb@main"
-	created, err := ti.CreateToolSession(ctx, "query", "agent/x", "", "my-lens", fp)
+	created, err := ti.CreateToolSession(ctx, "query", "agent/x", "", "my-lens", fp, "")
 	require.NoError(t, err)
 	require.Equal(t, fp, created.ReadSet, "created session must carry the read-set fingerprint")
 
@@ -102,9 +102,9 @@ func TestReapIdleSessions_RemovesIdleKeepsActive(t *testing.T) {
 	ctx := context.Background()
 	ti := svc.ti
 
-	idle, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
+	idle, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "", "")
 	require.NoError(t, err)
-	active, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
+	active, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "", "")
 	require.NoError(t, err)
 
 	// Give the idle session some queued rows so we can confirm cascade cleanup.
@@ -143,7 +143,7 @@ func TestReapIdleSessions_ZeroTTLSkips(t *testing.T) {
 	svc := openSessionTestStore(t)
 	ctx := context.Background()
 
-	sess, err := svc.ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
+	sess, err := svc.ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "", "")
 	require.NoError(t, err)
 	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
 	_, err = svc.sessionDB.ExecContext(ctx,
@@ -193,7 +193,7 @@ func TestDequeuePaths_PreservesSortOrderAndState(t *testing.T) {
 	ctx := context.Background()
 	ti := svc.ti
 
-	sess, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "")
+	sess, err := ti.CreateToolSession(ctx, "query", "agent/test", "", "test", "", "")
 	require.NoError(t, err)
 
 	// Backdate so we can detect the heartbeat bump on dequeue.

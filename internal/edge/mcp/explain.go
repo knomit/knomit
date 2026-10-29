@@ -649,7 +649,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		queueItems = append(queueItems, item)
 	}
 
-	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.PinID(), federate.ReadSetFingerprint(b))
+	session, err := sWrite.toolSession.CreateToolSession(ctx, "explain", b.WriteMountBranch(), rel, b.PinID(), federate.ReadSetFingerprint(b), callerOwner(ctx))
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
@@ -704,6 +704,10 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 	// able to MINT a session but never RESUME one, or two uid-less bindings
 	// would positively match instead of merely colliding on a shared prefix.
 	if session.Binding == "" || session.Binding != b.PinID() {
+		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
+	}
+	// And to the endpoint and principal that minted it (callerOwner).
+	if session.Owner != callerOwner(ctx) {
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 	// A cursor is a frozen view of the binding's READ SET at mint time — and the

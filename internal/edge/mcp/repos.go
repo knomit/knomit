@@ -11,6 +11,7 @@ import (
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/foundation/auth"
 )
 
 // reposTool defines knomit_repos: the ONE discovery tool.
@@ -27,7 +28,7 @@ import (
 // world rather than a mode the tool is in.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
-		mcpgo.WithDescription("List every repo and lens this server serves, and what a binding points at. The ONE tool that works without a binding handle — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Pass `binding` to have the result also describe what that handle names (or why it no longer resolves). On a --repo or --lens endpoint the result also has `endpoint`: the repo or lens this connection is fixed to. Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
+		mcpgo.WithDescription("List every repo and lens this server serves that your credential reaches (a token for one repo sees that repo; a token for one lens sees that lens and its members; local callers see all), and what a binding points at. The ONE tool that works without a binding handle — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Pass `binding` to have the result also describe what that handle names (or why it no longer resolves). On a --repo or --lens endpoint the result also has `endpoint`: the repo or lens this connection is fixed to. Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
 		bindingArg(false),
 	)
 }
@@ -208,12 +209,14 @@ func ReposHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolReques
 		// error. Omitting the key and naming the failure keeps both guarantees:
 		// the agent never reads "no lenses" from a broken lookup, and it still
 		// gets everything that did resolve.
+		lenses := listLenses(mgr)
 		resp := reposResponse{
-			Repos:    listRepos(mgr),
+			Repos:    reposInReach(ctx, listRepos(mgr), lenses),
 			Bound:    boundOf(ctx, mgr),
 			Endpoint: endpointOf(ctx),
 		}
-		if lenses := listLenses(mgr); lenses != nil {
+		if lenses != nil {
+			lenses = lensesInReach(ctx, lenses)
 			resp.Lenses = &lenses
 		} else {
 			resp.LensesError = "the lens registry is unavailable, so lenses could not be listed — retry shortly; the repos above are unaffected"
@@ -224,6 +227,48 @@ func ReposHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolReques
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
+}
+
+// reposInReach keeps the repo rows the caller may address (audit G1), live
+// and unavailable alike, so an unavailable repo's reason and detail do not
+// leak either. A row stays when the caller's credential reaches the repo by
+// name (auth.ReachesRepo), or when the repo is a member — write or read — of
+// a lens the credential reaches: the members ARE the lens, so a lens token
+// sees them although it reaches no repo by name. Local callers and the
+// unscoped endpoint's token reach everything, so for them nothing changes.
+//
+// lenses is the full, unfiltered lens list (nil when the registry failed: a
+// lens token then sees no member rows, never more).
+func reposInReach(ctx context.Context, rows []reposRepo, lenses []reposLens) []reposRepo {
+	members := map[string]bool{}
+	for _, l := range lenses {
+		if !auth.ReachesLens(ctx, l.Name) {
+			continue
+		}
+		members[l.Write] = true
+		for _, m := range l.Mounts {
+			members[m.Repo] = true
+		}
+	}
+	out := rows[:0:0]
+	for _, r := range rows {
+		if members[r.Name] || auth.ReachesRepo(ctx, r.Name) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// lensesInReach keeps the lens rows whose lens the caller's credential
+// reaches (auth.ReachesLens): a repo token sees none, a lens token its own.
+func lensesInReach(ctx context.Context, lenses []reposLens) []reposLens {
+	out := []reposLens{}
+	for _, l := range lenses {
+		if auth.ReachesLens(ctx, l.Name) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // boundFor builds the `bound` section for a live binding.

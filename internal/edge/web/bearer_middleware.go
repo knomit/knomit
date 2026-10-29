@@ -64,6 +64,7 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 			ctx := auth.WithPrincipal(r.Context(), principal)
 			ctx = auth.WithCeiling(ctx, ceiling)
 			ctx = auth.WithRepoReach(ctx, tokenRepoReach(audience))
+			ctx = auth.WithLensReach(ctx, tokenLensReach(audience))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -75,7 +76,9 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 //     reaches that repo;
 //   - a token for one repo's endpoint (/api/v1/repos/<name>/...) reaches that
 //     repo and no other;
-//   - a token for the UNSCOPED MCP endpoint (/api/v1/mcp) reaches every repo:
+//   - a token for the UNSCOPED MCP endpoint (/api/v1/mcp, or any path under
+//     it: httpx.IsUnscopedMCP, the set the router serves unscoped) reaches
+//     every repo:
 //     its client binds a repo or lens after the token is issued, and that
 //     endpoint may bind any of them (decisions/mcp/session-binding/
 //     scoped-endpoint-bind 3408dd94; the scoped endpoints are the confined
@@ -84,16 +87,34 @@ func BearerMiddleware(v *oauth.Verifier, issuer string) func(http.Handler) http.
 //     repo by name; a lens binding's own mounts are readable through the
 //     binding, not through this.
 func tokenRepoReach(audience string) func(repo string) bool {
-	under := func(p, prefix string) bool {
-		return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
-	}
-	if audience == httpx.APIBase+"/mcp" {
+	if httpx.IsUnscopedMCP(audience) {
 		return auth.AllRepos
 	}
 	return func(repo string) bool {
 		root := httpx.APIBase + "/repos/" + repo
-		return under(root, audience) || under(audience, root)
+		return pathUnderOrEqual(root, audience) || pathUnderOrEqual(audience, root)
 	}
+}
+
+// tokenLensReach is tokenRepoReach for lenses, by the same rule: a token whose
+// audience covers a lens's routes (/, /api/v1, /api/v1/lenses) or sits under
+// one lens's (/api/v1/lenses/<name>/...) reaches that lens; the unscoped MCP
+// endpoint's token reaches every lens (its client may bind any); a token for
+// one repo reaches no lens.
+func tokenLensReach(audience string) func(lens string) bool {
+	if httpx.IsUnscopedMCP(audience) {
+		return auth.AllLenses
+	}
+	return func(lens string) bool {
+		root := httpx.APIBase + "/lenses/" + lens
+		return pathUnderOrEqual(root, audience) || pathUnderOrEqual(audience, root)
+	}
+}
+
+// pathUnderOrEqual: p is prefix itself or extends it at a "/" boundary; ""
+// (the whole issuer) covers everything.
+func pathUnderOrEqual(p, prefix string) bool {
+	return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
 }
 
 // bearerToken accepts exactly one Authorization header of the form

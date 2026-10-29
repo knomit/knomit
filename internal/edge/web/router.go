@@ -211,8 +211,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// Unscoped MCP mount: the session picks its repo/lens through knomit_bind.
 	r.Group(func(r chi.Router) {
 		r.Use(SessionBindingMiddleware(s.Manager))
-		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
-		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+		// httpx.IsUnscopedMCP is the same set of paths, for the bearer
+		// edge's reach: keep both on these constants.
+		r.HandleFunc(httpx.UnscopedMCPPath, mcpDispatch.ServeHTTP)
+		r.HandleFunc(httpx.UnscopedMCPPattern, mcpDispatch.ServeHTTP)
 	})
 
 	// As on the repo subtree: the session's experiment applies to the lens

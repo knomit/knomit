@@ -145,7 +145,9 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		var result *step.PipelineResult
 
 		if current {
-			result, err = synthesize.NewHypothesizer(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}).
+			// The binding's write branch on every path: a session_id
+			// continues only on the branch its session was opened on.
+			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}, b.WriteBranch()).
 				Current(ctx, sessionID)
 		} else if sessionID == "" {
 			effort, scope, perr := parseEffortAndScope(req, ri)
@@ -157,15 +159,17 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			//
 			// The branch comes from the BINDING for the same reason review's
 			// does: inside an experiment the session belongs to the
-			// experiment. Only this path passes it — the continue path opens
-			// no session, and its branch comes off the session row.
+			// experiment. The continue and current paths pass it too, so a
+			// session_id continues only on the branch its session was opened
+			// on (Pipeline.activeSession); the work itself still takes its
+			// branch off the session row.
 			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, effort, scope, b.WriteBranch()).
 				StartSession(withActor(ctx, req))
 		} else {
 			// Effort and scope are deliberately NOT parsed on the continue path:
 			// an invalid effort must not be able to wedge a live session, and the
 			// scope that matters was persisted on the session row at start.
-			result, err = synthesize.NewHypothesizer(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}).
+			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}, b.WriteBranch()).
 				ContinueSessionForItem(ctx, sessionID, response, itemID)
 		}
 
