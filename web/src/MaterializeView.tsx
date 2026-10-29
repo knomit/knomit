@@ -7,6 +7,7 @@ import type { SaveOutcome } from './saveFile';
 import { MARK_LATEST_OTHER_KB, MAX_DEPTH, MAX_FACTS, materializeApi } from './materializeApi';
 import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './materializeApi';
 import { clampDepth, clampFacts, exportFilename, headingLevel, id8, optionChange } from './materializeOptions';
+import { isHttpUrl } from './utils';
 import { useMaterializeStream } from './useMaterializeStream';
 import './materialize.css';
 
@@ -126,7 +127,7 @@ const Section = memo(function Section({ node, group, onGoto }: {
             <span className="k-mat-label">Sources</span>
             {node.sources.map(s => (
               <span key={s.label + (s.url ?? '')} className="k-mat-src">
-                {s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.label}</a> : s.label}
+                {isHttpUrl(s.url) ? <a href={s.url} target="_blank" rel="noopener noreferrer">{s.label}</a> : s.label}
               </span>
             ))}
           </div>

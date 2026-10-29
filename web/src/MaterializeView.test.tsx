@@ -395,6 +395,32 @@ describe('Export .md', () => {
   });
 });
 
+describe('source links', () => {
+  function pageWith(url: string | undefined): MaterializeApi {
+    return {
+      page: async () => ({ root: 'r', anchor: 'abc1234', order: 'reading', unpinned: false, cross_kb: false, depth: 4, max_nodes: 200, total: 1,
+        truncated: { depth: 0, nodes: 0 }, n_from: 1, n_to: 1, cursor: null, has_more: false,
+        facts: [{ n: 1, path: 'kb/x/1.md', repo: 'r', commit: 'c', depth: 0, role: 'root', title: 'T', type: 'observation', kind: 'epistemic',
+          confidence: 0.9, body: 'b', anchor_id: 'f-1', sources: [{ label: 'the source', url }] }],
+      }),
+      exportMarkdown: vi.fn(),
+    };
+  }
+  it.each([['javascript:alert(1)'], ['data:text/html,<script>1</script>']])('renders %s as plain text, not a link', async url => {
+    render(<Harness api={pageWith(url)} />);
+    await waitFor(() => expect(ns()).toEqual([1]));
+    expect(screen.getByText('the source')).toBeInTheDocument();
+    expect(screen.getByTestId('mat-section').querySelector('a')).toBeNull();
+  });
+  it('renders an https url as a link with that href, opened safely', async () => {
+    render(<Harness api={pageWith('https://example.com/a?b=1')} />);
+    await waitFor(() => expect(ns()).toEqual([1]));
+    const a = screen.getByText('the source').closest('a')!;
+    expect(a).toHaveAttribute('href', 'https://example.com/a?b=1');
+    expect(a).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+});
+
 describe('top bar', () => {
   it('shows the controls, the limits and progress, and Back calls back', async () => {
     const onBack = vi.fn();
