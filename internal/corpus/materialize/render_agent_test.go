@@ -20,9 +20,11 @@ func TestShiftHeadings(t *testing.T) {
 // The export name is <slug, at most 48 characters, cut at a word>-<id8>.md.
 //
 // Sabotage: cut the slug at 48 bytes without looking for a "-", and the
-// first case ends "-unpin-s".
+// "defaults" case keeps half a word ("...-by-default").
 func TestExportFileName(t *testing.T) {
 	for _, c := range []struct{ title, root, want string }{
+		{"materialize rulings 2026 10 28 pinned by defaults unpin", "kb/a/0123abcd.md",
+			"materialize-rulings-2026-10-28-pinned-by-0123abcd.md"},
 		{"materialize rulings (2026-10-28): pinned by default, unpin silently drops gone targets",
 			"kb/decisions/materialize/rulings/16ccefe6.md", "materialize-rulings-2026-10-28-pinned-by-default-16ccefe6.md"},
 		{"Short Title!", "kb/a/0123abcd.md", "short-title-0123abcd.md"},
