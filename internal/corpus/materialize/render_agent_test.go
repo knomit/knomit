@@ -20,7 +20,8 @@ func TestShiftHeadings(t *testing.T) {
 // The export name is <slug, at most 48 characters, cut at a word>-<id8>.md.
 //
 // Sabotage: cut the slug at 48 bytes without looking for a "-", and the
-// "defaults" case keeps half a word ("...-by-default").
+// "defaults" case keeps half a word ("...-by-default"); use the raw file id
+// (shortID) for the id part, and the quote and multibyte cases break.
 func TestExportFileName(t *testing.T) {
 	for _, c := range []struct{ title, root, want string }{
 		{"materialize rulings 2026 10 28 pinned by defaults unpin", "kb/a/0123abcd.md",
@@ -34,6 +35,13 @@ func TestExportFileName(t *testing.T) {
 			"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv-0123abcd.md"},
 		{"exactly forty eight characters long title abcdef zz", "kb/a/0123abcd.md",
 			"exactly-forty-eight-characters-long-title-abcdef-0123abcd.md"},
+		// The id goes through the same rule: a hand-authored file name with
+		// a quote cannot break the quoted filename, and the 8-character cut
+		// never splits a multibyte character (it is made on the ASCII slug).
+		{"Quoted", `kb/a/ab"cd.md`, "quoted-ab-cd.md"},
+		{"Multi", "kb/a/abc日本defgh.md", "multi-abc-defg.md"},
+		{"Multi", "kb/a/日本語.md", "multi.md"},
+		{"日本", "kb/a/日本語.md", "materialize.md"},
 	} {
 		if got := ExportFileName(&Document{RootTitle: c.title, Root: c.root}); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.title, got, c.want)

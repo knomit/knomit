@@ -278,18 +278,55 @@ func sourceCodeLabel(c fact.Ref) string {
 // exportSlugMax is the longest the title part of ExportFileName may be.
 const exportSlugMax = 48
 
+// exportFallbackName is the export's name when neither the title nor the
+// file id leaves anything after exportSlug.
+const exportFallbackName = "materialize"
+
 // ExportFileName is the file name the agent document is saved under:
-// `<slug of the root title, at most 48 characters>-<root id8>.md`. The slug
-// is the title lowercased, every run of characters other than a-z and 0-9
-// made one "-", trimmed of "-"; it is cut at the last "-" within 48
-// characters (a word boundary), or at 48 when the first word alone is
-// longer. A title with no a-z or 0-9 gives `<id8>.md`. The options are in
-// the document's header, never in the name. The name is ASCII only, so it
-// needs no quoting rules beyond the double quotes of Content-Disposition.
+// `<slug of the root title, at most 48 characters>-<id>.md`. Both parts go
+// through exportSlug: lowercased, every run of characters other than a-z and
+// 0-9 made one "-", trimmed of "-". The title slug is cut at the last "-"
+// within 48 characters (a word boundary), or at 48 when the first word alone
+// is longer. The id is the root's file name without .md, slugged the same
+// way, then cut to 8 characters: fact files are named by an 8-hex id, but a
+// hand-authored name can hold anything, a quote or a multibyte character
+// included, and the cut is made only after the slug made it ASCII. A part
+// that slugs to nothing is left out with its "-"; when both do, the name is
+// `materialize.md`. The options are in the document's header, never in the
+// name. Every character of the name is a-z, 0-9, "-" or ".", so it needs no
+// quoting rules beyond the double quotes of Content-Disposition.
 func ExportFileName(d *Document) string {
+	slug := exportSlug(d.RootTitle)
+	if len(slug) > exportSlugMax {
+		cut := slug[:exportSlugMax+1]
+		if i := strings.LastIndexByte(cut, '-'); i > 0 {
+			slug = slug[:i]
+		} else {
+			slug = slug[:exportSlugMax]
+		}
+	}
+	id := exportSlug(strings.TrimSuffix(path.Base(d.Root), ".md"))
+	if len(id) > shortIDLen {
+		id = strings.TrimRight(id[:shortIDLen], "-")
+	}
+	switch {
+	case slug != "" && id != "":
+		return slug + "-" + id + ".md"
+	case slug != "":
+		return slug + ".md"
+	case id != "":
+		return id + ".md"
+	default:
+		return exportFallbackName + ".md"
+	}
+}
+
+// exportSlug is s lowercased with every run of characters other than a-z
+// and 0-9 made one "-", and no leading or trailing "-". The result is ASCII.
+func exportSlug(s string) string {
 	var sb strings.Builder
 	dash := false
-	for _, r := range strings.ToLower(d.RootTitle) {
+	for _, r := range strings.ToLower(s) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			if dash && sb.Len() > 0 {
 				sb.WriteByte('-')
@@ -300,18 +337,5 @@ func ExportFileName(d *Document) string {
 		}
 		dash = true
 	}
-	slug := sb.String()
-	if len(slug) > exportSlugMax {
-		cut := slug[:exportSlugMax+1]
-		if i := strings.LastIndexByte(cut, '-'); i > 0 {
-			slug = slug[:i]
-		} else {
-			slug = slug[:exportSlugMax]
-		}
-	}
-	id := shortID(d.Root)
-	if slug == "" {
-		return id + ".md"
-	}
-	return slug + "-" + id + ".md"
+	return sb.String()
 }
