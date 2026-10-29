@@ -203,6 +203,9 @@ func TestScopedBind_ForeignHandlesAreRefused(t *testing.T) {
 	unscopedA := bindAt(t, h, unscopedMount, sidU, `{"repo":"jobA-repo"}`)
 	scopedA := bindAt(t, h, mountA, sidA, `{}`)
 	scopedL := bindAt(t, h, lensM, sidL, `{}`)
+	// The handle knomit_experiment open MINTS on a scoped endpoint is a handle
+	// of that endpoint like any other, and is refused everywhere else.
+	openedA := openNoHandle(t, h, mountA, sidA, "opened-on-a")
 
 	wantOther := func(kind, name string) string {
 		return fmt.Sprintf("this binding handle belongs to another endpoint — omit `binding` to use this endpoint's %s %s, "+
@@ -218,6 +221,9 @@ func TestScopedBind_ForeignHandlesAreRefused(t *testing.T) {
 		{"a scoped handle on the unscoped endpoint", unscopedMount, sidU, scopedA,
 			"this binding handle was minted on a URL-scoped endpoint (a --repo or --lens bridge) and works only there — call knomit_bind on this endpoint"},
 		{"a handle nobody minted", mountA, sidA, "Zm9yZ2VkLWhhbmRsZS0yNC1ieXRlcyEh", wantUnknownHandle},
+		{"an open-minted handle on another repo's mount", mountB, sidB, openedA, wantOther("repo", "jobB-repo")},
+		{"an open-minted handle on the unscoped endpoint", unscopedMount, sidU, openedA,
+			"this binding handle was minted on a URL-scoped endpoint (a --repo or --lens bridge) and works only there — call knomit_bind on this endpoint"},
 	} {
 		text, isErr := callToolAt(t, h, c.mount, c.sid, "knomit_learn", learnArgs(c.handle, "demo", "foreign "+c.why))
 		require.True(t, isErr, "%s: must be refused, got %s", c.why, text)
@@ -226,6 +232,7 @@ func TestScopedBind_ForeignHandlesAreRefused(t *testing.T) {
 	for _, br := range []string{"agent/test"} {
 		for _, repo := range []string{"jobA-repo", "jobB-repo"} {
 			require.False(t, branchHolding(t, m, repo, br, "foreign "), "a refused write landed on %s %s", repo, br)
+			require.False(t, branchHolding(t, m, repo, "exp/opened-on-a", "foreign "), "a refused write landed in the opened experiment")
 		}
 	}
 }
@@ -272,6 +279,7 @@ type reposView struct {
 	Endpoint *struct {
 		Kind string `json:"kind"`
 		Name string `json:"name"`
+		Bind string `json:"bind"`
 	} `json:"endpoint"`
 }
 
@@ -307,6 +315,8 @@ func TestScopedBind_ReposAnswers(t *testing.T) {
 	require.Equal(t, "exp/seen", v.Bound.Mounts[0].WriteBranch, "bound describes the HANDLE")
 	require.Equal(t, "seen", v.Bound.Mounts[0].Experiment)
 	require.Equal(t, "jobA-repo", v.Endpoint.Name)
+	require.True(t, strings.HasPrefix(v.Endpoint.Bind, "knomit_bind here mints a handle"),
+		"a handle-routed call on a steerable mount must still say a handle works here: %q", v.Endpoint.Bind)
 
 	v = reposAt(t, h, mount, sid, `{"binding":"never-minted"}`)
 	require.Equal(t, "unresolvable", v.Bound.Status, "a bad handle is reported, not raised")
