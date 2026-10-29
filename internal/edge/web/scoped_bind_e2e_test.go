@@ -144,17 +144,17 @@ func TestScopedBind_AddressedBranchTakesNoBind(t *testing.T) {
 
 // THE ISOLATION TEST. Two handles on ONE scoped connection — one session id,
 // the shape of subagents sharing a bridge. Opening an experiment through A
-// moves A alone: B's writes stay on B's branch, and so do the writes of a
-// caller on the same connection that passes no handle and is inside its OWN
-// session-keyed experiment. A committing must not pull that caller out.
+// moves A alone: B's writes stay on B's branch, and a caller on the same
+// connection that passes no handle stays on the agent branch even after it,
+// too, opened an experiment (its open returned a handle and left the default
+// alone, #685). A committing must not move either of them.
 func TestScopedBind_TwoHandlesOnOneConnectionAreIsolated(t *testing.T) {
 	h, m := experimentServer(t)
 	mount := repoMount(t, m, "jobA-repo")
 	sid := initAt(t, h, mount)
 
-	// The handle-less caller on this connection enters its own experiment.
-	_, text, isErr := callExperiment(t, h, mount, sid, `{"action":"open","name":"plain-exp"}`)
-	require.False(t, isErr, text)
+	// The handle-less caller opens; what it gets back is a handle.
+	plainExp := openNoHandle(t, h, mount, sid, "plain-exp")
 
 	a := bindAt(t, h, mount, sid, `{}`)
 	b := bindAt(t, h, mount, sid, `{}`)
@@ -163,24 +163,27 @@ func TestScopedBind_TwoHandlesOnOneConnectionAreIsolated(t *testing.T) {
 	envA, text, isErr := callExperiment(t, h, mount, sid, withBinding(a, `{"action":"open","name":"a-work"}`))
 	require.False(t, isErr, text)
 	require.Equal(t, "a-work", envA.Active)
+	require.Equal(t, a, envA.Binding, "open through a handle moves THAT handle")
 
 	learnVia(t, h, mount, sid, b, "B writes")
 	learnVia(t, h, mount, sid, a, "A writes")
 	learnVia(t, h, mount, sid, "", "plain writes")
+	learnVia(t, h, mount, sid, plainExp, "plain-exp writes")
 
 	require.True(t, branchHolding(t, m, "jobA-repo", "agent/test", "B writes"), "B's write must land on B's branch")
 	require.False(t, branchHolding(t, m, "jobA-repo", "exp/a-work", "B writes"), "B's write reached A's experiment")
 	require.True(t, branchHolding(t, m, "jobA-repo", "exp/a-work", "A writes"))
-	require.True(t, branchHolding(t, m, "jobA-repo", "exp/plain-exp", "plain writes"),
-		"a handle-less call keeps the connection's own experiment")
-	require.False(t, branchHolding(t, m, "jobA-repo", "exp/a-work", "plain writes"))
+	require.True(t, branchHolding(t, m, "jobA-repo", "agent/test", "plain writes"),
+		"a handle-less call is on the agent branch, whatever this connection opened")
+	require.False(t, branchHolding(t, m, "jobA-repo", "exp/plain-exp", "plain writes"))
+	require.True(t, branchHolding(t, m, "jobA-repo", "exp/plain-exp", "plain-exp writes"))
 
-	// A commits. The connection's own experiment must survive it.
+	// A commits. The returned handle's experiment must survive it.
 	_, text, isErr = callExperiment(t, h, mount, sid, withBinding(a, `{"action":"commit"}`))
 	require.False(t, isErr, text)
-	learnVia(t, h, mount, sid, "", "plain after A commits")
-	require.True(t, branchHolding(t, m, "jobA-repo", "exp/plain-exp", "plain after A commits"),
-		"A's commit cleared the connection's session-keyed experiment")
+	learnVia(t, h, mount, sid, plainExp, "plain-exp after A commits")
+	require.True(t, branchHolding(t, m, "jobA-repo", "exp/plain-exp", "plain-exp after A commits"),
+		"A's commit moved another handle on the connection")
 }
 
 // A handle works only on the endpoint that minted it.
@@ -200,6 +203,9 @@ func TestScopedBind_ForeignHandlesAreRefused(t *testing.T) {
 	unscopedA := bindAt(t, h, unscopedMount, sidU, `{"repo":"jobA-repo"}`)
 	scopedA := bindAt(t, h, mountA, sidA, `{}`)
 	scopedL := bindAt(t, h, lensM, sidL, `{}`)
+	// The handle knomit_experiment open MINTS on a scoped endpoint is a handle
+	// of that endpoint like any other, and is refused everywhere else.
+	openedA := openNoHandle(t, h, mountA, sidA, "opened-on-a")
 
 	wantOther := func(kind, name string) string {
 		return fmt.Sprintf("this binding handle belongs to another endpoint — omit `binding` to use this endpoint's %s %s, "+
@@ -215,6 +221,9 @@ func TestScopedBind_ForeignHandlesAreRefused(t *testing.T) {
 		{"a scoped handle on the unscoped endpoint", unscopedMount, sidU, scopedA,
 			"this binding handle was minted on a URL-scoped endpoint (a --repo or --lens bridge) and works only there — call knomit_bind on this endpoint"},
 		{"a handle nobody minted", mountA, sidA, "Zm9yZ2VkLWhhbmRsZS0yNC1ieXRlcyEh", wantUnknownHandle},
+		{"an open-minted handle on another repo's mount", mountB, sidB, openedA, wantOther("repo", "jobB-repo")},
+		{"an open-minted handle on the unscoped endpoint", unscopedMount, sidU, openedA,
+			"this binding handle was minted on a URL-scoped endpoint (a --repo or --lens bridge) and works only there — call knomit_bind on this endpoint"},
 	} {
 		text, isErr := callToolAt(t, h, c.mount, c.sid, "knomit_learn", learnArgs(c.handle, "demo", "foreign "+c.why))
 		require.True(t, isErr, "%s: must be refused, got %s", c.why, text)
@@ -223,6 +232,7 @@ func TestScopedBind_ForeignHandlesAreRefused(t *testing.T) {
 	for _, br := range []string{"agent/test"} {
 		for _, repo := range []string{"jobA-repo", "jobB-repo"} {
 			require.False(t, branchHolding(t, m, repo, br, "foreign "), "a refused write landed on %s %s", repo, br)
+			require.False(t, branchHolding(t, m, repo, "exp/opened-on-a", "foreign "), "a refused write landed in the opened experiment")
 		}
 	}
 }
@@ -269,6 +279,7 @@ type reposView struct {
 	Endpoint *struct {
 		Kind string `json:"kind"`
 		Name string `json:"name"`
+		Bind string `json:"bind"`
 	} `json:"endpoint"`
 }
 
@@ -304,6 +315,8 @@ func TestScopedBind_ReposAnswers(t *testing.T) {
 	require.Equal(t, "exp/seen", v.Bound.Mounts[0].WriteBranch, "bound describes the HANDLE")
 	require.Equal(t, "seen", v.Bound.Mounts[0].Experiment)
 	require.Equal(t, "jobA-repo", v.Endpoint.Name)
+	require.True(t, strings.HasPrefix(v.Endpoint.Bind, "knomit_bind here mints a handle"),
+		"a handle-routed call on a steerable mount must still say a handle works here: %q", v.Endpoint.Bind)
 
 	v = reposAt(t, h, mount, sid, `{"binding":"never-minted"}`)
 	require.Equal(t, "unresolvable", v.Bound.Status, "a bad handle is reported, not raised")
@@ -469,8 +482,8 @@ func TestScopedBind_SchemasAndInstructionsPerEndpoint(t *testing.T) {
 // S1: committing or rolling back SOMEONE ELSE's experiment by name leaves the
 // caller where it is. The lead agent landing a subagent's experiment must not
 // be dropped out of its own. Run for every kind of caller: a handle on the
-// unscoped endpoint, a handle on a scoped one, and a handle-less caller on a
-// scoped one (whose experiment is session-keyed).
+// unscoped endpoint, a handle on a scoped one, and a scoped caller that opened
+// WITHOUT a handle and then uses the one open returned (#685).
 func TestExperimentByName_OthersCommitLeavesTheCallerInPlace(t *testing.T) {
 	for _, c := range []struct {
 		name          string
@@ -500,8 +513,12 @@ func TestExperimentByName_OthersCommitLeavesTheCallerInPlace(t *testing.T) {
 			}
 			sub := bindAt(t, h, mount, sid, bindArgs)
 
-			_, text, isErr := callExperiment(t, h, mount, sid, asLead(`{"action":"open","name":"lead-exp"}`))
+			envOpen, text, isErr := callExperiment(t, h, mount, sid, asLead(`{"action":"open","name":"lead-exp"}`))
 			require.False(t, isErr, text)
+			if lead == "" {
+				require.NotEmpty(t, envOpen.Binding, "open without a handle returns one: %s", text)
+				lead = envOpen.Binding
+			}
 			_, text, isErr = callExperiment(t, h, mount, sid, withBinding(sub, `{"action":"open","name":"sub-work"}`))
 			require.False(t, isErr, text)
 
@@ -527,31 +544,6 @@ func TestExperimentByName_OthersCommitLeavesTheCallerInPlace(t *testing.T) {
 			require.Equal(t, "agent/test", env.Branch)
 		})
 	}
-}
-
-// S2: a handle-routed call must not see the CONNECTION's lapsed mark. When the
-// handle-less caller's session-keyed experiment is rolled back out of band,
-// knomit_repos without a handle reports it lapsed, and the same call through a
-// handle — which was never in that experiment — does not.
-func TestScopedBind_HandleDoesNotInheritTheConnectionsLapsedMark(t *testing.T) {
-	h, m := experimentServer(t)
-	mount := repoMount(t, m, "jobA-repo")
-	sid := initAt(t, h, mount)
-
-	_, text, isErr := callExperiment(t, h, mount, sid, `{"action":"open","name":"plain-exp"}`)
-	require.False(t, isErr, text)
-	handle := bindAt(t, h, mount, sid, `{}`)
-
-	ri := m.Get("jobA-repo")
-	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		require.NoError(t, svc.Merge().RollbackExperiment(context.Background(), "plain-exp"))
-	}))
-
-	plain := reposAt(t, h, mount, sid, `{}`)
-	require.Equal(t, "plain-exp", plain.Bound.LapsedExperiment, "the handle-less caller is told it was moved")
-	viaHandle := reposAt(t, h, mount, sid, withBinding(handle, `{}`))
-	require.Empty(t, viaHandle.Bound.LapsedExperiment,
-		"the handle was never in plain-exp; telling it so is a false 'you were moved'")
 }
 
 // S5: scoped handles are recorded in the session's binding set, as unscoped

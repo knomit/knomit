@@ -179,7 +179,7 @@ func TestGate_MintedHandleWhoseRepoIsGone(t *testing.T) {
 }
 
 // scopedCtx is a URL-scoped request for repo alpha at its agent branch: a
-// RepoInstance, the URL branch, the mount marker MountExperimentMiddleware sets
+// RepoInstance, the URL branch, the mount marker ScopedMountMiddleware sets
 // on a mount a handle may steer, and NO session-scoped marker.
 func scopedCtx(t *testing.T, m *repos.Manager, repo string) context.Context {
 	t.Helper()
@@ -229,8 +229,6 @@ func TestGate_ScopedEndpointHandles(t *testing.T) {
 	res, spy := gateCall(t, m, ctx, map[string]any{"binding": handle, "text": "x"})
 	require.False(t, res.IsError, resultText(t, res))
 	require.Equal(t, handle, bindingHandleFromContext(spy.ctx))
-	_, _, plain := repos.MountSessionFromContext(spy.ctx)
-	require.False(t, plain, "a handle-routed call must not see the connection's session state")
 
 	res, spy = gateCall(t, m, ctx, map[string]any{"binding": "never-minted", "text": "x"})
 	require.True(t, res.IsError)

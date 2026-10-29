@@ -5,7 +5,7 @@
 - NEVER create `plan.md`, `todo.md`, `notes.md` or similar at the project root
 - Commit messages and session logs go in `.claude/plans/`
 
-<!-- knomit:integration v5 -->
+<!-- knomit:integration v6 -->
 ## Working with knomit memory
 
 This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
@@ -52,6 +52,10 @@ branch when the branch is created, and write the facts there AS THE WORK
 HAPPENS rather than reconstructing them later from a diff:
 `/knomit-experiment open <branch-name>`.
 
+- Keep the `binding` handle that `open` returns and pass it on EVERY knomit
+  call for that work: reads, writes, and the commit or rollback. Never rely on
+  the session default. On a `--repo`/`--lens` connection the default never
+  moves into an experiment, and subagents share it with their parent.
 - Commit the experiment AFTER the GitHub PR merges — and as part of that,
   re-pin every `src://` ref to the merge commit and re-read each fact's own
   claim there. Review changes code, so a fact that was true of the branch can

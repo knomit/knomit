@@ -79,7 +79,7 @@ const (
 )
 
 // endpointKindOf classifies a request. The scoped/fixed split is the
-// mount-session marker MountExperimentMiddleware sets from the ROUTE — the same
+// mount-session marker ScopedMountMiddleware sets from the ROUTE — the same
 // predicate the gate and knomit_bind enforce at call time.
 func endpointKindOf(ctx context.Context) endpointKind {
 	if repos.SessionScoped(ctx) {
@@ -133,10 +133,11 @@ const (
 	// bindingScopedDescription is gateRequired's `binding` on a URL-scoped
 	// endpoint, where the handle only chooses a branch.
 	bindingScopedDescription = "Optional on this endpoint, which is fixed to one repo or lens by its URL. " +
-		"Omit it (or pass \"\") to use that repo or lens at its default branch, or inside the experiment " +
-		"this connection opened. Pass a handle that knomit_bind returned on this endpoint (this same --repo " +
-		"or --lens URL) to work on the branch or experiment that handle names. A handle minted on any other " +
-		"endpoint is refused."
+		"Omit it (or pass \"\") to use that repo or lens at its default branch, the agent branch: always, " +
+		"whatever any experiment was opened on this connection, because the default never moves. To work " +
+		"inside an experiment, pass the handle knomit_experiment open returned — or any handle that " +
+		"knomit_bind or open returned on this endpoint (this same --repo or --lens URL) — to work on the " +
+		"branch or experiment that handle names. A handle minted on any other endpoint is refused."
 	// bindingScopedReposDescription is gateOptional's `binding` (knomit_repos)
 	// on a URL-scoped endpoint.
 	bindingScopedReposDescription = "Optional: a handle that knomit_bind returned on this endpoint (this same " +
@@ -353,10 +354,6 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle, mount string
 		if pin != mount {
 			return ctx, errors.New(errHandleFromOtherEndpoint(ctx))
 		}
-		// The HANDLE routes this call, so the connection's session-keyed
-		// experiment must not touch it: neither apply to it nor be opened,
-		// committed or cleared by it.
-		ctx = repos.WithoutMountState(ctx)
 	}
 	// The experiment this handle is working inside, if any. Read here rather
 	// than deeper because this is where the handle is known, and the handle

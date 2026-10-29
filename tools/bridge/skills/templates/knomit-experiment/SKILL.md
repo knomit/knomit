@@ -9,10 +9,17 @@ Wraps the `knomit_experiment` MCP tool and carries the project workflow that
 goes with it.
 
 An experiment is a local `exp/<name>` branch forked from this instance's agent
-branch. Opening one MOVES THIS SESSION onto it: every later `knomit_learn`,
-`knomit_update`, `knomit_retract`, `knomit_query`, `knomit_review` reads and
-writes the experiment until you commit or roll back. It is never pushed, never
-fetched, and invisible to peers.
+branch. Opening one returns a `binding` HANDLE inside it. Every
+`knomit_learn`, `knomit_update`, `knomit_retract`, `knomit_query`,
+`knomit_review` that passes that handle reads and writes the experiment, until
+you commit or roll back. It is never pushed, never fetched, and invisible to
+peers.
+
+**Pass the handle `open` returns on EVERY call. Never rely on the session
+default.** On a `--repo`/`--lens` connection, a call without `binding` is
+always on the agent branch, and opening an experiment does not change that:
+subagents share their parent's MCP session, and a default that moved would move
+all of them.
 
 ## Preflight — the tool may not be there
 
@@ -44,42 +51,43 @@ fall back to writing on the agent branch.
 
 | Action | Call | Effect |
 |---|---|---|
-| list | `{action: "list"}` | this repo's experiments, marking the one you are in |
-| open | `{action: "open", name, description}` | fork if absent, else resume; moves this session onto it |
-| commit | `{action: "commit"}` | merge into the agent branch, then DELETE the experiment |
-| rollback | `{action: "rollback"}` | delete the experiment and everything on it |
-| sync | `{action: "sync"}` | merge the agent branch INTO the experiment, **agent branch wins** |
+| list | `{action: "list", binding}` | this repo's experiments, marking the one your handle is in |
+| open | `{action: "open", name, description}` | fork if absent, else resume; returns `binding`, a handle inside it |
+| commit | `{action: "commit", binding}` | merge into the agent branch, then DELETE the experiment |
+| rollback | `{action: "rollback", binding}` | delete the experiment and everything on it |
+| sync | `{action: "sync", binding}` | merge the agent branch INTO the experiment, **agent branch wins** |
 
-`name` defaults to the experiment you are in for commit/rollback/sync; `open`
-always needs it. `description` is local-only and never enters git.
+For commit/rollback/sync, `name` defaults to the experiment the passed handle is
+in. With neither a `name` nor a handle they are REFUSED: the session default is
+never inside an experiment. `open` always needs `name`. `description` is
+local-only and never enters git.
 
-**`open` moves you on every mount.** A `--repo` or `--lens` bridge is scoped by
-its URL, but the experiment you open is recorded against your session and that
-mount, so the very next call writes inside it — no reconnect, no bridge flag.
-The result says which branch that is.
+**What `open` returns, per endpoint.** The result carries `binding`, the
+handle that is now inside the experiment:
 
-TWO EXCEPTIONS, both of which refuse rather than pretend:
+- **Called with a `binding` handle** (any endpoint): that same handle moves into
+  the experiment. Other handles, and the connection default, stay where they
+  are.
+- **Called without one on a `--repo`/`--lens` connection:** a NEW handle is
+  minted inside the experiment and returned. Keep it. The connection default
+  stays on the agent branch.
+- **The unscoped endpoint** always needs a handle, so it is always the first
+  case.
 
-- A mount whose URL already NAMES an experiment
-  (`/repos/{repo}/branches/exp:<name>/mcp`) serves that one. Opening a
-  different experiment there creates it and refuses to switch, because the
-  endpoint is an address.
-- A connection with no MCP session id has nothing to attach the experiment to,
-  so `open` refuses. Bind on the unscoped mount instead.
+A mount whose URL already NAMES an experiment
+(`/repos/{repo}/branches/exp:<name>/mcp`) serves that one and takes no handle.
+Opening a different experiment there creates it and refuses to switch,
+because the endpoint is an address.
 
-**One connection is one session.** If your client shares a connection across
-several jobs — Claude Desktop does — they share the session id, so opening an
-experiment moves all of them on that mount. It can never reach another
-knowledge base: the URL fixed the repo before any of this applied. Say so if
-you are not the only job on the connection.
+**Several agents on one connection: one handle each.** Subagents share their
+parent's connection. Each agent keeps its own handle, the one its own `open`
+returned or one from `knomit_bind {}` followed by `open` with that `binding`,
+and passes it on every call of its own. The handle works on this
+`--repo`/`--lens` endpoint (any connection to the same URL) and nowhere else.
 
-**Several agents on one `--repo`/`--lens` connection: one handle each.** Call
-`knomit_bind {}` for a handle of your own (it changes only the branch, never
-the repo or lens), open with `knomit_experiment {action: "open", name, binding:
-<handle>}`, and pass that `binding` on every call of yours. Only your handle
-moves; calls without `binding` stay where the connection is. The handle works
-on this `--repo`/`--lens` endpoint (any connection to the same URL) and nowhere
-else.
+**Lost the handle?** After a reconnect, or when an unused handle has aged out,
+`knomit_bind {experiment: "<name>"}` mints a new handle inside the existing
+experiment. Commit and rollback also work by `name` alone.
 
 **On open, warn about expiry.** An experiment with no commits for
 `experiments.expiry_days` (default 30) is rolled back automatically by the
@@ -95,10 +103,11 @@ PR comment as the gate. That changes:
 1. **When the branch is created**, open an experiment named after it:
    `{action: "open", name: "<branch-name>", description: "Facts for <branch>. Commit when #<n> merges."}`
    Keep the name identical to the git branch — that is what lets anyone match
-   an orphaned experiment to its PR later.
-2. **Write facts as the work happens**, inside the experiment. This is the
-   point: the knowledge is captured while it is fresh instead of being
-   reconstructed days later from a diff.
+   an orphaned experiment to its PR later. Keep the `binding` the result
+   returns.
+2. **Write facts as the work happens**, inside the experiment, passing that
+   `binding` on every call. This is the point: the knowledge is captured while
+   it is fresh instead of being reconstructed days later from a diff.
 3. **When the GitHub PR MERGES**, run the commit procedure below.
 4. **If the PR is abandoned or closed unmerged**, `rollback`. The facts
    described code that never existed on the default branch; keeping them is
@@ -118,7 +127,8 @@ Facts written during the PR cite `src://` refs at **branch** commits. After the
 merge those commits may be unreachable, and a fact whose ref cannot be resolved
 is worse than one with no ref: it looks anchored and is not.
 
-So, when any fact in the experiment carries one, before `{action: "commit"}`:
+So, when any fact in the experiment carries one, before
+`{action: "commit", binding}` (or `{action: "commit", name}`):
 
 1. **Find the merge commit** of the PR on the default branch.
 2. **For every fact in the experiment, re-read each `src://` ref at the merge
@@ -226,11 +236,14 @@ and your proposed merge, then act on their pick.
 
 ## Things that will bite
 
-- **Two sessions may share an experiment.** The branch lock serialises writes,
-  so this is allowed — but the other session committing it deletes it under
-  you. Your next call heals onto the agent branch and SAYS SO
+- **Two handles may share an experiment.** The branch lock serialises writes,
+  so this is allowed — but another caller committing it deletes it under you.
+  Your handle's next call heals onto the agent branch and SAYS SO
   (`lapsed_experiment`). Believe that marker: continuing as though you were
   still inside is how the next fact lands on the wrong branch.
+- **A call without `binding` is on the agent branch.** If you forget the
+  handle, the fact lands on the agent branch and skips the PR gate. Nothing
+  warns you, because that is where a handle-less call belongs.
 - **An experiment whose recorded parent is not this instance's current agent
   branch is orphaned**: not writable, not committable, only rollback-able.
   The answer comes from the record, never from the `exp/` prefix.

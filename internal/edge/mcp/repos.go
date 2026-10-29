@@ -168,9 +168,7 @@ func endpointOf(ctx context.Context) *endpointSection {
 	kind, name := urlTarget(ctx)
 	out := &endpointSection{Kind: kind, Name: name,
 		Bind: "knomit_bind here mints a handle on this " + kind + " that changes only the branch; calls without `binding` use this " + kind + "."}
-	// A resolved handle proves the mount takes one: the gate masks the mount
-	// marker once a handle routes the call, so the marker alone would say no.
-	if _, _, plain := repos.MountSessionFromContext(ctx); !plain && bindingHandleFromContext(ctx) == "" {
+	if _, _, plain := repos.MountSessionFromContext(ctx); !plain {
 		out.Bind = "fixed to branch " + fixedBranch(ctx) + " by the URL; knomit_bind is not available here."
 	}
 	return out

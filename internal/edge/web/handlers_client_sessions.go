@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/engine/store/model"
-
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
@@ -23,21 +21,6 @@ type clientSessionBinding struct {
 	Kind string  `json:"kind"`
 	UID  string  `json:"uid"`
 	Name *string `json:"name"` // null when the repo/lens no longer resolves
-}
-
-// clientSessionMountRow is one URL-scoped mount this session has moved off the
-// branch its URL names, by opening an experiment on it.
-type clientSessionMountRow struct {
-	// Mount is the pin the mount is keyed by: `repo:<uid>` or `lens:<uid>`.
-	Mount string `json:"mount"`
-	Kind  string `json:"kind"`
-	UID   string `json:"uid"`
-	// Name is null when the repo or lens no longer resolves.
-	Name       *string `json:"name"`
-	Experiment string  `json:"experiment"`
-	// Branch is what this session actually writes to on that mount.
-	Branch string `json:"branch"`
-	SetAt  string `json:"set_at"`
 }
 
 // clientSessionBindingRow is one HANDLE the session has presented, inside the
@@ -89,18 +72,12 @@ type clientSessionView struct {
 	// Bindings is every handle the session has presented, most recently used
 	// first. Empty for a session that has only ever used URL-scoped mounts,
 	// which present no handle.
-	Bindings []clientSessionBindingRow `json:"bindings"`
-	// Mounts is what this session is writing to on its URL-SCOPED mounts, and
-	// it is STORED rather than inferred from the URL. A URL-scoped mount names
-	// a branch in its path, but a session that opened an experiment writes
-	// somewhere else — so a table reading the path would confidently show the
-	// wrong branch. Empty for a session with no experiment anywhere.
-	Mounts     []clientSessionMountRow `json:"mounts,omitempty"`
-	Branch     string                  `json:"branch"`
-	Client     clientSessionClient     `json:"client"`
-	Bridge     clientSessionBridge     `json:"bridge"`
-	RemoteAddr string                  `json:"remote_addr"`
-	UserAgent  string                  `json:"user_agent"`
+	Bindings   []clientSessionBindingRow `json:"bindings"`
+	Branch     string                    `json:"branch"`
+	Client     clientSessionClient       `json:"client"`
+	Bridge     clientSessionBridge       `json:"bridge"`
+	RemoteAddr string                    `json:"remote_addr"`
+	UserAgent  string                    `json:"user_agent"`
 	// Principal is who the edge VERIFIED this caller to be, empty when
 	// nobody did. VerifiedPID is the kernel's pid for a unix socket peer.
 	// Deliberately NOT inside the bridge block: everything there is
@@ -232,37 +209,10 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *clientse
 					RequestCount: sb.RequestCount,
 				})
 			}
-			// Attribution: what this session writes to on each URL-scoped
-			// mount. Read per session rather than joined in the query, to keep
-			// the store's accessor the one place that knows the table.
-			var mounts []clientSessionMountRow
-			if store != nil {
-				if rows, merr := store.SessionMountExperiments(r.Context(), s.ID); merr == nil {
-					for _, mr := range rows {
-						mKind, mUID, mName := names.lookup(mr.MountUID)
-						var mNamePtr *string
-						if mName != "" {
-							n := mName
-							mNamePtr = &n
-						}
-						mounts = append(mounts, clientSessionMountRow{
-							Mount: mr.MountUID, Kind: mKind, UID: mUID, Name: mNamePtr,
-							Experiment: mr.Experiment,
-							Branch:     model.ExperimentBranch(mr.Experiment),
-							SetAt:      mr.SetAt.UTC().Format(time.RFC3339),
-						})
-					}
-				} else {
-					log.Warn().Err(merr).Str("mcp_session", s.ID).
-						Msg("client sessions: mount experiments unreadable; the row omits them")
-				}
-			}
-
 			view := clientSessionView{
 				ID: s.ID, InstanceID: s.InstanceID, State: s.State, Transport: s.Transport,
 				Binding:  clientSessionBinding{Kind: kind, UID: uid, Name: namePtr},
 				Bindings: set,
-				Mounts:   mounts,
 				Branch:   s.Branch,
 				Client:   clientSessionClient{Name: s.ClientName, Version: s.ClientVersion, Initialized: s.Initialized},
 				Bridge: clientSessionBridge{Host: s.Host, User: s.User, Cwd: s.Cwd, PID: s.PID,
