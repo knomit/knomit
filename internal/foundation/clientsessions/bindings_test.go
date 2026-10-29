@@ -266,14 +266,14 @@ func TestMintBindingHandleOnMount_IsAtomic(t *testing.T) {
 		`INSERT INTO handle_mounts (handle, mount_uid, created_at) VALUES ('h', 'repo:u1', 0)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MintBindingHandleOnMount(ctx, "h", "repo:u1", "repo:u1", t0); err == nil {
+	if err := s.MintBindingHandleOnMount(ctx, "h", "repo:u1", t0); err == nil {
 		t.Fatal("mint must fail when the mount row cannot be written")
 	}
 	if _, _, ok, _ := s.BindingHandle(ctx, "h", t0); ok {
 		t.Fatal("the handle was written without its mount row: it would read as an unscoped handle")
 	}
 
-	if err := s.MintBindingHandleOnMount(ctx, "h2", "lens:l1", "lens:l1", t0); err != nil {
+	if err := s.MintBindingHandleOnMount(ctx, "h2", "lens:l1", t0); err != nil {
 		t.Fatal(err)
 	}
 	if m, err := s.HandleMount(ctx, "h2"); err != nil || m != "lens:l1" {
@@ -290,7 +290,7 @@ func TestPurge_CollectsHandleMountsWithTheirHandles(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	for _, h := range []string{"stale", "busy"} {
-		if err := s.MintBindingHandleOnMount(ctx, h, "repo:u1", "repo:u1", t0); err != nil {
+		if err := s.MintBindingHandleOnMount(ctx, h, "repo:u1", t0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -309,5 +309,30 @@ func TestPurge_CollectsHandleMountsWithTheirHandles(t *testing.T) {
 	}
 	if m, err := s.HandleMount(ctx, "busy"); err != nil || m != "repo:u1" {
 		t.Fatalf("a live handle lost its mount row: %q, %v", m, err)
+	}
+}
+
+// A scoped handle's pin IS its mount: MintBindingHandleOnMount takes one value
+// and writes it as both, so the handle routes to exactly the repo or lens of the
+// endpoint it works on. resolveHandle checks only the mount row and relies on
+// this; a pin naming another knowledge base would be routed there.
+func TestMintBindingHandleOnMount_PinIsTheMount(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for h, mount := range map[string]string{"hr": "repo:u1", "hl": "lens:l1"} {
+		if err := s.MintBindingHandleOnMount(ctx, h, mount, t0); err != nil {
+			t.Fatal(err)
+		}
+		pin, branch, ok, err := s.BindingHandle(ctx, h, t0)
+		if err != nil || !ok {
+			t.Fatalf("BindingHandle(%s) = ok %v, %v", h, ok, err)
+		}
+		got, err := s.HandleMount(ctx, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pin != mount || got != mount || branch != "" {
+			t.Fatalf("%s: pin %q, mount %q, branch %q; want pin and mount %q, branch \"\"", h, pin, got, branch, mount)
+		}
 	}
 }

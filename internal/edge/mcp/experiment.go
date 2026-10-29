@@ -419,7 +419,7 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 // arrived on, at the endpoint's default branch — what knomit_bind with no
 // arguments mints there, through the same scopedBindTarget.
 func mintEndpointHandle(ctx context.Context, mgr *repos.Manager) (string, error) {
-	_, pin, mount, err := scopedBindTarget(ctx, mgr, "", "")
+	_, _, mount, err := scopedBindTarget(ctx, mgr, "", "")
 	if err != nil {
 		return "", err
 	}
@@ -432,8 +432,8 @@ func mintEndpointHandle(ctx context.Context, mgr *repos.Manager) (string, error)
 		log.Error().Err(err).Msg("knomit_experiment: minting a handle failed")
 		return "", errors.New("no handle could be generated for it; ask the operator to check the server log")
 	}
-	if err := st.MintBindingHandleOnMount(ctx, handle, pin, mount, time.Now()); err != nil {
-		log.Warn().Err(err).Str("pin", pin).Msg("knomit_experiment: recording the minted handle failed")
+	if err := st.MintBindingHandleOnMount(ctx, handle, mount, time.Now()); err != nil {
+		log.Warn().Err(err).Str("pin", mount).Msg("knomit_experiment: recording the minted handle failed")
 		return "", errors.New("no handle could be recorded for it; ask the operator to check the server log")
 	}
 	return handle, nil

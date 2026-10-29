@@ -72,11 +72,21 @@ INSERT INTO binding_handles (handle, binding, branch, created_at, last_used_at) 
 // URL-SCOPED endpoint: it also records which mount minted it, so the handle
 // works on that endpoint and nowhere else (see HandleMount).
 //
+// THE MOUNT IS THE PIN. A scoped endpoint's URL fixes one repo or lens, so a
+// handle minted there can only ever name that repo or lens: mountUID
+// (repo:<uid> or lens:<uid>) is written as the handle's binding AND as its
+// mount row. There is deliberately no separate pin parameter. With one, a
+// caller could record a handle whose pin names another knowledge base than
+// the mount it works on — the 2026-09-17 cross-binding incident on a scoped
+// endpoint — and resolveHandle, which checks only the mount row, would route
+// it there. Taking one value makes that handle unrepresentable instead of
+// checked.
+//
 // ONE TRANSACTION. A scoped handle whose mount row was lost would read as a
 // handle minted on the unscoped endpoint, and be accepted there.
-func (s *Store) MintBindingHandleOnMount(ctx context.Context, handle, pin, mountUID string, now time.Time) error {
-	if handle == "" || pin == "" || mountUID == "" {
-		return errors.New("mint binding handle: empty handle, pin or mount")
+func (s *Store) MintBindingHandleOnMount(ctx context.Context, handle, mountUID string, now time.Time) error {
+	if handle == "" || mountUID == "" {
+		return errors.New("mint binding handle: empty handle or mount")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -85,7 +95,7 @@ func (s *Store) MintBindingHandleOnMount(ctx context.Context, handle, pin, mount
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO binding_handles (handle, binding, branch, created_at, last_used_at) VALUES (?, ?, '', ?, ?)`,
-		handle, pin, now.Unix(), now.Unix()); err != nil {
+		handle, mountUID, now.Unix(), now.Unix()); err != nil {
 		return fmt.Errorf("mint binding handle: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `

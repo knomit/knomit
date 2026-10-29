@@ -277,3 +277,40 @@ func TestBind_RejectsABindingArgument(t *testing.T) {
 	require.True(t, res.IsError)
 	require.Contains(t, resultText(t, res), "binding")
 }
+
+// scopedBindTarget resolves the URL's repo or lens BY NAME, and the name can
+// have come to mean another base since the URL resolved it: the lens was
+// deleted and recreated under the same name, so the same URL now has a new uid.
+// The bind must then be refused, not minted: a handle pinned to the new uid on
+// the old mount would name a base the URL did not resolve to.
+func TestScopedBindTarget_RefusesWhenTheNameNowNamesAnotherBase(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	reg := m.LensRegistry()
+	old, ok, err := reg.Get("eng")
+	require.NoError(t, err)
+	require.True(t, ok)
+	oldB, err := repos.NewBindingOfLens(m, old)
+	require.NoError(t, err)
+	// The request as the lens route left it, resolved BEFORE the recreate.
+	ctx := repos.WithMountSession(repos.WithBinding(context.Background(), oldB), "sid-scoped", oldB.PinID())
+
+	_, pin, mount, err := scopedBindTarget(ctx, m, "", "")
+	require.NoError(t, err, "before the recreate the name and the URL agree")
+	require.Equal(t, oldB.PinID(), pin)
+	require.Equal(t, pin, mount)
+
+	require.NoError(t, reg.Delete("eng"))
+	recreated, err := reg.Create(control.Lens{Name: "eng", WriteUID: "uid-alpha", Reads: []control.LensRead{{RepoUID: "uid-beta"}}})
+	require.NoError(t, err)
+	require.NotEqual(t, old.UID, recreated.UID, "the fixture must give the recreated lens a new uid")
+
+	_, _, _, err = scopedBindTarget(ctx, m, "", "")
+	require.EqualError(t, err, "lens eng was renamed or replaced while binding; call knomit_bind again")
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{}
+	res, err := BindHandler(m)(ctx, req)
+	require.NoError(t, err)
+	require.True(t, res.IsError, "knomit_bind must refuse, got %s", resultText(t, res))
+	require.Equal(t, "lens eng was renamed or replaced while binding; call knomit_bind again", resultText(t, res))
+}
