@@ -7,6 +7,38 @@ import (
 	"time"
 )
 
+// #685: mount_experiments is no longer read or written, so a row a server
+// from before that change left behind can mean nothing, and the purge drops
+// it even while its session is LIVE.
+func TestPurge_DropsLegacyMountExperimentsOfLiveSessions(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.Touch(ctx, bridgeObs("live", t0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO mount_experiments (session_id, mount_uid, experiment, set_at) VALUES ('live', 'repo:uid1', 'old-exp', ?)`,
+		t0.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Purge(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	var sessions, rows int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM client_sessions WHERE id = 'live'`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 {
+		t.Fatalf("precondition: the session must still be live, got %d rows", sessions)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM mount_experiments`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("a legacy mount_experiments row of a live session survived the purge (%d rows)", rows)
+	}
+}
+
 func TestMintBindingHandle_SetThenGet(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
