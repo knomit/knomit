@@ -2,11 +2,30 @@
 // desktop app's lockfile, logs, and autostart artifacts.
 package paths
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+)
 
 // StateDir returns the directory where the desktop app persists state
 // (lockfile, etc.). The directory is NOT created by this function.
 func StateDir() (string, error) { return stateDir() }
+
+// DownloadsDir returns the user's Downloads folder, where the Export save dialog
+// opens: ~/Downloads on macOS, the Downloads known folder on Windows, and on Linux
+// XDG_DOWNLOAD_DIR (from the environment, then ~/.config/user-dirs.dirs) or
+// ~/Downloads. It is a SUGGESTION for a dialog, never a place the app writes to
+// on its own; "" when the home directory cannot be found.
+func DownloadsDir() string { return downloadsDir() }
+
+// homeDownloads is ~/Downloads, "" without a home directory.
+func homeDownloads() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, "Downloads")
+}
 
 // LogsDir returns the directory where the desktop app writes log files.
 // The directory is NOT created by this function.

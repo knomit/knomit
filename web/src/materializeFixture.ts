@@ -84,9 +84,9 @@ export function makeFixtureApi(o: FixtureOptions = {}) {
   const calls: FixtureCall[] = [];
   const failed = new Set<number>();
   const nodesFor = (opts: MatOptions): MatNode[] => {
-    const cap = Math.min(total, opts.maxFacts);
+    const cap = Math.min(total, opts.references + 1);
     const out = Array.from({ length: cap }, (_, i) => fixtureNode(i + 1, o));
-    if (o.shiftAbove !== undefined && opts.maxFacts > o.shiftAbove && cap >= 2) {
+    if (o.shiftAbove !== undefined && opts.references + 1 > o.shiftAbove && cap >= 2) {
       // a newly admitted fact (identity 900) lands second; the rest move down
       const inserted = fixtureNode(900, o);
       const order = [out[0], inserted, ...out.slice(1, cap - 1)];
@@ -109,7 +109,7 @@ export function makeFixtureApi(o: FixtureOptions = {}) {
       unpinned: opts.unpin,
       cross_kb: opts.crossKb,
       depth: opts.depth,
-      max_nodes: opts.maxFacts,
+      max_nodes: opts.references + 1,
       total: all.length,
       truncated: { depth: o.depthBeyond ?? 0, nodes: Math.max(0, total - all.length) },
       facts,

@@ -4,7 +4,7 @@ import { RightPanel } from './RightPanel';
 import { init } from './state';
 import type { AppState } from './state';
 import { makeFixtureApi } from './materializeFixture';
-import { ScrollTextIcon } from './icons';
+import { NewspaperIcon } from './icons';
 import { LayersIcon, BookIcon } from './icons';
 
 const fixture = makeFixtureApi({ total: 4, pageSize: 4 });
@@ -47,9 +47,18 @@ describe('the Materialize action in the fact header', () => {
 
   it('draws a glyph of its own, not the lens mark or the repo mark', () => {
     const html = (el: React.ReactElement) => render(el).container.innerHTML;
-    const scroll = html(<ScrollTextIcon color="#fff" />);
+    const scroll = html(<NewspaperIcon color="#fff" />);
     expect(scroll).not.toBe(html(<LayersIcon color="#fff" />));
     expect(scroll).not.toBe(html(<BookIcon color="#fff" />));
+  });
+
+  it('renders the newspaper glyph in the header button', async () => {
+    render(<RightPanel state={state} dispatch={vi.fn()} />);
+    const btn = await screen.findByTestId('materialize-btn');
+    const expected = render(<NewspaperIcon color="currentColor" size={15} />).container.innerHTML;
+    expect(btn.innerHTML).toBe(expected);
+    expect(btn.querySelector('path')?.getAttribute('d')).toMatch(/^M4 22h16a2 2 0 0 0 2-2V4/);
+    expect(btn.querySelectorAll('path')).toHaveLength(4);
   });
 
   it('swaps the fact view for the materialized view, and Back returns to the fact', async () => {
@@ -77,11 +86,11 @@ describe('the Materialize action in the fact header', () => {
   });
 
   it('opens straight into the view, with its options, from a shared URL', async () => {
-    window.history.replaceState(null, '', '/?materialize=1&mat_depth=7&mat_facts=120');
+    window.history.replaceState(null, '', '/?materialize=1&mat_depth=7&mat_refs=120');
     render(<RightPanel state={state} dispatch={vi.fn()} />);
     expect(await screen.findByTestId('materialize-view')).toBeInTheDocument();
     expect((screen.getByTestId('mat-depth') as HTMLInputElement).value).toBe('7');
-    expect((screen.getByTestId('mat-facts') as HTMLInputElement).value).toBe('120');
+    expect((screen.getByTestId('mat-refs') as HTMLInputElement).value).toBe('120');
   });
 
   const focusOn = () => document.documentElement.dataset.matFocus === '1';

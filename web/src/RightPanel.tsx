@@ -6,7 +6,7 @@ import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from '
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime } from './utils';
-import { RetractIcon, ScrollTextIcon } from './icons';
+import { RetractIcon, NewspaperIcon } from './icons';
 import { MaterializeView } from './MaterializeView';
 import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
 import type { MatOptions } from './materializeApi';
@@ -294,7 +294,7 @@ function renderFact(
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.75'; }}
-              ><ScrollTextIcon color="currentColor" size={15} /></button>
+              ><NewspaperIcon color="currentColor" size={15} /></button>
             )}
             {onRetract && (
               <button

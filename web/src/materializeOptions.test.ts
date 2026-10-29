@@ -7,7 +7,7 @@ import {
 
 describe('materialize options in the URL', () => {
   it('round-trips every option through the query string', () => {
-    const options: MatOptions = { depth: 7, maxFacts: 350, crossKb: true, unpin: true };
+    const options: MatOptions = { depth: 7, references: 350, crossKb: true, unpin: true };
     const search = writeMaterializeParams('', { open: true, options });
     expect(parseMaterializeParams(search)).toEqual({ open: true, options });
   });
@@ -23,13 +23,13 @@ describe('materialize options in the URL', () => {
     expect(parseMaterializeParams(search).options.depth).toBe(2);
   });
 
-  it('clamps a hand-edited URL to the limits (depth 0..10, facts 1..500) and falls back on junk', () => {
-    const p = parseMaterializeParams('?materialize=1&mat_depth=99&mat_facts=100000');
-    expect(p.options).toMatchObject({ depth: 10, maxFacts: 500 });
-    const q = parseMaterializeParams('?materialize=1&mat_depth=-3&mat_facts=0');
-    expect(q.options).toMatchObject({ depth: 0, maxFacts: 1 });
-    const r = parseMaterializeParams('?materialize=1&mat_depth=abc&mat_facts=');
-    expect(r.options).toMatchObject({ depth: 4, maxFacts: 200 });
+  it('clamps a hand-edited URL to the limits (depth 0..10, references 0..499) and falls back on junk', () => {
+    const p = parseMaterializeParams('?materialize=1&mat_depth=99&mat_refs=100000');
+    expect(p.options).toMatchObject({ depth: 10, references: 499 });
+    const q = parseMaterializeParams('?materialize=1&mat_depth=-3&mat_refs=0');
+    expect(q.options).toMatchObject({ depth: 0, references: 0 });
+    const r = parseMaterializeParams('?materialize=1&mat_depth=abc&mat_refs=');
+    expect(r.options).toMatchObject({ depth: 4, references: 199 });
   });
 
   it('defaults when the URL says nothing', () => {
@@ -40,14 +40,14 @@ describe('materialize options in the URL', () => {
 describe('what an option change means for a stream', () => {
   const base = DEFAULT_OPTIONS;
   it('raising ONLY the count continues in place', () => {
-    expect(optionChange(base, { ...base, maxFacts: 300 })).toBe('continue');
+    expect(optionChange(base, { ...base, references: 300 })).toBe('continue');
   });
   it('lowering the count, or changing anything else, restarts', () => {
-    expect(optionChange(base, { ...base, maxFacts: 100 })).toBe('restart');
+    expect(optionChange(base, { ...base, references: 100 })).toBe('restart');
     expect(optionChange(base, { ...base, depth: 5 })).toBe('restart');
     expect(optionChange(base, { ...base, crossKb: true })).toBe('restart');
     expect(optionChange(base, { ...base, unpin: true })).toBe('restart');
-    expect(optionChange(base, { ...base, maxFacts: 300, depth: 5 })).toBe('restart');
+    expect(optionChange(base, { ...base, references: 300, depth: 5 })).toBe('restart');
   });
   it('is a no-op when nothing changed', () => {
     expect(optionChange(base, { ...base })).toBe('same');
@@ -76,7 +76,7 @@ describe('export filename', () => {
   });
 });
 
-describe('heading level by walk depth', () => {
+describe('heading level by tree depth', () => {
   it('steps down one level per hop and stops at h6', () => {
     expect([0, 1, 2, 3, 4, 9].map(headingLevel)).toEqual([2, 3, 4, 5, 6, 6]);
   });

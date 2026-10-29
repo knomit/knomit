@@ -239,7 +239,10 @@ func TestFleetIdentity_WireKeysMatchTheUIFixture(t *testing.T) {
 func TestFleetIdentity_NativeServiceMethodSetIsPinned(t *testing.T) {
 	want := []string{
 		"GetIdentity", "GetSettings", "PublicKeyLine",
-		"RestartServer", "RevealLogFile", "SaveSettings", "WriteFile",
+		"RestartServer", "RevealLogFile", "SaveFileAs", "SaveSettings", "WriteFile",
+		// SaveFileAs (Materialize Export) takes only a suggested name and the bytes; the
+		// destination is chosen by the user in the native save dialog, so it is not a
+		// page-controlled write (see NativeService.SaveFileAs).
 	}
 	var got []string
 	ty := reflect.TypeOf(&NativeService{})

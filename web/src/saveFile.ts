@@ -26,6 +26,9 @@ export type SaveOutcome =
 /** NativeService.WriteFile's bound name: packagePath.TypeName.MethodName,
  *  and NativeService is in package main (see the desktop's SettingsApp). */
 export const NATIVE_WRITE_FILE = 'main.NativeService.WriteFile';
+/** NativeService.SaveFileAs: the native save dialog, then the write. Resolves
+ *  with the path the user chose, or '' when they cancelled. */
+export const NATIVE_SAVE_FILE_AS = 'main.NativeService.SaveFileAs';
 const RUNTIME_URL = '/wails/runtime.js';
 
 type Picker = (opts: { suggestedName: string }) => Promise<{ name?: string; createWritable: () => Promise<{ write: (d: Blob) => Promise<void>; close: () => Promise<void> }> }>;
@@ -34,6 +37,8 @@ export interface SaveEnv {
   desktop: boolean;
   /** The desktop shell's WriteFile: resolves with the absolute path written. */
   nativeWrite: (name: string, text: string) => Promise<string>;
+  /** The desktop shell's SaveFileAs (native dialog + write); '' = cancelled. */
+  nativeSaveAs?: (name: string, text: string) => Promise<string>;
   /** The browser's save dialog, when it has one. */
   picker?: Picker;
   /** A plain download. */
@@ -48,6 +53,12 @@ export function defaultSaveEnv(): SaveEnv {
       const m = (await import(/* @vite-ignore */ RUNTIME_URL)) as { Call: { ByName: (n: string, ...a: unknown[]) => Promise<unknown> } };
       const path = await m.Call.ByName(NATIVE_WRITE_FILE, name, text);
       if (typeof path !== 'string' || !path) throw new Error('the desktop app did not say where it wrote the file');
+      return path;
+    },
+    nativeSaveAs: async (name, text) => {
+      const m = (await import(/* @vite-ignore */ RUNTIME_URL)) as { Call: { ByName: (n: string, ...a: unknown[]) => Promise<unknown> } };
+      const path = await m.Call.ByName(NATIVE_SAVE_FILE_AS, name, text);
+      if (typeof path !== 'string') throw new Error('the desktop app did not say where it wrote the file');
       return path;
     },
     picker: typeof w?.showSaveFilePicker === 'function' ? w.showSaveFilePicker.bind(w) : undefined,
@@ -72,6 +83,29 @@ export async function saveTextFile(name: string, text: string, type = 'text/plai
       await out.write(new Blob([text], { type }));
       await out.close();
       return { kind: 'saved', where: handle.name || name };
+    }
+    env.download(name, text, type);
+    return { kind: 'downloaded', name };
+  } catch (e) {
+    return { kind: 'failed', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** saveExport saves text as name for the Export action:
+ *  - the DESKTOP app ALWAYS asks, with the operating system's native save dialog
+ *    (NativeService.SaveFileAs: opened in the Downloads folder, suggesting name);
+ *    cancelling writes nothing and is `cancelled`;
+ *  - a BROWSER does a normal download into the browser's configured download
+ *    location, the same in every browser (no showSaveFilePicker: it needs a fresh
+ *    click, leaves an empty file behind when an export then fails, and does not
+ *    exist in Safari or Firefox anyway).
+ *  It never throws. */
+export async function saveExport(name: string, text: string, type = 'text/plain', env: SaveEnv = defaultSaveEnv()): Promise<SaveOutcome> {
+  try {
+    if (env.desktop) {
+      if (!env.nativeSaveAs) throw new Error('the desktop app has no save dialog');
+      const where = await env.nativeSaveAs(name, text);
+      return where ? { kind: 'saved', where } : { kind: 'cancelled' };
     }
     env.download(name, text, type);
     return { kind: 'downloaded', name };

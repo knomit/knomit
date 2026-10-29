@@ -72,14 +72,17 @@ export interface MatPage {
 /** The options a first call takes. A cursor call takes none of them. */
 export interface MatOptions {
   depth: number;
-  maxFacts: number;
+  /** References only, 0..499: how many facts beyond the root the read may hold.
+   *  The request carries references + 1 as max_nodes (the root counts there). */
+  references: number;
   crossKb: boolean;
   unpin: boolean;
 }
 
-export const DEFAULT_OPTIONS: MatOptions = { depth: 4, maxFacts: 200, crossKb: false, unpin: false };
+export const DEFAULT_OPTIONS: MatOptions = { depth: 4, references: 199, crossKb: false, unpin: false };
 export const MAX_DEPTH = 10;
-export const MAX_FACTS = 500;
+/** The server's max_nodes ceiling is 500 and counts the root, so references top out at 499. */
+export const MAX_REFERENCES = 499;
 /** Facts per page, asked for on a FIRST call only (the server accepts 1..5 and
  *  freezes it in the cursor; a cursor call that carries it is refused: 400). */
 export const PAGE_LIMIT = 5;
@@ -131,7 +134,7 @@ function factUrl(t: MatTarget): string {
 }
 
 function optionParams(o: MatOptions): URLSearchParams {
-  const p = new URLSearchParams({ depth: String(o.depth), max_nodes: String(o.maxFacts) });
+  const p = new URLSearchParams({ depth: String(o.depth), max_nodes: String(o.references + 1) });
   if (o.unpin) p.set('unpin', 'true');
   if (o.crossKb) p.set('cross_kb', 'true');
   return p;

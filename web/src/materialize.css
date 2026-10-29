@@ -7,7 +7,7 @@
    never scrolls sideways (the same shrink-starvation the top bar's tab strip
    had to be defended against). */
 
-.k-mat { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #141414; }
+.k-mat { --gutter-w: 44px; display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #141414; }
 
 .k-mat-bar { flex-shrink: 0; min-width: 0; padding: 8px 28px 8px; background: #101014; border-bottom: 1px solid #1e222a; display: flex; flex-direction: column; gap: 6px; }
 .k-mat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
@@ -47,18 +47,21 @@
 .k-mat-article { padding: 26px 28px 56px; min-width: 0; transition: opacity 0.15s; }
 .k-mat-article[data-stale='true'] { opacity: 0.38; }
 
-.k-mat-notice { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: #c9b27a; background: rgba(229,162,60,0.08); border: 1px solid rgba(229,162,60,0.25); border-radius: 4px; padding: 6px 10px; margin-bottom: 18px; }
-.k-mat-notice button { margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; }
 
 .k-mat-group { font-family: var(--k-font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #5d6676; margin: 30px 0 4px; }
-.k-mat-sec { padding: 22px 0 22px; border-top: 1px solid #1e222a; min-width: 0; }
+/* A section is a fixed-width depth gutter beside the content. NOTHING is indented
+   by depth: every section starts at the same left edge. */
+.k-mat-sec { display: grid; grid-template-columns: var(--gutter-w) minmax(0, 1fr); padding: var(--sec-pad-top) 0 var(--sec-pad-bottom); border-top: 1px solid #1e222a; min-width: 0; }
 .k-mat-sec:first-child, .k-mat-group + .k-mat-sec { border-top: none; padding-top: 4px; }
-.k-mat-h { font-family: var(--k-font-display); font-weight: 600; color: #f0f4fa; letter-spacing: -0.2px; line-height: 1.25; margin: 0 0 6px; overflow-wrap: anywhere; }
-h2.k-mat-h { font-size: 22px; }
-h3.k-mat-h { font-size: 18px; }
-h4.k-mat-h { font-size: 16px; }
-h5.k-mat-h { font-size: 14.5px; }
-h6.k-mat-h { font-size: 13.5px; }
+.k-mat-sec[data-lv='4'], .k-mat-sec[data-lv='5'] { padding-top: var(--sec-pad-top-deep); padding-bottom: var(--sec-pad-bottom-deep); }
+.k-mat-main { min-width: 0; }
+.k-mat-h { font-family: var(--k-font-display); line-height: var(--lv-line); margin: 0 0 6px; overflow-wrap: anywhere; }
+.k-mat-h[title] { cursor: help; }
+.k-mat-h[data-lv='1'] { font-size: var(--lv1-size); font-weight: var(--lv1-weight); color: var(--lv1-color); font-style: var(--lv1-style); font-variant-caps: var(--lv1-caps); letter-spacing: var(--lv1-track); }
+.k-mat-h[data-lv='2'] { font-size: var(--lv2-size); font-weight: var(--lv2-weight); color: var(--lv2-color); font-style: var(--lv2-style); font-variant-caps: var(--lv2-caps); letter-spacing: var(--lv2-track); }
+.k-mat-h[data-lv='3'] { font-size: var(--lv3-size); font-weight: var(--lv3-weight); color: var(--lv3-color); font-style: var(--lv3-style); font-variant-caps: var(--lv3-caps); letter-spacing: var(--lv3-track); }
+.k-mat-h[data-lv='4'] { font-size: var(--lv4-size); font-weight: var(--lv4-weight); color: var(--lv4-color); font-style: var(--lv4-style); font-variant-caps: var(--lv4-caps); letter-spacing: var(--lv4-track); }
+.k-mat-h[data-lv='5'] { font-size: var(--lv5-size); font-weight: var(--lv5-weight); color: var(--lv5-color); font-style: var(--lv5-style); font-variant-caps: var(--lv5-caps); letter-spacing: var(--lv5-track); }
 .k-mat-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; font-family: var(--k-font-mono); font-size: 10.5px; color: #5d6676; margin-bottom: 12px; min-width: 0; overflow-wrap: anywhere; }
 .k-mat-repo { color: #c9a0f0; border: 1px solid rgba(201,160,240,0.35); border-radius: 3px; padding: 0 5px; }
 .k-mat-frozen { color: #c9a0f0; }
@@ -100,7 +103,7 @@ h6.k-mat-h { font-size: 13.5px; }
 .k-mat-arrow { display: inline-flex; transition: transform 0.12s; }
 .k-mat-arrow[data-open='false'] { transform: rotate(-90deg); }
 .k-mat-dot { width: 6px; height: 6px; border-radius: 50%; background: #e5a23c; display: inline-block; }
-.k-mat-hnum { color: #7f8b9c; font-weight: 500; }
+.k-mat-hnum { color: #7f8b9c; font-weight: 500; font-style: normal; }
 
 /* Icon-only bar buttons: the fact header's action style (RightPanel's Materialize
    and retract buttons): bare, 2px padding, 15px glyph, dimmed until hovered. */
@@ -122,3 +125,49 @@ html[data-mat-focus] [data-testid='library-splitter'] { display: none !important
 .k-mat-link .k-mat-n { color: #7f8b9c; font-family: var(--k-font-mono); font-size: 10.5px; margin-left: 4px; }
 
 .k-mat-actions { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+/* "more" at the end of the article: the app's quiet text action (as the facet
+   panel's "+N more"): small, muted, no border, brighter on hover. */
+.k-mat-more { background: none; border: none; padding: 0; font: inherit; font-family: var(--k-font-mono); font-size: 10.5px; color: #5f6a7c; cursor: pointer; }
+.k-mat-more:hover { color: #9fb0c8; }
+.k-mat-more:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 3px; border-radius: 2px; }
+
+/* Back to top: floats at the right of the reading pane once scrolled down. */
+.k-mat { position: relative; }
+.k-mat-top { position: absolute; right: 22px; bottom: 22px; z-index: 5; width: 30px; height: 30px; border-radius: 50%; background: #1a1e28; border: 1px solid #2a3040; color: #8a96a8; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0.85; padding: 0; }
+.k-mat-top:hover { opacity: 1; color: #cfd8e6; border-color: #3d4a66; }
+.k-mat-top:active { opacity: 0.6; }
+
+
+/* ---- Heading ladder (level = tree depth + 1; levels past 5 repeat L5) and gutter, from the
+   deep-nesting prototype (variant C, the user's choice). ---- */
+.k-mat {
+  --lv1-size: 24px; --lv1-weight: 700; --lv1-color: #f0f4fa; --lv1-style: normal; --lv1-caps: normal;      --lv1-track: -0.3px;
+  --lv2-size: 19px; --lv2-weight: 600; --lv2-color: #e8eef6; --lv2-style: normal; --lv2-caps: normal;      --lv2-track: -0.2px;
+  --lv3-size: 15.5px; --lv3-weight: 700; --lv3-color: #d2dae6; --lv3-style: normal; --lv3-caps: normal;    --lv3-track: 0;
+  --lv4-size: 14px; --lv4-weight: 600; --lv4-color: #b4becc; --lv4-style: normal; --lv4-caps: small-caps;  --lv4-track: 0.03em;
+  --lv5-size: 13.5px; --lv5-weight: 500; --lv5-color: #98a4b6; --lv5-style: italic; --lv5-caps: normal;    --lv5-track: 0;
+  --lv-line: 1.3;
+  --sec-pad-top: 22px; --sec-pad-bottom: 22px;
+  --sec-pad-top-deep: 14px; --sec-pad-bottom-deep: 14px;
+  --gutter-mark: #4a7ab5; --gutter-mark-dim: #34507f; --gutter-mark-cap: #e5a23c;
+  --tick-w: 12px; --tick-h: 2px; --tick-gap: 2px;
+  --path-h: 28px; --path-bg: rgba(16,16,20,0.96); --path-size: 11px; --bc-sep: #3a4252;
+}
+.k-mat-gut { display: flex; justify-content: flex-end; padding-right: 12px; }
+.k-mat-gut-m { display: flex; flex-direction: column; gap: var(--tick-gap); align-items: flex-end; margin-top: 0.55em; }
+.k-mat-gut-m i { display: block; width: var(--tick-w); height: var(--tick-h); background: var(--gutter-mark-dim); border-radius: 1px; }
+.k-mat-gut-m i:last-child { background: var(--gutter-mark); }
+.k-mat-gut-m i.cap { background: var(--gutter-mark-cap); }
+
+/* The section path: a thin bar pinned at the top of the article, naming the section at the top. */
+.k-mat-path { position: sticky; top: 0; z-index: 5; height: var(--path-h); display: flex; align-items: center; gap: 6px; padding: 0 28px 0 calc(28px + var(--gutter-w)); background: var(--path-bg); border-bottom: 1px solid #1e222a; font-family: var(--k-font-mono); font-size: var(--path-size); color: #5d6676; white-space: nowrap; overflow: hidden; backdrop-filter: blur(4px); }
+.k-mat-path button { background: none; border: none; padding: 0; font: inherit; color: #7f8b9c; cursor: pointer; }
+.k-mat-path button:hover { color: #b8d0ff; }
+.k-mat-path button.cur { color: #d6dde8; }
+.k-mat-path .sep, .k-mat-path .gap { color: var(--bc-sep); }
+.k-mat-path .gap { padding: 0 2px; }
+@media (max-width: 1100px) {
+  .k-mat { --gutter-w: 34px; }
+  .k-mat-path { padding-left: calc(14px + var(--gutter-w)); padding-right: 14px; }
+}
