@@ -185,17 +185,26 @@ func TestBook_StalePositionIsRefused(t *testing.T) {
 func TestBook_SeekWalksTheUnitsBefore(t *testing.T) {
 	f := newBookFixture(t)
 	fixtureTwo(t, f)
+	f.write(t, "kb/u/r3.md", "R3", "r3 body.", "kb/z/s.md")
 	ctx := context.Background()
 	req := f.request("kb/u/")
 	req.Limit = 1
 	p1, _, err := BookFirstPage(ctx, f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 1, p1.UnitsWalked)
-	p, stats, err := BookNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, 2)
+	p, stats, err := BookNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, 3)
 	require.NoError(t, err)
-	require.Equal(t, 1, stats.UnitsWalked, "the seek walked unit 2 (unit 1 was walked)")
-	require.Equal(t, 2, p.UnitFrom)
-	require.Equal(t, 2, p.UnitsWalked)
+	require.Equal(t, 2, stats.UnitsWalked, "the seek walked units 2 and 3 (unit 1 was walked)")
+	require.Equal(t, 3, p.UnitFrom)
+	require.Equal(t, 3, p.UnitsWalked)
+	require.False(t, p.Facts[0].Written == false, "unit 3's root is written")
+	if len(p.Facts) > 0 {
+		for _, n := range p.Facts {
+			if n.Path == "kb/z/s.md" {
+				require.NotNil(t, n.Link, "s was written in an earlier unit: a link here")
+			}
+		}
+	}
 }
 
 // measureEnv gates the measurement runs: they write ~1000 facts with up to
