@@ -568,6 +568,13 @@ func newBudgetedStorage(budget int64) *budgetedStorage {
 	return &budgetedStorage{Storage: memory.NewStorage(), budget: budget}
 }
 
+// PackfileWriter bounds the RAW pack as it arrives, before anything is parsed
+// (remotesync.NewBudgetedPackWriter, shared with the attach guard's history
+// probe); SetEncodedObject then bounds the inflated objects the parse stores.
+func (b *budgetedStorage) PackfileWriter() (io.WriteCloser, error) {
+	return remotesync.NewBudgetedPackWriter(b, b.budget, errProbeTooLarge), nil
+}
+
 func (b *budgetedStorage) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error) {
 	if b.budget > 0 {
 		b.spent += obj.Size()

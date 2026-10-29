@@ -55,9 +55,10 @@ type GitConfig struct {
 	// refused ("Origin not inspected"), not admitted. Measured: a knowledge
 	// base of about 1,000 commits inflates to about 11 MiB, so the default
 	// admits roughly 5,000 commits of that shape; raise this to attach a
-	// larger one. The budget counts inflated objects as they are stored: it
-	// bounds what is admitted, not the transfer or peak memory (deltas are
-	// buffered before they are counted).
+	// larger one. For both probes the budget is applied twice: to the raw
+	// pack as it arrives, before any of it is parsed (the fetch stops there),
+	// and to the inflated objects the parse stores. Peak memory is about twice
+	// the budget plus go-git's bounded parse cache.
 	MaxProbeBytes int64 `toml:"max_probe_bytes"`
 	// LocalReconcileInterval is how often a repo with NO origin fast-forwards
 	// its consensus branch (main) from its own agent branch, so that branch
