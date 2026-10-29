@@ -18,6 +18,7 @@ import (
 	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/testsupport/testsigner"
 
 	"knomit/internal/foundation/config"
@@ -190,7 +191,7 @@ func boundJSON(t *testing.T, result *mcpgo.CallToolResult) []byte {
 // catalogue half of the tool, which is what these tests exercise.
 func catalogOf(t *testing.T, m *repos.Manager, ctx context.Context) map[string]any {
 	t.Helper()
-	res, err := ReposHandler(m)(ctx, mcpgo.CallToolRequest{})
+	res, err := ReposHandler(m)(localReach(ctx), mcpgo.CallToolRequest{})
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	text := resultText(t, res)
@@ -437,7 +438,7 @@ func TestRepos_NoDeadlockUnderConcurrentWriter(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		for i := 0; i < 50; i++ {
-			res, err := ReposHandler(m)(context.Background(), mcpgo.CallToolRequest{})
+			res, err := ReposHandler(m)(localReach(context.Background()), mcpgo.CallToolRequest{})
 			if err != nil {
 				done <- err
 				return
@@ -648,4 +649,11 @@ func TestRepos_UnresolvableBindingWithoutPin(t *testing.T) {
 	require.NotContains(t, bound, "kind")
 	require.NotContains(t, bound, "name")
 	require.Contains(t, bound["error"], "lookup failed")
+}
+
+// localReach is what the local edges (AuthMiddleware) record: every repo and
+// every lens. knomit_repos lists only what the caller reaches, and reach is
+// default-deny, so a catalogue test that means "a local caller" says so.
+func localReach(ctx context.Context) context.Context {
+	return auth.WithLensReach(auth.WithRepoReach(ctx, auth.AllRepos), auth.AllLenses)
 }

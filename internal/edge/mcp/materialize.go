@@ -203,7 +203,7 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 	}
 	rest := doc.Nodes[used:]
 	if len(rest) > 0 {
-		session, err := sWrite.toolSession.CreateToolSession(ctx, materializeToolPrefix+audience, b.WriteMountBranch(), doc.Root, b.PinID(), federate.ReadSetFingerprint(b))
+		session, err := sWrite.toolSession.CreateToolSession(ctx, materializeToolPrefix+audience, b.WriteMountBranch(), doc.Root, b.PinID(), federate.ReadSetFingerprint(b), callerOwner(ctx))
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 		}
@@ -236,6 +236,7 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 	// expiry. A cursor minted by another tool is refused the same way.
 	if session == nil || session.Status != "active" || session.Binding == "" ||
 		session.Binding != b.PinID() || session.ReadSet != federate.ReadSetFingerprint(b) ||
+		session.Owner != callerOwner(ctx) ||
 		!strings.HasPrefix(session.Tool, materializeToolPrefix) {
 		return mcpgo.NewToolResultError(errMaterializeExpired), nil
 	}

@@ -17,7 +17,8 @@ CREATE TABLE tool_sessions (
     branch       TEXT NOT NULL,
     path_prefix  TEXT NOT NULL DEFAULT '',
     binding      TEXT NOT NULL DEFAULT '',   -- binding IDENTITY the cursor is frozen to: `repo:<uid>` or `lens:<uid>` (Binding.PinID, lenses RFC §7.3) — NOT the display name, so a repo/lens rename leaves an in-flight cursor resumable; resume through another binding is rejected
-    read_set     TEXT NOT NULL DEFAULT '',   -- canonical read-set fingerprint (id12@branch,… sorted) the cursor is frozen to; resume against a re-pinned read set is rejected, indistinguishably from expiry (lenses RFC §7.3)
+    read_set     TEXT NOT NULL DEFAULT '',
+    owner        TEXT NOT NULL DEFAULT '',   -- WHO may resume it: the MCP endpoint it was minted on plus the caller's principal (mcp.callerOwner); resume by another owner is rejected, indistinguishably from expiry   -- canonical read-set fingerprint (id12@branch,… sorted) the cursor is frozen to; resume against a re-pinned read set is rejected, indistinguishably from expiry (lenses RFC §7.3)
     last_commit  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'active',
     created_at   TEXT NOT NULL,

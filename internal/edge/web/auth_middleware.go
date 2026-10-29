@@ -81,7 +81,7 @@ func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []strin
 			// repo dimension and nothing confines it to a resource, so it
 			// reaches every repo's routes (auth.ReachesRepo is default-deny,
 			// so this must be recorded, not assumed).
-			ctx := auth.WithRepoReach(r.Context(), auth.AllRepos)
+			ctx := auth.WithLensReach(auth.WithRepoReach(r.Context(), auth.AllRepos), auth.AllLenses)
 			if disabled {
 				next.ServeHTTP(w, r.WithContext(
 					auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindAnonymous, Via: auth.ViaNone})))

@@ -209,6 +209,14 @@ func mcpHTTPContext(ctx context.Context, r *http.Request) context.Context {
 	if reach, ok := auth.RepoReachFromContext(r.Context()); ok {
 		ctx = auth.WithRepoReach(ctx, reach)
 	}
+	if reach, ok := auth.LensReachFromContext(r.Context()); ok {
+		ctx = auth.WithLensReach(ctx, reach)
+	}
+	// The endpoint the call arrived on: with the principal, it OWNS what the
+	// call creates for later calls to resume (tool-session cursors, MCP
+	// tasks), so a cursor or task minted through one endpoint or by one
+	// principal reads as not found through any other.
+	ctx = mcp.WithEndpoint(ctx, r.URL.Path)
 	if pid, ok := clientsessions.VerifiedPIDFromContext(r.Context()); ok {
 		ctx = clientsessions.WithVerifiedPID(ctx, pid)
 	}

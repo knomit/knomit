@@ -44,7 +44,10 @@ const ChangesDescription = "What is different under a folder since a commit you 
 	"another branch) the call refuses with a named error instead of reporting false deletions: retry after " +
 	"sync, or omit `since`. " +
 	"Rows from the repo you write to are bare paths; rows from any other repo are kb://<id>/… paths, ready " +
-	"for knomit_explain. Rows are sorted by path; when `has_more` is true pass the returned `cursor` (alone) " +
+	"for knomit_explain. " +
+	"ON A LENS, each member is read only at the branch the lens pins it to, and the repo you write to also at your " +
+	"agent branch and your experiments; `branch` or `consensus` naming any other branch is refused. " +
+	"Rows are sorted by path; when `has_more` is true pass the returned `cursor` (alone) " +
 	"for the next page, which compares the SAME two commits of the same repo and branch."
 
 // changesTool returns the Tool definition for knomit_changes.
@@ -193,6 +196,14 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			return mcpgo.NewToolResultError(fmt.Sprintf("cursor is for branch %q of repo %s; pass the cursor alone", branch, repo12)), nil
 		}
 
+		// On a lens, a member is read only at the branch the lens pins it to,
+		// as the lens's REST routes serve it; the write repo keeps its own
+		// agent and experiment branches. Checked before the branch is looked
+		// up, so the refusal says nothing about which branches exist.
+		if b.FromLens() && !lensServesBranch(b, rt, branch) {
+			return mcpgo.NewToolResultError(lensBranchRefusal(b, rt, branch)), nil
+		}
+
 		// A bookmark names its repo; a bare hash means this one.
 		sinceRepo, sinceCommit, err := model.ParseChangesSince(q.Since)
 		if err != nil {
@@ -253,6 +264,38 @@ func resolveChangesRepo(b *repos.Binding, id string) (repos.ReadTarget, string) 
 		return repos.ReadTarget{RI: b.Write(), Branch: b.WriteMountBranch()}, ""
 	}
 	return repos.ReadTarget{}, fmt.Sprintf("repo %s is not mounted in this binding", id)
+}
+
+// lensServesBranch reports whether a lens binding lets knomit_changes read
+// branch of the member rt: the branch the lens pins that member to, and — for
+// the lens's WRITE repo only — that repo's own agent branch and its
+// experiments. Experiments are local (never pushed, never fetched), so every
+// exp/* branch of the write repo is one of its own, and the shape test needs
+// no store read. Any other branch of a member (its consensus branch unless
+// pinned, another machine's agent branch, a pushed branch) is not part of the
+// lens.
+func lensServesBranch(b *repos.Binding, rt repos.ReadTarget, branch string) bool {
+	if branch == rt.Branch {
+		return true
+	}
+	if rt.RI != b.Write() {
+		return false
+	}
+	if agent := rt.RI.AgentBranch(); agent != "" && branch == agent {
+		return true
+	}
+	return model.IsExperimentBranch(branch)
+}
+
+// lensBranchRefusal names what a lens does serve for this member, which is the
+// whole repair.
+func lensBranchRefusal(b *repos.Binding, rt repos.ReadTarget, branch string) string {
+	if rt.RI == b.Write() {
+		return fmt.Sprintf("lens %s reads its write repo %s at %q, its agent branch and its own experiments, not %q; "+
+			"omit branch and consensus, or connect to the repo itself for its other branches", b.Name(), rt.RI.Name(), rt.Branch, branch)
+	}
+	return fmt.Sprintf("lens %s reads member %s only at %q, not %q; omit branch and consensus, "+
+		"or connect to the repo itself for its other branches", b.Name(), rt.RI.Name(), rt.Branch, branch)
 }
 
 // describeChangesRepo renders a 12-hex id with its name when the binding

@@ -45,6 +45,10 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 	skills := newSkillSource()
 	prompts := newPromptLayer(skills)
 	prompts.addHooks(hooks)
+	// MCP tasks belong to the endpoint and principal that created them
+	// (owner.go): tasks/* are not tool calls, so no gate below sees them.
+	taskHooks := &server.TaskHooks{}
+	newTaskOwners().addHooks(hooks, taskHooks)
 	// Name the tool for the HTTP layer. Over streamable HTTP every call is the
 	// same POST .../mcp, so without this a slow-request warning cannot say which
 	// tool was slow. The annotation rides in the request context (mcp-go derives
@@ -100,6 +104,7 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 		// long-running tools (knomit_review) asynchronously and poll for
 		// completion via tasks/get instead of blocking on a single response.
 		server.WithTaskCapabilities(true, true, true),
+		server.WithTaskHooks(taskHooks),
 		// tools/list is filtered by what the caller may actually do. This is
 		// presentation only — the enforcement is gatePermission below, on the
 		// registration seam, because a filter cannot stop a call that never

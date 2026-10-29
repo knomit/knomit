@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/foundation/auth"
 )
 
 // lensMember is how a lens names one of its member repos on the wire: the uid
@@ -229,8 +231,17 @@ func writeLensView(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, reg
 // {"repo": name} spelling produces, and normalize() would drop that mount
 // silently — a lens quietly missing a member is worse than a 400.
 //
+// A member the lens does not ALREADY have (current) must also be a repo the
+// caller's credential reaches by name (auth.ReachesRepo, audit G4): a lens
+// token may add only repos it can already read, and it reaches no repo by
+// name, so it can add none — while removing members, re-sending the ones the
+// lens has, or editing the description stays open to it. A new member it
+// does not reach is answered exactly like a uid no repo has, so the refusal
+// says nothing about which repos exist. Local callers and whole-API tokens
+// reach every repo, so for them nothing changes.
+//
 // A nil registry cannot answer, so the check defers to the manager's validation.
-func checkLensMembers(reg *control.Registry, write string, reads []lensReadDTO) (title, detail string, err error) {
+func checkLensMembers(ctx context.Context, reg *control.Registry, current map[string]bool, write string, reads []lensReadDTO) (title, detail string, err error) {
 	if reg == nil {
 		return "", "", nil
 	}
@@ -238,6 +249,9 @@ func checkLensMembers(reg *control.Registry, write string, reads []lensReadDTO) 
 		rec, ok, err := reg.Get(uid)
 		if err != nil {
 			return "", "", err
+		}
+		if ok && !current[uid] && !auth.ReachesRepo(ctx, rec.Name) {
+			ok = false
 		}
 		if !ok {
 			return "Unknown repo uid", fmt.Sprintf(
@@ -271,8 +285,10 @@ func checkLensMembers(reg *control.Registry, write string, reads []lensReadDTO) 
 
 // rejectUnknownMembers writes the 400 (or 500) and reports whether the request
 // should stop. Shared by create and patch so the two cannot drift.
-func rejectUnknownMembers(w http.ResponseWriter, r *http.Request, reg *control.Registry, write string, reads []lensReadDTO) bool {
-	title, detail, err := checkLensMembers(reg, write, reads)
+//
+// current holds the uids the lens already has as members (nil on create).
+func rejectUnknownMembers(w http.ResponseWriter, r *http.Request, reg *control.Registry, current map[string]bool, write string, reads []lensReadDTO) bool {
+	title, detail, err := checkLensMembers(r.Context(), reg, current, write, reads)
 	if err != nil {
 		log.Error().Err(err).Str("path", r.URL.Path).Msg("resolve lens member uids failed")
 		hal.WriteProblem(w, http.StatusInternalServerError, "Lookup failed", "resolve lens members failed", r.URL.Path)
@@ -283,6 +299,16 @@ func rejectUnknownMembers(w http.ResponseWriter, r *http.Request, reg *control.R
 		return true
 	}
 	return false
+}
+
+// lensMemberUIDs is the set of repo uids l already has: its write repo and
+// every read mount.
+func lensMemberUIDs(l control.Lens) map[string]bool {
+	out := map[string]bool{l.WriteUID: true}
+	for _, rd := range l.Reads {
+		out[rd.RepoUID] = true
+	}
+	return out
 }
 
 // handleHALLenses serves GET /api/v1/lenses.
@@ -392,7 +418,7 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
-		if rejectUnknownMembers(w, r, m.Repos(), req.Write.UID, req.Reads) {
+		if rejectUnknownMembers(w, r, m.Repos(), nil, req.Write.UID, req.Reads) {
 			return
 		}
 		reads := make([]control.LensRead, len(req.Reads))
@@ -479,7 +505,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			}
 			lens.Reads = reads
 		}
-		if rejectUnknownMembers(w, r, m.Repos(), providedWrite, providedReads) {
+		if rejectUnknownMembers(w, r, m.Repos(), lensMemberUIDs(current), providedWrite, providedReads) {
 			return
 		}
 
