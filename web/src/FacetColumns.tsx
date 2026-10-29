@@ -44,13 +44,22 @@ export const FacetStacked = createContext(false);
  *  left the content about 150px and a confirm card 50px (#531 re-review S5).
  *  The width is the container's own, measured, so it follows the rail and
  *  the window alike; unmeasured (0, as in jsdom) is the side-by-side layout. */
-export function FacetColumns({ left, children, scrollRef, testId }: {
+export function FacetColumns({ left, children, scrollRef, testId, indexMaxWidth }: {
   left: ReactNode;
+  /** Caps the index column below the Library's width. For a page whose index is
+   *  a short list of section names (Settings), where the Library's 35% share
+   *  would starve the content. The splitter is not offered while it applies:
+   *  dragging could not move a capped column. Omitted, the index follows the
+   *  Library exactly as before. */
+  indexMaxWidth?: number;
   children: ReactNode;
   scrollRef?: React.Ref<HTMLDivElement>;
   testId?: string;
 }) {
-  const { width, onSplitterDown } = useFacetLayout();
+  const layout = useFacetLayout();
+  const capped = indexMaxWidth !== undefined && layout.width > indexMaxWidth;
+  const width = capped ? indexMaxWidth : layout.width;
+  const onSplitterDown = capped ? undefined : layout.onSplitterDown;
   const box = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
