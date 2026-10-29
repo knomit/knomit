@@ -47,8 +47,6 @@
 .k-mat-article { padding: 26px 28px 56px; min-width: 0; transition: opacity 0.15s; }
 .k-mat-article[data-stale='true'] { opacity: 0.38; }
 
-.k-mat-notice { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: #c9b27a; background: rgba(229,162,60,0.08); border: 1px solid rgba(229,162,60,0.25); border-radius: 4px; padding: 6px 10px; margin-bottom: 18px; }
-.k-mat-notice button { margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; }
 
 .k-mat-group { font-family: var(--k-font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #5d6676; margin: 30px 0 4px; }
 .k-mat-sec { padding: 22px 0 22px; border-top: 1px solid #1e222a; min-width: 0; }
@@ -122,3 +120,19 @@ html[data-mat-focus] [data-testid='library-splitter'] { display: none !important
 .k-mat-link .k-mat-n { color: #7f8b9c; font-family: var(--k-font-mono); font-size: 10.5px; margin-left: 4px; }
 
 .k-mat-actions { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+/* "more" at the end of the article: the app's quiet text action (as the facet
+   panel's "+N more"): small, muted, no border, brighter on hover. */
+.k-mat-more { background: none; border: none; padding: 0; font: inherit; font-family: var(--k-font-mono); font-size: 10.5px; color: #5f6a7c; cursor: pointer; }
+.k-mat-more:hover { color: #9fb0c8; }
+.k-mat-more:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 3px; border-radius: 2px; }
+
+/* Back to top: floats at the right of the reading pane once scrolled down. */
+.k-mat { position: relative; }
+.k-mat-top { position: absolute; right: 22px; bottom: 22px; z-index: 5; width: 30px; height: 30px; border-radius: 50%; background: #1a1e28; border: 1px solid #2a3040; color: #8a96a8; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0.85; padding: 0; }
+.k-mat-top:hover { opacity: 1; color: #cfd8e6; border-color: #3d4a66; }
+.k-mat-top:active { opacity: 0.6; }
+
+/* Sections deeper than the numbered levels: no number, a thin vertical guide line in
+   the theme's muted line colour, one indent step per level past the third. */
+.k-mat-deep { margin-left: calc(var(--k-deep, 1) * 14px); padding-left: 12px; border-left: 1px solid #2a3040; }

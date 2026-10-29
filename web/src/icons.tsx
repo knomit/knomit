@@ -425,3 +425,11 @@ export const FocusIcon = ({ color, size = 14 }: IconProps) => (
     <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
   </svg>
 );
+
+// An arrow pointing up: scroll back to the top (the materialize view's floating button).
+export const ArrowUpIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="19" x2="12" y2="5"/>
+    <polyline points="5 12 12 5 19 12"/>
+  </svg>
+);

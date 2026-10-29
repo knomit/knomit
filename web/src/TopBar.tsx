@@ -5,6 +5,7 @@ import { isLensContext } from './state';
 import type { RepoInfo } from './api';
 import { BookIcon, FleetIcon, GearIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
+import { useMatFocus } from './matFocus';
 import { otherRepoFailing } from './facets';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
@@ -67,6 +68,11 @@ export interface ServerBar {
 export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null, gear = true }: Props) {
   const lensCtx = isLensContext(state);
   const serverOpen = server !== null;
+  // Over the materialize view's Focus mode the rail is hidden, so its toggle stays
+  // on screen but inert: disabled (neither clickable nor focusable), no hover, and
+  // the rail's open/closed state is left exactly as it was.
+  const matFocus = useMatFocus();
+  const railInert = serverOpen || matFocus;
   // Held while a connect commit runs in the Settings facet: opening the server
   // pages would unmount the page it reports to. (The server pages host nothing
   // that locks, and the lock cannot be raised while they are open.)
@@ -183,15 +189,16 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             data-nodrag
             onClick={onToggleRail}
             onMouseDown={noMouseFocus}
-            disabled={serverOpen}
+            disabled={railInert}
+            aria-disabled={railInert}
             aria-pressed={railOpen}
             aria-label={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories, lenses and fleet' : 'Show repositories, lenses and fleet'}
-            title={serverOpen ? RAIL_HIDDEN : railOpen ? 'Hide repositories, lenses and fleet  (⌘B)' : 'Show repositories, lenses and fleet  (⌘B)'}
+            title={serverOpen ? RAIL_HIDDEN : matFocus ? RAIL_FOCUS : railOpen ? 'Hide repositories, lenses and fleet  (⌘B)' : 'Show repositories, lenses and fleet  (⌘B)'}
             style={{
               width: 26, height: 26, flexShrink: 0, position: 'relative',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: 'none', borderRadius: 4, padding: 0, cursor: serverOpen ? 'default' : 'pointer',
-              color: serverOpen ? '#3d3d3d' : railOpen ? '#dfe9e2' : '#777',
+              border: 'none', borderRadius: 4, padding: 0, cursor: railInert ? 'default' : 'pointer',
+              color: railInert ? '#3d3d3d' : railOpen ? '#dfe9e2' : '#777',
               background: railOpen ? '#1a231d' : 'transparent',
               ...noDrag,
             }}
@@ -346,6 +353,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
 // The rail is not shown over the server pages, which are not about a target;
 // the toggle stays so the bar does not shift, and says why it is off.
+const RAIL_FOCUS = 'Repositories, lenses and fleet are unavailable while reading in Focus';
 const RAIL_HIDDEN = 'Repositories, lenses and fleet are hidden over the server pages';
 
 const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings', members: 'Members' };

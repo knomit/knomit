@@ -3,7 +3,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@te
 import { useState } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { MaterializeView } from './MaterializeView';
+import { BACK_TO_TOP_PX, MaterializeView } from './MaterializeView';
 import { useMaterializeStream } from './useMaterializeStream';
 import { fixtureId, makeFixtureApi } from './materializeFixture';
 import type { FixtureOptions } from './materializeFixture';
@@ -49,17 +49,17 @@ const liveObservers = () => MockIO.all.filter(o => o.live).length;
 const ns = () => screen.queryAllByTestId('mat-section').map(e => Number((e as HTMLElement).dataset.matN));
 const settle = () => act(() => new Promise<void>(r => setTimeout(r, 15)));
 
-function Harness({ api, save, initial = DEFAULT_OPTIONS, onOptions }: {
-  api: MaterializeApi; save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions; onOptions?: (o: MatOptions) => void;
+function Harness({ api, save, initial = DEFAULT_OPTIONS, onOptions, canChoose = () => true }: {
+  api: MaterializeApi; save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions; onOptions?: (o: MatOptions) => void; canChoose?: () => boolean;
 }) {
   const [options, setOptions] = useState(initial);
   return (
-    <MaterializeView target={TARGET} title="Fact number 1" options={options} api={api} save={save}
+    <MaterializeView target={TARGET} title="Fact number 1" options={options} api={api} save={save} canChoose={canChoose}
       onOptionsChange={o => { setOptions(o); onOptions?.(o); }} onBack={() => {}} />
   );
 }
 
-function setup(fx: FixtureOptions = {}, extra: { save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions } = {}) {
+function setup(fx: FixtureOptions = {}, extra: { save?: (n: string, t: string, ty?: string) => Promise<SaveOutcome>; initial?: MatOptions; canChoose?: () => boolean } = {}) {
   const f = makeFixtureApi(fx);
   const utils = render(<Harness api={f.api} {...extra} />);
   return { ...f, ...utils };
@@ -359,17 +359,17 @@ describe('changing options mid-read', () => {
       expect(screen.queryByTestId('mat-notice')).toBeNull();
     });
 
-    it('lands on the nearest earlier section and says so when that section is gone', async () => {
+    it('lands on the nearest earlier section when that section is gone, and shows NO banner about it', async () => {
       setup({ total: 12, pageSize: 3 });
       await waitFor(() => expect(ns()).toHaveLength(3));
-      layout();
+      const scrollTop = layout();
       const input = screen.getByTestId('mat-facts');
       fireEvent.change(input, { target: { value: '2' } });                 // the new walk has only §1 and §2
       fireEvent.blur(input);
-      const note = await screen.findByTestId('mat-notice');
-      expect(note).toHaveTextContent('Fact number 3');
-      expect(note).toHaveTextContent('nearest earlier section');
-      expect(note).toHaveTextContent('Fact number 2');
+      await waitFor(() => expect(ns()).toEqual([1, 2]));
+      await waitFor(() => expect(scrollTop()).toBe(-108));                 // section 2, at (2-3)*100 - 8: the nearest earlier one
+      expect(screen.queryByTestId('mat-notice')).toBeNull();
+      expect(document.body.textContent).not.toMatch(/not in this walk any more|nearest earlier section/);
     });
   });
 });
@@ -485,9 +485,8 @@ describe('top bar', () => {
     await waitFor(() => expect(ns()).toHaveLength(3));
     const bar = screen.getByTestId('mat-bar');
     expect(bar).toHaveTextContent('Max depth');
-    expect(bar).toHaveTextContent('of 10');
     expect(bar).toHaveTextContent('Max facts');
-    expect(bar).toHaveTextContent('of 500');
+    expect(bar.textContent).not.toMatch(/of 10|of 500/);                  // the limits are enforced, not printed
     expect(within(bar).getByTestId('mat-cross-kb')).not.toBeChecked();
     expect(within(bar).getByTestId('mat-unpin')).not.toBeChecked();
     expect(screen.getByTestId('mat-progress')).toHaveTextContent('3 of ≤9 facts · depth 4');
@@ -798,5 +797,248 @@ describe('back control', () => {
     const lib = readFileSync(resolve(__dirname, 'LibraryHeader.tsx'), 'utf8');
     expect(lib).toContain('<ChevronLeftIcon color={canBack ?');   // the control it copies
     expect(lib).toContain('width: 20, height: 26');
+  });
+});
+
+describe('end of the article: more, and back to top', () => {
+  it('"more" replaces "Go deeper": a quiet borderless text action, and it still goes one level deeper', async () => {
+    const { pageCalls } = setup({ total: 3, pageSize: 3, depthBeyond: 4 });
+    await waitFor(() => expect(screen.getByTestId('mat-end')).toBeInTheDocument());
+    const more = screen.getByTestId('mat-deeper');
+    expect(more.textContent).toBe('more');
+    expect(document.body.textContent).not.toMatch(/Go deeper/);
+    expect(more).toHaveClass('k-mat-more');
+    expect(more).not.toHaveClass('k-mat-btn');                  // not the bordered button
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = /^\.k-mat-more \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).toMatch(/border: none/);
+    expect(rule).toMatch(/background: none/);
+    expect(css).toMatch(/\.k-mat-more:hover \{ color: #9fb0c8/);   // the facet panel's "+N more" hover colour
+    fireEvent.click(more);
+    await waitFor(() => expect(pageCalls().at(-1)?.options.depth).toBe(5));
+  });
+
+  it('the back-to-top arrow appears only after scrolling down, and scrolls the article to the top', async () => {
+    setup({ total: 3, pageSize: 3 });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const box = screen.getByTestId('mat-scroll');
+    const scrollTo = vi.fn();
+    (box as HTMLElement & { scrollTo: unknown }).scrollTo = scrollTo;
+    expect(screen.queryByTestId('mat-top')).toBeNull();
+    Object.defineProperty(box, 'scrollTop', { value: BACK_TO_TOP_PX - 100, configurable: true, writable: true });
+    fireEvent.scroll(box);
+    expect(screen.queryByTestId('mat-top')).toBeNull();          // not far enough yet
+    (box as unknown as { scrollTop: number }).scrollTop = BACK_TO_TOP_PX + 100;
+    fireEvent.scroll(box);
+    const arrow = await screen.findByTestId('mat-top');
+    expect(arrow).toHaveAttribute('aria-label', 'Back to top');
+    expect(arrow).toHaveAttribute('title', 'Back to top');
+    expect(arrow.querySelector('svg')).not.toBeNull();
+    fireEvent.click(arrow);
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 0 }));
+    (box as unknown as { scrollTop: number }).scrollTop = 0;
+    fireEvent.scroll(box);
+    expect(screen.queryByTestId('mat-top')).toBeNull();          // gone again at the top
+  });
+});
+
+describe('export asks where to save', () => {
+  const saved: SaveOutcome = { kind: 'saved', where: '/home/me/doc.md' };
+
+  it('a cancelled save dialog writes nothing and shows nothing alarming (no status, no error, button back to idle)', async () => {
+    const save = vi.fn().mockResolvedValue({ kind: 'cancelled' } as SaveOutcome);
+    setup({ total: 3, pageSize: 3 }, { save });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await settle();
+    for (const id of ['mat-export-done', 'mat-export-failed', 'mat-export-ready', 'mat-export-confirm']) expect(screen.queryByTestId(id)).toBeNull();
+    expect(screen.getByTestId('mat-export')).toHaveAttribute('aria-label', 'Export');
+    expect(document.body.textContent).not.toMatch(/cancel|Not saved/i);
+  });
+
+  it('a browser that cannot ask where to save says where the file will go BEFORE exporting; Cancel exports nothing', async () => {
+    const save = vi.fn().mockResolvedValue(saved);
+    const { calls } = setup({ total: 3, pageSize: 3 }, { save, canChoose: () => false });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    const note = await screen.findByTestId('mat-export-confirm');
+    expect(note).toHaveTextContent('cannot ask where to save');
+    expect(note).toHaveTextContent('download location');
+    expect(calls.filter(c => c.kind === 'export')).toHaveLength(0);
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('mat-export-nevermind'));
+    await settle();
+    expect(screen.queryByTestId('mat-export-confirm')).toBeNull();
+    expect(calls.filter(c => c.kind === 'export')).toHaveLength(0);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('...and Download goes ahead, saving once', async () => {
+    const save = vi.fn().mockResolvedValue({ kind: 'downloaded', name: 'x.md' } as SaveOutcome);
+    const { calls } = setup({ total: 3, pageSize: 3 }, { save, canChoose: () => false });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    fireEvent.click(await screen.findByTestId('mat-export-go'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(calls.filter(c => c.kind === 'export')).toHaveLength(1);
+  });
+
+  it('a dialog the browser will not open without a fresh click: the export waits, "Save as…" opens it, and nothing is lost', async () => {
+    const save = vi.fn()
+      .mockResolvedValueOnce({ kind: 'needs-gesture' } as SaveOutcome)
+      .mockResolvedValueOnce(saved);
+    const { calls } = setup({ total: 3, pageSize: 3 }, { save });
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByTestId('mat-export'));
+    const ready = await screen.findByTestId('mat-export-ready');
+    expect(ready).toHaveTextContent('ready');
+    expect(screen.queryByTestId('mat-export-done')).toBeNull();
+    fireEvent.click(screen.getByTestId('mat-export-saveas'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1][1]).toBe(save.mock.calls[0][1]);             // the same fetched document, not a second export
+    expect(calls.filter(c => c.kind === 'export')).toHaveLength(1);
+    expect(await screen.findByTestId('mat-export-done')).toHaveTextContent('Saved /home/me/doc.md');
+  });
+
+  it('is wired to the asking save, not the silent one', () => {
+    const src = readFileSync(resolve(__dirname, 'MaterializeView.tsx'), 'utf8');
+    expect(src).toContain('save = saveTextFileAs');
+    expect(src).not.toMatch(/save = saveTextFile\b[^A]/);
+  });
+});
+
+describe('Max depth / Max facts are clamped to the server\'s range', () => {
+  // The server refuses depth outside 0..10 and max_nodes outside 1..500 (materialize.Options.Validate).
+  async function typeIn(id: string, value: string, commit: 'blur' | 'enter' = 'blur') {
+    const input = screen.getByTestId(id) as HTMLInputElement;
+    fireEvent.change(input, { target: { value } });
+    const shown = input.value;
+    if (commit === 'blur') fireEvent.blur(input); else fireEvent.keyDown(input, { key: 'Enter' });
+    return shown;
+  }
+  const callOpts = (f: ReturnType<typeof makeFixtureApi>) => f.pageCalls().map(c => c.options);
+
+  it('Max facts: typing past 500 shows 500, typing 0 shows 1; blur commits the clamped value only', async () => {
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(await typeIn('mat-facts', '99999')).toBe('500');
+    await waitFor(() => expect(callOpts(f).at(-1)?.maxFacts).toBe(500));
+    expect(await typeIn('mat-facts', '0')).toBe('1');
+    await waitFor(() => expect(callOpts(f).at(-1)?.maxFacts).toBe(1));
+    expect(callOpts(f).every(o => o.maxFacts >= 1 && o.maxFacts <= 500)).toBe(true);   // nothing out of range reached the server
+  });
+
+  it('Max depth: typing past 10 shows 10, and 0 is allowed (the server accepts 0..10); Enter commits too', async () => {
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    expect(await typeIn('mat-depth', '99', 'enter')).toBe('10');
+    await waitFor(() => expect(callOpts(f).at(-1)?.depth).toBe(10));
+    expect(await typeIn('mat-depth', '0')).toBe('0');
+    await waitFor(() => expect(callOpts(f).at(-1)?.depth).toBe(0));
+    expect(callOpts(f).every(o => o.depth >= 0 && o.depth <= 10)).toBe(true);
+  });
+
+  it('letters are dropped and an emptied field reverts on blur without sending anything', async () => {
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    render(<Harness api={f.api} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    const before = f.pageCalls().length;
+    expect(await typeIn('mat-facts', 'abc')).toBe('');
+    expect((screen.getByTestId('mat-facts') as HTMLInputElement).value).toBe('200');   // reverted
+    expect(f.pageCalls().length).toBe(before);
+    expect(await typeIn('mat-facts', '2x5')).toBe('25');
+  });
+
+  it('the steppers stop at both ends of both fields (disabled, so no out-of-range value can be sent)', async () => {
+    const lo = makeFixtureApi({ total: 3, pageSize: 3 });
+    const { unmount } = render(<MaterializeView target={TARGET} title="T" options={{ depth: 0, maxFacts: 1, crossKb: false, unpin: false }} onOptionsChange={() => {}} onBack={() => {}} api={lo.api} />);
+    await waitFor(() => expect(ns().length).toBeGreaterThan(0));
+    expect(screen.getByLabelText('Lower Max depth')).toBeDisabled();
+    expect(screen.getByLabelText('Lower Max facts')).toBeDisabled();
+    expect(screen.getByLabelText('Raise Max depth')).not.toBeDisabled();
+    expect(screen.getByLabelText('Raise Max facts')).not.toBeDisabled();
+    unmount();
+    const hi = makeFixtureApi({ total: 3, pageSize: 3 });
+    render(<MaterializeView target={TARGET} title="T" options={{ depth: 10, maxFacts: 500, crossKb: false, unpin: false }} onOptionsChange={() => {}} onBack={() => {}} api={hi.api} />);
+    await waitFor(() => expect(ns().length).toBeGreaterThan(0));
+    expect(screen.getByLabelText('Raise Max depth')).toBeDisabled();
+    expect(screen.getByLabelText('Raise Max facts')).toBeDisabled();
+    expect(screen.getByLabelText('Lower Max depth')).not.toBeDisabled();
+  });
+
+  it('a step from 480 facts lands on 500, not 530; a step from 5 lands on 1, not -45', async () => {
+    const f = makeFixtureApi({ total: 3, pageSize: 3 });
+    const { unmount } = render(<Harness api={f.api} initial={{ ...DEFAULT_OPTIONS, maxFacts: 480 }} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByLabelText('Raise Max facts'));
+    await waitFor(() => expect(callOpts(f).at(-1)?.maxFacts).toBe(500));
+    unmount();
+    const g = makeFixtureApi({ total: 3, pageSize: 3 });
+    render(<Harness api={g.api} initial={{ ...DEFAULT_OPTIONS, maxFacts: 5 }} />);
+    await waitFor(() => expect(ns()).toHaveLength(3));
+    fireEvent.click(screen.getByLabelText('Lower Max facts'));
+    await waitFor(() => expect(callOpts(g).at(-1)?.maxFacts).toBe(1));
+  });
+});
+
+describe('deep section numbers: three levels, then a guide line', () => {
+  // 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7: a chain, so 2 is "1.", 3 "1.1", 4 "1.1.1", 5 "1.1.1.1", 6 "1.1.1.1.1" ...
+  const chain = { 1: [2], 2: [3], 3: [4], 4: [5], 5: [6], 6: [7] };
+  const head = (i: number) => screen.getAllByTestId('mat-section')[i];
+  const hnum = (i: number) => head(i).querySelector('[data-testid="mat-num"]')?.textContent?.trim() ?? '';
+
+  it('levels 1-3 carry a number; level 4 and deeper carry none but a guide line, one indent step per extra level', async () => {
+    setup({ total: 7, pageSize: 7, tree: chain });
+    await waitFor(() => expect(ns()).toHaveLength(7));
+    expect([0, 1, 2, 3, 4, 5, 6].map(hnum)).toEqual(['', '1.', '1.1', '1.1.1', '', '', '']);
+    expect(head(3).className).not.toMatch(/k-mat-deep/);               // 1.1.1 is still a numbered level
+    expect(head(4)).toHaveClass('k-mat-deep');
+    expect(head(4).getAttribute('data-deep')).toBe('1');
+    expect(head(5).getAttribute('data-deep')).toBe('2');
+    expect(head(6).getAttribute('data-deep')).toBe('3');
+    expect(head(4).style.getPropertyValue('--k-deep')).toBe('1');
+    expect(head(6).style.getPropertyValue('--k-deep')).toBe('3');
+    const css = readFileSync(resolve(__dirname, 'materialize.css'), 'utf8');
+    const rule = /^\.k-mat-deep \{([^}]*)\}/m.exec(css)![1];
+    expect(rule).toMatch(/border-left: 1px solid #2a3040/);            // thin, in the theme's muted line colour
+    expect(rule).toMatch(/margin-left: calc\(var\(--k-deep, 1\) \* 14px\)/);
+    expect(head(4).querySelector('.k-mat-h')?.textContent).toBe('Fact number 5: what it decided and why it matters to the one citing it');   // no number prefix text
+  });
+
+  it('a deep heading\'s tooltip carries its FULL position; numbered headings need none; builds-on links still show no number', async () => {
+    setup({ total: 7, pageSize: 7, tree: chain });
+    await waitFor(() => expect(ns()).toHaveLength(7));
+    expect(head(4).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1');
+    expect(head(5).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1.1');
+    expect(head(6).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1.1.1');
+    expect(head(3).querySelector('.k-mat-h')?.hasAttribute('title')).toBe(false);
+    fireEvent.click(within(head(4)).getByTestId('mat-builds-toggle'));
+    expect(within(head(4)).getByTestId('mat-builds-link').textContent).not.toMatch(/\d\.\d/);
+  });
+
+  it('the heading level still follows depth and is capped at h6', async () => {
+    setup({ total: 7, pageSize: 7, tree: chain });
+    await waitFor(() => expect(ns()).toHaveLength(7));
+    const levels = [0, 1, 2, 3, 4, 5, 6].map(i => head(i).querySelector('.k-mat-h')?.tagName);
+    expect(levels.every(l => /^H[2-6]$/.test(l ?? ''))).toBe(true);
+  });
+
+  it('numbers (and tooltips) do not change as pages append', async () => {
+    setup({ total: 7, pageSize: 2, tree: chain });
+    await waitFor(() => expect(ns()).toHaveLength(2));
+    const snap = () => screen.getAllByTestId('mat-section').map(sec => [sec.querySelector('[data-testid="mat-num"]')?.textContent ?? '', sec.querySelector('.k-mat-h')?.getAttribute('title') ?? '']);
+    let before = snap();
+    for (let i = 0; i < 3; i++) {
+      nearBottom();
+      await waitFor(() => expect(ns().length).toBeGreaterThan(before.length));
+      const after = snap();
+      expect(after.slice(0, before.length)).toEqual(before);        // every earlier section keeps its number and tooltip
+      before = after;
+    }
+    expect(ns()).toHaveLength(7);
+    expect(head(6).querySelector('.k-mat-h')).toHaveAttribute('title', '1.1.1.1.1.1');
   });
 });

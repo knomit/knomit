@@ -21,11 +21,18 @@ export type SaveOutcome =
   | { kind: 'saved'; where: string }
   | { kind: 'downloaded'; name: string }
   | { kind: 'cancelled' }
+  /** saveTextFileAs only: the browser's save dialog refused to open because the
+   *  click that started the export is too old (the export took a while). The
+   *  caller offers a button, and the click on THAT opens the dialog. */
+  | { kind: 'needs-gesture' }
   | { kind: 'failed'; message: string };
 
 /** NativeService.WriteFile's bound name: packagePath.TypeName.MethodName,
  *  and NativeService is in package main (see the desktop's SettingsApp). */
 export const NATIVE_WRITE_FILE = 'main.NativeService.WriteFile';
+/** NativeService.SaveFileAs: the native save dialog, then the write. Resolves
+ *  with the path the user chose, or '' when they cancelled. */
+export const NATIVE_SAVE_FILE_AS = 'main.NativeService.SaveFileAs';
 const RUNTIME_URL = '/wails/runtime.js';
 
 type Picker = (opts: { suggestedName: string }) => Promise<{ name?: string; createWritable: () => Promise<{ write: (d: Blob) => Promise<void>; close: () => Promise<void> }> }>;
@@ -34,6 +41,8 @@ export interface SaveEnv {
   desktop: boolean;
   /** The desktop shell's WriteFile: resolves with the absolute path written. */
   nativeWrite: (name: string, text: string) => Promise<string>;
+  /** The desktop shell's SaveFileAs (native dialog + write); '' = cancelled. */
+  nativeSaveAs?: (name: string, text: string) => Promise<string>;
   /** The browser's save dialog, when it has one. */
   picker?: Picker;
   /** A plain download. */
@@ -48,6 +57,12 @@ export function defaultSaveEnv(): SaveEnv {
       const m = (await import(/* @vite-ignore */ RUNTIME_URL)) as { Call: { ByName: (n: string, ...a: unknown[]) => Promise<unknown> } };
       const path = await m.Call.ByName(NATIVE_WRITE_FILE, name, text);
       if (typeof path !== 'string' || !path) throw new Error('the desktop app did not say where it wrote the file');
+      return path;
+    },
+    nativeSaveAs: async (name, text) => {
+      const m = (await import(/* @vite-ignore */ RUNTIME_URL)) as { Call: { ByName: (n: string, ...a: unknown[]) => Promise<unknown> } };
+      const path = await m.Call.ByName(NATIVE_SAVE_FILE_AS, name, text);
+      if (typeof path !== 'string') throw new Error('the desktop app did not say where it wrote the file');
       return path;
     },
     picker: typeof w?.showSaveFilePicker === 'function' ? w.showSaveFilePicker.bind(w) : undefined,
@@ -80,6 +95,47 @@ export async function saveTextFile(name: string, text: string, type = 'text/plai
   }
 }
 
+/** Whether this environment can ASK where to save: the desktop's native dialog,
+ *  or a browser with showSaveFilePicker (Chrome, Edge). Safari and Firefox
+ *  cannot; a caller that must not drop a file somewhere unasked tells the user
+ *  first (see MaterializeView's export confirmation). */
+export function canChooseLocation(env: SaveEnv = defaultSaveEnv()): boolean {
+  return env.desktop || Boolean(env.picker);
+}
+
+/** saveTextFileAs saves text as name AFTER ASKING where: the desktop's native
+ *  save dialog (suggesting name), else the browser's showSaveFilePicker. A
+ *  cancelled dialog writes nothing and is `cancelled`. Where neither exists it
+ *  falls back to a plain download, which the browser places itself; callers
+ *  check canChooseLocation first and say so. It never throws. */
+export async function saveTextFileAs(name: string, text: string, type = 'text/plain', env: SaveEnv = defaultSaveEnv()): Promise<SaveOutcome> {
+  try {
+    if (env.desktop) {
+      if (!env.nativeSaveAs) throw new Error('the desktop app has no save dialog');
+      const where = await env.nativeSaveAs(name, text);
+      return where ? { kind: 'saved', where } : { kind: 'cancelled' };
+    }
+    if (env.picker) {
+      let handle;
+      try {
+        handle = await env.picker({ suggestedName: name });
+      } catch (e) {
+        if (e instanceof Error && e.name === 'AbortError') return { kind: 'cancelled' };
+        if (e instanceof Error && (e.name === 'SecurityError' || e.name === 'NotAllowedError')) return { kind: 'needs-gesture' };
+        throw e;
+      }
+      const out = await handle.createWritable();
+      await out.write(new Blob([text], { type }));
+      await out.close();
+      return { kind: 'saved', where: handle.name || name };
+    }
+    env.download(name, text, type);
+    return { kind: 'downloaded', name };
+  } catch (e) {
+    return { kind: 'failed', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 function blobDownload(name: string, text: string, type: string): void {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement('a');
@@ -97,6 +153,7 @@ export function saveOutcomeLine(o: SaveOutcome): string {
     case 'saved': return `Saved ${o.where}`;
     case 'downloaded': return `${o.name} was handed to the browser as a download; check that it arrived.`;
     case 'cancelled': return 'Not saved: the save was cancelled.';
+    case 'needs-gesture': return 'Not saved yet: choose where to save it.';
     case 'failed': return `Not saved: ${o.message}`;
   }
 }

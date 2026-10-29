@@ -1,8 +1,8 @@
 import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
-import { ChevronDownIcon, ChevronLeftIcon, DownloadIcon, FocusIcon } from './icons';
-import { saveOutcomeLine, saveTextFile } from './saveFile';
+import { ArrowUpIcon, ChevronDownIcon, ChevronLeftIcon, DownloadIcon, FocusIcon } from './icons';
+import { canChooseLocation, saveOutcomeLine, saveTextFileAs } from './saveFile';
 import type { SaveOutcome } from './saveFile';
 import { MARK_LATEST_OTHER_KB, MAX_DEPTH, MAX_FACTS, materializeApi } from './materializeApi';
 import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './materializeApi';
@@ -27,6 +27,10 @@ type ExportState =
   | { kind: 'idle' }
   | { kind: 'running'; bytes: number }
   | { kind: 'failed'; message: string }
+  /** This browser cannot ask where to save: say where the file will go, first. */
+  | { kind: 'confirm' }
+  /** Fetched, but the browser's save dialog needs a fresh click to open. */
+  | { kind: 'ready'; text: string; name: string }
   | { kind: 'done'; line: string };
 
 /** Where to scroll once the section is on screen. 'restore' is the place the
@@ -40,14 +44,23 @@ function Stepper({ label, value, max, min, step, onCommit, testid }: {
   onCommit: (n: number) => void; testid: string;
 }) {
   // What the reader is typing, until they commit it; otherwise the value itself.
+  // The range is the server's (depth 0..10, facts 1..500) and is enforced HERE:
+  // typing clamps as you type, blur and Enter clamp and commit, the buttons stop
+  // at the ends, and an out-of-range number never reaches onCommit.
   const [draft, setDraft] = useState<string | null>(null);
   const text = draft ?? String(value);
+  const clamp = (n: number) => Math.min(max, Math.max(min, Math.trunc(n)));
   const apply = (raw: string) => {
     setDraft(null);
     const n = Number(raw);
     if (raw.trim() === '' || !Number.isFinite(n)) return;
-    const c = Math.min(max, Math.max(min, Math.trunc(n)));
+    const c = clamp(n);
     if (c !== value) onCommit(c);
+  };
+  const onType = (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    if (digits === '') { setDraft(''); return; }
+    setDraft(String(clamp(Number(digits))));
   };
   return (
     <span className="k-mat-ctl">
@@ -55,11 +68,10 @@ function Stepper({ label, value, max, min, step, onCommit, testid }: {
       <span className="k-mat-step">
         <button type="button" aria-label={`Lower ${label}`} disabled={value <= min} onClick={() => apply(String(value - step))}>−</button>
         <input aria-label={label} data-testid={testid} inputMode="numeric" value={text}
-          onChange={e => setDraft(e.target.value)} onBlur={e => apply(e.target.value)}
+          onChange={e => onType(e.target.value)} onBlur={e => apply(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') apply((e.target as HTMLInputElement).value); }} />
         <button type="button" aria-label={`Raise ${label}`} disabled={value >= max} onClick={() => apply(String(value + step))}>+</button>
       </span>
-      <span className="k-mat-of">of {max}</span>
     </span>
   );
 }
@@ -100,6 +112,11 @@ function Disclosure({ label, count, open, onToggle, testid, flag }: {
   );
 }
 
+/** How many levels of the outline carry a printed number: "1.", "1.1", "1.1.1".
+ *  Deeper sections are unnumbered and show their depth as an indented guide line;
+ *  their full position is in the heading's tooltip. */
+export const NUMBERED_LEVELS = 3;
+
 /** The number as a heading prefix: "1." for a top-level section, "1.1" below it. */
 function numberPrefix(num: string): string {
   return num.includes('.') ? num : `${num}.`;
@@ -112,6 +129,10 @@ const Section = memo(function Section({ node, group, num, onGoto }: {
   onGoto: (l: MatLink) => void;
 }) {
   const level = headingLevel(node.depth);
+  // The outline level of this section (1.1.1 is level 3); beyond NUMBERED_LEVELS it is
+  // unnumbered and indented one guide-line step per level past it.
+  const outline = num ? num.split('.').length : 0;
+  const deep = Math.max(0, outline - NUMBERED_LEVELS);
   const cross = node.marks?.includes(MARK_LATEST_OTHER_KB);
   // Open/closed is the reader's, per section, and not remembered anywhere.
   const [builtOpen, setBuiltOpen] = useState(false);
@@ -121,10 +142,11 @@ const Section = memo(function Section({ node, group, num, onGoto }: {
   return (
     <>
       {group && <div className="k-mat-group" data-testid="mat-group">{group}</div>}
-      <section className="k-mat-sec" data-mat-n={node.n} data-anchor={node.anchor_id} data-testid="mat-section"
+      <section className={deep > 0 ? 'k-mat-sec k-mat-deep' : 'k-mat-sec'} data-mat-n={node.n}
+        data-deep={deep > 0 ? deep : undefined} style={deep > 0 ? ({ '--k-deep': deep } as React.CSSProperties) : undefined} data-anchor={node.anchor_id} data-testid="mat-section"
         aria-labelledby={`${node.anchor_id}-h`}>
-        {createElement(`h${level}`, { id: `${node.anchor_id}-h`, className: 'k-mat-h', 'data-level': level },
-          num ? <span className="k-mat-hnum" data-testid="mat-num">{numberPrefix(num)}{' '}</span> : null,
+        {createElement(`h${level}`, { id: `${node.anchor_id}-h`, className: 'k-mat-h', 'data-level': level, title: deep > 0 ? num : undefined },
+          num && deep === 0 ? <span className="k-mat-hnum" data-testid="mat-num">{numberPrefix(num)}{' '}</span> : null,
           node.title || node.path)}
         <div className="k-mat-meta" data-testid="mat-meta">
           <span>{node.path}</span>
@@ -185,7 +207,10 @@ const Section = memo(function Section({ node, group, num, onGoto }: {
 
 // ── The view ────────────────────────────────────────────────────────────────
 
-export function MaterializeView({ target, title, options, onOptionsChange, onBack, api = materializeApi, save = saveTextFile }: {
+/** How far (px) the reader must scroll before the back-to-top arrow appears. */
+export const BACK_TO_TOP_PX = 600;
+
+export function MaterializeView({ target, title, options, onOptionsChange, onBack, api = materializeApi, save = saveTextFileAs, canChoose = canChooseLocation }: {
   target: MatTarget;
   /** The viewed fact's title; the stream's own root_title wins when it sends one. */
   title: string;
@@ -193,13 +218,16 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   onOptionsChange: (o: MatOptions) => void;
   onBack: () => void;
   api?: MaterializeApi;
+  /** Saves AFTER asking where (saveTextFileAs). */
   save?: Save;
+  /** Whether this environment can ask where to save (else the reader is told first). */
+  canChoose?: () => boolean;
 }) {
   const s = useMaterializeStream(api, target, options);
   const scroller = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [goto, setGoto] = useState<Goto | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [scrolled, setScrolled] = useState(false);
   const [exp, setExp] = useState<ExportState>({ kind: 'idle' });
   const exportCtl = useRef<AbortController | null>(null);
 
@@ -300,9 +328,6 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
     if (earlier) {
       const el = box.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(earlier.anchor_id)}"]`);
       if (el) scrollToEl(el);
-      if (goto.kind === 'restore') {
-        setNotice(`“${goto.title}” is not in this walk any more. Showing the nearest earlier section${earlier.title ? `, “${earlier.title}”` : ''}.`);
-      }
     }
     setGoto(null);
   }, [goto, epoch, stale, phase, tail, sections, loadMore, scrollToEl]);
@@ -329,13 +354,19 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   }, [tail, stale, phase, sections.length, loadMore]);
 
   const onGoto = useCallback((l: MatLink) => {
-    setNotice(null);
     setGoto({ anchor: l.anchor_id, n: l.n, kind: 'jump', title: l.title, epoch: 0 });
   }, []);
 
-  // ── Export: always the whole document, never what has scrolled in. ──
-  const runExport = useCallback(async () => {
-    if (exp.kind === 'running') { exportCtl.current?.abort(); return; }
+  // ── Export: always the whole document, never what has scrolled in, and always
+  // to a place the READER chose (the native dialog or showSaveFilePicker); a
+  // cancelled dialog writes nothing and says nothing. ──
+  const finishSave = useCallback((out: SaveOutcome, text: string, name: string) => {
+    if (out.kind === 'cancelled') setExp({ kind: 'idle' });
+    else if (out.kind === 'needs-gesture') setExp({ kind: 'ready', text, name });
+    else setExp({ kind: 'done', line: out.kind === 'saved' ? `Saved ${out.where}` : saveOutcomeLine(out) });
+  }, []);
+
+  const doExport = useCallback(async () => {
     const ctl = new AbortController();
     exportCtl.current = ctl;
     setExp({ kind: 'running', bytes: 0 });
@@ -347,13 +378,25 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
       // The server names its own download (Content-Disposition, and it sanitizes
       // the id part); our builder is only the fallback for a missing header.
       const name = fileNameOnly(doc.serverName) || exportFilename(rootTitle, target.path);
-      const out = await save(name, doc.text, 'text/markdown');
-      setExp({ kind: 'done', line: out.kind === 'saved' ? `Saved ${out.where}` : saveOutcomeLine(out) });
+      finishSave(await save(name, doc.text, 'text/markdown'), doc.text, name);
     } catch (e) {
       if (ctl.signal.aborted) { setExp({ kind: 'idle' }); return; }
       setExp({ kind: 'failed', message: e instanceof Error ? e.message : String(e) });
     }
-  }, [api, exp.kind, options, rootTitle, save, target]);
+  }, [api, finishSave, options, rootTitle, save, target]);
+
+  const runExport = useCallback(() => {
+    if (exp.kind === 'running') { exportCtl.current?.abort(); return; }
+    // A browser that cannot ask where to save (Safari, Firefox) would drop the file
+    // into its download folder: say so and let the reader decide, before fetching.
+    if (!canChoose() && exp.kind !== 'confirm') { setExp({ kind: 'confirm' }); return; }
+    void doExport();
+  }, [canChoose, doExport, exp.kind]);
+
+  const saveReady = useCallback(async () => {
+    if (exp.kind !== 'ready') return;
+    finishSave(await save(exp.name, exp.text, 'text/markdown'), exp.text, exp.name);
+  }, [exp, finishSave, save]);
 
   useEffect(() => () => exportCtl.current?.abort(), []);
 
@@ -423,17 +466,25 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           </div>
         )}
         {exp.kind === 'done' && <div className="k-mat-status" data-testid="mat-export-done" role="status">{exp.line}</div>}
+        {exp.kind === 'confirm' && (
+          <div className="k-mat-status" data-testid="mat-export-confirm" role="status">
+            This browser cannot ask where to save. The file will go to your browser's download location.
+            <button type="button" className="k-mat-btn" data-testid="mat-export-go" onClick={() => void doExport()}>Download</button>
+            <button type="button" className="k-mat-btn" data-testid="mat-export-nevermind" onClick={() => setExp({ kind: 'idle' })}>Cancel</button>
+          </div>
+        )}
+        {exp.kind === 'ready' && (
+          <div className="k-mat-status" data-testid="mat-export-ready" role="status">
+            The export is ready.
+            <button type="button" className="k-mat-btn" data-testid="mat-export-saveas" onClick={() => void saveReady()}>Save as…</button>
+            <button type="button" className="k-mat-btn" onClick={() => setExp({ kind: 'idle' })}>Discard</button>
+          </div>
+        )}
       </div>
 
-      <div className="k-mat-scroll" ref={scroller} data-testid="mat-scroll">
+      <div className="k-mat-scroll" ref={scroller} data-testid="mat-scroll"
+        onScroll={e => setScrolled(e.currentTarget.scrollTop > BACK_TO_TOP_PX)}>
         <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'}>
-          {notice && (
-            <div className="k-mat-notice" data-testid="mat-notice" role="status">
-              {notice}
-              <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)}>×</button>
-            </div>
-          )}
-
           {phase === 'loading' && sections.length === 0 && (
             <div data-testid="mat-loading" aria-label="Loading">
               <div className="k-mat-skel"><i style={{ width: '60%', height: 20 }} /><i style={{ width: '30%' }} /><i /><i style={{ width: '92%' }} /><i style={{ width: '75%' }} /></div>
@@ -491,8 +542,8 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
                   <div className="k-mat-endline" data-testid="mat-depth-note">
                     <span>{trunc.depth} cited {trunc.depth === 1 ? 'fact lies' : 'facts lie'} beyond depth {s.env?.depth}.</span>
                     {options.depth < MAX_DEPTH && (
-                      <button type="button" className="k-mat-btn" data-testid="mat-deeper"
-                        onClick={() => change({ ...options, depth: options.depth + 1 })}>Go deeper</button>
+                      <button type="button" className="k-mat-more" data-testid="mat-deeper" title="Go one level deeper"
+                        onClick={() => change({ ...options, depth: options.depth + 1 })}>more</button>
                     )}
                   </div>
                 )}
@@ -502,6 +553,17 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
           </div>
         </article>
       </div>
+      {scrolled && (
+        <button type="button" className="k-bare k-mat-top" data-testid="mat-top" title="Back to top" aria-label="Back to top"
+          onClick={() => {
+            const box = scroller.current;
+            if (!box) return;
+            if (typeof box.scrollTo === 'function') box.scrollTo({ top: 0, behavior: 'smooth' });
+            else box.scrollTop = 0;
+          }}>
+          <ArrowUpIcon color="currentColor" size={15} />
+        </button>
+      )}
     </div>
   );
 }

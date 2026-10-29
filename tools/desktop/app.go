@@ -228,6 +228,15 @@ func run(ctx context.Context) error {
 		},
 	})
 	window.SetURL("/")
+	// Export asks where to save: the native save dialog, attached to the main
+	// window. The page only suggests a name; the user picks the path.
+	nativeSvc.pickSavePath = func(suggested string) (string, error) {
+		return wapp.Dialog.SaveFile().
+			AttachToWindow(window).
+			SetFilename(suggested).
+			CanCreateDirectories(true).
+			PromptForSingleSelection()
+	}
 
 	// Hide (don't destroy) the window when closed, so "Open Knomit" can bring
 	// it back. Registered as a hook so Cancel() short-circuits Wails' default

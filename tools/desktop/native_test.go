@@ -219,3 +219,58 @@ func TestRestartServer_PassesTheSupervisorsRefusalThrough(t *testing.T) {
 		t.Fatalf("RestartServer = %v, want the attached-server refusal naming pid 4242", err)
 	}
 }
+
+// Export asks where to save: SaveFileAs writes ONLY to the path the user picks
+// in the native dialog, suggests the file's base name, and a cancelled dialog
+// writes nothing and is not an error. SABOTAGE: ignore the picked path and write
+// into the exports dir -> red.
+func TestSaveFileAs_WritesToTheChosenPathAndSuggestsTheName(t *testing.T) {
+	sandboxHome(t)
+	dir := t.TempDir()
+	chosen := filepath.Join(dir, "elsewhere", "mine.md")
+	if err := os.MkdirAll(filepath.Dir(chosen), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var suggested string
+	n := &NativeService{pickSavePath: func(name string) (string, error) { suggested = name; return chosen, nil }}
+	got, err := n.SaveFileAs("some/dir/title-ab12cd34.md", "# doc")
+	if err != nil || got != chosen {
+		t.Fatalf("got %q, %v; want %q", got, err, chosen)
+	}
+	if suggested != "title-ab12cd34.md" {
+		t.Errorf("suggested name %q, want the base name only", suggested)
+	}
+	if b, err := os.ReadFile(chosen); err != nil || string(b) != "# doc" {
+		t.Fatalf("file not at the chosen path: %v %q", err, b)
+	}
+	if exp, _ := exportsDir(); exp != "" {
+		if _, err := os.Stat(filepath.Join(exp, "title-ab12cd34.md")); err == nil {
+			t.Error("also wrote into the exports dir")
+		}
+	}
+}
+
+func TestSaveFileAs_CancelWritesNothing(t *testing.T) {
+	sandboxHome(t)
+	n := &NativeService{pickSavePath: func(string) (string, error) { return "", nil }}
+	got, err := n.SaveFileAs("x.md", "data")
+	if err != nil || got != "" {
+		t.Fatalf("cancel: got %q, %v; want empty and no error", got, err)
+	}
+	if exp, _ := exportsDir(); exp != "" {
+		if ents, _ := os.ReadDir(exp); len(ents) != 0 {
+			t.Errorf("cancel wrote %d file(s) into the exports dir", len(ents))
+		}
+	}
+}
+
+func TestSaveFileAs_DialogErrorIsAnErrorAndWritesNothing(t *testing.T) {
+	sandboxHome(t)
+	n := &NativeService{pickSavePath: func(string) (string, error) { return "", errors.New("boom") }}
+	if got, err := n.SaveFileAs("x.md", "data"); err == nil || got != "" {
+		t.Fatalf("want an error, got %q, %v", got, err)
+	}
+	if got, err := (&NativeService{}).SaveFileAs("x.md", "d"); err == nil || got != "" {
+		t.Fatalf("no dialog wired: want an error, got %q, %v", got, err)
+	}
+}

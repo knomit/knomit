@@ -18,6 +18,7 @@ import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRep
 import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
+import { isMatFocus } from './matFocus';
 import { TargetRail } from './TargetRail';
 import { BrowseFacet } from './BrowseFacet';
 import { ActivityFacet } from './ActivityFacet';
@@ -1149,6 +1150,9 @@ export default function App() {
       // rail on Escape: it is a column of the layout, not a popup.
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) {
         e.preventDefault();
+        // The rail is hidden by the materialize view's Focus, and its toggle is inert
+        // there: the shortcut must not flip the state behind the reader's back.
+        if (isMatFocus()) return;
         dispatchView({ type: 'TOGGLE_RAIL' });
         return;
       }

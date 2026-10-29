@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { computed } from './cascade.testutil';
 import { init } from './state';
@@ -515,5 +515,43 @@ describe('TopBar at a narrow width', () => {
     for (const width of [1280, 641]) {
       expect(computed(label, 'min-width', width), `label at ${width}`).toBe('0px');
     }
+  });
+});
+
+describe('TopBar — the rail toggle in the materialize view\'s Focus', () => {
+  const setFocus = (on: boolean) => {
+    if (on) document.documentElement.setAttribute('data-mat-focus', '1');
+    else document.documentElement.removeAttribute('data-mat-focus');
+  };
+  afterEach(() => setFocus(false));
+
+  it('works outside Focus: clickable, focusable, not aria-disabled', () => {
+    const onToggleRail = vi.fn();
+    render(bar({ onToggleRail }));
+    const t = screen.getByTestId('rail-toggle');
+    expect(t).not.toBeDisabled();
+    expect(t).toHaveAttribute('aria-disabled', 'false');
+    fireEvent.click(t);
+    expect(onToggleRail).toHaveBeenCalledTimes(1);
+  });
+
+  it('in Focus it stays on screen but is inert: disabled + aria-disabled, no click, not focusable, state untouched', async () => {
+    const onToggleRail = vi.fn();
+    render(bar({ onToggleRail, railOpen: true }));
+    expect(screen.getByTestId('rail-toggle')).toBeInTheDocument();
+    act(() => setFocus(true));
+    const t = await screen.findByTestId('rail-toggle');
+    await waitFor(() => expect(t).toBeDisabled());
+    expect(t).toHaveAttribute('aria-disabled', 'true');
+    expect(t).toHaveAttribute('aria-pressed', 'true');        // the rail's own state is left alone
+    fireEvent.click(t);
+    t.focus();
+    expect(document.activeElement).not.toBe(t);               // a disabled button takes no focus
+    expect(onToggleRail).not.toHaveBeenCalled();
+    // leaving Focus brings it back
+    act(() => setFocus(false));
+    await waitFor(() => expect(t).not.toBeDisabled());
+    fireEvent.click(t);
+    expect(onToggleRail).toHaveBeenCalledTimes(1);
   });
 });
