@@ -267,6 +267,10 @@ type SessionConfig struct {
 	ClientDeadAfter   string `toml:"client_dead_after"`
 	ClientHiddenAfter string `toml:"client_hidden_after"`
 	ClientRetention   string `toml:"client_retention"`
+	// BookMemoryMiB is the process-wide budget, in MiB, for materialize
+	// books' structure held in memory; past it the largest in-memory book
+	// is spilled to its file. 0 or unset is the default (64).
+	BookMemoryMiB int `toml:"book_memory_mib"`
 }
 
 // ExperimentsConfig configures the experiment lifecycle: an `exp/<name>`

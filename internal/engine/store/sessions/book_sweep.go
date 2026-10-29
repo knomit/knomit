@@ -38,21 +38,22 @@ type BookSweepStats struct {
 	Bytes    int64
 }
 
-// SweepBookFiles garbage-collects the book directory (the periodic
-// sweeper; at Open the directory is recreated empty). Under booksMu, the
-// lock OpenBookFile registers its holders under, so a file a call is reading
-// or writing right now is never deleted (it is Skipped and swept later):
-//   - a book file whose cursor row is gone (reaped, replaced, crashed) is
-//     an orphan;
+// SweepBookFiles garbage-collects the live books (in memory and in files)
+// and the book directory (the periodic sweeper; at Open the directory is
+// recreated empty). Under booksMu, the lock OpenBook registers holders
+// under, so a book a call holds right now is never dropped (Skipped, swept
+// on a later tick):
+//   - a live book whose cursor row is gone (reaped, replaced) is an orphan:
+//     its memory is freed, or its file deleted;
 //   - a book whose cursor was last used before Now - IdleTTL - Grace is
-//     expired: its row and file go;
-//   - a SQLite sidecar (-journal, -wal, -shm) of no live book, and any other
-//     stray file older than Grace, goes;
-//   - then, while the directory is over MaxBytes, the book idle longest goes
-//     first, row and file.
+//     expired: its row goes, and its memory or file with it;
+//   - in the directory, a book file of no live book, a SQLite sidecar
+//     (-journal, -wal, -shm) of no existing book file, and any other stray
+//     file older than Grace, goes;
+//   - then, while the spilled books' files are over MaxBytes, the book idle
+//     longest goes first, row and file.
 //
-// A book removed here reads as an expired cursor (the 404), never an error:
-// its row is gone with it, and a row whose file is missing reads expired too.
+// A book removed here reads as an expired cursor (the 404), never an error.
 func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (BookSweepStats, error) {
 	var st BookSweepStats
 	if ti.booksDir == "" {
@@ -60,58 +61,25 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 	}
 	ti.booksMu.Lock()
 	defer ti.booksMu.Unlock()
-	entries, err := os.ReadDir(ti.booksDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return st, nil
-	}
-	if err != nil {
-		return st, err
-	}
-	type book struct {
+	type file struct {
 		id       string
 		lastUsed time.Time
 		size     int64
 	}
-	var live []book
+	var spilled []file
 	cutoff := p.Now.Add(-p.IdleTTL - p.Grace)
-	for _, e := range entries {
-		name := e.Name()
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		id, isBook := strings.CutSuffix(name, bookFileSuffix)
-		if !isBook {
-			base := name
-			for _, s := range []string{"-journal", "-wal", "-shm"} {
-				base = strings.TrimSuffix(base, s)
-			}
-			owner := strings.TrimSuffix(base, bookFileSuffix)
-			if base != name && ti.openBooks[owner] > 0 {
-				st.Skipped++
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(ti.booksDir, base)); base != name && err == nil {
-				continue // the sidecar of a book file that still exists
-			}
-			if base == name && p.Now.Sub(info.ModTime()) < p.Grace {
-				continue // a stray file being created right now
-			}
-			_ = os.Remove(filepath.Join(ti.booksDir, name))
-			st.Sidecars++
-			continue
-		}
-		if ti.openBooks[id] > 0 {
+	for id, bs := range ti.books {
+		if bs.holders > 0 {
 			st.Skipped++
-			st.Bytes += info.Size()
 			continue
 		}
 		var lastUsed string
-		err = ti.db.QueryRowContext(ctx,
+		err := ti.db.QueryRowContext(ctx,
 			`SELECT ts.last_used_at FROM book_sessions b JOIN tool_sessions ts ON ts.id = b.session_id WHERE b.session_id = ?`, id,
 		).Scan(&lastUsed)
 		if errors.Is(err, sql.ErrNoRows) {
-			removeBookFile(ti.bookPath(id))
+			delete(ti.books, id)
+			bs.drop()
 			st.Orphans++
 			continue
 		}
@@ -126,32 +94,72 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 			st.Expired++
 			continue
 		}
-		live = append(live, book{id: id, lastUsed: used, size: info.Size()})
-		st.Bytes += info.Size()
+		if bs.spilled() {
+			if fi, err := os.Stat(bs.path); err == nil {
+				spilled = append(spilled, file{id: id, lastUsed: used, size: fi.Size()})
+				st.Bytes += fi.Size()
+			}
+		}
+	}
+	entries, err := os.ReadDir(ti.booksDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return st, err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if id, isBook := strings.CutSuffix(name, bookFileSuffix); isBook {
+			if ti.books[id] == nil {
+				removeBookFile(filepath.Join(ti.booksDir, name))
+				st.Orphans++
+			}
+			continue
+		}
+		base := name
+		for _, s := range []string{"-journal", "-wal", "-shm"} {
+			base = strings.TrimSuffix(base, s)
+		}
+		if base != name {
+			if _, err := os.Stat(filepath.Join(ti.booksDir, base)); err == nil {
+				continue // the sidecar of a book file that still exists
+			}
+		} else if p.Now.Sub(info.ModTime()) < p.Grace {
+			continue // a stray file being created right now
+		}
+		_ = os.Remove(filepath.Join(ti.booksDir, name))
+		st.Sidecars++
 	}
 	if p.MaxBytes > 0 && st.Bytes > p.MaxBytes {
-		sort.Slice(live, func(i, j int) bool { return live[i].lastUsed.Before(live[j].lastUsed) })
-		for _, b := range live {
+		sort.Slice(spilled, func(i, j int) bool { return spilled[i].lastUsed.Before(spilled[j].lastUsed) })
+		for _, f := range spilled {
 			if st.Bytes <= p.MaxBytes {
 				break
 			}
-			if err := ti.dropBookLocked(ctx, b.id); err != nil {
+			if err := ti.dropBookLocked(ctx, f.id); err != nil {
 				return st, err
 			}
-			st.Bytes -= b.size
+			st.Bytes -= f.size
 			st.Evicted++
 		}
 	}
 	return st, nil
 }
 
-// dropBookLocked deletes a book's cursor row and its file; booksMu is held.
+// dropBookLocked deletes a book's cursor row and frees the book; booksMu
+// is held.
 func (ti *ToolIndex) dropBookLocked(ctx context.Context, id string) error {
 	if err := ti.bookWrite(ctx, "SweepBookFiles", func(c *sql.Conn) error {
 		_, err := c.ExecContext(ctx, `DELETE FROM tool_sessions WHERE id = ?`, id)
 		return err
 	}); err != nil {
 		return err
+	}
+	if bs := ti.books[id]; bs != nil {
+		delete(ti.books, id)
+		bs.drop()
 	}
 	removeBookFile(ti.bookPath(id))
 	return nil

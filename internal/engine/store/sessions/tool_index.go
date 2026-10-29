@@ -27,10 +27,10 @@ type ToolIndex struct {
 	waits bookLockWaits
 	// booksDir holds the book files (book_file.go); "" disables books.
 	booksDir string
-	// booksMu guards openBooks: how many calls hold each book file open
-	// right now. The sweeper never deletes a file with a holder.
-	booksMu   sync.Mutex
-	openBooks map[string]int
+	// booksMu guards books, the live books by cursor id (book_store.go),
+	// and each book's holders. The sweeper never drops a held book.
+	booksMu sync.Mutex
+	books   map[string]*bookStore
 }
 
 // CreateToolSession creates a new tool session for the given tool, branch, path

@@ -88,7 +88,7 @@ func BooksDirFor(sessionPath string) string { return sessionPath + ".books" }
 // NewToolIndex returns the tool-session index over the session db. booksDir
 // is where its book files live (BooksDirFor); "" disables books.
 func NewToolIndex(sessionDB *sql.DB, booksDir string) *ToolIndex {
-	return &ToolIndex{db: sessionDB, booksDir: booksDir, openBooks: map[string]int{}}
+	return &ToolIndex{db: sessionDB, booksDir: booksDir, books: map[string]*bookStore{}}
 }
 
 // ReapIdle deletes session rows whose last_used_at is older than the

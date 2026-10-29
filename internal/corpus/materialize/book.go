@@ -219,7 +219,7 @@ type book struct {
 	id      string
 	env     BookEnv
 	limit   int
-	f       *sessions.BookFile
+	f       *sessions.Book
 	r       *reader
 	b       *repos.Binding
 	req     Request // the per-unit walk request (File set per unit)
@@ -297,10 +297,10 @@ func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPa
 		return BookPage{}, bk.stats, err
 	}
 	bk.id = id
-	f, ok, err := sc.Sessions.OpenBookFile(id)
-	if err != nil || !ok {
+	f, ok := sc.Sessions.OpenBook(id)
+	if !ok {
 		_ = sc.Sessions.DeleteBook(context.WithoutCancel(ctx), id)
-		return BookPage{}, bk.stats, fmt.Errorf("open the new book: %v", err)
+		return BookPage{}, bk.stats, ErrCursorBusy
 	}
 	bk.f = f
 	if err := bk.load(req.Manager, req.MayRead); err != nil {
@@ -642,11 +642,7 @@ func openBook(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.
 		bk.close()
 		return nil, nil, fmt.Errorf("book envelope: %w", err)
 	}
-	f, ok, err := sc.Sessions.OpenBookFile(cursor)
-	if err != nil {
-		bk.close()
-		return nil, nil, err
-	}
+	f, ok := sc.Sessions.OpenBook(cursor)
 	if !ok {
 		// Swept or evicted: the cursor reads as expired, never an error.
 		bk.close()

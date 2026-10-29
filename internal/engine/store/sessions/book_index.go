@@ -118,10 +118,11 @@ func (ti *ToolIndex) bookWrite(ctx context.Context, op string, fn func(c *sql.Co
 }
 
 // CreateBook starts a book cursor for owner. It deletes owner's other book
-// cursors and their files (one active book per endpoint + principal: a new
-// first call replaces the old one), creates the session and its envelope,
-// and creates the book's file holding results (the frozen search results,
-// unit 1..len, with the anchors reserved for their roots). On any failure
+// cursors and frees their books (one active book per endpoint + principal: a
+// new first call replaces the old one), creates the session and its
+// envelope, and registers the new book IN MEMORY with its results (the
+// frozen search results, unit 1..len, with the anchors reserved for their
+// roots). No file is created until the book must spill. On any failure
 // nothing is left behind.
 func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, readSet, owner, env string, results []BookResult) (string, error) {
 	if !strings.HasPrefix(tool, BookToolPrefix) {
@@ -131,9 +132,6 @@ func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, read
 		return "", errors.New("CreateBook: this session store has no book directory")
 	}
 	id := uuid.New().String()
-	if err := createBookFile(ctx, ti.bookPath(id), results); err != nil {
-		return "", err
-	}
 	var replaced []string
 	now := time.Now().UTC().Format(time.RFC3339)
 	err := ti.bookWrite(ctx, "CreateBook", func(c *sql.Conn) error {
@@ -167,23 +165,48 @@ func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, read
 		return nil
 	})
 	if err != nil {
-		removeBookFile(ti.bookPath(id))
 		return "", err
 	}
-	for _, old := range replaced {
-		removeBookFile(ti.bookPath(old))
+	bs := newMemBook(id, ti.bookPath(id), results)
+	ti.booksMu.Lock()
+	ti.books[id] = bs
+	var old []*bookStore
+	for _, o := range replaced {
+		if b := ti.books[o]; b != nil {
+			old = append(old, b)
+			delete(ti.books, o)
+		}
 	}
-	return id, nil
+	ti.booksMu.Unlock()
+	for _, b := range old {
+		b.drop()
+	}
+	for _, o := range replaced {
+		removeBookFile(ti.bookPath(o))
+	}
+	return id, enforceBookBudget(ctx)
 }
 
-// DeleteBook removes a book cursor and its file.
+// DeleteBook removes a book cursor and frees its book (memory or file).
 func (ti *ToolIndex) DeleteBook(ctx context.Context, id string) error {
 	err := ti.bookWrite(ctx, "DeleteBook", func(c *sql.Conn) error {
 		_, err := c.ExecContext(ctx, `DELETE FROM tool_sessions WHERE id = ?`, id)
 		return err
 	})
-	removeBookFile(ti.bookPath(id))
+	ti.forgetBook(id)
 	return err
+}
+
+// forgetBook drops book id from the registry and frees it.
+func (ti *ToolIndex) forgetBook(id string) {
+	ti.booksMu.Lock()
+	bs := ti.books[id]
+	delete(ti.books, id)
+	ti.booksMu.Unlock()
+	if bs != nil {
+		bs.drop()
+	}
+	removeBookFile(ti.bookPath(id))
 }
 
 // GetBook returns a book's envelope and position, nil when id is not a book.
@@ -236,31 +259,23 @@ func (ti *ToolIndex) TouchBook(ctx context.Context, id string) error {
 	})
 }
 
-// OpenBookFile opens the structure file of book id for this call. ok is
-// false when the file is gone (replaced, reaped or swept).
-//
-// While the returned file is open, the sweeper never deletes it: the open is
-// registered under booksMu, the same lock the sweeper deletes under, and
-// Close unregisters it.
-func (ti *ToolIndex) OpenBookFile(id string) (*BookFile, bool, error) {
-	if ti.booksDir == "" {
-		return nil, false, nil
-	}
+// OpenBook holds book id for this call. ok is false when the book is gone
+// (replaced, expired, evicted, or lost with a restart). While held, the
+// sweeper never drops it: the hold is registered under booksMu, the lock
+// the sweeper drops books under, and Close releases it.
+func (ti *ToolIndex) OpenBook(id string) (*Book, bool) {
 	ti.booksMu.Lock()
 	defer ti.booksMu.Unlock()
-	f, ok, err := openBookFile(ti.bookPath(id))
-	if !ok || err != nil {
-		return nil, ok, err
+	bs := ti.books[id]
+	if bs == nil {
+		return nil, false
 	}
-	ti.openBooks[id]++
-	f.release = func() {
+	bs.holders++
+	return &Book{bs: bs, release: func() {
 		ti.booksMu.Lock()
-		defer ti.booksMu.Unlock()
-		if ti.openBooks[id]--; ti.openBooks[id] <= 0 {
-			delete(ti.openBooks, id)
-		}
-	}
-	return f, true, nil
+		bs.holders--
+		ti.booksMu.Unlock()
+	}}, true
 }
 
 // BookFiles reports the book files on disk and their total size in bytes.
@@ -293,21 +308,42 @@ func (ti *ToolIndex) BookCount(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// LiveBooks reports the books this index holds: in memory and spilled.
+func (ti *ToolIndex) LiveBooks() (inMemory, spilled int) {
+	ti.booksMu.Lock()
+	defer ti.booksMu.Unlock()
+	for _, bs := range ti.books {
+		if bs.spilled() {
+			spilled++
+		} else {
+			inMemory++
+		}
+	}
+	return inMemory, spilled
+}
+
 func (ti *ToolIndex) bookPath(id string) string {
 	return filepath.Join(ti.booksDir, filepath.Base(id)+bookFileSuffix)
 }
 
-// OpenBookFiles is how many book files calls hold open right now (each holds
-// one SQLite handle on its file).
+// OpenBookFiles is how many SQLite handles spilled books hold right now
+// (a spilled book keeps its file open until it is dropped).
 func (ti *ToolIndex) OpenBookFiles() int {
-	ti.booksMu.Lock()
-	defer ti.booksMu.Unlock()
-	n := 0
-	for _, c := range ti.openBooks {
-		n += c
-	}
-	return n
+	_, spilled := ti.LiveBooks()
+	return spilled
 }
 
 // BookFilePath is the file of book id (for tests and diagnostics).
 func (ti *ToolIndex) BookFilePath(id string) string { return ti.bookPath(id) }
+
+// CloseBooks frees every live book of this index (the store is closing):
+// their memory leaves the process budget and their files are closed.
+func (ti *ToolIndex) CloseBooks() {
+	ti.booksMu.Lock()
+	books := ti.books
+	ti.books = map[string]*bookStore{}
+	ti.booksMu.Unlock()
+	for _, bs := range books {
+		bs.drop()
+	}
+}

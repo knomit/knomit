@@ -377,6 +377,9 @@ func (s *Service) Checkpoint() error {
 // Close closes the underlying database connections and removes the ephemeral
 // session DB file (it holds only disposable runtime state).
 func (s *Service) Close() error {
+	if s.ti != nil {
+		s.ti.CloseBooks()
+	}
 	if s.sessionDB != nil {
 		s.sessionDB.Close()
 		s.sessionDB = nil

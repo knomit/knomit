@@ -2,12 +2,14 @@ package materialize
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/sessions"
 )
 
 type bookFixture struct {
@@ -126,9 +129,50 @@ func TestBook_RowCap(t *testing.T) {
 	books, err := f.svc.ToolSession().BookCount(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, books, "the refused first call left no cursor (probe and o remain)")
-	files, _, err := f.svc.ToolSession().BookFiles()
-	require.NoError(t, err)
-	require.Equal(t, 2, files, "and no file")
+	inMem, spilled := f.svc.ToolSession().LiveBooks()
+	require.Equal(t, 2, inMem+spilled, "and no live book")
+}
+
+// A book that spills mid-read pages exactly as one that never spills: the
+// same bytes page for page (cursor ids aside), before and after the spill.
+//
+// Sabotage: drop the rows from the spill's load, and the pages after it are
+// missing or wrong.
+func TestBook_PagesAreTheSameAcrossASpill(t *testing.T) {
+	f := newBookFixture(t)
+	fixtureTwo(t, f)
+	f.write(t, "kb/u/r3.md", "R3", "r3 body.", "kb/z/s.md", "kb/u/r2.md")
+	ctx := context.Background()
+	read := func(owner string, spillAfter int) ([]string, bool) {
+		req := f.request("kb/u/")
+		req.Limit = 1
+		p, _, err := BookFirstPage(ctx, f.scope(owner), req)
+		require.NoError(t, err)
+		c := *p.Cursor
+		var out []string
+		for i := 0; ; i++ {
+			raw, err := json.Marshal(p)
+			require.NoError(t, err)
+			out = append(out, strings.ReplaceAll(string(raw), c, "CURSOR"))
+			if i == spillAfter {
+				defer sessions.SetBookSpillBytesForTest(1)() // the next unit's append spills
+			}
+			if !p.HasMore {
+				break
+			}
+			p, err = BookNextPage(ctx, f.scope(owner), f.b, nil, nil, c, 0)
+			require.NoError(t, err)
+		}
+		bk, ok := f.svc.ToolSession().OpenBook(c)
+		require.True(t, ok)
+		defer bk.Close()
+		return out, bk.Spilled()
+	}
+	memory, spilledA := read("mem", 1000)
+	require.False(t, spilledA, "a small book stays in memory")
+	spilledPages, spilledB := read("spill", 0)
+	require.True(t, spilledB, "this one spilled after page 1")
+	require.Equal(t, memory, spilledPages)
 }
 
 // Over the concurrent-walk cap a call that must walk is refused at once (no
@@ -311,8 +355,9 @@ func TestBook_MeasureLargest(t *testing.T) {
 	require.NoError(t, err)
 	nfiles, bytes, _ := ti.BookFiles()
 	n, total, max := ti.BookLockWaits()
-	t.Logf("page 1: %s (walked %d units, %d sections); far seek to unit %d: %s (walked %d units, %d sections, walk %+v); heap peak %d MiB; book files %d, %d MiB; open book files peak %d; session-DB lock waits %d writes, total %s, max %s",
-		first, stats.UnitsWalked, stats.Rows, units, seek, sstats.UnitsWalked, p.Sections, sstats.Walk, heap>>20, nfiles, bytes>>20, files, n, total, max)
+	inMem, spilled := ti.LiveBooks()
+	t.Logf("page 1: %s (walked %d units, %d sections); far seek to unit %d: %s (walked %d units, %d sections, walk %+v); heap peak %d MiB; books in memory %d, spilled %d (book memory now %d KiB); book files %d, %d MiB; open book files peak %d; session-DB lock waits %d writes, total %s, max %s",
+		first, stats.UnitsWalked, stats.Rows, units, seek, sstats.UnitsWalked, p.Sections, sstats.Walk, heap>>20, inMem, spilled, sessions.BookMemoryUsed()>>10, nfiles, bytes>>20, files, n, total, max)
 	t3 := time.Now()
 	_, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *page.Cursor, 1)
 	require.NoError(t, err)
@@ -374,8 +419,9 @@ func TestBook_MeasureConcurrentBooks(t *testing.T) {
 		heap, files := stop()
 		n1, t1, max := ti.BookLockWaits()
 		nfiles, bytes, _ := ti.BookFiles()
-		t.Logf("10 concurrent books of %d x %d (walk cap %d): %s, completed %d, refused %d, slowest far seek %s, heap peak %d MiB, book files %d (%d MiB, %d MiB each), open book files peak %d, session-DB lock waits %d writes total %s max-so-far %s",
-			units, refs, slots, time.Since(start), ok.Load(), busy.Load(), time.Duration(maxSeek.Load()), heap>>20, nfiles, bytes>>20, (bytes/int64(max1(nfiles)))>>20, files, n1-n0, t1-t0, max)
+		inMem, spilled := ti.LiveBooks()
+		t.Logf("10 concurrent books of %d x %d (walk cap %d): %s, completed %d, refused %d, slowest far seek %s, heap peak %d MiB, live books in memory %d / spilled %d (book memory now %d KiB), book files %d (%d MiB written, %d MiB each), open book files peak %d, session-DB lock waits %d writes total %s max-so-far %s",
+			units, refs, slots, time.Since(start), ok.Load(), busy.Load(), time.Duration(maxSeek.Load()), heap>>20, inMem, spilled, sessions.BookMemoryUsed()>>10, nfiles, bytes>>20, (bytes/int64(max1(nfiles)))>>20, files, n1-n0, t1-t0, max)
 		buildSlots = saved
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"knomit/internal/corpus/repos/trigger"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/sessions"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/foundation/config"
@@ -1017,6 +1018,9 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("session config: %w", err)
 	}
 	m.sessionCfg = sessionCfg
+	// The in-memory materialize-book budget is process-wide (the books of
+	// every repo's session store count against one budget).
+	sessions.SetBookMemoryBudget(int64(m.deps.Cfg.Session.BookMemoryMiB) << 20)
 
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {

@@ -307,3 +307,37 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// load writes a spilled book's whole structure in one transaction (the
+// results are already in the file).
+func (f *BookFile) load(ctx context.Context, rows []BookRow, visits []BookVisit, anchors []string, tips map[string]string) error {
+	tx, err := f.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO rows(seq, unit, n, path, written, state) VALUES (?, ?, ?, ?, ?, ?)`,
+			r.Seq, r.Unit, r.N, r.Path, boolInt(r.Written), r.State); err != nil {
+			return err
+		}
+	}
+	for _, v := range visits {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO visited(path, unit, n, seq, number, anchor, commit_hash, blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			v.Path, v.Unit, v.N, v.Seq, v.Number, v.Anchor, v.Commit, v.Blob); err != nil {
+			return err
+		}
+	}
+	for _, a := range anchors {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO anchors(anchor) VALUES (?)`, a); err != nil {
+			return err
+		}
+	}
+	for repo, tip := range tips {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tips(repo, commit_hash) VALUES (?, ?)`, repo, tip); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
