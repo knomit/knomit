@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sort"
 	"testing"
 
@@ -342,6 +343,50 @@ func TestBlobEdges_NoEdgeToAMissingBlob(t *testing.T) {
 	require.Contains(t, got, "kb/s.md")
 }
 
+// A version whose OWN blob is not in the object store gets no reference
+// edges, and the skip is counted.
+//
+// Sabotage: drop the source-blob check, and F's edge to r is written.
+func TestBlobEdges_NoEdgesFromAMissingSourceBlob(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "main", "kb/r.md", "R")
+	c, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	resetRefEdgesForTest(t, db)
+	_, err := db.Exec(`DELETE FROM objects WHERE hash = ? AND type = 3`, fBlob)
+	require.NoError(t, err)
+	before := svc.si.DanglingRefsSkipped()
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", fBlob, c, []string{"kb/r.md"}))
+	require.Empty(t, allRefEdges(t, db), "no edges from a version whose blob is not in the object store")
+	require.Greater(t, svc.si.DanglingRefsSkipped(), before)
+}
+
+// The order of a blob's introductions: an ancestor precedes its descendant
+// even when both are in the same second and the descendant's hash sorts
+// first (commit times are forced equal here, hashes compared both ways).
+//
+// Sabotage: break a same-second tie by hash alone, and one direction fails.
+func TestBlobEdges_AncestorPrecedesDescendantOnATie(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	a, _ := write(t, svc, "main", "kb/a.md", "A")
+	var d string
+	for i := 0; i < 64 && (d == "" || d > a); i++ {
+		d, _ = write(t, svc, "main", "kb/b.md", fmt.Sprintf("B %d", i))
+	}
+	require.Less(t, d, a, "precondition: the descendant's hash sorts first")
+	_, err := db.Exec(`UPDATE commit_log SET committed_at = 1000 WHERE commit_hash IN (?, ?)`, a, d)
+	require.NoError(t, err)
+	early, err := svc.si.CommitEarlierForTest(ctx, a, d)
+	require.NoError(t, err)
+	require.True(t, early, "the ancestor precedes")
+	late, err := svc.si.CommitEarlierForTest(ctx, d, a)
+	require.NoError(t, err)
+	require.False(t, late, "the descendant does not, whatever the hashes")
+}
+
 // The GraphSchemaVersion 8 upgrade: a store indexed by the old scheme holds a
 // blob's edges re-pinned at a later commit (injected here as the COW-hit path
 // used to write them); the first rebuild drops every reference edge once and
@@ -394,6 +439,9 @@ func TestBlobEdges_VerifyReportsAndRebuildDropsDanglingEdges(t *testing.T) {
 		return n
 	}
 	require.Zero(t, count())
+	// A first rebuild spends the one-time v8 reset, so the drop below is the
+	// dangling-edge drop's, not the reset's.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
 	src, err := svc.si.GraphNodeIDByBlobForTest(ctx, "kb/f.md", fBlob)
 	require.NoError(t, err)
 	ghost, err := index.GraphMergeNodeForTest(ctx, db, index.NodeFact, map[string]string{"path": "kb/ghost.md", "blob_hash": "0123456789abcdef0123456789abcdef01234567"})

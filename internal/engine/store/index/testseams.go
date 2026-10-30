@@ -147,6 +147,12 @@ func (si *Index) GraphAddDerivedFromAtCommitTxForTest(ctx context.Context, tx st
 	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refs)
 }
 
+// CommitEarlierForTest is commitEarlier.
+func (si *Index) CommitEarlierForTest(ctx context.Context, a, b string) (bool, error) {
+	mustBeTest("CommitEarlierForTest")
+	return si.commitEarlier(ctx, a, b)
+}
+
 // GraphNodeIDByBlobForTest is graphNodeIDByBlob.
 func (si *Index) GraphNodeIDByBlobForTest(ctx context.Context, path, blobHash string) (int64, error) {
 	mustBeTest("GraphNodeIDByBlobForTest")
