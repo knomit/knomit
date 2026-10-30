@@ -419,6 +419,17 @@ func prefetchReservation(ctx context.Context, r *reader, req Request, results []
 	if err := r.prefetchMetas(ctx, m, pairs); err != nil {
 		return err
 	}
+	if !req.Options.Unpin {
+		var hits []index.PathAtCommit
+		for _, rv := range roots {
+			if r.metas[edgeKey{m.id12, rv.rel, rv.commit}].hit {
+				hits = append(hits, index.PathAtCommit{Path: rv.rel, Commit: rv.commit})
+			}
+		}
+		if err := r.prefetchPins(ctx, m, hits); err != nil {
+			return err
+		}
+	}
 	pairs = pairs[:0]
 	for _, rv := range roots {
 		e := r.metas[edgeKey{m.id12, rv.rel, rv.commit}]
