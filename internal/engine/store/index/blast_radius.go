@@ -21,30 +21,40 @@ import (
 // invariant means a retracted intermediate's node + edges persist; a
 // dependent declared against an older version of the target still transmits
 // reach.
+//
+// The walk is over BLOBS: reference edges belong to a blob and sit on the
+// node that first carried it, so each step widens to every node of the same
+// blob (a rename's node at another path) before following edges, and the
+// dependents' paths are read from every node of their blobs.
 func (gs *GraphStore) reverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
 	const q = `
 WITH RECURSIVE
-  seed(node_id) AS (
-    SELECT np.node_id
+  kb(id) AS (SELECT id FROM property_keys WHERE key = 'blob_hash'),
+  seed(blob) AS (
+    SELECT nb.value
       FROM node_props_text np
       JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
       JOIN node_labels nl ON nl.node_id = np.node_id AND nl.label = ?
+      JOIN node_props_text nb ON nb.node_id = np.node_id AND nb.key_id = (SELECT id FROM kb)
      WHERE np.value = ?
   ),
-  deps(node_id) AS (
-    SELECT e.source_id
-      FROM edges e
-      JOIN seed s ON s.node_id = e.target_id
-     WHERE e.type = ?
+  deps(blob) AS (
+    SELECT sb.value
+      FROM seed s
+      JOIN node_props_text tb ON tb.key_id = (SELECT id FROM kb) AND tb.value = s.blob
+      JOIN edges e ON e.target_id = tb.node_id AND e.type = ?
+      JOIN node_props_text sb ON sb.node_id = e.source_id AND sb.key_id = (SELECT id FROM kb)
     UNION
-    SELECT e.source_id
-      FROM edges e
-      JOIN deps d ON d.node_id = e.target_id
-     WHERE e.type = ?
+    SELECT sb.value
+      FROM deps d
+      JOIN node_props_text tb ON tb.key_id = (SELECT id FROM kb) AND tb.value = d.blob
+      JOIN edges e ON e.target_id = tb.node_id AND e.type = ?
+      JOIN node_props_text sb ON sb.node_id = e.source_id AND sb.key_id = (SELECT id FROM kb)
   )
 SELECT DISTINCT np.value
   FROM deps
-  JOIN node_props_text np ON np.node_id = deps.node_id
+  JOIN node_props_text nb ON nb.key_id = (SELECT id FROM kb) AND nb.value = deps.blob
+  JOIN node_props_text np ON np.node_id = nb.node_id
   JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
  WHERE np.value <> ?`
 	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, q,

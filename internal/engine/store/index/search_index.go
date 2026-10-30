@@ -59,10 +59,19 @@ import (
 // Version 7: the fact_context side table (F22, migration 000034). The forced
 // rebuild fills it from every blob, including hand-written `context:` lines a
 // pre-F22 parser dropped.
-const GraphSchemaVersion = "7"
+// Version 8: reference edges are per BLOB, written once (claimBlobRefs). The
+// forced rebuild drops every DERIVED_FROM edge ONCE per store
+// (resetBlobRefsOnce) and phase B re-resolves each blob at its earliest
+// introduction, so the edges the old per-commit writes accumulated (the
+// same ref re-pinned at every commit a blob arrived at) are gone.
+const GraphSchemaVersion = "8"
 
 type Index struct {
 	rh *vcs.Repo
+
+	// danglingRefsSkipped counts reference edges not written because a blob
+	// was not in the object store (DanglingRefsSkipped).
+	danglingRefsSkipped atomic.Int64
 
 	// This repo's 12-hex identity (root-commit prefix), resolved once and
 	// cached — it is immutable for the life of the repo. Used to tell a
@@ -1273,6 +1282,15 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		return 0, fmt.Errorf("rebuildGraph: begin tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	if err := resetBlobRefsOnce(ctx, tx); err != nil {
+		return 0, fmt.Errorf("rebuildGraph: %w", err)
+	}
+	if n, err := dropDanglingRefEdges(ctx, tx); err != nil {
+		return 0, fmt.Errorf("rebuildGraph: %w", err)
+	} else if n > 0 {
+		log.Warn().Int64("edges", n).Msg("rebuildGraph: dropped reference edges whose blob is not in the object store")
+	}
 
 	// The facts snapshot is read INSIDE the write transaction. `facts` rows and
 	// graph Fact nodes are keyed by version and shared by every branch, while

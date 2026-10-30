@@ -66,6 +66,7 @@ const (
 	CategoryBranchesTable      = "branches-table"
 	CategoryFactFormat         = "fact-format"
 	CategoryGraphCoherence     = "graph-coherence"
+	CategoryReferenceBlobs     = "reference-blobs"
 	CategoryDerivedTables      = "derived-tables"
 	CategoryDatabase           = "database"
 	CategorySchemaVersion      = "schema-version"
@@ -275,6 +276,7 @@ func (s *Checker) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	report.Issues = append(report.Issues, s.checkEmbeddingsCoverage(ctx)...)
 	report.Issues = append(report.Issues, s.checkEmbeddingIdentity(ctx)...)
 	report.Issues = append(report.Issues, s.checkGraphCoherence(ctx)...)
+	report.Issues = append(report.Issues, s.checkReferenceBlobs(ctx)...)
 	report.Issues = append(report.Issues, s.checkDerivedTables(ctx)...)
 	report.Issues = append(report.Issues, s.checkDatabase(ctx)...)
 	report.Issues = append(report.Issues, s.checkSchemaVersion(ctx)...)
@@ -1655,6 +1657,22 @@ func (s *Checker) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	}
 
 	return issues
+}
+
+// checkReferenceBlobs reports reference (DERIVED_FROM) edges whose source or
+// target Fact node names a blob that is not in the object store: a reference
+// edge must join two real blobs. A rebuild of the index drops them.
+func (s *Checker) checkReferenceBlobs(ctx context.Context) []IntegrityIssue {
+	n, err := s.si.DanglingRefEdges(ctx)
+	if err != nil {
+		return []IntegrityIssue{{Severity: SeverityError, Category: CategoryReferenceBlobs,
+			Detail: fmt.Sprintf("count reference edges with a missing blob: %v", err)}}
+	}
+	if n == 0 {
+		return nil
+	}
+	return []IntegrityIssue{{Severity: SeverityError, Category: CategoryReferenceBlobs,
+		Detail: fmt.Sprintf("%d reference edge(s) name a source or target blob that is not in the object store; rebuild the index", n)}}
 }
 
 // Checker is the integrity checker: Verify and PruneGeneratedRefs. It holds only what the checks read: the

@@ -295,7 +295,12 @@ func graphDeleteIncomingEdges(ctx context.Context, ex storegit.CtxExecer, nodeID
 }
 
 // graphDerivedFromNeighbours returns the DERIVED_FROM edges incident to the
-// Fact version (path, blobHash), described from the far endpoint's side.
+// fact VERSION blobHash, described from the far endpoint's side.
+//
+// Anchored by BLOB, not by (path, blob): reference edges belong to the blob
+// and sit on the one Fact node that first carried it (claimBlobRefs), so a
+// rename's node at another path, or any other node of the same blob, reads
+// the same edges. path is not part of the match.
 //
 // incoming=true  → edges INTO that version; each RefSummary describes the
 // SOURCE fact and carries the edge's source_commit.
@@ -317,11 +322,9 @@ func graphDerivedFromNeighbours(ctx context.Context, ex storegit.CtxExecer, path
 		       COALESCE(oty.value, ''),
 		       COALESCE(ec.value, ''),
 		       COALESCE(od.value, '')
-		FROM edges e
-		JOIN node_props_text ap ON ap.node_id = e.%[1]s
-		JOIN property_keys kap ON kap.id = ap.key_id AND kap.key = 'path'
-		JOIN node_props_text ab ON ab.node_id = e.%[1]s
+		FROM node_props_text ab
 		JOIN property_keys kab ON kab.id = ab.key_id AND kab.key = 'blob_hash'
+		JOIN edges e ON e.%[1]s = ab.node_id
 		JOIN node_props_text op ON op.node_id = e.%[2]s
 		JOIN property_keys kop ON kop.id = op.key_id AND kop.key = 'path'
 		LEFT JOIN property_keys kot ON kot.key = 'title'
@@ -332,9 +335,10 @@ func graphDerivedFromNeighbours(ctx context.Context, ex storegit.CtxExecer, path
 		LEFT JOIN node_props_text od ON od.node_id = e.%[2]s AND od.key_id = kod.id
 		LEFT JOIN property_keys kec ON kec.key = ?
 		LEFT JOIN edge_props_text ec ON ec.edge_id = e.id AND ec.key_id = kec.id
-		WHERE e.type = ? AND ap.value = ? AND ab.value = ?`, anchorCol, otherCol)
+		WHERE e.type = ? AND ab.value = ?
+		ORDER BY e.id`, anchorCol, otherCol)
 
-	rows, err := ex.QueryContext(ctx, q, commitKey, EdgeDerivedFrom, path, blobHash)
+	rows, err := ex.QueryContext(ctx, q, commitKey, EdgeDerivedFrom, blobHash)
 	if err != nil {
 		return nil, err
 	}

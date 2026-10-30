@@ -110,7 +110,7 @@ const (
 //
 // Steps:
 //  1. MERGE Fact node
-//  2. Delete old TAGGED, IN_DOMAIN, UNDER, DERIVED_FROM edges
+//  2. Delete old TAGGED, IN_DOMAIN, UNDER edges (never DERIVED_FROM: per blob, written once)
 //  3. MERGE Entity nodes + TAGGED edges
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
@@ -144,8 +144,11 @@ func (si *Index) graphSyncFactTx(ctx context.Context, tx storegit.CtxExecer, rec
 		return fmt.Errorf("graph set fact props: %w", err)
 	}
 
-	// 2. Delete old relationship edges for this fact version.
-	for _, edgeType := range []string{EdgeTagged, EdgeInDomain, EdgeUnder, EdgeDerivedFrom} {
+	// 2. Delete old current-state edges for this fact version. NOT
+	// DERIVED_FROM: reference edges belong to the blob, are written once
+	// (graphAddDerivedFromAtCommitTx/claimBlobRefs), and are never rewritten by
+	// a re-sync of the same version.
+	for _, edgeType := range []string{EdgeTagged, EdgeInDomain, EdgeUnder} {
 		if err := graphDeleteOutgoingEdges(ctx, tx, factID, edgeType); err != nil {
 			return fmt.Errorf("graph delete old %s edges: %w", edgeType, err)
 		}
