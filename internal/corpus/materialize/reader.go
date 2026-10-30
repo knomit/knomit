@@ -39,6 +39,9 @@ type reader struct {
 	edges    map[edgeKey]map[string]string
 	metas    map[edgeKey]metaEntry
 	dates    map[edgeKey]string
+	// lives caches LiveRevision per (repo, path, anchor): within a call a
+	// path's version live at a fixed anchor never changes.
+	lives map[edgeKey]string
 	// tips are the frozen tips of repos entered cross-KB, by id12 (a factset
 	// seeds them so every unit reads one repo at the tip its first read
 	// froze); a repo not in it is resolved once, now.
@@ -63,7 +66,22 @@ type edgeKey struct{ repo, rel, commit string }
 
 func newReader(b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool) *reader {
 	return &reader{b: b, mgr: mgr, mayRead: mayRead, mounts: map[string]*mount{}, edges: map[edgeKey]map[string]string{},
-		metas: map[edgeKey]metaEntry{}, dates: map[edgeKey]string{}}
+		metas: map[edgeKey]metaEntry{}, dates: map[edgeKey]string{}, lives: map[edgeKey]string{}}
+}
+
+// liveRevision is HistoryQuery.LiveRevision of rel at the mount's anchor,
+// cached for the call.
+func (r *reader) liveRevision(ctx context.Context, m *mount, rel string) (string, error) {
+	k := edgeKey{m.id12, rel, m.anchor}
+	if c, ok := r.lives[k]; ok {
+		return c, nil
+	}
+	c, err := m.svc.HistoryQuery().LiveRevision(ctx, m.branch, rel, m.anchor)
+	if err != nil {
+		return "", err
+	}
+	r.lives[k] = c
+	return c, nil
 }
 
 func (r *reader) close() {
@@ -92,6 +110,9 @@ func (r *reader) forget() {
 	}
 	if len(r.dates) > readerCacheMax {
 		r.dates = map[edgeKey]string{}
+	}
+	if len(r.lives) > readerCacheMax {
+		r.lives = map[edgeKey]string{}
 	}
 }
 
@@ -306,7 +327,7 @@ func (r *reader) latest(ctx context.Context, m *mount, rel string) (f fact.Fact,
 		}
 		f.Body = ""
 	}
-	commit, err = m.svc.HistoryQuery().LiveRevision(ctx, m.branch, rel, m.anchor)
+	commit, err = r.liveRevision(ctx, m, rel)
 	if err != nil {
 		return fact.Fact{}, "", "", false, fmt.Errorf("resolve the version of %s at %s: %w", rel, m.anchor, err)
 	}

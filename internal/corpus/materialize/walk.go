@@ -332,7 +332,7 @@ func (w *walker) root(req Request) (*node, error) {
 			return nil, fmt.Errorf("resolve HEAD of %s: %w", m.branch, err)
 		}
 	}
-	commit, err := m.svc.HistoryQuery().LiveRevision(w.ctx, m.branch, rel, m.anchor)
+	commit, err := w.r.liveRevision(w.ctx, m, rel)
 	if err != nil {
 		return nil, fmt.Errorf("resolve the version of %s at %s: %w", rel, m.anchor, err)
 	}

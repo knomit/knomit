@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/sessions"
 )
 
@@ -366,6 +367,99 @@ func nextAnchor(used map[string]int, wire string) string {
 	return a
 }
 
+// reservationWindow is how many results prefetchReservation reads ahead.
+const reservationWindow = 100
+
+// reservationRefBatchMax caps a window's batch of cited versions, so it
+// stays well inside the reader's caches (readerCacheMax) until it is used;
+// a window over it leaves those reads to the per-node prefetch.
+const reservationRefBatchMax = 10_000
+
+// prefetchReservation fills the reader's caches for a window of results in
+// a few batches, so the reservation's per-result walk (root, then resolve)
+// answers from them: every root's live version (cached LiveRevision), all
+// the roots' index rows in ONE batch, each root's cited versions (its pins)
+// and then all of those rows in ONE more batch. Batching across roots
+// decodes a subtree shared by many roots' versions once, where the per-node
+// prefetch decodes it once per root. It changes no answer: it only reads,
+// through the same calls and the same equivalent batch, what the walk then
+// reads, and a version the batch cannot answer is left to the walk.
+func prefetchReservation(ctx context.Context, r *reader, req Request, results []sessions.FactSetResult) error {
+	if !versionPrefetch || req.Options.Depth < 1 {
+		return nil
+	}
+	m, err := r.open(req.Binding.Write(), req.Binding.WriteMountBranch())
+	if err != nil {
+		return err
+	}
+	m.anchor = req.Commit
+	if m.anchor == "" {
+		return nil
+	}
+	root := req.Binding.Write().OntologyRoot()
+	type rootVersion struct{ rel, commit string }
+	var roots []rootVersion
+	var pairs []index.PathAtCommit
+	for _, res := range results {
+		_, rel, qualified, err := fact.ParseKBPath(res.Path)
+		if err != nil || qualified {
+			continue
+		}
+		rel = fact.NormalizePath(root, rel)
+		c, err := r.liveRevision(ctx, m, rel)
+		if err != nil {
+			return err
+		}
+		if c == "" {
+			continue
+		}
+		roots = append(roots, rootVersion{rel, c})
+		pairs = append(pairs, index.PathAtCommit{Path: rel, Commit: c})
+	}
+	if err := r.prefetchMetas(ctx, m, pairs); err != nil {
+		return err
+	}
+	pairs = pairs[:0]
+	for _, rv := range roots {
+		e := r.metas[edgeKey{m.id12, rv.rel, rv.commit}]
+		if !e.hit {
+			continue // read from its blob by the walk; its refs come then
+		}
+		var local []string
+		seen := map[string]bool{}
+		for _, raw := range e.meta.Refs {
+			c := fact.ClassifyRef(raw, m.id12)
+			if c.Kind != fact.RefLocalFact || c.Path == rv.rel || seen[c.Path] {
+				continue
+			}
+			seen[c.Path] = true
+			local = append(local, c.Path)
+		}
+		if len(local) == 0 {
+			continue
+		}
+		if req.Options.Unpin {
+			for _, p := range local {
+				pairs = append(pairs, index.PathAtCommit{Path: p, Commit: m.anchor})
+			}
+			continue
+		}
+		pins, err := r.pins(ctx, m, rv.rel, rv.commit)
+		if err != nil {
+			return err
+		}
+		for _, p := range local {
+			if c, ok := pins[p]; ok {
+				pairs = append(pairs, index.PathAtCommit{Path: p, Commit: c})
+			}
+		}
+	}
+	if len(pairs) > reservationRefBatchMax {
+		return nil
+	}
+	return r.prefetchMetas(ctx, m, pairs)
+}
+
 // reserveDirectRefs is the second level of the factset's reservation (user
 // ruling, 2026-10-29), computed before any unit is walked: every unit
 // root's DIRECT references, the ones its own walk will show at depth 1, are
@@ -398,7 +492,12 @@ func reserveDirectRefs(ctx context.Context, r *reader, req Request, results []se
 	taken := map[string]bool{}
 	var out []sessions.FactSetReserve
 	writeID := fact12(req.Binding)
-	for _, res := range results {
+	for i, res := range results {
+		if i%reservationWindow == 0 {
+			if err := prefetchReservation(ctx, r, req, results[i:min(len(results), i+reservationWindow)]); err != nil {
+				return nil, err
+			}
+		}
 		w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: writeID, nodes: map[key]*node{}}
 		ureq := req
 		ureq.File = res.Path
