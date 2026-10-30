@@ -103,11 +103,15 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 func TestOutgoingAtCommit_DatesTheEdgeByItsTargetCommit(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
+	nextSecond := func() {
+		for start := time.Now().Unix(); time.Now().Unix() == start; {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	nextSecond() // apart from the setup's own commits too
 	_, err := svc.Facts().WriteFact(ctx, "main", "kb/b.md", testFactBody("b", 0.9, nil), "b", "")
 	require.NoError(t, err)
-	for start := time.Now().Unix(); time.Now().Unix() == start; {
-		time.Sleep(20 * time.Millisecond)
-	}
+	nextSecond()
 	_, err = svc.Facts().WriteFact(ctx, "main", "kb/a.md", testFactBody("a", 0.8, []string{"kb/b.md"}), "a->b", "")
 	require.NoError(t, err)
 	head, err := svc.HeadCommit(ctx, "main")
