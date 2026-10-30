@@ -253,20 +253,18 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 
 		targetBlobHash, err := si.rh.ReadBlobHashAtCommit(ctx, refPath, targetCommit)
 		if err != nil {
-			// The read loads the blob object: a target whose blob is not in
-			// the object store fails here. No edge for it, and the other refs
+			// The read loads the blob object, so THIS is the target half of
+			// the real-blob invariant: a target whose blob is not in the
+			// object store fails here (a separate existence check after it
+			// could never fire). If the read ever stops loading the blob (a
+			// tree-entry-only read), add a blobExists check on the target.
+			// No edge for it, and the other refs
 			// still get theirs (it used to abort the rest of the list). The
 			// claim allows the same node and commit again, so Sync's pass 2
 			// or a rebuild retries a transient failure.
 			si.danglingRefsSkipped.Add(1)
 			log.Debug().Err(err).Str("source", sourcePath).Str("ref", refPath).Str("target_commit", targetCommit).
 				Msg("derived_from: target blob unreadable; edge skipped")
-			continue
-		}
-		if !si.blobExists(ctx, targetBlobHash) {
-			si.danglingRefsSkipped.Add(1)
-			log.Debug().Str("source", sourcePath).Str("ref", refPath).Str("blob", targetBlobHash).
-				Msg("derived_from: target blob not in the object store; edge skipped")
 			continue
 		}
 		tgtID, err := si.graphNodeIDByBlob(ctx, refPath, targetBlobHash)
