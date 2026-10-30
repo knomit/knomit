@@ -40,12 +40,14 @@ func (ti *ToolIndex) CreateStreamFactSet(ctx context.Context, tool, branch, bind
 }
 
 // GetStreamFactSet reads a streamed FactSet's frozen state; "" when there is
-// no such cursor for owner.
-func (ti *ToolIndex) GetStreamFactSet(ctx context.Context, id, owner string) (string, error) {
+// no such cursor for this owner, binding identity and read set (every
+// mismatch reads as absent, like an expired cursor).
+func (ti *ToolIndex) GetStreamFactSet(ctx context.Context, id, owner, binding, readSet string) (string, error) {
 	var state string
 	err := ti.db.QueryRowContext(ctx,
 		`SELECT f.env FROM factset_sessions f JOIN tool_sessions t ON t.id = f.session_id
-		  WHERE f.session_id = ? AND t.owner = ?`, id, owner).Scan(&state)
+		  WHERE f.session_id = ? AND t.owner = ? AND t.binding = ? AND t.read_set = ?
+		    AND t.tool LIKE 'materialize-factset-stream:%'`, id, owner, binding, readSet).Scan(&state)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}

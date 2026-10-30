@@ -131,19 +131,23 @@ type reservation struct{ unit, k int32 }
 // StreamFactSet is a streamed FactSet's in-memory state: a CACHE over the
 // frozen cursor. Losing it loses nothing: OpenStream rebuilds it.
 type StreamFactSet struct {
-	ID         string
-	cur        StreamCursor
-	b          *repos.Binding
-	mgr        *repos.Manager
-	may        func(string) bool
-	writeID    string
-	resultUnit map[uint64]int32
-	reserved   map[uint64]reservation
-	written    map[uint64]struct{}
-	walked     int             // units applied to written
-	last       []StreamSection // the plan of unit `walked` (no bodies), for a page that ends inside it
-	Stats      StreamStats
-	mu         sync.Mutex
+	ID      string
+	cur     StreamCursor
+	b       *repos.Binding
+	mgr     *repos.Manager
+	may     func(string) bool
+	writeID string
+	// The cursor's scope: who may resume it (owner: endpoint + principal),
+	// through which binding identity (PinID) and read set. Checked on EVERY
+	// open, the cache hit included; a mismatch answers like an expired cursor.
+	owner, pin, readSet string
+	resultUnit          map[uint64]int32
+	reserved            map[uint64]reservation
+	written             map[uint64]struct{}
+	walked              int             // units applied to written
+	last                []StreamSection // the plan of unit `walked` (no bodies), for a page that ends inside it
+	Stats               StreamStats
+	mu                  sync.Mutex
 }
 
 // streamCache is the process's cache of streamed FactSets (prototype: no
@@ -173,7 +177,11 @@ func CreateStream(ctx context.Context, sc CursorScope, req FactSetRequest) (*Str
 	if err != nil {
 		return nil, err
 	}
-	s := &StreamFactSet{b: req.Binding, mgr: req.Manager, may: req.MayRead, writeID: fact12(req.Binding)}
+	if sc.Pin == "" || sc.Owner == "" {
+		return nil, fmt.Errorf("%w: a factset cursor needs an owner and a binding pin", ErrInvalid)
+	}
+	s := &StreamFactSet{b: req.Binding, mgr: req.Manager, may: req.MayRead, writeID: fact12(req.Binding),
+		owner: sc.Owner, pin: sc.Pin, readSet: sc.ReadSet}
 	hits, err := runFactSetSearch(ctx, wm, req)
 	if err != nil {
 		return nil, err
@@ -236,17 +244,27 @@ func CreateStream(ctx context.Context, sc CursorScope, req FactSetRequest) (*Str
 // from its one session-DB row (the reserved map again; the written set by
 // replay when a page asks for a position).
 func OpenStream(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, id string) (*StreamFactSet, error) {
-	if v, ok := streamCache.Load(id); ok {
-		return v.(*StreamFactSet), nil
+	if sc.Pin == "" || sc.Owner == "" {
+		return nil, ErrCursorExpired
 	}
-	state, err := sc.Sessions.GetStreamFactSet(ctx, id, sc.Owner)
+	if v, ok := streamCache.Load(id); ok {
+		s := v.(*StreamFactSet)
+		if s.owner != sc.Owner || s.pin != sc.Pin || s.readSet != sc.ReadSet || s.pin != b.PinID() {
+			return nil, ErrCursorExpired
+		}
+		return s, nil
+	}
+	if sc.Pin != b.PinID() {
+		return nil, ErrCursorExpired
+	}
+	state, err := sc.Sessions.GetStreamFactSet(ctx, id, sc.Owner, sc.Pin, sc.ReadSet)
 	if err != nil {
 		return nil, err
 	}
 	if state == "" {
 		return nil, ErrCursorExpired
 	}
-	s := &StreamFactSet{ID: id, b: b, mgr: mgr, may: mayRead, writeID: fact12(b)}
+	s := &StreamFactSet{ID: id, b: b, mgr: mgr, may: mayRead, writeID: fact12(b), owner: sc.Owner, pin: sc.Pin, readSet: sc.ReadSet}
 	if err := json.Unmarshal([]byte(state), &s.cur); err != nil {
 		return nil, err
 	}

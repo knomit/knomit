@@ -272,3 +272,32 @@ func TestStream_CrossKBAtTheFrozenTip(t *testing.T) {
 	require.Equal(t, secs, got, "the frozen tip, not beta's new head")
 	require.Positive(t, s2.Stats.PerFactOps, "beta moved past its frozen tip: the per-path fallback ran")
 }
+
+// A streamed FactSet's cursor is resumed only by its owner, through the
+// same binding identity and read set: on a cache hit AND on the replay
+// path, any mismatch is ErrCursorExpired, never the other caller's state.
+func TestStream_OpenChecksOwnerBindingAndReadSet(t *testing.T) {
+	f := newFactSetFixture(t)
+	seedABC(t, f)
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Limit = 5
+	s, err := CreateStream(ctx, f.scope("alice"), req)
+	require.NoError(t, err)
+	otherRead := f.scope("alice")
+	otherRead.ReadSet = "rs-other"
+	otherPin := f.scope("alice")
+	otherPin.Pin = "repo:someone-else"
+	for _, replay := range []bool{false, true} {
+		if replay {
+			DropStreamCacheForTest()
+		}
+		for name, sc := range map[string]CursorScope{"owner": f.scope("mallory"), "read set": otherRead, "pin": otherPin} {
+			_, err := OpenStream(ctx, sc, f.b, nil, nil, s.ID)
+			require.ErrorIs(t, err, ErrCursorExpired, "another %s (replay %v)", name, replay)
+		}
+		got, err := OpenStream(ctx, f.scope("alice"), f.b, nil, nil, s.ID)
+		require.NoError(t, err, "replay %v", replay)
+		require.Equal(t, s.ID, got.ID)
+	}
+}
