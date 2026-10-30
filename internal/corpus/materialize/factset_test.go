@@ -2,6 +2,7 @@ package materialize
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -967,6 +968,69 @@ func TestFactSet_SeekGivesTheSameReservedFactSet(t *testing.T) {
 		return out
 	}
 	require.Equal(t, strip(unit3), strip(seeked))
+}
+
+// The batched read changes nothing when a cited version has NO index row
+// (a historical blob the index never saw: on knomit-kb, 416 of page 1's
+// reads): the batch reports it as a miss and the walk reads its blob, as
+// the per-reference path does. The facts row of x's old version is deleted
+// to make the miss; the page stats prove the blob fallback ran.
+//
+// Sabotage: let the prefetch record a miss as a hit, and r1's x is titled
+// "" from an empty row instead of read from its blob.
+func TestFactSet_BatchedReadsSameOnAnIndexMiss(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "alpha.db")
+	svc, err := store.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	ctx := context.Background()
+	require.NoError(t, svc.InitRepo(ctx, map[string]string{}, "agent/test"))
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha", UID: "uid-alpha", AgentBranch: "agent/test", Svc: svc, OntologyRoot: "kb",
+	})
+	f := &factsetFixture{ri: ri, svc: svc, b: repos.NewBindingOfRepo(ri, "agent/test")}
+	f.write(t, "kb/z/x.md", "X old", "x old body.")
+	f.write(t, "kb/z/y.md", "Y", "y body.")
+	f.write(t, "kb/u/r1.md", "R1", "r1 body.", "kb/z/x.md", "kb/z/y.md")
+	f.write(t, "kb/z/x.md", "X new", "x new body.")
+	f.write(t, "kb/u/r2.md", "R2", "r2 body.", "kb/z/x.md", "kb/z/y.md")
+
+	raw, err := sql.Open("sqlite3", path+"?_busy_timeout=5000")
+	require.NoError(t, err)
+	defer raw.Close()
+	res, err := raw.Exec(`DELETE FROM facts WHERE path = 'kb/z/x.md' AND title = 'X old'`)
+	require.NoError(t, err)
+	n, _ := res.RowsAffected()
+	require.EqualValues(t, 1, n, "x's old version is no longer indexed")
+
+	read := func(owner string) ([]string, int) {
+		req := f.request("kb/u/")
+		req.Limit = 5
+		p, st, err := FactSetFirstPage(ctx, f.scope(owner), req)
+		require.NoError(t, err)
+		parsed := st.Walk.Parsed
+		var out []string
+		for {
+			b, err := json.Marshal(p)
+			require.NoError(t, err)
+			out = append(out, strings.ReplaceAll(string(b), *p.Cursor, "CURSOR"))
+			if !p.HasMore {
+				return out, parsed
+			}
+			var st2 FactSetBuildStats
+			p, st2, err = FactSetNextPageStats(ctx, f.scope(owner), f.b, nil, nil, *p.Cursor, 0)
+			require.NoError(t, err)
+			parsed += st2.Walk.Parsed
+		}
+	}
+	batched, parsedB := read("batched")
+	defer SetVersionPrefetchForTest(false)()
+	perRef, parsedP := read("per-ref")
+	require.Equal(t, perRef, batched)
+	require.Positive(t, parsedB, "the old x was read from its blob")
+	require.Equal(t, parsedP, parsedB)
+	require.Contains(t, strings.Join(batched, ""), `"title":"X old"`)
 }
 
 // The batched version read (index.VersionMetasAt, round 4) answers every
