@@ -35,6 +35,7 @@ import (
 //                                  own process: the first pass is cold)
 //   KNOMIT_FACTSET_MEASURE_PROFILE a directory: CPU profile of page 1
 //   KNOMIT_FACTSET_MEASURE_UNITS   results per shape (default 500)
+//   KNOMIT_FACTSET_MEASURE_CONCURRENT=1  also run 4 concurrent builds
 //
 // Shapes, under kb/m4/<shape>/ (bodies ~2.5 KiB):
 //   A shared: every result cites the same 499 leaves (round 3's case);
@@ -287,6 +288,9 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 	}
 
 	// 4 concurrent builds (the walk cap): first page, far seek, of 4 owners.
+	if os.Getenv("KNOMIT_FACTSET_MEASURE_CONCURRENT") == "" {
+		return
+	}
 	runtime.GC()
 	stop := peakSampler(ti)
 	start := time.Now()
