@@ -66,3 +66,58 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	require.Len(t, in, 1, "B's incoming edge from A must survive resolving HEAD to the merge commit")
 	require.Equal(t, "kb/a.md", in[0].Path)
 }
+
+// ResolveActiveCommitForPath's depth-0 fast path (round 4 of PR #692)
+// answers exactly what the first-parent chain walk alone answers, for every
+// (path, commit) of a history with writes, a modify, a delete, a re-add and
+// a real merge: a commit that wrote the path, one that did not, one that
+// deleted it, the merge, and paths never written.
+//
+// Sabotage: answer fromCommit whenever commit_log has ANY row for it and
+// the path (a deletion included), and the commit that deleted kb/a.md
+// resolves to itself instead of the write before it.
+func TestResolveActiveCommitForPath_FastPathIsTheChainWalk(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
+	_, err := svc.Facts().WriteFact(ctx, "feature", "kb/b.md", testFactBody("b", 0.9, nil), "b", "")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "main", "kb/a.md", "a", "a one")
+	writeMergeFact(t, svc, "main", "kb/x.md", "x", "x")
+	writeMergeFact(t, svc, "main", "kb/a.md", "a", "a two")
+	_, err = svc.Facts().DeleteFact(ctx, "main", "kb/a.md", "delete a")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "main", "kb/y.md", "y", "y")
+	writeMergeFact(t, svc, "main", "kb/a.md", "a", "a three")
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "feature", "main", merge.StrategyLocalWins))
+	require.NoError(t, svc.IndexManager().Sync(ctx, "main"))
+
+	rh := svc.si.RepoForTest()
+	head, err := svc.HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	var commits []string
+	for c := head; c != ""; {
+		commits = append(commits, c)
+		c, err = rh.FirstParentCommit(ctx, c)
+		require.NoError(t, err)
+	}
+	require.GreaterOrEqual(t, len(commits), 7)
+	fast, chainDiffers := 0, 0
+	for _, c := range commits {
+		for _, p := range []string{"kb/a.md", "kb/b.md", "kb/x.md", "kb/y.md", "kb/never.md"} {
+			got, gotOK, err := rh.ResolveActiveCommitForPath(ctx, "main", p, c)
+			require.NoError(t, err)
+			want, wantOK, err := rh.ResolveActiveCommitForPathChainForTest(ctx, "main", p, c)
+			require.NoError(t, err)
+			require.Equal(t, wantOK, gotOK, "%s at %s", p, c[:8])
+			require.Equal(t, want, got, "%s at %s", p, c[:8])
+			if gotOK && got == c {
+				fast++
+			} else if gotOK {
+				chainDiffers++
+			}
+		}
+	}
+	require.Positive(t, fast, "some pairs take the fast path")
+	require.Positive(t, chainDiffers, "and some resolve further down the chain")
+}

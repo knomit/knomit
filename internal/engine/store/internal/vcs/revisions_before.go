@@ -52,11 +52,58 @@ const FirstParentChainCTE = `
 // callers — facts.Index, index.Index, index.FactQuery and index.GraphStore — share it directly —
 // facts.Index's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
+//
+// EARLY STOP (round 4 of PR #692): the recursion carries whether its commit
+// wrote path (one commit_log primary-key lookup per step) and expands no
+// further from a commit that did, so it ends at the FIRST such commit, the
+// one of smallest depth, which is exactly what the chain walk with ORDER BY
+// depth LIMIT 1 answers. That walk joined the WHOLE first-parent chain
+// before ordering (the ORDER BY defeats the pull-based LIMIT), so every call
+// was O(history): measured 0.4 ms each on knomit-kb, 40% of a FactSet's
+// first page, and quadratic in history for a store writing facts with refs
+// (every edge's target is resolved here). Now a call costs O(depth to the
+// commit that wrote path).
 func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil
 	}
+	var hash string
+	err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx, `
+		WITH RECURSIVE fpc(commit_hash, wrote) AS (
+		    SELECT ?1, EXISTS (SELECT 1 FROM commit_log
+		                        WHERE commit_hash = ?1 AND path = ?2 AND action IN ('added','modified'))
+		    UNION ALL
+		    SELECT cp.parent_hash, EXISTS (SELECT 1 FROM commit_log
+		                                    WHERE commit_hash = cp.parent_hash AND path = ?2 AND action IN ('added','modified'))
+		      FROM fpc
+		      JOIN commit_parents cp ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
+		     WHERE fpc.wrote = 0
+		)
+		SELECT commit_hash FROM fpc WHERE wrote = 1 LIMIT 1
+	`, fromCommit, path).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
+	}
+	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
+	return hash, true, nil
+}
 
+// ResolveActiveCommitForPathChainForTest is ResolveActiveCommitForPath
+// without the depth-0 fast path (the chain walk alone), so a test can prove
+// the two answer alike. Never called in production.
+func (rh *Repo) ResolveActiveCommitForPathChainForTest(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+	if fromCommit == "" {
+		return "", false, nil
+	}
+	return rh.resolveActiveCommitChain(ctx, branch, path, fromCommit)
+}
+
+// resolveActiveCommitChain is the first-parent chain walk of
+// ResolveActiveCommitForPath.
+func (rh *Repo) resolveActiveCommitChain(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	var hash string
 	err := sqlite.Conn(ctx, rh.db).QueryRowContext(ctx, FirstParentChainCTE+`
 		SELECT cl.commit_hash
