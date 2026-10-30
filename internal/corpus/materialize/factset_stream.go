@@ -91,29 +91,29 @@ type StreamRef struct {
 
 // StreamSection is one emitted section.
 type StreamSection struct {
-	Unit        int          `json:"unit"`
-	Number      string       `json:"number"`
-	TreeDepth   int          `json:"tree_depth"`
-	Depth       int          `json:"depth"`
-	Anchor      string       `json:"anchor"`
-	Path        string       `json:"path"`
-	Repo        string       `json:"repo"`
-	Commit      string       `json:"commit"`
-	Blob        string       `json:"blob,omitempty"`
-	Title       string       `json:"title"`
-	Type        string       `json:"type"`
-	Kind        string       `json:"kind"`
-	Confidence  float64      `json:"confidence"`
-	Date        string       `json:"date,omitempty"`
-	Written     bool         `json:"written"`
-	Unavailable bool         `json:"unavailable,omitempty"`
-	Marks       []string     `json:"marks,omitempty"`
-	Link        *StreamLink  `json:"link,omitempty"`
-	BuildsOn    []StreamRef  `json:"builds_on,omitempty"`
-	NotIncluded []Omission   `json:"not_included,omitempty"`
-	Sources     []Source     `json:"sources,omitempty"`
-	Body        string       `json:"body,omitempty"`
-	Truncated   *Truncation  `json:"truncated,omitempty"`
+	Unit        int         `json:"unit"`
+	Number      string      `json:"number"`
+	TreeDepth   int         `json:"tree_depth"`
+	Depth       int         `json:"depth"`
+	Anchor      string      `json:"anchor"`
+	Path        string      `json:"path"`
+	Repo        string      `json:"repo"`
+	Commit      string      `json:"commit"`
+	Blob        string      `json:"blob,omitempty"`
+	Title       string      `json:"title"`
+	Type        string      `json:"type"`
+	Kind        string      `json:"kind"`
+	Confidence  float64     `json:"confidence"`
+	Date        string      `json:"date,omitempty"`
+	Written     bool        `json:"written"`
+	Unavailable bool        `json:"unavailable,omitempty"`
+	Marks       []string    `json:"marks,omitempty"`
+	Link        *StreamLink `json:"link,omitempty"`
+	BuildsOn    []StreamRef `json:"builds_on,omitempty"`
+	NotIncluded []Omission  `json:"not_included,omitempty"`
+	Sources     []Source    `json:"sources,omitempty"`
+	Body        string      `json:"body,omitempty"`
+	Truncated   *Truncation `json:"truncated,omitempty"`
 }
 
 // StreamStats counts what the prototype did, for the measurements.
@@ -131,12 +131,12 @@ type reservation struct{ unit, k int32 }
 // StreamFactSet is a streamed FactSet's in-memory state: a CACHE over the
 // frozen cursor. Losing it loses nothing: OpenStream rebuilds it.
 type StreamFactSet struct {
-	ID     string
-	cur    StreamCursor
-	b      *repos.Binding
-	mgr    *repos.Manager
-	may    func(string) bool
-	writeID string
+	ID         string
+	cur        StreamCursor
+	b          *repos.Binding
+	mgr        *repos.Manager
+	may        func(string) bool
+	writeID    string
 	resultUnit map[uint64]int32
 	reserved   map[uint64]reservation
 	written    map[uint64]struct{}
@@ -151,7 +151,9 @@ type StreamFactSet struct {
 var streamCache sync.Map
 
 // DropStreamCacheForTest forgets every cached streamed FactSet.
-func DropStreamCacheForTest() { streamCache.Range(func(k, _ any) bool { streamCache.Delete(k); return true }) }
+func DropStreamCacheForTest() {
+	streamCache.Range(func(k, _ any) bool { streamCache.Delete(k); return true })
+}
 
 func (s *StreamFactSet) chunks(n int) int { return (n + 399) / 400 }
 
@@ -282,7 +284,9 @@ func (s *StreamFactSet) ReservedNumber(repo, rel string) string {
 }
 
 // MemoryEntries is the size of the state: written set + reserved map.
-func (s *StreamFactSet) MemoryEntries() (written, reserved int) { return len(s.written), len(s.reserved) }
+func (s *StreamFactSet) MemoryEntries() (written, reserved int) {
+	return len(s.written), len(s.reserved)
+}
 
 // ---- the walk -------------------------------------------------------------
 
