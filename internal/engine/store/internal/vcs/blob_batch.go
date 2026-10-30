@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
@@ -79,8 +78,9 @@ func (rh *Repo) BlobHashesAtCommits(ctx context.Context, pairs []PathAtCommit) (
 
 // entryAt is the hash of path's entry under root, walking (and decoding,
 // once per call) the trees along it, as object.Tree.FindEntry does: every
-// segment but the last must name a tree; the last must not name a directory
-// (Tree.File's blob read refuses a tree).
+// segment but the last must name a tree. The last entry's hash counts only
+// if it is stored as a BLOB (BlobHashesAtCommits' typed presence check),
+// which is what refuses a directory there, as Tree.File's blob read does.
 func (rh *Repo) entryAt(root *object.Tree, path string, trees map[plumbing.Hash]*object.Tree) (plumbing.Hash, bool) {
 	parts := strings.Split(path, "/")
 	t := root
@@ -103,7 +103,7 @@ func (rh *Repo) entryAt(root *object.Tree, path string, trees map[plumbing.Hash]
 		t = sub
 	}
 	e, err := t.FindEntry(parts[len(parts)-1])
-	if err != nil || e.Mode == filemode.Dir || e.Mode == filemode.Submodule {
+	if err != nil {
 		return plumbing.ZeroHash, false
 	}
 	return e.Hash, true

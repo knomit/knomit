@@ -671,6 +671,12 @@ func TestFactSet_BatchedReadsGiveTheSameFactSet(t *testing.T) {
 	writeMatFact(t, alpha, br, "kb/z/d2a.md", "D2A", "d2a body.", "kb/z/x.md")
 	writeMatFact(t, alpha, br, "kb/u/r2.md", "R2", "r2 body.", "kb/z/s1.md", "kb/z/x.md", "kb/z/d2a.md", by, "kb/u/r1.md")
 	writeMatFact(t, alpha, br, "kb/u/r3.md", "R3", "r3 body.", "kb/z/s2.md", "kb/z/d1a.md", bx, "kb/u/r2.md")
+	// A rebuild indexes the current versions only: the old x that r1 cites
+	// becomes an index miss (read from its blob), as historical versions
+	// are on a real store.
+	require.NoError(t, alpha.WithRead(func(svc *store.Service) {
+		require.NoError(t, svc.IndexManager().Rebuild(context.Background(), br, nil))
+	}))
 	paths := []string{"kb/z/s1.md", "kb/z/s2.md", "kb/z/x.md", "kb/z/d1a.md", "kb/z/d1b.md", "kb/z/d2a.md", bx, by, gone}
 
 	read := func(owner, query string) ([]string, map[string]string) {
