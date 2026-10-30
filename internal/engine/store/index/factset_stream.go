@@ -305,3 +305,51 @@ func (gs *GraphStore) DerivedFromOfNodes(ctx context.Context, ids []int64, withM
 	}
 	return out, nil
 }
+
+// DerivedFromPathsOfNodes is DerivedFromOfNodes reduced to what a FactSet's
+// reservation needs: for each edge out of the given nodes whose target
+// commit the index knows, the source node and the target PATH, handed to fn
+// without retaining anything (the path bytes are valid only during fn).
+func (gs *GraphStore) DerivedFromPathsOfNodes(ctx context.Context, ids []int64, fn func(src int64, path []byte)) (int, error) {
+	if err := gs.probe("DerivedFromPathsOfNodes"); err != nil {
+		return 0, err
+	}
+	queries := 0
+	for lo := 0; lo < len(ids); lo += streamChunk {
+		part := ids[lo:min(len(ids), lo+streamChunk)]
+		args := make([]any, 0, len(part)+1)
+		for _, id := range part {
+			args = append(args, id)
+		}
+		args = append(args, EdgeDerivedFrom)
+		rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx,
+			`WITH s(id) AS (VALUES `+valuesList(len(part), 1)+`),
+			      k AS (SELECT (SELECT id FROM property_keys WHERE key = 'path') AS kp,
+			                   (SELECT id FROM property_keys WHERE key = 'target_commit') AS ktc)
+			 SELECT e.source_id, tp.value
+			   FROM s CROSS JOIN k
+			   CROSS JOIN edges e ON e.source_id = s.id AND e.type = ?
+			   CROSS JOIN node_props_text tp ON tp.node_id = e.target_id AND tp.key_id = k.kp
+			   CROSS JOIN edge_props_text tc ON tc.edge_id = e.id AND tc.key_id = k.ktc
+			  WHERE EXISTS (SELECT 1 FROM commit_log cl WHERE cl.commit_hash = tc.value AND cl.path = tp.value)`, args...)
+		if err != nil {
+			return queries, fmt.Errorf("DerivedFromPathsOfNodes: %w", err)
+		}
+		queries++
+		for rows.Next() {
+			var src int64
+			var p sql.RawBytes
+			if err := rows.Scan(&src, &p); err != nil {
+				rows.Close()
+				return queries, fmt.Errorf("DerivedFromPathsOfNodes: %w", err)
+			}
+			fn(src, p)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return queries, fmt.Errorf("DerivedFromPathsOfNodes: %w", err)
+		}
+	}
+	return queries, nil
+}

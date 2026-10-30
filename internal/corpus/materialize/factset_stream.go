@@ -635,43 +635,142 @@ func (s *StreamFactSet) reserve(ctx context.Context) error {
 	}
 	w := s.newWalk(ctx)
 	defer w.r.close()
-	w.meta = false
 	roots, ex, err := w.roots()
 	if err != nil {
 		return err
 	}
-	var level []*node
-	for _, n := range roots {
-		if n != nil {
-			level = append(level, n)
+	// Cross-KB direct refs: per foreign repo, ONE read at its frozen tip of
+	// every path the results cite there (resolves = present at the tip).
+	foreignOK := map[uint64]bool{}
+	if opts.CrossKB {
+		want := map[string][]string{}
+		for _, n := range roots {
+			if n == nil {
+				continue
+			}
+			for _, raw := range n.f.Refs {
+				if c := fact.ClassifyRef(raw, n.m.id12); c.Kind == fact.RefForeignFact {
+					want[c.RepoID] = append(want[c.RepoID], c.Path)
+				}
+			}
+		}
+		for id, paths := range want {
+			m, err := w.r.foreign(ctx, id)
+			if err != nil {
+				return err
+			}
+			if m == nil {
+				continue
+			}
+			head, err := m.svc.HeadCommit(ctx, m.branch)
+			if err != nil {
+				return err
+			}
+			if head == m.anchor {
+				lv, err := m.svc.FactQuery().LiveVersions(ctx, m.branch, paths)
+				if err != nil {
+					return err
+				}
+				s.Stats.IndexQueries += s.chunks(len(paths))
+				for p := range lv {
+					foreignOK[FactHash(m.id12, p)] = true
+				}
+				continue
+			}
+			for _, p := range paths {
+				_, _, _, ok, err := w.r.latest(ctx, m, p)
+				if err != nil {
+					return err
+				}
+				s.Stats.PerFactOps++
+				foreignOK[FactHash(m.id12, p)] = ok
+			}
 		}
 	}
-	if err := w.resolveLevel(level, ex, opts); err != nil {
-		return err
-	}
-	for i, n := range roots {
-		if n == nil {
-			continue
+	// Local direct refs: the first-level join, streamed in unit-ordered
+	// chunks of results; only (source node, target path hash) is kept, and
+	// only for one chunk.
+	const window = 50
+	for lo := 0; lo < len(roots); lo += window {
+		hi := min(len(roots), lo+window)
+		var ids []int64
+		for _, n := range roots[lo:hi] {
+			if n != nil && ex[n].nodeID != 0 {
+				ids = append(ids, ex[n].nodeID)
+			}
 		}
-		unit := int32(i + 1)
-		included, k := 1, int32(0)
-		for _, r := range n.refs {
-			if r.kind != refNode {
+		resolves := map[int64]map[uint64]struct{}{}
+		if len(ids) > 0 {
+			m := roots[lo:hi]
+			var mid12 string
+			var svcMount *mount
+			for _, n := range m {
+				if n != nil {
+					mid12, svcMount = n.m.id12, n.m
+					break
+				}
+			}
+			q, err := svcMount.svc.GraphStore().DerivedFromPathsOfNodes(ctx, ids, func(src int64, p []byte) {
+				set := resolves[src]
+				if set == nil {
+					set = map[uint64]struct{}{}
+					resolves[src] = set
+				}
+				set[FactHash(mid12, string(p))] = struct{}{}
+			})
+			s.Stats.IndexQueries += q
+			if err != nil {
+				return err
+			}
+		}
+		for i := lo; i < hi; i++ {
+			n := roots[i]
+			if n == nil {
 				continue
 			}
-			if included >= opts.MaxNodes {
-				break
+			unit := int32(i + 1)
+			set := resolves[ex[n].nodeID]
+			included, k := 1, int32(0)
+			seen := map[uint64]bool{}
+			self := FactHash(n.repo, n.rel)
+			for _, raw := range n.f.Refs {
+				if included >= opts.MaxNodes {
+					break
+				}
+				c := fact.ClassifyRef(raw, n.m.id12)
+				var h uint64
+				switch c.Kind {
+				case fact.RefLocalFact:
+					h = FactHash(n.m.id12, c.Path)
+					if seen[h] || h == self {
+						continue
+					}
+					seen[h] = true
+					if _, ok := set[h]; !ok {
+						continue // no recorded cited version: not a node
+					}
+				case fact.RefForeignFact:
+					h = FactHash(c.RepoID, c.Path)
+					if seen[h] {
+						continue
+					}
+					seen[h] = true
+					if !opts.CrossKB || !foreignOK[h] {
+						continue
+					}
+				default:
+					continue
+				}
+				included++
+				k++
+				if _, isResult := s.resultUnit[h]; isResult {
+					continue
+				}
+				if _, taken := s.reserved[h]; taken {
+					continue
+				}
+				s.reserved[h] = reservation{unit, k}
 			}
-			included++
-			k++
-			h := FactHash(r.target.repo, r.target.rel)
-			if _, isResult := s.resultUnit[h]; isResult {
-				continue
-			}
-			if _, taken := s.reserved[h]; taken {
-				continue
-			}
-			s.reserved[h] = reservation{unit, k}
 		}
 	}
 	return nil
