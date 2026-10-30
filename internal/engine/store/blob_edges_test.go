@@ -720,22 +720,28 @@ func TestBlobEdges_SameSecondIntroductionsAreATotalOrder(t *testing.T) {
 	require.NoError(t, svc.CreateBranch(ctx, "side", "main"))
 	require.NoError(t, svc.IndexManager().Sync(ctx, "side"))
 
+	// Candidates for C first: each a real introduction of F on side.
+	var cands []string
+	for i := 0; i < 48; i++ {
+		write(t, svc, "side", "kb/s.md", fmt.Sprintf("S %d", i))
+		c, _ := write(t, svc, "side", "kb/f.md", "F", "kb/r.md")
+		cands = append(cands, c)
+		write(t, svc, "side", "kb/f.md", fmt.Sprintf("F side %d", i), "kb/r.md")
+	}
 	var a, b, c, fBlob string
-	for i := 0; i < 200 && (a == "" || !(b < a)); i++ {
+	for i := 0; i < 200 && c == ""; i++ {
 		// Each round starts from other content, so A is a real change
 		// (re-writing identical bytes makes no commit on the branch).
 		write(t, svc, "main", "kb/f.md", fmt.Sprintf("F before %d", i), "kb/r.md")
 		a, fBlob = write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
 		write(t, svc, "main", "kb/f.md", fmt.Sprintf("F changed %d", i), "kb/r.md")
-		var bb string
-		bb, _ = write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
-		b = bb
-	}
-	require.Less(t, b, a, "precondition: B's hash sorts before A's")
-	for i := 0; i < 400 && (c == "" || !(b < c && c < a)); i++ {
-		write(t, svc, "side", "kb/s.md", fmt.Sprintf("S %d", i))
-		c, _ = write(t, svc, "side", "kb/f.md", "F", "kb/r.md")
-		write(t, svc, "side", "kb/f.md", fmt.Sprintf("F side %d", i), "kb/r.md")
+		b, _ = write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+		for _, x := range cands {
+			if b < x && x < a {
+				c = x
+				break
+			}
+		}
 	}
 	require.True(t, b < c && c < a, "precondition: B < C < A by hash")
 	rh := svc.si.RepoForTest()
