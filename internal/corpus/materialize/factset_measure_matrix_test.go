@@ -142,7 +142,7 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		for i := lo; i < min(units, lo+chunk); i++ {
 			own := make([]string, 499)
 			for j := range own {
-				own[j] = fmt.Sprintf("kb/m4/b/d/r%03d/l%03d.md", i, j)
+				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/l%03d.md", i/25, i, j)
 				files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
 			}
 			p := fmt.Sprintf("kb/m4/b/u/r%03d.md", i)
@@ -163,10 +163,10 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 			files = map[string]string{}
 			for i := lo; i < min(units, lo+chunkC); i++ {
 				for j := range 50 {
-					p := fmt.Sprintf("kb/m4/c/d/r%03d/c%02d_%d.md", i, j, k)
+					p := fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/c%02d_%d.md", i/25, i, j, k)
 					var refs []string
 					if k < 9 {
-						refs = []string{fmt.Sprintf("kb/m4/c/d/r%03d/c%02d_%d.md", i, j, k+1)}
+						refs = []string{fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/c%02d_%d.md", i/25, i, j, k+1)}
 					}
 					files[p] = factText(t, p, fmt.Sprintf("C %d.%d.%d", i, j, k), refs)
 				}
@@ -177,7 +177,7 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		for i := lo; i < min(units, lo+chunkC); i++ {
 			heads := make([]string, 50)
 			for j := range heads {
-				heads[j] = fmt.Sprintf("kb/m4/c/d/r%03d/c%02d_0.md", i, j)
+				heads[j] = fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/c%02d_0.md", i/25, i, j)
 			}
 			p := fmt.Sprintf("kb/m4/c/u/r%03d.md", i)
 			results[p] = factText(t, p, fmt.Sprintf("C result %d", i), heads)
