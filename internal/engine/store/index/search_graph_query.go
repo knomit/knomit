@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -254,16 +255,27 @@ func (gs *GraphStore) outgoingOfVersion(ctx context.Context, path, commitHash, b
 	if len(candidates) == 0 {
 		return candidates, nil
 	}
+	// One commit_log row per DISTINCT target commit (its committed_at is the
+	// commit's, the same on every path row it wrote). Selecting
+	// `commit_hash IN (...)` returned every path row of every target commit:
+	// a 500-file commit cited by 50 refs read 25,000 rows to learn 50
+	// timestamps (round 4 of PR #692: half of a deep FactSet's walk). A
+	// commit with no commit_log row still drops its edge.
 	args := make([]any, 0, len(candidates))
 	placeholders := make([]string, 0, len(candidates))
+	seenCommit := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
+		if seenCommit[c.Commit] {
+			continue
+		}
+		seenCommit[c.Commit] = true
 		args = append(args, c.Commit)
-		placeholders = append(placeholders, "?")
+		placeholders = append(placeholders, "(?)")
 	}
 	clRows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx,
-		`SELECT cl.commit_hash, COALESCE(cl.committed_at, 0)
-		   FROM commit_log cl
-		  WHERE cl.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
+		`WITH c(h) AS (VALUES `+strings.Join(placeholders, ",")+`)
+		 SELECT c.h, (SELECT COALESCE(cl.committed_at, 0) FROM commit_log cl WHERE cl.commit_hash = c.h LIMIT 1)
+		   FROM c`,
 		args...,
 	)
 	if err != nil {
@@ -273,11 +285,13 @@ func (gs *GraphStore) outgoingOfVersion(ctx context.Context, path, commitHash, b
 	dates := make(map[string]int64, len(candidates))
 	for clRows.Next() {
 		var h string
-		var ts int64
+		var ts sql.NullInt64
 		if err := clRows.Scan(&h, &ts); err != nil {
 			return nil, fmt.Errorf("OutgoingAtCommit: commit_log scan: %w", err)
 		}
-		dates[h] = ts
+		if ts.Valid {
+			dates[h] = ts.Int64
+		}
 	}
 	if err := clRows.Err(); err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: commit_log rows: %w", err)

@@ -77,6 +77,14 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 		require.Equal(t, one, batch[p], "%s at %s", p.Path, p.Commit[:8])
 	}
 	require.Len(t, batch[index.PathAtCommit{Path: "kb/a.md", Commit: head}], 1)
+	// The edge carries its target commit's own time (one commit_log row per
+	// distinct commit, round 4).
+	revs, err := svc.HistoryQuery().RevisionsBefore(ctx, "feature", "kb/b.md", out[0].Commit, 1)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+	require.Equal(t, out[0].Commit, revs[0].Commit)
+	require.Equal(t, revs[0].CommittedAt, out[0].CommittedAt)
+	require.Positive(t, out[0].CommittedAt)
 
 	// INCOMING: B←A symmetric.
 	in, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/b.md", head)
