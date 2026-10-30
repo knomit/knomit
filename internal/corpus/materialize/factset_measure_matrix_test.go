@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,6 +59,18 @@ FactSet measurements. It is written to look like a real fact: a few
 paragraphs of prose with caveats, numbers and references, so that the
 store's rows, its blob objects and its page cache behave like production.
 `
+
+// uname is a uuid-like file name for a seeded fact: 12 hex digits of a hash
+// of its coordinates. Real facts are named by server-generated uuids, so
+// their 8-character anchor ids rarely collide; names like l000 repeated in
+// every result's directory would collide in every unit and make anchor
+// allocation probe -2, -3, ... once per earlier unit (an artifact, measured
+// apart).
+func uname(parts ...any) string {
+	h := fnv.New64a()
+	fmt.Fprint(h, parts...)
+	return fmt.Sprintf("%012x", h.Sum64()&0xffffffffffff)
+}
 
 func realisticBody(seed string) string {
 	var sb strings.Builder
@@ -129,7 +142,7 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 			files := map[string]string{}
 			own := make([]string, 499)
 			for j := range own {
-				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/l%03d.md", i/25, i, j/50, j)
+				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/50, uname("b", i, j))
 				files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
 			}
 			t1 := time.Now()
@@ -168,7 +181,7 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		for i := lo; i < min(units, lo+chunk); i++ {
 			own := make([]string, 499)
 			for j := range own {
-				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/l%03d.md", i/25, i, j/50, j)
+				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/50, uname("b", i, j))
 				files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
 			}
 			p := fmt.Sprintf("kb/m4/b/u/g%02d/r%03d.md", i/25, i)
@@ -189,10 +202,10 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 			files = map[string]string{}
 			for i := lo; i < min(units, lo+chunkC); i++ {
 				for j := range 50 {
-					p := fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/c%02d_%d.md", i/25, i, j/5, j, k)
+					p := fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/5, uname("c", i, j, k))
 					var refs []string
 					if k < 9 {
-						refs = []string{fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/c%02d_%d.md", i/25, i, j/5, j, k+1)}
+						refs = []string{fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/5, uname("c", i, j, k+1))}
 					}
 					files[p] = factText(t, p, fmt.Sprintf("C %d.%d.%d", i, j, k), refs)
 				}
@@ -203,7 +216,7 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		for i := lo; i < min(units, lo+chunkC); i++ {
 			heads := make([]string, 50)
 			for j := range heads {
-				heads[j] = fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/c%02d_0.md", i/25, i, j/5, j)
+				heads[j] = fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/5, uname("c", i, j, 0))
 			}
 			p := fmt.Sprintf("kb/m4/c/u/g%02d/r%03d.md", i/25, i)
 			results[p] = factText(t, p, fmt.Sprintf("C result %d", i), heads)
