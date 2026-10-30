@@ -45,6 +45,12 @@ import (
 //     sections, exactly the section cap.
 // A, B and C run at References 499 (max_nodes 500), Depth 10, Facts 500,
 // at the shipped 100,000-section cap.
+//
+// Layout: directories stay small, as a real KB's categories do (results in
+// u/gNN/ by 25; a result's own facts in d/gNN/rNNN/sS/ by 50). Writing into
+// wide directories made the seed itself quadratic: a commit's index sync runs
+// go-git's LastCommitForPath per file, whose tree diff decodes every sibling
+// subtree along the path, uncached (knomit #357).
 
 const measureBody = `This fact records an observation made while building the materialize
 FactSet measurements. It is written to look like a real fact: a few
@@ -115,6 +121,25 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 	// the seed quadratic.
 	const chunk = 1 // results per batch of their own facts (499 of them)
 	start := time.Now()
+	// KNOMIT_FACTSET_MEASURE_PROFILE_SEED=<from>: seed only B's results
+	// from..from+10 (to profile the seed itself on a copy of a store).
+	if from := envInt("KNOMIT_FACTSET_MEASURE_PROFILE_SEED", -1); from >= 0 {
+		for i := from; i < from+10; i++ {
+			files := map[string]string{}
+			own := make([]string, 499)
+			for j := range own {
+				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/l%03d.md", i/25, i, j/50, j)
+				files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
+			}
+			t1 := time.Now()
+			batchWrite(t, f, branch, files)
+			t2 := time.Now()
+			p := fmt.Sprintf("kb/m4/b/u/g%02d/r%03d.md", i/25, i)
+			batchWrite(t, f, branch, map[string]string{p: factText(t, p, fmt.Sprintf("B result %d", i), own)})
+			t.Logf("B result %d: leaves %s, result %s", i, t2.Sub(t1), time.Since(t2))
+		}
+		return
+	}
 
 	// A: 499 shared leaves, then the results.
 	files := map[string]string{}
@@ -142,10 +167,10 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		for i := lo; i < min(units, lo+chunk); i++ {
 			own := make([]string, 499)
 			for j := range own {
-				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/l%03d.md", i/25, i, j)
+				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/l%03d.md", i/25, i, j/50, j)
 				files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
 			}
-			p := fmt.Sprintf("kb/m4/b/u/r%03d.md", i)
+			p := fmt.Sprintf("kb/m4/b/u/g%02d/r%03d.md", i/25, i)
 			results[p] = factText(t, p, fmt.Sprintf("B result %d", i), own)
 		}
 		batchWrite(t, f, branch, files)
@@ -163,10 +188,10 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 			files = map[string]string{}
 			for i := lo; i < min(units, lo+chunkC); i++ {
 				for j := range 50 {
-					p := fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/c%02d_%d.md", i/25, i, j, k)
+					p := fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/c%02d_%d.md", i/25, i, j/5, j, k)
 					var refs []string
 					if k < 9 {
-						refs = []string{fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/c%02d_%d.md", i/25, i, j, k+1)}
+						refs = []string{fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/c%02d_%d.md", i/25, i, j/5, j, k+1)}
 					}
 					files[p] = factText(t, p, fmt.Sprintf("C %d.%d.%d", i, j, k), refs)
 				}
@@ -177,9 +202,9 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		for i := lo; i < min(units, lo+chunkC); i++ {
 			heads := make([]string, 50)
 			for j := range heads {
-				heads[j] = fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/c%02d_0.md", i/25, i, j)
+				heads[j] = fmt.Sprintf("kb/m4/c/d/g%02d/r%03d/s%d/c%02d_0.md", i/25, i, j/5, j)
 			}
-			p := fmt.Sprintf("kb/m4/c/u/r%03d.md", i)
+			p := fmt.Sprintf("kb/m4/c/u/g%02d/r%03d.md", i/25, i)
 			results[p] = factText(t, p, fmt.Sprintf("C result %d", i), heads)
 		}
 		batchWrite(t, f, branch, results)
