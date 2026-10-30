@@ -864,8 +864,7 @@ func TestBook_TwoLevelReservationExample(t *testing.T) {
 // reserved. Every reserved fact is written by its owner.
 //
 // Sabotage: ignore max_nodes when reserving, and Y is reserved for unit 1,
-// which never writes it (the walk refuses the book: reserved but walked
-// nowhere).
+// which never writes it: unit 2 then links to a Y written nowhere.
 func TestBook_ReservationFollowsTheOwnersLimits(t *testing.T) {
 	f := newBookFixture(t)
 	seedABC(t, f)
@@ -900,6 +899,30 @@ func TestBook_ReservationFollowsTheOwnersLimits(t *testing.T) {
 	zero, nodes := reservations("depth0", 0, MaxBookFacts)
 	require.Empty(t, zero, "Depth 0 reserves nothing")
 	require.Equal(t, []row{{"1", "u/a", ""}, {"2", "u/b", ""}, {"3", "u/c", ""}}, rowsOf(nodes))
+}
+
+// A unit's direct references are its root's children, in refs order, even
+// when one is also reachable through a sibling: r cites a then b, a cites
+// b. The plain reading order would nest b under a (1.1.1); in a book b is
+// 1.2, the number reserved for it before the walk, and a's builds_on still
+// points at it.
+//
+// Sabotage: drop walker.pinDirect, and b is walked as 1.1.1 against its
+// reserved 1.2 (the unit is refused).
+func TestBook_DirectRefsAreTheRootsChildren(t *testing.T) {
+	f := newBookFixture(t)
+	f.write(t, "kb/z/b.md", "B", "b body.")
+	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/b.md")
+	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
+	req := f.request("kb/u/")
+	req.Limit = 5
+	p, _, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	require.NoError(t, err)
+	require.Equal(t, []row{{"1", "u/r", ""}, {"1.1", "z/a", ""}, {"1.2", "z/b", ""}}, rowsOf(p.Facts))
+	a, b := p.Facts[1], p.Facts[2]
+	require.Equal(t, 1, b.TreeDepth)
+	require.Len(t, a.BuildsOn, 1)
+	require.Equal(t, b.AnchorID, a.BuildsOn[0].AnchorID)
 }
 
 // A seek to unit 3 before units 2 and 3 are walked serves exactly what
