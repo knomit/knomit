@@ -1082,3 +1082,30 @@ func TestVersionMetasAt_IsVersionMetaAtForEveryPair(t *testing.T) {
 	require.Equal(t, "X", got[index.PathAtCommit{Path: "kb/z/x.md", Commit: c1}].Title, "the old version's row")
 	require.Equal(t, "X2", got[index.PathAtCommit{Path: "kb/z/x.md", Commit: c2}].Title)
 }
+
+// The BFS takes nodes in queue order when max_nodes cuts inside a level: r
+// cites a then b, a cites x, b cites y; at max_nodes 4 the walk includes r,
+// a, b and x (a was queued before b) and cuts y. The level-by-level form
+// (round 4, for batched reads) must keep that FIFO order exactly.
+//
+// Sabotage: walk a level in reverse, and y is included instead of x.
+func TestPlan_SizeCutFollowsTheQueueOrder(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/z/x.md", "X", "x body.")
+	f.write(t, "kb/z/y.md", "Y", "y body.")
+	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/x.md")
+	f.write(t, "kb/z/b.md", "B", "b body.", "kb/z/y.md")
+	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
+	doc, err := Plan(context.Background(), Request{Binding: f.b, File: "kb/u/r.md", Options: Options{Depth: 3, MaxNodes: 4}})
+	require.NoError(t, err)
+	var paths []string
+	cut := map[string]string{}
+	for _, n := range doc.Nodes {
+		paths = append(paths, n.Path)
+		for _, o := range n.NotIncluded {
+			cut[o.Path] = o.Reason
+		}
+	}
+	require.Equal(t, []string{"kb/u/r.md", "kb/z/a.md", "kb/z/x.md", "kb/z/b.md"}, paths)
+	require.Equal(t, ReasonSize, cut["kb/z/y.md"])
+}
