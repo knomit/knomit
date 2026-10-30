@@ -120,4 +120,28 @@ func TestResolveActiveCommitForPath_EarlyStopIsTheChainWalk(t *testing.T) {
 	}
 	require.Positive(t, fast, "some pairs take the fast path")
 	require.Positive(t, chainDiffers, "and some resolve further down the chain")
+
+	// RevisionsBefore with limit 1 (its early-stopping form, which
+	// materialize's date of every walked fact uses) is the first row of the
+	// general query (limit 2), on both branches: branch_commits filters too.
+	hq := svc.HistoryQuery()
+	featureHead, err := svc.HeadCommit(ctx, "feature")
+	require.NoError(t, err)
+	rows := 0
+	for _, branch := range []string{"main", "feature"} {
+		for _, c := range append(commits, featureHead) {
+			for _, p := range []string{"kb/a.md", "kb/b.md", "kb/x.md", "kb/y.md", "kb/never.md"} {
+				one, err := hq.RevisionsBefore(ctx, branch, p, c, 1)
+				require.NoError(t, err)
+				two, err := hq.RevisionsBefore(ctx, branch, p, c, 2)
+				require.NoError(t, err)
+				if len(two) > 1 {
+					two = two[:1]
+				}
+				require.Equal(t, two, one, "%s %s at %s", branch, p, c[:8])
+				rows += len(one)
+			}
+		}
+	}
+	require.Positive(t, rows)
 }

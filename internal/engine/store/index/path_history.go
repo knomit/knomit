@@ -278,6 +278,9 @@ func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 	if err != nil {
 		return nil, fmt.Errorf("RevisionsBefore: branchID: %w", err)
 	}
+	if limit == 1 {
+		return hq.lastRevisionBefore(ctx, branchID, path, anchorCommit)
+	}
 	rows, err := conn(ctx, hq.rh.DB()).QueryContext(ctx, vcs.FirstParentChainCTE+`
 		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
 		  FROM fpc
@@ -306,4 +309,41 @@ func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 		return nil, fmt.Errorf("RevisionsBefore: rows: %w", err)
 	}
 	return out, nil
+}
+
+// lastRevisionBefore is RevisionsBefore with limit 1, the same row: the
+// first commit, in first-parent order from anchorCommit, on the branch,
+// that added or modified path. The general query orders the WHOLE chain by
+// depth before its LIMIT (an ORDER BY defeats the pull-based recursion), so
+// one call cost O(history); materialize reads one date per walked fact
+// through it. This recursion stops expanding at the first such commit, so
+// it costs O(depth to it). (The same fix as
+// vcs.Repo.ResolveActiveCommitForPath, round 4 of PR #692.)
+func (hq *HistoryQuery) lastRevisionBefore(ctx context.Context, branchID int64, path, anchorCommit string) ([]model.RevisionMeta, error) {
+	var rm model.RevisionMeta
+	var msg string
+	err := conn(ctx, hq.rh.DB()).QueryRowContext(ctx, `
+		WITH RECURSIVE fpc(commit_hash, hit) AS (
+		    SELECT ?1, EXISTS (SELECT 1 FROM commit_log cl JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		                        WHERE cl.commit_hash = ?1 AND bc.branch_id = ?2 AND cl.path = ?3 AND cl.action IN ('added','modified'))
+		    UNION ALL
+		    SELECT cp.parent_hash, EXISTS (SELECT 1 FROM commit_log cl JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		                                    WHERE cl.commit_hash = cp.parent_hash AND bc.branch_id = ?2 AND cl.path = ?3 AND cl.action IN ('added','modified'))
+		      FROM fpc
+		      JOIN commit_parents cp ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
+		     WHERE fpc.hit = 0
+		)
+		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
+		  FROM fpc JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash AND cl.path = ?3
+		 WHERE fpc.hit = 1
+		 LIMIT 1
+	`, anchorCommit, branchID, path).Scan(&rm.Commit, &rm.CommittedAt, &msg, &rm.Action)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("RevisionsBefore: %w", err)
+	}
+	rm.Message = vcs.FirstLine(msg)
+	return []model.RevisionMeta{rm}, nil
 }
