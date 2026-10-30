@@ -1047,3 +1047,170 @@ func TestBlobEdges_FailedDrainWriteKeepsThePendingMark(t *testing.T) {
 	require.Empty(t, pendingRefBranches(t, db))
 	require.Equal(t, map[string]string{"kb/r.md": cR}, outPaths(t, svc, "exp/x", "kb/f.md", cF))
 }
+
+// branchFactCommit is branch_facts.commit_hash for (branch, path).
+func branchFactCommit(t *testing.T, db *sql.DB, branch, path string) string {
+	t.Helper()
+	var c string
+	require.NoError(t, db.QueryRow(`
+		SELECT bf.commit_hash FROM branch_facts bf JOIN branches b ON b.id = bf.branch_id
+		 WHERE b.name = ? AND bf.path = ?`, branch, path).Scan(&c))
+	return c
+}
+
+// P1 (round-3 review of #693; the user's merge-case test): X (citing R) is
+// written on branch A; B moves on (R changes, Z is written); A is merged into
+// B with X carried unchanged, and B is synced. On B: X is in B's facts, X
+// keeps exactly its one edge pinned at A's introducing commit, R's incoming
+// lists X, and outgoing AND explain (HEAD Connections) for X are identical on
+// B and on A. Run incrementally, and as the v8 upgrade of a store an older
+// index wrote (B's recorded commit for X set to B's last non-merge commit, the
+// commit LastCommitForPath named, which does not hold X), rebuilding B first
+// or A first (B is then drained, not rebuilt).
+//
+// Sabotage: record LastCommitForPath's commit again in indexFile, and explain
+// on B is empty (incremental); drop repairRecordedCommits from the drain, and
+// "upgrade A first" keeps the empty explain.
+func TestBlobEdges_MergeCarriesBlobUnchanged(t *testing.T) {
+	const A, B = "side-a", "dest-b"
+	type world struct {
+		svc                      *Service
+		db                       *sql.DB
+		cR, cX, cZ, xBlob, rBlob string
+	}
+	build := func(t *testing.T) world {
+		svc := newMergeTestStore(t)
+		ctx := context.Background()
+		db := svc.si.RepoForTest().DB()
+		cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
+		for _, b := range []string{A, B} {
+			require.NoError(t, svc.CreateBranch(ctx, b, "main"))
+			require.NoError(t, svc.IndexManager().Sync(ctx, b))
+		}
+		cX, xBlob := write(t, svc, A, "kb/x.md", "X", "kb/r.md")
+		write(t, svc, B, "kb/r.md", "R on B")
+		cZ, _ := write(t, svc, B, "kb/z.md", "Z")
+		require.NoError(t, svc.Merge().MergeBranch(ctx, A, B, merge.StrategyLocalWins))
+		require.NoError(t, svc.IndexManager().Sync(ctx, B))
+		return world{svc, db, cR, cX, cZ, xBlob, rBlob}
+	}
+	check := func(t *testing.T, w world, label string) {
+		ctx := context.Background()
+		var blob string
+		require.NoError(t, w.db.QueryRow(`
+			SELECT f.blob_hash FROM branch_facts bf
+			  JOIN facts f ON f.id = bf.fact_id
+			  JOIN branches b ON b.id = bf.branch_id
+			 WHERE b.name = ? AND bf.path = ?`, B, "kb/x.md").Scan(&blob), label)
+		require.Equal(t, w.xBlob, blob, "%s: X is in B's facts, unchanged", label)
+		require.Equal(t, w.cX, branchFactCommit(t, w.db, B, "kb/x.md"), "%s: B records X's own commit, which holds X", label)
+		var ofX []refEdge
+		for _, e := range allRefEdges(t, w.db) {
+			if e.SrcBlob == w.xBlob {
+				ofX = append(ofX, e)
+			}
+		}
+		require.Len(t, ofX, 1, "%s: X has exactly one edge (no new edge from the merge)", label)
+		require.Equal(t, "kb/r.md", ofX[0].TgtPath, label)
+		require.Equal(t, w.rBlob, ofX[0].TgtBlob, "%s: pinned to R as of X's commit, not B's R", label)
+		require.Equal(t, w.cX, ofX[0].SourceCommit, "%s: source_commit = A's introducing commit", label)
+		require.Equal(t, w.cR, ofX[0].TargetCommit, label)
+		require.Equal(t, w.cX, refsCommitOf(t, w.db, w.xBlob), label)
+		in, err := w.svc.gq.IncomingAtCommit(ctx, B, "kb/r.md", w.cR)
+		require.NoError(t, err)
+		var paths []string
+		for _, r := range in {
+			paths = append(paths, r.Path)
+		}
+		require.Contains(t, paths, "kb/x.md", "%s: R's incoming on B lists X", label)
+		headA, err := w.svc.HeadCommit(ctx, A)
+		require.NoError(t, err)
+		headB, err := w.svc.HeadCommit(ctx, B)
+		require.NoError(t, err)
+		onA, err := w.svc.gq.OutgoingAtCommit(ctx, A, "kb/x.md", headA)
+		require.NoError(t, err)
+		onB, err := w.svc.gq.OutgoingAtCommit(ctx, B, "kb/x.md", headB)
+		require.NoError(t, err)
+		require.Len(t, onA, 1, label)
+		require.Equal(t, onA, onB, "%s: outgoing for X on B == on A", label)
+		exA, err := w.svc.gq.ExplainFact(ctx, A, "kb/x.md")
+		require.NoError(t, err)
+		exB, err := w.svc.gq.ExplainFact(ctx, B, "kb/x.md")
+		require.NoError(t, err)
+		require.Len(t, exA.Outgoing, 1, label)
+		require.Equal(t, exA.Outgoing, exB.Outgoing, "%s: explain outgoing on B == on A", label)
+		require.Equal(t, exA.Incoming, exB.Incoming, "%s: explain incoming on B == on A", label)
+	}
+
+	t.Run("incremental", func(t *testing.T) {
+		check(t, build(t), "incremental")
+	})
+	for _, first := range []string{B, A} {
+		t.Run("upgrade-"+first+"-first", func(t *testing.T) {
+			w := build(t)
+			inc := allRefEdges(t, w.db)
+			// The store an older index wrote: B recorded LastCommitForPath's
+			// commit for X, which does not hold it.
+			_, err := w.svc.si.RepoForTest().ReadBlobHashAtCommit(context.Background(), "kb/x.md", w.cZ)
+			require.Error(t, err, "precondition: cZ does not hold X")
+			_, err = w.db.Exec(`UPDATE branch_facts SET commit_hash = ? WHERE path = 'kb/x.md'
+				AND branch_id = (SELECT id FROM branches WHERE name = ?)`, w.cZ, B)
+			require.NoError(t, err)
+			ex, err := w.svc.gq.ExplainFact(context.Background(), B, "kb/x.md")
+			require.NoError(t, err)
+			require.Empty(t, ex.Outgoing, "precondition: the old index's empty explain on B")
+
+			_, err = w.db.Exec(`DELETE FROM meta WHERE key = 'derived_from_per_blob'`)
+			require.NoError(t, err)
+			require.NoError(t, w.svc.IndexManager().Rebuild(context.Background(), first, nil))
+			require.Empty(t, pendingRefBranches(t, w.db), "every branch drained")
+			check(t, w, "upgrade "+first+" first")
+			require.Equal(t, inc, allRefEdges(t, w.db), "rebuild == incremental (%s first)", first)
+		})
+	}
+}
+
+// The commit recorded for a path on a branch HOLDS the path's blob there, and
+// the incremental index and a rebuild record the same one: after a merge that
+// carries X unchanged (X's own commit), and after a revert to earlier bytes
+// (the revert, the live introduction, not the first one).
+//
+// Sabotage: indexFile records LastCommitForPath's commit again, and X on b
+// records b's last non-merge commit, which does not hold X; rebuildFacts
+// records the latest commit_log row again, and the rebuild records the merge
+// for X (rebuild != incremental).
+func TestBlobEdges_RecordedCommitHoldsTheBlob(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	rh := svc.si.RepoForTest()
+	write(t, svc, "main", "kb/r.md", "R")
+	for _, b := range []string{"a", "b"} {
+		require.NoError(t, svc.CreateBranch(ctx, b, "main"))
+		require.NoError(t, svc.IndexManager().Sync(ctx, b))
+	}
+	cX, xBlob := write(t, svc, "a", "kb/x.md", "X", "kb/r.md")
+	write(t, svc, "b", "kb/z.md", "Z")
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "a", "b", merge.StrategyLocalWins))
+	require.NoError(t, svc.IndexManager().Sync(ctx, "b"))
+	// A revert on b: y = Y, Y', Y; then an unrelated commit.
+	write(t, svc, "b", "kb/y.md", "Y")
+	write(t, svc, "b", "kb/y.md", "Y prime")
+	cY3, yBlob := write(t, svc, "b", "kb/y.md", "Y")
+	write(t, svc, "b", "kb/w.md", "W")
+
+	holds := func(path, commit, blob string) {
+		got, err := rh.ReadBlobHashAtCommit(ctx, path, commit)
+		require.NoError(t, err, "%s at %s", path, commit)
+		require.Equal(t, blob, got)
+	}
+	incX, incY := branchFactCommit(t, db, "b", "kb/x.md"), branchFactCommit(t, db, "b", "kb/y.md")
+	holds("kb/x.md", incX, xBlob)
+	holds("kb/y.md", incY, yBlob)
+	require.Equal(t, cX, incX, "the merge carried X: X's own commit")
+	require.Equal(t, cY3, incY, "the revert: the live introduction")
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "b", nil))
+	require.Equal(t, incX, branchFactCommit(t, db, "b", "kb/x.md"), "rebuild == incremental")
+	require.Equal(t, incY, branchFactCommit(t, db, "b", "kb/y.md"), "rebuild == incremental")
+}

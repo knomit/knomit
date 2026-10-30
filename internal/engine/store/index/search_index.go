@@ -646,6 +646,9 @@ func (si *Index) reResolvePendingBranches(ctx context.Context, rebuilt string, d
 // events and is done. failed reports whether any edge write failed (the
 // event is then not marked done, so a later pass retries it).
 func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done map[string]struct{}) (failed bool, err error) {
+	if err := si.repairRecordedCommits(ctx, branch); err != nil {
+		return false, err
+	}
 	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, `
 		SELECT cl.commit_hash, cl.path
 		FROM commit_log cl
@@ -710,12 +713,111 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 	return failed, nil
 }
 
+// recordedCommit is the commit recorded for (path, blob) on a branch whose
+// tip is head: branch_facts.commit_hash, the anchor of HEAD explain /
+// Connections (kb/conventions/store/active-commit-via-branch-facts). It must
+// HOLD blob at path, and the incremental index and a rebuild must record the
+// same one, so both call this:
+//   - the LIVE introduction of the path's content at head: path_changes'
+//     change live on head's first-parent line, as the entry it resolves to
+//     (a merge carrying the content resolves to the commit that wrote it),
+//     when that entry's blob is blob;
+//   - else LastCommitForPath (the latest non-merge commit touching the path;
+//     it can name a commit without the file after a merge,
+//     kb/gotchas/store/git/last-commit-for-path) only if it holds blob;
+//   - else head, which holds it (the file was read at head).
+//
+// It reads git only on the fallbacks, so callers keep it outside any write
+// transaction.
+func (si *Index) recordedCommit(ctx context.Context, branch, path, blob, head string) string {
+	if head != "" {
+		if entry, _, err := vcs.LiveChange(ctx, conn(ctx, si.rh.DB()), vcs.ActiveTables, path, head, 0); err == nil && entry != "" {
+			var b string
+			if err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+				`SELECT blob FROM path_changes WHERE path = ? AND commit_hash = ?`, path, entry).Scan(&b); err == nil && b == blob {
+				return entry
+			}
+		}
+	}
+	holds := func(c string) bool {
+		got, err := si.rh.ReadBlobHashAtCommit(ctx, path, c)
+		return err == nil && got == blob
+	}
+	if last, err := si.rh.LastCommitForPath(ctx, branch, path); err == nil && last != "" && holds(last) {
+		return last
+	}
+	return head
+}
+
+// repairRecordedCommits rewrites the branch's branch_facts.commit_hash values
+// to recordedCommit's, for a branch the upgrade drains but does not rebuild
+// (rebuildFacts already records them for a rebuilt branch). Older indexes
+// recorded LastCommitForPath's commit, which after a merge can be a commit
+// that does not hold the file, and then HEAD explain on that branch is empty.
+//
+// Each row is updated only if it still has the fact and commit it was read
+// with, so a concurrent index sync of that branch (no lock is held here) is
+// never overwritten with an answer computed from an older tip. Idempotent: the
+// drain clears the branch's pending mark only after this and the edges ran.
+func (si *Index) repairRecordedCommits(ctx context.Context, branch string) error {
+	head, err := si.rh.HeadCommit(ctx, branch)
+	if err != nil {
+		return nil // the branch is gone: nothing to repair
+	}
+	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, `
+		SELECT bf.branch_id, bf.path, bf.fact_id, bf.commit_hash, f.blob_hash
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = (SELECT id FROM branches WHERE name = ?)`, branch)
+	if err != nil {
+		return fmt.Errorf("repair recorded commits: %w", err)
+	}
+	type row struct {
+		branchID, factID   int64
+		path, commit, blob string
+	}
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.branchID, &r.path, &r.factID, &r.commit, &r.blob); err != nil {
+			rows.Close()
+			return fmt.Errorf("repair recorded commits: %w", err)
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("repair recorded commits: %w", err)
+	}
+	fixed := 0
+	for _, r := range all {
+		want := si.recordedCommit(ctx, branch, r.path, r.blob, head)
+		if want == r.commit {
+			continue
+		}
+		res, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `
+			UPDATE branch_facts SET commit_hash = ?
+			 WHERE branch_id = ? AND path = ? AND fact_id = ? AND commit_hash = ?`,
+			want, r.branchID, r.path, r.factID, r.commit)
+		if err != nil {
+			return fmt.Errorf("repair recorded commits: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			fixed++
+		}
+	}
+	if fixed > 0 {
+		log.Info().Str("branch", branch).Int("rows", fixed).Msg("repaired branch_facts commits that did not hold their blob")
+	}
+	return nil
+}
+
 // indexFile reads a single file from git, parses it as a fact, and upserts
 // it into the index. Files that fail to parse (e.g. README.md manifest) are
 // silently skipped.
 //
-// commitHash is the fallback; if commit_log has a more specific last-touch
-// commit for this path, that is used instead.
+// commitHash is the branch tip; the commit recorded for the path is
+// recordedCommit's (a commit that holds this blob), not the tip.
 //
 // Returns the FactRecord that was upserted, or nil if the file was skipped
 // (not a fact file). The commit stored in FactRecord.SourceCommit is the
@@ -726,10 +828,7 @@ func (si *Index) indexFile(ctx context.Context, branch, path, commitHash string)
 		return nil, fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
-	// Use the most recent non-merge commit that touched this file.
-	if last, lerr := si.rh.LastCommitForPath(ctx, branch, path); lerr == nil && last != "" {
-		commitHash = last
-	}
+	commitHash = si.recordedCommit(ctx, branch, path, blobHash, commitHash)
 
 	rec, err := facts.ParseFactRecord(path, content)
 	if err != nil {
@@ -862,6 +961,17 @@ func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress
 		progress("facts", 0, len(paths))
 	}
 
+	// The commit recorded per path, the same function the incremental index
+	// uses (recordedCommit), so rebuild == incremental for branch_facts. It is
+	// computed BEFORE the transaction: its fallbacks read git, and git object
+	// reads take a pool connection of their own.
+	recorded := make([]string, len(paths))
+	for i := range paths {
+		if si.rh.IsFactPath(paths[i]) {
+			recorded[i] = si.recordedCommit(ctx, branch, paths[i], hashes[i], head)
+		}
+	}
+
 	// The whole of phase 1 — facts upsert + derived junction/token regeneration
 	// + branch_facts — runs in ONE transaction. This is load-bearing: the
 	// derived-state regeneration below clears tables before repopulating them
@@ -878,7 +988,7 @@ func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress
 	}
 
 	// Create temp table for the rebuild entries.
-	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL, commit_hash TEXT NOT NULL DEFAULT '')`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: create temp table: %w", err)
 	}
 	// Ensure it's empty (in case of prior incomplete rebuild).
@@ -886,7 +996,7 @@ func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress
 		return 0, fmt.Errorf("rebuildFacts: clear temp table: %w", err)
 	}
 
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO _rebuild_entries(path, blob_hash) VALUES (?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO _rebuild_entries(path, blob_hash, commit_hash) VALUES (?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: prepare insert: %w", err)
 	}
@@ -900,7 +1010,7 @@ func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress
 		if !si.rh.IsFactPath(paths[i]) {
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, paths[i], hashes[i]); err != nil {
+		if _, err := stmt.ExecContext(ctx, paths[i], hashes[i], recorded[i]); err != nil {
 			return 0, fmt.Errorf("rebuildFacts: insert entry %s: %w", paths[i], err)
 		}
 	}
@@ -1094,22 +1204,15 @@ func (si *Index) rebuildFacts(ctx context.Context, branch, head string, progress
 		return 0, fmt.Errorf("rebuildFacts: repopulate fact_motifs: %w", err)
 	}
 
-	// Populate branch_facts: link each fact to this branch with its commit_hash.
-	// We pick the most recent commit_log row per path whose commit is visible on
-	// this branch (via branch_commits).
+	// Populate branch_facts: link each fact to this branch with the commit
+	// recordedCommit chose for it above (a commit that holds the blob; the
+	// incremental index records the same one).
 	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `
 		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
-		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
+		SELECT ?, f.path, f.id, e.commit_hash
 		FROM facts f
 		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
-		LEFT JOIN (
-			SELECT cl.path, cl.commit_hash,
-			       ROW_NUMBER() OVER (PARTITION BY cl.path ORDER BY cl.committed_at DESC) AS rn
-			FROM commit_log cl
-			JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-			WHERE bc.branch_id = ?
-		) cl ON cl.path = f.path AND cl.rn = 1
-	`, branchID, branchID); err != nil {
+	`, branchID); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: populate branch_facts: %w", err)
 	}
 
