@@ -1415,3 +1415,33 @@ func TestBlobEdges_TargetResolvedOnAnotherBranchRendersOnTheReader(t *testing.T)
 	require.True(t, ok)
 	require.NotEqual(t, cRA, head, "changed since cited on brC")
 }
+
+// A citer the reading branch held and then retracted is still listed there,
+// as retracted (kb/decisions/store/temporal/retracted-fact-semantics), even
+// when the citing blob's edges were resolved on another branch: the same bytes
+// X are written on brA, then on brC at another path, then retracted on brC.
+// R's incoming on brC lists kb/x-copy.md with deleted=true, at a commit of
+// brC that held it.
+//
+// Sabotage: count only the branch's current holdings (drop the path_changes
+// half of blobHoldings), and the retracted citer disappears from brC.
+func TestBlobEdges_RetractedCiterOnTheSecondBranchIsListed(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, _ := write(t, svc, "main", "kb/r.md", "R")
+	for _, b := range []string{"brA", "brC"} {
+		require.NoError(t, svc.CreateBranch(ctx, b, "main"))
+		require.NoError(t, svc.IndexManager().Sync(ctx, b))
+	}
+	write(t, svc, "brA", "kb/x.md", "X", "kb/r.md")
+	write(t, svc, "brC", "kb/z.md", "Z")
+	cC, _ := write(t, svc, "brC", "kb/x-copy.md", "X", "kb/r.md")
+	_, err := svc.Facts().DeleteFact(ctx, "brC", "kb/x-copy.md", "retract")
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"kb/x-copy.md": true}, incomingPaths(t, svc, "brC", "kb/r.md", cR))
+	in, err := svc.gq.IncomingAtCommit(ctx, "brC", "kb/r.md", cR)
+	require.NoError(t, err)
+	require.Equal(t, cC, in[0].Commit, "the brC commit that held it")
+	require.True(t, onBranch(t, db, "brC", in[0].Commit))
+}
