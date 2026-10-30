@@ -54,11 +54,11 @@ func TestEveryQueryServiceReadProbes(t *testing.T) {
 			}
 		}
 	}
-	// Not vacuous: 13 FactQuery (VersionMetaAt and VersionMetasAt, the
-	// factset walk) + 10 GraphStore (OutgoingAtCommits too) + 7 HistoryQuery + 1 MethodologyMatcher
+	// Not vacuous: 16 FactQuery (VersionMetaAt and VersionMetasAt, the
+	// factset walk; VersionsByBlob, BlobsByHash, LiveVersions: the streaming prototype) + 12 GraphStore (OutgoingAtCommits; NodeIDsByBlob, DerivedFromOfNodes) + 7 HistoryQuery + 1 MethodologyMatcher
 	// public reads. Adding a read means adding its probe and raising this
 	// number on purpose.
-	require.Equal(t, 31, seen, "the number of public reads on the four query services")
+	require.Equal(t, 36, seen, "the number of public reads on the four query services")
 }
 
 // probeName returns the string literal passed to <recv>.probe in the statement,
