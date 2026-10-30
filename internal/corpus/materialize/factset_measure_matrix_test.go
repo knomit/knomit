@@ -155,42 +155,47 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		return
 	}
 
-	// A: 499 shared leaves, then the results.
-	files := map[string]string{}
-	leaves := make([]string, 499)
-	for j := range leaves {
-		leaves[j] = fmt.Sprintf("kb/m4/a/z/l%03d.md", j)
-		files[leaves[j]] = factText(t, leaves[j], fmt.Sprintf("A leaf %d", j), nil)
-	}
-	batchWrite(t, f, branch, files)
-	for lo := 0; lo < units; lo += 100 {
+	// KNOMIT_FACTSET_MEASURE_SEED_ONLY=C seeds shape C alone (into a store of
+	// its own, in parallel with A and B).
+	var files map[string]string
+	if os.Getenv("KNOMIT_FACTSET_MEASURE_SEED_ONLY") != "C" {
+		// A: 499 shared leaves, then the results.
 		files = map[string]string{}
-		for i := lo; i < min(units, lo+100); i++ {
-			p := fmt.Sprintf("kb/m4/a/u/r%03d.md", i)
-			files[p] = factText(t, p, fmt.Sprintf("A result %d", i), leaves)
+		leaves := make([]string, 499)
+		for j := range leaves {
+			leaves[j] = fmt.Sprintf("kb/m4/a/z/l%03d.md", j)
+			files[leaves[j]] = factText(t, leaves[j], fmt.Sprintf("A leaf %d", j), nil)
 		}
 		batchWrite(t, f, branch, files)
-	}
-	t.Logf("seed A: %s", time.Since(start))
-
-	// B: per result, 499 facts of its own.
-	start = time.Now()
-	for lo := 0; lo < units; lo += chunk {
-		files = map[string]string{}
-		results := map[string]string{}
-		for i := lo; i < min(units, lo+chunk); i++ {
-			own := make([]string, 499)
-			for j := range own {
-				own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/50, uname("b", i, j))
-				files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
+		for lo := 0; lo < units; lo += 100 {
+			files = map[string]string{}
+			for i := lo; i < min(units, lo+100); i++ {
+				p := fmt.Sprintf("kb/m4/a/u/r%03d.md", i)
+				files[p] = factText(t, p, fmt.Sprintf("A result %d", i), leaves)
 			}
-			p := fmt.Sprintf("kb/m4/b/u/g%02d/r%03d.md", i/25, i)
-			results[p] = factText(t, p, fmt.Sprintf("B result %d", i), own)
+			batchWrite(t, f, branch, files)
 		}
-		batchWrite(t, f, branch, files)
-		batchWrite(t, f, branch, results)
-		if done := min(units, lo+chunk); done%50 == 0 || done == units {
-			t.Logf("seed B: %d results in %s", done, time.Since(start))
+		t.Logf("seed A: %s", time.Since(start))
+
+		// B: per result, 499 facts of its own.
+		start = time.Now()
+		for lo := 0; lo < units; lo += chunk {
+			files = map[string]string{}
+			results := map[string]string{}
+			for i := lo; i < min(units, lo+chunk); i++ {
+				own := make([]string, 499)
+				for j := range own {
+					own[j] = fmt.Sprintf("kb/m4/b/d/g%02d/r%03d/s%d/%s.md", i/25, i, j/50, uname("b", i, j))
+					files[own[j]] = factText(t, own[j], fmt.Sprintf("B %d.%d", i, j), nil)
+				}
+				p := fmt.Sprintf("kb/m4/b/u/g%02d/r%03d.md", i/25, i)
+				results[p] = factText(t, p, fmt.Sprintf("B result %d", i), own)
+			}
+			batchWrite(t, f, branch, files)
+			batchWrite(t, f, branch, results)
+			if done := min(units, lo+chunk); done%50 == 0 || done == units {
+				t.Logf("seed B: %d results in %s", done, time.Since(start))
+			}
 		}
 	}
 
