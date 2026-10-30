@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -69,12 +70,27 @@ func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 	// Retracted sources are returned with deleted=true so the UI can render
 	// them with the retracted treatment instead of hiding the edge entirely
 	// (mirrors how OutgoingAtCommit exposes retracted targets).
-	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, true)
+	//
+	// The source is described by every node of the citing BLOB (a rename's
+	// live node as well as the node the edge sits on). A node other than the
+	// edge's own is listed only when its path held that blob in a commit of
+	// this branch, so a rename made on another branch does not surface here.
+	found, err := graphDerivedFromNeighbourRows(ctx, conn(ctx, gs.rh.DB()), blobHash, true)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: read edges: %w", err)
 	}
 	candidates := make([]RefSummary, 0, len(found))
-	for _, rs := range found {
+	for _, n := range found {
+		rs := n.RefSummary
+		if !n.Own {
+			held, err := gs.pathHeldBlobOnBranch(ctx, branchID, rs.Path, n.Blob)
+			if err != nil {
+				return nil, fmt.Errorf("IncomingAtCommit: %w", err)
+			}
+			if !held {
+				continue
+			}
+		}
 		// Defense-in-depth: stale self-loops (same path & same commit on
 		// both endpoints) navigate to nowhere; drop them. Legitimate
 		// "previous version" edges have differing commits and pass through.
@@ -233,4 +249,23 @@ func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// pathHeldBlobOnBranch reports whether path held blob in some commit of the
+// branch (a path_changes row: an introduction or a carry).
+func (gs *GraphStore) pathHeldBlobOnBranch(ctx context.Context, branchID int64, path, blob string) (bool, error) {
+	var one int
+	err := conn(ctx, gs.rh.DB()).QueryRowContext(ctx, `
+		SELECT 1
+		  FROM path_changes pc
+		  JOIN branch_commits bc ON bc.commit_hash = pc.commit_hash AND bc.branch_id = ?
+		 WHERE pc.path = ? AND pc.blob = ?
+		 LIMIT 1`, branchID, path, blob).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("path %s held blob %s: %w", path, blob, err)
+	}
+	return true, nil
 }

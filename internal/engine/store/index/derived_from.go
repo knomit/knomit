@@ -161,27 +161,27 @@ func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 	return action == "added" || action == "modified", nil
 }
 
-// graphAddDerivedFromAtCommitTx writes one DERIVED_FROM edge per ref-event
-// from Fact(sourcePath, sourceBlobHash) to Fact(refPath, target_blob_hash),
-// with edge text properties source_commit and target_commit. Refs that
-// resolve to "skip" via resolveTargetCommit (forward-broken or first
-// ancestor is a deletion) are silently skipped. The branch parameter is
-// the ingestion branch (the branch on which sourceCommit was committed).
+// graphAddDerivedFromAtCommitTx writes the DERIVED_FROM edges of the source
+// BLOB, once: from Fact(sourcePath, sourceBlobHash) to Fact(refPath,
+// target_blob_hash), with edge text properties source_commit and
+// target_commit. Refs that resolve to "skip" via resolveTargetCommit
+// (forward-broken or first ancestor is a deletion) are silently skipped. The
+// branch parameter is the ingestion branch (the branch on which sourceCommit
+// was committed); the resolution itself does not depend on it.
 //
 // The target Fact node already exists if resolveTargetCommit succeeds — it
 // was upserted when refPath was originally indexed at target_commit. The
 // target's blob_hash is the blob in the target_commit's tree for refPath,
 // resolved via vcs.Repo.ReadBlobHashAtCommit.
 //
-// Called AFTER the source Fact node's merge has been committed. The original
-// reason was that direct-SQL reads could not see nodes MERGE'd through Cypher
-// inside the same *sql.Tx, so node IDs only became visible post-commit. Node
-// writes are direct SQL too now, so that constraint is gone and this could in
-// principle move into the transaction — left as-is to keep the GraphQLite
-// removal behaviour-neutral (see the matching note at the call site in
-// search_crud.go). The tx parameter remains unused for the same reason; it is
-// retained in the signature for symmetry with graphSyncFactTx and for the
-// move-into-tx follow-up.
+// Called AFTER the source Fact node's merge has been committed. Every git
+// read (the introducing commit, the claim's order, the targets) happens
+// BEFORE the write transaction: an in-memory store has a one-connection pool,
+// and the git object reads take a connection of their own. The claim and the
+// edges are then written in ONE transaction (applyBlobRefs), so a blob is
+// never claimed without its edges, and two indexers racing on one blob
+// serialize on the write lock. The tx parameter is unused; it is retained in
+// the signature for symmetry with graphSyncFactTx.
 func (si *Index) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
 	tx storegit.CtxExecer,
@@ -195,20 +195,6 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 	if srcID == 0 {
 		return fmt.Errorf("graphAddDerivedFromAtCommitTx: source Fact(%s,%s) not found", sourcePath, sourceBlobHash)
 	}
-	// Reference edges are per BLOB and written ONCE (user ruling 2026-10-30):
-	// a blob's refs are resolved at the commit that introduced it, and the
-	// blob arriving anywhere else (a COW hit: merge carrying it, another
-	// branch, an experiment, restore, rename) adds nothing. Only a strictly
-	// EARLIER introduction, seen later (an upstream synced after the agent
-	// branch), moves them, so a rebuild (oldest first) and an incremental
-	// index agree.
-	sourceCommit, err = si.introducingCommit(ctx, branch, sourcePath, sourceBlobHash, sourceCommit)
-	if err != nil {
-		return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
-	}
-	if sourceCommit == "" {
-		return nil // an arrival at a commit that does not hold the blob
-	}
 	// A reference edge joins two REAL blobs: the source's and the target's
 	// must both be in this store's object table, or there is no edge
 	// (user ruling 2026-10-30; Verify reports a violation, the rebuild drops
@@ -219,18 +205,72 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 			Msg("derived_from: source blob not in the object store; no reference edges")
 		return nil
 	}
-	write, err := si.claimBlobRefs(ctx, srcID, sourcePath, sourceBlobHash, sourceCommit)
+	// Reference edges are per BLOB and written ONCE (user ruling 2026-10-30):
+	// a blob's refs are resolved at the commit that introduced it (the
+	// earliest, in commitEarlier order), and the blob arriving anywhere else (a
+	// COW hit: merge carrying it, another branch, an experiment, restore,
+	// rename) adds nothing. Only a strictly EARLIER introduction, seen later
+	// (an upstream synced after the agent branch), moves them, so a rebuild
+	// and an incremental index agree.
+	sourceCommit, err = si.introducingCommit(ctx, branch, sourcePath, sourceBlobHash, sourceCommit)
 	if err != nil {
 		return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
 	}
-	if !write {
-		return nil
+	if sourceCommit == "" {
+		return nil // an arrival at a commit that does not hold the blob
 	}
 
+	var targets []refTarget
+	resolved := false
+	// The claim is decided outside the transaction (it may read git for the
+	// order) and re-checked inside it: if another indexer changed the claim in
+	// between, decide again.
+	for attempt := 0; attempt < 5; attempt++ {
+		seen, err := si.readBlobClaim(ctx, sourceBlobHash)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
+		}
+		write, err := si.claimBlobRefs(ctx, seen, srcID, sourceCommit)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
+		}
+		if !write {
+			return nil
+		}
+		if !resolved {
+			if targets, err = si.resolveRefTargets(ctx, branch, sourcePath, sourceCommit, refs); err != nil {
+				return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
+			}
+			resolved = true
+		}
+		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
+		}
+		if applied {
+			return nil
+		}
+	}
+	return fmt.Errorf("graphAddDerivedFromAtCommitTx: the claim of blob %s kept changing", sourceBlobHash)
+}
+
+// refTarget is one resolved reference: the target version's node and the
+// commit it was resolved at.
+type refTarget struct {
+	tgtID        int64
+	targetCommit string
+}
+
+// resolveRefTargets resolves each ref at sourceCommit to the target's node.
+// A ref that does not resolve, or whose target blob is not readable, or whose
+// node is not indexed yet, is skipped (and retried by Sync's pass 2 or a
+// rebuild: the claim allows the same node and commit again).
+func (si *Index) resolveRefTargets(ctx context.Context, branch, sourcePath, sourceCommit string, refs []string) ([]refTarget, error) {
+	var out []refTarget
 	for _, refPath := range refs {
 		targetCommit, ok, err := si.resolveTargetCommit(ctx, branch, sourcePath, refPath, sourceCommit)
 		if err != nil {
-			return fmt.Errorf("graphAddDerivedFromAtCommitTx: resolve %s: %w", refPath, err)
+			return nil, fmt.Errorf("resolve %s: %w", refPath, err)
 		}
 		if !ok {
 			// The ref gate stops a NEWLY ADDED local ref from being written
@@ -258,10 +298,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 			// object store fails here (a separate existence check after it
 			// could never fire). If the read ever stops loading the blob (a
 			// tree-entry-only read), add a blobExists check on the target.
-			// No edge for it, and the other refs
-			// still get theirs (it used to abort the rest of the list). The
-			// claim allows the same node and commit again, so Sync's pass 2
-			// or a rebuild retries a transient failure.
+			// No edge for it, and the other refs still get theirs.
 			si.danglingRefsSkipped.Add(1)
 			log.Debug().Err(err).Str("source", sourcePath).Str("ref", refPath).Str("target_commit", targetCommit).
 				Msg("derived_from: target blob unreadable; edge skipped")
@@ -269,7 +306,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 		}
 		tgtID, err := si.graphNodeIDByBlob(ctx, refPath, targetBlobHash)
 		if err != nil {
-			return fmt.Errorf("graphAddDerivedFromAtCommitTx: target node id: %w", err)
+			return nil, fmt.Errorf("target node id: %w", err)
 		}
 		if tgtID == 0 {
 			// Target Fact node missing despite resolveTargetCommit succeeding.
@@ -278,31 +315,103 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 				Msg("graphAddDerivedFromAtCommitTx: target Fact node not found, skipping (likely intra-commit ordering — Sync pass 2 will retry)")
 			continue
 		}
+		out = append(out, refTarget{tgtID: tgtID, targetCommit: targetCommit})
+	}
+	return out, nil
+}
 
-		// Dedup guard: skip if this exact (src→tgt, source_commit, target_commit)
-		// edge already exists. Prevents duplicates when the two-pass sync in
-		// Sync() calls writePostCommitDerivedFrom a second time for intra-batch
-		// refs that succeeded on the first attempt.
-		exists, err := si.graphDerivedFromEdgeExists(ctx, srcID, tgtID, sourceCommit, targetCommit)
+// applyBlobRefs writes the claim and the edges in ONE transaction. It first
+// re-reads the claim inside the transaction: when it is no longer the one
+// the decision was made on (another indexer moved it), nothing is written
+// and applied=false, and the caller decides again.
+func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget) (applied bool, err error) {
+	// Nothing to write (the claim is already this node and commit, and every
+	// edge exists): no transaction, so a caller re-visiting a resolved blob
+	// never takes the write lock.
+	if seen.found && seen.node == srcID && seen.at == sourceCommit {
+		missing := false
+		for _, t := range targets {
+			exists, err := si.graphDerivedFromEdgeExists(ctx, srcID, t.tgtID, sourceCommit, t.targetCommit)
+			if err != nil {
+				return false, fmt.Errorf("dedup check: %w", err)
+			}
+			if !exists {
+				missing = true
+				break
+			}
+		}
+		if !missing {
+			return true, nil
+		}
+	}
+	tctx, tx, own, err := beginTxIfNeeded(ctx, si.rh.DB())
+	if err != nil {
+		return false, fmt.Errorf("claim refs of blob %s: begin: %w", blobHash, err)
+	}
+	if own {
+		defer func() {
+			if err != nil || !applied {
+				tx.Rollback() //nolint:errcheck
+			}
+		}()
+	}
+	now, err := si.readBlobClaim(tctx, blobHash)
+	if err != nil {
+		return false, err
+	}
+	if now != seen {
+		return false, nil
+	}
+	db := conn(tctx, si.rh.DB())
+	if !seen.found || seen.node != srcID || seen.at != sourceCommit {
+		if seen.found {
+			log.Debug().Str("blob", blobHash).Str("from", seen.at).Str("to", sourceCommit).
+				Msg("derived_from: an earlier introduction of the blob re-resolves its refs")
+			if err := graphDeleteOutgoingEdges(tctx, db, seen.node, EdgeDerivedFrom); err != nil {
+				return false, err
+			}
+			if _, err := db.ExecContext(tctx, `DELETE FROM node_props_text WHERE node_id = ? AND key_id = (SELECT id FROM property_keys WHERE key = ?)`,
+				seen.node, refsCommitKey); err != nil {
+				return false, fmt.Errorf("claim refs of blob %s: clear: %w", blobHash, err)
+			}
+		}
+		if err := graphSetNodeProps(tctx, db, srcID, map[string]string{refsCommitKey: sourceCommit}); err != nil {
+			return false, fmt.Errorf("claim refs of blob %s: %w", blobHash, err)
+		}
+	}
+	if si.beforeRefEdgesWrite != nil {
+		if err := si.beforeRefEdgesWrite(); err != nil {
+			return false, err
+		}
+	}
+	for _, t := range targets {
+		// Dedup guard: skip if this exact (src→tgt, source_commit,
+		// target_commit) edge already exists (Sync's pass 2, or a rebuild,
+		// filling in a claim that pass 1 wrote partly).
+		exists, err := si.graphDerivedFromEdgeExists(tctx, srcID, t.tgtID, sourceCommit, t.targetCommit)
 		if err != nil {
-			return fmt.Errorf("graphAddDerivedFromAtCommitTx: dedup check: %w", err)
+			return false, fmt.Errorf("dedup check: %w", err)
 		}
 		if exists {
 			continue
 		}
-
-		edgeID, err := si.graphInsertEdgeReturningID(ctx, srcID, tgtID, EdgeDerivedFrom)
+		edgeID, err := si.graphInsertEdgeReturningID(tctx, srcID, t.tgtID, EdgeDerivedFrom)
 		if err != nil {
-			return fmt.Errorf("graphAddDerivedFromAtCommitTx: insert edge: %w", err)
+			return false, fmt.Errorf("insert edge: %w", err)
 		}
-		if err := si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+		if err := si.graphSetEdgeProps(tctx, edgeID, map[string]string{
 			"source_commit": sourceCommit,
-			"target_commit": targetCommit,
+			"target_commit": t.targetCommit,
 		}); err != nil {
-			return fmt.Errorf("graphAddDerivedFromAtCommitTx: set props: %w", err)
+			return false, fmt.Errorf("set props: %w", err)
 		}
 	}
-	return nil
+	if own {
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("claim refs of blob %s: commit: %w", blobHash, err)
+		}
+	}
+	return true, nil
 }
 
 // blobExists reports whether the blob is in this store's object table.
@@ -358,62 +467,82 @@ func (si *Index) DanglingRefEdges(ctx context.Context) (int64, error) {
 // same blob finds the blob already resolved and writes nothing.
 const refsCommitKey = "refs_commit"
 
-// claimBlobRefs decides whether this call writes the blob's reference edges:
-//   - the blob has no resolution yet: it is claimed for (srcID, sourceCommit);
-//   - it was resolved at this same node and commit (Sync's pass 2 retrying an
-//     intra-batch ref): the call fills in what pass 1 could not;
-//   - it was resolved at a commit that is strictly LATER by (committed_at,
-//     hash) than sourceCommit: the earlier introduction wins; the old edges
-//     are deleted and the blob is re-claimed here;
-//   - otherwise (any other arrival of a resolved blob): nothing is written.
-func (si *Index) claimBlobRefs(ctx context.Context, srcID int64, sourcePath, blobHash, sourceCommit string) (bool, error) {
-	db := conn(ctx, si.rh.DB())
-	var node int64
-	var at string
-	err := db.QueryRowContext(ctx, `
+// blobClaim is the refs_commit mark of a blob as read: the node carrying the
+// blob's edges and the commit they were resolved at (found=false: none).
+type blobClaim struct {
+	node  int64
+	at    string
+	found bool
+}
+
+// readBlobClaim reads the blob's refs_commit mark (SQL only, so it can run
+// inside the write transaction).
+func (si *Index) readBlobClaim(ctx context.Context, blobHash string) (blobClaim, error) {
+	var c blobClaim
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
 		SELECT nb.node_id, rc.value
 		  FROM node_props_text nb
 		  JOIN node_props_text rc ON rc.node_id = nb.node_id
 		       AND rc.key_id = (SELECT id FROM property_keys WHERE key = ?)
 		 WHERE nb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash') AND nb.value = ?
-		 LIMIT 1`, refsCommitKey, blobHash).Scan(&node, &at)
+		 ORDER BY nb.node_id
+		 LIMIT 1`, refsCommitKey, blobHash).Scan(&c.node, &c.at)
 	switch {
 	case err == sql.ErrNoRows:
-		return true, graphSetNodeProps(ctx, db, srcID, map[string]string{refsCommitKey: sourceCommit})
+		return blobClaim{}, nil
 	case err != nil:
-		return false, fmt.Errorf("claim refs of blob %s: %w", blobHash, err)
-	case node == srcID && at == sourceCommit:
+		return blobClaim{}, fmt.Errorf("claim refs of blob %s: %w", blobHash, err)
+	}
+	c.found = true
+	return c, nil
+}
+
+// claimBlobRefs decides, from the claim as read, whether this call writes the
+// blob's reference edges:
+//   - the blob has no resolution yet: it is claimed for (srcID, sourceCommit);
+//   - it was resolved at this same node and commit (Sync's pass 2 retrying an
+//     intra-batch ref, a rebuild): the call fills in what is missing;
+//   - it was resolved at a commit that sourceCommit strictly precedes in
+//     introduction order (commitEarlier): the earlier introduction wins, and
+//     applyBlobRefs moves the edges here;
+//   - otherwise (any other arrival of a resolved blob): nothing is written.
+//
+// It may read git (the order), so it runs OUTSIDE the write transaction;
+// applyBlobRefs re-checks that the claim did not change before writing.
+func (si *Index) claimBlobRefs(ctx context.Context, seen blobClaim, srcID int64, sourceCommit string) (bool, error) {
+	switch {
+	case !seen.found:
+		return true, nil
+	case seen.node == srcID && seen.at == sourceCommit:
 		return true, nil
 	}
-	earlier, err := si.commitEarlier(ctx, sourceCommit, at)
-	if err != nil {
-		return false, err
-	}
-	if !earlier {
-		return false, nil
-	}
-	log.Debug().Str("blob", blobHash).Str("from", at).Str("to", sourceCommit).
-		Msg("derived_from: an earlier introduction of the blob re-resolves its refs")
-	if err := graphDeleteOutgoingEdges(ctx, db, node, EdgeDerivedFrom); err != nil {
-		return false, err
-	}
-	if _, err := db.ExecContext(ctx, `DELETE FROM node_props_text WHERE node_id = ? AND key_id = (SELECT id FROM property_keys WHERE key = ?)`,
-		node, refsCommitKey); err != nil {
-		return false, fmt.Errorf("claim refs of blob %s: clear: %w", blobHash, err)
-	}
-	return true, graphSetNodeProps(ctx, db, srcID, map[string]string{refsCommitKey: sourceCommit})
+	return si.commitEarlier(ctx, sourceCommit, seen.at)
 }
 
 // blobRefsResetKey is the meta sentinel of the one-time move to per-blob
 // reference edges (GraphSchemaVersion 8).
 const blobRefsResetKey = "derived_from_per_blob"
 
+// blobRefsPendingPrefix prefixes the meta key of a branch whose reference
+// edges the one-time reset dropped and that has not been re-resolved yet
+// (meta "derived_from_per_blob_pending:<branch>").
+const blobRefsPendingPrefix = "derived_from_per_blob_pending:"
+
 // resetBlobRefsOnce drops every DERIVED_FROM edge and every refs_commit mark
-// ONCE per store, inside the rebuild's transaction, so the first branch
-// rebuilt after the upgrade re-resolves every blob it sees from scratch and
-// later branches only add blobs (or earlier introductions) of their own. The
-// edges of the old scheme cannot be kept: a blob's edges were the union of
-// every commit it arrived at, and which of them is its first is not recorded.
+// ONCE per store, inside the rebuild's transaction, and marks EVERY row of
+// `branches` (open experiments included) pending, in the same transaction.
+// The rebuild re-resolves its own branch in phase B and then every pending
+// branch (reResolvePendingBranches), clearing each mark after its branch is
+// done. The edges of the old scheme cannot be kept: a blob's edges were the
+// union of every commit it arrived at, and which of them is its first is not
+// recorded.
+//
+// Crash safety: the reset, the sentinel and the marks commit together; a
+// mark is cleared only after its branch was re-resolved, and the rebuilt
+// branch's schema version is bumped only after every mark is drained. An
+// interrupted upgrade leaves marks behind and a branch whose version was not
+// bumped, so the next boot rebuilds it, and that rebuild drains the marks
+// again (any rebuild drains whatever marks it finds).
 func resetBlobRefsOnce(ctx context.Context, tx storegit.CtxExecer) error {
 	var done string
 	err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, blobRefsResetKey).Scan(&done)
@@ -429,110 +558,267 @@ func resetBlobRefsOnce(ctx context.Context, tx storegit.CtxExecer) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM node_props_text WHERE key_id = (SELECT id FROM property_keys WHERE key = ?)`, refsCommitKey); err != nil {
 		return fmt.Errorf("reset reference edges: marks: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) SELECT ? || name, '1' FROM branches`, blobRefsPendingPrefix); err != nil {
+		return fmt.Errorf("reset reference edges: pending branches: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')`, blobRefsResetKey); err != nil {
 		return fmt.Errorf("reset reference edges: sentinel: %w", err)
 	}
 	return nil
 }
 
-// introducingCommit is the commit a NEW blob's refs are resolved at. Callers
-// pass the version's source commit, which the indexer takes from
-// LastCommitForPath: the most recent NON-merge commit that touched the file.
-// For a blob a merge commit created (a conflict resolved in the merge) that
-// commit does not hold the blob, and the merge does: when the passed commit
-// does not hold the blob, the version live at the branch tip (first-parent,
-// merges included) is used if it does. Only a blob not yet resolved pays for
-// the check; any other arrival writes nothing anyway.
-//
-// The passed commit is used only when it holds the blob. For a blob already
-// resolved, an arrival at a commit that does not hold it cannot be an earlier
-// introduction: "" (write nothing).
-func (si *Index) introducingCommit(ctx context.Context, branch, path, blobHash, commit string) (string, error) {
-	if b, err := si.rh.ReadBlobHashAtCommit(ctx, path, commit); err == nil && b == blobHash {
-		return commit, nil
+// pendingRefBranches lists the branches still marked pending by the reset.
+func (si *Index) pendingRefBranches(ctx context.Context) ([]string, error) {
+	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx,
+		`SELECT substr(key, ?) FROM meta WHERE key LIKE ? ORDER BY key`,
+		len(blobRefsPendingPrefix)+1, blobRefsPendingPrefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("pending reference branches: %w", err)
 	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			return nil, fmt.Errorf("pending reference branches: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// clearPendingRefBranch removes a branch's pending mark.
+func (si *Index) clearPendingRefBranch(ctx context.Context, branch string) error {
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, blobRefsPendingPrefix+branch); err != nil {
+		return fmt.Errorf("clear pending reference branch %s: %w", branch, err)
+	}
+	return nil
+}
+
+// introducingCommit is the commit a blob's refs are resolved at.
+//
+// Callers pass the version's source commit, which the indexer takes from
+// LastCommitForPath (the most recent NON-merge commit that touched the file;
+// it can misattribute on interleaved histories), or a rebuild's commit_log
+// event. Three cases:
+//   - the blob is already claimed: the passed commit if it holds the blob at
+//     path (the claim then decides whether it is an earlier introduction),
+//     else "" (write nothing);
+//   - the blob is not claimed: the EARLIEST introduction of the blob at path
+//     (path_changes entries reachable from an indexed branch, and the passed
+//     commit when it holds the blob), in commitEarlier order. A merge that
+//     carried the blob, or a tip that holds it, is never preferred over the
+//     commit that wrote it;
+//   - no introduction is recorded yet (a merge commit being indexed before
+//     branch_commits names it): the version live at the branch tip, or the
+//     tip itself, when it holds the blob.
+//
+// Never a commit that does not hold the blob at path: when none is found the
+// answer is "" and no edge is written.
+func (si *Index) introducingCommit(ctx context.Context, branch, path, blobHash, commit string) (string, error) {
+	holds := func(c string) bool {
+		b, err := si.rh.ReadBlobHashAtCommit(ctx, path, c)
+		return err == nil && b == blobHash
+	}
+	passedHolds := commit != "" && holds(commit)
 	if si.blobRefsClaimed(ctx, blobHash) {
+		if passedHolds {
+			return commit, nil
+		}
 		return "", nil
+	}
+	best, err := si.earliestIntroduction(ctx, path, blobHash, holds)
+	if err != nil {
+		return "", err
+	}
+	if passedHolds {
+		if best == "" {
+			return commit, nil
+		}
+		earlier, err := si.commitEarlier(ctx, commit, best)
+		if err != nil {
+			return "", err
+		}
+		if earlier {
+			return commit, nil
+		}
+	}
+	if best != "" {
+		return best, nil
 	}
 	head, err := si.rh.HeadCommit(ctx, branch)
 	if err != nil {
-		return commit, nil
+		return "", nil
 	}
-	if c, ok, err := si.rh.ResolveActiveCommitForPath(ctx, branch, path, head); err == nil && ok {
-		if b, err := si.rh.ReadBlobHashAtCommit(ctx, path, c); err == nil && b == blobHash {
-			return c, nil
-		}
+	if c, ok, err := si.rh.ResolveActiveCommitForPath(ctx, branch, path, head); err == nil && ok && holds(c) {
+		return c, nil
 	}
 	// commit_log may not record the merge yet when the index syncs it: the
 	// tip itself, when it holds the blob, is the commit that introduced it.
-	if b, err := si.rh.ReadBlobHashAtCommit(ctx, path, head); err == nil && b == blobHash {
+	if holds(head) {
 		return head, nil
 	}
-	return commit, nil
+	return "", nil
+}
+
+// earliestIntroduction is the earliest commit, in commitEarlier order, that
+// introduced blobHash at path (a path_changes entry: the blob differs from
+// every parent) and that some indexed branch reaches, or "" when none is
+// recorded. Each candidate is checked to really hold the blob.
+func (si *Index) earliestIntroduction(ctx context.Context, path, blobHash string, holds func(string) bool) (string, error) {
+	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, `
+		SELECT pc.commit_hash
+		  FROM path_changes pc
+		 WHERE pc.path = ? AND pc.blob = ? AND pc.entry = 1
+		   AND EXISTS (SELECT 1 FROM branch_commits bc WHERE bc.commit_hash = pc.commit_hash)
+		 ORDER BY pc.commit_hash`, path, blobHash)
+	if err != nil {
+		return "", fmt.Errorf("introductions of %s at %s: %w", blobHash, path, err)
+	}
+	var cands []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			rows.Close()
+			return "", fmt.Errorf("introductions of %s at %s: %w", blobHash, path, err)
+		}
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("introductions of %s at %s: %w", blobHash, path, err)
+	}
+	best := ""
+	for _, c := range cands {
+		if !holds(c) {
+			continue
+		}
+		if best == "" {
+			best = c
+			continue
+		}
+		earlier, err := si.commitEarlier(ctx, c, best)
+		if err != nil {
+			return "", err
+		}
+		if earlier {
+			best = c
+		}
+	}
+	return best, nil
 }
 
 // blobRefsClaimed reports whether some Fact node of blobHash carries the
 // refs_commit mark.
 func (si *Index) blobRefsClaimed(ctx context.Context, blobHash string) bool {
-	var one int
-	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
-		SELECT 1
-		  FROM node_props_text nb
-		  JOIN node_props_text rc ON rc.node_id = nb.node_id
-		       AND rc.key_id = (SELECT id FROM property_keys WHERE key = ?)
-		 WHERE nb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash') AND nb.value = ?
-		 LIMIT 1`, refsCommitKey, blobHash).Scan(&one)
-	return err == nil
+	c, err := si.readBlobClaim(ctx, blobHash)
+	return err == nil && c.found
 }
 
-// commitEarlier reports whether commit a precedes commit b, the order of a
-// blob's introductions: an ancestor precedes its descendant; otherwise by
-// committed_at, and two unrelated commits of the same second by hash. A
-// commit commit_log does not know sorts last (it is checked for ancestry
-// first: a merge being indexed is not in commit_log yet).
-// Rebuild walks events by (committed_at, rowid) and an incremental index
-// sees them as they come; this order makes both converge to the same claim.
+// commitEarlier reports whether commit a precedes commit b in the order of a
+// blob's introductions. The order is TOTAL: each commit gets the key
+// (committed_at, same-second ancestors, hash), compared lexicographically:
+//   - committed_at first (commit_log's, else the git committer time), so with
+//     clock skew a descendant can come out earlier than its ancestor;
+//   - within one second, the number of ancestors committed in that same
+//     second (walking parents while committed_at >= that second). An
+//     ancestor of the same second has strictly fewer, so it comes first;
+//   - then the hash.
+//
+// A per-commit key makes the order transitive, so the claim converges to the
+// same minimum whatever order the introductions are seen in: a rebuild (events
+// by committed_at) and an incremental index agree. (A pairwise "ancestor,
+// else hash" tie-break is not transitive: A anc B, B < C and C < A by hash,
+// with C unrelated, is a cycle.) A commit whose time cannot be read sorts
+// last.
 func (si *Index) commitEarlier(ctx context.Context, a, b string) (bool, error) {
-	when := func(h string) (int64, bool, error) {
-		var t int64
-		err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
-			`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`, h).Scan(&t)
-		if err == sql.ErrNoRows {
-			return 0, false, nil
-		}
-		return t, err == nil, err
+	if a == b {
+		return false, nil
 	}
-	ta, okA, err := when(a)
+	ta, okA, err := si.commitTime(ctx, a)
 	if err != nil {
-		return false, fmt.Errorf("commit time of %s: %w", a, err)
+		return false, err
 	}
-	tb, okB, err := when(b)
+	tb, okB, err := si.commitTime(ctx, b)
 	if err != nil {
-		return false, fmt.Errorf("commit time of %s: %w", b, err)
+		return false, err
 	}
 	switch {
+	case okA != okB:
+		return okA, nil
 	case !okA:
-		return false, nil
-	case !okB:
-		return true, nil
+		return a < b, nil
 	case ta != tb:
 		return ta < tb, nil
-	case a == b:
-		return false, nil
 	}
-	if anc, err := si.isAncestor(ctx, a, b); err != nil || anc {
-		return anc, err
-	}
-	if anc, err := si.isAncestor(ctx, b, a); err != nil || anc {
+	na, err := si.sameSecondAncestors(ctx, a, ta)
+	if err != nil {
 		return false, err
+	}
+	nb, err := si.sameSecondAncestors(ctx, b, tb)
+	if err != nil {
+		return false, err
+	}
+	if na != nb {
+		return na < nb, nil
 	}
 	return a < b, nil
 }
 
-// isAncestor reports whether commit a is an ancestor of commit b, from the
-// git objects (commit_parents is not written yet for a commit being indexed).
-func (si *Index) isAncestor(_ context.Context, a, b string) (bool, error) {
-	return si.rh.CommitIsAncestor(a, b)
+// commitTime is a commit's committed_at: commit_log's (what a rebuild orders
+// by), else the git committer time (a commit being indexed is not in
+// commit_log yet). ok=false when neither is readable.
+func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) {
+	var t int64
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`, h).Scan(&t)
+	if err == nil {
+		return t, true, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, false, fmt.Errorf("commit time of %s: %w", h, err)
+	}
+	_, gt, gerr := si.rh.CommitParentsAndTime(h)
+	if gerr != nil {
+		return 0, false, nil
+	}
+	return gt, true, nil
+}
+
+// sameSecondAncestors counts the strict ancestors of h whose committed_at is
+// t, walking parents through commits with committed_at >= t (the walk stops
+// at older commits, so it is bounded by the commits of that second, plus
+// whatever clock skew puts above it).
+func (si *Index) sameSecondAncestors(ctx context.Context, h string, t int64) (int, error) {
+	seen := map[string]struct{}{h: {}}
+	stack := []string{h}
+	n := 0
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		parents, _, err := si.rh.CommitParentsAndTime(c)
+		if err != nil {
+			continue // a missing commit object ends the walk on that side
+		}
+		for _, p := range parents {
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			pt, ok, err := si.commitTime(ctx, p)
+			if err != nil {
+				return 0, err
+			}
+			if !ok || pt < t {
+				continue
+			}
+			if pt == t {
+				n++
+			}
+			stack = append(stack, p)
+		}
+	}
+	return n, nil
 }
 
 // graphDerivedFromEdgeExists reports whether a DERIVED_FROM edge with the

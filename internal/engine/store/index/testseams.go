@@ -56,6 +56,20 @@ func (si *Index) SetBeforeGraphTxHookForTest(f func()) {
 	si.beforeGraphTx = f
 }
 
+// SetBeforeRefEdgesWriteHookForTest installs f to run inside the reference
+// edge transaction, after the claim is written and before the edges are; an
+// error aborts the transaction. nil removes it.
+func (si *Index) SetBeforeRefEdgesWriteHookForTest(f func() error) {
+	mustBeTest("SetBeforeRefEdgesWriteHookForTest")
+	si.beforeRefEdgesWrite = f
+}
+
+// IntroducingCommitForTest is introducingCommit.
+func (si *Index) IntroducingCommitForTest(ctx context.Context, branch, path, blobHash, commit string) (string, error) {
+	mustBeTest("IntroducingCommitForTest")
+	return si.introducingCommit(ctx, branch, path, blobHash, commit)
+}
+
 // SetSubgraphEdgeChunkSizeForTest sets the chunk size SubgraphEdges binds
 // per query and returns the previous value, for the caller to restore.
 func SetSubgraphEdgeChunkSizeForTest(n int) int {

@@ -61,9 +61,11 @@ import (
 // pre-F22 parser dropped.
 // Version 8: reference edges are per BLOB, written once (claimBlobRefs). The
 // forced rebuild drops every DERIVED_FROM edge ONCE per store
-// (resetBlobRefsOnce) and phase B re-resolves each blob at its earliest
-// introduction, so the edges the old per-commit writes accumulated (the
-// same ref re-pinned at every commit a blob arrived at) are gone.
+// (resetBlobRefsOnce), and phase B re-resolves each blob at its earliest
+// introduction, for the rebuilt branch and then every other row of
+// `branches` (reResolvePendingBranches), so the edges the old per-commit
+// writes accumulated (the same ref re-pinned at every commit a blob arrived
+// at) are gone and no branch is left without edges.
 const GraphSchemaVersion = "8"
 
 type Index struct {
@@ -108,6 +110,10 @@ type Index struct {
 	// cross-branch writer could change `facts` under a snapshot taken
 	// outside the transaction.
 	beforeGraphTx func()
+	// beforeRefEdgesWrite fires inside applyBlobRefs's transaction, after the
+	// claim is written and before the edges are: an error from it aborts the
+	// transaction, which is how a test stands in for a crash between the two.
+	beforeRefEdgesWrite func() error
 }
 
 // simEdgeKey identifies a fact version for node-id caching during the
@@ -591,6 +597,103 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 	}
 
 	return si.setLastCommit(ctx, branch, head)
+}
+
+// reResolvePendingBranches re-resolves the reference edges of every branch
+// the one-time per-blob reset marked pending (resetBlobRefsOnce), and clears
+// each mark once its branch is done. rebuilt is the branch whose phase B just
+// ran: its mark is cleared without another pass, and done holds the (commit,
+// path) events it resolved, which the other branches skip.
+//
+// It does not take the other branches' locks (a nested LockBranch could
+// deadlock against a writer taking them in another order). That is safe
+// because phase B only adds reference edges and claims, and each blob's claim
+// and edges are written in one transaction that re-checks the claim
+// (applyBlobRefs); a branch being written concurrently gets its own blobs
+// resolved by its own index sync either way.
+func (si *Index) reResolvePendingBranches(ctx context.Context, rebuilt string, done map[string]struct{}) error {
+	pending, err := si.pendingRefBranches(ctx)
+	if err != nil {
+		return err
+	}
+	for _, b := range pending {
+		if b != rebuilt {
+			if err := si.reResolveBranchRefs(ctx, b, done); err != nil {
+				return fmt.Errorf("re-resolve reference edges of %s: %w", b, err)
+			}
+		}
+		if err := si.clearPendingRefBranch(ctx, b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reResolveBranchRefs is phase B for one branch: the reference edges of every
+// commit_log event on it, oldest first, skipping the events in done (and
+// adding the ones it resolves). A branch no longer in `branches` has no
+// events and is done.
+func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done map[string]struct{}) error {
+	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, `
+		SELECT cl.commit_hash, cl.path
+		FROM commit_log cl
+		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+		  AND cl.action != 'deleted'
+		ORDER BY cl.committed_at ASC, cl.rowid ASC`, branch)
+	if err != nil {
+		return fmt.Errorf("query commit_log: %w", err)
+	}
+	type commitPath struct{ commitHash, path string }
+	var events []commitPath
+	for rows.Next() {
+		var e commitPath
+		if err := rows.Scan(&e.commitHash, &e.path); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan commit_log: %w", err)
+		}
+		events = append(events, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("commit_log rows: %w", err)
+	}
+	repoID := si.localRepoID(ctx, branch)
+	for _, e := range events {
+		key := e.commitHash + "|" + e.path
+		if _, ok := done[key]; ok {
+			continue
+		}
+		done[key] = struct{}{}
+		blobHash, err := si.rh.ReadBlobHashAtCommit(ctx, e.path, e.commitHash)
+		if err != nil {
+			continue
+		}
+		content, err := si.rh.ReadFileAtCommit(ctx, e.path, e.commitHash)
+		if err != nil {
+			continue
+		}
+		rec, err := facts.ParseFactRecord(e.path, content)
+		if err != nil {
+			continue
+		}
+		localRefs := localFactRefs(rec.Refs, repoID)
+		if len(localRefs) == 0 {
+			continue
+		}
+		srcID, err := si.graphNodeIDByBlob(ctx, e.path, blobHash)
+		if err != nil {
+			return fmt.Errorf("source node lookup: %w", err)
+		}
+		if srcID == 0 {
+			continue // the version has no graph node (orphaned): as phase B
+		}
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, localRefs); err != nil {
+			log.Warn().Err(err).Str("branch", branch).Str("path", e.path).Str("commit", e.commitHash[:8]).
+				Msg("re-resolve reference edges: edge write failed")
+		}
+	}
+	return nil
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts
@@ -1394,11 +1497,12 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		return 0, fmt.Errorf("rebuildGraph: commit: %w", err)
 	}
 
-	// Phase B: walk commit_log to write DERIVED_FROM edges per ref-event.
-	// Each (commit_hash, path, action != 'deleted') tuple is one ref-event:
-	// the version of `path` committed at `commit_hash` had its blob's refs
-	// asserted at that time. We resolve each ref's target via
-	// resolveTargetCommit (called from inside graphAddDerivedFromAtCommitTx).
+	// Phase B: walk commit_log to write DERIVED_FROM edges. Each
+	// (commit_hash, path, action != 'deleted') tuple is an arrival of the
+	// blob at that commit; graphAddDerivedFromAtCommitTx writes a blob's
+	// edges once, at its earliest introduction (claimBlobRefs), so later
+	// arrivals add nothing. Each ref's target is resolved via
+	// resolveTargetCommit.
 	//
 	// Runs POST-commit. The original reason was that direct-SQL reads could
 	// not see nodes MERGE'd through Cypher inside the same *sql.Tx, so node
@@ -1415,11 +1519,16 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 	// resolveTargetCommit's first-parent topological walk, so the outer
 	// order does not affect correctness on branches with merge commits.
 	// Consumes the shared git-read cache built above (same `events` order).
+	// done records the (commit, path) events resolved here, so re-resolving
+	// the pending branches below skips what this branch already did (the
+	// resolution does not depend on the branch).
+	done := make(map[string]struct{}, len(events))
 	for _, e := range events {
 		cf := factAtCommit[e.commitHash+"|"+e.path]
 		if !cf.ok {
 			continue
 		}
+		done[e.commitHash+"|"+e.path] = struct{}{}
 
 		localRefs := localFactRefs(cf.rec.Refs, si.localRepoID(ctx, branch))
 		if len(localRefs) == 0 {
@@ -1450,6 +1559,15 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, localRefs); err != nil {
 			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
 		}
+	}
+
+	// Phase B': the GraphSchemaVersion 8 reset dropped the reference edges of
+	// EVERY branch, not only this one; re-resolve every branch it marked
+	// pending (open experiments included), then clear the mark. Runs before
+	// the caller bumps this branch's version, so an interrupted drain is
+	// re-run by the next rebuild.
+	if err := si.reResolvePendingBranches(ctx, branch, done); err != nil {
+		return 0, fmt.Errorf("rebuildGraph: %w", err)
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
