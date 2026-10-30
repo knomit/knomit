@@ -342,6 +342,37 @@ func TestBlobEdges_NoEdgeToAMissingBlob(t *testing.T) {
 	require.Contains(t, got, "kb/s.md")
 }
 
+// The GraphSchemaVersion 8 upgrade: a store indexed by the old scheme holds a
+// blob's edges re-pinned at a later commit (injected here as the COW-hit path
+// used to write them); the first rebuild drops every reference edge once and
+// re-resolves, leaving one pin per ref, and a second rebuild changes nothing.
+//
+// Sabotage: skip resetBlobRefsOnce, and the legacy re-pin survives.
+func TestBlobEdges_UpgradeRebuildDropsAccumulatedEdges(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	_, rBlob := write(t, svc, "main", "kb/r.md", "R")
+	_, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	c2, r2Blob := write(t, svc, "main", "kb/r.md", "R2")
+	src, err := svc.si.GraphNodeIDByBlobForTest(ctx, "kb/f.md", fBlob)
+	require.NoError(t, err)
+	r2, err := svc.si.GraphNodeIDByBlobForTest(ctx, "kb/r.md", r2Blob)
+	require.NoError(t, err)
+	id, err := svc.si.GraphInsertEdgeReturningIDForTest(ctx, src, r2, index.EdgeDerivedFrom)
+	require.NoError(t, err)
+	require.NoError(t, svc.si.GraphSetEdgePropsForTest(ctx, id, map[string]string{"source_commit": c2, "target_commit": c2}))
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'derived_from_per_blob'`)
+	require.NoError(t, err)
+	require.Len(t, allRefEdges(t, db), 2, "precondition: the legacy re-pin")
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	after := allRefEdges(t, db)
+	require.Equal(t, map[string]string{"kb/r.md": rBlob}, edgesOfBlob(after, fBlob), "one pin: R as of F's commit")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Equal(t, after, allRefEdges(t, db), "a second rebuild changes nothing")
+}
+
 // Verify reports a reference edge to a blob that is not in the object store
 // (injected), and a rebuild drops it.
 //
