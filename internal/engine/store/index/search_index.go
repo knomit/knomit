@@ -605,22 +605,33 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 // ran: its mark is cleared without another pass, and done holds the (commit,
 // path) events it resolved, which the other branches skip.
 //
+// A branch where an edge write FAILED keeps its mark (rebuiltFailed for the
+// rebuilt branch): the next rebuild drains it again, as it does after a
+// cancellation. The rebuild itself still succeeds; failing it would turn a
+// permanent per-blob failure into a full re-index on every boot (the PR #73
+// lesson in kb/architecture/store/graph-schema-version).
+//
 // It does not take the other branches' locks (a nested LockBranch could
 // deadlock against a writer taking them in another order). That is safe
 // because phase B only adds reference edges and claims, and each blob's claim
 // and edges are written in one transaction that re-checks the claim
 // (applyBlobRefs); a branch being written concurrently gets its own blobs
 // resolved by its own index sync either way.
-func (si *Index) reResolvePendingBranches(ctx context.Context, rebuilt string, done map[string]struct{}) error {
+func (si *Index) reResolvePendingBranches(ctx context.Context, rebuilt string, done map[string]struct{}, rebuiltFailed bool) error {
 	pending, err := si.pendingRefBranches(ctx)
 	if err != nil {
 		return err
 	}
 	for _, b := range pending {
+		failed := rebuiltFailed
 		if b != rebuilt {
-			if err := si.reResolveBranchRefs(ctx, b, done); err != nil {
+			if failed, err = si.reResolveBranchRefs(ctx, b, done); err != nil {
 				return fmt.Errorf("re-resolve reference edges of %s: %w", b, err)
 			}
+		}
+		if failed {
+			log.Warn().Str("branch", b).Msg("re-resolve reference edges: some edge writes failed; the branch stays pending for the next rebuild")
+			continue
 		}
 		if err := si.clearPendingRefBranch(ctx, b); err != nil {
 			return err
@@ -632,8 +643,9 @@ func (si *Index) reResolvePendingBranches(ctx context.Context, rebuilt string, d
 // reResolveBranchRefs is phase B for one branch: the reference edges of every
 // commit_log event on it, oldest first, skipping the events in done (and
 // adding the ones it resolves). A branch no longer in `branches` has no
-// events and is done.
-func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done map[string]struct{}) error {
+// events and is done. failed reports whether any edge write failed (the
+// event is then not marked done, so a later pass retries it).
+func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done map[string]struct{}) (failed bool, err error) {
 	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, `
 		SELECT cl.commit_hash, cl.path
 		FROM commit_log cl
@@ -642,7 +654,7 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		  AND cl.action != 'deleted'
 		ORDER BY cl.committed_at ASC, cl.rowid ASC`, branch)
 	if err != nil {
-		return fmt.Errorf("query commit_log: %w", err)
+		return false, fmt.Errorf("query commit_log: %w", err)
 	}
 	type commitPath struct{ commitHash, path string }
 	var events []commitPath
@@ -650,13 +662,13 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		var e commitPath
 		if err := rows.Scan(&e.commitHash, &e.path); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan commit_log: %w", err)
+			return false, fmt.Errorf("scan commit_log: %w", err)
 		}
 		events = append(events, e)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("commit_log rows: %w", err)
+		return false, fmt.Errorf("commit_log rows: %w", err)
 	}
 	repoID := si.localRepoID(ctx, branch)
 	for _, e := range events {
@@ -683,17 +695,19 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		}
 		srcID, err := si.graphNodeIDByBlob(ctx, e.path, blobHash)
 		if err != nil {
-			return fmt.Errorf("source node lookup: %w", err)
+			return false, fmt.Errorf("source node lookup: %w", err)
 		}
 		if srcID == 0 {
 			continue // the version has no graph node (orphaned): as phase B
 		}
 		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, localRefs); err != nil {
+			failed = true
+			delete(done, key)
 			log.Warn().Err(err).Str("branch", branch).Str("path", e.path).Str("commit", e.commitHash[:8]).
 				Msg("re-resolve reference edges: edge write failed")
 		}
 	}
-	return nil
+	return failed, nil
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts
@@ -1523,6 +1537,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 	// the pending branches below skips what this branch already did (the
 	// resolution does not depend on the branch).
 	done := make(map[string]struct{}, len(events))
+	ownFailed := false
 	for _, e := range events {
 		cf := factAtCommit[e.commitHash+"|"+e.path]
 		if !cf.ok {
@@ -1557,6 +1572,8 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		}
 
 		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, localRefs); err != nil {
+			ownFailed = true
+			delete(done, e.commitHash+"|"+e.path)
 			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
 		}
 	}
@@ -1566,7 +1583,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 	// pending (open experiments included), then clear the mark. Runs before
 	// the caller bumps this branch's version, so an interrupted drain is
 	// re-run by the next rebuild.
-	if err := si.reResolvePendingBranches(ctx, branch, done); err != nil {
+	if err := si.reResolvePendingBranches(ctx, branch, done, ownFailed); err != nil {
 		return 0, fmt.Errorf("rebuildGraph: %w", err)
 	}
 

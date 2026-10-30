@@ -101,10 +101,11 @@ func countEdgesOfBlob(edges []refEdge, blob string) int {
 // The user's example: F@c1 -> R@c1; R becomes R1 at c2: F's edges do not
 // change; F becomes F1 at c3: the new node F1 -> R1@c2, and F still -> R@c1.
 //
-// F also arrives again at c2, a commit that HOLDS it (what a COW hit passes):
-// introducingCommit returns c2, so only the claim check stops the re-pin.
-// Sabotage: let claimBlobRefs's refusal through (graphAddDerivedFromAtCommitTx
-// ignores !write), and F -> R1 at c2 appears.
+// The same bytes then arrive at ANOTHER path, kb/h.md at ch (a fact's bytes
+// do not depend on its path). introducingCommit returns ch, h's own
+// introduction, so only the claim check (F is claimed at cF, which is
+// earlier) stops the re-pin. Sabotage: let claimBlobRefs's refusal through
+// (graphAddDerivedFromAtCommitTx ignores !write), and the blob re-pins to R1.
 func TestBlobEdges_UserExample(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
@@ -117,13 +118,16 @@ func TestBlobEdges_UserExample(t *testing.T) {
 	require.Equal(t, map[string]string{"kb/r.md": rBlob}, edgesOfBlob(allRefEdges(t, db), fBlob), "R changing touches nothing")
 	require.Equal(t, map[string]string{"kb/r.md": c1}, outPaths(t, svc, "main", "kb/f.md", c2))
 
-	at, err := svc.si.IntroducingCommitForTest(ctx, "main", "kb/f.md", fBlob, c2)
+	ch, hBlob := write(t, svc, "main", "kb/h.md", "F", "kb/r.md")
+	require.Equal(t, fBlob, hBlob, "precondition: the same bytes at another path")
+	at, err := svc.si.IntroducingCommitForTest(ctx, "main", "kb/h.md", fBlob, ch)
 	require.NoError(t, err)
-	require.Equal(t, c2, at, "precondition: c2 holds F, so the arrival reaches the claim")
-	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", fBlob, c2, []string{"kb/r.md"}))
+	require.Equal(t, ch, at, "precondition: the arrival resolves to h's own commit, so the claim decides")
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/h.md", fBlob, ch, []string{"kb/r.md"}))
 	edges := allRefEdges(t, db)
-	require.Equal(t, 1, countEdgesOfBlob(edges, fBlob), "the claim refuses F's later arrival at c2")
+	require.Equal(t, 1, countEdgesOfBlob(edges, fBlob), "the claim refuses the blob's later arrival at kb/h.md")
 	require.Equal(t, map[string]string{"kb/r.md": rBlob}, edgesOfBlob(edges, fBlob))
+	require.Equal(t, cF, refsCommitOf(t, db, fBlob))
 
 	c3, f1Blob := write(t, svc, "main", "kb/f.md", "F1", "kb/r.md")
 	edges = allRefEdges(t, db)
@@ -137,10 +141,11 @@ func TestBlobEdges_UserExample(t *testing.T) {
 // destination before the merge; F still pins R as of F's own commit. A
 // branch copy and its re-index add nothing either.
 //
-// The index's own arrival is stopped by introducingCommit (the commit it
-// passes does not hold F, and F is claimed). F then arrives at the merge
-// commit itself, which DOES hold it, so the claim decides. Sabotage: let
-// claimBlobRefs's refusal through, and F -> R2 at the merge appears.
+// The merge's own arrival resolves to F's own commit (introducingCommit takes
+// the earliest introduction at kb/f.md), so it only re-fills. The same bytes
+// then arrive at another path on main, kb/h.md, whose own introduction is
+// later than the claim: the claim decides. Sabotage: let claimBlobRefs's
+// refusal through, and the blob re-pins to R2.
 func TestBlobEdges_MergeCarryingABlobAddsNothing(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
@@ -160,13 +165,15 @@ func TestBlobEdges_MergeCarryingABlobAddsNothing(t *testing.T) {
 	got := outPaths(t, svc, "main", "kb/f.md", head)
 	require.Len(t, got, 1)
 	require.NotEmpty(t, edgesOfBlob(before, fBlob))
-	_ = cF
-
 	at, err := svc.si.IntroducingCommitForTest(ctx, "main", "kb/f.md", fBlob, head)
 	require.NoError(t, err)
-	require.Equal(t, head, at, "precondition: the merge holds F, so the arrival reaches the claim")
-	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", fBlob, head, []string{"kb/r.md"}))
-	require.Equal(t, before, allRefEdges(t, db), "the claim refuses F's arrival at the merge")
+	require.Equal(t, cF, at, "the merge's arrival resolves to F's own commit")
+	ch, hBlob := write(t, svc, "main", "kb/h.md", "F", "kb/r.md")
+	require.Equal(t, fBlob, hBlob, "precondition: the same bytes at another path")
+	at, err = svc.si.IntroducingCommitForTest(ctx, "main", "kb/h.md", fBlob, ch)
+	require.NoError(t, err)
+	require.Equal(t, ch, at, "precondition: h's own commit, so the claim decides")
+	require.Equal(t, before, allRefEdges(t, db), "the claim refuses the blob's arrival at kb/h.md")
 
 	require.NoError(t, svc.CreateBranch(ctx, "copy", "main"))
 	require.NoError(t, svc.IndexManager().Sync(ctx, "copy"))
@@ -650,13 +657,12 @@ func TestBlobEdges_IntroducingCommitIsTheEarliestHolder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, cF, at, "the commit that wrote F, not the merge %s", head)
 
-	// Claimed: an arrival at a commit that does not hold the blob writes
-	// nothing.
+	// Claimed: the same answer (the claim then only re-fills).
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
 	require.Equal(t, cF, refsCommitOf(t, db, fBlob))
 	at, err = svc.si.IntroducingCommitForTest(ctx, "main", "kb/f.md", fBlob, cR2)
 	require.NoError(t, err)
-	require.Empty(t, at)
+	require.Equal(t, cF, at)
 }
 
 // B2 (review of #693; dev's behaviour): after a rename f -> g, R's incoming
@@ -886,4 +892,158 @@ func TestBlobEdges_MergedSideBlobRebuildEqualsIncremental(t *testing.T) {
 			require.Equal(t, incremental, allRefEdges(t, db), "rebuild of the read branch only == incremental")
 		})
 	}
+}
+
+// B3 (round-2 review of #693; probe H): F is written in an experiment, so its
+// blob is claimed at the experiment commit cE; the experiment is ROLLED BACK,
+// which leaves that claim at a commit no branch reaches. The same bytes are
+// then written on the agent branch, at the same path or a new one. The void
+// claim must not stand: the blob is re-claimed at the agent commit and its old
+// edges go with the old claim, so R's incoming on the agent branch lists the
+// citer (as dev does) and rebuild == incremental.
+//
+// Sabotage: treat a void claim as live (blobClaim.live ignores void), and the
+// claim stays at cE: incoming is empty and rebuild != incremental.
+func TestBlobEdges_RolledBackExperimentClaimIsVoid(t *testing.T) {
+	for _, samePath := range []bool{true, false} {
+		t.Run(map[bool]string{true: "same-path", false: "new-path"}[samePath], func(t *testing.T) {
+			svc, _ := sideStore(t)
+			ctx := context.Background()
+			db := svc.si.RepoForTest().DB()
+			cR, rBlob := write(t, svc, "agent/test", "kb/r.md", "R")
+			_, err := svc.Merge().OpenExperiment(ctx, "x", "", "agent/test")
+			require.NoError(t, err)
+			cE, fBlob := write(t, svc, "exp/x", "kb/f.md", "F", "kb/r.md")
+			require.NoError(t, svc.Merge().RollbackExperiment(ctx, "x"))
+			require.Equal(t, cE, refsCommitOf(t, db, fBlob), "precondition: the claim survives the rollback")
+			var n int
+			require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM branch_commits WHERE commit_hash = ?`, cE).Scan(&n))
+			require.Zero(t, n, "precondition: no branch reaches cE")
+
+			write(t, svc, "agent/test", "kb/z.md", "Z")
+			p := "kb/f.md"
+			if !samePath {
+				p = "kb/g.md"
+			}
+			cA, b := write(t, svc, "agent/test", p, "F", "kb/r.md")
+			require.Equal(t, fBlob, b, "precondition: the same blob")
+
+			inc := allRefEdges(t, db)
+			require.Equal(t, cA, refsCommitOf(t, db, fBlob), "the void claim is replaced at the agent commit")
+			require.Equal(t, 1, countEdgesOfBlob(inc, fBlob), "one edge set: the void claim's edges are gone")
+			for _, e := range inc {
+				if e.SrcBlob == fBlob {
+					require.Equal(t, p, e.SrcPath)
+					require.Equal(t, cA, e.SourceCommit)
+					require.Equal(t, rBlob, e.TgtBlob)
+				}
+			}
+			in, err := svc.gq.IncomingAtCommit(ctx, "agent/test", "kb/r.md", cR)
+			require.NoError(t, err)
+			require.Len(t, in, 1, "R's incoming lists the citer")
+			require.Equal(t, p, in[0].Path)
+			require.False(t, in[0].Deleted)
+
+			resetRefEdgesForTest(t, db)
+			require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil))
+			require.Equal(t, inc, allRefEdges(t, db), "rebuild == incremental")
+		})
+	}
+}
+
+// m6 (round-2 review): an arrival at a commit no branch reaches (a drain
+// walking an experiment that is rolled back under it) does not claim there.
+//
+// Sabotage: let an unreachable passed commit compete like a reachable one
+// (passedReachable := passedHolds), and the blob is claimed at cE.
+func TestBlobEdges_UnreachablePassedCommitDoesNotClaim(t *testing.T) {
+	svc, _ := sideStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "agent/test", "kb/r.md", "R")
+	_, err := svc.Merge().OpenExperiment(ctx, "x", "", "agent/test")
+	require.NoError(t, err)
+	cE, fBlob := write(t, svc, "exp/x", "kb/f.md", "F", "kb/r.md")
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "x"))
+	resetRefEdgesForTest(t, db)
+	// The drain's call for the gone branch, at its (now orphaned) event.
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "exp/x", "kb/f.md", fBlob, cE, []string{"kb/r.md"}))
+	require.Empty(t, refsCommitOf(t, db, fBlob), "no claim at a commit no branch reaches")
+	require.Empty(t, allRefEdges(t, db))
+}
+
+// m4 (round-2 review; probe G): a CLAIMED blob arriving at a commit that
+// holds it but is not its earliest introduction at that path. f: c1 = B,
+// c2 = B', c3 = B; g on another branch: c4 = B, claimed first. The arrival
+// at c3 must move the claim to c1 (f's earliest introduction), as a rebuild
+// does.
+//
+// Sabotage: return the passed commit for a claimed blob without consulting
+// earliestIntroduction, and the claim lands on c3 (rebuild: c1).
+func TestBlobEdges_ClaimedBlobTakesItsEarliestIntroduction(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "main", "kb/r.md", "R")
+	c1, b := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	write(t, svc, "main", "kb/f.md", "F prime", "kb/r.md")
+	c3, b3 := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	require.Equal(t, b, b3)
+	require.NoError(t, svc.CreateBranch(ctx, "other", "main"))
+	require.NoError(t, svc.IndexManager().Sync(ctx, "other"))
+	c4, b4 := write(t, svc, "other", "kb/g.md", "F", "kb/r.md")
+	require.Equal(t, b, b4)
+	resetRefEdgesForTest(t, db)
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "other", "kb/g.md", b, c4, []string{"kb/r.md"}))
+	require.Equal(t, c4, refsCommitOf(t, db, b), "precondition: claimed via g at c4")
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", b, c3, []string{"kb/r.md"}))
+	require.Equal(t, c1, refsCommitOf(t, db, b), "the arrival at c3 resolves to f's earliest introduction c1")
+	ofB := func() []refEdge {
+		var out []refEdge
+		for _, e := range allRefEdges(t, db) {
+			if e.SrcBlob == b {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	inc := ofB()
+	require.Len(t, inc, 1)
+	require.Equal(t, c1, inc[0].SourceCommit)
+	resetRefEdgesForTest(t, db)
+	for _, br := range []string{"main", "other"} {
+		require.NoError(t, svc.IndexManager().Rebuild(ctx, br, nil))
+	}
+	require.Equal(t, inc, ofB(), "rebuild == incremental for B")
+}
+
+// m5 (round-2 review): an edge write that FAILS while the v8 upgrade drains a
+// pending branch leaves that branch's mark, so the next rebuild re-resolves
+// it; it is not cleared as if done.
+//
+// Sabotage: clear the mark whatever reResolveBranchRefs reports, and exp/x is
+// no longer pending although F has no edges.
+func TestBlobEdges_FailedDrainWriteKeepsThePendingMark(t *testing.T) {
+	svc, _ := sideStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, _ := write(t, svc, "agent/test", "kb/r.md", "R")
+	_, err := svc.Merge().OpenExperiment(ctx, "x", "", "agent/test")
+	require.NoError(t, err)
+	cF, fBlob := write(t, svc, "exp/x", "kb/f.md", "F", "kb/r.md")
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'derived_from_per_blob'`)
+	require.NoError(t, err)
+
+	calls := 0
+	svc.si.SetBeforeRefEdgesWriteHookForTest(func() error { calls++; return fmt.Errorf("write failed") })
+	err = svc.IndexManager().Rebuild(ctx, "agent/test", nil)
+	svc.si.SetBeforeRefEdgesWriteHookForTest(nil)
+	require.NoError(t, err, "the rebuild itself succeeds")
+	require.Positive(t, calls, "an edge write was attempted and failed")
+	require.Equal(t, []string{"derived_from_per_blob_pending:exp/x"}, pendingRefBranches(t, db), "only the failed branch stays pending")
+	require.Empty(t, edgesOfBlob(allRefEdges(t, db), fBlob))
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil))
+	require.Empty(t, pendingRefBranches(t, db))
+	require.Equal(t, map[string]string{"kb/r.md": cR}, outPaths(t, svc, "exp/x", "kb/f.md", cF))
 }

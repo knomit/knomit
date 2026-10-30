@@ -328,7 +328,7 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 	// Nothing to write (the claim is already this node and commit, and every
 	// edge exists): no transaction, so a caller re-visiting a resolved blob
 	// never takes the write lock.
-	if seen.found && seen.node == srcID && seen.at == sourceCommit {
+	if seen.live() && seen.node == srcID && seen.at == sourceCommit {
 		missing := false
 		for _, t := range targets {
 			exists, err := si.graphDerivedFromEdgeExists(ctx, srcID, t.tgtID, sourceCommit, t.targetCommit)
@@ -363,10 +363,15 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 		return false, nil
 	}
 	db := conn(tctx, si.rh.DB())
-	if !seen.found || seen.node != srcID || seen.at != sourceCommit {
+	if !seen.live() || seen.node != srcID || seen.at != sourceCommit {
+		// A claim being replaced takes its edges with it, in this
+		// transaction: an earlier introduction moves them, and a VOID claim
+		// (its commit on no branch) pinned history nobody reaches. Keeping
+		// either would give the blob two edge sets, and outgoing reads key
+		// by blob with no branch filter on source_commit.
 		if seen.found {
-			log.Debug().Str("blob", blobHash).Str("from", seen.at).Str("to", sourceCommit).
-				Msg("derived_from: an earlier introduction of the blob re-resolves its refs")
+			log.Debug().Str("blob", blobHash).Str("from", seen.at).Str("to", sourceCommit).Bool("void", seen.void).
+				Msg("derived_from: the blob's claim is replaced; its refs are re-resolved")
 			if err := graphDeleteOutgoingEdges(tctx, db, seen.node, EdgeDerivedFrom); err != nil {
 				return false, err
 			}
@@ -469,14 +474,22 @@ const refsCommitKey = "refs_commit"
 
 // blobClaim is the refs_commit mark of a blob as read: the node carrying the
 // blob's edges and the commit they were resolved at (found=false: none).
+// void=true: the claim's commit is in no branch_commits row (an experiment
+// rolled back, a rewound branch), so no branch reaches the history its edges
+// describe; it counts as no claim, and the next arrival replaces it and its
+// edges.
 type blobClaim struct {
 	node  int64
 	at    string
 	found bool
+	void  bool
 }
 
-// readBlobClaim reads the blob's refs_commit mark (SQL only, so it can run
-// inside the write transaction).
+// live reports whether the claim stands: present and reachable from a branch.
+func (c blobClaim) live() bool { return c.found && !c.void }
+
+// readBlobClaim reads the blob's refs_commit mark and whether its commit is
+// still reachable (SQL only, so it can run inside the write transaction).
 func (si *Index) readBlobClaim(ctx context.Context, blobHash string) (blobClaim, error) {
 	var c blobClaim
 	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx, `
@@ -494,12 +507,23 @@ func (si *Index) readBlobClaim(ctx context.Context, blobHash string) (blobClaim,
 		return blobClaim{}, fmt.Errorf("claim refs of blob %s: %w", blobHash, err)
 	}
 	c.found = true
+	var one int
+	err = conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+		`SELECT 1 FROM branch_commits WHERE commit_hash = ? LIMIT 1`, c.at).Scan(&one)
+	switch {
+	case err == sql.ErrNoRows:
+		c.void = true
+	case err != nil:
+		return blobClaim{}, fmt.Errorf("claim refs of blob %s: reachability: %w", blobHash, err)
+	}
 	return c, nil
 }
 
 // claimBlobRefs decides, from the claim as read, whether this call writes the
 // blob's reference edges:
-//   - the blob has no resolution yet: it is claimed for (srcID, sourceCommit);
+//   - the blob has no resolution yet, or its claim is VOID (its commit is no
+//     longer on any branch): it is claimed for (srcID, sourceCommit), and
+//     applyBlobRefs drops the void claim's edges in the same transaction;
 //   - it was resolved at this same node and commit (Sync's pass 2 retrying an
 //     intra-batch ref, a rebuild): the call fills in what is missing;
 //   - it was resolved at a commit that sourceCommit strictly precedes in
@@ -511,7 +535,7 @@ func (si *Index) readBlobClaim(ctx context.Context, blobHash string) (blobClaim,
 // applyBlobRefs re-checks that the claim did not change before writing.
 func (si *Index) claimBlobRefs(ctx context.Context, seen blobClaim, srcID int64, sourceCommit string) (bool, error) {
 	switch {
-	case !seen.found:
+	case !seen.live():
 		return true, nil
 	case seen.node == srcID && seen.at == sourceCommit:
 		return true, nil
@@ -600,18 +624,20 @@ func (si *Index) clearPendingRefBranch(ctx context.Context, branch string) error
 // Callers pass the version's source commit, which the indexer takes from
 // LastCommitForPath (the most recent NON-merge commit that touched the file;
 // it can misattribute on interleaved histories), or a rebuild's commit_log
-// event. Three cases:
-//   - the blob is already claimed: the passed commit if it holds the blob at
-//     path (the claim then decides whether it is an earlier introduction),
-//     else "" (write nothing);
-//   - the blob is not claimed: the EARLIEST introduction of the blob at path
-//     (path_changes entries reachable from an indexed branch, and the passed
-//     commit when it holds the blob), in commitEarlier order. A merge that
-//     carried the blob, or a tip that holds it, is never preferred over the
-//     commit that wrote it;
-//   - no introduction is recorded yet (a merge commit being indexed before
-//     branch_commits names it): the version live at the branch tip, or the
-//     tip itself, when it holds the blob.
+// event, so it may not hold the blob, or may not be its earliest
+// introduction. The answer:
+//   - the EARLIEST, in commitEarlier order, of the blob's introductions at
+//     path (path_changes entries reachable from an indexed branch) and the
+//     passed commit when it holds the blob. This holds whether or not the
+//     blob is claimed: for a claimed blob, claimBlobRefs then compares it
+//     with the claim, so an earlier introduction the claim missed moves it.
+//     A merge that carried the blob, or a tip that holds it, is never
+//     preferred over the commit that wrote it;
+//   - none of those, and the blob has a LIVE claim: "" (write nothing);
+//   - none of those, and no live claim (none, or a void one: its commit is on
+//     no branch any more): the version live at the branch tip, or the tip
+//     itself, when it holds the blob (a merge commit being indexed before
+//     branch_commits names it).
 //
 // Never a commit that does not hold the blob at path: when none is found the
 // answer is "" and no edge is written.
@@ -621,17 +647,15 @@ func (si *Index) introducingCommit(ctx context.Context, branch, path, blobHash, 
 		return err == nil && b == blobHash
 	}
 	passedHolds := commit != "" && holds(commit)
-	if si.blobRefsClaimed(ctx, blobHash) {
-		if passedHolds {
-			return commit, nil
-		}
-		return "", nil
-	}
+	// A passed commit no branch reaches (an experiment rolled back while a
+	// drain walked it) competes only as the last resort below: a claim there
+	// would be void at once.
+	passedReachable := passedHolds && si.commitReachable(ctx, commit)
 	best, err := si.earliestIntroduction(ctx, path, blobHash, holds)
 	if err != nil {
 		return "", err
 	}
-	if passedHolds {
+	if passedReachable {
 		if best == "" {
 			return commit, nil
 		}
@@ -646,9 +670,12 @@ func (si *Index) introducingCommit(ctx context.Context, branch, path, blobHash, 
 	if best != "" {
 		return best, nil
 	}
+	if si.blobRefsClaimed(ctx, blobHash) {
+		return "", nil
+	}
 	head, err := si.rh.HeadCommit(ctx, branch)
 	if err != nil {
-		return "", nil
+		return "", nil // the branch is gone: nothing reaches what it held
 	}
 	if c, ok, err := si.rh.ResolveActiveCommitForPath(ctx, branch, path, head); err == nil && ok && holds(c) {
 		return c, nil
@@ -658,7 +685,19 @@ func (si *Index) introducingCommit(ctx context.Context, branch, path, blobHash, 
 	if holds(head) {
 		return head, nil
 	}
+	if passedHolds {
+		return commit, nil
+	}
 	return "", nil
+}
+
+// commitReachable reports whether some branch reaches the commit (a
+// branch_commits row names it).
+func (si *Index) commitReachable(ctx context.Context, commit string) bool {
+	var one int
+	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+		`SELECT 1 FROM branch_commits WHERE commit_hash = ? LIMIT 1`, commit).Scan(&one)
+	return err == nil
 }
 
 // earliestIntroduction is the earliest commit, in commitEarlier order, that
@@ -708,11 +747,12 @@ func (si *Index) earliestIntroduction(ctx context.Context, path, blobHash string
 	return best, nil
 }
 
-// blobRefsClaimed reports whether some Fact node of blobHash carries the
-// refs_commit mark.
+// blobRefsClaimed reports whether some Fact node of blobHash carries a LIVE
+// refs_commit mark (a void one, at a commit no branch reaches, does not
+// count).
 func (si *Index) blobRefsClaimed(ctx context.Context, blobHash string) bool {
 	c, err := si.readBlobClaim(ctx, blobHash)
-	return err == nil && c.found
+	return err == nil && c.live()
 }
 
 // commitEarlier reports whether commit a precedes commit b in the order of a
