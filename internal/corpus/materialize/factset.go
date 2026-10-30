@@ -733,6 +733,25 @@ func (bk *factset) unitRows(uw *unitWalk, unit int, res sessions.FactSetResult) 
 	usedHere := map[string]bool{}
 	var newAnchors []string
 	byN := make(map[int]int, len(nodes))
+	// The written nodes' reservations and base anchors, read in one batch
+	// each (one query apiece once the factset lives in its file, where it
+	// was one per node): the same answers the per-node lookups give, as
+	// nothing is appended until the unit is done.
+	var written, bases []string
+	for i, n := range nodes {
+		if uw.links[i] == nil && n.Role != RoleRoot && n.Role != RoleFocal {
+			written = append(written, n.Path)
+			bases = append(bases, anchorIDPrefix+shortID(relOf(n.Path)))
+		}
+	}
+	reservedOf, err := bk.f.ReservedOf(bk.ctx, written)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	baseTaken, err := bk.f.AnchorsTaken(bk.ctx, bases)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	for i, n := range nodes {
 		byN[n.N] = i
 		switch p := uw.parent[i]; {
@@ -753,10 +772,7 @@ func (bk *factset) unitRows(uw *unitWalk, unit int, res sessions.FactSetResult) 
 		case n.Role == RoleRoot || n.Role == RoleFocal:
 			anchor[i] = res.Anchor
 		default:
-			rv, reserved, err := bk.f.Reserved(bk.ctx, n.Path)
-			if err != nil {
-				return nil, nil, nil, err
-			}
+			rv, reserved := reservedOf[n.Path]
 			if reserved {
 				// Written by the unit it was reserved for, at the number and
 				// under the anchor forward links already carry.
@@ -766,9 +782,13 @@ func (bk *factset) unitRows(uw *unitWalk, unit int, res sessions.FactSetResult) 
 				anchor[i] = rv.Anchor
 				break
 			}
-			a, err := uniqueAnchorErr(anchorIDPrefix+id8, func(a string) (bool, error) {
+			base := anchorIDPrefix + id8
+			a, err := uniqueAnchorErr(base, func(a string) (bool, error) {
 				if usedHere[a] {
 					return true, nil
+				}
+				if a == base {
+					return baseTaken[a], nil
 				}
 				return bk.f.AnchorTaken(bk.ctx, a)
 			})

@@ -263,9 +263,20 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 			_ = prof.Close()
 		}
 		require.NoError(t, err)
+		var seekProf *os.File
+		if dir := os.Getenv("KNOMIT_FACTSET_MEASURE_PROFILE"); dir != "" && pass == 0 {
+			var err error
+			seekProf, err = os.Create(filepath.Join(dir, "seek-"+name+".pprof"))
+			require.NoError(t, err)
+			require.NoError(t, pprof.StartCPUProfile(seekProf))
+		}
 		t2 := time.Now()
 		p, st2, seekErr := FactSetNextPageStats(ctx, f.scope(owner), f.b, nil, nil, *page.Cursor, page.Units)
 		seek := time.Since(t2)
+		if seekProf != nil {
+			pprof.StopCPUProfile()
+			_ = seekProf.Close()
+		}
 		seekNote := fmt.Sprintf("walked %d units, %d sections", st2.UnitsWalked, p.Sections)
 		if seekErr != nil {
 			require.ErrorIs(t, seekErr, ErrFactSetTooLarge)

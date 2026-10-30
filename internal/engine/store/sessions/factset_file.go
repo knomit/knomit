@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // A FACTSET FILE holds one factset's structure: the frozen search results, every
@@ -255,6 +256,35 @@ func (f *FactSetFile) Visited(ctx context.Context, path string) (FactSetVisit, b
 		return FactSetVisit{}, false, fmt.Errorf("factset visited: %w", err)
 	}
 	return v, true, nil
+}
+
+// inSet runs query (its one %s the placeholders) for keys, a chunk at a
+// time, and hands every row to scan.
+func (f *FactSetFile) inSet(ctx context.Context, query string, keys []string, scan func(*sql.Rows) error) error {
+	const chunk = 500
+	for lo := 0; lo < len(keys); lo += chunk {
+		part := keys[lo:min(len(keys), lo+chunk)]
+		args := make([]any, len(part))
+		for i, k := range part {
+			args[i] = k
+		}
+		rows, err := f.db.QueryContext(ctx, fmt.Sprintf(query, "?"+strings.Repeat(",?", len(part)-1)), args...)
+		if err != nil {
+			return fmt.Errorf("factset lookup: %w", err)
+		}
+		for rows.Next() {
+			if err := scan(rows); err != nil {
+				rows.Close()
+				return fmt.Errorf("factset lookup: %w", err)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return fmt.Errorf("factset lookup: %w", err)
+		}
+	}
+	return nil
 }
 
 // Reserved is the reservation of path, if a unit reserved it.

@@ -348,6 +348,54 @@ func TestFactSets_HeldFactSetIsFreedOnTheLastRelease(t *testing.T) {
 	}
 }
 
+// The batch lookups (round 4) answer exactly as the per-item ones, in
+// memory and after a spill: AnchorsTaken as AnchorTaken (a result's anchor,
+// a reserved anchor, a unit's anchor, a free one), ReservedOf as Reserved.
+//
+// Sabotage: let the file form of a batch lookup read the wrong table or
+// column, and the spilled answers differ.
+func TestFactSets_BatchLookupsAreThePerItemOnes(t *testing.T) {
+	ctx := context.Background()
+	ti := newFactSetIndex(t)
+	results := []FactSetResult{{Unit: 1, Path: "kb/a.md", Anchor: "f-a"}, {Unit: 2, Path: "kb/b.md", Anchor: "f-b"}}
+	reserved := []FactSetReserve{{Path: "kb/z/x.md", Unit: 1, Number: "1.1", Anchor: "f-x", Commit: "c", Blob: "b"}}
+	id, err := ti.CreateFactSet(ctx, FactSetToolPrefix+"3", "b", "repo:x", "rs", "o", "{}", results, reserved)
+	require.NoError(t, err)
+	fs, ok := ti.OpenFactSet(id)
+	require.True(t, ok)
+	require.NoError(t, fs.AppendUnit(ctx, 1, []FactSetRow{{Seq: 1, Unit: 1, N: 1, Path: "kb/a.md", Written: true, State: "{}"}},
+		nil, []string{"f-y"}, nil))
+	fs.Close()
+	anchors := []string{"f-a", "f-b", "f-x", "f-y", "f-free"}
+	paths := []string{"kb/z/x.md", "kb/a.md", "kb/none.md"}
+	check := func(label string) {
+		fs, ok := ti.OpenFactSet(id)
+		require.True(t, ok)
+		defer fs.Close()
+		taken, err := fs.AnchorsTaken(ctx, anchors)
+		require.NoError(t, err)
+		for _, a := range anchors {
+			one, err := fs.AnchorTaken(ctx, a)
+			require.NoError(t, err)
+			require.Equal(t, one, taken[a], "%s: anchor %s", label, a)
+		}
+		res, err := fs.ReservedOf(ctx, paths)
+		require.NoError(t, err)
+		for _, p := range paths {
+			one, ok, err := fs.Reserved(ctx, p)
+			require.NoError(t, err)
+			got, gotOK := res[p]
+			require.Equal(t, ok, gotOK, "%s: %s reserved", label, p)
+			require.Equal(t, one, got, "%s: %s", label, p)
+		}
+		require.Len(t, taken, 4, "%s: every anchor but the free one is taken", label)
+		require.Len(t, res, 1)
+	}
+	check("memory")
+	spill(t, ti, id)
+	check("file")
+}
+
 // The reserved set (two-level reservation) is part of a factset's structure:
 // it counts toward the factset's accounted size (the spill threshold and the
 // process budget), and a spill carries it to the file.

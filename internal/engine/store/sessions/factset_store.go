@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -323,6 +324,54 @@ func (b *FactSet) AnchorTaken(ctx context.Context, anchor string) (bool, error) 
 		return f.AnchorTaken(ctx, anchor)
 	}
 	return b.bs.mem.anchors[anchor], nil
+}
+
+// AnchorsTaken is AnchorTaken for many anchors at once (one query per chunk
+// once the factset lives in its file): the taken ones are in the map.
+func (b *FactSet) AnchorsTaken(ctx context.Context, anchors []string) (map[string]bool, error) {
+	b.bs.mu.Lock()
+	defer b.bs.mu.Unlock()
+	out := make(map[string]bool, len(anchors))
+	if f := b.bs.file; f != nil {
+		return out, f.inSet(ctx, `SELECT anchor FROM anchors WHERE anchor IN (%s)`, anchors, func(rows *sql.Rows) error {
+			var a string
+			if err := rows.Scan(&a); err != nil {
+				return err
+			}
+			out[a] = true
+			return nil
+		})
+	}
+	for _, a := range anchors {
+		if b.bs.mem.anchors[a] {
+			out[a] = true
+		}
+	}
+	return out, nil
+}
+
+// ReservedOf is Reserved for many paths at once: the reserved ones are in
+// the map.
+func (b *FactSet) ReservedOf(ctx context.Context, paths []string) (map[string]FactSetReserve, error) {
+	b.bs.mu.Lock()
+	defer b.bs.mu.Unlock()
+	out := make(map[string]FactSetReserve, len(paths))
+	if f := b.bs.file; f != nil {
+		return out, f.inSet(ctx, `SELECT path, unit, number, anchor, commit_hash, blob FROM reserved WHERE path IN (%s)`, paths, func(rows *sql.Rows) error {
+			var r FactSetReserve
+			if err := rows.Scan(&r.Path, &r.Unit, &r.Number, &r.Anchor, &r.Commit, &r.Blob); err != nil {
+				return err
+			}
+			out[r.Path] = r
+			return nil
+		})
+	}
+	for _, p := range paths {
+		if r, ok := b.bs.mem.reserved[p]; ok {
+			out[p] = r
+		}
+	}
+	return out, nil
 }
 
 // AppendUnit appends one walked unit (refused with ErrFactSetUnitTaken unless
