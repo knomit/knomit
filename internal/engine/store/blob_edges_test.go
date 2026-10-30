@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/fsck"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/merge"
@@ -1213,4 +1214,204 @@ func TestBlobEdges_RecordedCommitHoldsTheBlob(t *testing.T) {
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, "b", nil))
 	require.Equal(t, incX, branchFactCommit(t, db, "b", "kb/x.md"), "rebuild == incremental")
 	require.Equal(t, incY, branchFactCommit(t, db, "b", "kb/y.md"), "rebuild == incremental")
+}
+
+// graphCounts is (Fact nodes, DERIVED_FROM edges, refs_commit marks).
+func graphCounts(t *testing.T, db *sql.DB) [3]int {
+	t.Helper()
+	var c [3]int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM nodes`).Scan(&c[0]))
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM edges WHERE type = 'DERIVED_FROM'`).Scan(&c[1]))
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM node_props_text WHERE key_id = (SELECT id FROM property_keys WHERE key = 'refs_commit')`).Scan(&c[2]))
+	return c
+}
+
+// onBranch reports whether a branch_commits row of branch names commit.
+func onBranch(t *testing.T, db *sql.DB, branch, commit string) bool {
+	t.Helper()
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM branch_commits
+		WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND commit_hash = ?`, branch, commit).Scan(&n))
+	return n > 0
+}
+
+// incomingPaths is R's incoming on branch at cR as path -> deleted.
+func incomingPaths(t *testing.T, svc *Service, branch, path, commit string) map[string]bool {
+	t.Helper()
+	in, err := svc.gq.IncomingAtCommit(context.Background(), branch, path, commit)
+	require.NoError(t, err)
+	m := map[string]bool{}
+	for _, r := range in {
+		_, dup := m[r.Path]
+		require.False(t, dup, "%s listed once", r.Path)
+		m[r.Path] = r.Deleted
+	}
+	return m
+}
+
+// B4 (round-4 review of #693; user ruling, OPTION 1): the same bytes X
+// (citing R) are written on brA (cA) and later on brC (cC); the branches
+// never merge; same path or another path. Incremental, and rebuilt with
+// either branch first.
+//   - R's incoming lists X on brA AND on brC: an edge is visible on a branch
+//     iff the citing blob is held there, not iff its source_commit is on it.
+//   - X's refs are resolved once, at the earliest introduction cA: on brC its
+//     outgoing is R as resolved on brA (R_A @ cR), though brC has since
+//     changed R to R_C; and the explain "changed since cited" input (the
+//     branch's latest commit of R, explain.go readNode) differs from that pin.
+//
+// Then: brC is merged into brA and brA into brC (a fast-forward). The merges
+// add no node, edge or mark; the mark is still cA, on both branches; R's
+// incoming and X's Connections are identical on both; with two paths both
+// are listed. brA is then dropped: the mark stays valid (cA is on brC) and
+// nothing on brC changes.
+//
+// Sabotage: restore the source_commit-on-branch filter in IncomingAtCommit,
+// and R's incoming on brC is empty.
+func TestBlobEdges_SameBytesOnTwoBranches(t *testing.T) {
+	for _, samePath := range []bool{true, false} {
+		for _, mode := range []string{"incremental", "rebuild-A-first", "rebuild-C-first"} {
+			name := map[bool]string{true: "same-path", false: "other-path"}[samePath] + "/" + mode
+			t.Run(name, func(t *testing.T) {
+				svc := newMergeTestStore(t)
+				ctx := context.Background()
+				db := svc.si.RepoForTest().DB()
+				cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
+				for _, b := range []string{"brA", "brC"} {
+					require.NoError(t, svc.CreateBranch(ctx, b, "main"))
+					require.NoError(t, svc.IndexManager().Sync(ctx, b))
+				}
+				pA, pC := "kb/x.md", "kb/x.md"
+				if !samePath {
+					pC = "kb/x-copy.md"
+				}
+				cA, xBlob := write(t, svc, "brA", pA, "X", "kb/r.md")
+				cRC, _ := write(t, svc, "brC", "kb/r.md", "R on C")
+				write(t, svc, "brC", "kb/z.md", "Z")
+				cC, b2 := write(t, svc, "brC", pC, "X", "kb/r.md")
+				require.Equal(t, xBlob, b2, "precondition: same bytes")
+				require.False(t, onBranch(t, db, "brC", cA), "precondition: cA is not on brC")
+				switch mode {
+				case "rebuild-A-first":
+					resetRefEdgesForTest(t, db)
+					require.NoError(t, svc.IndexManager().Rebuild(ctx, "brA", nil))
+					require.NoError(t, svc.IndexManager().Rebuild(ctx, "brC", nil))
+				case "rebuild-C-first":
+					resetRefEdgesForTest(t, db)
+					require.NoError(t, svc.IndexManager().Rebuild(ctx, "brC", nil))
+					require.NoError(t, svc.IndexManager().Rebuild(ctx, "brA", nil))
+				}
+				require.Equal(t, cA, refsCommitOf(t, db, xBlob), "resolved once, at the earliest introduction")
+
+				require.Equal(t, map[string]bool{pA: false}, incomingPaths(t, svc, "brA", "kb/r.md", cR), "R's incoming on brA")
+				require.Equal(t, map[string]bool{pC: false}, incomingPaths(t, svc, "brC", "kb/r.md", cR), "R's incoming on brC lists X")
+				in, err := svc.gq.IncomingAtCommit(ctx, "brC", "kb/r.md", cR)
+				require.NoError(t, err)
+				require.True(t, onBranch(t, db, "brC", in[0].Commit), "the row's commit is one of brC")
+				got, err := svc.si.RepoForTest().ReadBlobHashAtCommit(ctx, pC, in[0].Commit)
+				require.NoError(t, err)
+				require.Equal(t, xBlob, got, "and holds X at that path")
+				_ = cC
+
+				exC, err := svc.gq.ExplainFact(ctx, "brC", pC)
+				require.NoError(t, err)
+				require.Len(t, exC.Outgoing, 1)
+				require.Equal(t, "kb/r.md", exC.Outgoing[0].Path)
+				require.Equal(t, cR, exC.Outgoing[0].Commit, "X on brC shows R as resolved on brA")
+				pinned, err := svc.si.RepoForTest().ReadBlobHashAtCommit(ctx, "kb/r.md", exC.Outgoing[0].Commit)
+				require.NoError(t, err)
+				require.Equal(t, rBlob, pinned)
+				head, ok := svc.FactQuery().LastCommitForPath(ctx, "brC", "kb/r.md")
+				require.True(t, ok)
+				require.Equal(t, cRC, head)
+				require.NotEqual(t, exC.Outgoing[0].Commit, head, "changed since cited: brC's R is not the version X cites")
+
+				// THEN MERGE.
+				before := graphCounts(t, db)
+				require.NoError(t, svc.Merge().MergeBranch(ctx, "brC", "brA", merge.StrategyLocalWins))
+				require.NoError(t, svc.IndexManager().Sync(ctx, "brA"))
+				require.NoError(t, svc.Merge().MergeBranch(ctx, "brA", "brC", merge.StrategyLocalWins))
+				require.NoError(t, svc.IndexManager().Sync(ctx, "brC"))
+				require.Equal(t, before, graphCounts(t, db), "the merges add no node, edge or mark")
+				require.Equal(t, cA, refsCommitOf(t, db, xBlob))
+				require.True(t, onBranch(t, db, "brA", cA) && onBranch(t, db, "brC", cA), "the mark is valid on both")
+				want := map[string]bool{pA: false, pC: false}
+				inA, inC := incomingPaths(t, svc, "brA", "kb/r.md", cR), incomingPaths(t, svc, "brC", "kb/r.md", cR)
+				require.Equal(t, want, inA, "both paths listed")
+				require.Equal(t, inA, inC, "R's incoming identical on both branches")
+				for _, p := range []string{pA, pC} {
+					xa, err := svc.gq.ExplainFact(ctx, "brA", p)
+					require.NoError(t, err)
+					xc, err := svc.gq.ExplainFact(ctx, "brC", p)
+					require.NoError(t, err)
+					require.Len(t, xa.Outgoing, 1, p)
+					require.Equal(t, xa, xc, "%s: Connections identical on both branches", p)
+				}
+
+				exBefore, err := svc.gq.ExplainFact(ctx, "brC", pC)
+				require.NoError(t, err)
+				inBefore, err := svc.gq.IncomingAtCommit(ctx, "brC", "kb/r.md", cR)
+				require.NoError(t, err)
+				require.NoError(t, svc.rh.DropBranch(ctx, "brA"))
+				require.Equal(t, cA, refsCommitOf(t, db, xBlob))
+				require.True(t, onBranch(t, db, "brC", cA), "the mark stays valid: cA is on brC")
+				require.Equal(t, before, graphCounts(t, db))
+				exAfter, err := svc.gq.ExplainFact(ctx, "brC", pC)
+				require.NoError(t, err)
+				inAfter, err := svc.gq.IncomingAtCommit(ctx, "brC", "kb/r.md", cR)
+				require.NoError(t, err)
+				require.Equal(t, exBefore, exAfter, "nothing on brC changes")
+				require.Equal(t, inBefore, inAfter)
+			})
+		}
+	}
+}
+
+// OPTION 1 when the resolved target's commit is NOT on the reading branch: R
+// changes on brA before X is written there, so X pins R_A at cRA, a brA-only
+// commit; the same bytes X are written on brC. On brC, X's Connections show
+// R @ cRA (no dropped row), the commit-anchored gate the REST read of that
+// target uses (FactLiveAtCommit) passes, the version reads back as R_A, and
+// R's incoming on brC at cRA lists X. brC's R (never R_A) differs from the
+// pin, which is what explain's "changed since cited" compares.
+func TestBlobEdges_TargetResolvedOnAnotherBranchRendersOnTheReader(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "main", "kb/r.md", "R")
+	for _, b := range []string{"brA", "brC"} {
+		require.NoError(t, svc.CreateBranch(ctx, b, "main"))
+		require.NoError(t, svc.IndexManager().Sync(ctx, b))
+	}
+	cRA, rABlob := write(t, svc, "brA", "kb/r.md", "R on A")
+	cA, xBlob := write(t, svc, "brA", "kb/x.md", "X", "kb/r.md")
+	// Commits on brC first, so cC is later than cA even inside one second
+	// (the order counts same-second ancestors).
+	for i := 0; i < 3; i++ {
+		write(t, svc, "brC", fmt.Sprintf("kb/filler-%d.md", i), fmt.Sprintf("F%d", i))
+	}
+	cC, _ := write(t, svc, "brC", "kb/x.md", "X", "kb/r.md")
+	require.Equal(t, cA, refsCommitOf(t, db, xBlob), "precondition: resolved at cA on brA")
+	require.False(t, onBranch(t, db, "brC", cRA), "precondition: cRA is not on brC")
+
+	out, err := svc.gq.OutgoingAtCommit(ctx, "brC", "kb/x.md", cC)
+	require.NoError(t, err)
+	require.Len(t, out, 1, "no dropped row")
+	require.Equal(t, cRA, out[0].Commit)
+	ex, err := svc.gq.ExplainFact(ctx, "brC", "kb/x.md")
+	require.NoError(t, err)
+	require.Equal(t, out, ex.Outgoing)
+	live, err := svc.FactQuery().FactLiveAtCommit(ctx, "brC", "kb/r.md", cRA)
+	require.NoError(t, err)
+	require.True(t, live, "the REST gate (factPresentAtCommitOr404) passes on brC: no 404")
+	res, err := svc.Facts().ReadFact(ctx, "brC", "kb/r.md", &facts.ReadFactOpts{AtCommit: cRA})
+	require.NoError(t, err)
+	require.Contains(t, res.Content, "R on A", "the pinned version reads back on brC")
+	pinned, err := svc.si.RepoForTest().ReadBlobHashAtCommit(ctx, "kb/r.md", cRA)
+	require.NoError(t, err)
+	require.Equal(t, rABlob, pinned)
+	require.Equal(t, map[string]bool{"kb/x.md": false}, incomingPaths(t, svc, "brC", "kb/r.md", cRA))
+	head, ok := svc.FactQuery().LastCommitForPath(ctx, "brC", "kb/r.md")
+	require.True(t, ok)
+	require.NotEqual(t, cRA, head, "changed since cited on brC")
 }
