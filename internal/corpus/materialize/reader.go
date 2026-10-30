@@ -115,6 +115,31 @@ func (r *reader) versionMeta(ctx context.Context, m *mount, rel, commit string) 
 	return meta, hit, nil
 }
 
+// prefetchMetas fills the version cache for every pair not cached yet, in
+// one batch (index.VersionMetasAt): a pair the batch answers is a hit with
+// its row, any other is VersionMetaAt's miss, so versionMeta then answers
+// exactly as it would have read by read.
+func (r *reader) prefetchMetas(ctx context.Context, m *mount, pairs []index.PathAtCommit) error {
+	var need []index.PathAtCommit
+	for _, p := range pairs {
+		if _, ok := r.metas[edgeKey{m.id12, p.Path, p.Commit}]; !ok {
+			need = append(need, p)
+		}
+	}
+	if len(need) == 0 {
+		return nil
+	}
+	got, err := m.svc.FactQuery().VersionMetasAt(ctx, need)
+	if err != nil {
+		return err
+	}
+	for _, p := range need {
+		meta, hit := got[p]
+		r.metas[edgeKey{m.id12, p.Path, p.Commit}] = metaEntry{meta, hit}
+	}
+	return nil
+}
+
 // target routes a root-commit id to a repo and the branch to read it at.
 func (r *reader) target(id12 string) (*repos.RepoInstance, string, bool) {
 	if rt, ok := r.b.ByID(id12); ok {

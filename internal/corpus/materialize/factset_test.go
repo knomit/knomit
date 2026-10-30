@@ -968,3 +968,53 @@ func TestFactSet_SeekGivesTheSameReservedFactSet(t *testing.T) {
 	}
 	require.Equal(t, strip(unit3), strip(seeked))
 }
+
+// The batched version read (index.VersionMetasAt, round 4) answers every
+// (path, commit) exactly as the per-pair VersionMetaAt does, hits and
+// misses alike: an old version, the current one, a version before the fact
+// existed, a directory, a mixed-case spelling, an unknown commit, a deeper
+// path, and a pair asked twice.
+//
+// Sabotage: resolve a directory's hash as a hit, or answer a pair from the
+// wrong commit's tree, and a pair differs.
+func TestVersionMetasAt_IsVersionMetaAtForEveryPair(t *testing.T) {
+	f := newFactSetFixture(t)
+	ctx := context.Background()
+	write := func(path, title, body string, refs ...string) string {
+		ff := fact.NewFact(path)
+		ff.Title, ff.Body, ff.Type = title, body, fact.Observation
+		ff.Domain, ff.Entities, ff.Refs = []string{"testing"}, []string{}, refs
+		ff.Confidence, ff.Sources = 0.7, 1
+		content, err := fact.SerializeFact(ff)
+		require.NoError(t, err)
+		r, err := f.svc.Facts().WriteFact(ctx, "agent/test", path, content, "write "+path, "")
+		require.NoError(t, err)
+		return r.CommitHash
+	}
+	c0 := write("kb/z/a.md", "A", "a body.")
+	c1 := write("kb/z/x.md", "X", "x old.", "kb/z/a.md")
+	c2 := write("kb/z/x.md", "X2", "x new.")
+	c3 := write("kb/z/deep/y.md", "Y", "y body.", "kb/z/x.md", "kb/z/a.md")
+	pairs := []index.PathAtCommit{
+		{Path: "kb/z/x.md", Commit: c1}, {Path: "kb/z/x.md", Commit: c2}, {Path: "kb/z/x.md", Commit: c0},
+		{Path: "kb/z", Commit: c2}, {Path: "kb/z/X.md", Commit: c2}, {Path: "kb/z/x.md", Commit: strings.Repeat("0", 40)},
+		{Path: "kb/z/deep/y.md", Commit: c3}, {Path: "kb/z/a.md", Commit: c3}, {Path: "kb/z/x.md", Commit: c1},
+		{Path: "kb/nope/q.md", Commit: c3}, {Path: "kb/z/deep", Commit: c3},
+	}
+	got, err := f.svc.FactQuery().VersionMetasAt(ctx, pairs)
+	require.NoError(t, err)
+	hits := 0
+	for _, p := range pairs {
+		want, ok, err := f.svc.FactQuery().VersionMetaAt(ctx, p.Path, p.Commit)
+		require.NoError(t, err)
+		g, gok := got[p]
+		require.Equal(t, ok, gok, "%s@%s: hit", p.Path, p.Commit[:8])
+		require.Equal(t, want, g, "%s@%s: row", p.Path, p.Commit[:8])
+		if ok {
+			hits++
+		}
+	}
+	require.Equal(t, 5, hits, "x@c1, x@c2, y@c3, a@c3 and x@c1 again are hits; the rest miss")
+	require.Equal(t, "X", got[index.PathAtCommit{Path: "kb/z/x.md", Commit: c1}].Title, "the old version's row")
+	require.Equal(t, "X2", got[index.PathAtCommit{Path: "kb/z/x.md", Commit: c2}].Title)
+}

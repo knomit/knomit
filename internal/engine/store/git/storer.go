@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -191,6 +192,41 @@ func (s *Storer) IterEncodedObjects(t plumbing.ObjectType) (storer.EncodedObject
 		return nil, err
 	}
 	return &objectIter{rows: rows}, nil
+}
+
+// ObjectsOfType reports which of hashes are stored as objects of type t, in
+// one query per chunk: EncodedObject(t, h) would succeed exactly for those
+// (it selects by hash AND type), without reading any object's data.
+func (s *Storer) ObjectsOfType(ctx context.Context, t plumbing.ObjectType, hashes []plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	out := make(map[plumbing.Hash]bool, len(hashes))
+	const chunk = 500
+	for lo := 0; lo < len(hashes); lo += chunk {
+		part := hashes[lo:min(len(hashes), lo+chunk)]
+		args := make([]any, 0, len(part)+1)
+		args = append(args, int(t))
+		for _, h := range part {
+			args = append(args, h.String())
+		}
+		rows, err := s.connCtx(ctx).QueryContext(ctx,
+			`SELECT hash FROM objects WHERE type = ? AND hash IN (?`+strings.Repeat(",?", len(part)-1)+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("storegit: ObjectsOfType: %w", err)
+		}
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("storegit: ObjectsOfType: %w", err)
+			}
+			out[plumbing.NewHash(h)] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("storegit: ObjectsOfType: %w", err)
+		}
+	}
+	return out, nil
 }
 
 // HasEncodedObject returns nil if the object exists, plumbing.ErrObjectNotFound otherwise.

@@ -91,9 +91,9 @@ func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fr
 	return hash, true, nil
 }
 
-// ResolveActiveCommitForPathChainForTest is ResolveActiveCommitForPath
-// without the depth-0 fast path (the chain walk alone), so a test can prove
-// the two answer alike. Never called in production.
+// ResolveActiveCommitForPathChainForTest is the old form of
+// ResolveActiveCommitForPath (the whole chain ordered by depth), so a test
+// can prove the two answer alike. Never called in production.
 func (rh *Repo) ResolveActiveCommitForPathChainForTest(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	if fromCommit == "" {
 		return "", false, nil

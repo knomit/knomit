@@ -67,16 +67,16 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	require.Equal(t, "kb/a.md", in[0].Path)
 }
 
-// ResolveActiveCommitForPath's depth-0 fast path (round 4 of PR #692)
-// answers exactly what the first-parent chain walk alone answers, for every
-// (path, commit) of a history with writes, a modify, a delete, a re-add and
-// a real merge: a commit that wrote the path, one that did not, one that
-// deleted it, the merge, and paths never written.
+// ResolveActiveCommitForPath's early-stopping recursion (round 4 of PR
+// #692) answers exactly what the old first-parent chain walk (ORDER BY
+// depth LIMIT 1) answers, for every (path, commit) of a history with
+// writes, a modify, a delete, a re-add and a real merge: a commit that wrote
+// the path, one that did not, one that deleted it, the merge, and paths
+// never written.
 //
-// Sabotage: answer fromCommit whenever commit_log has ANY row for it and
-// the path (a deletion included), and the commit that deleted kb/a.md
-// resolves to itself instead of the write before it.
-func TestResolveActiveCommitForPath_FastPathIsTheChainWalk(t *testing.T) {
+// Sabotage: count a deletion as a write in the recursion, and the commit
+// that deleted kb/a.md resolves to itself instead of the write before it.
+func TestResolveActiveCommitForPath_EarlyStopIsTheChainWalk(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))

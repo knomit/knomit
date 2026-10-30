@@ -641,3 +641,76 @@ func TestFactSet_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
 		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", 50+i), p, "then the rest, deterministically")
 	}
 }
+
+// Round 4: the batched version read (walker.prefetch over
+// index.VersionMetasAt) gives the SAME FactSet, reservation included, as the
+// per-reference read, on a mixed graph: shared and distinct direct
+// references, a pinned OLD version of a fact updated since, cross-KB refs
+// into another repo, a ref into a repo that is not there, refs between
+// results, pinned and unpinned. Every page's bytes (cursor ids aside) and
+// every stored reservation are compared.
+//
+// Sabotage: make the prefetch fill a miss as a hit (or the batch answer a
+// pair from another commit), and the pages or reservations differ.
+func TestFactSet_BatchedReadsGiveTheSameFactSet(t *testing.T) {
+	m := newMatStoreManager(t, "alpha", "beta")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	const br = "agent/test"
+	b12 := fact.ID12(beta.ID())
+	bx, by := "kb://"+b12+"/kb/b/x.md", "kb://"+b12+"/kb/b/y.md"
+	gone := "kb://0123456789ab/kb/q.md"
+	writeMatFact(t, beta, br, "kb/b/x.md", "BX", "bx body.")
+	writeMatFact(t, beta, br, "kb/b/y.md", "BY", "by body.", "kb/b/x.md")
+	writeMatFact(t, alpha, br, "kb/z/s1.md", "S1", "s1 body.")
+	writeMatFact(t, alpha, br, "kb/z/x.md", "X", "x old body.")
+	writeMatFact(t, alpha, br, "kb/z/s2.md", "S2", "s2 body.", "kb/z/x.md")
+	writeMatFact(t, alpha, br, "kb/z/d1a.md", "D1A", "d1a body.", "kb/z/s1.md")
+	writeMatFact(t, alpha, br, "kb/z/d1b.md", "D1B", "d1b body.")
+	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", "kb/z/s1.md", "kb/z/s2.md", "kb/z/x.md", "kb/z/d1a.md", "kb/z/d1b.md", bx, gone)
+	writeMatFact(t, alpha, br, "kb/z/x.md", "X", "x new body.")
+	writeMatFact(t, alpha, br, "kb/z/d2a.md", "D2A", "d2a body.", "kb/z/x.md")
+	writeMatFact(t, alpha, br, "kb/u/r2.md", "R2", "r2 body.", "kb/z/s1.md", "kb/z/x.md", "kb/z/d2a.md", by, "kb/u/r1.md")
+	writeMatFact(t, alpha, br, "kb/u/r3.md", "R3", "r3 body.", "kb/z/s2.md", "kb/z/d1a.md", bx, "kb/u/r2.md")
+	paths := []string{"kb/z/s1.md", "kb/z/s2.md", "kb/z/x.md", "kb/z/d1a.md", "kb/z/d1b.md", "kb/z/d2a.md", bx, by, gone}
+
+	read := func(owner, query string) ([]string, map[string]string) {
+		h := asPrincipal(owner, newTestRouter(m))
+		code, p, body := getFactSet(t, h, factsetBase+"?"+query)
+		require.Equal(t, http.StatusOK, code, body)
+		cur := *p.Cursor
+		pages := []string{strings.ReplaceAll(body, cur, "CURSOR")}
+		for p.HasMore {
+			code, p, body = getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(cur))
+			require.Equal(t, http.StatusOK, code, body)
+			pages = append(pages, strings.ReplaceAll(body, cur, "CURSOR"))
+		}
+		var svcRes map[string]string
+		require.NoError(t, alpha.WithRead(func(svc *store.Service) {
+			fs, ok := svc.ToolSession().OpenFactSet(cur)
+			require.True(t, ok)
+			defer fs.Close()
+			svcRes = map[string]string{}
+			for _, path := range paths {
+				r, ok, err := fs.Reserved(context.Background(), path)
+				require.NoError(t, err)
+				if ok {
+					svcRes[path] = fmt.Sprintf("%d %s %s %s %s", r.Unit, r.Number, r.Anchor, r.Commit, r.Blob)
+				}
+			}
+		}))
+		return pages, svcRes
+	}
+	for _, query := range []string{
+		"path=kb/u/&cross_kb=true&depth=3&limit=5",
+		"path=kb/u/&cross_kb=true&depth=3&limit=5&unpin=true",
+		"path=kb/u/&depth=10&max_nodes=3&limit=5",
+	} {
+		batched, batchedRes := read("batched", query)
+		restore := materialize.SetVersionPrefetchForTest(false)
+		perRef, perRefRes := read("per-ref", query)
+		restore()
+		require.Equal(t, perRef, batched, "%s: the same pages", query)
+		require.Equal(t, perRefRes, batchedRes, "%s: the same reservation", query)
+		require.NotEmpty(t, batchedRes, "%s: something is reserved", query)
+	}
+}

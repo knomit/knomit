@@ -109,7 +109,11 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 	}
 	f, branch := measureStore(t, true)
 	units := envInt("KNOMIT_FACTSET_MEASURE_UNITS", 500)
-	const chunk = 25 // results per batch of their own facts
+	// Batches stay near 500 facts: a commit's index sync runs one uncached
+	// go-git diff of the whole commit PER FILE (LastCommitForPath, knomit
+	// #357), so a batch of n files costs O(n^2); 12,500-fact batches made
+	// the seed quadratic.
+	const chunk = 1 // results per batch of their own facts (499 of them)
 	start := time.Now()
 
 	// A: 499 shared leaves, then the results.
@@ -146,15 +150,18 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 		}
 		batchWrite(t, f, branch, files)
 		batchWrite(t, f, branch, results)
-		t.Logf("seed B: %d results in %s", min(units, lo+chunk), time.Since(start))
+		if done := min(units, lo+chunk); done%50 == 0 || done == units {
+			t.Logf("seed B: %d results in %s", done, time.Since(start))
+		}
 	}
 
 	// C: per result, 50 chains of 10 facts of its own, written bottom up.
 	start = time.Now()
-	for lo := 0; lo < units; lo += chunk {
+	const chunkC = 10 // 500 chain facts per batch
+	for lo := 0; lo < units; lo += chunkC {
 		for k := 9; k >= 0; k-- {
 			files = map[string]string{}
-			for i := lo; i < min(units, lo+chunk); i++ {
+			for i := lo; i < min(units, lo+chunkC); i++ {
 				for j := range 50 {
 					p := fmt.Sprintf("kb/m4/c/d/r%03d/c%02d_%d.md", i, j, k)
 					var refs []string
@@ -167,7 +174,7 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 			batchWrite(t, f, branch, files)
 		}
 		results := map[string]string{}
-		for i := lo; i < min(units, lo+chunk); i++ {
+		for i := lo; i < min(units, lo+chunkC); i++ {
 			heads := make([]string, 50)
 			for j := range heads {
 				heads[j] = fmt.Sprintf("kb/m4/c/d/r%03d/c%02d_0.md", i, j)
@@ -176,7 +183,9 @@ func TestFactSet_MeasureSeed(t *testing.T) {
 			results[p] = factText(t, p, fmt.Sprintf("C result %d", i), heads)
 		}
 		batchWrite(t, f, branch, results)
-		t.Logf("seed C: %d results in %s", min(units, lo+chunk), time.Since(start))
+		if done := min(units, lo+chunkC); done%50 == 0 || done == units {
+			t.Logf("seed C: %d results in %s", done, time.Since(start))
+		}
 	}
 }
 

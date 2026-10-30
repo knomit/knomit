@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store/index"
 )
 
 // Roles a node plays in the reading order.
@@ -358,6 +359,9 @@ func (w *walker) resolve(n *node) ([]resolved, error) {
 		return n.refs, nil
 	}
 	n.resolved = true
+	if err := w.prefetch(n); err != nil {
+		return nil, err
+	}
 	var pins map[string]string
 	seen := map[key]bool{}
 	labels := map[string]int{}
@@ -472,6 +476,66 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 		return resolved{kind: refOmit, omit: Omission{Path: wire, Reason: ReasonNoVersion}}, true, nil
 	}
 	return resolved{kind: refNode, target: k, m: n.m, commit: used, blob: blob, f: f}, true, nil
+}
+
+// versionPrefetch turns walker.prefetch on (always, in production); a test
+// turns it off to compare the batched path with the per-ref one.
+var versionPrefetch = true
+
+// SetVersionPrefetchForTest turns the batched version read on or off and
+// returns the restore. Never called in production.
+func SetVersionPrefetchForTest(on bool) (restore func()) {
+	old := versionPrefetch
+	versionPrefetch = on
+	return func() { versionPrefetch = old }
+}
+
+// prefetch reads, in ONE batch, the index rows of every version n's local
+// fact refs will read (the version each cites, or the latest at the anchor
+// when unpinned) into the reader's version cache, so resolve's per-ref
+// readAt answers from the cache. It changes no answer: the batch returns,
+// for each version, exactly what VersionMetaAt would (index.VersionMetasAt),
+// and it asks for exactly the versions resolve reads (the same refs, the
+// same pins, fetched only when a local ref exists, as resolve does).
+// Cross-KB refs keep their per-ref read.
+func (w *walker) prefetch(n *node) error {
+	if !versionPrefetch {
+		return nil
+	}
+	var local []string
+	seen := map[key]bool{}
+	for _, raw := range n.f.Refs {
+		c := fact.ClassifyRef(raw, n.m.id12)
+		if c.Kind != fact.RefLocalFact {
+			continue
+		}
+		k := key{n.m.id12, c.Path}
+		if seen[k] || k == n.key {
+			continue
+		}
+		seen[k] = true
+		local = append(local, c.Path)
+	}
+	if len(local) < 2 {
+		return nil // nothing to batch
+	}
+	pairs := make([]index.PathAtCommit, 0, len(local))
+	if w.opts.Unpin {
+		for _, p := range local {
+			pairs = append(pairs, index.PathAtCommit{Path: p, Commit: n.m.anchor})
+		}
+	} else {
+		pins, err := w.r.pins(w.ctx, n.m, n.rel, n.commit)
+		if err != nil {
+			return err
+		}
+		for _, p := range local {
+			if c, ok := pins[p]; ok {
+				pairs = append(pairs, index.PathAtCommit{Path: p, Commit: c})
+			}
+		}
+	}
+	return w.r.prefetchMetas(w.ctx, n.m, pairs)
 }
 
 // adopt records the target of r as a node first reached from a node at
