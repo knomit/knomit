@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/merge"
 )
 
@@ -59,6 +60,23 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out, 1, "A's outgoing edge to B must survive resolving HEAD to the merge commit")
 	require.Equal(t, "kb/b.md", out[0].Path)
+
+	// The batched form (round 4 of PR #692) answers the same, pair by pair,
+	// through the merge, for an older commit, and for a path never written.
+	feature, err := svc.HeadCommit(ctx, "feature")
+	require.NoError(t, err)
+	pairs := []index.PathAtCommit{
+		{Path: "kb/a.md", Commit: head}, {Path: "kb/b.md", Commit: head}, {Path: "kb/a.md", Commit: feature},
+		{Path: "kb/never.md", Commit: head}, {Path: "kb/a.md", Commit: head},
+	}
+	batch, err := svc.gq.OutgoingAtCommits(ctx, "main", pairs)
+	require.NoError(t, err)
+	for _, p := range pairs {
+		one, err := svc.gq.OutgoingAtCommit(ctx, "main", p.Path, p.Commit)
+		require.NoError(t, err)
+		require.Equal(t, one, batch[p], "%s at %s", p.Path, p.Commit[:8])
+	}
+	require.Len(t, batch[index.PathAtCommit{Path: "kb/a.md", Commit: head}], 1)
 
 	// INCOMING: B←A symmetric.
 	in, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/b.md", head)

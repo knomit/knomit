@@ -570,32 +570,118 @@ func (n *node) expands() bool { return n.included && n.link == nil }
 // order, cut at MaxNodes. Ancestors are already included and are terminal.
 // Every included node's refs are resolved, the ones at the depth limit too,
 // so a ref cut by depth still has a title to show.
+//
+// It runs level by level, which is the FIFO order exactly (a level is the
+// queue's run of nodes at one distance, in the order they were queued), so
+// that each level's reads can be prefetched in batches first (prefetchLevel).
 func (w *walker) bfs(root *node) error {
-	queue := []*node{root}
-	for len(queue) > 0 {
-		u := queue[0]
-		queue = queue[1:]
-		refs, err := w.resolve(u)
-		if err != nil {
+	level := []*node{root}
+	for len(level) > 0 {
+		if err := w.prefetchLevel(level); err != nil {
 			return err
 		}
-		if u.dist >= w.opts.Depth {
-			continue
-		}
-		for _, r := range refs {
-			if r.kind != refNode {
-				continue
-			}
-			if _, seen := w.nodes[r.target]; seen {
-				continue
-			}
-			t, err := w.adopt(r, u.dist+1)
+		var next []*node
+		for _, u := range level {
+			refs, err := w.resolve(u)
 			if err != nil {
 				return err
 			}
-			if t.expands() {
-				queue = append(queue, t)
+			if u.dist >= w.opts.Depth {
+				continue
 			}
+			for _, r := range refs {
+				if r.kind != refNode {
+					continue
+				}
+				if _, seen := w.nodes[r.target]; seen {
+					continue
+				}
+				t, err := w.adopt(r, u.dist+1)
+				if err != nil {
+					return err
+				}
+				if t.expands() {
+					next = append(next, t)
+				}
+			}
+		}
+		level = next
+	}
+	return nil
+}
+
+// prefetchLevel reads, in batches, what resolving a BFS level will read:
+// the pins of every node in it with a local fact ref (GraphStore
+// .OutgoingAtCommits), then the index rows of every version those refs
+// cite (FactQuery.VersionMetasAt), per mount. resolve then answers from the
+// reader's caches. It changes no answer (both batches equal their per-item
+// reads) and reads nothing resolve would not.
+func (w *walker) prefetchLevel(level []*node) error {
+	if !versionPrefetch {
+		return nil
+	}
+	type work struct {
+		n     *node
+		local []string
+	}
+	byMount := map[*mount][]work{}
+	var mounts []*mount
+	for _, n := range level {
+		if n.resolved || n.m == nil {
+			continue
+		}
+		var local []string
+		seen := map[string]bool{}
+		for _, raw := range n.f.Refs {
+			c := fact.ClassifyRef(raw, n.m.id12)
+			if c.Kind != fact.RefLocalFact || c.Path == n.rel || seen[c.Path] {
+				continue
+			}
+			seen[c.Path] = true
+			local = append(local, c.Path)
+		}
+		if len(local) == 0 {
+			continue
+		}
+		if _, ok := byMount[n.m]; !ok {
+			mounts = append(mounts, n.m)
+		}
+		byMount[n.m] = append(byMount[n.m], work{n, local})
+	}
+	for _, m := range mounts {
+		ws := byMount[m]
+		var pairs []index.PathAtCommit
+		if w.opts.Unpin {
+			for _, x := range ws {
+				for _, p := range x.local {
+					pairs = append(pairs, index.PathAtCommit{Path: p, Commit: m.anchor})
+				}
+			}
+		} else {
+			roots := make([]index.PathAtCommit, len(ws))
+			for i, x := range ws {
+				roots[i] = index.PathAtCommit{Path: x.n.rel, Commit: x.n.commit}
+			}
+			if err := w.r.prefetchPins(w.ctx, m, roots); err != nil {
+				return err
+			}
+			for _, x := range ws {
+				pins, err := w.r.pins(w.ctx, m, x.n.rel, x.n.commit)
+				if err != nil {
+					return err
+				}
+				for _, p := range x.local {
+					if c, ok := pins[p]; ok {
+						pairs = append(pairs, index.PathAtCommit{Path: p, Commit: c})
+					}
+				}
+			}
+		}
+		if len(pairs) > readerCacheMax/2 {
+			continue // too many to hold until used: resolve reads them per node
+		}
+		if err := w.r.prefetchMetas(w.ctx, m, pairs); err != nil {
+			return err
 		}
 	}
 	return nil

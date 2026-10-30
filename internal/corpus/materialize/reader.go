@@ -161,6 +161,36 @@ func (r *reader) prefetchMetas(ctx context.Context, m *mount, pairs []index.Path
 	return nil
 }
 
+// prefetchPins fills the edges cache for every (rel, commit) not cached yet
+// with GraphStore.OutgoingAtCommits, the batched OutgoingAtCommit (the same
+// answer per pair), turned into pins exactly as pins does.
+func (r *reader) prefetchPins(ctx context.Context, m *mount, pairs []index.PathAtCommit) error {
+	var need []index.PathAtCommit
+	for _, p := range pairs {
+		if _, ok := r.edges[edgeKey{m.id12, p.Path, p.Commit}]; !ok {
+			need = append(need, p)
+		}
+	}
+	if len(need) < 2 {
+		return nil // nothing to batch: pins reads it
+	}
+	got, err := m.svc.GraphStore().OutgoingAtCommits(ctx, m.branch, need)
+	if err != nil {
+		return fmt.Errorf("outgoing refs: %w", err)
+	}
+	for _, p := range need {
+		out := got[p]
+		pm := make(map[string]string, len(out))
+		for _, e := range out {
+			if _, dup := pm[e.Path]; !dup {
+				pm[e.Path] = e.Commit
+			}
+		}
+		r.edges[edgeKey{m.id12, p.Path, p.Commit}] = pm
+	}
+	return nil
+}
+
 // target routes a root-commit id to a repo and the branch to read it at.
 func (r *reader) target(id12 string) (*repos.RepoInstance, string, bool) {
 	if rt, ok := r.b.ByID(id12); ok {

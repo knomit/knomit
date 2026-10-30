@@ -176,6 +176,66 @@ func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	if blobHash == "" {
 		return nil, nil
 	}
+	return gs.outgoingOfVersion(ctx, path, commitHash, blobHash)
+}
+
+// OutgoingAtCommits is OutgoingAtCommit for many (path, commit) pairs, the
+// same answer for each (an error for one is the call's error, as a loop
+// would return it). It resolves every pair's effective commit as
+// OutgoingAtCommit does, then every blob in ONE tree pass
+// (vcs.Repo.BlobHashesAtCommits), where OutgoingAtCommit decodes the commit
+// and trees again per pair; a pair the pass cannot answer goes through
+// OutgoingAtCommit itself, so its answer (or error) is unchanged. The edges
+// and their dates are read per pair by the same code, in the same order.
+func (gs *GraphStore) OutgoingAtCommits(ctx context.Context, branch string, pairs []PathAtCommit) (map[PathAtCommit][]RefSummary, error) {
+	gs.probe("OutgoingAtCommits")
+	out := make(map[PathAtCommit][]RefSummary, len(pairs))
+	effective := make(map[PathAtCommit]PathAtCommit, len(pairs))
+	var blobPairs []PathAtCommit
+	for _, p := range pairs {
+		if _, done := effective[p]; done {
+			continue
+		}
+		eff, ok, err := gs.rh.ResolveActiveCommitForPath(ctx, branch, p.Path, p.Commit)
+		if err != nil {
+			return nil, fmt.Errorf("OutgoingAtCommit: resolve effective commit: %w", err)
+		}
+		if !ok {
+			effective[p] = PathAtCommit{}
+			out[p] = nil
+			continue
+		}
+		e := PathAtCommit{Path: p.Path, Commit: eff}
+		effective[p] = e
+		blobPairs = append(blobPairs, e)
+	}
+	blobs, err := gs.rh.BlobHashesAtCommits(ctx, blobPairs)
+	if err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommits: %w", err)
+	}
+	for p, e := range effective {
+		if e.Commit == "" {
+			continue
+		}
+		blob, ok := blobs[e]
+		var res []RefSummary
+		if ok {
+			res, err = gs.outgoingOfVersion(ctx, p.Path, p.Commit, blob)
+		} else {
+			res, err = gs.OutgoingAtCommit(ctx, branch, p.Path, p.Commit)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[p] = res
+	}
+	return out, nil
+}
+
+// outgoingOfVersion is OutgoingAtCommit once the version's blob is known:
+// its DERIVED_FROM edges, minus stale self-loops, with their target commits'
+// dates; an edge whose target commit has no commit_log row is dropped.
+func (gs *GraphStore) outgoingOfVersion(ctx context.Context, path, commitHash, blobHash string) ([]RefSummary, error) {
 	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, false)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: read edges: %w", err)
