@@ -3,7 +3,10 @@ package materialize
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,10 +49,21 @@ func TestFactSet_MeasureRealKB(t *testing.T) {
 		base := sessions.FactSetMemoryUsed()
 		runtime.GC()
 		stopPeak := peakSampler(svc.ToolSession())
+		var prof *os.File
+		if dir := os.Getenv("KNOMIT_FACTSET_MEASURE_PROFILE"); dir != "" {
+			prof, err = os.Create(filepath.Join(dir, "page1-real-"+strings.ReplaceAll(strings.Fields(c.name)[0]+"-"+strings.Fields(c.name)[1], "/", "_")+".pprof"))
+			require.NoError(t, err)
+			require.NoError(t, pprof.StartCPUProfile(prof))
+		}
 		start := time.Now()
-		p, _, err := FactSetFirstPage(ctx, f.scope(c.name), req)
+		p, st1, err := FactSetFirstPage(ctx, f.scope(c.name), req)
 		require.NoError(t, err, c.name)
 		first := time.Since(start)
+		if prof != nil {
+			pprof.StopCPUProfile()
+			_ = prof.Close()
+		}
+		t.Logf("%s: page 1 walk %+v", c.name, st1.Walk)
 		if p.Units == 0 {
 			stopPeak()
 			t.Logf("%s: no results", c.name)
