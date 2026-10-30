@@ -3,6 +3,7 @@ package materialize
 import (
 	"context"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -43,20 +44,27 @@ func TestFactSet_MeasureRealKB(t *testing.T) {
 	} {
 		req := FactSetRequest{Binding: f.b, Search: c.s, Facts: DefaultFactSetFacts, Options: DefaultOptions(), Limit: HumanMaxLimit}
 		base := sessions.FactSetMemoryUsed()
+		runtime.GC()
+		stopPeak := peakSampler(svc.ToolSession())
 		start := time.Now()
 		p, _, err := FactSetFirstPage(ctx, f.scope(c.name), req)
 		require.NoError(t, err, c.name)
+		first := time.Since(start)
 		if p.Units == 0 {
+			stopPeak()
 			t.Logf("%s: no results", c.name)
 			continue
 		}
+		seekStart := time.Now()
 		last, err := FactSetNextPage(ctx, f.scope(c.name), f.b, nil, nil, *p.Cursor, p.Units)
 		require.NoError(t, err, c.name)
+		seek := time.Since(seekStart)
+		heap, _ := stopPeak()
 		bk, ok := svc.ToolSession().OpenFactSet(*p.Cursor)
 		require.True(t, ok)
 		spilled := bk.Spilled()
 		bk.Close()
-		t.Logf("%s: %d units, %d sections, walked in %s, structure %d KiB in memory, spilled %v",
-			c.name, p.Units, last.Sections, time.Since(start), (sessions.FactSetMemoryUsed()-base)>>10, spilled)
+		t.Logf("%s: %d units, %d sections; first page %s, far seek to unit %d %s, total %s; heap peak %d MiB; structure %d KiB in memory, spilled %v",
+			c.name, p.Units, last.Sections, first, p.Units, seek, time.Since(start), heap>>20, (sessions.FactSetMemoryUsed()-base)>>10, spilled)
 	}
 }
