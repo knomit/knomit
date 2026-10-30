@@ -209,6 +209,12 @@ type walker struct {
 	// unit walked). nil in a single materialization.
 	visited func(n *node) (*bookTarget, error)
 	rootKey key
+	// pinDirect, set only for a book unit (not a frame), keeps every node at
+	// BFS distance 1 a child of the root in the reading order: the DFS never
+	// places a direct reference under a sibling, so the root's children are
+	// exactly its depth-1 entries in refs order. A single materialization
+	// keeps the plain pre-order DFS.
+	pinDirect bool
 }
 
 // Plan runs the walk and returns the document, bodies included.
@@ -257,6 +263,9 @@ func walkUnit(ctx context.Context, r *reader, req Request, visited func(n *node)
 	}
 	w.rootKey = root.key
 	frame := root.f.Type == fact.Frame
+	// A book unit's direct references are its root's children in refs order,
+	// their numbers fixed before any unit is walked (reserveDirectRefs).
+	w.pinDirect = visited != nil && !frame
 
 	var ancestors []*node
 	if frame {
@@ -548,6 +557,9 @@ func (w *walker) order(root *node, ancestors []*node) []*node {
 			t := w.nodes[r.target]
 			if t == nil || !t.included {
 				continue
+			}
+			if w.pinDirect && u != root && t.dist == 1 {
+				continue // the root's own child, placed in its turn
 			}
 			written[t.key] = true
 			t.parent = u

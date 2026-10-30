@@ -50,6 +50,14 @@ CREATE TABLE visited (            -- first appearance of every written fact
     commit_hash TEXT NOT NULL,
     blob        TEXT NOT NULL
 );
+CREATE TABLE reserved (           -- direct references reserved for a unit
+    path        TEXT PRIMARY KEY,
+    unit        INTEGER NOT NULL,
+    number      TEXT NOT NULL,
+    anchor      TEXT NOT NULL,
+    commit_hash TEXT NOT NULL,
+    blob        TEXT NOT NULL
+);
 CREATE TABLE anchors (anchor TEXT PRIMARY KEY);
 CREATE TABLE tips (               -- cross-KB repos' tips, frozen on first read
     repo        TEXT PRIMARY KEY,
@@ -83,6 +91,20 @@ type BookResult struct {
 	// Title is the result's title as the search listed it: a unit whose
 	// fact is gone by the time it is walked is shown under it.
 	Title string
+}
+
+// BookReserve is a direct reference of a unit's root reserved for that unit
+// before any unit is walked (two-level reservation): it is written there,
+// as the root's child number Number, under Anchor, at the version
+// Commit/Blob the root cites; every earlier unit that reaches it links
+// forward to it.
+type BookReserve struct {
+	Path   string
+	Unit   int
+	Number string
+	Anchor string
+	Commit string
+	Blob   string
 }
 
 // BookRow is one appearance of a fact in book order.
@@ -121,7 +143,7 @@ func bookDSN(path string) string {
 	return "file:" + path + "?_journal_mode=MEMORY&_synchronous=OFF&_busy_timeout=5000"
 }
 
-func createBookFile(ctx context.Context, path string, results []BookResult) error {
+func createBookFile(ctx context.Context, path string, results []BookResult, reserved map[string]BookReserve) error {
 	db, err := sql.Open("sqlite3", bookDSN(path))
 	if err != nil {
 		return fmt.Errorf("create book file: %w", err)
@@ -146,6 +168,16 @@ func createBookFile(ctx context.Context, path string, results []BookResult) erro
 			return fail(err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO anchors(anchor) VALUES (?)`, r.Anchor); err != nil {
+			return fail(err)
+		}
+	}
+	for _, r := range reserved {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO reserved(path, unit, number, anchor, commit_hash, blob) VALUES (?, ?, ?, ?, ?, ?)`,
+			r.Path, r.Unit, r.Number, r.Anchor, r.Commit, r.Blob); err != nil {
+			return fail(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO anchors(anchor) VALUES (?)`, r.Anchor); err != nil {
 			return fail(err)
 		}
 	}
@@ -223,6 +255,21 @@ func (f *BookFile) Visited(ctx context.Context, path string) (BookVisit, bool, e
 		return BookVisit{}, false, fmt.Errorf("book visited: %w", err)
 	}
 	return v, true, nil
+}
+
+// Reserved is the reservation of path, if a unit reserved it.
+func (f *BookFile) Reserved(ctx context.Context, path string) (BookReserve, bool, error) {
+	r := BookReserve{Path: path}
+	err := f.db.QueryRowContext(ctx,
+		`SELECT unit, number, anchor, commit_hash, blob FROM reserved WHERE path = ?`, path,
+	).Scan(&r.Unit, &r.Number, &r.Anchor, &r.Commit, &r.Blob)
+	if errors.Is(err, sql.ErrNoRows) {
+		return BookReserve{}, false, nil
+	}
+	if err != nil {
+		return BookReserve{}, false, fmt.Errorf("book reserved: %w", err)
+	}
+	return r, true, nil
 }
 
 // AnchorTaken reports whether an anchor is used (or reserved) in the book.

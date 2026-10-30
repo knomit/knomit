@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
@@ -419,6 +420,59 @@ func TestBook_ExportIsOneDocumentWithAnchors(t *testing.T) {
 
 	code, _, _ = getMaterialize(t, asPrincipal("u2", newTestRouter(m)), bookBase+"/export?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code, "the export is owned like the pages")
+}
+
+// deadlineRecorder is a ResponseWriter that, like a real connection, takes
+// a write deadline (http.ResponseController finds SetWriteDeadline on it),
+// and records whether every Write was preceded by one.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlines []time.Time
+	armed     bool
+	unarmed   int
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
+	d.deadlines = append(d.deadlines, t)
+	d.armed = true
+	return nil
+}
+
+func (d *deadlineRecorder) Write(p []byte) (int, error) {
+	if !d.armed {
+		d.unarmed++
+	}
+	d.armed = false
+	return d.ResponseRecorder.Write(p)
+}
+
+// Q5 (review of PR #692, round 2): every write of an export's stream sets
+// the connection's write deadline about a minute ahead. The listeners run
+// with WriteTimeout 0, so this deadline is the only thing that stops a
+// client that stops reading from holding its export slot forever.
+//
+// Sabotage: drop the SetWriteDeadline call, or stream to the raw
+// ResponseWriter, and a write goes out with no deadline.
+func TestBook_ExportSetsAWriteDeadlineOnEveryWrite(t *testing.T) {
+	m := newMatStoreManager(t, "alpha")
+	alpha := m.Get("alpha")
+	for i := range 60 {
+		writeMatFact(t, alpha, "agent/test", fmt.Sprintf("kb/e/f%02d.md", i), fmt.Sprintf("F%02d", i), "body.")
+	}
+	h := asPrincipal("u1", newTestRouter(m))
+	code, p1, body := getBook(t, h, bookBase+"?path=kb/e/&depth=0&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+
+	rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	start := time.Now()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"/export?cursor="+*p1.Cursor, nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, 60, strings.Count(rec.Body.String(), "\n## "))
+	require.GreaterOrEqual(t, len(rec.deadlines), 2, "two chunks, at least two writes")
+	require.Zero(t, rec.unarmed, "no write went out without a deadline")
+	for _, d := range rec.deadlines {
+		require.WithinDuration(t, start.Add(time.Minute), d, 30*time.Second, "about a minute ahead")
+	}
 }
 
 // Over the export cap an export is refused at once: a 503 with

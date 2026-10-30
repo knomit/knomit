@@ -597,15 +597,18 @@ type writerFunc func(p []byte) (int, error)
 func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
 
 // tree_depth is the depth in the WALK TREE (reading order), not the BFS
-// distance (fact 33b57847): r cites a then b, a cites b. BFS puts a and b at
-// distance 1; the reading order writes b under a, at tree depth 2, numbered
-// 1.1.1.
+// distance (fact 33b57847): r cites a then b, a cites c, c cites d, b cites
+// d. BFS puts d at distance 2 (through b); the reading order writes it under
+// c, at tree depth 3, numbered 1.1.1.1. (A direct reference of the root,
+// distance 1, is always the root's child in a book: walker.pinDirect.)
 //
-// Sabotage: set tree_depth from the BFS depth, and b reads 1.
+// Sabotage: set tree_depth from the BFS depth, and d reads 2.
 func TestBook_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
 	f := newBookFixture(t)
-	f.write(t, "kb/z/b.md", "B", "b body.")
-	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/b.md")
+	f.write(t, "kb/z/d.md", "D", "d body.")
+	f.write(t, "kb/z/c.md", "C", "c body.", "kb/z/d.md")
+	f.write(t, "kb/z/b.md", "B", "b body.", "kb/z/d.md")
+	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/c.md")
 	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
 	req := f.request("kb/u/")
 	req.Limit = 5
@@ -615,12 +618,13 @@ func TestBook_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
 	for _, n := range p.Facts {
 		byPath[n.Path] = n
 	}
-	a, b := byPath["kb/z/a.md"], byPath["kb/z/b.md"]
-	require.Equal(t, 1, b.Depth, "BFS: b is one hop from r")
-	require.Equal(t, 2, b.TreeDepth, "the walk tree: b is under a")
-	require.Equal(t, "1.1.1", b.Number)
-	require.Equal(t, a.N, b.Parent)
-	require.Equal(t, 1, a.TreeDepth)
+	c, d := byPath["kb/z/c.md"], byPath["kb/z/d.md"]
+	require.Equal(t, 2, d.Depth, "BFS: d is two hops from r (through b)")
+	require.Equal(t, 3, d.TreeDepth, "the walk tree: d is under c, under a")
+	require.Equal(t, "1.1.1.1", d.Number)
+	require.Equal(t, c.N, d.Parent)
+	require.Equal(t, 2, c.TreeDepth)
+	require.Equal(t, "1.2", byPath["kb/z/b.md"].Number)
 }
 
 // different_version on a book link: unit 1 writes x at the version r1 cites
@@ -712,4 +716,232 @@ func TestBook_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
 	var doc strings.Builder
 	require.NoError(t, BookExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(BookEnv) io.Writer { return &doc }))
 	require.Contains(t, doc.String(), "## 3. Gone fact "+UnavailableNote)
+}
+
+// seedABC writes the two-level reservation example the user approved:
+// results A, B, C (units 1, 2, 3) under kb/u/, and under kb/z/
+//
+//	A -> X, Y; B -> Y, Z, C; C -> W, X; X -> P, Z; Y -> Q; Z -> P, S;
+//	W -> Q, R; Q -> R; P, R, S leaves.
+//
+// C is written before B and A, so the search lists a, b, c (newest first,
+// and by path on a tie).
+func seedABC(t testing.TB, f *bookFixture) {
+	t.Helper()
+	for _, leaf := range []string{"p", "r", "s"} {
+		f.write(t, "kb/z/"+leaf+".md", strings.ToUpper(leaf), leaf+" body.")
+	}
+	f.write(t, "kb/z/q.md", "Q", "q body.", "kb/z/r.md")
+	f.write(t, "kb/z/z.md", "Z", "z body.", "kb/z/p.md", "kb/z/s.md")
+	f.write(t, "kb/z/w.md", "W", "w body.", "kb/z/q.md", "kb/z/r.md")
+	f.write(t, "kb/z/y.md", "Y", "y body.", "kb/z/q.md")
+	f.write(t, "kb/z/x.md", "X", "x body.", "kb/z/p.md", "kb/z/z.md")
+	f.write(t, "kb/u/c.md", "C", "c body.", "kb/z/w.md", "kb/z/x.md")
+	f.write(t, "kb/u/b.md", "B", "b body.", "kb/z/y.md", "kb/z/z.md", "kb/u/c.md")
+	f.write(t, "kb/u/a.md", "A", "a body.", "kb/z/x.md", "kb/z/y.md")
+}
+
+// readAll pages a book from page to its end, every node in book order.
+func readAll(t *testing.T, f *bookFixture, owner string, p BookPage) []BookNode {
+	t.Helper()
+	nodes := append([]BookNode(nil), p.Facts...)
+	for p.HasMore {
+		var err error
+		p, err = BookNextPage(context.Background(), f.scope(owner), f.b, nil, nil, *p.Cursor, 0)
+		require.NoError(t, err)
+		nodes = append(nodes, p.Facts...)
+	}
+	return nodes
+}
+
+// row is one expected appearance: its number, fact, and either written or a
+// link (direction and the target's number).
+type row struct {
+	number, fact string
+	link         string // "" written; "forward 2.2", "back 1.2"
+}
+
+func rowsOf(nodes []BookNode) []row {
+	out := make([]row, len(nodes))
+	for i, n := range nodes {
+		r := row{number: n.Number, fact: strings.TrimSuffix(strings.TrimPrefix(n.Path, "kb/"), ".md")}
+		if n.Link != nil {
+			r.link = n.Link.Direction + " " + n.Link.Number
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// Two-level reservation (user ruling 2026-10-29), the user's own example at
+// Depth 3, References unlimited: before any unit is walked, the results
+// AND each result's direct references are reserved (X, Y -> unit 1, Z ->
+// unit 2, W -> unit 3; a direct reference shared by two results goes to the
+// earlier one), so unit 1's deep walk links FORWARD to Z at its fixed
+// number 2.2 instead of writing it. Every number, direction and target is
+// asserted, and every link's anchor is the written appearance's.
+//
+// Sabotage: reserve only the results (the old seeded set), and 1.1.2 Z is
+// written in unit 1; drop pinDirect, and a direct reference nests under a
+// sibling; number reservations from 0, and (see 2.2) points nowhere.
+func TestBook_TwoLevelReservationExample(t *testing.T) {
+	f := newBookFixture(t)
+	seedABC(t, f)
+	req := f.request("kb/u/")
+	req.Options.Depth, req.Options.MaxNodes, req.Limit = 3, MaxBookFacts, 5
+	p, _, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	require.NoError(t, err)
+	require.Equal(t, 3, p.Units)
+	nodes := readAll(t, f, "o", p)
+	require.Equal(t, []row{
+		{"1", "u/a", ""},
+		{"1.1", "z/x", ""},
+		{"1.1.1", "z/p", ""},
+		{"1.1.2", "z/z", "forward 2.2"},
+		{"1.2", "z/y", ""},
+		{"1.2.1", "z/q", ""},
+		{"1.2.1.1", "z/r", ""},
+		{"2", "u/b", ""},
+		{"2.1", "z/y", "back 1.2"},
+		{"2.2", "z/z", ""},
+		{"2.2.1", "z/p", "back 1.1.1"},
+		{"2.2.2", "z/s", ""},
+		{"2.3", "u/c", "forward 3"},
+		{"3", "u/c", ""},
+		{"3.1", "z/w", ""},
+		{"3.1.1", "z/q", "back 1.2.1"},
+		{"3.1.2", "z/r", "back 1.2.1.1"},
+		{"3.2", "z/x", "back 1.1"},
+	}, rowsOf(nodes))
+
+	written := map[string]BookNode{}
+	for _, n := range nodes {
+		if n.Written {
+			require.NotContains(t, written, n.Path, "%s written once", n.Path)
+			written[n.Path] = n
+		}
+	}
+	for _, n := range nodes {
+		if n.Link == nil {
+			continue
+		}
+		w, ok := written[n.Path]
+		require.True(t, ok, "%s is linked to and written", n.Path)
+		require.Equal(t, w.AnchorID, n.Link.AnchorID, "%s %s targets the written appearance", n.Number, n.Path)
+		require.Equal(t, w.Number, n.Link.Number)
+		require.Equal(t, w.Unit, n.Link.Unit)
+		if n.Link.Direction == LinkBack || n.Link.Seq != 0 {
+			// A forward link served before its unit was walked has no seq
+			// yet (the contract); every other link names the target's.
+			require.Equal(t, w.Seq, n.Link.Seq, "%s: the target's seq", n.Number)
+		}
+	}
+
+	bk, ok := f.svc.ToolSession().OpenBook(*p.Cursor)
+	require.True(t, ok)
+	defer bk.Close()
+	reservedAs := func(path string) string {
+		r, ok, err := bk.Reserved(context.Background(), path)
+		require.NoError(t, err)
+		if !ok {
+			return ""
+		}
+		return r.Number
+	}
+	require.Equal(t, "1.1", reservedAs("kb/z/x.md"), "X: A and C cite it directly, A is earlier")
+	require.Equal(t, "1.2", reservedAs("kb/z/y.md"), "Y: A and B cite it directly, A is earlier")
+	require.Equal(t, "2.2", reservedAs("kb/z/z.md"))
+	require.Equal(t, "3.1", reservedAs("kb/z/w.md"))
+	for _, below := range []string{"kb/z/p.md", "kb/z/q.md", "kb/z/r.md", "kb/z/s.md", "kb/u/a.md", "kb/u/b.md", "kb/u/c.md"} {
+		require.Empty(t, reservedAs(below), "%s: below the direct references, or a result: not reserved", below)
+	}
+}
+
+// The reservation reserves only what the owner can show under its own
+// limits: with References = 1 (max_nodes 2) each unit shows one direct
+// reference, so A reserves X, B reserves Y (A cannot show it), and C
+// reserves only W (its second, X, is beyond its one); at Depth 0 nothing is
+// reserved. Every reserved fact is written by its owner.
+//
+// Sabotage: ignore max_nodes when reserving, and Y is reserved for unit 1,
+// which never writes it (the walk refuses the book: reserved but walked
+// nowhere).
+func TestBook_ReservationFollowsTheOwnersLimits(t *testing.T) {
+	f := newBookFixture(t)
+	seedABC(t, f)
+	ctx := context.Background()
+	reservations := func(owner string, depth, maxNodes int) (map[string]string, []BookNode) {
+		req := f.request("kb/u/")
+		req.Options.Depth, req.Options.MaxNodes, req.Limit = depth, maxNodes, 5
+		p, _, err := BookFirstPage(ctx, f.scope(owner), req)
+		require.NoError(t, err)
+		nodes := readAll(t, f, owner, p)
+		bk, ok := f.svc.ToolSession().OpenBook(*p.Cursor)
+		require.True(t, ok)
+		defer bk.Close()
+		out := map[string]string{}
+		for _, path := range []string{"kb/z/x.md", "kb/z/y.md", "kb/z/z.md", "kb/z/w.md", "kb/z/p.md", "kb/z/q.md"} {
+			r, ok, err := bk.Reserved(ctx, path)
+			require.NoError(t, err)
+			if ok {
+				out[path] = r.Number
+			}
+		}
+		return out, nodes
+	}
+	one, nodes := reservations("refs1", 3, 2)
+	require.Equal(t, map[string]string{"kb/z/x.md": "1.1", "kb/z/y.md": "2.1", "kb/z/w.md": "3.1"}, one)
+	require.Equal(t, []row{
+		{"1", "u/a", ""}, {"1.1", "z/x", ""},
+		{"2", "u/b", ""}, {"2.1", "z/y", ""},
+		{"3", "u/c", ""}, {"3.1", "z/w", ""},
+	}, rowsOf(nodes))
+
+	zero, nodes := reservations("depth0", 0, MaxBookFacts)
+	require.Empty(t, zero, "Depth 0 reserves nothing")
+	require.Equal(t, []row{{"1", "u/a", ""}, {"2", "u/b", ""}, {"3", "u/c", ""}}, rowsOf(nodes))
+}
+
+// A seek to unit 3 before units 2 and 3 are walked serves exactly what
+// reading the book from the start does: the reservations are fixed on the
+// first call.
+//
+// Sabotage: compute the reservations lazily per walked unit, and unit 3
+// differs.
+func TestBook_SeekGivesTheSameReservedBook(t *testing.T) {
+	f := newBookFixture(t)
+	seedABC(t, f)
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Options.Depth, req.Options.MaxNodes, req.Limit = 3, MaxBookFacts, 5
+	p, _, err := BookFirstPage(ctx, f.scope("whole"), req)
+	require.NoError(t, err)
+	var unit3 []BookNode
+	for _, n := range readAll(t, f, "whole", p) {
+		if n.Unit == 3 {
+			unit3 = append(unit3, n)
+		}
+	}
+
+	req.Limit = 1
+	p1, _, err := BookFirstPage(ctx, f.scope("seek"), req)
+	require.NoError(t, err)
+	require.Equal(t, 1, p1.UnitsWalked)
+	p3, err := BookNextPage(ctx, f.scope("seek"), f.b, nil, nil, *p1.Cursor, 3)
+	require.NoError(t, err)
+	seeked := append([]BookNode(nil), p3.Facts...)
+	for p3.HasMore {
+		p3, err = BookNextPage(ctx, f.scope("seek"), f.b, nil, nil, *p3.Cursor, 0)
+		require.NoError(t, err)
+		seeked = append(seeked, p3.Facts...)
+	}
+	strip := func(ns []BookNode) []BookNode {
+		out := make([]BookNode, len(ns))
+		for i, n := range ns {
+			n.Date = ""
+			out[i] = n
+		}
+		return out
+	}
+	require.Equal(t, strip(unit3), strip(seeked))
 }

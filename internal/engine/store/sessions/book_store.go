@@ -83,6 +83,7 @@ type memData struct {
 	visited   map[string]BookVisit
 	anchors   map[string]bool
 	tips      map[string]string
+	reserved  map[string]BookReserve
 }
 
 // bookStore is one live book: in memory until spilled, then its file.
@@ -105,14 +106,25 @@ func visitBytes(v BookVisit) int64 {
 	return int64(len(v.Path)+len(v.Number)+len(v.Anchor)+len(v.Commit)+len(v.Blob)) + 96
 }
 
-func newMemBook(id, path string, results []BookResult) *bookStore {
+func reserveBytes(r BookReserve) int64 {
+	return int64(len(r.Path)+len(r.Number)+2*len(r.Anchor)+len(r.Commit)+len(r.Blob)) + 128
+}
+
+func newMemBook(id, path string, results []BookResult, reserved []BookReserve) *bookStore {
 	m := &memData{results: results, unitStart: map[int]int{}, visited: map[string]BookVisit{},
-		anchors: map[string]bool{}, tips: map[string]string{}}
+		anchors: map[string]bool{}, tips: map[string]string{}, reserved: make(map[string]BookReserve, len(reserved))}
 	bs := &bookStore{id: id, path: path, mem: m}
 	var n int64
 	for _, r := range results {
 		m.anchors[r.Anchor] = true
 		n += int64(len(r.Path)+2*len(r.Anchor)+len(r.Title)) + 64
+	}
+	// The reserved set is part of the structure: it is counted like the
+	// rest (the per-book spill threshold and the process budget).
+	for _, r := range reserved {
+		m.reserved[r.Path] = r
+		m.anchors[r.Anchor] = true
+		n += reserveBytes(r)
 	}
 	bs.grow(n)
 	allBooksMu.Lock()
@@ -132,7 +144,7 @@ func (bs *bookStore) spillLocked(ctx context.Context) error {
 	if bs.mem == nil {
 		return nil
 	}
-	if err := createBookFile(ctx, bs.path, bs.mem.results); err != nil {
+	if err := createBookFile(ctx, bs.path, bs.mem.results, bs.mem.reserved); err != nil {
 		return err
 	}
 	f, ok, err := openBookFile(bs.path)
@@ -289,6 +301,18 @@ func (b *Book) Visited(ctx context.Context, path string) (BookVisit, bool, error
 	}
 	v, ok := b.bs.mem.visited[path]
 	return v, ok, nil
+}
+
+// Reserved is the reservation of path (a unit root's direct reference
+// reserved for that unit before any unit was walked), if any.
+func (b *Book) Reserved(ctx context.Context, path string) (BookReserve, bool, error) {
+	b.bs.mu.Lock()
+	defer b.bs.mu.Unlock()
+	if f := b.bs.file; f != nil {
+		return f.Reserved(ctx, path)
+	}
+	r, ok := b.bs.mem.reserved[path]
+	return r, ok, nil
 }
 
 // AnchorTaken reports whether an anchor is used (or reserved) in the book.

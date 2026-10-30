@@ -15,11 +15,16 @@ import (
 
 // A BOOK materializes a search: every result is one unit, called a "Fact",
 // in search order, and each unit is that result's materialization, walked by
-// the same walk as Plan (walkUnit) with its visited set SEEDED with the
-// frozen search results and carried from unit to unit (user ruling,
-// 2026-10-29):
+// the same walk as Plan (walkUnit) with ONE visited set carried from unit to
+// unit. Before any unit is walked, the set RESERVES two levels (user
+// rulings, 2026-10-29): the frozen search results, each for its own unit,
+// and each result's direct references, each for the first unit that shows
+// it at depth 1 (reserveDirectRefs). Then:
 //   - a reached fact that is a search result is a link "(see N)" to its own
 //     unit, where it is written as the root; the walk continues past it;
+//   - a reached fact reserved as another unit's direct reference, not
+//     walked yet, is a link "(see N.k)" forward to its fixed number there,
+//     and stops there;
 //   - a reached fact an earlier unit already wrote is a link "(see N.x)"
 //     back to that first appearance, and its leftover children are not
 //     written here (the link node is terminal);
@@ -298,7 +303,16 @@ func BookFirstPage(ctx context.Context, sc CursorScope, req BookRequest) (BookPa
 		return BookPage{BookEnv: bk.env, Facts: []BookNode{}}, bk.stats, nil
 	}
 	envJSON, _ := json.Marshal(bk.env)
-	id, err := sc.Sessions.CreateBook(ctx, bookTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, string(envJSON), reserveRootAnchors(hits))
+	results, used := reserveRootAnchors(hits)
+	unitReq := Request{
+		Binding: req.Binding, Manager: req.Manager, MayRead: req.MayRead, Commit: anchor,
+		Options: Options{Depth: req.Options.Depth, MaxNodes: req.Options.MaxNodes, Unpin: req.Options.Unpin, CrossKB: req.Options.CrossKB},
+	}
+	reserved, err := reserveDirectRefs(ctx, r, unitReq, results, used)
+	if err != nil {
+		return BookPage{}, bk.stats, err
+	}
+	id, err := sc.Sessions.CreateBook(ctx, bookTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, string(envJSON), results, reserved)
 	if err != nil {
 		return BookPage{}, bk.stats, err
 	}
@@ -332,18 +346,100 @@ func takeSlot() bool {
 // reserveRootAnchors is every unit root's anchor, "f-<id8>", suffixed -2,
 // -3 in unit order when results share an id8: reserved up front so a
 // forward link to a unit not walked yet already knows its anchor.
-func reserveRootAnchors(hits []bookHit) []sessions.BookResult {
+func reserveRootAnchors(hits []bookHit) ([]sessions.BookResult, map[string]int) {
 	used := map[string]int{}
 	out := make([]sessions.BookResult, len(hits))
 	for i, h := range hits {
-		a := anchorIDPrefix + shortID(relOf(h.path))
-		used[a]++
-		if c := used[a]; c > 1 {
-			a = fmt.Sprintf("%s-%d", a, c)
-		}
-		out[i] = sessions.BookResult{Unit: i + 1, Path: h.path, Anchor: a, Title: h.title}
+		out[i] = sessions.BookResult{Unit: i + 1, Path: h.path, Anchor: nextAnchor(used, h.path), Title: h.title}
 	}
-	return out
+	return out, used
+}
+
+// nextAnchor is "f-<id8>" of wire, suffixed -2, -3 when an earlier
+// reservation took it.
+func nextAnchor(used map[string]int, wire string) string {
+	a := anchorIDPrefix + shortID(relOf(wire))
+	used[a]++
+	if c := used[a]; c > 1 {
+		a = fmt.Sprintf("%s-%d", a, c)
+	}
+	return a
+}
+
+// reserveDirectRefs is the second level of the book's reservation (user
+// ruling, 2026-10-29), computed before any unit is walked: every unit
+// root's DIRECT references, the ones its own walk will show at depth 1, are
+// reserved for that unit, so an earlier unit's deeper walk links forward
+// to them instead of writing them.
+//   - Owner: the first unit, in result order, whose walk shows the fact at
+//     depth 1. A unit shows only what its own limits admit: nothing at
+//     Depth 0, and with max_nodes = k + 1 only the first k depth-1 entries
+//     (fact refs that resolve, in refs order; link nodes count, as in the
+//     walk). This mirrors walker.bfs's first level exactly, so a reserved
+//     fact is always written by its owner, never linked to and written
+//     nowhere.
+//   - A search result is never reserved: it keeps its own unit.
+//   - Number: "<unit>.<k>", k its place among the root's depth-1 entries;
+//     the walk pins every depth-1 entry as a child of the root, in refs
+//     order (walker.pinDirect), so the number holds once the unit is
+//     walked.
+//   - A frame root, or a result gone at the anchor, reserves nothing.
+//
+// Below the direct references nothing is reserved: the first unit to reach
+// a fact writes it.
+func reserveDirectRefs(ctx context.Context, r *reader, req Request, results []sessions.BookResult, used map[string]int) ([]sessions.BookReserve, error) {
+	if req.Options.Depth < 1 || req.Options.MaxNodes < 2 {
+		return nil, nil
+	}
+	isResult := make(map[string]bool, len(results))
+	for _, res := range results {
+		isResult[res.Path] = true
+	}
+	taken := map[string]bool{}
+	var out []sessions.BookReserve
+	writeID := fact12(req.Binding)
+	for _, res := range results {
+		w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: writeID, nodes: map[key]*node{}}
+		ureq := req
+		ureq.File = res.Path
+		root, err := w.root(ureq)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if root.f.Type == fact.Frame {
+			continue
+		}
+		refs, err := w.resolve(root)
+		if err != nil {
+			return nil, err
+		}
+		included := len(w.incl)
+		k := 0
+		for _, ref := range refs {
+			if ref.kind != refNode {
+				continue
+			}
+			if included >= req.Options.MaxNodes {
+				break
+			}
+			included++
+			k++
+			wire := w.wire(ref.target)
+			if isResult[wire] || taken[wire] {
+				continue
+			}
+			taken[wire] = true
+			out = append(out, sessions.BookReserve{
+				Path: wire, Unit: res.Unit, Number: fmt.Sprintf("%d.%d", res.Unit, k),
+				Anchor: nextAnchor(used, wire), Commit: ref.commit, Blob: ref.blob,
+			})
+		}
+		r.forget()
+	}
+	return out, nil
 }
 
 // load reads the book's frozen results, walked extent and cross-KB tips.
@@ -479,7 +575,24 @@ func (bk *book) visited(n *node, unit int) (*bookTarget, error) {
 		return &bookTarget{unit: v.Unit, n: v.N, seq: v.Seq, number: v.Number, anchor: v.Anchor, commit: v.Commit, blob: v.Blob}, nil
 	}
 	res, isResult := bk.byPath[wire]
-	if !isResult || res.Unit == unit {
+	if !isResult {
+		// A direct reference another unit reserved: a forward link to its
+		// fixed section there (it was reserved before any unit was walked;
+		// had its unit been walked, the visited set would have answered).
+		rv, reserved, err := bk.f.Reserved(bk.ctx, wire)
+		if err != nil {
+			return nil, err
+		}
+		if !reserved || rv.Unit == unit {
+			return nil, nil
+		}
+		t := &bookTarget{unit: rv.Unit, number: rv.Number, anchor: rv.Anchor}
+		if !bk.env.Unpinned {
+			t.commit, t.blob = rv.Commit, rv.Blob
+		}
+		return t, nil
+	}
+	if res.Unit == unit {
 		return nil, nil
 	}
 	// A result not walked yet: written as its unit's root, at its version
@@ -530,6 +643,19 @@ func (bk *book) unitRows(uw *unitWalk, unit int, res sessions.BookResult) ([]ses
 		case n.Role == RoleRoot || n.Role == RoleFocal:
 			anchor[i] = res.Anchor
 		default:
+			rv, reserved, err := bk.f.Reserved(bk.ctx, n.Path)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if reserved {
+				// Written by the unit it was reserved for, at the number and
+				// under the anchor forward links already carry.
+				if rv.Unit != unit || rv.Number != number[i] {
+					return nil, nil, nil, fmt.Errorf("book: %s reserved as %s (unit %d) was walked as %s in unit %d", n.Path, rv.Number, rv.Unit, number[i], unit)
+				}
+				anchor[i] = rv.Anchor
+				break
+			}
 			a, err := uniqueAnchorErr(anchorIDPrefix+id8, func(a string) (bool, error) {
 				if usedHere[a] {
 					return true, nil

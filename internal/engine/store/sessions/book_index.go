@@ -126,7 +126,7 @@ func (ti *ToolIndex) bookWrite(ctx context.Context, op string, fn func(c *sql.Co
 // frozen search results, unit 1..len, with the anchors reserved for their
 // roots). No file is created until the book must spill. On any failure
 // nothing is left behind.
-func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, readSet, owner, env string, results []BookResult) (string, error) {
+func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, readSet, owner, env string, results []BookResult, reserved []BookReserve) (string, error) {
 	if !strings.HasPrefix(tool, BookToolPrefix) {
 		return "", fmt.Errorf("CreateBook: tool %q is not a book tool", tool)
 	}
@@ -169,7 +169,7 @@ func (ti *ToolIndex) CreateBook(ctx context.Context, tool, branch, binding, read
 	if err != nil {
 		return "", err
 	}
-	bs := newMemBook(id, ti.bookPath(id), results)
+	bs := newMemBook(id, ti.bookPath(id), results, reserved)
 	ti.booksMu.Lock()
 	ti.books[id] = bs
 	var old []*bookStore

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func newBookIndex(t *testing.T) *ToolIndex {
 func newBook(t *testing.T, ti *ToolIndex, owner string) string {
 	t.Helper()
 	id, err := ti.CreateBook(context.Background(), BookToolPrefix+"3", "b", "repo:x", "rs", owner, "{}",
-		[]BookResult{{Unit: 1, Path: "kb/a.md", Anchor: "f-a"}, {Unit: 2, Path: "kb/b.md", Anchor: "f-b"}})
+		[]BookResult{{Unit: 1, Path: "kb/a.md", Anchor: "f-a"}, {Unit: 2, Path: "kb/b.md", Anchor: "f-b"}}, nil)
 	require.NoError(t, err)
 	return id
 }
@@ -345,6 +346,46 @@ func TestBooks_HeldBookIsFreedOnTheLastRelease(t *testing.T) {
 			})
 		}
 	}
+}
+
+// The reserved set (two-level reservation) is part of a book's structure:
+// it counts toward the book's accounted size (the spill threshold and the
+// process budget), and a spill carries it to the file.
+//
+// Sabotage: leave the reservations out of newMemBook's size, or out of the
+// spilled file, and a check fails.
+func TestBooks_ReservedSetIsCountedAndSpilled(t *testing.T) {
+	ti := newBookIndex(t)
+	ctx := context.Background()
+	results := []BookResult{{Unit: 1, Path: "kb/a.md", Anchor: "f-a"}}
+	before := BookMemoryUsed()
+	plain, err := ti.CreateBook(ctx, BookToolPrefix+"3", "b", "repo:x", "rs", "plain", "{}", results, nil)
+	require.NoError(t, err)
+	plainSize := BookMemoryUsed() - before
+	var reserved []BookReserve
+	for i := range 100 {
+		reserved = append(reserved, BookReserve{Path: fmt.Sprintf("kb/z/r%03d.md", i), Unit: 1, Number: fmt.Sprintf("1.%d", i+1),
+			Anchor: fmt.Sprintf("f-r%03d", i), Commit: strings.Repeat("c", 40), Blob: strings.Repeat("b", 40)})
+	}
+	before = BookMemoryUsed()
+	id, err := ti.CreateBook(ctx, BookToolPrefix+"3", "b", "repo:x", "rs", "reserving", "{}", results, reserved)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, BookMemoryUsed()-before-plainSize, int64(100*(len("kb/z/r000.md")+40+40)),
+		"the reserved set is accounted")
+	_ = plain
+
+	spill(t, ti, id)
+	b, ok := ti.OpenBook(id)
+	require.True(t, ok)
+	defer b.Close()
+	require.True(t, b.Spilled())
+	r, ok, err := b.Reserved(ctx, "kb/z/r042.md")
+	require.NoError(t, err)
+	require.True(t, ok, "the spill carried the reservations")
+	require.Equal(t, BookReserve{Path: "kb/z/r042.md", Unit: 1, Number: "1.43", Anchor: "f-r042", Commit: strings.Repeat("c", 40), Blob: strings.Repeat("b", 40)}, r)
+	taken, err := b.AnchorTaken(ctx, "f-r042")
+	require.NoError(t, err)
+	require.True(t, taken, "a reserved anchor is taken")
 }
 
 // R6 (review of PR #692): the per-book spill counts what the book ALREADY
