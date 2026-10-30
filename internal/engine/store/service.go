@@ -196,7 +196,7 @@ func Open(path string) (*Service, error) {
 		mo:            mo,
 		search:        search,
 		pi:            sessions.NewPipelineIndex(rh.DB(), sessionDB),
-		ti:            sessions.NewToolIndex(sessionDB, sessions.BooksDirFor(sessionPath)),
+		ti:            sessions.NewToolIndex(sessionDB, sessions.FactSetsDirFor(sessionPath)),
 		ri:            ri,
 		dbPath:        canonPath,
 		sessionDB:     sessionDB,
@@ -219,14 +219,14 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 	if err != nil {
 		return n, err
 	}
-	// The book files ride the same tick (session.sweep_interval, 5 min by
-	// default): a book's file is garbage the moment the reap above deleted
+	// The factset files ride the same tick (session.sweep_interval, 5 min by
+	// default): a factset's file is garbage the moment the reap above deleted
 	// its cursor, so the reaper's cadence is the sweep's natural one.
-	st, serr := s.ti.SweepBookFiles(ctx, sessions.BookSweepPolicy{
-		Now: time.Now().UTC(), IdleTTL: toolTTL, Grace: sessions.BookSweepGrace, MaxBytes: sessions.MaxBookDirBytes,
+	st, serr := s.ti.SweepFactSetFiles(ctx, sessions.FactSetSweepPolicy{
+		Now: time.Now().UTC(), IdleTTL: toolTTL, Grace: sessions.FactSetSweepGrace, MaxBytes: sessions.MaxFactSetDirBytes,
 	})
 	log.Debug().Err(serr).Int("orphans", st.Orphans).Int("expired", st.Expired).Int("sidecars", st.Sidecars).
-		Int("evicted", st.Evicted).Int("skipped", st.Skipped).Int64("bytes", st.Bytes).Msg("book files swept")
+		Int("evicted", st.Evicted).Int("skipped", st.Skipped).Int64("bytes", st.Bytes).Msg("factset files swept")
 	return n, nil
 }
 
@@ -378,7 +378,7 @@ func (s *Service) Checkpoint() error {
 // session DB file (it holds only disposable runtime state).
 func (s *Service) Close() error {
 	if s.ti != nil {
-		s.ti.CloseBooks()
+		s.ti.CloseFactSets()
 	}
 	if s.sessionDB != nil {
 		s.sessionDB.Close()
@@ -388,7 +388,7 @@ func (s *Service) Close() error {
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			_ = os.Remove(s.sessionDBPath + suffix)
 		}
-		_ = os.RemoveAll(sessions.BooksDirFor(s.sessionDBPath))
+		_ = os.RemoveAll(sessions.FactSetsDirFor(s.sessionDBPath))
 	}
 	return s.rh.DB().Close()
 }

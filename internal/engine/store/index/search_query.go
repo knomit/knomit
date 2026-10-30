@@ -911,8 +911,8 @@ type searchCandidate struct {
 
 // rankCandidates orders hits by cosine, highest first, and equal cosines by
 // path, so a tie has ONE order (the candidates come from an IN query with no
-// ORDER BY): the UI's results list and a book materializing it
-// (materialize.runBookSearch) read the same order. Stable insertion sort.
+// ORDER BY): the UI's results list and a factset materializing it
+// (materialize.runFactSetSearch) read the same order. Stable insertion sort.
 func rankCandidates(c []searchCandidate) {
 	ahead := func(a, b searchCandidate) bool {
 		return a.score > b.score || (a.score == b.score && a.rec.Path < b.rec.Path)

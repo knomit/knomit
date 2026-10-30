@@ -1721,7 +1721,7 @@ func (m *Manager) archive(name string, why control.ArchiveReason) (ArchiveInfo, 
 	os.Remove(sess)
 	os.Remove(sess + "-wal")
 	os.Remove(sess + "-shm")
-	os.RemoveAll(sess + ".books") // sessions.BooksDirFor: the book files
+	os.RemoveAll(sess + ".factsets") // sessions.FactSetsDirFor: the factset files
 
 	log.Info().Str("repo", name).Str("uid", uid).
 		Str("source", string(why.Source)).Str("reason", why.Reason).Str("condition", why.Condition).

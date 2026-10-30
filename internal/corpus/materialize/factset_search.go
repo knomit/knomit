@@ -10,7 +10,7 @@ import (
 	"knomit/internal/engine/store/index"
 )
 
-// Book sort orders: the two lists the UI's results list shows.
+// FactSet sort orders: the two lists the UI's results list shows.
 const (
 	// SortRelevance is the repo /search route: text ranked by similarity,
 	// text-less newest commit first.
@@ -20,11 +20,11 @@ const (
 	SortRecent = "recent"
 )
 
-// BookSearch is the search a book materializes: the same filters as the
+// FactSetSearch is the search a factset materializes: the same filters as the
 // UI's results list (the repo /search and /facts routes), as data. It is
-// frozen in the cursor; the book's title and its full-search line are
+// frozen in the cursor; the factset's title and its full-search line are
 // computed from it on the server, so REST and MCP answer the same text.
-type BookSearch struct {
+type FactSetSearch struct {
 	Text          string   `json:"text,omitempty"`
 	Entities      []string `json:"entities,omitempty"`
 	Domains       []string `json:"domains,omitempty"`
@@ -45,7 +45,7 @@ type BookSearch struct {
 }
 
 // validate refuses a search the store would misread.
-func (s BookSearch) validate() error {
+func (s FactSetSearch) validate() error {
 	switch s.Sort {
 	case SortRelevance, SortRecent:
 	default:
@@ -65,7 +65,7 @@ func (s BookSearch) validate() error {
 }
 
 // options is the store query of s, for limit results.
-func (s BookSearch) options(limit int, pathsIn []string) index.SearchOptions {
+func (s FactSetSearch) options(limit int, pathsIn []string) index.SearchOptions {
 	tier := index.MotifMatchTier(s.MotifMatch)
 	if tier == "" {
 		tier = index.MotifMatchExact
@@ -78,7 +78,7 @@ func (s BookSearch) options(limit int, pathsIn []string) index.SearchOptions {
 	}
 }
 
-// BookTitle is the book's mechanical title (design §5):
+// FactSetTitle is the factset's mechanical title (design §5):
 //   - free text first, as a sentence: capitalized, quotes and a trailing "?"
 //     dropped;
 //   - then " for X" / " for X and Y" / " for X, Y and N more" for entities;
@@ -92,8 +92,8 @@ func (s BookSearch) options(limit int, pathsIn []string) index.SearchOptions {
 // built from the other filters, in words: fallbackTitle.
 //
 // root is the ontology root the path is shown under; name is the repo the
-// book reads, for "All facts in <name>".
-func BookTitle(s BookSearch, root, name string) string {
+// factset reads, for "All facts in <name>".
+func FactSetTitle(s FactSetSearch, root, name string) string {
 	text := sentence(s.Text)
 	ents := listPhrase(s.Entities)
 	switch {
@@ -129,7 +129,7 @@ func BookTitle(s BookSearch, root, name string) string {
 // The title is in sentence case: only its first letter is capitalized.
 // Excluded types and kinds, episodes and a similarity floor (inert without
 // text) stay out of it; the search line spells them out.
-func fallbackTitle(s BookSearch, root, name string) string {
+func fallbackTitle(s FactSetSearch, root, name string) string {
 	head := ""
 	switch {
 	case len(s.Types) > 0:
@@ -264,7 +264,7 @@ func pathTitle(p, root string) string {
 // SearchLine spells out the whole search, the filters the title leaves out
 // included, in a fixed order, so the reader can see exactly what was
 // materialized: `text "…" · entities A, B · domains c · path kb/x/ · …`.
-func SearchLine(s BookSearch) string {
+func SearchLine(s FactSetSearch) string {
 	var parts []string
 	add := func(label string, vals []string) {
 		if len(vals) > 0 {

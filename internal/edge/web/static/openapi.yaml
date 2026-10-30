@@ -1238,20 +1238,20 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
-  /repos/{repo}/branches/{branch}/search/book:
+  /repos/{repo}/branches/{branch}/search/factset:
     parameters:
       - $ref: "#/components/parameters/Repo"
       - $ref: "#/components/parameters/Branch"
     get:
       tags: [search, facts]
-      summary: Page a search materialized as a book (server-side cursor)
+      summary: Page a search materialized as a factset (server-side cursor)
       description: |
-        Materializes a SEARCH as a book: every result (up to `facts`) is one
+        Materializes a SEARCH as a factset: every result (up to `facts`) is one
         unit, in search order, expanded top-down by the same walk as
         `/facts/{path}/materialize/pages` under `depth` and `max_nodes`, with
-        ONE visited set for the whole book, seeded with the search results.
+        ONE visited set for the whole factset, seeded with the search results.
         Each response is BYTE FOR BYTE the page `knomit_materialize` returns
-        in book mode (`search` instead of `file`) for the same input.
+        in factset mode (`search` instead of `file`) for the same input.
 
         WRITE ONCE: a search result is written in its own unit, as its root;
         reached in another unit it is a forward link "(see N)" and is not
@@ -1260,7 +1260,7 @@ paths:
         "(see N.x)" to that first appearance, and its children are not
         written again. A link is a heading-only node (`written: false`, no
         body, no builds_on) with a `link`. Units are walked as pages need
-        them: `units_walked` and `sections` say how far the book is walked.
+        them: `units_walked` and `sections` say how far the factset is walked.
 
         FIRST CALL (no `cursor`): the search parameters are the repo
         `/search` route's, as the UI's results list sends them (`q`,
@@ -1271,18 +1271,18 @@ paths:
         `/facts` collection's order). The server runs the search itself, up
         to `facts`: its first 50 units are EXACTLY the list the UI shows (the
         same call at limit 50, in its order; ties in a text search are
-        ordered by path), and only when that list is full does the book
+        ordered by path), and only when that list is full does the factset
         extend past it, appending the further results of the same search at
         limit `facts` in their order. A list shorter than 50 is the whole
-        book. The book's options are `facts` (1-500, default every result up
+        factset. The factset's options are `facts` (1-500, default every result up
         to 500), `depth`, `max_nodes`, `unpin`, `cross_kb` (as for one fact)
         and `limit` (sections per page, 1-5, default 3). Any other parameter
         is a 400. The results are frozen here; each walked unit's structure
-        is held in memory (spilled to a file of the book's own only past 8
-        MiB, or when the server's in-memory books pass
-        `session.book_memory_mib`), and pages read bodies at each section's
+        is held in memory (spilled to a file of the factset's own only past 8
+        MiB, or when the server's in-memory factsets pass
+        `session.factset_memory_mib`), and pages read bodies at each section's
         frozen version. A search with no results is a 200 page with
-        `units: 0` and no cursor. A result that is gone at the book's anchor
+        `units: 0` and no cursor. A result that is gone at the factset's anchor
         (deleted between the search and the walk) keeps its unit as a
         heading alone (`unavailable: true`), never an error.
 
@@ -1307,24 +1307,24 @@ paths:
         OWNERSHIP AND BOUNDS: a cursor belongs to this route and the caller's
         principal (and the binding's read set); another owner's, an unknown
         or an idle-expired cursor answer the same 404, and consume nothing.
-        One book per owner: a new first call replaces the owner's previous
-        book; a call still reading the replaced book finishes from it, or
-        ends as the 404, and the book is freed when the last such call ends.
-        A book holds at most 100000 sections: the walked units still
+        One factset per owner: a new first call replaces the owner's previous
+        factset; a call still reading the replaced factset finishes from it, or
+        ends as the 404, and the factset is freed when the last such call ends.
+        A factset holds at most 100000 sections: the walked units still
         page, and the call that needs the next unit is a 422 naming the
-        controls to lower. At most 4 calls walk book units at once on the
+        controls to lower. At most 4 calls walk factset units at once on the
         server (a page from walked units walks nothing); a call over that,
         or one that finds the session store's lock taken past its timeout,
         is a 503 with Retry-After. The in-memory budget
-        (`session.book_memory_mib`, 64 MiB) bounds books AT REST (measured
+        (`session.factset_memory_mib`, 64 MiB) bounds factsets AT REST (measured
         at about 1.16x the accounted bytes); a walk's working memory is
-        bounded by the 4-walk cap, not by that budget. An idle cursor's book is deleted after
-        the idle expiry plus 5 minutes, and the oldest idle books are
-        evicted when a store's book files pass 1 GiB; either reads as the
+        bounded by the 4-walk cap, not by that budget. An idle cursor's factset is deleted after
+        the idle expiry plus 5 minutes, and the oldest idle factsets are
+        evicted when a store's factset files pass 1 GiB; either reads as the
         404. Cross-KB refs are followed only into repos the caller
         reaches; resuming a cursor with a credential that does not reach a
         repo on the page is the 404.
-      operationId: getSearchBookPage
+      operationId: getSearchFactSetPage
       parameters:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, only `unit` is accepted." }
         - { name: unit, in: query, required: false, schema: { type: integer, minimum: 1 }, description: "With `cursor` only: continue from this unit's first section." }
@@ -1353,10 +1353,10 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 5, default: 3 }, description: "First call only: sections per page, frozen in the cursor." }
       responses:
         "200":
-          description: One page of the book
+          description: One page of the factset
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/BookPage" }
+              schema: { $ref: "#/components/schemas/FactSetPage" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
@@ -1364,15 +1364,15 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
-  /repos/{repo}/branches/{branch}/search/book/export:
+  /repos/{repo}/branches/{branch}/search/factset/export:
     parameters:
       - $ref: "#/components/parameters/Repo"
       - $ref: "#/components/parameters/Branch"
     get:
       tags: [search, facts]
-      summary: Export a whole book as one agent document
+      summary: Export a whole factset as one agent document
       description: |
-        The whole book of `cursor` (its only parameter) as one markdown
+        The whole factset of `cursor` (its only parameter) as one markdown
         agent document, sent as an attachment (`Content-Disposition:
         attachment; filename="<slug of the title, at most 48
         characters>-<first 8 characters of the cursor>.md"`): a header with
@@ -1386,15 +1386,15 @@ paths:
         once on the server (over that: a 503 with Retry-After), and each
         write of the stream must complete within a minute, else the export
         aborts. A 409 is a unit-append race with another call on the same
-        cursor; a 422 is a book at the 100000-section cap, which cannot be
+        cursor; a 422 is a factset at the 100000-section cap, which cannot be
         exported whole even though its walked units still page; a 500 is
         any other failure before the first byte.
-      operationId: exportSearchBook
+      operationId: exportSearchFactSet
       parameters:
         - { name: cursor, in: query, required: true, schema: { type: string } }
       responses:
         "200":
-          description: The book as markdown
+          description: The factset as markdown
           headers:
             Content-Disposition: { schema: { type: string } }
           content:
@@ -5457,15 +5457,15 @@ components:
         cursor:   { type: string, nullable: true, description: "Pass it back alone for the next page; null on the last page." }
         has_more: { type: boolean }
 
-    BookPage:
+    FactSetPage:
       type: object
       description: >
-        One page of a book (internal/corpus/materialize BookPage), the page
-        knomit_materialize returns in book mode. The envelope repeats on
-        every page; `facts` holds whole sections in book order.
+        One page of a factset (internal/corpus/materialize FactSetPage), the page
+        knomit_materialize returns in factset mode. The envelope repeats on
+        every page; `facts` holds whole sections in factset order.
       required: [mode, title, search_line, search, anchor, audience, unpinned, cross_kb, depth, max_nodes, facts_limit, units, units_walked, sections, instructions_version, facts, seq_from, seq_to, unit_from, unit_to, cursor, has_more]
       properties:
-        mode:        { type: string, enum: [book] }
+        mode:        { type: string, enum: [factset] }
         title:       { type: string, description: "The mechanical title, built from the search on the server." }
         search_line: { type: string, description: "The whole search spelled out, the filters the title leaves out included." }
         search:      { type: object, description: "The frozen search as data (text, entities, domains, path, types, ..., sort)." }
@@ -5476,26 +5476,26 @@ components:
         depth:       { type: integer }
         max_nodes:   { type: integer }
         facts_limit: { type: integer, description: "The Facts limit the first call asked for." }
-        units:       { type: integer, description: "Units (search results) in the book." }
+        units:       { type: integer, description: "Units (search results) in the factset." }
         units_walked: { type: integer, description: "Units walked so far (units are walked as pages need them)." }
         sections:    { type: integer, description: "Sections (written and links) in the units walked so far." }
         instructions_version: { type: string }
         instructions: { type: string, description: "Reading instructions, page 1 only." }
         facts:
           type: array
-          items: { $ref: "#/components/schemas/BookNode" }
-        seq_from:  { type: integer, description: "Book position of the first section on this page." }
+          items: { $ref: "#/components/schemas/FactSetNode" }
+        seq_from:  { type: integer, description: "FactSet position of the first section on this page." }
         seq_to:    { type: integer }
         unit_from: { type: integer }
         unit_to:   { type: integer }
-        cursor:    { type: string, nullable: true, description: "Set on every page of a non-empty book; pass it back alone, or with unit to seek." }
+        cursor:    { type: string, nullable: true, description: "Set on every page of a non-empty factset; pass it back alone, or with unit to seek." }
         has_more:  { type: boolean }
 
-    BookNode:
+    FactSetNode:
       description: >
         One appearance: a MaterializeNode of its unit's own walk (`n` is the
         ordinal inside the unit; builds_on point inside the unit, their
-        anchor_id at the written appearance) plus its place in the book. A
+        anchor_id at the written appearance) plus its place in the factset. A
         link (`written: false`) has no body, builds_on, not_included or
         sources.
       allOf:
@@ -5504,12 +5504,12 @@ components:
           required: [unit, seq, number, tree_depth, written]
           properties:
             unit:       { type: integer }
-            seq:        { type: integer, description: "Position in the book, from 1." }
+            seq:        { type: integer, description: "Position in the factset, from 1." }
             number:     { type: string, description: "Section number: the unit root is \"5\", its sections \"5.1\", \"5.1.2\"; \"\" for a frame's ancestor." }
             tree_depth: { type: integer, description: "Depth in the unit's walk tree (not the BFS `depth`)." }
             parent:     { type: integer, description: "n of the tree parent in the unit; absent for the root and ancestors." }
             written:    { type: boolean }
-            unavailable: { type: boolean, description: "A unit root whose search result is gone at the book's anchor: a heading alone, under the title the search listed, \"(no longer available)\"; written is false and there is no link." }
+            unavailable: { type: boolean, description: "A unit root whose search result is gone at the factset's anchor: a heading alone, under the title the search listed, \"(no longer available)\"; written is false and there is no link." }
             link:
               type: object
               description: Where this fact is written.

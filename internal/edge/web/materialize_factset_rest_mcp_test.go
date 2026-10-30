@@ -19,11 +19,11 @@ import (
 	"knomit/internal/foundation/auth"
 )
 
-const alphaBook = "/api/v1/repos/alpha/branches/agent:test/search/book"
+const alphaFactSet = "/api/v1/repos/alpha/branches/agent:test/search/factset"
 
-// bookPages pages a book through next (a cursor -> the next raw page) from
+// factsetPages pages a factset through next (a cursor -> the next raw page) from
 // the first raw page, with every cursor id replaced by CURSOR.
-func bookPages(t *testing.T, first string, next func(cursor string) string) []string {
+func factsetPages(t *testing.T, first string, next func(cursor string) string) []string {
 	t.Helper()
 	var out []string
 	raw := first
@@ -46,13 +46,13 @@ func bookPages(t *testing.T, first string, next func(cursor string) string) []st
 	}
 }
 
-// The REST book route and knomit_materialize's book mode return the SAME
+// The REST factset route and knomit_materialize's factset mode return the SAME
 // bytes for the same search, page for page, a seek page included; only the
 // cursor id differs (each surface mints its own, owned by its own endpoint).
 //
 // Sabotage: build the MCP search line from the raw arguments instead of
-// BookSearch, or give MCP a different default page size, and a page differs.
-func TestBook_RESTIsTheMCPBookPage(t *testing.T) {
+// FactSetSearch, or give MCP a different default page size, and a page differs.
+func TestFactSet_RESTIsTheMCPFactSetPage(t *testing.T) {
 	f := newOAuthWebFixture(t, testIssuer)
 	m, alpha, beta := newMaterializeRepos(t)
 	f.s.Manager = m
@@ -74,15 +74,15 @@ func TestBook_RESTIsTheMCPBookPage(t *testing.T) {
 		return text
 	}
 	mcpFirst := mcpCall(`{"search":{"path":"kb/u/","type":["observation"]},"cross_kb":true,"depth":2,"limit":2}`)
-	mcpPages := bookPages(t, mcpFirst, func(c string) string { return mcpCall(`{"cursor":"` + c + `"}`) })
+	mcpPages := factsetPages(t, mcpFirst, func(c string) string { return mcpCall(`{"cursor":"` + c + `"}`) })
 
 	restCall := func(u string) string {
 		code, body := restGet(t, h, u)
 		require.Equal(t, http.StatusOK, code, body)
 		return body
 	}
-	restFirst := restCall(alphaBook + "?path=kb/u/&type=observation&cross_kb=true&depth=2&limit=2")
-	restPages := bookPages(t, restFirst, func(c string) string { return restCall(alphaBook + "?cursor=" + url.QueryEscape(c)) })
+	restFirst := restCall(alphaFactSet + "?path=kb/u/&type=observation&cross_kb=true&depth=2&limit=2")
+	restPages := factsetPages(t, restFirst, func(c string) string { return restCall(alphaFactSet + "?cursor=" + url.QueryEscape(c)) })
 
 	require.Greater(t, len(restPages), 2)
 	require.Equal(t, mcpPages, restPages)
@@ -91,36 +91,36 @@ func TestBook_RESTIsTheMCPBookPage(t *testing.T) {
 
 	// The defaults (no limit, no depth, every result) are the same too.
 	md := mcpCall(`{"search":{"path":"kb/u/"}}`)
-	rd := restCall(alphaBook + "?path=kb/u/")
+	rd := restCall(alphaFactSet + "?path=kb/u/")
 	require.Equal(t, strings.ReplaceAll(md, pageCursor(t, md), "CURSOR"), strings.ReplaceAll(rd, pageCursor(t, rd), "CURSOR"))
 
 	// A seek page is the same on both surfaces too.
 	mcpFirst = mcpCall(`{"search":{"path":"kb/u/","type":["observation"]},"cross_kb":true,"depth":2,"limit":2}`)
-	restFirst = restCall(alphaBook + "?path=kb/u/&type=observation&cross_kb=true&depth=2&limit=2")
+	restFirst = restCall(alphaFactSet + "?path=kb/u/&type=observation&cross_kb=true&depth=2&limit=2")
 	mc := pageCursor(t, mcpFirst)
 	rc := pageCursor(t, restFirst)
 	ms := strings.ReplaceAll(mcpCall(`{"cursor":"`+mc+`","unit":3}`), mc, "CURSOR")
-	rs := strings.ReplaceAll(restCall(alphaBook+"?cursor="+url.QueryEscape(rc)+"&unit=3"), rc, "CURSOR")
+	rs := strings.ReplaceAll(restCall(alphaFactSet+"?cursor="+url.QueryEscape(rc)+"&unit=3"), rc, "CURSOR")
 	require.Equal(t, ms, rs)
 
 	// The MCP cursor is not the REST route's, and the reverse.
-	code, _ := restGet(t, h, alphaBook+"?cursor="+url.QueryEscape(mc))
+	code, _ := restGet(t, h, alphaFactSet+"?cursor="+url.QueryEscape(mc))
 	require.Equal(t, http.StatusNotFound, code)
 	text, isErr := callToolAt(t, h, alphaMCP, sid, "knomit_materialize", `{"cursor":"`+rc+`"}`)
 	require.True(t, isErr, text)
-	// A book cursor refuses every other argument on MCP as on REST.
+	// A factset cursor refuses every other argument on MCP as on REST.
 	text, isErr = callToolAt(t, h, alphaMCP, sid, "knomit_materialize", `{"cursor":"`+mc+`","limit":5}`)
 	require.True(t, isErr, text)
 }
 
-// N1 (review of PR #692): on MCP, another owner's live book cursor and a
+// N1 (review of PR #692): on MCP, another owner's live factset cursor and a
 // cursor that does not exist are refused with the SAME text, whatever
 // argument is added (fact d870cc94: an unauthorized cursor reads as
 // expired), so the refusal is no existence oracle.
 //
-// Sabotage: route on IsBookCursor ignoring the owner, and `unit` or
-// `limit` with the other owner's cursor answers a book-only text.
-func TestBook_MCPRefusalsDoNotTellAnotherOwnersCursorFromNone(t *testing.T) {
+// Sabotage: route on IsFactSetCursor ignoring the owner, and `unit` or
+// `limit` with the other owner's cursor answers a factset-only text.
+func TestFactSet_MCPRefusalsDoNotTellAnotherOwnersCursorFromNone(t *testing.T) {
 	f := newOAuthWebFixture(t, testIssuer)
 	m, alpha, _ := newMaterializeRepos(t)
 	f.s.Manager = m
@@ -157,7 +157,7 @@ func TestBook_MCPRefusalsDoNotTellAnotherOwnersCursorFromNone(t *testing.T) {
 //
 // Sabotage: return instead of panic(http.ErrAbortHandler) on a mid-stream
 // failure, and the client reads a short body with a clean EOF.
-func TestBook_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
+func TestFactSet_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
 	f := newOAuthWebFixture(t, testIssuer)
 	m, alpha, _ := newMaterializeRepos(t)
 	f.s.Manager = m
@@ -166,7 +166,7 @@ func TestBook_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
 	}
 	tok := f.mint(t, "laptop", testIssuer+"/api/v1", []string{"read"}, auth.Read)
 	h := withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
-	code, body := restGet(t, h, alphaBook+"?path=kb/e/&depth=0&limit=1")
+	code, body := restGet(t, h, alphaFactSet+"?path=kb/e/&depth=0&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	cur := pageCursor(t, body)
 
@@ -176,7 +176,7 @@ func TestBook_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
 	// (the request itself, when the abort comes before the buffered headers
 	// are flushed; the body read, after).
 	get := func() (int, []byte, error) {
-		resp, err := srv.Client().Get(srv.URL + alphaBook + "/export?cursor=" + url.QueryEscape(cur))
+		resp, err := srv.Client().Get(srv.URL + alphaFactSet + "/export?cursor=" + url.QueryEscape(cur))
 		if err != nil {
 			return 0, nil, err
 		}
@@ -189,12 +189,12 @@ func TestBook_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
 	require.Equal(t, http.StatusOK, st)
 	require.Equal(t, 60, strings.Count(string(whole), "\n## "), "the whole export, before the fault")
 
-	defer materialize.SetBookExportFaultForTest(func(int) error { return errors.New("injected mid-stream failure") })()
+	defer materialize.SetFactSetExportFaultForTest(func(int) error { return errors.New("injected mid-stream failure") })()
 	st, part, err := get()
 	require.Error(t, err, "the download fails (status %d, %d of %d bytes read): never a short file that ends cleanly", st, len(part), len(whole))
 }
 
-// Reach: a book cannot be built on a repo the token does not reach (the
+// Reach: a factset cannot be built on a repo the token does not reach (the
 // answer is exactly a missing repo's); a cross-KB ref outside the token's
 // reach is kb_unavailable in the unit; and a cursor built by a wide token
 // cannot be paged by a narrower token of the same principal when a page
@@ -202,7 +202,7 @@ func TestBook_ExportFailingMidStreamAbortsTheDownload(t *testing.T) {
 //
 // Sabotage: drop the per-row reach check in inflateRows, and the confined
 // token is served X's page.
-func TestBook_ReachIsEnforced(t *testing.T) {
+func TestFactSet_ReachIsEnforced(t *testing.T) {
 	f := newOAuthWebFixture(t, testIssuer)
 	m, alpha, beta := newMaterializeRepos(t)
 	f.s.Manager = m
@@ -218,23 +218,23 @@ func TestBook_ReachIsEnforced(t *testing.T) {
 	confined := handler(testIssuer + "/api/v1/repos/alpha")
 	wide := handler(testIssuer + "/api/v1")
 
-	bc, bb := restGet(t, confined, "/api/v1/repos/beta/branches/agent:test/search/book?path=kb/")
-	gc, gb := restGet(t, confined, "/api/v1/repos/ghost/branches/agent:test/search/book?path=kb/")
+	bc, bb := restGet(t, confined, "/api/v1/repos/beta/branches/agent:test/search/factset?path=kb/")
+	gc, gb := restGet(t, confined, "/api/v1/repos/ghost/branches/agent:test/search/factset?path=kb/")
 	require.NotEqual(t, http.StatusOK, bc, bb)
 	require.Equal(t, gc, bc)
 	require.Equal(t, strings.ReplaceAll(gb, "/ghost/", "/beta/"), bb, "an unreachable repo answers exactly like a missing one")
 
-	code, body := restGet(t, confined, alphaBook+"?path=kb/u/&cross_kb=true&limit=5")
+	code, body := restGet(t, confined, alphaFactSet+"?path=kb/u/&cross_kb=true&limit=5")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Contains(t, body, xWire+`","reason":"kb_unavailable"`)
 	require.NotContains(t, body, `"X body."`)
 
-	code, body = restGet(t, wide, alphaBook+"?path=kb/u/&cross_kb=true&limit=1")
+	code, body = restGet(t, wide, alphaFactSet+"?path=kb/u/&cross_kb=true&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	cur := pageCursor(t, body)
-	code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur))
+	code, body = restGet(t, confined, alphaFactSet+"?cursor="+url.QueryEscape(cur))
 	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X: %s", body)
-	code, body = restGet(t, wide, alphaBook+"?cursor="+url.QueryEscape(cur))
+	code, body = restGet(t, wide, alphaFactSet+"?cursor="+url.QueryEscape(cur))
 	require.Equal(t, http.StatusOK, code, "and the refusal consumed nothing: %s", body)
 	require.Contains(t, body, `"X body."`)
 
@@ -242,13 +242,13 @@ func TestBook_ReachIsEnforced(t *testing.T) {
 	// too: the link's title and anchor come from the unreachable repo.
 	writeObs(t, alpha, "kb/v/r1.md", "V1", xWire)
 	writeObs(t, alpha, "kb/v/r2.md", "V2", xWire)
-	code, body = restGet(t, wide, alphaBook+"?path=kb/v/&cross_kb=true&limit=2")
+	code, body = restGet(t, wide, alphaFactSet+"?path=kb/v/&cross_kb=true&limit=2")
 	require.Equal(t, http.StatusOK, code, body)
 	cur = pageCursor(t, body)
-	code, body = restGet(t, wide, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
+	code, body = restGet(t, wide, alphaFactSet+"?cursor="+url.QueryEscape(cur)+"&unit=2")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Contains(t, body, `"link":`, "unit 2 holds X as a link")
-	code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit=2")
+	code, body = restGet(t, confined, alphaFactSet+"?cursor="+url.QueryEscape(cur)+"&unit=2")
 	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X's link: %s", body)
 
 	// A unit the NARROWER credential walks reads only what it reaches: X is
@@ -256,12 +256,12 @@ func TestBook_ReachIsEnforced(t *testing.T) {
 	// call that walks them).
 	writeObs(t, alpha, "kb/w/r1.md", "W1")
 	writeObs(t, alpha, "kb/w/r2.md", "W2", xWire)
-	code, body = restGet(t, confined, alphaBook+"?path=kb/w/&cross_kb=true&limit=1")
+	code, body = restGet(t, confined, alphaFactSet+"?path=kb/w/&cross_kb=true&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	cur = pageCursor(t, body)
 	var all strings.Builder
 	for u := 1; u <= 2; u++ {
-		code, body = restGet(t, confined, alphaBook+"?cursor="+url.QueryEscape(cur)+"&unit="+strconv.Itoa(u))
+		code, body = restGet(t, confined, alphaFactSet+"?cursor="+url.QueryEscape(cur)+"&unit="+strconv.Itoa(u))
 		require.Equal(t, http.StatusOK, code, body)
 		all.WriteString(body)
 	}

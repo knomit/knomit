@@ -267,13 +267,13 @@ type SessionConfig struct {
 	ClientDeadAfter   string `toml:"client_dead_after"`
 	ClientHiddenAfter string `toml:"client_hidden_after"`
 	ClientRetention   string `toml:"client_retention"`
-	// BookMemoryMiB is the process-wide budget, in MiB, for materialize
-	// books' structure held in memory; past it the largest in-memory book
+	// FactSetMemoryMiB is the process-wide budget, in MiB, for materialize
+	// factsets' structure held in memory; past it the largest in-memory factset
 	// is spilled to its file. 0 or unset is the default (64). It bounds
-	// books AT REST (their heap measured at about 1.16x what is counted);
+	// factsets AT REST (their heap measured at about 1.16x what is counted);
 	// the working memory of a walk in progress is bounded by the cap on
-	// concurrent book walks (materialize.MaxConcurrentBookBuilds), not here.
-	BookMemoryMiB int `toml:"book_memory_mib"`
+	// concurrent factset walks (materialize.MaxConcurrentFactSetBuilds), not here.
+	FactSetMemoryMiB int `toml:"factset_memory_mib"`
 }
 
 // ExperimentsConfig configures the experiment lifecycle: an `exp/<name>`

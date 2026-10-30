@@ -8,23 +8,23 @@ import (
 	"os"
 )
 
-// A BOOK FILE holds one book's structure: the frozen search results, every
+// A FACTSET FILE holds one factset's structure: the frozen search results, every
 // appearance (row) of the units walked so far, and the visited set the next
 // unit's walk is seeded with. It is a SQLite file of its own under
-// <session DB>.books/, so books never share a lock. It is written only by the
-// book's one cursor holder, a unit at a time, as pages need units. It is a
+// <session DB>.factsets/, so factsets never share a lock. It is written only by the
+// factset's one cursor holder, a unit at a time, as pages need units. It is a
 // rebuildable cache, never a record: journal_mode MEMORY and synchronous OFF,
 // and the directory is recreated empty at every Open.
 //
-// Lifecycle: created when an in-memory book spills (book_store.go); deleted
-// when the owner's next first call replaces the book (CreateBook), by
-// DeleteBook, by SweepBookFiles once the idle reaper has deleted the cursor,
-// and wholesale at Open and Close; never while a call holds the book (the
+// Lifecycle: created when an in-memory factset spills (factset_store.go); deleted
+// when the owner's next first call replaces the factset (CreateFactSet), by
+// DeleteFactSet, by SweepFactSetFiles once the idle reaper has deleted the cursor,
+// and wholesale at Open and Close; never while a call holds the factset (the
 // last holder's release deletes it then).
 
-const bookFileSuffix = ".db"
+const factsetFileSuffix = ".db"
 
-const bookFileSchema = `
+const factsetFileSchema = `
 CREATE TABLE results (
     unit   INTEGER PRIMARY KEY,   -- 1..units, the search order
     path   TEXT NOT NULL UNIQUE,  -- wire path
@@ -32,7 +32,7 @@ CREATE TABLE results (
     title  TEXT NOT NULL          -- the title the search listed
 );
 CREATE TABLE rows (
-    seq     INTEGER PRIMARY KEY,  -- book order, 1..
+    seq     INTEGER PRIMARY KEY,  -- factset order, 1..
     unit    INTEGER NOT NULL,
     n       INTEGER NOT NULL,     -- ordinal inside the unit's walk
     path    TEXT NOT NULL,
@@ -66,10 +66,10 @@ CREATE TABLE tips (               -- cross-KB repos' tips, frozen on first read
 `
 
 // Tips is the frozen tip of every repo a unit entered cross-KB, by id12.
-func (f *BookFile) Tips(ctx context.Context) (map[string]string, error) {
+func (f *FactSetFile) Tips(ctx context.Context) (map[string]string, error) {
 	rows, err := f.db.QueryContext(ctx, `SELECT repo, commit_hash FROM tips`)
 	if err != nil {
-		return nil, fmt.Errorf("book tips: %w", err)
+		return nil, fmt.Errorf("factset tips: %w", err)
 	}
 	defer rows.Close()
 	out := map[string]string{}
@@ -83,8 +83,8 @@ func (f *BookFile) Tips(ctx context.Context) (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// BookResult is one frozen search result: the root of unit Unit.
-type BookResult struct {
+// FactSetResult is one frozen search result: the root of unit Unit.
+type FactSetResult struct {
 	Unit   int
 	Path   string
 	Anchor string
@@ -93,12 +93,12 @@ type BookResult struct {
 	Title string
 }
 
-// BookReserve is a direct reference of a unit's root reserved for that unit
+// FactSetReserve is a direct reference of a unit's root reserved for that unit
 // before any unit is walked (two-level reservation): it is written there,
 // as the root's child number Number, under Anchor, at the version
 // Commit/Blob the root cites; every earlier unit that reaches it links
 // forward to it.
-type BookReserve struct {
+type FactSetReserve struct {
 	Path   string
 	Unit   int
 	Number string
@@ -107,8 +107,8 @@ type BookReserve struct {
 	Blob   string
 }
 
-// BookRow is one appearance of a fact in book order.
-type BookRow struct {
+// FactSetRow is one appearance of a fact in factset order.
+type FactSetRow struct {
 	Seq     int
 	Unit    int
 	N       int
@@ -117,8 +117,8 @@ type BookRow struct {
 	State   string
 }
 
-// BookVisit is the first (written) appearance of a fact.
-type BookVisit struct {
+// FactSetVisit is the first (written) appearance of a fact.
+type FactSetVisit struct {
 	Path   string
 	Unit   int
 	N      int
@@ -129,33 +129,33 @@ type BookVisit struct {
 	Blob   string
 }
 
-// ErrBookUnitTaken is an AppendUnit for a unit another call appended first
+// ErrFactSetUnitTaken is an AppendUnit for a unit another call appended first
 // (two calls racing one cursor). Nothing was written.
-var ErrBookUnitTaken = errors.New("book unit already walked")
+var ErrFactSetUnitTaken = errors.New("factset unit already walked")
 
-// BookFile is an open book file, for one call.
-type BookFile struct {
+// FactSetFile is an open factset file, for one call.
+type FactSetFile struct {
 	db      *sql.DB
 	release func()
 }
 
-func bookDSN(path string) string {
+func factsetDSN(path string) string {
 	return "file:" + path + "?_journal_mode=MEMORY&_synchronous=OFF&_busy_timeout=5000"
 }
 
-func createBookFile(ctx context.Context, path string, results []BookResult, reserved map[string]BookReserve) error {
-	db, err := sql.Open("sqlite3", bookDSN(path))
+func createFactSetFile(ctx context.Context, path string, results []FactSetResult, reserved map[string]FactSetReserve) error {
+	db, err := sql.Open("sqlite3", factsetDSN(path))
 	if err != nil {
-		return fmt.Errorf("create book file: %w", err)
+		return fmt.Errorf("create factset file: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 	fail := func(err error) error {
 		db.Close()
-		removeBookFile(path)
-		return fmt.Errorf("create book file: %w", err)
+		removeFactSetFile(path)
+		return fmt.Errorf("create factset file: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, bookFileSchema); err != nil {
+	if _, err := db.ExecContext(ctx, factsetFileSchema); err != nil {
 		return fail(err)
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -187,26 +187,26 @@ func createBookFile(ctx context.Context, path string, results []BookResult, rese
 	return nil
 }
 
-func openBookFile(path string) (*BookFile, bool, error) {
+func openFactSetFile(path string) (*FactSetFile, bool, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
-	db, err := sql.Open("sqlite3", bookDSN(path))
+	db, err := sql.Open("sqlite3", factsetDSN(path))
 	if err != nil {
-		return nil, false, fmt.Errorf("open book file: %w", err)
+		return nil, false, fmt.Errorf("open factset file: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	return &BookFile{db: db}, true, nil
+	return &FactSetFile{db: db}, true, nil
 }
 
-func removeBookFile(path string) {
+func removeFactSetFile(path string) {
 	for _, s := range []string{"", "-journal", "-wal", "-shm"} {
 		_ = os.Remove(path + s)
 	}
 }
 
 // Close releases the file.
-func (f *BookFile) Close() error {
+func (f *FactSetFile) Close() error {
 	err := f.db.Close()
 	if f.release != nil {
 		f.release()
@@ -216,15 +216,15 @@ func (f *BookFile) Close() error {
 }
 
 // Results is every frozen search result, by unit.
-func (f *BookFile) Results(ctx context.Context) ([]BookResult, error) {
+func (f *FactSetFile) Results(ctx context.Context) ([]FactSetResult, error) {
 	rows, err := f.db.QueryContext(ctx, `SELECT unit, path, anchor, title FROM results ORDER BY unit`)
 	if err != nil {
-		return nil, fmt.Errorf("book results: %w", err)
+		return nil, fmt.Errorf("factset results: %w", err)
 	}
 	defer rows.Close()
-	var out []BookResult
+	var out []FactSetResult
 	for rows.Next() {
-		var r BookResult
+		var r FactSetResult
 		if err := rows.Scan(&r.Unit, &r.Path, &r.Anchor, &r.Title); err != nil {
 			return nil, err
 		}
@@ -234,46 +234,46 @@ func (f *BookFile) Results(ctx context.Context) ([]BookResult, error) {
 }
 
 // Walked is how many units are walked and how many rows they hold.
-func (f *BookFile) Walked(ctx context.Context) (units, rows int, err error) {
+func (f *FactSetFile) Walked(ctx context.Context) (units, rows int, err error) {
 	var u, r sql.NullInt64
 	if err := f.db.QueryRowContext(ctx, `SELECT MAX(unit), MAX(seq) FROM rows`).Scan(&u, &r); err != nil {
-		return 0, 0, fmt.Errorf("book walked: %w", err)
+		return 0, 0, fmt.Errorf("factset walked: %w", err)
 	}
 	return int(u.Int64), int(r.Int64), nil
 }
 
 // Visited is the first appearance of path, if it was written.
-func (f *BookFile) Visited(ctx context.Context, path string) (BookVisit, bool, error) {
-	v := BookVisit{Path: path}
+func (f *FactSetFile) Visited(ctx context.Context, path string) (FactSetVisit, bool, error) {
+	v := FactSetVisit{Path: path}
 	err := f.db.QueryRowContext(ctx,
 		`SELECT unit, n, seq, number, anchor, commit_hash, blob FROM visited WHERE path = ?`, path,
 	).Scan(&v.Unit, &v.N, &v.Seq, &v.Number, &v.Anchor, &v.Commit, &v.Blob)
 	if errors.Is(err, sql.ErrNoRows) {
-		return BookVisit{}, false, nil
+		return FactSetVisit{}, false, nil
 	}
 	if err != nil {
-		return BookVisit{}, false, fmt.Errorf("book visited: %w", err)
+		return FactSetVisit{}, false, fmt.Errorf("factset visited: %w", err)
 	}
 	return v, true, nil
 }
 
 // Reserved is the reservation of path, if a unit reserved it.
-func (f *BookFile) Reserved(ctx context.Context, path string) (BookReserve, bool, error) {
-	r := BookReserve{Path: path}
+func (f *FactSetFile) Reserved(ctx context.Context, path string) (FactSetReserve, bool, error) {
+	r := FactSetReserve{Path: path}
 	err := f.db.QueryRowContext(ctx,
 		`SELECT unit, number, anchor, commit_hash, blob FROM reserved WHERE path = ?`, path,
 	).Scan(&r.Unit, &r.Number, &r.Anchor, &r.Commit, &r.Blob)
 	if errors.Is(err, sql.ErrNoRows) {
-		return BookReserve{}, false, nil
+		return FactSetReserve{}, false, nil
 	}
 	if err != nil {
-		return BookReserve{}, false, fmt.Errorf("book reserved: %w", err)
+		return FactSetReserve{}, false, fmt.Errorf("factset reserved: %w", err)
 	}
 	return r, true, nil
 }
 
-// AnchorTaken reports whether an anchor is used (or reserved) in the book.
-func (f *BookFile) AnchorTaken(ctx context.Context, anchor string) (bool, error) {
+// AnchorTaken reports whether an anchor is used (or reserved) in the factset.
+func (f *FactSetFile) AnchorTaken(ctx context.Context, anchor string) (bool, error) {
 	var one int
 	err := f.db.QueryRowContext(ctx, `SELECT 1 FROM anchors WHERE anchor = ?`, anchor).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -284,57 +284,57 @@ func (f *BookFile) AnchorTaken(ctx context.Context, anchor string) (bool, error)
 
 // AppendUnit appends one walked unit: its rows, the visits of the facts it
 // wrote and the anchors it used, in one transaction. It is refused with
-// ErrBookUnitTaken unless unit is the next unit to walk.
-func (f *BookFile) AppendUnit(ctx context.Context, unit int, rows []BookRow, visits []BookVisit, anchors []string, tips map[string]string) error {
+// ErrFactSetUnitTaken unless unit is the next unit to walk.
+func (f *FactSetFile) AppendUnit(ctx context.Context, unit int, rows []FactSetRow, visits []FactSetVisit, anchors []string, tips map[string]string) error {
 	tx, err := f.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("book append: %w", err)
+		return fmt.Errorf("factset append: %w", err)
 	}
 	defer tx.Rollback()
 	var last sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(unit) FROM rows`).Scan(&last); err != nil {
-		return fmt.Errorf("book append: %w", err)
+		return fmt.Errorf("factset append: %w", err)
 	}
 	if int(last.Int64) != unit-1 {
-		return ErrBookUnitTaken
+		return ErrFactSetUnitTaken
 	}
 	for _, r := range rows {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO rows(seq, unit, n, path, written, state) VALUES (?, ?, ?, ?, ?, ?)`,
 			r.Seq, r.Unit, r.N, r.Path, boolInt(r.Written), r.State); err != nil {
-			return fmt.Errorf("book append row: %w", err)
+			return fmt.Errorf("factset append row: %w", err)
 		}
 	}
 	for _, v := range visits {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO visited(path, unit, n, seq, number, anchor, commit_hash, blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			v.Path, v.Unit, v.N, v.Seq, v.Number, v.Anchor, v.Commit, v.Blob); err != nil {
-			return fmt.Errorf("book append visit: %w", err)
+			return fmt.Errorf("factset append visit: %w", err)
 		}
 	}
 	for _, a := range anchors {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO anchors(anchor) VALUES (?)`, a); err != nil {
-			return fmt.Errorf("book append anchor: %w", err)
+			return fmt.Errorf("factset append anchor: %w", err)
 		}
 	}
 	for repo, tip := range tips {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tips(repo, commit_hash) VALUES (?, ?)`, repo, tip); err != nil {
-			return fmt.Errorf("book append tip: %w", err)
+			return fmt.Errorf("factset append tip: %w", err)
 		}
 	}
 	return tx.Commit()
 }
 
-// Rows returns up to limit rows from seq from, in book order.
-func (f *BookFile) Rows(ctx context.Context, from, limit int) ([]BookRow, error) {
+// Rows returns up to limit rows from seq from, in factset order.
+func (f *FactSetFile) Rows(ctx context.Context, from, limit int) ([]FactSetRow, error) {
 	rows, err := f.db.QueryContext(ctx,
 		`SELECT seq, unit, n, path, written, state FROM rows WHERE seq >= ? ORDER BY seq LIMIT ?`, from, limit)
 	if err != nil {
-		return nil, fmt.Errorf("book rows: %w", err)
+		return nil, fmt.Errorf("factset rows: %w", err)
 	}
 	defer rows.Close()
-	var out []BookRow
+	var out []FactSetRow
 	for rows.Next() {
-		var r BookRow
+		var r FactSetRow
 		var w int
 		if err := rows.Scan(&r.Seq, &r.Unit, &r.N, &r.Path, &w, &r.State); err != nil {
 			return nil, err
@@ -346,10 +346,10 @@ func (f *BookFile) Rows(ctx context.Context, from, limit int) ([]BookRow, error)
 }
 
 // UnitStart is the seq of unit's first row, 0 when the unit is not walked.
-func (f *BookFile) UnitStart(ctx context.Context, unit int) (int, error) {
+func (f *FactSetFile) UnitStart(ctx context.Context, unit int) (int, error) {
 	var seq sql.NullInt64
 	if err := f.db.QueryRowContext(ctx, `SELECT MIN(seq) FROM rows WHERE unit = ?`, unit).Scan(&seq); err != nil {
-		return 0, fmt.Errorf("book unit start: %w", err)
+		return 0, fmt.Errorf("factset unit start: %w", err)
 	}
 	return int(seq.Int64), nil
 }
@@ -361,9 +361,9 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// load writes a spilled book's whole structure in one transaction (the
+// load writes a spilled factset's whole structure in one transaction (the
 // results are already in the file).
-func (f *BookFile) load(ctx context.Context, rows []BookRow, visits []BookVisit, anchors []string, tips map[string]string) error {
+func (f *FactSetFile) load(ctx context.Context, rows []FactSetRow, visits []FactSetVisit, anchors []string, tips map[string]string) error {
 	tx, err := f.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

@@ -23,14 +23,14 @@ import (
 // DB handle to reach for by mistake.
 type ToolIndex struct {
 	db *sql.DB
-	// waits records the book writes' lock waits (book_index.go).
-	waits bookLockWaits
-	// booksDir holds the book files (book_file.go); "" disables books.
-	booksDir string
-	// booksMu guards books, the live books by cursor id (book_store.go),
-	// and each book's holders. The sweeper never drops a held book.
-	booksMu sync.Mutex
-	books   map[string]*bookStore
+	// waits records the factset writes' lock waits (factset_index.go).
+	waits factsetLockWaits
+	// factsetsDir holds the factset files (factset_file.go); "" disables factsets.
+	factsetsDir string
+	// factsetsMu guards factsets, the live factsets by cursor id (factset_store.go),
+	// and each factset's holders. The sweeper never drops a held factset.
+	factsetsMu sync.Mutex
+	factsets   map[string]*factsetStore
 }
 
 // CreateToolSession creates a new tool session for the given tool, branch, path

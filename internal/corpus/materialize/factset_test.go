@@ -26,13 +26,13 @@ import (
 	"knomit/internal/engine/store/sessions"
 )
 
-type bookFixture struct {
+type factsetFixture struct {
 	ri  *repos.RepoInstance
 	svc *store.Service
 	b   *repos.Binding
 }
 
-func newBookFixture(t testing.TB) *bookFixture {
+func newFactSetFixture(t testing.TB) *factsetFixture {
 	t.Helper()
 	svc, err := store.Open(filepath.Join(t.TempDir(), "alpha.db"))
 	require.NoError(t, err)
@@ -41,10 +41,10 @@ func newBookFixture(t testing.TB) *bookFixture {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", UID: "uid-alpha", AgentBranch: "agent/test", Svc: svc, OntologyRoot: "kb",
 	})
-	return &bookFixture{ri: ri, svc: svc, b: repos.NewBindingOfRepo(ri, "agent/test")}
+	return &factsetFixture{ri: ri, svc: svc, b: repos.NewBindingOfRepo(ri, "agent/test")}
 }
 
-func (f *bookFixture) write(t testing.TB, path, title, body string, refs ...string) {
+func (f *factsetFixture) write(t testing.TB, path, title, body string, refs ...string) {
 	t.Helper()
 	ff := fact.NewFact(path)
 	ff.Title, ff.Body, ff.Type = title, body, fact.Observation
@@ -56,21 +56,21 @@ func (f *bookFixture) write(t testing.TB, path, title, body string, refs ...stri
 	require.NoError(t, err)
 }
 
-func (f *bookFixture) scope(owner string) CursorScope {
+func (f *factsetFixture) scope(owner string) CursorScope {
 	return CursorScope{Sessions: f.svc.ToolSession(), Branch: "agent/test", Pin: f.b.PinID(), ReadSet: "rs", Owner: owner}
 }
 
-func (f *bookFixture) request(path string) BookRequest {
-	return BookRequest{
-		Binding: f.b, Search: BookSearch{Path: path, Sort: SortRelevance}, Facts: DefaultBookFacts,
+func (f *factsetFixture) request(path string) FactSetRequest {
+	return FactSetRequest{
+		Binding: f.b, Search: FactSetSearch{Path: path, Sort: SortRelevance}, Facts: DefaultFactSetFacts,
 		Options: DefaultOptions(), Limit: HumanDefaultLimit,
 	}
 }
 
 // fixtureTwo writes r1 -> s and then r2 -> s, r1: the search lists r2 first
 // (newest commit, or by path on a tie... r2 > r1, so the newest decides; a
-// tie keeps r1 first). Tests below read the unit order from the book.
-func fixtureTwo(t *testing.T, f *bookFixture) {
+// tie keeps r1 first). Tests below read the unit order from the factset.
+func fixtureTwo(t *testing.T, f *factsetFixture) {
 	f.write(t, "kb/z/s.md", "S", "s body.")
 	f.write(t, "kb/u/r1.md", "R1", "r1 body.", "kb/z/s.md")
 	f.write(t, "kb/u/r2.md", "R2", "r2 body.", "kb/z/s.md", "kb/u/r1.md")
@@ -81,12 +81,12 @@ func fixtureTwo(t *testing.T, f *bookFixture) {
 // while every page still carries full bodies.
 //
 // Sabotage: make readAt skip VersionMetaAt (always parse), and Parsed > 0.
-func TestBook_WalkReadsNoBodies(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_WalkReadsNoBodies(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	req := f.request("kb/u/")
 	req.Limit = 5
-	page, stats, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	page, stats, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.UnitsWalked)
 	require.Equal(t, 5, stats.Rows, "unit of r2: r2, s, r1 (link); unit of r1: r1, s (link)")
@@ -101,55 +101,55 @@ func TestBook_WalkReadsNoBodies(t *testing.T) {
 // call that cannot serve page 1 leaves no cursor and no file.
 //
 // Sabotage: check the cap with >= (unit 1's two rows already trip a cap of
-// 2), or drop the first call's DeleteBook (a refused first call leaves a
+// 2), or drop the first call's DeleteFactSet (a refused first call leaves a
 // cursor).
-func TestBook_RowCap(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_RowCap(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
-	old := maxBookRows
-	t.Cleanup(func() { maxBookRows = old })
+	old := maxFactSetRows
+	t.Cleanup(func() { maxFactSetRows = old })
 	ctx := context.Background()
 
 	one := f.request("kb/u/")
 	one.Limit = 1
-	probe, _, err := BookFirstPage(ctx, f.scope("probe"), one)
+	probe, _, err := FactSetFirstPage(ctx, f.scope("probe"), one)
 	require.NoError(t, err)
-	maxBookRows = probe.Sections // unit 1 fits exactly, unit 2 does not
-	p1, _, err := BookFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
+	maxFactSetRows = probe.Sections // unit 1 fits exactly, unit 2 does not
+	p1, _, err := FactSetFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
 	require.NoError(t, err)
 	require.Equal(t, 1, p1.UnitsWalked)
 	require.True(t, p1.HasMore)
 	var nerr error
 	for c := *p1.Cursor; nerr == nil; {
-		_, nerr = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, c, 0)
+		_, nerr = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, c, 0)
 	}
-	require.ErrorIs(t, nerr, ErrBookTooLarge)
+	require.ErrorIs(t, nerr, ErrFactSetTooLarge)
 	require.Contains(t, nerr.Error(), "lower Facts, Depth or References")
 
-	maxBookRows = 1 // not even unit 1
-	_, _, err = BookFirstPage(ctx, f.scope("o2"), f.request("kb/u/"))
-	require.ErrorIs(t, err, ErrBookTooLarge)
-	books, err := f.svc.ToolSession().BookCount(ctx)
+	maxFactSetRows = 1 // not even unit 1
+	_, _, err = FactSetFirstPage(ctx, f.scope("o2"), f.request("kb/u/"))
+	require.ErrorIs(t, err, ErrFactSetTooLarge)
+	factsets, err := f.svc.ToolSession().FactSetCount(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 2, books, "the refused first call left no cursor (probe and o remain)")
-	inMem, spilled := f.svc.ToolSession().LiveBooks()
-	require.Equal(t, 2, inMem+spilled, "and no live book")
+	require.Equal(t, 2, factsets, "the refused first call left no cursor (probe and o remain)")
+	inMem, spilled := f.svc.ToolSession().LiveFactSets()
+	require.Equal(t, 2, inMem+spilled, "and no live factset")
 }
 
-// A book that spills mid-read pages exactly as one that never spills: the
+// A factset that spills mid-read pages exactly as one that never spills: the
 // same bytes page for page (cursor ids aside), before and after the spill.
 //
 // Sabotage: drop the rows from the spill's load, and the pages after it are
 // missing or wrong.
-func TestBook_PagesAreTheSameAcrossASpill(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_PagesAreTheSameAcrossASpill(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	f.write(t, "kb/u/r3.md", "R3", "r3 body.", "kb/z/s.md", "kb/u/r2.md")
 	ctx := context.Background()
 	read := func(owner string, spillAfter int) ([]string, bool) {
 		req := f.request("kb/u/")
 		req.Limit = 1
-		p, _, err := BookFirstPage(ctx, f.scope(owner), req)
+		p, _, err := FactSetFirstPage(ctx, f.scope(owner), req)
 		require.NoError(t, err)
 		c := *p.Cursor
 		var out []string
@@ -158,21 +158,21 @@ func TestBook_PagesAreTheSameAcrossASpill(t *testing.T) {
 			require.NoError(t, err)
 			out = append(out, strings.ReplaceAll(string(raw), c, "CURSOR"))
 			if i == spillAfter {
-				defer sessions.SetBookSpillBytesForTest(1)() // the next unit's append spills
+				defer sessions.SetFactSetSpillBytesForTest(1)() // the next unit's append spills
 			}
 			if !p.HasMore {
 				break
 			}
-			p, err = BookNextPage(ctx, f.scope(owner), f.b, nil, nil, c, 0)
+			p, err = FactSetNextPage(ctx, f.scope(owner), f.b, nil, nil, c, 0)
 			require.NoError(t, err)
 		}
-		bk, ok := f.svc.ToolSession().OpenBook(c)
+		bk, ok := f.svc.ToolSession().OpenFactSet(c)
 		require.True(t, ok)
 		defer bk.Close()
 		return out, bk.Spilled()
 	}
 	memory, spilledA := read("mem", 1000)
-	require.False(t, spilledA, "a small book stays in memory")
+	require.False(t, spilledA, "a small factset stays in memory")
 	spilledPages, spilledB := read("spill", 0)
 	require.True(t, spilledB, "this one spilled after page 1")
 	require.Equal(t, memory, spilledPages)
@@ -183,47 +183,47 @@ func TestBook_PagesAreTheSameAcrossASpill(t *testing.T) {
 // from units already walked takes no slot.
 //
 // Sabotage: make the slot acquisition blocking, and this test times out.
-func TestBook_ConcurrentBuildCap(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_ConcurrentBuildCap(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	ctx := context.Background()
-	release := ReserveBookBuildsForTest(MaxConcurrentBookBuilds)
-	_, _, err := BookFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
+	release := ReserveFactSetBuildsForTest(MaxConcurrentFactSetBuilds)
+	_, _, err := FactSetFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
 	release()
-	require.ErrorIs(t, err, ErrBookBusy)
+	require.ErrorIs(t, err, ErrFactSetBusy)
 	req := f.request("kb/u/")
 	req.Limit = 1
-	p, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	p, _, err := FactSetFirstPage(ctx, f.scope("o"), req)
 	require.NoError(t, err)
-	release = ReserveBookBuildsForTest(MaxConcurrentBookBuilds)
-	_, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
+	release = ReserveFactSetBuildsForTest(MaxConcurrentFactSetBuilds)
+	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
 	require.NoError(t, err, "row 2 is in unit 1, already walked: no slot needed")
-	_, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 2)
+	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 2)
 	release()
-	require.ErrorIs(t, err, ErrBookBusy, "a seek that must walk unit 2 needs a slot")
+	require.ErrorIs(t, err, ErrFactSetBusy, "a seek that must walk unit 2 needs a slot")
 }
 
 // A cursor has one reader at a time: a page served from a stale position
 // (another call moved the cursor in between) is refused, never served twice.
 //
-// Sabotage: drop `AND next_seq = ?` from AdvanceBook, and the stale call is
+// Sabotage: drop `AND next_seq = ?` from AdvanceFactSet, and the stale call is
 // served the same rows again.
-func TestBook_StalePositionIsRefused(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_StalePositionIsRefused(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	ctx := context.Background()
 	sc := f.scope("o")
 	req := f.request("kb/u/")
 	req.Limit = 1
-	p1, _, err := BookFirstPage(ctx, sc, req)
+	p1, _, err := FactSetFirstPage(ctx, sc, req)
 	require.NoError(t, err)
-	bk, _, err := openBook(ctx, sc, f.b, nil, nil, *p1.Cursor)
+	bk, _, err := openFactSet(ctx, sc, f.b, nil, nil, *p1.Cursor)
 	require.NoError(t, err)
 	defer bk.close()
 	// Position is 2 now; a call that read position 1 loses.
 	_, err = bk.page(1, 1, false)
 	require.ErrorIs(t, err, ErrCursorInUse)
-	p2, err := BookNextPage(ctx, sc, f.b, nil, nil, *p1.Cursor, 0)
+	p2, err := FactSetNextPage(ctx, sc, f.b, nil, nil, *p1.Cursor, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, p2.SeqFrom)
 }
@@ -233,17 +233,17 @@ func TestBook_StalePositionIsRefused(t *testing.T) {
 //
 // Sabotage: walk only unit N on a seek, and its link to the earlier unit's
 // s is written instead of linked.
-func TestBook_SeekWalksTheUnitsBefore(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_SeekWalksTheUnitsBefore(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	f.write(t, "kb/u/r3.md", "R3", "r3 body.", "kb/z/s.md")
 	ctx := context.Background()
 	req := f.request("kb/u/")
 	req.Limit = 1
-	p1, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	p1, _, err := FactSetFirstPage(ctx, f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 1, p1.UnitsWalked)
-	p, stats, err := BookNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, 3)
+	p, stats, err := FactSetNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, 3)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.UnitsWalked, "the seek walked units 2 and 3 (unit 1 was walked)")
 	require.Equal(t, 3, p.UnitFrom)
@@ -260,11 +260,11 @@ func TestBook_SeekWalksTheUnitsBefore(t *testing.T) {
 
 // measureEnv gates the measurement runs: they write ~1000 facts with up to
 // 499 refs each and walk up to 250,000 sections.
-const measureEnv = "KNOMIT_BOOK_MEASURE"
+const measureEnv = "KNOMIT_FACTSET_MEASURE"
 
-// peakSampler samples the Go heap in use and the open book files every
+// peakSampler samples the Go heap in use and the open factset files every
 // 5 ms until stop is called.
-func peakSampler(ti interface{ OpenBookFiles() int }) (stop func() (heap uint64, files int)) {
+func peakSampler(ti interface{ OpenFactSetFiles() int }) (stop func() (heap uint64, files int)) {
 	var peak atomic.Uint64
 	var files atomic.Int64
 	done := make(chan struct{})
@@ -278,7 +278,7 @@ func peakSampler(ti interface{ OpenBookFiles() int }) (stop func() (heap uint64,
 			if ms.HeapInuse > peak.Load() {
 				peak.Store(ms.HeapInuse)
 			}
-			if n := int64(ti.OpenBookFiles()); n > files.Load() {
+			if n := int64(ti.OpenFactSetFiles()); n > files.Load() {
 				files.Store(n)
 			}
 			select {
@@ -293,7 +293,7 @@ func peakSampler(ti interface{ OpenBookFiles() int }) (stop func() (heap uint64,
 
 // seedCaps writes the caps corpus: `units` results under kb/u/, each citing
 // the same `refs` leaves under kb/z/.
-func seedCaps(t testing.TB, f *bookFixture, units, refs int) {
+func seedCaps(t testing.TB, f *factsetFixture, units, refs int) {
 	leaves := make([]string, refs)
 	for i := range refs {
 		leaves[i] = fmt.Sprintf("kb/z/l%03d.md", i)
@@ -307,7 +307,7 @@ func seedCaps(t testing.TB, f *bookFixture, units, refs int) {
 // distinct is the caps corpus where no two results share a cited fact:
 // `units` results, each citing `refs` leaves of its own. It is the
 // worst case for the walk (no version is read twice).
-func seedDistinct(t testing.TB, f *bookFixture, units, refs int) {
+func seedDistinct(t testing.TB, f *factsetFixture, units, refs int) {
 	for i := range units {
 		leaves := make([]string, refs)
 		for j := range refs {
@@ -318,28 +318,28 @@ func seedDistinct(t testing.TB, f *bookFixture, units, refs int) {
 	}
 }
 
-// TestBook_MeasureLargest measures the largest book: KNOMIT_BOOK_UNITS
-// results x KNOMIT_BOOK_REFS refs (default 500 x 499 = 250,000 walk
-// sections; MaxBookRows is lifted for the run; KNOMIT_BOOK_DISTINCT=1 gives
+// TestFactSet_MeasureLargest measures the largest factset: KNOMIT_FACTSET_UNITS
+// results x KNOMIT_FACTSET_REFS refs (default 500 x 499 = 250,000 walk
+// sections; MaxFactSetRows is lifted for the run; KNOMIT_FACTSET_DISTINCT=1 gives
 // every result its own leaves). It reports page 1, the far seek to the last
-// unit (which walks every unit before it), the heap peak, the book file's
-// size, the open book files and the shared session DB's lock waits.
-func TestBook_MeasureLargest(t *testing.T) {
+// unit (which walks every unit before it), the heap peak, the factset file's
+// size, the open factset files and the shared session DB's lock waits.
+func TestFactSet_MeasureLargest(t *testing.T) {
 	if os.Getenv(measureEnv) == "" {
 		t.Skip("set " + measureEnv + "=1 to measure")
 	}
-	units, refs := envInt("KNOMIT_BOOK_UNITS", 500), envInt("KNOMIT_BOOK_REFS", 499)
-	f := newBookFixture(t)
+	units, refs := envInt("KNOMIT_FACTSET_UNITS", 500), envInt("KNOMIT_FACTSET_REFS", 499)
+	f := newFactSetFixture(t)
 	t0 := time.Now()
-	if os.Getenv("KNOMIT_BOOK_DISTINCT") != "" {
+	if os.Getenv("KNOMIT_FACTSET_DISTINCT") != "" {
 		seedDistinct(t, f, units, refs)
 	} else {
 		seedCaps(t, f, units, refs)
 	}
 	t.Logf("seed: %d results x %d refs in %s", units, refs, time.Since(t0))
-	old := maxBookRows
-	maxBookRows = 1 << 30
-	t.Cleanup(func() { maxBookRows = old })
+	old := maxFactSetRows
+	maxFactSetRows = 1 << 30
+	t.Cleanup(func() { maxFactSetRows = old })
 	req := f.request("kb/u/")
 	req.Options.MaxNodes = MaxNodesLimit
 	ctx := context.Background()
@@ -348,45 +348,45 @@ func TestBook_MeasureLargest(t *testing.T) {
 	runtime.GC()
 	stop := peakSampler(ti)
 	t1 := time.Now()
-	page, stats, err := BookFirstPage(ctx, f.scope("o"), req)
+	page, stats, err := FactSetFirstPage(ctx, f.scope("o"), req)
 	first := time.Since(t1)
 	require.NoError(t, err)
 	t2 := time.Now()
-	p, sstats, err := BookNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *page.Cursor, units)
+	p, sstats, err := FactSetNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *page.Cursor, units)
 	seek := time.Since(t2)
 	heap, files := stop()
 	require.NoError(t, err)
-	nfiles, bytes, _ := ti.BookFiles()
-	n, total, max := ti.BookLockWaits()
-	inMem, spilled := ti.LiveBooks()
-	t.Logf("page 1: %s (walked %d units, %d sections); far seek to unit %d: %s (walked %d units, %d sections, walk %+v); heap peak %d MiB; books in memory %d, spilled %d (book memory now %d KiB); book files %d, %d MiB; open book files peak %d; session-DB lock waits %d writes, total %s, max %s",
-		first, stats.UnitsWalked, stats.Rows, units, seek, sstats.UnitsWalked, p.Sections, sstats.Walk, heap>>20, inMem, spilled, sessions.BookMemoryUsed()>>10, nfiles, bytes>>20, files, n, total, max)
+	nfiles, bytes, _ := ti.FactSetFiles()
+	n, total, max := ti.FactSetLockWaits()
+	inMem, spilled := ti.LiveFactSets()
+	t.Logf("page 1: %s (walked %d units, %d sections); far seek to unit %d: %s (walked %d units, %d sections, walk %+v); heap peak %d MiB; factsets in memory %d, spilled %d (factset memory now %d KiB); factset files %d, %d MiB; open factset files peak %d; session-DB lock waits %d writes, total %s, max %s",
+		first, stats.UnitsWalked, stats.Rows, units, seek, sstats.UnitsWalked, p.Sections, sstats.Walk, heap>>20, inMem, spilled, sessions.FactSetMemoryUsed()>>10, nfiles, bytes>>20, files, n, total, max)
 	t3 := time.Now()
-	_, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *page.Cursor, 1)
+	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *page.Cursor, 1)
 	require.NoError(t, err)
 	t.Logf("seek back to unit 1 (walked): %s", time.Since(t3))
 }
 
-// TestBook_MeasureConcurrentBooks runs 10 books at once on one session
+// TestFactSet_MeasureConcurrentFactSets runs 10 factsets at once on one session
 // store (10 owners), each a first call then a far seek to its last unit,
 // with the walk cap lifted to 10 and then at its deployed value.
-func TestBook_MeasureConcurrentBooks(t *testing.T) {
+func TestFactSet_MeasureConcurrentFactSets(t *testing.T) {
 	if os.Getenv(measureEnv) == "" {
 		t.Skip("set " + measureEnv + "=1 to measure")
 	}
-	units, refs := envInt("KNOMIT_BOOK_UNITS", 500), envInt("KNOMIT_BOOK_REFS", 199)
-	f := newBookFixture(t)
+	units, refs := envInt("KNOMIT_FACTSET_UNITS", 500), envInt("KNOMIT_FACTSET_REFS", 199)
+	f := newFactSetFixture(t)
 	seedCaps(t, f, units, refs)
-	old := maxBookRows
-	maxBookRows = 1 << 30
-	t.Cleanup(func() { maxBookRows = old })
+	old := maxFactSetRows
+	maxFactSetRows = 1 << 30
+	t.Cleanup(func() { maxFactSetRows = old })
 	ti := f.svc.ToolSession()
 
-	for _, slots := range []int{10, MaxConcurrentBookBuilds} {
+	for _, slots := range []int{10, MaxConcurrentFactSetBuilds} {
 		saved := buildSlots
 		buildSlots = make(chan struct{}, slots)
 		runtime.GC()
-		n0, t0, _ := ti.BookLockWaits()
+		n0, t0, _ := ti.FactSetLockWaits()
 		stop := peakSampler(ti)
 		start := time.Now()
 		var wg sync.WaitGroup
@@ -400,10 +400,10 @@ func TestBook_MeasureConcurrentBooks(t *testing.T) {
 				req := f.request("kb/u/")
 				req.Options.MaxNodes = MaxNodesLimit
 				owner := fmt.Sprintf("o%d-%d", slots, i)
-				p, _, err := BookFirstPage(ctx, f.scope(owner), req)
+				p, _, err := FactSetFirstPage(ctx, f.scope(owner), req)
 				if err == nil {
 					s := time.Now()
-					_, err = BookNextPage(ctx, f.scope(owner), f.b, nil, nil, *p.Cursor, units)
+					_, err = FactSetNextPage(ctx, f.scope(owner), f.b, nil, nil, *p.Cursor, units)
 					if d := int64(time.Since(s)); err == nil && d > maxSeek.Load() {
 						maxSeek.Store(d)
 					}
@@ -411,20 +411,20 @@ func TestBook_MeasureConcurrentBooks(t *testing.T) {
 				switch {
 				case err == nil:
 					ok.Add(1)
-				case errors.Is(err, ErrBookBusy):
+				case errors.Is(err, ErrFactSetBusy):
 					busy.Add(1)
 				default:
-					t.Errorf("book %d: %v", i, err)
+					t.Errorf("factset %d: %v", i, err)
 				}
 			}()
 		}
 		wg.Wait()
 		heap, files := stop()
-		n1, t1, max := ti.BookLockWaits()
-		nfiles, bytes, _ := ti.BookFiles()
-		inMem, spilled := ti.LiveBooks()
-		t.Logf("10 concurrent books of %d x %d (walk cap %d): %s, completed %d, refused %d, slowest far seek %s, heap peak %d MiB, live books in memory %d / spilled %d (book memory now %d KiB), book files %d (%d MiB written, %d MiB each), open book files peak %d, session-DB lock waits %d writes total %s max-so-far %s",
-			units, refs, slots, time.Since(start), ok.Load(), busy.Load(), time.Duration(maxSeek.Load()), heap>>20, inMem, spilled, sessions.BookMemoryUsed()>>10, nfiles, bytes>>20, (bytes/int64(max1(nfiles)))>>20, files, n1-n0, t1-t0, max)
+		n1, t1, max := ti.FactSetLockWaits()
+		nfiles, bytes, _ := ti.FactSetFiles()
+		inMem, spilled := ti.LiveFactSets()
+		t.Logf("10 concurrent factsets of %d x %d (walk cap %d): %s, completed %d, refused %d, slowest far seek %s, heap peak %d MiB, live factsets in memory %d / spilled %d (factset memory now %d KiB), factset files %d (%d MiB written, %d MiB each), open factset files peak %d, session-DB lock waits %d writes total %s max-so-far %s",
+			units, refs, slots, time.Since(start), ok.Load(), busy.Load(), time.Duration(maxSeek.Load()), heap>>20, inMem, spilled, sessions.FactSetMemoryUsed()>>10, nfiles, bytes>>20, (bytes/int64(max1(nfiles)))>>20, files, n1-n0, t1-t0, max)
 		buildSlots = saved
 	}
 }
@@ -444,8 +444,8 @@ func envInt(k string, def int) int {
 }
 
 // seedFlat writes n results under kb/u/ that cite nothing: unit i is one
-// section, so the book has n rows.
-func seedFlat(t testing.TB, f *bookFixture, n int) {
+// section, so the factset has n rows.
+func seedFlat(t testing.TB, f *factsetFixture, n int) {
 	t.Helper()
 	for i := range n {
 		f.write(t, fmt.Sprintf("kb/u/f%02d.md", i), fmt.Sprintf("F%02d", i), fmt.Sprintf("f%02d body.", i))
@@ -464,19 +464,19 @@ func noPanic(t *testing.T, what string, fn func()) {
 	require.Nil(t, p, "%s PANICKED: %v", what, p)
 }
 
-// B1 (review of PR #692): a book a call holds is never freed under it. A
+// B1 (review of PR #692): a factset a call holds is never freed under it. A
 // far seek (the walk of 59 units) and an export (60 rows, two chunks) hold
-// their book while the same owner's new first call REPLACES it, or the
+// their factset while the same owner's new first call REPLACES it, or the
 // cursor is DELETED, in memory and after a spill. The holder never panics:
 // the seek ends as the expired cursor (the 404: its row is gone), the export
-// finishes whole from the book it holds, and the book is freed on that last
+// finishes whole from the factset it holds, and the factset is freed on that last
 // release, its file deleted with it.
 //
-// Sabotage: free the book at once in retireLocked (ignore holders), and the
+// Sabotage: free the factset at once in retireLocked (ignore holders), and the
 // holder's next read is a nil-pointer panic; answer a vanished row with
 // ErrCursorInUse in page (N4), and the seek is a 409, not the 404.
-func TestBook_HeldBookSurvivesReplacementAndDelete(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_HeldFactSetSurvivesReplacementAndDelete(t *testing.T) {
+	f := newFactSetFixture(t)
 	seedFlat(t, f, 60)
 	ti := f.svc.ToolSession()
 	ctx := context.Background()
@@ -486,44 +486,44 @@ func TestBook_HeldBookSurvivesReplacementAndDelete(t *testing.T) {
 				name := fmt.Sprintf("%s-%s-spilled=%v", via, action, spilled)
 				t.Run(name, func(t *testing.T) {
 					if spilled {
-						defer sessions.SetBookSpillBytesForTest(1)()
+						defer sessions.SetFactSetSpillBytesForTest(1)()
 					}
 					owner := "o-" + name
 					req := f.request("kb/u/")
 					req.Limit = 1
-					p1, _, err := BookFirstPage(ctx, f.scope(owner), req)
+					p1, _, err := FactSetFirstPage(ctx, f.scope(owner), req)
 					require.NoError(t, err)
 					id := *p1.Cursor
 					require.Equal(t, 1, p1.UnitsWalked)
-					inMem, onDisk := ti.LiveBooks()
+					inMem, onDisk := ti.LiveFactSets()
 					before := inMem + onDisk
 					acted := false
 					act := func() {
 						acted = true
 						if action == "replace" {
-							_, _, err := BookFirstPage(ctx, f.scope(owner), req)
+							_, _, err := FactSetFirstPage(ctx, f.scope(owner), req)
 							require.NoError(t, err)
 						} else {
-							require.NoError(t, ti.DeleteBook(ctx, id))
+							require.NoError(t, ti.DeleteFactSet(ctx, id))
 						}
-						_, ok := ti.OpenBook(id)
-						require.False(t, ok, "a retired book is refused to new calls")
+						_, ok := ti.OpenFactSet(id)
+						require.False(t, ok, "a retired factset is refused to new calls")
 					}
 					switch via {
 					case "seek":
-						defer SetBookUnitWalkedHookForTest(func(cursor string, unit int) {
+						defer SetFactSetUnitWalkedHookForTest(func(cursor string, unit int) {
 							if cursor == id && unit == 30 && !acted {
 								act()
 							}
 						})()
 						noPanic(t, "the seeking call", func() {
-							_, err = BookNextPage(ctx, f.scope(owner), f.b, nil, nil, id, 60)
+							_, err = FactSetNextPage(ctx, f.scope(owner), f.b, nil, nil, id, 60)
 						})
 						require.ErrorIs(t, err, ErrCursorExpired, "its row is gone: the 404, never a 409")
 					case "export":
 						var doc strings.Builder
 						noPanic(t, "the exporting call", func() {
-							err = BookExport(ctx, f.scope(owner), f.b, nil, nil, id, func(BookEnv) io.Writer {
+							err = FactSetExport(ctx, f.scope(owner), f.b, nil, nil, id, func(FactSetEnv) io.Writer {
 								act() // chunk 1 is read; chunk 2 is read after this
 								return &doc
 							})
@@ -532,13 +532,13 @@ func TestBook_HeldBookSurvivesReplacementAndDelete(t *testing.T) {
 						require.Equal(t, 60, strings.Count(doc.String(), "\n## "), "the export is whole")
 					}
 					require.True(t, acted)
-					inMem, onDisk = ti.LiveBooks()
+					inMem, onDisk = ti.LiveFactSets()
 					want := before
 					if action == "delete" {
 						want--
 					}
-					require.Equal(t, want, inMem+onDisk, "the old book was freed on its last release")
-					require.False(t, exists(ti.BookFilePath(id)), "and its file deleted")
+					require.Equal(t, want, inMem+onDisk, "the old factset was freed on its last release")
+					require.False(t, exists(ti.FactSetFilePath(id)), "and its file deleted")
 				})
 			}
 		}
@@ -557,19 +557,19 @@ func exists(path string) bool {
 //
 // Sabotage: drop the releaseSlot after the walk, and the blocked export
 // still holds its build slot.
-func TestBook_ExportGivesItsBuildSlotBackBeforeStreaming(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_ExportGivesItsBuildSlotBackBeforeStreaming(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	ctx := context.Background()
 	req := f.request("kb/u/")
 	req.Limit = 1
-	p1, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	p1, _, err := FactSetFirstPage(ctx, f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 1, p1.UnitsWalked, "unit 2 is left for the export to walk")
 	require.Zero(t, BuildSlotsInUse())
 
 	builds, exports := -1, -1
-	err = BookExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(BookEnv) io.Writer {
+	err = FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(FactSetEnv) io.Writer {
 		return writerFunc(func(p []byte) (int, error) {
 			if builds < 0 {
 				builds, exports = BuildSlotsInUse(), ExportSlotsInUse()
@@ -582,14 +582,14 @@ func TestBook_ExportGivesItsBuildSlotBackBeforeStreaming(t *testing.T) {
 	require.Equal(t, 1, exports, "it holds its export slot")
 	require.Zero(t, ExportSlotsInUse(), "and gives it back at the end")
 
-	for range MaxConcurrentBookExports {
+	for range MaxConcurrentFactSetExports {
 		exportSlots <- struct{}{}
 	}
-	err = BookExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(BookEnv) io.Writer { return io.Discard })
-	for range MaxConcurrentBookExports {
+	err = FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(FactSetEnv) io.Writer { return io.Discard })
+	for range MaxConcurrentFactSetExports {
 		<-exportSlots
 	}
-	require.ErrorIs(t, err, ErrBookExportsBusy)
+	require.ErrorIs(t, err, ErrFactSetExportsBusy)
 }
 
 type writerFunc func(p []byte) (int, error)
@@ -600,11 +600,11 @@ func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
 // distance (fact 33b57847): r cites a then b, a cites c, c cites d, b cites
 // d. BFS puts d at distance 2 (through b); the reading order writes it under
 // c, at tree depth 3, numbered 1.1.1.1. (A direct reference of the root,
-// distance 1, is always the root's child in a book: walker.pinDirect.)
+// distance 1, is always the root's child in a factset: walker.pinDirect.)
 //
 // Sabotage: set tree_depth from the BFS depth, and d reads 2.
-func TestBook_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
+	f := newFactSetFixture(t)
 	f.write(t, "kb/z/d.md", "D", "d body.")
 	f.write(t, "kb/z/c.md", "C", "c body.", "kb/z/d.md")
 	f.write(t, "kb/z/b.md", "B", "b body.", "kb/z/d.md")
@@ -612,9 +612,9 @@ func TestBook_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
 	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
 	req := f.request("kb/u/")
 	req.Limit = 5
-	p, _, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	p, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
 	require.NoError(t, err)
-	byPath := map[string]BookNode{}
+	byPath := map[string]FactSetNode{}
 	for _, n := range p.Facts {
 		byPath[n.Path] = n
 	}
@@ -627,15 +627,15 @@ func TestBook_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
 	require.Equal(t, "1.2", byPath["kb/z/b.md"].Number)
 }
 
-// different_version on a book link: unit 1 writes x at the version r1 cites
+// different_version on a factset link: unit 1 writes x at the version r1 cites
 // (its new body); unit 2's r2 cites x's OLD version, whose body differs, so
 // its back link is flagged. y was re-written with the same body (only its
 // confidence changed): a different commit alone is not a change.
 //
-// Sabotage: never set different_version on a book link, and x's link is
+// Sabotage: never set different_version on a factset link, and x's link is
 // unflagged.
-func TestBook_LinkDifferentVersion(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_LinkDifferentVersion(t *testing.T) {
+	f := newFactSetFixture(t)
 	f.write(t, "kb/z/x.md", "X", "x old body.")
 	f.write(t, "kb/z/y.md", "Y", "y body.")
 	f.write(t, "kb/u/r2.md", "R2", "r2 body.", "kb/z/x.md", "kb/z/y.md")
@@ -653,15 +653,15 @@ func TestBook_LinkDifferentVersion(t *testing.T) {
 	req := f.request("kb/u/")
 	req.Limit = 5
 	ctx := context.Background()
-	p, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	p, _, err := FactSetFirstPage(ctx, f.scope("o"), req)
 	require.NoError(t, err)
 	nodes := p.Facts
 	for p.HasMore {
-		p, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
+		p, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
 		require.NoError(t, err)
 		nodes = append(nodes, p.Facts...)
 	}
-	links := map[string]*BookLink{}
+	links := map[string]*FactSetLink{}
 	for _, n := range nodes {
 		if n.Unit == 2 && n.Link != nil {
 			links[n.Path] = n.Link
@@ -675,15 +675,15 @@ func TestBook_LinkDifferentVersion(t *testing.T) {
 }
 
 // N3: a result the search listed that is gone at the anchor (deleted
-// between the search and the HEAD the book is walked at) keeps its unit, as
+// between the search and the HEAD the factset is walked at) keeps its unit, as
 // a heading alone under the title the search listed: never a 503 "retry",
 // which every retry at the frozen anchor would answer again. Pages and the
 // export both serve it.
 //
-// Sabotage: make the gone result's walk error (the old ErrBookChanged), and
+// Sabotage: make the gone result's walk error (the old ErrBookChanged 503), and
 // the unit is refused.
-func TestBook_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
+	f := newFactSetFixture(t)
 	fixtureTwo(t, f)
 	defer f.svc.Search().SetOverridesForTest(index.Overrides{Search: func(next index.SearchFunc) index.SearchFunc {
 		return func(ctx context.Context, branch string, q index.SearchOptions) ([]index.SearchResult, error) {
@@ -695,12 +695,12 @@ func TestBook_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
 	req := f.request("kb/u/")
 	req.Limit = 5
 	ctx := context.Background()
-	p, _, err := BookFirstPage(ctx, f.scope("o"), req)
+	p, _, err := FactSetFirstPage(ctx, f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 3, p.Units, "the gone result keeps its unit")
 	nodes := p.Facts
 	for p.HasMore {
-		p, err = BookNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
+		p, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
 		require.NoError(t, err)
 		nodes = append(nodes, p.Facts...)
 	}
@@ -714,7 +714,7 @@ func TestBook_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
 	require.Equal(t, "3", last.Number)
 
 	var doc strings.Builder
-	require.NoError(t, BookExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(BookEnv) io.Writer { return &doc }))
+	require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return &doc }))
 	require.Contains(t, doc.String(), "## 3. Gone fact "+UnavailableNote)
 }
 
@@ -726,7 +726,7 @@ func TestBook_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
 //
 // C is written before B and A, so the search lists a, b, c (newest first,
 // and by path on a tie).
-func seedABC(t testing.TB, f *bookFixture) {
+func seedABC(t testing.TB, f *factsetFixture) {
 	t.Helper()
 	for _, leaf := range []string{"p", "r", "s"} {
 		f.write(t, "kb/z/"+leaf+".md", strings.ToUpper(leaf), leaf+" body.")
@@ -741,13 +741,13 @@ func seedABC(t testing.TB, f *bookFixture) {
 	f.write(t, "kb/u/a.md", "A", "a body.", "kb/z/x.md", "kb/z/y.md")
 }
 
-// readAll pages a book from page to its end, every node in book order.
-func readAll(t *testing.T, f *bookFixture, owner string, p BookPage) []BookNode {
+// readAll pages a factset from page to its end, every node in factset order.
+func readAll(t *testing.T, f *factsetFixture, owner string, p FactSetPage) []FactSetNode {
 	t.Helper()
-	nodes := append([]BookNode(nil), p.Facts...)
+	nodes := append([]FactSetNode(nil), p.Facts...)
 	for p.HasMore {
 		var err error
-		p, err = BookNextPage(context.Background(), f.scope(owner), f.b, nil, nil, *p.Cursor, 0)
+		p, err = FactSetNextPage(context.Background(), f.scope(owner), f.b, nil, nil, *p.Cursor, 0)
 		require.NoError(t, err)
 		nodes = append(nodes, p.Facts...)
 	}
@@ -761,7 +761,7 @@ type row struct {
 	link         string // "" written; "forward 2.2", "back 1.2"
 }
 
-func rowsOf(nodes []BookNode) []row {
+func rowsOf(nodes []FactSetNode) []row {
 	out := make([]row, len(nodes))
 	for i, n := range nodes {
 		r := row{number: n.Number, fact: strings.TrimSuffix(strings.TrimPrefix(n.Path, "kb/"), ".md")}
@@ -784,12 +784,12 @@ func rowsOf(nodes []BookNode) []row {
 // Sabotage: reserve only the results (the old seeded set), and 1.1.2 Z is
 // written in unit 1; drop pinDirect, and a direct reference nests under a
 // sibling; number reservations from 0, and (see 2.2) points nowhere.
-func TestBook_TwoLevelReservationExample(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_TwoLevelReservationExample(t *testing.T) {
+	f := newFactSetFixture(t)
 	seedABC(t, f)
 	req := f.request("kb/u/")
-	req.Options.Depth, req.Options.MaxNodes, req.Limit = 3, MaxBookFacts, 5
-	p, _, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	req.Options.Depth, req.Options.MaxNodes, req.Limit = 3, MaxFactSetFacts, 5
+	p, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 3, p.Units)
 	nodes := readAll(t, f, "o", p)
@@ -814,7 +814,7 @@ func TestBook_TwoLevelReservationExample(t *testing.T) {
 		{"3.2", "z/x", "back 1.1"},
 	}, rowsOf(nodes))
 
-	written := map[string]BookNode{}
+	written := map[string]FactSetNode{}
 	for _, n := range nodes {
 		if n.Written {
 			require.NotContains(t, written, n.Path, "%s written once", n.Path)
@@ -837,7 +837,7 @@ func TestBook_TwoLevelReservationExample(t *testing.T) {
 		}
 	}
 
-	bk, ok := f.svc.ToolSession().OpenBook(*p.Cursor)
+	bk, ok := f.svc.ToolSession().OpenFactSet(*p.Cursor)
 	require.True(t, ok)
 	defer bk.Close()
 	reservedAs := func(path string) string {
@@ -865,17 +865,17 @@ func TestBook_TwoLevelReservationExample(t *testing.T) {
 //
 // Sabotage: ignore max_nodes when reserving, and Y is reserved for unit 1,
 // which never writes it: unit 2 then links to a Y written nowhere.
-func TestBook_ReservationFollowsTheOwnersLimits(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_ReservationFollowsTheOwnersLimits(t *testing.T) {
+	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
-	reservations := func(owner string, depth, maxNodes int) (map[string]string, []BookNode) {
+	reservations := func(owner string, depth, maxNodes int) (map[string]string, []FactSetNode) {
 		req := f.request("kb/u/")
 		req.Options.Depth, req.Options.MaxNodes, req.Limit = depth, maxNodes, 5
-		p, _, err := BookFirstPage(ctx, f.scope(owner), req)
+		p, _, err := FactSetFirstPage(ctx, f.scope(owner), req)
 		require.NoError(t, err)
 		nodes := readAll(t, f, owner, p)
-		bk, ok := f.svc.ToolSession().OpenBook(*p.Cursor)
+		bk, ok := f.svc.ToolSession().OpenFactSet(*p.Cursor)
 		require.True(t, ok)
 		defer bk.Close()
 		out := map[string]string{}
@@ -896,27 +896,27 @@ func TestBook_ReservationFollowsTheOwnersLimits(t *testing.T) {
 		{"3", "u/c", ""}, {"3.1", "z/w", ""},
 	}, rowsOf(nodes))
 
-	zero, nodes := reservations("depth0", 0, MaxBookFacts)
+	zero, nodes := reservations("depth0", 0, MaxFactSetFacts)
 	require.Empty(t, zero, "Depth 0 reserves nothing")
 	require.Equal(t, []row{{"1", "u/a", ""}, {"2", "u/b", ""}, {"3", "u/c", ""}}, rowsOf(nodes))
 }
 
 // A unit's direct references are its root's children, in refs order, even
 // when one is also reachable through a sibling: r cites a then b, a cites
-// b. The plain reading order would nest b under a (1.1.1); in a book b is
+// b. The plain reading order would nest b under a (1.1.1); in a factset b is
 // 1.2, the number reserved for it before the walk, and a's builds_on still
 // points at it.
 //
 // Sabotage: drop walker.pinDirect, and b is walked as 1.1.1 against its
 // reserved 1.2 (the unit is refused).
-func TestBook_DirectRefsAreTheRootsChildren(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_DirectRefsAreTheRootsChildren(t *testing.T) {
+	f := newFactSetFixture(t)
 	f.write(t, "kb/z/b.md", "B", "b body.")
 	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/b.md")
 	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
 	req := f.request("kb/u/")
 	req.Limit = 5
-	p, _, err := BookFirstPage(context.Background(), f.scope("o"), req)
+	p, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, []row{{"1", "u/r", ""}, {"1.1", "z/a", ""}, {"1.2", "z/b", ""}}, rowsOf(p.Facts))
 	a, b := p.Facts[1], p.Facts[2]
@@ -926,20 +926,20 @@ func TestBook_DirectRefsAreTheRootsChildren(t *testing.T) {
 }
 
 // A seek to unit 3 before units 2 and 3 are walked serves exactly what
-// reading the book from the start does: the reservations are fixed on the
+// reading the factset from the start does: the reservations are fixed on the
 // first call.
 //
 // Sabotage: compute the reservations lazily per walked unit, and unit 3
 // differs.
-func TestBook_SeekGivesTheSameReservedBook(t *testing.T) {
-	f := newBookFixture(t)
+func TestFactSet_SeekGivesTheSameReservedFactSet(t *testing.T) {
+	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
 	req := f.request("kb/u/")
-	req.Options.Depth, req.Options.MaxNodes, req.Limit = 3, MaxBookFacts, 5
-	p, _, err := BookFirstPage(ctx, f.scope("whole"), req)
+	req.Options.Depth, req.Options.MaxNodes, req.Limit = 3, MaxFactSetFacts, 5
+	p, _, err := FactSetFirstPage(ctx, f.scope("whole"), req)
 	require.NoError(t, err)
-	var unit3 []BookNode
+	var unit3 []FactSetNode
 	for _, n := range readAll(t, f, "whole", p) {
 		if n.Unit == 3 {
 			unit3 = append(unit3, n)
@@ -947,19 +947,19 @@ func TestBook_SeekGivesTheSameReservedBook(t *testing.T) {
 	}
 
 	req.Limit = 1
-	p1, _, err := BookFirstPage(ctx, f.scope("seek"), req)
+	p1, _, err := FactSetFirstPage(ctx, f.scope("seek"), req)
 	require.NoError(t, err)
 	require.Equal(t, 1, p1.UnitsWalked)
-	p3, err := BookNextPage(ctx, f.scope("seek"), f.b, nil, nil, *p1.Cursor, 3)
+	p3, err := FactSetNextPage(ctx, f.scope("seek"), f.b, nil, nil, *p1.Cursor, 3)
 	require.NoError(t, err)
-	seeked := append([]BookNode(nil), p3.Facts...)
+	seeked := append([]FactSetNode(nil), p3.Facts...)
 	for p3.HasMore {
-		p3, err = BookNextPage(ctx, f.scope("seek"), f.b, nil, nil, *p3.Cursor, 0)
+		p3, err = FactSetNextPage(ctx, f.scope("seek"), f.b, nil, nil, *p3.Cursor, 0)
 		require.NoError(t, err)
 		seeked = append(seeked, p3.Facts...)
 	}
-	strip := func(ns []BookNode) []BookNode {
-		out := make([]BookNode, len(ns))
+	strip := func(ns []FactSetNode) []FactSetNode {
+		out := make([]FactSetNode, len(ns))
 		for i, n := range ns {
 			n.Date = ""
 			out[i] = n

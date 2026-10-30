@@ -1018,9 +1018,9 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("session config: %w", err)
 	}
 	m.sessionCfg = sessionCfg
-	// The in-memory materialize-book budget is process-wide (the books of
+	// The in-memory materialize-factset budget is process-wide (the factsets of
 	// every repo's session store count against one budget).
-	sessions.SetBookMemoryBudget(int64(m.deps.Cfg.Session.BookMemoryMiB) << 20)
+	sessions.SetFactSetMemoryBudget(int64(m.deps.Cfg.Session.FactSetMemoryMiB) << 20)
 
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {

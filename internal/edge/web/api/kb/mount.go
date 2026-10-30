@@ -56,8 +56,8 @@ func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr
 	branch.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
 
 	branch.Get("/search", handleSearch(b, emb))
-	branch.Get(bookRouteSuffix, handleSearchBook(emb, mgr))
-	branch.Get(bookRouteSuffix+bookExportSuffix, handleSearchBookExport(mgr))
+	branch.Get(factsetRouteSuffix, handleSearchFactSet(emb, mgr))
+	branch.Get(factsetRouteSuffix+factsetExportSuffix, handleSearchFactSetExport(mgr))
 	branch.Get("/activity", handleHALActivity(b))
 	branch.Get("/completions", handleHALCompletions(b))
 	branch.Get("/domains", handleHALDomains(b))

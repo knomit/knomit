@@ -8,8 +8,8 @@ import (
 
 // Vector hits rank by cosine, highest first, and equal cosines by path: a
 // tie has one order whatever order the metadata query returned the rows in,
-// so the UI's results list and a book materializing the same search
-// (materialize.runBookSearch) agree on it (review of PR #692, N2).
+// so the UI's results list and a factset materializing the same search
+// (materialize.runFactSetSearch) agree on it (review of PR #692, N2).
 //
 // Sabotage: drop the path tie-break, and the tied rows keep their input
 // order.

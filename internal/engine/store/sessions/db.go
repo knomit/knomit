@@ -42,11 +42,11 @@ func Open(mainPath string) (*sql.DB, string, error) {
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(sessionPath + suffix)
 	}
-	// The book files of the previous run are dead with their cursors: the
+	// The factset files of the previous run are dead with their cursors: the
 	// startup sweep is recreating their directory empty.
-	_ = os.RemoveAll(BooksDirFor(sessionPath))
-	if err := os.MkdirAll(BooksDirFor(sessionPath), 0o700); err != nil {
-		return nil, "", fmt.Errorf("open: book directory: %w", err)
+	_ = os.RemoveAll(FactSetsDirFor(sessionPath))
+	if err := os.MkdirAll(FactSetsDirFor(sessionPath), 0o700); err != nil {
+		return nil, "", fmt.Errorf("open: factset directory: %w", err)
 	}
 
 	// Stock "sqlite3" driver — NO vec extension, so no need for
@@ -81,14 +81,14 @@ func NewPipelineIndex(mainDB, sessionDB *sql.DB) *PipelineIndex {
 	return &PipelineIndex{db: mainDB, sessionDB: sessionDB}
 }
 
-// BooksDirFor is the directory of the book files that belong to the session
-// DB at sessionPath: "<session DB>.books".
-func BooksDirFor(sessionPath string) string { return sessionPath + ".books" }
+// FactSetsDirFor is the directory of the factset files that belong to the session
+// DB at sessionPath: "<session DB>.factsets".
+func FactSetsDirFor(sessionPath string) string { return sessionPath + ".factsets" }
 
-// NewToolIndex returns the tool-session index over the session db. booksDir
-// is where its book files live (BooksDirFor); "" disables books.
-func NewToolIndex(sessionDB *sql.DB, booksDir string) *ToolIndex {
-	return &ToolIndex{db: sessionDB, booksDir: booksDir, books: map[string]*bookStore{}}
+// NewToolIndex returns the tool-session index over the session db. factsetsDir
+// is where its factset files live (FactSetsDirFor); "" disables factsets.
+func NewToolIndex(sessionDB *sql.DB, factsetsDir string) *ToolIndex {
+	return &ToolIndex{db: sessionDB, factsetsDir: factsetsDir, factsets: map[string]*factsetStore{}}
 }
 
 // ReapIdle deletes session rows whose last_used_at is older than the

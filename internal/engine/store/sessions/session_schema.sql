@@ -43,15 +43,15 @@ CREATE TABLE tool_queue (
 
 CREATE INDEX tool_queue_session_sort ON tool_queue(session_id, sort_key);
 
--- Book cursors (materialize a search as a book). A book is a tool_sessions
--- row (tool 'materialize-book:<limit>', owner = endpoint + principal) plus
--- this small row: its envelope and its reading position. The book's
+-- FactSet cursors (materialize a search as a factset). A factset is a tool_sessions
+-- row (tool 'materialize-factset:<limit>', owner = endpoint + principal) plus
+-- this small row: its envelope and its reading position. The factset's
 -- STRUCTURE (results, rows, visited set) is NOT here: it lives in a file of
--- its own under <session DB>.books/<id>.db (book_file.go), so books never
+-- its own under <session DB>.factsets/<id>.db (factset_file.go), so factsets never
 -- contend with each other or with other cursors on this file. The row
--- cascades from tool_sessions; the book file goes with it (ToolIndex
--- deletes it on replacement and in SweepBookFiles after the reaper).
-CREATE TABLE book_sessions (
+-- cascades from tool_sessions; the factset file goes with it (ToolIndex
+-- deletes it on replacement and in SweepFactSetFiles after the reaper).
+CREATE TABLE factset_sessions (
     session_id TEXT PRIMARY KEY REFERENCES tool_sessions(id) ON DELETE CASCADE,
     env        TEXT NOT NULL,              -- JSON envelope (title, search, options, units)
     units      INTEGER NOT NULL DEFAULT 0,

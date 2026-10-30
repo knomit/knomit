@@ -14,13 +14,13 @@ import (
 	"knomit/internal/corpus/repos"
 )
 
-// Book mode of knomit_materialize: `search` instead of `file` materializes
-// that search as a book (materialize.BookFirstPage), and a book cursor pages
-// it (materialize.BookNextPage). The pages are byte for byte the REST
-// GET …/search/book pages for the same input: one shared builder.
+// FactSet mode of knomit_materialize: `search` instead of `file` materializes
+// that search as a factset (materialize.FactSetFirstPage), and a factset cursor pages
+// it (materialize.FactSetNextPage). The pages are byte for byte the REST
+// GET …/search/factset pages for the same input: one shared builder.
 
-// bookSearchKeys are the keys of the `search` object.
-var bookSearchKeys = map[string]any{
+// factsetSearchKeys are the keys of the `search` object.
+var factsetSearchKeys = map[string]any{
 	"text": map[string]any{"type": "string", "description": "Free text, ranked by similarity."},
 	"entities": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
 		"description": "Entities, all must be present."},
@@ -43,29 +43,29 @@ var bookSearchKeys = map[string]any{
 		"description": "relevance (default): the search list; recent: newest first."},
 }
 
-// bookOnlyArgs may be passed only in book mode.
-var bookOnlyArgs = []string{"search", "facts"}
+// factsetOnlyArgs may be passed only in factset mode.
+var factsetOnlyArgs = []string{"search", "facts"}
 
-// isBookFirst reports whether a first call is in book mode.
-func isBookFirst(req mcpgo.CallToolRequest) bool {
+// isFactSetFirst reports whether a first call is in factset mode.
+func isFactSetFirst(req mcpgo.CallToolRequest) bool {
 	_, ok := req.GetArguments()["search"]
 	return ok
 }
 
-// materializeBookFirst builds the book of the `search` argument and returns
+// materializeFactSetFirst builds the factset of the `search` argument and returns
 // page 1.
-func materializeBookFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, mgr *repos.Manager, sWrite mcpStore) (*mcpgo.CallToolResult, error) {
+func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, mgr *repos.Manager, sWrite mcpStore) (*mcpgo.CallToolResult, error) {
 	args := req.GetArguments()
 	if _, ok := args["file"]; ok {
-		return mcpgo.NewToolResultError("pass `file` (one fact) or `search` (a book), not both"), nil
+		return mcpgo.NewToolResultError("pass `file` (one fact) or `search` (a factset), not both"), nil
 	}
 	if a, ok := args["audience"]; ok && a != audienceHuman {
-		return mcpgo.NewToolResultError(`book mode serves the human pages: audience must be "human" or omitted`), nil
+		return mcpgo.NewToolResultError(`factset mode serves the human pages: audience must be "human" or omitted`), nil
 	}
-	if err := rejectUnknownObjectKeys(req, "search", bookSearchKeys, "knomit_materialize"); err != nil {
+	if err := rejectUnknownObjectKeys(req, "search", factsetSearchKeys, "knomit_materialize"); err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	search, err := bookSearchArg(args["search"])
+	search, err := factsetSearchArg(args["search"])
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -84,9 +84,9 @@ func materializeBookFirst(ctx context.Context, req mcpgo.CallToolRequest, b *rep
 	}
 	opts.Unpin = req.GetBool("unpin", false)
 	opts.CrossKB = req.GetBool("cross_kb", false)
-	breq := materialize.BookRequest{
+	breq := materialize.FactSetRequest{
 		Binding: b, Manager: mgr, MayRead: callerMayRead(ctx), Search: search, Options: opts,
-		Facts: materialize.DefaultBookFacts, Limit: materialize.HumanDefaultLimit,
+		Facts: materialize.DefaultFactSetFacts, Limit: materialize.HumanDefaultLimit,
 	}
 	for _, a := range []struct {
 		name string
@@ -101,24 +101,24 @@ func materializeBookFirst(ctx context.Context, req mcpgo.CallToolRequest, b *rep
 		}
 	}
 	if c := req.GetString("commit", ""); c != "" {
-		return mcpgo.NewToolResultError("a book is materialized at the branch tip: the search reads the live index, so `commit` is not accepted"), nil
+		return mcpgo.NewToolResultError("a factset is materialized at the branch tip: the search reads the live index, so `commit` is not accepted"), nil
 	}
-	page, _, err := materialize.BookFirstPage(ctx, materializeScope(ctx, b, sWrite), breq)
+	page, _, err := materialize.FactSetFirstPage(ctx, materializeScope(ctx, b, sWrite), breq)
 	if err != nil {
-		return bookToolError(err), nil
+		return factsetToolError(err), nil
 	}
-	return marshalBookPage(page)
+	return marshalFactSetPage(page)
 }
 
-// materializeBookResume serves the next page of a book cursor, or seeks to
-// `unit`. A book cursor takes nothing but cursor, unit and binding: its page
+// materializeFactSetResume serves the next page of a factset cursor, or seeks to
+// `unit`. A factset cursor takes nothing but cursor, unit and binding: its page
 // size was frozen by the first call, as on REST.
-func materializeBookResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, mgr *repos.Manager, sWrite mcpStore, cursor string) (*mcpgo.CallToolResult, error) {
+func materializeFactSetResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, mgr *repos.Manager, sWrite mcpStore, cursor string) (*mcpgo.CallToolResult, error) {
 	for k := range req.GetArguments() {
 		switch k {
 		case "cursor", "unit", "binding":
 		default:
-			return mcpgo.NewToolResultError(fmt.Sprintf("%s cannot be passed with a book cursor: the book was fixed by the first call — pass only cursor (and unit to seek, binding)", k)), nil
+			return mcpgo.NewToolResultError(fmt.Sprintf("%s cannot be passed with a factset cursor: the factset was fixed by the first call — pass only cursor (and unit to seek, binding)", k)), nil
 		}
 	}
 	unit, present, err := intArgument(req, "unit")
@@ -128,18 +128,18 @@ func materializeBookResume(ctx context.Context, req mcpgo.CallToolRequest, b *re
 	if present && unit < 1 {
 		return mcpgo.NewToolResultError("unit must be at least 1"), nil
 	}
-	page, err := materialize.BookNextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor, unit)
+	page, err := materialize.FactSetNextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor, unit)
 	if err != nil {
-		return bookToolError(err), nil
+		return factsetToolError(err), nil
 	}
-	return marshalBookPage(page)
+	return marshalFactSetPage(page)
 }
 
-// bookToolError maps a book error to its tool error, with the REST route's
-// rule: the caller's own input errors and the book's bounds are named, and
+// factsetToolError maps a factset error to its tool error, with the REST route's
+// rule: the caller's own input errors and the factset's bounds are named, and
 // anything else is a fixed text, the internal error only logged (it can
 // carry SQL or file-path text).
-func bookToolError(err error) *mcpgo.CallToolResult {
+func factsetToolError(err error) *mcpgo.CallToolResult {
 	switch {
 	case errors.Is(err, materialize.ErrCursorExpired):
 		return mcpgo.NewToolResultError(errMaterializeExpired)
@@ -147,21 +147,21 @@ func bookToolError(err error) *mcpgo.CallToolResult {
 		return mcpgo.NewToolResultError(errSessionBusy)
 	case errors.Is(err, materialize.ErrCursorInUse):
 		return mcpgo.NewToolResultError("another call is reading this cursor; a cursor has one reader at a time")
-	case errors.Is(err, materialize.ErrBookBusy):
-		return mcpgo.NewToolResultError(materialize.ErrBookBusy.Error())
-	case errors.Is(err, materialize.ErrInvalid), errors.Is(err, materialize.ErrBookTooLarge):
+	case errors.Is(err, materialize.ErrFactSetBusy):
+		return mcpgo.NewToolResultError(materialize.ErrFactSetBusy.Error())
+	case errors.Is(err, materialize.ErrInvalid), errors.Is(err, materialize.ErrFactSetTooLarge):
 		return mcpgo.NewToolResultError(err.Error())
 	default:
-		log.Error().Err(err).Msg("knomit_materialize book failed")
-		return mcpgo.NewToolResultError(errBookFailed)
+		log.Error().Err(err).Msg("knomit_materialize factset failed")
+		return mcpgo.NewToolResultError(errFactSetFailed)
 	}
 }
 
-// errBookFailed is the tool error of every book failure that is not the
+// errFactSetFailed is the tool error of every factset failure that is not the
 // caller's to fix.
-const errBookFailed = "the book could not be served; retry, or start over without cursor"
+const errFactSetFailed = "the factset could not be served; retry, or start over without cursor"
 
-func marshalBookPage(p materialize.BookPage) (*mcpgo.CallToolResult, error) {
+func marshalFactSetPage(p materialize.FactSetPage) (*mcpgo.CallToolResult, error) {
 	out, err := json.Marshal(p)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
@@ -169,13 +169,13 @@ func marshalBookPage(p materialize.BookPage) (*mcpgo.CallToolResult, error) {
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-// bookSearchArg decodes the `search` object.
-func bookSearchArg(raw any) (materialize.BookSearch, error) {
+// factsetSearchArg decodes the `search` object.
+func factsetSearchArg(raw any) (materialize.FactSetSearch, error) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return materialize.BookSearch{}, errors.New("search must be an object")
+		return materialize.FactSetSearch{}, errors.New("search must be an object")
 	}
-	s := materialize.BookSearch{Sort: materialize.SortRelevance}
+	s := materialize.FactSetSearch{Sort: materialize.SortRelevance}
 	str := func(k string, dst *string) error {
 		if v, ok := obj[k]; ok {
 			sv, ok := v.(string)
@@ -235,7 +235,7 @@ func bookSearchArg(raw any) (materialize.BookSearch, error) {
 		boolean("domain_exact", &s.DomainExact),
 	} {
 		if err != nil {
-			return materialize.BookSearch{}, err
+			return materialize.FactSetSearch{}, err
 		}
 	}
 	return s, nil

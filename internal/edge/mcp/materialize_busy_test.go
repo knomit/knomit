@@ -63,22 +63,22 @@ func TestMaterialize_BusySessionStoreIsRetryable(t *testing.T) {
 	require.Equal(t, first.NTo+1, p.NFrom, "the retry serves the page the busy call did not")
 }
 
-// N7 (review of PR #692): a book failure that is not the caller's to fix is
+// N7 (review of PR #692): a factset failure that is not the caller's to fix is
 // a FIXED tool text, as on REST: the internal error (SQL, a file path) is
-// only logged. The caller's own input errors and the book's bounds are
+// only logged. The caller's own input errors and the factset's bounds are
 // still named.
 //
 // Sabotage: return err.Error() for the default case, and the path leaks.
-func TestBookToolError_InternalTextNeverLeaks(t *testing.T) {
-	internal := fmt.Errorf("spill book: open: /home/someone/.knomit/x.db.books/abc.db: %w", errors.New("disk I/O error"))
-	res := bookToolError(internal)
+func TestFactSetToolError_InternalTextNeverLeaks(t *testing.T) {
+	internal := fmt.Errorf("spill factset: open: /home/someone/.knomit/x.db.factsets/abc.db: %w", errors.New("disk I/O error"))
+	res := factsetToolError(internal)
 	require.True(t, res.IsError)
 	text := resultText(t, res)
-	require.Equal(t, errBookFailed, text)
+	require.Equal(t, errFactSetFailed, text)
 	require.NotContains(t, text, "/home/")
 
-	invalid := bookToolError(fmt.Errorf("%w: facts must be between 1 and 500, got 0", materialize.ErrInvalid))
+	invalid := factsetToolError(fmt.Errorf("%w: facts must be between 1 and 500, got 0", materialize.ErrInvalid))
 	require.Contains(t, resultText(t, invalid), "facts must be between 1 and 500")
-	require.Equal(t, errMaterializeExpired, resultText(t, bookToolError(materialize.ErrCursorExpired)))
-	require.Equal(t, errSessionBusy, resultText(t, bookToolError(materialize.ErrStoreBusy)))
+	require.Equal(t, errMaterializeExpired, resultText(t, factsetToolError(materialize.ErrCursorExpired)))
+	require.Equal(t, errSessionBusy, resultText(t, factsetToolError(materialize.ErrStoreBusy)))
 }

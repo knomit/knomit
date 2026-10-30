@@ -22,12 +22,12 @@ import (
 	"knomit/internal/engine/store"
 )
 
-const bookBase = "/repos/alpha/branches/agent:test/search/book"
+const factsetBase = "/repos/alpha/branches/agent:test/search/factset"
 
-func getBook(t *testing.T, h http.Handler, u string) (int, materialize.BookPage, string) {
+func getFactSet(t *testing.T, h http.Handler, u string) (int, materialize.FactSetPage, string) {
 	t.Helper()
 	code, ctype, body := getMaterialize(t, h, u)
-	var p materialize.BookPage
+	var p materialize.FactSetPage
 	if code == http.StatusOK {
 		require.Equal(t, "application/json", ctype)
 		require.NoError(t, json.Unmarshal([]byte(body), &p), body)
@@ -35,15 +35,15 @@ func getBook(t *testing.T, h http.Handler, u string) (int, materialize.BookPage,
 	return code, p, body
 }
 
-// readBook pages a book from its first call to the end: every node in book
+// readFactSet pages a factset from its first call to the end: every node in factset
 // order, and the pages.
-func readBook(t *testing.T, h http.Handler, first string) ([]materialize.BookNode, []materialize.BookPage) {
+func readFactSet(t *testing.T, h http.Handler, first string) ([]materialize.FactSetNode, []materialize.FactSetPage) {
 	t.Helper()
-	var nodes []materialize.BookNode
-	var pages []materialize.BookPage
+	var nodes []materialize.FactSetNode
+	var pages []materialize.FactSetPage
 	u := first
 	for {
-		code, p, body := getBook(t, h, u)
+		code, p, body := getFactSet(t, h, u)
 		require.Equal(t, http.StatusOK, code, body)
 		pages = append(pages, p)
 		nodes = append(nodes, p.Facts...)
@@ -51,13 +51,13 @@ func readBook(t *testing.T, h http.Handler, first string) ([]materialize.BookNod
 			return nodes, pages
 		}
 		require.NotNil(t, p.Cursor)
-		u = bookBase + "?cursor=" + url.QueryEscape(*p.Cursor)
+		u = factsetBase + "?cursor=" + url.QueryEscape(*p.Cursor)
 		require.Less(t, len(pages), 2000, "paging does not end")
 	}
 }
 
 // searchPaths is what the repo /search route lists for query: the list the
-// book must materialize.
+// factset must materialize.
 func searchPaths(t *testing.T, h http.Handler, query string) []string {
 	t.Helper()
 	code, _, body := getMaterialize(t, h, "/repos/alpha/branches/agent:test/search?"+query)
@@ -77,7 +77,7 @@ func searchPaths(t *testing.T, h http.Handler, query string) []string {
 	return out
 }
 
-// seedShared writes the book fixture under kb/u/ (the results) and kb/z/
+// seedShared writes the factset fixture under kb/u/ (the results) and kb/z/
 // (what they build on):
 //
 //	u/r1 -> z/s, u/r2        z/s -> z/d
@@ -97,15 +97,15 @@ func seedShared(t *testing.T, alpha *repos.RepoInstance) {
 	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", "kb/z/s.md", "kb/u/r2.md")
 }
 
-func byUnitPath(nodes []materialize.BookNode) map[string]materialize.BookNode {
-	out := map[string]materialize.BookNode{}
+func byUnitPath(nodes []materialize.FactSetNode) map[string]materialize.FactSetNode {
+	out := map[string]materialize.FactSetNode{}
 	for _, n := range nodes {
 		out[fmt.Sprintf("%d %s", n.Unit, n.Path)] = n
 	}
 	return out
 }
 
-func unitOf(nodes []materialize.BookNode, root string) int {
+func unitOf(nodes []materialize.FactSetNode, root string) int {
 	for _, n := range nodes {
 		if n.Path == root && (n.Role == materialize.RoleRoot || n.Role == materialize.RoleFocal) {
 			return n.Unit
@@ -114,7 +114,7 @@ func unitOf(nodes []materialize.BookNode, root string) int {
 	return 0
 }
 
-// The book walk with its visited set seeded with the search results
+// The factset walk with its visited set seeded with the search results
 // (user ruling 2026-10-29): every result has its own unit, in search order,
 // rooted at it; a result reached in another unit is a forward link
 // "(see N)" and is not expanded there; a fact an earlier unit wrote is a
@@ -124,7 +124,7 @@ func unitOf(nodes []materialize.BookNode, root string) int {
 // Sabotage: drop the results from the visited set (r2 is expanded inside
 // unit 1), make a back link expand (d appears in unit 2), or flip the
 // direction comparison.
-func TestBook_SeededVisitedSetAndLinks(t *testing.T) {
+func TestFactSet_SeededVisitedSetAndLinks(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
@@ -132,7 +132,7 @@ func TestBook_SeededVisitedSetAndLinks(t *testing.T) {
 	want := searchPaths(t, h, "path=kb/u/")
 	require.Equal(t, []string{"kb/u/r1.md", "kb/u/r2.md"}, want)
 
-	nodes, pages := readBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=5")
+	nodes, pages := readFactSet(t, h, factsetBase+"?path=kb/u/&depth=2&limit=5")
 	require.Equal(t, 2, pages[0].Units)
 	last := pages[len(pages)-1]
 	require.Equal(t, 2, last.UnitsWalked)
@@ -143,7 +143,7 @@ func TestBook_SeededVisitedSetAndLinks(t *testing.T) {
 	var got []string
 	written := map[string]int{}
 	for i, n := range nodes {
-		require.Equal(t, i+1, n.Seq, "seq is book order")
+		require.Equal(t, i+1, n.Seq, "seq is factset order")
 		mark := ""
 		if n.Written {
 			written[n.Path]++
@@ -189,21 +189,21 @@ func TestBook_SeededVisitedSetAndLinks(t *testing.T) {
 //
 // Sabotage: walk every unit on the first call, and page 1 reports 2 units
 // walked.
-func TestBook_UnitsAreWalkedAsPagesNeedThem(t *testing.T) {
+func TestFactSet_UnitsAreWalkedAsPagesNeedThem(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	code, p, body := getBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=2")
+	code, p, body := getFactSet(t, h, factsetBase+"?path=kb/u/&depth=2&limit=2")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 1, p.UnitsWalked, "page 1 needed unit 1 only")
 	require.Equal(t, 4, p.Sections)
 	require.True(t, p.HasMore)
 	// Page 3 (r2's forward link, then unit 2) walks unit 2.
-	code, p2, body := getBook(t, h, bookBase+"?cursor="+*p.Cursor)
+	code, p2, body := getFactSet(t, h, factsetBase+"?cursor="+*p.Cursor)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 1, p2.UnitsWalked, "rows 3-4 are in unit 1")
 	require.Equal(t, 0, p2.Facts[1].Link.Seq, "a forward link to a unit not walked yet has no seq yet")
-	code, p3, body := getBook(t, h, bookBase+"?cursor="+*p.Cursor)
+	code, p3, body := getFactSet(t, h, factsetBase+"?cursor="+*p.Cursor)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 2, p3.UnitsWalked)
 }
@@ -213,11 +213,11 @@ func TestBook_UnitsAreWalkedAsPagesNeedThem(t *testing.T) {
 //
 // Sabotage: number children from the unit's first node instead of their
 // tree parent, and d reads "1.2" instead of "1.1.1".
-func TestBook_SectionNumbersPerUnit(t *testing.T) {
+func TestFactSet_SectionNumbersPerUnit(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	nodes, _ := readBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=5")
+	nodes, _ := readFactSet(t, h, factsetBase+"?path=kb/u/&depth=2&limit=5")
 	at := byUnitPath(nodes)
 	for _, c := range []struct {
 		key, num  string
@@ -240,13 +240,13 @@ func TestBook_SectionNumbersPerUnit(t *testing.T) {
 //
 // Sabotage: ignore unit (serve from the cursor's position), and the seek
 // page starts elsewhere.
-func TestBook_Seek(t *testing.T) {
+func TestFactSet_Seek(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	all, _ := readBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=5")
+	all, _ := readFactSet(t, h, factsetBase+"?path=kb/u/&depth=2&limit=5")
 
-	code, p1, body := getBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=1")
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&depth=2&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	c := *p1.Cursor
 	start2 := 0
@@ -256,77 +256,77 @@ func TestBook_Seek(t *testing.T) {
 			break
 		}
 	}
-	code, p, body := getBook(t, h, bookBase+"?cursor="+c+"&unit=2")
+	code, p, body := getFactSet(t, h, factsetBase+"?cursor="+c+"&unit=2")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, start2, p.SeqFrom, "the seek page starts at unit 2's first section")
 	require.Equal(t, 2, p.Facts[0].Unit)
-	code, p, body = getBook(t, h, bookBase+"?cursor="+c)
+	code, p, body = getFactSet(t, h, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, start2+1, p.SeqFrom, "a resume continues after the seek page")
 
-	code, p, body = getBook(t, h, bookBase+"?cursor="+c+"&unit=1")
+	code, p, body = getFactSet(t, h, factsetBase+"?cursor="+c+"&unit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 1, p.SeqFrom, "seek goes back too")
 	for _, u := range []string{"0", "3", "x", "-1"} {
-		code, _, body := getBook(t, h, bookBase+"?cursor="+c+"&unit="+u)
+		code, _, body := getFactSet(t, h, factsetBase+"?cursor="+c+"&unit="+u)
 		require.Equal(t, http.StatusBadRequest, code, "unit=%s: %s", u, body)
 	}
-	code, p, body = getBook(t, h, bookBase+"?cursor="+c)
+	code, p, body = getFactSet(t, h, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 2, p.SeqFrom, "the refused seeks moved nothing")
 }
 
 // A cursor refuses every argument but unit, and the refusal consumes
 // nothing; the cursor belongs to the route and the principal; a new first
-// call by the same owner replaces the old book (one active book per
+// call by the same owner replaces the old factset (one active factset per
 // endpoint + principal).
 //
-// Sabotage: drop the owner comparison in openBook (u2 is served), or the
-// DELETE in CreateBook (the old cursor still pages).
-func TestBook_CursorOwnershipRefusalAndReplacement(t *testing.T) {
+// Sabotage: drop the owner comparison in openFactSet (u2 is served), or the
+// DELETE in CreateFactSet (the old cursor still pages).
+func TestFactSet_CursorOwnershipRefusalAndReplacement(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	router := newTestRouter(m)
 	owner, other := asPrincipal("u1", router), asPrincipal("u2", router)
 
-	code, p1, body := getBook(t, owner, bookBase+"?path=kb/u/&depth=2&limit=1")
+	code, p1, body := getFactSet(t, owner, factsetBase+"?path=kb/u/&depth=2&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	c := *p1.Cursor
 	for _, extra := range []string{"depth=1", "facts=1", "q=x", "limit=2", "path=kb/", "x=1"} {
-		code, _, body := getBook(t, owner, bookBase+"?cursor="+c+"&"+extra)
+		code, _, body := getFactSet(t, owner, factsetBase+"?cursor="+c+"&"+extra)
 		require.Equal(t, http.StatusBadRequest, code, "%s: %s", extra, body)
 	}
-	_, _, ghost := getBook(t, owner, bookBase+"?cursor=00000000-0000-4000-8000-000000000000")
-	code, _, foreign := getBook(t, other, bookBase+"?cursor="+c)
+	_, _, ghost := getFactSet(t, owner, factsetBase+"?cursor=00000000-0000-4000-8000-000000000000")
+	code, _, foreign := getFactSet(t, other, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code)
 	require.Equal(t, ghost, foreign, "another principal's cursor reads exactly like none")
 	// The single-fact pages route is another endpoint.
-	code, _, _ = getBook(t, owner, "/repos/alpha/branches/agent:test/facts/kb/u/r1.md/materialize/pages?cursor="+c)
+	code, _, _ = getFactSet(t, owner, "/repos/alpha/branches/agent:test/facts/kb/u/r1.md/materialize/pages?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code)
 
-	code, p2, body := getBook(t, owner, bookBase+"?cursor="+c)
+	code, p2, body := getFactSet(t, owner, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, p1.SeqTo+1, p2.SeqFrom, "the refused calls consumed nothing")
 
-	// Another principal's book does not replace this one; the owner's does.
-	code, _, body = getBook(t, other, bookBase+"?path=kb/u/&limit=1")
+	// Another principal's factset does not replace this one; the owner's does.
+	code, _, body = getFactSet(t, other, factsetBase+"?path=kb/u/&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
-	code, _, _ = getBook(t, owner, bookBase+"?cursor="+c)
-	require.Equal(t, http.StatusOK, code, "u2's book left u1's alone")
-	code, _, body = getBook(t, owner, bookBase+"?path=kb/z/&limit=1")
+	code, _, _ = getFactSet(t, owner, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusOK, code, "u2's factset left u1's alone")
+	code, _, body = getFactSet(t, owner, factsetBase+"?path=kb/z/&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
-	code, _, gone := getBook(t, owner, bookBase+"?cursor="+c)
-	require.Equal(t, http.StatusNotFound, code, "a new first call replaced the owner's old book")
+	code, _, gone := getFactSet(t, owner, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusNotFound, code, "a new first call replaced the owner's old factset")
 	require.Equal(t, ghost, gone)
 }
 
-// Paging past the UI's 50: the book holds every result up to Facts (the
+// Paging past the UI's 50: the factset holds every result up to Facts (the
 // default is all, capped at 500), and its first 50 units are the /search
 // list's 50, in order. facts=N keeps the best N.
 //
 // Sabotage: run the search with the UI's limit (50), and unit 51.. is
 // missing.
-func TestBook_PagesPastFiftyResults(t *testing.T) {
+func TestFactSet_PagesPastFiftyResults(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	alpha := m.Get("alpha")
 	for i := range 60 {
@@ -336,7 +336,7 @@ func TestBook_PagesPastFiftyResults(t *testing.T) {
 	ui := searchPaths(t, h, "path=kb/p/&limit=50")
 	require.Len(t, ui, 50)
 
-	nodes, pages := readBook(t, h, bookBase+"?path=kb/p/&depth=0&limit=5")
+	nodes, pages := readFactSet(t, h, factsetBase+"?path=kb/p/&depth=0&limit=5")
 	require.Equal(t, 60, pages[0].Units)
 	var roots []string
 	for _, n := range nodes {
@@ -345,62 +345,62 @@ func TestBook_PagesPastFiftyResults(t *testing.T) {
 	require.Len(t, roots, 60)
 	require.Equal(t, ui, roots[:50], "the first 50 units are the list the UI shows")
 
-	_, few := readBook(t, h, bookBase+"?path=kb/p/&depth=0&limit=5&facts=7")
+	_, few := readFactSet(t, h, factsetBase+"?path=kb/p/&depth=0&limit=5&facts=7")
 	require.Equal(t, 7, few[0].Units)
-	require.Equal(t, 500, materialize.DefaultBookFacts)
-	code, _, _ := getBook(t, h, bookBase+"?path=kb/p/&facts=501")
+	require.Equal(t, 500, materialize.DefaultFactSetFacts)
+	code, _, _ := getFactSet(t, h, factsetBase+"?path=kb/p/&facts=501")
 	require.Equal(t, http.StatusBadRequest, code)
 }
 
 // The title and the full-search line are computed on the server.
-func TestBook_TitleAndSearchLine(t *testing.T) {
+func TestFactSet_TitleAndSearchLine(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	code, p, body := getBook(t, h, bookBase+"?path=kb/u/&type=observation&limit=1")
+	code, p, body := getFactSet(t, h, factsetBase+"?path=kb/u/&type=observation&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, "Observations in U", p.Title, "no text, entities or domains: the fallback title from the other filters")
 	require.Equal(t, "path kb/u/ · type observation · sorted by relevance", p.SearchLine)
-	require.Equal(t, materialize.BookModeBook, p.Mode)
-	require.Equal(t, materialize.BookInstructions, p.Instructions)
+	require.Equal(t, materialize.FactSetMode, p.Mode)
+	require.Equal(t, materialize.FactSetInstructions, p.Instructions)
 }
 
 // Overload bounds on the REST edge: over the concurrent-build cap is a 503
 // with Retry-After and writes nothing.
 //
 // Sabotage: block on the slot instead of refusing, and the call hangs.
-func TestBook_ConcurrentBuildCapIs503(t *testing.T) {
+func TestFactSet_ConcurrentBuildCapIs503(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	release := materialize.ReserveBookBuildsForTest(materialize.MaxConcurrentBookBuilds)
+	release := materialize.ReserveFactSetBuildsForTest(materialize.MaxConcurrentFactSetBuilds)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"?path=kb/u/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"?path=kb/u/", nil))
 	release()
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
 	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
-	code, _, body := getBook(t, h, bookBase+"?path=kb/u/")
+	code, _, body := getFactSet(t, h, factsetBase+"?path=kb/u/")
 	require.Equal(t, http.StatusOK, code, "a slot freed is a slot: %s", body)
 }
 
-// Export: the whole book as one agent document, one "##" per unit, every
+// Export: the whole factset as one agent document, one "##" per unit, every
 // section once, links as in-document anchors that resolve; an attachment
 // named like the single export; the cursor's position is left alone.
 //
 // Sabotage: write a link's target as its own appearance anchor, and the
 // "(see …)" anchor resolves to nothing.
-func TestBook_ExportIsOneDocumentWithAnchors(t *testing.T) {
+func TestFactSet_ExportIsOneDocumentWithAnchors(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	code, p1, body := getBook(t, h, bookBase+"?path=kb/u/&depth=2&limit=1")
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&depth=2&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	c := *p1.Cursor
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"/export?cursor="+c, nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"/export?cursor="+c, nil))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, `attachment; filename="`+materialize.BookExportFileName(p1.BookEnv, c)+`"`, rec.Header().Get("Content-Disposition"))
+	require.Equal(t, `attachment; filename="`+materialize.FactSetExportFileName(p1.FactSetEnv, c)+`"`, rec.Header().Get("Content-Disposition"))
 	doc := rec.Body.String()
 	require.True(t, strings.HasPrefix(doc, "# Facts in U\n"), doc)
 	require.Equal(t, 2, strings.Count(doc, "\n## "), "one ## per unit:\n%s", doc)
@@ -414,11 +414,11 @@ func TestBook_ExportIsOneDocumentWithAnchors(t *testing.T) {
 	}
 	require.Contains(t, doc, "(see [")
 
-	code, p2, body := getBook(t, h, bookBase+"?cursor="+c)
+	code, p2, body := getFactSet(t, h, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 2, p2.SeqFrom, "the export left the reading position alone")
 
-	code, _, _ = getMaterialize(t, asPrincipal("u2", newTestRouter(m)), bookBase+"/export?cursor="+c)
+	code, _, _ = getMaterialize(t, asPrincipal("u2", newTestRouter(m)), factsetBase+"/export?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code, "the export is owned like the pages")
 }
 
@@ -453,19 +453,19 @@ func (d *deadlineRecorder) Write(p []byte) (int, error) {
 //
 // Sabotage: drop the SetWriteDeadline call, or stream to the raw
 // ResponseWriter, and a write goes out with no deadline.
-func TestBook_ExportSetsAWriteDeadlineOnEveryWrite(t *testing.T) {
+func TestFactSet_ExportSetsAWriteDeadlineOnEveryWrite(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	alpha := m.Get("alpha")
 	for i := range 60 {
 		writeMatFact(t, alpha, "agent/test", fmt.Sprintf("kb/e/f%02d.md", i), fmt.Sprintf("F%02d", i), "body.")
 	}
 	h := asPrincipal("u1", newTestRouter(m))
-	code, p1, body := getBook(t, h, bookBase+"?path=kb/e/&depth=0&limit=1")
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/e/&depth=0&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 
 	rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 	start := time.Now()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"/export?cursor="+*p1.Cursor, nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"/export?cursor="+*p1.Cursor, nil))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, 60, strings.Count(rec.Body.String(), "\n## "))
 	require.GreaterOrEqual(t, len(rec.deadlines), 2, "two chunks, at least two writes")
@@ -478,23 +478,23 @@ func TestBook_ExportSetsAWriteDeadlineOnEveryWrite(t *testing.T) {
 // Over the export cap an export is refused at once: a 503 with
 // Retry-After, nothing streamed.
 //
-// Sabotage: map ErrBookExportsBusy to nothing special, and it is a 500.
-func TestBook_ExportCapIs503(t *testing.T) {
+// Sabotage: map ErrFactSetExportsBusy to nothing special, and it is a 500.
+func TestFactSet_ExportCapIs503(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	code, p1, body := getBook(t, h, bookBase+"?path=kb/u/&limit=1")
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
-	release := materialize.ReserveBookExportsForTest(materialize.MaxConcurrentBookExports)
+	release := materialize.ReserveFactSetExportsForTest(materialize.MaxConcurrentFactSetExports)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bookBase+"/export?cursor="+*p1.Cursor, nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"/export?cursor="+*p1.Cursor, nil))
 	release()
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
 	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
 }
 
 // R11 (review of PR #692): a repo entered cross-KB has ONE tip for the
-// whole book, frozen by the unit that first read it, even when later units
+// whole factset, frozen by the unit that first read it, even when later units
 // are walked by later calls after that repo moved on. Unit 1 (r1) reads
 // beta's x; beta then rewrites x and adds y; unit 2 (r2 -> x, y), walked by
 // the next call, still reads beta at the frozen tip: x at the version unit
@@ -502,7 +502,7 @@ func TestBook_ExportCapIs503(t *testing.T) {
 //
 // Sabotage: read each call's cross-KB tip afresh (drop the frozen tips in
 // reader.foreign), and x's link is flagged and y is written.
-func TestBook_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
+func TestFactSet_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
 	m := newMatStoreManager(t, "alpha", "beta")
 	alpha, beta := m.Get("alpha"), m.Get("beta")
 	const br = "agent/test"
@@ -513,7 +513,7 @@ func TestBook_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
 	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", x)
 	h := asPrincipal("u1", newTestRouter(m))
 
-	code, p, body := getBook(t, h, bookBase+"?path=kb/u/&cross_kb=true&limit=1")
+	code, p, body := getFactSet(t, h, factsetBase+"?path=kb/u/&cross_kb=true&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, 1, p.UnitsWalked, "only unit 1 is walked by the first call")
 	writeMatFact(t, beta, br, "kb/b/x.md", "X", "x second.")
@@ -521,7 +521,7 @@ func TestBook_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
 
 	nodes := p.Facts
 	for p.HasMore {
-		code, p, body = getBook(t, h, bookBase+"?cursor="+url.QueryEscape(*p.Cursor))
+		code, p, body = getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(*p.Cursor))
 		require.Equal(t, http.StatusOK, code, body)
 		nodes = append(nodes, p.Facts...)
 	}
@@ -541,9 +541,9 @@ func TestBook_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
 	require.Contains(t, reasons, y+" "+materialize.ReasonNotInThatKB)
 }
 
-// newEmbBook is a store with the cos test embedder (its vectors searched
+// newEmbFactSet is a store with the cos test embedder (its vectors searched
 // for real) behind the kb routes, and the repo to write into.
-func newEmbBook(t *testing.T) (http.Handler, *repos.RepoInstance) {
+func newEmbFactSet(t *testing.T) (http.Handler, *repos.RepoInstance) {
 	t.Helper()
 	emb := &cosEmbedder{}
 	m := repos.New(context.Background(), repos.Deps{})
@@ -580,21 +580,21 @@ func cosFacts(t *testing.T, ri *repos.RepoInstance, files map[string]float64, ty
 	}))
 }
 
-// N2 (review of PR #692): for a FILTERED TEXT search the book's first 50
+// N2 (review of PR #692): for a FILTERED TEXT search the factset's first 50
 // units are exactly the UI's list (the /search call at limit 50), in its
 // order, though the store's nearest-neighbour window grows with the limit
 // and the filters apply after it:
 //   - 300 observations at cosine 0.9 fill the UI's window (5 x 50), so the
 //     type=hypothesis list holds only the 5 hypotheses at 0.95. The 25 at
-//     0.6 are inside a limit-500 window, so a book searching at limit 500
+//     0.6 are inside a limit-500 window, so a factset searching at limit 500
 //     had 30 units; it has the UI's 5.
 //   - 60 tied hypotheses at 0.9 (all inside the window): the UI lists the
-//     first 50 by path; the book's first 50 are those, then the other 10.
+//     first 50 by path; the factset's first 50 are those, then the other 10.
 //
-// Sabotage: search once at limit Facts (the old runBookSearch), and the
-// book holds 30 units where the list shows 5.
-func TestBook_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
-	h, ri := newEmbBook(t)
+// Sabotage: search once at limit Facts (the old runFactSetSearch), and the
+// factset holds 30 units where the list shows 5.
+func TestFactSet_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
+	h, ri := newEmbFactSet(t)
 	files := map[string]float64{}
 	for i := range 300 {
 		files[fmt.Sprintf("kb/n/o%03d.md", i)] = 0.9
@@ -612,8 +612,8 @@ func TestBook_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
 	ui := searchPaths(t, h, "q=x&type=hypothesis&path=kb/n/&limit=50")
 	require.Equal(t, []string{"kb/n/h00.md", "kb/n/h01.md", "kb/n/h02.md", "kb/n/h03.md", "kb/n/h04.md"}, ui,
 		"the UI's window holds only the 5 hypotheses at 0.95")
-	nodes, pages := readBook(t, h, bookBase+"?q=x&type=hypothesis&path=kb/n/&depth=0&limit=5")
-	require.Equal(t, 5, pages[0].Units, "the book is the list the UI shows")
+	nodes, pages := readFactSet(t, h, factsetBase+"?q=x&type=hypothesis&path=kb/n/&depth=0&limit=5")
+	require.Equal(t, 5, pages[0].Units, "the factset is the list the UI shows")
 	var roots []string
 	for _, n := range nodes {
 		roots = append(roots, n.Path)
@@ -630,7 +630,7 @@ func TestBook_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
 	for i, p := range ui {
 		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", i), p, "ties are listed by path")
 	}
-	nodes, pages = readBook(t, h, bookBase+"?q=x&type=hypothesis&path=kb/m/&depth=0&limit=5")
+	nodes, pages = readFactSet(t, h, factsetBase+"?q=x&type=hypothesis&path=kb/m/&depth=0&limit=5")
 	require.Equal(t, 60, pages[0].Units, "a full list extends past 50")
 	roots = roots[:0]
 	for _, n := range nodes {

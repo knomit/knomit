@@ -167,11 +167,11 @@ type node struct {
 	// parent is the node whose refs first reached this one in the reading
 	// order (the walk tree's edge); nil for the root and frame ancestors.
 	parent *node
-	// link, set only in a book, says this fact is in the book's visited set
+	// link, set only in a factset, says this fact is in the factset's visited set
 	// (a search result, or a fact an earlier unit wrote): the node is a
 	// heading with a link there, and is TERMINAL (its refs are never read,
 	// so its leftover children are not written here).
-	link *bookTarget
+	link *factsetTarget
 }
 
 type refKind int
@@ -204,12 +204,12 @@ type walker struct {
 	writeID string
 	nodes   map[key]*node
 	incl    []*node
-	// visited, set only in a book, looks a newly reached fact up in the
-	// book's visited set (seeded with the search results, grown by every
+	// visited, set only in a factset, looks a newly reached fact up in the
+	// factset's visited set (seeded with the search results, grown by every
 	// unit walked). nil in a single materialization.
-	visited func(n *node) (*bookTarget, error)
+	visited func(n *node) (*factsetTarget, error)
 	rootKey key
-	// pinDirect, set only for a book unit (not a frame), keeps every node at
+	// pinDirect, set only for a factset unit (not a frame), keeps every node at
 	// BFS distance 1 a child of the root in the reading order: the DFS never
 	// places a direct reference under a sibling, so the root's children are
 	// exactly its depth-1 entries in refs order. A single materialization
@@ -243,18 +243,18 @@ type unitWalk struct {
 	parent []int
 	// blobs[i] is node i's blob hash ("" when read through the blob fallback).
 	blobs []string
-	// links[i] is node i's link target in a book; nil when it is written.
-	links []*bookTarget
-	// gone: a book unit whose result has no version at the anchor; its one
+	// links[i] is node i's link target in a factset; nil when it is written.
+	links []*factsetTarget
+	// gone: a factset unit whose result has no version at the anchor; its one
 	// node is the root, a heading only (goneUnit).
 	gone bool
 }
 
 // walkUnit runs one materialization's walk on r: metadata and edges only,
-// never a body. It is the walk of Plan and of every unit of a book.
-// visited is nil for Plan; a book passes its visited-set lookup, so a
+// never a body. It is the walk of Plan and of every unit of a factset.
+// visited is nil for Plan; a factset passes its visited-set lookup, so a
 // reached fact that is in the set becomes a terminal link node.
-func walkUnit(ctx context.Context, r *reader, req Request, visited func(n *node) (*bookTarget, error)) (*unitWalk, error) {
+func walkUnit(ctx context.Context, r *reader, req Request, visited func(n *node) (*factsetTarget, error)) (*unitWalk, error) {
 	w := &walker{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), nodes: map[key]*node{}, visited: visited}
 
 	root, err := w.root(req)
@@ -263,7 +263,7 @@ func walkUnit(ctx context.Context, r *reader, req Request, visited func(n *node)
 	}
 	w.rootKey = root.key
 	frame := root.f.Type == fact.Frame
-	// A book unit's direct references are its root's children in refs order,
+	// A factset unit's direct references are its root's children in refs order,
 	// their numbers fixed before any unit is walked (reserveDirectRefs).
 	w.pinDirect = visited != nil && !frame
 
@@ -293,7 +293,7 @@ func walkUnit(ctx context.Context, r *reader, req Request, visited func(n *node)
 		}
 	}
 	blobs := make([]string, len(order))
-	links := make([]*bookTarget, len(order))
+	links := make([]*factsetTarget, len(order))
 	for i, n := range order {
 		blobs[i], links[i] = n.blob, n.link
 	}
@@ -478,7 +478,7 @@ func (w *walker) resolveFact(n *node, c fact.Ref, k key, pins *map[string]string
 // distance dist-1. Its version is the one THIS ref cites: a path has one
 // version in a document, the one it was first reached at.
 //
-// In a book, an included node whose fact is in the book's visited set is a
+// In a factset, an included node whose fact is in the factset's visited set is a
 // link (n.link set): it counts as a section of this unit, and it is never
 // expanded.
 func (w *walker) adopt(r resolved, dist int) (*node, error) {
@@ -499,7 +499,7 @@ func (w *walker) adopt(r resolved, dist int) (*node, error) {
 }
 
 // expands reports whether an adopted node's refs are walked: it is
-// included and not a book link.
+// included and not a factset link.
 func (n *node) expands() bool { return n.included && n.link == nil }
 
 // bfs decides the included set: shortest distance from the root, in refs

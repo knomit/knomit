@@ -39,7 +39,7 @@ type reader struct {
 	edges    map[edgeKey]map[string]string
 	metas    map[edgeKey]metaEntry
 	dates    map[edgeKey]string
-	// tips are the frozen tips of repos entered cross-KB, by id12 (a book
+	// tips are the frozen tips of repos entered cross-KB, by id12 (a factset
 	// seeds them so every unit reads one repo at the tip its first read
 	// froze); a repo not in it is resolved once, now.
 	tips  map[string]string
@@ -76,11 +76,11 @@ func (r *reader) close() {
 // readerCacheMax bounds each version cache of a reader (edges, metadata,
 // dates). A version's edges, index row and date never change (a version is
 // immutable), so the caches only save repeated reads of facts several units
-// share; past the bound a cache is dropped and refilled, so a book build's
+// share; past the bound a cache is dropped and refilled, so a factset build's
 // memory stays bounded whatever the corpus.
 const readerCacheMax = 20_000
 
-// forget drops the version caches once one passes readerCacheMax. A book
+// forget drops the version caches once one passes readerCacheMax. A factset
 // calls it between units: the mounts stay acquired, and facts shared by
 // several units are read once while the caches stay small.
 func (r *reader) forget() {
@@ -170,7 +170,7 @@ func (r *reader) foreign(ctx context.Context, id12 string) (*mount, error) {
 		return nil, nil
 	}
 	if m.anchor == "" && r.tips[id12] != "" {
-		// A book froze this repo's tip when an earlier unit first read it.
+		// A factset froze this repo's tip when an earlier unit first read it.
 		m.anchor = r.tips[id12]
 	}
 	if m.anchor == "" {

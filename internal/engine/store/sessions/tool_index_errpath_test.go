@@ -19,7 +19,7 @@ func newToolIndexWithDB(t *testing.T) (*ToolIndex, *sql.DB, string) {
 	db, path, err := Open(filepath.Join(t.TempDir(), "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return NewToolIndex(db, BooksDirFor(path)), db, path
+	return NewToolIndex(db, FactSetsDirFor(path)), db, path
 }
 
 // A dequeue that fails after BEGIN IMMEDIATE must give its connection back

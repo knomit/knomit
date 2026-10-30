@@ -10,31 +10,31 @@ import (
 	"knomit/internal/corpus/repos"
 )
 
-// BookInstructionsVersion names BookInstructions; every book page carries it.
-const BookInstructionsVersion = "materialize-book/1"
+// FactSetInstructionsVersion names FactSetInstructions; every factset page carries it.
+const FactSetInstructionsVersion = "materialize-factset/1"
 
-// BookInstructions tells the caller's model how to read a book's pages. A
+// FactSetInstructions tells the caller's model how to read a factset's pages. A
 // server constant, on page 1 only, like HumanInstructions.
-const BookInstructions = `These pages are a BOOK: one materialization per search result, in search order. Each search result is a unit ("Fact" ` + "`unit`" + ` of ` + "`units`" + `), and each unit is that fact followed by what it builds on, walked as knomit_materialize walks one fact. Keep calling with the cursor until has_more is false; pass ` + "`unit`" + ` with the cursor to continue from another unit.
+const FactSetInstructions = `These pages are a FACTSET: one materialization per search result, in search order. Each search result is a unit ("Fact" ` + "`unit`" + ` of ` + "`units`" + `), and each unit is that fact followed by what it builds on, walked as knomit_materialize walks one fact. Keep calling with the cursor until has_more is false; pass ` + "`unit`" + ` with the cursor to continue from another unit.
 
-Every node carries its unit, its section number (` + "`number`" + `: the unit root is "5", its sections "5.1", "5.1.2"; a frame's ancestors are unnumbered) and its tree depth. A fact is written ONCE in the book: a node with ` + "`written: true`" + ` carries the body; every other appearance has ` + "`written: false`" + `, no body, and a ` + "`link`" + ` to the written one (unit, n, number, anchor_id, direction forward or back; different_version when the version cited here has another body). Refer to the written section ("see 7.1.1") instead of repeating it. builds_on links point inside the same unit. A unit root with ` + "`unavailable: true`" + ` is a search result deleted since the search: its title alone, nothing to read. Use only what the facts say, keep their caveats, and cite them by section number.`
+Every node carries its unit, its section number (` + "`number`" + `: the unit root is "5", its sections "5.1", "5.1.2"; a frame's ancestors are unnumbered) and its tree depth. A fact is written ONCE in the factset: a node with ` + "`written: true`" + ` carries the body; every other appearance has ` + "`written: false`" + `, no body, and a ` + "`link`" + ` to the written one (unit, n, number, anchor_id, direction forward or back; different_version when the version cited here has another body). Refer to the written section ("see 7.1.1") instead of repeating it. builds_on links point inside the same unit. A unit root with ` + "`unavailable: true`" + ` is a search result deleted since the search: its title alone, nothing to read. Use only what the facts say, keep their caveats, and cite them by section number.`
 
 // UnavailableNote ends the heading of a unit whose result is gone at the
-// book's anchor (BookNode.Unavailable).
+// factset's anchor (FactSetNode.Unavailable).
 const UnavailableNote = "(no longer available)"
 
-// BookExportFileName is the export's file name: ExportFileName's rule over
-// the book title and the cursor's first 8 characters.
-func BookExportFileName(env BookEnv, cursor string) string {
+// FactSetExportFileName is the export's file name: ExportFileName's rule over
+// the factset title and the cursor's first 8 characters.
+func FactSetExportFileName(env FactSetEnv, cursor string) string {
 	return ExportFileName(&Document{RootTitle: env.Title, Root: cursor + ".md"})
 }
 
-// renderBookHeader opens the exported book.
-func renderBookHeader(env BookEnv, sections int) string {
+// renderFactSetHeader opens the exported factset.
+func renderFactSetHeader(env FactSetEnv, sections int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s\n\n", env.Title)
 	fmt.Fprintf(&sb, "Search: %s.\n", env.SearchLine)
-	fmt.Fprintf(&sb, "Materialized as a book at commit %s", short(env.Anchor, 7))
+	fmt.Fprintf(&sb, "Materialized as a factset at commit %s", short(env.Anchor, 7))
 	if env.Unpinned {
 		sb.WriteString("; references unpinned: each fact is shown at its latest version")
 	}
@@ -51,11 +51,11 @@ func renderBookHeader(env BookEnv, sections int) string {
 	return sb.String()
 }
 
-// renderBookNode is one appearance's block. A unit root opens the unit with
+// renderFactSetNode is one appearance's block. A unit root opens the unit with
 // its "## <unit>. <title>" heading; a written section is the agent block
 // under "### <number> <title>"; a link is its heading alone, ending in a
 // "(see …)" in-document link.
-func renderBookNode(n BookNode) string {
+func renderFactSetNode(n FactSetNode) string {
 	if n.Unavailable {
 		return fmt.Sprintf("\n<a id=\"%s\"></a>\n## %d. %s %s\n", n.AnchorID, n.Unit, n.Title, UnavailableNote)
 	}
@@ -79,7 +79,7 @@ func renderBookNode(n BookNode) string {
 	return renderNodeBlock(n.Node, "### "+headingTitle(n))
 }
 
-func headingTitle(n BookNode) string {
+func headingTitle(n FactSetNode) string {
 	if n.Number == "" {
 		return n.Title
 	}
@@ -87,20 +87,20 @@ func headingTitle(n BookNode) string {
 }
 
 // exportChunk is how many rows the export reads, inflates and writes at a
-// time: one chunk's bodies are in memory, never the book's.
+// time: one chunk's bodies are in memory, never the factset's.
 const exportChunk = 50
 
-// MaxConcurrentBookExports caps the book exports streaming at once,
-// server-wide; one over it is refused at once (ErrBookExportsBusy, a
-// retry-able 503). It is separate from MaxConcurrentBookBuilds: an export
+// MaxConcurrentFactSetExports caps the factset exports streaming at once,
+// server-wide; one over it is refused at once (ErrFactSetExportsBusy, a
+// retry-able 503). It is separate from MaxConcurrentFactSetBuilds: an export
 // takes a build slot only while it walks the units not walked yet, and gives
 // it back before it streams.
-const MaxConcurrentBookExports = 8
+const MaxConcurrentFactSetExports = 8
 
-// ErrBookExportsBusy: MaxConcurrentBookExports exports are streaming; retry.
-var ErrBookExportsBusy = errors.New("too many books are being exported right now; retry shortly")
+// ErrFactSetExportsBusy: MaxConcurrentFactSetExports exports are streaming; retry.
+var ErrFactSetExportsBusy = errors.New("too many factsets are being exported right now; retry shortly")
 
-var exportSlots = make(chan struct{}, MaxConcurrentBookExports)
+var exportSlots = make(chan struct{}, MaxConcurrentFactSetExports)
 
 func takeExportSlot() bool {
 	select {
@@ -119,9 +119,9 @@ func BuildSlotsInUse() int { return len(buildSlots) }
 // diagnostics).
 func ExportSlotsInUse() int { return len(exportSlots) }
 
-// ReserveBookExportsForTest takes n export slots and returns their release.
+// ReserveFactSetExportsForTest takes n export slots and returns their release.
 // Never called in production.
-func ReserveBookExportsForTest(n int) func() {
+func ReserveFactSetExportsForTest(n int) func() {
 	for range n {
 		exportSlots <- struct{}{}
 	}
@@ -132,52 +132,52 @@ func ReserveBookExportsForTest(n int) func() {
 	}
 }
 
-// bookExportFault, when set, runs before each chunk after the first and
+// factsetExportFault, when set, runs before each chunk after the first and
 // fails the export with its error (a test seam for the mid-stream abort:
-// SetBookExportFaultForTest). Never set in production.
-var bookExportFault func(from int) error
+// SetFactSetExportFaultForTest). Never set in production.
+var factsetExportFault func(from int) error
 
-// SetBookExportFaultForTest sets the mid-stream export fault and returns its
+// SetFactSetExportFaultForTest sets the mid-stream export fault and returns its
 // restore. Never called in production.
-func SetBookExportFaultForTest(f func(from int) error) (restore func()) {
-	old := bookExportFault
-	bookExportFault = f
-	return func() { bookExportFault = old }
+func SetFactSetExportFaultForTest(f func(from int) error) (restore func()) {
+	old := factsetExportFault
+	factsetExportFault = f
+	return func() { factsetExportFault = old }
 }
 
-// BookExport writes the whole book of cursor to w as one agent document:
+// FactSetExport writes the whole factset of cursor to w as one agent document:
 // the header, then every unit under its own "##" heading, every section
 // once, links as in-document anchors. It streams exportChunk rows at a time
 // and leaves the cursor's reading position where it was. Every cursor the
 // caller cannot be served is ErrCursorExpired, before anything is written.
-func BookExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, start func(env BookEnv) io.Writer) error {
+func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, start func(env FactSetEnv) io.Writer) error {
 	// An export holds a reader and one chunk's bodies for as long as its
 	// client reads: bounded server-wide, apart from the walk cap.
 	if !takeExportSlot() {
-		return ErrBookExportsBusy
+		return ErrFactSetExportsBusy
 	}
 	defer func() { <-exportSlots }()
-	bk, _, err := openBook(ctx, sc, b, mgr, mayRead, cursor)
+	bk, _, err := openFactSet(ctx, sc, b, mgr, mayRead, cursor)
 	if err != nil {
 		return err
 	}
 	defer bk.close()
-	// The export is the WHOLE book: the units not walked yet are walked
+	// The export is the WHOLE factset: the units not walked yet are walked
 	// first (a build slot, as for a far seek), before anything is written.
 	if err := bk.walkTo(len(bk.results), 0); err != nil {
 		return err
 	}
 	// The walk is done: its build slot goes back NOW, before streaming, so
-	// a slow or stalled download never keeps other books from being built.
+	// a slow or stalled download never keeps other factsets from being built.
 	bk.releaseSlot()
-	if err := sc.Sessions.TouchBook(ctx, cursor); err != nil {
+	if err := sc.Sessions.TouchFactSet(ctx, cursor); err != nil {
 		return err
 	}
 	// The first chunk is inflated before anything is written, so a reach
 	// refusal is still a clean ErrCursorExpired.
 	var w io.Writer
 	for from := 1; from <= bk.rows; from += exportChunk {
-		if f := bookExportFault; f != nil && w != nil {
+		if f := factsetExportFault; f != nil && w != nil {
 			if err := f(from); err != nil {
 				return err
 			}
@@ -192,13 +192,13 @@ func BookExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repo
 		}
 		if w == nil {
 			w = start(bk.env)
-			if _, err := io.WriteString(w, renderBookHeader(bk.env, bk.rows)); err != nil {
+			if _, err := io.WriteString(w, renderFactSetHeader(bk.env, bk.rows)); err != nil {
 				return err
 			}
 		}
 		var sb strings.Builder
 		for _, n := range nodes {
-			sb.WriteString(renderBookNode(n))
+			sb.WriteString(renderFactSetNode(n))
 		}
 		if _, err := io.WriteString(w, sb.String()); err != nil {
 			return err

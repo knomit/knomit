@@ -12,55 +12,55 @@ import (
 	"time"
 )
 
-// BookSweepPolicy is what one book-file sweep enforces.
-type BookSweepPolicy struct {
+// FactSetSweepPolicy is what one factset-file sweep enforces.
+type FactSetSweepPolicy struct {
 	// Now is the sweep's clock.
 	Now time.Time
 	// IdleTTL is the tool-cursor idle expiry (session.tool_idle_ttl): a
-	// book whose cursor was last used longer ago than IdleTTL + Grace is
+	// factset whose cursor was last used longer ago than IdleTTL + Grace is
 	// deleted, row and file, even if the reaper has not run yet.
 	IdleTTL time.Duration
 	// Grace covers a page in flight and clock skew between the row's
 	// heartbeat and the file's mtime; a stray file younger than it is left.
 	Grace time.Duration
-	// MaxBytes caps the directory: past it, the books idle longest are
+	// MaxBytes caps the directory: past it, the factsets idle longest are
 	// evicted first (row and file) until it fits. 0 is no cap.
 	MaxBytes int64
 }
 
-// BookSweepStats counts what one sweep did.
-type BookSweepStats struct {
+// FactSetSweepStats counts what one sweep did.
+type FactSetSweepStats struct {
 	Orphans  int // a file whose cursor row is gone
 	Expired  int // a file (and row) idle past IdleTTL + Grace
-	Sidecars int // a -journal/-wal/-shm/stray file with no live book
+	Sidecars int // a -journal/-wal/-shm/stray file with no live factset
 	Evicted  int // removed to bring the directory under MaxBytes
 	Skipped  int // held open by a call right now
 	Bytes    int64
 }
 
-// SweepBookFiles garbage-collects the live books (in memory and in files)
-// and the book directory (the periodic sweeper; at Open the directory is
-// recreated empty). Under booksMu, the lock OpenBook registers holders
-// under, so a book a call holds right now is never dropped (Skipped, swept
+// SweepFactSetFiles garbage-collects the live factsets (in memory and in files)
+// and the factset directory (the periodic sweeper; at Open the directory is
+// recreated empty). Under factsetsMu, the lock OpenFactSet registers holders
+// under, so a factset a call holds right now is never dropped (Skipped, swept
 // on a later tick):
-//   - a live book whose cursor row is gone (reaped, replaced) is an orphan:
+//   - a live factset whose cursor row is gone (reaped, replaced) is an orphan:
 //     its memory is freed, or its file deleted;
-//   - a book whose cursor was last used before Now - IdleTTL - Grace is
+//   - a factset whose cursor was last used before Now - IdleTTL - Grace is
 //     expired: its row goes, and its memory or file with it;
-//   - in the directory, a book file of no live book, a SQLite sidecar
-//     (-journal, -wal, -shm) of no existing book file, and any other stray
+//   - in the directory, a factset file of no live factset, a SQLite sidecar
+//     (-journal, -wal, -shm) of no existing factset file, and any other stray
 //     file older than Grace, goes;
-//   - then, while the spilled books' files are over MaxBytes, the book idle
+//   - then, while the spilled factsets' files are over MaxBytes, the factset idle
 //     longest goes first, row and file.
 //
-// A book removed here reads as an expired cursor (the 404), never an error.
-func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (BookSweepStats, error) {
-	var st BookSweepStats
-	if ti.booksDir == "" {
+// A factset removed here reads as an expired cursor (the 404), never an error.
+func (ti *ToolIndex) SweepFactSetFiles(ctx context.Context, p FactSetSweepPolicy) (FactSetSweepStats, error) {
+	var st FactSetSweepStats
+	if ti.factsetsDir == "" {
 		return st, nil
 	}
-	ti.booksMu.Lock()
-	defer ti.booksMu.Unlock()
+	ti.factsetsMu.Lock()
+	defer ti.factsetsMu.Unlock()
 	type file struct {
 		id       string
 		lastUsed time.Time
@@ -68,27 +68,27 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 	}
 	var spilled []file
 	cutoff := p.Now.Add(-p.IdleTTL - p.Grace)
-	for id, bs := range ti.books {
+	for id, bs := range ti.factsets {
 		if bs.holders > 0 {
 			st.Skipped++
 			continue
 		}
 		var lastUsed string
 		err := ti.db.QueryRowContext(ctx,
-			`SELECT ts.last_used_at FROM book_sessions b JOIN tool_sessions ts ON ts.id = b.session_id WHERE b.session_id = ?`, id,
+			`SELECT ts.last_used_at FROM factset_sessions b JOIN tool_sessions ts ON ts.id = b.session_id WHERE b.session_id = ?`, id,
 		).Scan(&lastUsed)
 		if errors.Is(err, sql.ErrNoRows) {
-			delete(ti.books, id)
+			delete(ti.factsets, id)
 			bs.drop()
 			st.Orphans++
 			continue
 		}
 		if err != nil {
-			return st, fmt.Errorf("sweep books: %w", err)
+			return st, fmt.Errorf("sweep factsets: %w", err)
 		}
 		used, perr := time.Parse(time.RFC3339, lastUsed)
 		if perr != nil || used.Before(cutoff) {
-			if err := ti.dropBookLocked(ctx, id); err != nil {
+			if err := ti.dropFactSetLocked(ctx, id); err != nil {
 				return st, err
 			}
 			st.Expired++
@@ -101,7 +101,7 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 			}
 		}
 	}
-	entries, err := os.ReadDir(ti.booksDir)
+	entries, err := os.ReadDir(ti.factsetsDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return st, err
 	}
@@ -111,9 +111,9 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 		if err != nil {
 			continue
 		}
-		if id, isBook := strings.CutSuffix(name, bookFileSuffix); isBook {
-			if ti.books[id] == nil {
-				removeBookFile(filepath.Join(ti.booksDir, name))
+		if id, isFactSet := strings.CutSuffix(name, factsetFileSuffix); isFactSet {
+			if ti.factsets[id] == nil {
+				removeFactSetFile(filepath.Join(ti.factsetsDir, name))
 				st.Orphans++
 			}
 			continue
@@ -123,13 +123,13 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 			base = strings.TrimSuffix(base, s)
 		}
 		if base != name {
-			if _, err := os.Stat(filepath.Join(ti.booksDir, base)); err == nil {
-				continue // the sidecar of a book file that still exists
+			if _, err := os.Stat(filepath.Join(ti.factsetsDir, base)); err == nil {
+				continue // the sidecar of a factset file that still exists
 			}
 		} else if p.Now.Sub(info.ModTime()) < p.Grace {
 			continue // a stray file being created right now
 		}
-		_ = os.Remove(filepath.Join(ti.booksDir, name))
+		_ = os.Remove(filepath.Join(ti.factsetsDir, name))
 		st.Sidecars++
 	}
 	if p.MaxBytes > 0 && st.Bytes > p.MaxBytes {
@@ -138,7 +138,7 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 			if st.Bytes <= p.MaxBytes {
 				break
 			}
-			if err := ti.dropBookLocked(ctx, f.id); err != nil {
+			if err := ti.dropFactSetLocked(ctx, f.id); err != nil {
 				return st, err
 			}
 			st.Bytes -= f.size
@@ -148,33 +148,33 @@ func (ti *ToolIndex) SweepBookFiles(ctx context.Context, p BookSweepPolicy) (Boo
 	return st, nil
 }
 
-// dropBookLocked deletes a book's cursor row and frees the book; booksMu
+// dropFactSetLocked deletes a factset's cursor row and frees the factset; factsetsMu
 // is held.
-func (ti *ToolIndex) dropBookLocked(ctx context.Context, id string) error {
-	if err := ti.bookWrite(ctx, "SweepBookFiles", func(c *sql.Conn) error {
+func (ti *ToolIndex) dropFactSetLocked(ctx context.Context, id string) error {
+	if err := ti.factsetWrite(ctx, "SweepFactSetFiles", func(c *sql.Conn) error {
 		_, err := c.ExecContext(ctx, `DELETE FROM tool_sessions WHERE id = ?`, id)
 		return err
 	}); err != nil {
 		return err
 	}
-	if bs := ti.books[id]; bs != nil {
-		delete(ti.books, id)
+	if bs := ti.factsets[id]; bs != nil {
+		delete(ti.factsets, id)
 		bs.drop()
 	}
-	removeBookFile(ti.bookPath(id))
+	removeFactSetFile(ti.factsetPath(id))
 	return nil
 }
 
 // Sweep defaults, applied by store.Service.ReapIdleSessions on every reaper
 // tick.
 const (
-	// BookSweepGrace is added to the idle expiry before a book is swept,
+	// FactSetSweepGrace is added to the idle expiry before a factset is swept,
 	// and is how old a stray file must be: longer than any page takes, so
 	// a page in flight or a file being created is never caught.
-	BookSweepGrace = 5 * time.Minute
-	// MaxBookDirBytes caps one session store's book directory: about 19
-	// books at the row cap (MaxBookRows, ~53 MiB each as measured), far
+	FactSetSweepGrace = 5 * time.Minute
+	// MaxFactSetDirBytes caps one session store's factset directory: about 19
+	// factsets at the row cap (MaxFactSetRows, ~53 MiB each as measured), far
 	// more than one owner per endpoint needs. It is enforced on the
 	// sweeper's tick, not on every write.
-	MaxBookDirBytes int64 = 1 << 30
+	MaxFactSetDirBytes int64 = 1 << 30
 )
