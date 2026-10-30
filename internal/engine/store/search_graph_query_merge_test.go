@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -91,6 +92,35 @@ func TestGraphAtCommit_ResolvesThroughMergeCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, in, 1, "B's incoming edge from A must survive resolving HEAD to the merge commit")
 	require.Equal(t, "kb/a.md", in[0].Path)
+}
+
+// OutgoingAtCommit dates each edge by ITS TARGET commit (one commit_log row
+// per distinct commit, round 4 of PR #692): B is written a second before
+// A cites it, so the two commits' times differ, and the edge carries B's.
+//
+// Sabotage: read the date from another commit's row, and the edge carries
+// A's time.
+func TestOutgoingAtCommit_DatesTheEdgeByItsTargetCommit(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	_, err := svc.Facts().WriteFact(ctx, "main", "kb/b.md", testFactBody("b", 0.9, nil), "b", "")
+	require.NoError(t, err)
+	for start := time.Now().Unix(); time.Now().Unix() == start; {
+		time.Sleep(20 * time.Millisecond)
+	}
+	_, err = svc.Facts().WriteFact(ctx, "main", "kb/a.md", testFactBody("a", 0.8, []string{"kb/b.md"}), "a->b", "")
+	require.NoError(t, err)
+	head, err := svc.HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	out, err := svc.gq.OutgoingAtCommit(ctx, "main", "kb/a.md", head)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	b, err := svc.HistoryQuery().RevisionsBefore(ctx, "main", "kb/b.md", head, 1)
+	require.NoError(t, err)
+	a, err := svc.HistoryQuery().RevisionsBefore(ctx, "main", "kb/a.md", head, 1)
+	require.NoError(t, err)
+	require.NotEqual(t, a[0].CommittedAt, b[0].CommittedAt, "precondition: the commits are a second apart")
+	require.Equal(t, b[0].CommittedAt, out[0].CommittedAt)
 }
 
 // ResolveActiveCommitForPath's early-stopping recursion (round 4 of PR
