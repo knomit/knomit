@@ -9,6 +9,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/materialize"
@@ -176,11 +177,11 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 		File: file, Commit: req.GetString("commit", ""), Options: opts,
 	})
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return materializeToolError(err, file), nil
 	}
 	page, err := materialize.FirstPage(ctx, materializeScope(ctx, b, sWrite), doc, audience, limit)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return materializeToolError(err, file), nil
 	}
 	return marshalMaterializePage(page)
 }
@@ -194,15 +195,43 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 	}
 	page, err := materialize.NextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor,
 		func(audience string, frozen int) (int, error) { return materializeLimit(req, audience, frozen) })
-	switch {
-	case errors.Is(err, materialize.ErrCursorExpired):
-		return mcpgo.NewToolResultError(errMaterializeExpired), nil
-	case errors.Is(err, materialize.ErrCursorBusy):
-		return mcpgo.NewToolResultError(errSessionBusy), nil
-	case err != nil:
-		return mcpgo.NewToolResultError(err.Error()), nil
+	if err != nil {
+		return materializeToolError(err, ""), nil
 	}
 	return marshalMaterializePage(page)
+}
+
+// errMaterializeFailed is the tool error of every single-fact failure that
+// is not the caller's to fix: the cause is logged, never returned.
+const errMaterializeFailed = "the document could not be materialized; retry, or start over without cursor"
+
+// materializeArgError is an argument the caller passed wrong (limit): its
+// text is the caller's to read.
+type materializeArgError struct{ error }
+
+// materializeToolError maps a single-fact planner or page error to a stable
+// tool error: the caller's own mistakes (an invalid request, a fact that is
+// not there, a bad argument) keep their text; every retry-able state has a
+// fixed text; anything else is logged and returned as errMaterializeFailed,
+// so no internal error text (SQL, paths, wrapped causes) reaches the caller
+// (review N3).
+func materializeToolError(err error, file string) *mcpgo.CallToolResult {
+	var arg materializeArgError
+	switch {
+	case errors.As(err, &arg):
+		return mcpgo.NewToolResultError(arg.Error())
+	case errors.Is(err, materialize.ErrCursorExpired):
+		return mcpgo.NewToolResultError(errMaterializeExpired)
+	case errors.Is(err, materialize.ErrCursorBusy), errors.Is(err, materialize.ErrStoreBusy):
+		return mcpgo.NewToolResultError(errSessionBusy)
+	case errors.Is(err, materialize.ErrNotReady):
+		return mcpgo.NewToolResultError(materialize.ErrNotReady.Error())
+	case errors.Is(err, materialize.ErrInvalid), errors.Is(err, materialize.ErrNotFound):
+		return mcpgo.NewToolResultError(err.Error())
+	default:
+		log.Error().Err(err).Str("file", file).Msg("knomit_materialize failed")
+		return mcpgo.NewToolResultError(errMaterializeFailed)
+	}
 }
 
 // materializeScope pins a cursor to the binding (pin and read set) and to
@@ -243,13 +272,13 @@ func materializeLimit(req mcpgo.CallToolRequest, audience string, def int) (int,
 	}
 	v, present, err := intArgument(req, "limit")
 	if err != nil {
-		return 0, err
+		return 0, materializeArgError{err}
 	}
 	if !present {
 		return def, nil
 	}
 	if v < 1 {
-		return 0, errors.New("limit must be at least 1")
+		return 0, materializeArgError{errors.New("limit must be at least 1")}
 	}
 	return min(v, max), nil
 }

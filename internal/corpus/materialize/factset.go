@@ -593,6 +593,10 @@ type fsCall struct {
 	// the following window, reading in the background.
 	pre  *prefetch
 	next *pending
+	// noPipeline: no window is read in the background, so every read is
+	// made inside the planning slot (the export: it gives the slot back
+	// between units, and a background window would read outside it).
+	noPipeline bool
 	// keepFrom is the unit the page being served starts in: plans before it
 	// are dropped as soon as the planner passes them.
 	keepFrom int
@@ -621,7 +625,7 @@ const prefetchParallel = 4
 // window and what it read.
 func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre *prefetch, st Stats, err error) {
 	hi := min(len(fr.Roots)+1, u+prefetchWindow)
-	pre = &prefetch{lo: u, hi: hi, rows: map[string][]index.LevelRow{}, metas: map[index.VersionKey]index.TargetMeta{}}
+	pre = &prefetch{lo: u, hi: hi, rows: map[string][]index.LevelRow{}, metas: map[index.TargetVersion]index.TargetMeta{}}
 	var roots []index.TargetVersion
 	for _, root := range fr.Roots[u-1 : hi-1] {
 		if root.Blob != "" {
@@ -646,7 +650,9 @@ func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre
 			blobs = append(blobs, k.Blob)
 		}
 	}
-	if len(blobs) == 0 {
+	if len(blobs) == 0 || fr.Env.Unpinned {
+		// Unpinned units read no ref rows: their targets are their refs, at
+		// the versions live at the anchor (LiveAt at plan time).
 		return pre, st, nil
 	}
 	rows, err := lv.Refs(blobs)
@@ -674,7 +680,7 @@ func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre
 		targets = nil // versioned by LiveAt at the anchor instead
 	}
 	type part struct {
-		metas  map[index.VersionKey]index.TargetMeta
+		metas  map[index.TargetVersion]index.TargetMeta
 		rows   []index.LevelRow
 		parsed bool
 		err    error
@@ -751,9 +757,9 @@ func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre
 			if r.Repo != "" || r.TargetBlob == "" {
 				continue
 			}
-			vk := index.VersionKey{Path: r.Path, Blob: r.TargetBlob}
-			if _, ok := pre.metas[vk]; !ok {
-				targets = append(targets, index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit})
+			tv := index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit}
+			if _, ok := pre.metas[tv]; !ok {
+				targets = append(targets, tv)
 			}
 			if _, done := pre.rows[r.TargetBlob]; !done && !seenChild[r.TargetBlob] {
 				seenChild[r.TargetBlob] = true
@@ -768,6 +774,10 @@ func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre
 	return pre, st, nil
 }
 
+// backgroundReads counts the windows started in the background (a test reads
+// it to see that an export starts none).
+var backgroundReads atomic.Int64
+
 // pending is a window being read ahead in the background.
 type pending struct {
 	lo   int
@@ -779,6 +789,7 @@ type pending struct {
 
 // startReadAhead reads window u in the background.
 func (c *fsCall) startReadAhead(fr *factsetFrozen, lv *index.LevelReader, u int) *pending {
+	backgroundReads.Add(1)
 	pd := &pending{lo: u, done: make(chan struct{})}
 	go func() {
 		defer close(pd.done)
@@ -816,7 +827,7 @@ func (c *fsCall) window(fr *factsetFrozen, m *mount, u int) error {
 		return err
 	}
 	c.pre = pre
-	if pre.hi <= len(fr.Roots) {
+	if pre.hi <= len(fr.Roots) && !c.noPipeline {
 		c.next = c.startReadAhead(fr, lv, pre.hi)
 	}
 	return nil
@@ -1176,11 +1187,41 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 		if len(blobs) == 0 {
 			continue
 		}
-		targets, err := m.svc.GraphStore().RefTargetsOfBlobs(c.ctx, blobs)
-		if err != nil {
-			return nil, err
+		var targets []index.RefTarget
+		if opts.Unpin {
+			// Unpinned, a unit's depth-1 entries are its root's fact refs as
+			// written (row or not), exactly as the planner classifies them:
+			// in order, each (repo, path) once, the root itself skipped.
+			for _, k := range keys {
+				mt, ok := metas[k]
+				if !ok || fact.Type(mt.Type) == fact.Frame {
+					continue
+				}
+				seen := map[[2]string]bool{}
+				for ord, raw := range mt.Refs {
+					cr := fact.ClassifyRef(raw, fr.WriteRepo)
+					var t index.RefTarget
+					switch cr.Kind {
+					case fact.RefLocalFact:
+						t = index.RefTarget{SourceBlob: k.Blob, Ord: ord, Path: cr.Path}
+					case fact.RefForeignFact:
+						t = index.RefTarget{SourceBlob: k.Blob, Ord: ord, Repo: cr.RepoID, Path: cr.Path}
+					default:
+						continue
+					}
+					if seen[[2]string{t.Repo, t.Path}] || (t.Repo == "" && t.Path == k.Path) {
+						continue
+					}
+					seen[[2]string{t.Repo, t.Path}] = true
+					targets = append(targets, t)
+				}
+			}
+		} else {
+			if targets, err = m.svc.GraphStore().RefTargetsOfBlobs(c.ctx, blobs); err != nil {
+				return nil, err
+			}
+			c.st.IndexQueries++
 		}
-		c.st.IndexQueries++
 		bySource := map[string][]refTarget{}
 		var local []string
 		foreignPaths := map[string][]string{}

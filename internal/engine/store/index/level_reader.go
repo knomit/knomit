@@ -68,7 +68,7 @@ const levelRefsSQL = `
 
 const levelMetaSQL = `
 	WITH k(p, b, c) AS (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?))
-	SELECT k.p, k.b, f.id IS NOT NULL, COALESCE(f.title, ''), COALESCE(f.kind, ''), COALESCE(f.type, ''),
+	SELECT k.p, k.b, k.c, f.id IS NOT NULL, COALESCE(f.title, ''), COALESCE(f.kind, ''), COALESCE(f.type, ''),
 	       COALESCE(f.confidence, 0), COALESCE(f.refs, ''), COALESCE(cl.committed_at, 0)
 	  FROM k
 	  LEFT JOIN facts f ON f.path = k.p AND f.blob_hash = k.b
@@ -174,7 +174,11 @@ func (lr *LevelReader) Refs(blobs []string) ([]LevelRow, error) {
 // for the facts rows and dates, plus one batched object read when some
 // version has no facts row (parsed reports it: real stores' old pinned
 // versions often have none). A key whose blob is in neither is absent.
-func (lr *LevelReader) Versions(keys []TargetVersion) (out map[VersionKey]TargetMeta, parsed bool, err error) {
+//
+// The answer is keyed by the WHOLE TargetVersion: one blob pinned at two
+// commits (a revert to earlier bytes) is two keys with one metadata and two
+// dates, so the date served with a commit is always that commit's.
+func (lr *LevelReader) Versions(keys []TargetVersion) (out map[TargetVersion]TargetMeta, parsed bool, err error) {
 	seen := make(map[TargetVersion]struct{}, len(keys))
 	arg := make([][3]string, 0, len(keys))
 	for _, k := range keys {
@@ -187,7 +191,7 @@ func (lr *LevelReader) Versions(keys []TargetVersion) (out map[VersionKey]Target
 		seen[k] = struct{}{}
 		arg = append(arg, [3]string{k.Path, k.Blob, k.Commit})
 	}
-	out = make(map[VersionKey]TargetMeta, len(arg))
+	out = make(map[TargetVersion]TargetMeta, len(arg))
 	if len(arg) == 0 {
 		return out, false, nil
 	}
@@ -199,8 +203,8 @@ func (lr *LevelReader) Versions(keys []TargetVersion) (out map[VersionKey]Target
 	if err != nil {
 		return nil, false, fmt.Errorf("LevelReader.Versions: %w", err)
 	}
-	var missing []VersionKey
-	dates := map[VersionKey]int64{}
+	var missing []TargetVersion
+	dates := map[TargetVersion]int64{}
 	var title, kind, typ, refs sql.RawBytes
 	// kind and type take a handful of values: one string each per call.
 	intern := map[string]string{}
@@ -213,11 +217,11 @@ func (lr *LevelReader) Versions(keys []TargetVersion) (out map[VersionKey]Target
 		return s
 	}
 	for rows.Next() {
-		var k VersionKey
+		var k TargetVersion
 		var has bool
 		var conf float64
 		var date int64
-		if err := rows.Scan(&k.Path, &k.Blob, &has, &title, &kind, &typ, &conf, &refs, &date); err != nil {
+		if err := rows.Scan(&k.Path, &k.Blob, &k.Commit, &has, &title, &kind, &typ, &conf, &refs, &date); err != nil {
 			rows.Close()
 			return nil, false, fmt.Errorf("LevelReader.Versions: %w", err)
 		}
@@ -260,7 +264,7 @@ func (lr *LevelReader) Versions(keys []TargetVersion) (out map[VersionKey]Target
 	return out, true, nil
 }
 
-func blobsOf(keys []VersionKey) []string {
+func blobsOf(keys []TargetVersion) []string {
 	out := make([]string, len(keys))
 	for i, k := range keys {
 		out[i] = k.Blob
@@ -273,7 +277,7 @@ func blobsOf(keys []VersionKey) []string {
 // nil known reads no metadata at all, for a caller that versions targets
 // another way, unpin and cross-KB). Two statements at most, plus the object
 // read Versions makes for row-less versions (parsed).
-func (lr *LevelReader) Level(blobs []string, known func(path string) bool) (rows []LevelRow, metas map[VersionKey]TargetMeta, parsed bool, err error) {
+func (lr *LevelReader) Level(blobs []string, known func(path string) bool) (rows []LevelRow, metas map[TargetVersion]TargetMeta, parsed bool, err error) {
 	if err := lr.gs.probe("LevelReader.Level"); err != nil {
 		return nil, nil, false, err
 	}

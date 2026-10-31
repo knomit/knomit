@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/engine/store/storetest"
 )
 
 // The extra written set stays a set across its tail merges: 10,000 inserts
@@ -62,13 +64,33 @@ func TestFactSetState_FreezeKeepsTheEarliestOwner(t *testing.T) {
 
 // The read-ahead window changes no byte: the same FactSet read with windows
 // of 1, 3 and the default (with its background pipelining) pages
-// identically, across many windows, and a replay after eviction with a
-// window that does not start at unit 1 too.
+// identically, across many windows; and every page re-read by its cursor
+// after an eviction (a replay, its windows aligned from unit 1) is the page
+// first served from the cache (windows aligned at the page's unit).
 //
-// Sabotage: read a window one unit short (hi-1), and the unit after each
-// window is planned without its level 0 rows.
+// The fixture holds one target blob pinned at TWO commits (t reverted to its
+// first bytes, the two commits dated years apart): roots in one window cite
+// it at each commit, so a read keyed by blob alone would serve one commit's
+// date for the other (review B2).
+//
+// Sabotage: key the versions read by (path, blob) and drop the commit, and
+// the window changes t's date.
 func TestFactSet_ReadAheadWindowChangesNothing(t *testing.T) {
 	f := newFactSetFixture(t)
+	db := storetest.RawDB(f.svc)
+	setDate := func(commit, path string, ts int64) {
+		res, err := db.Exec(`UPDATE commit_log SET committed_at = ? WHERE commit_hash = ? AND path = ?`, ts, commit, path)
+		require.NoError(t, err)
+		n, _ := res.RowsAffected()
+		require.Equal(t, int64(1), n)
+	}
+	c1 := f.write(t, "kb/z/t.md", "T", "t v1.")
+	setDate(c1, "kb/z/t.md", 1577880000) // 2020-01-01
+	f.write(t, "kb/u/r900.md", "R900", "cites t at c1.", "kb/z/t.md")
+	f.write(t, "kb/z/t.md", "T", "t v2.")
+	c3 := f.write(t, "kb/z/t.md", "T", "t v1.") // the v1 bytes again: one blob, commit c3
+	setDate(c3, "kb/z/t.md", 1686009600)        // 2023-06-06
+	f.write(t, "kb/u/r901.md", "R901", "cites t at c3.", "kb/z/t.md")
 	for _, l := range []string{"a", "b", "c", "d"} {
 		f.write(t, "kb/z/"+l+".md", strings.ToUpper(l), l+" body.")
 	}
@@ -77,11 +99,12 @@ func TestFactSet_ReadAheadWindowChangesNothing(t *testing.T) {
 		f.write(t, "kb/y/o"+n+".md", "O"+n, "own body.", "kb/z/"+string(rune('a'+i%4))+".md")
 		f.write(t, "kb/u/r"+n+".md", "R"+n, "r body.", "kb/y/o"+n+".md", "kb/z/"+string(rune('a'+(i+1)%4))+".md")
 	}
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Options.Depth, req.Limit = 3, 2
 	read := func(owner string, window int) []string {
 		defer SetFactSetPrefetchWindowForTest(window)()
 		DropFactSetCacheForTest()
-		req := f.request("kb/u/")
-		req.Options.Depth, req.Limit = 3, 2
 		return pagesJSON(t, f, owner, f.first(t, owner, req))
 	}
 	want := read("w1", 1)
@@ -91,23 +114,32 @@ func TestFactSet_ReadAheadWindowChangesNothing(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(raw), &pg))
 		nodes = append(nodes, pg.Facts...)
 	}
-	require.Equal(t, 14, nodes[len(nodes)-1].Unit)
-	require.Greater(t, len(nodes), 14*2, "units expanded beyond their roots")
+	require.Equal(t, 16, nodes[len(nodes)-1].Unit)
+	require.Greater(t, len(nodes), 16*2, "units expanded beyond their roots")
+	var tDates []string
+	for _, n := range nodes {
+		if n.Path == "kb/z/t.md" {
+			tDates = append(tDates, n.Commit[:8]+" "+n.Date)
+		}
+	}
+	require.ElementsMatch(t, []string{c1[:8] + " 2020-01-01", c3[:8] + " 2023-06-06"}, tDates,
+		"t at each commit with that commit's date")
 	for _, w := range []int{3, prefetchWindow} {
 		require.Equal(t, want, read("w"+leftPad(w), w), "window %d", w)
 	}
-	defer SetFactSetPrefetchWindowForTest(4)()
-	req := f.request("kb/u/")
-	req.Options.Depth, req.Limit = 3, 2
-	p := f.first(t, "seek", req)
-	DropFactSetCacheForTest()
-	p, err := FactSetNextPage(context.Background(), f.scope("seek"), f.b, nil, nil, *p.Cursor, 9)
-	require.NoError(t, err)
-	var nine []FactSetNode
-	for _, n := range nodes {
-		if n.Unit == 9 {
-			nine = append(nine, n)
-		}
+
+	// Cache hit against replay, page by page, at the default window.
+	p := f.first(t, "cmp", req)
+	id := mustID(t, *p.Cursor)
+	for p.HasMore {
+		cur := *p.Cursor
+		var err error
+		p, err = FactSetNextPage(ctx, f.scope("cmp"), f.b, nil, nil, cur, 0)
+		require.NoError(t, err)
+		hit := strings.ReplaceAll(mustJSON(t, p), id, "ID")
+		DropFactSetCacheForTest()
+		again, err := FactSetNextPage(ctx, f.scope("cmp"), f.b, nil, nil, cur, 0)
+		require.NoError(t, err)
+		require.Equal(t, hit, strings.ReplaceAll(mustJSON(t, again), id, "ID"), "cursor %s: replay == cache hit", cur)
 	}
-	require.Equal(t, nine[:len(p.Facts)], p.Facts, "a replay to unit 9 with windows of 4")
 }

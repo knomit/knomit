@@ -114,6 +114,10 @@ type Index struct {
 	// cross-branch writer could change `facts` under a snapshot taken
 	// outside the transaction.
 	beforeGraphTx func()
+	// beforeSyncCAS fires in Sync after every row of the sync is written and
+	// before the watermark moves: the window in which branch_facts is ahead
+	// of meta.last_commit.
+	beforeSyncCAS func()
 	// beforeRefEdgesWrite fires inside applyBlobRefs's transaction, after the
 	// claim is written and before the edges are: an error from it aborts the
 	// transaction, which is how a test stands in for a crash between the two.
@@ -229,6 +233,25 @@ func (si *Index) casLastCommit(ctx context.Context, branch, prev, next string) (
 	}
 	n, _ := result.RowsAffected()
 	return n > 0, nil
+}
+
+// SyncPendingKey is the meta key of a branch's in-flight sync marker: the
+// head a sync is writing rows for, set before its first row and removed once
+// the watermark reaches that head.
+func SyncPendingKey(branch string) string { return "sync_pending:" + branch }
+
+func (si *Index) setSyncPending(ctx context.Context, branch, head string) error {
+	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, SyncPendingKey(branch), head)
+	return err
+}
+
+// clearSyncPending removes the marker only while it still names head: a
+// newer sync that set its own marker keeps it.
+func (si *Index) clearSyncPending(ctx context.Context, branch, head string) error {
+	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = ? AND value = ?`, SyncPendingKey(branch), head)
+	return err
 }
 
 // setLastCommit stores the last processed commit hash in the meta table,
@@ -364,6 +387,17 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 		return nil
 	}
 
+	// branch_facts is rewritten file by file below and the watermark moves
+	// only at the end, so between the two the rows are AHEAD of
+	// meta.last_commit. The pending marker, committed before the first row,
+	// tells a reader that the rows no longer match the watermark beside them
+	// (HistoryQuery.LiveAt's fast path, review N1). A sync that fails leaves
+	// it set, which only sends readers to the derived history until the next
+	// sync of the branch overwrites it.
+	if err := si.setSyncPending(ctx, branch, head); err != nil {
+		return fmt.Errorf("sync: pending marker: %w", err)
+	}
+
 	// indexed collects every FactRecord successfully upserted in this sync
 	// pass. After all fact nodes are committed (pass 1), a second pass writes
 	// DERIVED_FROM edges for all of them. This two-pass order is required for
@@ -455,12 +489,22 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 		}
 	}
 
+	if si.beforeSyncCAS != nil {
+		si.beforeSyncCAS()
+	}
 	ok, err := si.casLastCommit(ctx, branch, last, head)
 	if err != nil {
 		return fmt.Errorf("sync cas: %w", err)
 	}
 	if !ok {
+		// The marker stays: this sync's rows were written and the watermark
+		// is another sync's, so readers keep to the derived history until a
+		// sync completes.
 		log.Debug().Str("branch", branch).Msg("sync: CAS failed, another sync won")
+		return nil
+	}
+	if err := si.clearSyncPending(ctx, branch, head); err != nil {
+		return fmt.Errorf("sync: clear pending marker: %w", err)
 	}
 	return nil
 }

@@ -82,3 +82,49 @@ func TestFactSetToolError_InternalTextNeverLeaks(t *testing.T) {
 	require.Equal(t, errMaterializeExpired, resultText(t, factsetToolError(materialize.ErrCursorExpired)))
 	require.Equal(t, errSessionBusy, resultText(t, factsetToolError(materialize.ErrStoreBusy)))
 }
+
+// N3 (review of #696): a single-fact failure that is not the caller's to fix
+// is a FIXED tool text, as factset failures are: the store's error (here
+// "no such table: ref_edges") is only logged. The caller's own mistakes keep
+// their text: a bad limit on a resume, a file that is not a fact.
+//
+// Sabotage: return err.Error() from materializeToolError's default case, and
+// the SQL text reaches the caller.
+func TestMaterialize_InternalTextNeverLeaks(t *testing.T) {
+	mainPath := filepath.Join(t.TempDir(), "k.db")
+	svc, err := store.Open(mainPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(context.Background(), map[string]string{}, "agent/test"))
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "test", UID: nextTestRepoUID(), AgentBranch: "agent/test", Svc: svc,
+		Ontology: fact.CodeOntology(), OntologyRoot: "kb",
+	})
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	seedT1(t, ri)
+
+	first := matCall(t, ctx, nil, map[string]any{"file": "kb/t1/r.md", "audience": "human", "limit": 2})
+	require.NotNil(t, first.Cursor)
+	res, text := matCallRaw(t, ctx, nil, map[string]any{"cursor": *first.Cursor, "limit": 0})
+	require.True(t, res.IsError)
+	require.Equal(t, "limit must be at least 1", text, "the caller's own argument error keeps its text")
+
+	res, text = matCallRaw(t, ctx, nil, map[string]any{"file": "kb/t1/none.md", "audience": "human"})
+	require.True(t, res.IsError)
+	require.NotEqual(t, errMaterializeFailed, text, "a missing fact is the caller's to fix: named")
+
+	db, err := sql.Open("sqlite3", mainPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(`DROP TABLE ref_edges`)
+	require.NoError(t, err)
+	res, text = matCallRaw(t, ctx, nil, map[string]any{"file": "kb/t1/r.md", "audience": "human"})
+	require.True(t, res.IsError)
+	require.Equal(t, errMaterializeFailed, text)
+	require.NotContains(t, text, "ref_edges")
+
+	require.Equal(t, materialize.ErrNotReady.Error(), resultText(t, materializeToolError(fmt.Errorf("plan: %w", materialize.ErrNotReady), "")))
+	require.Equal(t, errSessionBusy, resultText(t, materializeToolError(fmt.Errorf("x: %w", materialize.ErrStoreBusy), "")))
+	require.Equal(t, errMaterializeExpired, resultText(t, materializeToolError(materialize.ErrCursorExpired, "")))
+	require.Contains(t, resultText(t, materializeToolError(fmt.Errorf("%w: depth must be >= 0", materialize.ErrInvalid), "")), "depth must be >= 0")
+}

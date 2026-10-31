@@ -358,16 +358,27 @@ func (hq *HistoryQuery) LiveAt(ctx context.Context, branch, anchor string, paths
 	keys := uniqueSorted(paths)
 	out = make(map[string]LiveVersion, len(keys))
 	if wm != "" && wm == anchor {
+		// Each statement reads the watermark and the in-flight sync marker
+		// beside the rows: one statement is one read snapshot, so the rows
+		// are branch_facts exactly when that snapshot's watermark is the
+		// anchor AND no sync is writing rows past it (Index.Sync rewrites
+		// branch_facts file by file before it moves the watermark). Anything
+		// else falls back to the derived history rather than serving a
+		// version from after the anchor (review N1).
+		consistent := true
 		chunk := max(factsetChunk, 1)
-		for lo := 0; lo < len(keys); lo += chunk {
+		for lo := 0; lo < len(keys) && consistent; lo += chunk {
 			part := keys[lo:min(len(keys), lo+chunk)]
-			args := make([]any, 0, len(part)+1)
-			args = append(args, branchID)
+			args := make([]any, 0, len(part)+4)
+			args = append(args, "last_commit:"+branch, "last_commit:"+branch, SyncPendingKey(branch), branchID)
 			for _, p := range part {
 				args = append(args, p)
 			}
 			rows, err := db.QueryContext(ctx,
-				`SELECT bf.path, bf.commit_hash, f.blob_hash, f.title, f.kind, f.type, f.confidence, f.refs,
+				`SELECT CASE key WHEN ? THEN 1 ELSE 2 END, value, '', '', '', '', '', 0, '', 0
+				   FROM meta WHERE key IN (?, ?)
+				 UNION ALL
+				 SELECT 0, bf.path, bf.commit_hash, f.blob_hash, f.title, f.kind, f.type, f.confidence, f.refs,
 				        COALESCE(cl.committed_at, 0)
 				   FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
 				   LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
@@ -375,12 +386,24 @@ func (hq *HistoryQuery) LiveAt(ctx context.Context, branch, anchor string, paths
 			if err != nil {
 				return nil, false, fmt.Errorf("LiveAt: %w", err)
 			}
+			sawMark := false
 			for rows.Next() {
+				var mark int
 				var p, refs string
 				var v LiveVersion
-				if err := rows.Scan(&p, &v.Commit, &v.Blob, &v.Meta.Title, &v.Meta.Kind, &v.Meta.Type, &v.Meta.Confidence, &refs, &v.Date); err != nil {
+				if err := rows.Scan(&mark, &p, &v.Commit, &v.Blob, &v.Meta.Title, &v.Meta.Kind, &v.Meta.Type, &v.Meta.Confidence, &refs, &v.Date); err != nil {
 					rows.Close()
 					return nil, false, fmt.Errorf("LiveAt: %w", err)
+				}
+				if mark != 0 {
+					// 1: the watermark, which must be the anchor. 2: a
+					// sync's marker, harmless only once the watermark has
+					// reached the head it names.
+					sawMark = sawMark || mark == 1
+					if p != anchor {
+						consistent = false
+					}
+					continue
 				}
 				v.Meta.Blob, v.HasMeta = v.Blob, true
 				if v.Meta.Refs, err = decodeRefsJSON(refs); err != nil {
@@ -394,8 +417,14 @@ func (hq *HistoryQuery) LiveAt(ctx context.Context, branch, anchor string, paths
 			if err != nil {
 				return nil, false, fmt.Errorf("LiveAt: %w", err)
 			}
+			if !sawMark {
+				consistent = false
+			}
 		}
-		return out, false, nil
+		if consistent {
+			return out, false, nil
+		}
+		out = make(map[string]LiveVersion, len(keys))
 	}
 	var vkeys []VersionKey
 	var pairs []PathAtCommit

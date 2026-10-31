@@ -134,6 +134,70 @@ func TestFactSetReads_LiveAt(t *testing.T) {
 	require.NotContains(t, atFirst, "kb/m.md", "not written yet")
 }
 
+// N1: Index.Sync writes branch_facts file by file and moves the watermark
+// last, so mid-sync the rows are ahead of a watermark that still equals the
+// anchor. LiveAt at that anchor, asked from inside that window, must answer
+// the anchor's version (the derived history), not the row the sync just
+// wrote; once the sync completes the fast path is back.
+//
+// Sabotage: drop the pending marker from Sync (or the marker check from
+// LiveAt), and the mid-sync read returns the new blob from branch_facts.
+func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	hq := svc.HistoryQuery()
+	cA1, a1 := write(t, svc, "main", "kb/a.md", "A")
+	anchor, err := hq.Watermark(ctx, "main")
+	require.NoError(t, err)
+
+	var (
+		mid      map[string]index.LiveVersion
+		midHist  bool
+		midErr   error
+		midWm    string
+		calls    int
+		rowAhead string
+	)
+	svc.si.SetBeforeSyncCASHookForTest(func() {
+		calls++
+		midWm, midErr = hq.Watermark(ctx, "main")
+		if midErr != nil {
+			return
+		}
+		cur, err := svc.FactQuery().CurrentBlobs(ctx, "main", []string{"kb/a.md"})
+		if err != nil {
+			midErr = err
+			return
+		}
+		rowAhead = cur["kb/a.md"].Blob
+		mid, midHist, midErr = hq.LiveAt(ctx, "main", anchor, []string{"kb/a.md"})
+	})
+	defer svc.si.SetBeforeSyncCASHookForTest(nil)
+	cA2, a2 := write(t, svc, "main", "kb/a.md", "A two")
+	svc.si.SetBeforeSyncCASHookForTest(nil)
+
+	require.Positive(t, calls, "the hook ran inside the sync")
+	require.NoError(t, midErr)
+	require.Equal(t, anchor, midWm, "mid-sync the watermark is still the anchor")
+	require.Equal(t, a2, rowAhead, "mid-sync branch_facts already holds the new blob")
+	require.True(t, midHist, "a sync in flight: the derived history, not branch_facts")
+	require.Equal(t, a1, mid["kb/a.md"].Blob, "the anchor's version, not the row written past it")
+	require.Equal(t, cA1, mid["kb/a.md"].Commit)
+
+	wm, err := hq.Watermark(ctx, "main")
+	require.NoError(t, err)
+	require.NotEqual(t, anchor, wm)
+	var pending int
+	require.NoError(t, svc.si.RepoForTest().DB().QueryRow(
+		`SELECT COUNT(*) FROM meta WHERE key = ?`, index.SyncPendingKey("main")).Scan(&pending))
+	require.Zero(t, pending, "a completed sync clears its marker")
+	after, hist, err := hq.LiveAt(ctx, "main", wm, []string{"kb/a.md"})
+	require.NoError(t, err)
+	require.False(t, hist, "sync done: the fast path again")
+	require.Equal(t, a2, after["kb/a.md"].Blob)
+	require.Equal(t, cA2, after["kb/a.md"].Commit)
+}
+
 // CommitDates reads commit_log's (commit, path) primary key, batched.
 func TestFactSetReads_CommitDates(t *testing.T) {
 	svc := newMergeTestStore(t)
@@ -174,19 +238,23 @@ func TestFactSetReads_LevelReaderAndTargets(t *testing.T) {
 			{SourceBlob: fBlob, Ord: 2, Path: "kb/b.md", TargetBlob: bBlob, TargetCommit: cB},
 			{SourceBlob: fBlob, Ord: 3, Repo: "0123456789ab", Path: "kb/far.md"},
 		}, rows, "%s: the author's order", when)
-		metas, parsed, err := lv.Versions([]index.TargetVersion{{Path: "kb/z.md", Blob: zBlob, Commit: cZ}, {Path: "kb/b.md", Blob: bBlob}})
+		metas, parsed, err := lv.Versions([]index.TargetVersion{{Path: "kb/z.md", Blob: zBlob, Commit: cZ}, {Path: "kb/z.md", Blob: zBlob, Commit: cB}, {Path: "kb/b.md", Blob: bBlob}})
 		require.NoError(t, err)
 		require.False(t, parsed)
-		z := metas[index.VersionKey{Path: "kb/z.md", Blob: zBlob}]
+		require.Len(t, metas, 3, "%s: one answer per (path, blob, commit)", when)
+		z := metas[index.TargetVersion{Path: "kb/z.md", Blob: zBlob, Commit: cZ}]
 		require.True(t, z.HasMeta, when)
 		require.Equal(t, "Z", z.Meta.Title)
 		require.Positive(t, z.Date, "dated at its commit")
-		require.Zero(t, metas[index.VersionKey{Path: "kb/b.md", Blob: bBlob}].Date, "no commit asked: no date")
+		zAtB := metas[index.TargetVersion{Path: "kb/z.md", Blob: zBlob, Commit: cB}]
+		require.True(t, zAtB.HasMeta, when)
+		require.Zero(t, zAtB.Date, "%s: the same blob asked at a commit that did not write it takes that commit's (absent) date, not cZ's", when)
+		require.Zero(t, metas[index.TargetVersion{Path: "kb/b.md", Blob: bBlob}].Date, "no commit asked: no date")
 		lrows, lmetas, _, err := lv.Level([]string{fBlob}, func(p string) bool { return p == "kb/z.md" })
 		require.NoError(t, err)
 		require.Equal(t, rows, lrows)
 		require.Len(t, lmetas, 1, "%s: only the unseen target's version is read", when)
-		require.Equal(t, "B", lmetas[index.VersionKey{Path: "kb/b.md", Blob: bBlob}].Meta.Title)
+		require.Equal(t, "B", lmetas[index.TargetVersion{Path: "kb/b.md", Blob: bBlob, Commit: cB}].Meta.Title)
 		_, none, _, err := lv.Level([]string{fBlob}, nil)
 		require.NoError(t, err)
 		require.Nil(t, none, "a nil filter reads no versions")
@@ -217,7 +285,7 @@ func TestFactSetReads_LevelReaderAndTargets(t *testing.T) {
 	lv.Close()
 	require.NoError(t, err)
 	require.True(t, parsed)
-	z := metas[index.VersionKey{Path: "kb/z.md", Blob: zBlob}]
+	z := metas[index.TargetVersion{Path: "kb/z.md", Blob: zBlob, Commit: cZ}]
 	require.True(t, z.Meta.Parsed)
 	require.Equal(t, "Z", z.Meta.Title)
 	require.Positive(t, z.Date)

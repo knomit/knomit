@@ -575,9 +575,11 @@ func (rh *Repo) dropExperiment(ctx context.Context, exp model.Experiment) error 
 		`DELETE FROM pipeline_watermarks WHERE branch = ?`, branch); err != nil {
 		return fmt.Errorf("drop experiment watermarks: %w", err)
 	}
+	// The keys are spelled here as the index spells them (last_commit:,
+	// graph_schema_version:, and index.SyncPendingKey's sync_pending:).
 	if _, err := sqlite.Conn(ctx, rh.vr.DB()).ExecContext(ctx,
-		`DELETE FROM meta WHERE key = ? OR key = ?`,
-		"last_commit:"+branch, "graph_schema_version:"+branch); err != nil {
+		`DELETE FROM meta WHERE key IN (?, ?, ?)`,
+		"last_commit:"+branch, "graph_schema_version:"+branch, "sync_pending:"+branch); err != nil {
 		return fmt.Errorf("drop experiment meta keys: %w", err)
 	}
 	if err := rh.clearExperimentRewound(exp.Name); err != nil {

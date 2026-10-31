@@ -116,3 +116,10 @@ func SetFactSetPrefetchWindowForTest(n int) (restore func()) {
 	prefetchWindow = max(n, 1)
 	return func() { prefetchWindow = old }
 }
+
+// FactSetBackgroundReadsForTest is how many read-ahead windows have been
+// started in the background so far.
+func FactSetBackgroundReadsForTest() int64 {
+	mustBeTest("FactSetBackgroundReadsForTest")
+	return backgroundReads.Load()
+}

@@ -158,7 +158,9 @@ var factsetExportFault func(unit int) error
 // read, from unit 1 to the end, on its OWN written set (the cached entry is
 // left as it is): it plans a unit holding a planning slot (waiting for one)
 // and gives the slot back before it writes, so a slow download never keeps
-// other FactSets from being planned. The first unit is planned and inflated
+// other FactSets from being planned. It reads nothing outside the slot (no
+// background window), and what it holds between units is charged to the
+// cache budget (fsCharge). The first unit is planned and inflated
 // before anything is written, so a refusal is still a clean error; a failure
 // after that is returned with the stream started (the edge aborts the
 // connection: the export is never partial).
@@ -188,6 +190,20 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 	c.e.mu.Unlock()
 	c.e = nil
 	defer c.close()
+	// Every read is made holding a planning slot (no background window),
+	// and what the export holds between units is charged to the cache
+	// budget (review N2).
+	c.noPipeline = true
+	charge := &fsCharge{}
+	defer fsCacheUncharge(charge)
+	held := func(pu *plannedUnit) int64 {
+		n := st.bytes() + int64(len(fr.Roots))*bytesPerRoot + c.pre.bytes()
+		if pu != nil {
+			n += int64(len(pu.secs)) * bytesPerSection
+		}
+		return n
+	}
+	fsCacheCharge(charge, held(nil))
 
 	var w io.Writer
 	nums := factsetNumbers{}
@@ -203,6 +219,9 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 		pu, err := c.planUnit(fr, st, u)
 		if err == nil {
 			err = applyUnit(st, pu)
+		}
+		if err == nil {
+			fsCacheCharge(charge, held(pu))
 		}
 		c.releaseSlot()
 		if err != nil {

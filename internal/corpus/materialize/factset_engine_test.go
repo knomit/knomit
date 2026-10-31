@@ -745,6 +745,65 @@ func TestFactSet_ExportStreamsWithoutAPlanningSlot(t *testing.T) {
 	require.Equal(t, 1, strings.Count(doc, "<a id=\""+AnchorOf(FactHash(f.id12(), "kb/z/z.md"))+"\">"), "one target per fact")
 }
 
+// N2: an export reads only inside its planning slot (no background window,
+// where a page pipelines one) and what it holds between units is charged to
+// the cache budget: the accounted total is above the cached entries while it
+// runs and back to them after, and with a budget the entry fits alone, the
+// charge evicts the idle entry.
+//
+// Sabotage: let the export pipeline its windows (background reads appear);
+// drop the charge (the total never rises, the entry is never evicted).
+func TestFactSet_ExportIsChargedAndReadsInItsSlot(t *testing.T) {
+	f := newFactSetFixture(t)
+	seedABC(t, f)
+	ctx := context.Background()
+	defer SetFactSetPrefetchWindowForTest(1)()
+	defer SetFactSetCacheBudget(0)
+	SetFactSetCacheBudget(1 << 30)
+	DropFactSetCacheForTest()
+	req := f.request("kb/u/")
+	req.Options.Depth, req.Limit = 3, 1
+	p := f.first(t, "o", req)
+	bg := FactSetBackgroundReadsForTest()
+	require.Len(t, readAll(t, f, "o", p), 18)
+	require.Greater(t, FactSetBackgroundReadsForTest(), bg, "pages read the next window in the background")
+	cached, size := FactSetCachedForTest(*p.Cursor)
+	require.True(t, cached)
+	require.Positive(t, size)
+	base := FactSetCacheBytes()
+
+	var during []int64
+	var entryCached []bool
+	defer SetFactSetExportFaultForTest(func(int) error {
+		during = append(during, FactSetCacheBytes())
+		c, _ := FactSetCachedForTest(*p.Cursor)
+		entryCached = append(entryCached, c)
+		return nil
+	})()
+	export := func() {
+		t.Helper()
+		require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }))
+	}
+	bg = FactSetBackgroundReadsForTest()
+	export()
+	require.Equal(t, bg, FactSetBackgroundReadsForTest(), "the export reads nothing in the background")
+	require.Len(t, during, 2, "units 2 and 3 were observed")
+	for i, d := range during {
+		require.Greater(t, d, base, "unit %d: the export's held state is charged", i+2)
+		require.True(t, entryCached[i], "a budget with room evicts nothing")
+	}
+	require.Equal(t, base, FactSetCacheBytes(), "the charge is given back")
+
+	during, entryCached = nil, nil
+	SetFactSetCacheBudget(size + 1)
+	export()
+	require.Len(t, entryCached, 2)
+	for i := range entryCached {
+		require.False(t, entryCached[i], "unit %d: entry + charge exceed the budget, the idle entry is evicted", i+2)
+	}
+	require.Zero(t, FactSetCacheBytes(), "entry evicted, charge given back")
+}
+
 type writerFunc func([]byte) (int, error)
 
 func (w writerFunc) Write(b []byte) (int, error) { return w(b) }
@@ -898,4 +957,45 @@ func TestFactSet_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, FactSetExport(context.Background(), f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return &buf }))
 	require.Contains(t, buf.String(), "## 2. B "+UnavailableNote)
+}
+
+// B1 (review of #696). Unpinned, EVERY local ref resolves to its target's
+// version live at the anchor (16ccefe6 item 3), also a ref that did not
+// resolve when the citing version was written (its target was created
+// later, so the version has no ref_edges row for it). Single fact and
+// FactSet both follow it; in the FactSet it counts as a depth-1 entry, so the
+// reservation numbers the next ref 1.2 and the plan agrees. Pinned, the same
+// ref is "not included (no recorded version)".
+//
+// Sabotage: take the unpinned targets from the ref rows only, and a is "not
+// included" (single fact) and missing from the unit (FactSet).
+func TestFactSet_B1_UnpinFollowsRefsUnresolvedAtWrite(t *testing.T) {
+	f := newFactSetFixture(t)
+	ctx := context.Background()
+	f.write(t, "kb/z/c.md", "C", "c body.")
+	f.write(t, "kb/u/b.md", "B", "b body.", "kb/z/a.md", "kb/z/c.md") // a does not exist yet
+	f.write(t, "kb/z/a.md", "A", "a body.")
+
+	opts := DefaultOptions()
+	opts.Unpin = true
+	doc, err := Plan(ctx, Request{Binding: f.b, File: "kb/u/b.md", Options: opts})
+	require.NoError(t, err)
+	var paths []string
+	for _, n := range doc.Nodes {
+		paths = append(paths, n.Path)
+	}
+	require.Equal(t, []string{"kb/u/b.md", "kb/z/a.md", "kb/z/c.md"}, paths, "single fact, unpinned: a is followed")
+	require.Empty(t, doc.Nodes[0].NotIncluded)
+
+	pinned, err := Plan(ctx, Request{Binding: f.b, File: "kb/u/b.md", Options: DefaultOptions()})
+	require.NoError(t, err)
+	require.Equal(t, []string{"kb/z/a.md|" + ReasonNoVersion}, []string{pinned.Nodes[0].NotIncluded[0].Path + "|" + pinned.Nodes[0].NotIncluded[0].Reason},
+		"pinned: no recorded version")
+
+	req := f.request("kb/u/")
+	req.Options.Unpin, req.Limit = true, 5
+	p := f.first(t, "o", req)
+	require.Equal(t, []row{{"1", "u/b", ""}, {"1.1", "z/a", ""}, {"1.2", "z/c", ""}}, rowsOf(p.Facts))
+	require.Equal(t, "1.1", reservedNumber(t, *p.Cursor, f.id12(), "kb/z/a.md"))
+	require.Equal(t, "1.2", reservedNumber(t, *p.Cursor, f.id12(), "kb/z/c.md"))
 }

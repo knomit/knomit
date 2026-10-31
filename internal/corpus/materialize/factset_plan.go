@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/rs/zerolog/log"
 
@@ -225,9 +226,9 @@ func (p *planner) adopt(r pref, dist int) (*pnode, error) {
 
 // levelReads is what one level read returned for one mount.
 type levelReads struct {
-	rows  map[string][]index.LevelRow           // by source blob, in ord order
-	metas map[index.VersionKey]index.TargetMeta // pinned: the NEW local targets' versions
-	live  map[string]index.LiveVersion          // unpin: the new local targets at the anchor
+	rows  map[string][]index.LevelRow              // by source blob, in ord order
+	metas map[index.TargetVersion]index.TargetMeta // pinned: the NEW local targets' versions
+	live  map[string]index.LiveVersion             // unpin: the new local targets at the anchor
 }
 
 // prefetch holds reads made ahead for a window of units (fsCall.prefetch):
@@ -235,9 +236,37 @@ type levelReads struct {
 // targets. Level 0 of a unit never depends on the written set, so these are
 // exactly the reads the unit's plan would make, batched across units.
 type prefetch struct {
-	lo, hi int                                   // the units covered, [lo, hi)
-	rows   map[string][]index.LevelRow           // by root blob
-	metas  map[index.VersionKey]index.TargetMeta // roots and their targets
+	lo, hi int                                      // the units covered, [lo, hi)
+	rows   map[string][]index.LevelRow              // by root blob
+	metas  map[index.TargetVersion]index.TargetMeta // roots and their targets, by (path, blob, commit)
+}
+
+// bytes is the accounted size of a window held between units (the export
+// keeps one across its slot-less writes): every string's bytes plus the
+// struct and map-entry overhead, the same estimate style as the cache's.
+func (pre *prefetch) bytes() int64 {
+	if pre == nil {
+		return 0
+	}
+	const mapEntry = 48
+	rowSize := int64(unsafe.Sizeof(index.LevelRow{}))
+	keySize := int64(unsafe.Sizeof(index.TargetVersion{}))
+	metaSize := int64(unsafe.Sizeof(index.TargetMeta{}))
+	var n int64
+	for b, rows := range pre.rows {
+		n += mapEntry + int64(len(b)) + 24
+		for _, r := range rows {
+			n += rowSize + int64(len(r.SourceBlob)+len(r.Repo)+len(r.Path)+len(r.TargetBlob)+len(r.TargetCommit))
+		}
+	}
+	for k, m := range pre.metas {
+		n += mapEntry + keySize + metaSize + int64(len(k.Path)+len(k.Blob)+len(k.Commit))
+		n += int64(len(m.Meta.Blob) + len(m.Meta.Title) + len(m.Meta.Kind) + len(m.Meta.Type))
+		for _, r := range m.Meta.Refs {
+			n += 16 + int64(len(r))
+		}
+	}
+	return n
 }
 
 // resolveLevel reads and classifies the refs of every unresolved node of one
@@ -262,11 +291,14 @@ func (p *planner) resolveLevel(level []*pnode) error {
 	reads := map[*mount]*levelReads{}
 	for _, m := range mounts {
 		ns := byMount[m]
-		lr := &levelReads{rows: map[string][]index.LevelRow{}, metas: map[index.VersionKey]index.TargetMeta{}}
+		lr := &levelReads{rows: map[string][]index.LevelRow{}, metas: map[index.TargetVersion]index.TargetMeta{}}
 		reads[m] = lr
 		var blobs []string
 		for _, n := range ns {
-			if !hasFactRef(n) {
+			// Unpinned, the targets come from the version's own refs (every
+			// local fact ref, row or not: 16ccefe6 item 3), each at its
+			// version live at the anchor: no ref rows are read.
+			if p.opts.Unpin || !hasFactRef(n) {
 				continue
 			}
 			if pre := p.pre; pre != nil && m.id12 == p.writeID {
@@ -308,17 +340,17 @@ func (p *planner) resolveLevel(level []*pnode) error {
 					if r.Repo != "" || r.TargetBlob == "" || known(r.Path) {
 						continue
 					}
-					vk := index.VersionKey{Path: r.Path, Blob: r.TargetBlob}
-					if _, ok := lr.metas[vk]; ok {
+					tv := index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit}
+					if _, ok := lr.metas[tv]; ok {
 						continue
 					}
 					if p.pre != nil && m.id12 == p.writeID {
-						if v, ok := p.pre.metas[vk]; ok {
-							lr.metas[vk] = v
+						if v, ok := p.pre.metas[tv]; ok {
+							lr.metas[tv] = v
 							continue
 						}
 					}
-					want = append(want, index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit})
+					want = append(want, tv)
 				}
 			}
 			if len(want) > 0 {
@@ -339,15 +371,18 @@ func (p *planner) resolveLevel(level []*pnode) error {
 			p.st.IndexQueries++
 		}
 		if p.opts.Unpin {
-			// Unpinned: the same target SET (the ref rows, the author's
-			// order), each NEW target at its version live at the anchor.
+			// Unpinned: EVERY local fact ref of the version (16ccefe6 item
+			// 3: every ref resolves to the target's latest version, whether
+			// or not it resolved when the citing version was written), each
+			// NEW target at its version live at the anchor.
 			var paths []string
 			want := map[string]bool{}
-			for _, byKey := range lr.rows {
-				for _, r := range byKey {
-					if r.Repo == "" && !known(r.Path) && !want[r.Path] {
-						want[r.Path] = true
-						paths = append(paths, r.Path)
+			for _, n := range ns {
+				for _, raw := range n.meta.Refs {
+					c := fact.ClassifyRef(raw, n.m.id12)
+					if c.Kind == fact.RefLocalFact && c.Path != n.rel && !known(c.Path) && !want[c.Path] {
+						want[c.Path] = true
+						paths = append(paths, c.Path)
 					}
 				}
 			}
@@ -460,11 +495,12 @@ func seenRef(k key, t *pnode, blob, commit string) pref {
 }
 
 // classify turns n's refs, in the order written, into its classified refs: a
-// fact once per target, a source once per label. A local ref with no
+// fact once per target, a source once per label. Pinned, a local ref with no
 // ref_edges row (unresolved when its version was written, or its target blob
 // missing: the real-blob invariant) is "not included" (no recorded version)
-// and never a node. Under unpin a target gone at the anchor is dropped without
-// a mark.
+// and never a node. Unpinned, every local ref resolves to its target's
+// version live at the anchor, row or not, and a target gone there is dropped
+// without a mark.
 func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[string]index.LiveVersion) {
 	seen := map[key]bool{}
 	labels := map[string]int{}
@@ -512,11 +548,6 @@ func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[stri
 					meta: v.Meta, date: v.Date, latest: true})
 				continue
 			}
-			row, ok := rowAt(rows, &j, ord, "", c.Path)
-			if !ok || row.TargetBlob == "" {
-				n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonNoVersion}})
-				continue
-			}
 			if p.opts.Unpin {
 				if held != nil {
 					n.refs = append(n.refs, seenRef(k, held, held.blob, held.commit))
@@ -529,11 +560,16 @@ func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[stri
 				n.refs = append(n.refs, pref{kind: refNode, target: k, m: n.m, commit: v.Commit, blob: v.Blob, meta: v.Meta, date: v.Date})
 				continue
 			}
+			row, ok := rowAt(rows, &j, ord, "", c.Path)
+			if !ok || row.TargetBlob == "" {
+				n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonNoVersion}})
+				continue
+			}
 			if held != nil {
 				n.refs = append(n.refs, seenRef(k, held, row.TargetBlob, row.TargetCommit))
 				continue
 			}
-			v, ok := lr.metas[index.VersionKey{Path: c.Path, Blob: row.TargetBlob}]
+			v, ok := lr.metas[index.TargetVersion{Path: c.Path, Blob: row.TargetBlob, Commit: row.TargetCommit}]
 			if !ok || !v.HasMeta {
 				n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonNoVersion}})
 				continue
@@ -873,7 +909,7 @@ func (p *planner) rootNode(m *mount, rel, commit, blob string, date int64) (*pno
 	if blob == "" {
 		return nil, nil
 	}
-	vk := index.VersionKey{Path: rel, Blob: blob}
+	vk := index.TargetVersion{Path: rel, Blob: blob, Commit: commit}
 	meta, ok := index.TargetMeta{}, false
 	if p.pre != nil {
 		meta, ok = p.pre.metas[vk]
@@ -883,7 +919,7 @@ func (p *planner) rootNode(m *mount, rel, commit, blob string, date int64) (*pno
 		if err != nil {
 			return nil, err
 		}
-		metas, parsed, err := lv.Versions([]index.TargetVersion{{Path: rel, Blob: blob, Commit: commit}})
+		metas, parsed, err := lv.Versions([]index.TargetVersion{vk})
 		if err != nil {
 			return nil, err
 		}

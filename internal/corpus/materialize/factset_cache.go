@@ -211,3 +211,33 @@ func (c *fsCacheT) evictLocked(keep *fsEntry) {
 		c.removeLocked(e)
 	}
 }
+
+// fsCharge is memory a FactSet export holds outside any cache entry (its own
+// written set, the frozen tables and roots it keeps alive, the window and
+// plan it holds between units), counted under the same budget: charging it
+// evicts least recently used entries exactly as an entry's growth does. A
+// charge is never evicted itself: like the entry a call is using, it is
+// bounded by its slot (MaxConcurrentFactSetExports), and the budget evicts
+// everything idle around it. It counts the frozen tables even while the
+// FactSet's entry, which shares them, is still cached: double-counted, never
+// missed.
+type fsCharge struct{ size int64 }
+
+// fsCacheCharge sets ch's accounted size and evicts past the budget.
+func fsCacheCharge(ch *fsCharge, size int64) {
+	c := fsCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.total += size - ch.size
+	ch.size = size
+	c.evictLocked(nil)
+}
+
+// fsCacheUncharge gives ch's bytes back.
+func fsCacheUncharge(ch *fsCharge) {
+	c := fsCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.total -= ch.size
+	ch.size = 0
+}
