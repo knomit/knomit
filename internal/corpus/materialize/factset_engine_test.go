@@ -599,6 +599,34 @@ func TestFactSet_F18_WatermarkRace(t *testing.T) {
 	require.Equal(t, writes, f.svc.ToolSession().FactSetWrites(), "nothing written")
 }
 
+// N1: a sync in flight (Index.Sync rewrites branch_facts before it moves the
+// watermark, holding a sync_pending marker meanwhile) leaves the watermark
+// unchanged across the search, yet the hits may be versions from after it:
+// the search is not anchored while a marker names another head, and is
+// anchored again once the marker names the watermark (the sync done).
+//
+// Sabotage: compare only the two watermarks (ignore settled), and a FactSet
+// is created during the sync.
+func TestFactSet_SearchIsNotAnchoredDuringASync(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/u/a.md", "A", "a body.")
+	db := storetest.RawDB(f.svc)
+	wm, err := f.svc.HistoryQuery().Watermark(context.Background(), "agent/test")
+	require.NoError(t, err)
+	key := index.SyncPendingKey("agent/test")
+	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, key, "0123456789abcdef0123456789abcdef01234567")
+	require.NoError(t, err)
+	writes := f.svc.ToolSession().FactSetWrites()
+	_, _, err = FactSetFirstPage(context.Background(), f.scope("o"), f.request("kb/u/"))
+	require.ErrorIs(t, err, ErrIndexMoved, "rows may be past the watermark: not anchored")
+	require.Equal(t, writes, f.svc.ToolSession().FactSetWrites(), "nothing written")
+
+	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, wm, key)
+	require.NoError(t, err)
+	p := f.first(t, "o", f.request("kb/u/"))
+	require.Equal(t, wm, p.Anchor, "a marker naming the watermark is a finished sync")
+}
+
 // F19. Before the ref_edges backfill (sentinel unset, table empty) the
 // FactSet is byte-identical to the backfilled one when the repo id resolves;
 // with the repo id unresolved too, it is ErrNotReady (503), never a 500.

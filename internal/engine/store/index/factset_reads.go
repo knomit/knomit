@@ -528,6 +528,40 @@ func (hq *HistoryQuery) Watermark(ctx context.Context, branch string) (string, e
 	return wm, nil
 }
 
+// SettledWatermark is Watermark plus whether the branch's derived rows are AT
+// it: false while an Index.Sync is rewriting branch_facts past it (its
+// sync_pending marker names another head), when a read of the rows can see
+// versions from after the watermark. Both come from one statement, so one
+// snapshot. A FactSet's anchored search needs settled on both sides of the
+// search (review N1).
+func (hq *HistoryQuery) SettledWatermark(ctx context.Context, branch string) (wm string, settled bool, err error) {
+	if err := hq.probe("SettledWatermark"); err != nil {
+		return "", false, err
+	}
+	rows, err := conn(ctx, hq.rh.DB()).QueryContext(ctx,
+		`SELECT key, value FROM meta WHERE key IN (?, ?)`, "last_commit:"+branch, SyncPendingKey(branch))
+	if err != nil {
+		return "", false, fmt.Errorf("SettledWatermark: %w", err)
+	}
+	defer rows.Close()
+	var pending string
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return "", false, fmt.Errorf("SettledWatermark: %w", err)
+		}
+		if k == SyncPendingKey(branch) {
+			pending = v
+		} else {
+			wm = v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, fmt.Errorf("SettledWatermark: %w", err)
+	}
+	return wm, pending == "" || pending == wm, nil
+}
+
 // ErrRefEdgesNotReady: ref_edges is not backfilled yet (the reads derive rows
 // from the edges) AND this repo's id is unresolved, so a kb://<self>/ ref can
 // only be told from a foreign one by learning it from the data. A FactSet

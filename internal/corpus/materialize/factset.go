@@ -417,7 +417,7 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 // second move is ErrIndexMoved.
 func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factsetHit, error) {
 	for attempt := 0; attempt < 2; attempt++ {
-		w1, err := wm.svc.HistoryQuery().Watermark(c.ctx, wm.branch)
+		w1, settled1, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
 		if err != nil {
 			return "", nil, err
 		}
@@ -428,12 +428,15 @@ func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factse
 		if h := factsetSearchHook; h != nil {
 			h()
 		}
-		w2, err := wm.svc.HistoryQuery().Watermark(c.ctx, wm.branch)
+		w2, settled2, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
 		if err != nil {
 			return "", nil, err
 		}
 		c.st.IndexQueries += 3
-		if w1 == w2 {
+		// The hits are branch_facts rows, AT the watermark only when no sync
+		// was rewriting them past it on either side of the search (a sync
+		// moves the watermark last, review N1).
+		if w1 == w2 && settled1 && settled2 {
 			return w1, hits, nil
 		}
 	}

@@ -157,6 +157,9 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 		midWm    string
 		calls    int
 		rowAhead string
+
+		midSettledWm string
+		midSettled   bool
 	)
 	svc.si.SetBeforeSyncCASHookForTest(func() {
 		calls++
@@ -170,6 +173,10 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 			return
 		}
 		rowAhead = cur["kb/a.md"].Blob
+		midSettledWm, midSettled, midErr = hq.SettledWatermark(ctx, "main")
+		if midErr != nil {
+			return
+		}
 		mid, midHist, midErr = hq.LiveAt(ctx, "main", anchor, []string{"kb/a.md"})
 	})
 	defer svc.si.SetBeforeSyncCASHookForTest(nil)
@@ -183,6 +190,8 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 	require.True(t, midHist, "a sync in flight: the derived history, not branch_facts")
 	require.Equal(t, a1, mid["kb/a.md"].Blob, "the anchor's version, not the row written past it")
 	require.Equal(t, cA1, mid["kb/a.md"].Commit)
+	require.Equal(t, anchor, midSettledWm)
+	require.False(t, midSettled, "mid-sync the watermark is not settled")
 
 	wm, err := hq.Watermark(ctx, "main")
 	require.NoError(t, err)
@@ -191,6 +200,10 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 	require.NoError(t, svc.si.RepoForTest().DB().QueryRow(
 		`SELECT COUNT(*) FROM meta WHERE key = ?`, index.SyncPendingKey("main")).Scan(&pending))
 	require.Zero(t, pending, "a completed sync clears its marker")
+	sw, settled, err := hq.SettledWatermark(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, wm, sw)
+	require.True(t, settled, "sync done: settled")
 	after, hist, err := hq.LiveAt(ctx, "main", wm, []string{"kb/a.md"})
 	require.NoError(t, err)
 	require.False(t, hist, "sync done: the fast path again")
