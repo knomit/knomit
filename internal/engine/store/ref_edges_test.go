@@ -555,3 +555,31 @@ func TestRefEdges_LevelReadIsChunkIndependent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, whole, chunked, "chunk-independent")
 }
+
+// A revisit of a claimed blob at its claim (Sync's pass 2, a rebuild's phase
+// B, a re-index) whose edges are all present but whose rows are not current
+// writes the rows; with rows current it writes nothing (no transaction).
+//
+// Sabotage: let applyBlobRefs's no-op check ignore the rows (return as soon
+// as every edge exists), and the deleted rows stay deleted.
+func TestRefEdges_RevisitAtTheClaimFillsMissingRows(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "main", "kb/r.md", "R")
+	c, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md", "kb://0123456789ab/kb/far.md")
+	want := rowsOfBlob(allRefRows(t, db), fBlob)
+	require.Len(t, want, 2)
+	_, err := db.Exec(`DELETE FROM ref_edges WHERE source_blob = ?`, fBlob)
+	require.NoError(t, err)
+
+	reached := 0
+	svc.si.SetBeforeRefRowsWriteHookForTest(func() error { reached++; return nil })
+	defer svc.si.SetBeforeRefRowsWriteHookForTest(nil)
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", fBlob, c, []string{"kb/r.md", "kb://0123456789ab/kb/far.md"}))
+	require.Equal(t, 1, reached, "the revisit opened the write transaction")
+	require.Equal(t, want, rowsOfBlob(allRefRows(t, db), fBlob), "the rows are back")
+
+	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", fBlob, c, []string{"kb/r.md", "kb://0123456789ab/kb/far.md"}))
+	require.Equal(t, 1, reached, "with rows current, a revisit writes nothing")
+}
