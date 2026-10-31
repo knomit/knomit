@@ -18,8 +18,11 @@ import (
 func TestFactSetState_ExtraSetSurvivesMerges(t *testing.T) {
 	var s hset
 	const n = 2*extraTail + 1808
+	// Descending keys: every merge's new keys sort before the main slice's,
+	// so a merge that dropped the main slice's leftovers would lose them all.
+	key := func(i uint64) uint64 { return (n + 1 - i) * 1000003 }
 	for i := uint64(1); i <= n; i++ {
-		h := i * 0x9e3779b97f4a7c15
+		h := key(i)
 		_, found := s.get(h)
 		require.False(t, found)
 		s.put(xentry{h: h, check: i, blob: i * 3})
@@ -27,12 +30,15 @@ func TestFactSetState_ExtraSetSurvivesMerges(t *testing.T) {
 	require.Equal(t, n, s.len())
 	require.Len(t, s.main, 2*extraTail, "two merges happened")
 	for i := uint64(1); i <= n; i++ {
-		e, ok := s.get(i * 0x9e3779b97f4a7c15)
+		e, ok := s.get(key(i))
 		require.True(t, ok, "key %d", i)
 		require.Equal(t, i, e.check)
 		require.Equal(t, i*3, e.blob)
 	}
 	_, ok := s.get(12345)
+	for i := 1; i < len(s.main); i++ {
+		require.Less(t, s.main[i-1].h, s.main[i].h, "the main slice stays sorted")
+	}
 	require.False(t, ok)
 }
 
