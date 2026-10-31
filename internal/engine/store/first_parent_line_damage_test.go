@@ -95,7 +95,8 @@ func b1Store(t *testing.T) (svc *Service, o, p, a, tip string) {
 // Sabotage (each fails this test): drop wouldCutDerivedLine (re-derive
 // anyway), and A becomes depth 0 / degraded 2 under undegraded descendants
 // and the readers answer o; run rederiveDegraded before the walk in
-// RebuildCommitLog again, and the failed rebuild has changed A's row.
+// RebuildCommitLog again, and the rebuild that fails at the walk has already
+// repaired C (the "changes no row" subtest).
 func TestFirstParentLine_RederiveNeverCutsALineUnderItsDescendants(t *testing.T) {
 	t.Run("rebuild on real damage", func(t *testing.T) {
 		svc, o, p, a, tip := b1Store(t)
@@ -146,6 +147,28 @@ func TestFirstParentLine_RederiveNeverCutsALineUnderItsDescendants(t *testing.T)
 		lr, err := svc.Search().LiveRevision(ctx, "main", "kb/p.md", tip)
 		require.NoError(t, err)
 		require.Equal(t, a, lr, "LiveRevision answers A too")
+	})
+	t.Run("a rebuild that git cannot walk changes no row", func(t *testing.T) {
+		// C's blob is missing at derivation (degraded = 1) and comes back; an
+		// older commit P goes missing, so git cannot walk the branch. The
+		// rebuild fails BEFORE re-deriving: C is not repaired by a rebuild
+		// that reports failure.
+		svc, ctx := openPathHistoryStore(t)
+		writeMergeFact(t, svc, "main", "kb/o.md", "o", "o")
+		p := writeMergeFact(t, svc, "main", "kb/f.md", "f", "P")
+		writeMergeFact(t, svc, "main", "kb/x.md", "x", "x")
+		c := writeMergeFact(t, svc, "main", "kb/c.md", "c", "C")
+		writeMergeFact(t, svc, "main", "kb/y.md", "y", "above")
+		restoreBlob := removeObject(t, svc, plumbing.NewHash(blobOf(t, svc, c, "kb/c.md")))
+		staleVersion(t, svc)
+		require.NoError(t, svc.rh.OpenHistory(ctx))
+		_, deg, _, _ := fpRow(t, svc, c)
+		require.Equal(t, 1, deg, "precondition: C content-degraded")
+		restoreBlob()
+		removeObject(t, svc, plumbing.NewHash(p))
+		require.Error(t, svc.rh.RebuildCommitLog(ctx, "main"))
+		_, deg, _, _ = fpRow(t, svc, c)
+		require.Equal(t, 1, deg, "the failed rebuild re-derived nothing")
 	})
 	t.Run("a structural row is still repaired once its parent is back", func(t *testing.T) {
 		svc, o, p, a, tip := b1Store(t)
