@@ -498,27 +498,29 @@ func (rh *Repo) LineEventsWalkForTest(ctx context.Context, from string, lq LineQ
 // fall back to the walk.
 func (rh *Repo) LineEventsJumpsCountingForTest(ctx context.Context, from string, lq LineQuery) (evs []LineEvent, complete bool, statements int, err error) {
 	mustBeTest()
-	c := &countingExecer{CtxExecer: sqlite.Conn(ctx, rh.db)}
+	c := &countingExecer{q: sqlite.Conn(ctx, rh.db)}
 	evs, complete, err = lineEventsByJumps(ctx, c, from, lq)
 	return evs, complete, c.n, err
 }
 
+// countingExecer wraps q (a named field, not an embedding: test/archtest
+// forbids promoting another store package's methods) and counts statements.
 type countingExecer struct {
-	storegit.CtxExecer
+	q storegit.CtxExecer
 	n int
 }
 
 func (c *countingExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	c.n++
-	return c.CtxExecer.ExecContext(ctx, query, args...)
+	return c.q.ExecContext(ctx, query, args...)
 }
 
 func (c *countingExecer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	c.n++
-	return c.CtxExecer.QueryContext(ctx, query, args...)
+	return c.q.QueryContext(ctx, query, args...)
 }
 
 func (c *countingExecer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	c.n++
-	return c.CtxExecer.QueryRowContext(ctx, query, args...)
+	return c.q.QueryRowContext(ctx, query, args...)
 }
