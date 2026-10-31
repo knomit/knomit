@@ -41,7 +41,11 @@ CREATE TABLE IF NOT EXISTS ref_edges (
     target_path   TEXT    NOT NULL,
     target_blob   TEXT,
     target_commit TEXT,
-    PRIMARY KEY (source_blob, ord)
+    PRIMARY KEY (source_blob, ord),
+    -- A cross-KB row pins no version: the incoming read and the reverse walk
+    -- probe idx_ref_edges_target with no target_repo filter, relying on only
+    -- local rows carrying a target_blob (PR #694 review R3-N2).
+    CHECK (target_repo = '' OR (target_blob IS NULL AND target_commit IS NULL))
 ) WITHOUT ROWID;
 
 -- The incoming direction (IncomingAtCommit, BlastRadius) probes by the CITED

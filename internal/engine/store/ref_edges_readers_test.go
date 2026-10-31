@@ -283,8 +283,10 @@ func requireTableReadsEqualEdgeReadsOnEveryBranch(t *testing.T, svc *Service) {
 // COVERING probe of idx_ref_edges_target (no table lookup per row), and each
 // citing blob's nodes found through (key_id, value), not a skip-scan.
 //
-// Sabotage: put back the target_repo filter (not covering), or unpin the join
-// order (FROM s CROSS JOIN k JOIN node_props_text fb: the skip-scan).
+// Sabotage: put back the target_repo filter (not covering), and the plan
+// assertion fails. Unpinning the join order is NOT caught: with this query
+// shape SQLite picks the same plan with or without the pin (checked on the
+// 250k store with its real statistics), so the pin is defensive only.
 //
 // Production stores carry planner statistics (PRAGMA optimize at open), and
 // the bad plan only appears with realistic ones, so the test loads the

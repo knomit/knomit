@@ -1037,3 +1037,94 @@ func TestRefEdges_LevelReadFallsBackWithoutTheRepoID(t *testing.T) {
 	require.Equal(t, want, got, "the same rows, in the author's order")
 	require.Equal(t, wantOut, outOrder(t, svc, "main", "kb/f.md", c), "outgoing too")
 }
+
+// PR #694 review R3-N2: the schema enforces that a cross-KB row pins no
+// version (the incoming read and the reverse walk rely on it): a cross-KB
+// insert carrying a target_blob or a target_commit is rejected; a local row
+// with a pin, and a cross-KB row without one, are accepted.
+//
+// Sabotage: drop the CHECK from migration 000035, and the bad insert lands.
+func TestRefEdges_SchemaRejectsAPinnedCrossKBRow(t *testing.T) {
+	svc := newMergeTestStore(t)
+	db := svc.si.RepoForTest().DB()
+	ins := func(ord int, repo string, blob, commit any) error {
+		_, err := db.Exec(`INSERT INTO ref_edges(source_blob, ord, target_repo, target_path, target_blob, target_commit) VALUES ('b', ?, ?, 'kb/x.md', ?, ?)`,
+			ord, repo, blob, commit)
+		return err
+	}
+	require.NoError(t, ins(0, "", "tb", "tc"), "a local row with its pin")
+	require.NoError(t, ins(1, "0123456789ab", nil, nil), "a cross-KB row without a pin")
+	err := ins(2, "0123456789ab", "tb", nil)
+	require.Error(t, err, "a cross-KB row with a target_blob is rejected")
+	require.Contains(t, err.Error(), "CHECK")
+	require.Error(t, ins(3, "0123456789ab", nil, "tc"), "a cross-KB row with a target_commit is rejected")
+}
+
+// PR #694 review R3-N1 (the reviewer's probe, ported, plus the second case):
+// the fallback level read with the repo id unresolved learns this repo's id
+// only from a kb://R/p ref whose edge cannot be an explicit local ref's.
+//   - same-path-other-kb: F cites [kb://<other>/kb/r.md, kb/r.md]. The edge
+//     to kb/r.md is the local ref's, so <other> is NOT taken for this repo:
+//     the cross-KB row stays at ord 0 and the local row at ord 1, as in the
+//     table.
+//   - dangling-self-ref: F cites [kb://<self>/kb/r.md, kb://<self>/kb/g.md]
+//     and the edge to g was dropped as dangling. The table (id known) has no
+//     row for g (a local ref without an edge has none); the fallback learns
+//     <self> from r's edge and gives no row for g either, never a cross-KB
+//     row naming this repo.
+//
+// Sabotage: convert every cross-KB spec whose path has an edge (the round-2
+// rule), and same-path-other-kb loses the other KB's row; keep a kb://self
+// ref without an edge as cross-KB, and dangling-self-ref grows a row.
+func TestRefEdges_FallbackLearnsTheSelfRepoID(t *testing.T) {
+	ctx := context.Background()
+	fallback := func(t *testing.T, svc *Service, blob string) []index.RefEdgeRow {
+		db := svc.si.RepoForTest().DB()
+		_, err := db.Exec(`DELETE FROM ref_edges`)
+		require.NoError(t, err)
+		_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+		require.NoError(t, err)
+		svc.gq.SetRootCommitForTest(func(context.Context, string) (string, error) { return "", errors.New("unavailable") })
+		t.Cleanup(func() { svc.gq.SetRootCommitForTest(nil) })
+		rows, err := svc.gq.RefEdgesOfBlobs(ctx, []string{blob})
+		require.NoError(t, err)
+		return rows
+	}
+	t.Run("same-path-other-kb", func(t *testing.T) {
+		svc := newMergeTestStore(t)
+		write(t, svc, "main", "kb/r.md", "R")
+		_, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb://0123456789ab/kb/r.md", "kb/r.md")
+		table, err := svc.gq.RefEdgesOfBlobs(ctx, []string{fBlob})
+		require.NoError(t, err)
+		require.Len(t, table, 2, "precondition: the cross-KB row and the local row")
+		require.Equal(t, "0123456789ab", table[0].Repo)
+		require.Equal(t, table, fallback(t, svc, fBlob), "the fallback equals the table")
+	})
+	t.Run("dangling-self-ref", func(t *testing.T) {
+		svc := newMergeTestStore(t)
+		db := svc.si.RepoForTest().DB()
+		write(t, svc, "main", "kb/r.md", "R")
+		_, gBlob := write(t, svc, "main", "kb/g.md", "G")
+		root, err := svc.si.RepoForTest().RootCommit(ctx, "main")
+		require.NoError(t, err)
+		self := fact.ID12(root)
+		_, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb://"+self+"/kb/r.md", "kb://"+self+"/kb/g.md")
+		// g's blob is lost and F's edge to it dropped as dangling (as
+		// dropDanglingRefEdges does in a rebuild); the repair rewrites F's
+		// rows from its edges with the id known: the table's answer.
+		_, err = db.Exec(`DELETE FROM objects WHERE hash = ? AND type = 3`, gBlob)
+		require.NoError(t, err)
+		_, err = db.Exec(`DELETE FROM edges WHERE id IN (SELECT e.id FROM edges e
+			JOIN node_props_text tb ON tb.node_id = e.target_id AND tb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash')
+			WHERE e.type = 'DERIVED_FROM' AND tb.value = ?)`, gBlob)
+		require.NoError(t, err)
+		_, err = svc.si.RepairRefEdgesForTest(ctx, "main")
+		require.NoError(t, err)
+		table, err := svc.gq.RefEdgesOfBlobs(ctx, []string{fBlob})
+		require.NoError(t, err)
+		require.Len(t, table, 1, "precondition: the table has the r row only")
+		require.Equal(t, "kb/r.md", table[0].Path)
+		got := fallback(t, svc, fBlob)
+		require.Equal(t, table, got, "the fallback equals the table: no row for the dangling kb://self ref")
+	})
+}

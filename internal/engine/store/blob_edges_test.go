@@ -416,11 +416,27 @@ func TestBlobEdges_AncestorPrecedesDescendantOnATie(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
-	a, _ := write(t, svc, "main", "kb/a.md", "A")
-	var d string
-	for i := 0; i < 64 && (d == "" || d > a); i++ {
-		d, _ = write(t, svc, "main", "kb/b.md", fmt.Sprintf("B %d", i))
+	// A chain of commits, each the previous one's child; the pair is an
+	// ancestor a and a later descendant d whose hash sorts BELOW a's. Such a
+	// pair is missing only if every hash in the chain sorts above the one
+	// before it (odds 1/16! for 16 commits), so the precondition holds by
+	// construction (it used to search for a d below one fixed a, and failed
+	// about 2 runs in 30 when a's hash was small: PR #694 review R3-N3).
+	var chain []string
+	for i := 0; i < 16; i++ {
+		c, _ := write(t, svc, "main", "kb/b.md", fmt.Sprintf("B %d", i))
+		chain = append(chain, c)
 	}
+	var a, d string
+	for i := 0; i < len(chain) && a == ""; i++ {
+		for j := i + 1; j < len(chain); j++ {
+			if chain[j] < chain[i] {
+				a, d = chain[i], chain[j]
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, a, "precondition: an ancestor/descendant pair with the descendant's hash first")
 	require.Less(t, d, a, "precondition: the descendant's hash sorts first")
 	_, err := db.Exec(`UPDATE commit_log SET committed_at = 1000 WHERE commit_hash IN (?, ?)`, a, d)
 	require.NoError(t, err)

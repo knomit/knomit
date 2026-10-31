@@ -519,13 +519,18 @@ func (gs *GraphStore) repoIDOf(ctx context.Context, ex storegit.CtxExecer, branc
 // keys are sorted; the rows come back in (source_blob, ord) order.
 //
 // With the repo id unresolved it does not fail (as outgoing does not, PR #694
-// review round 2): selfSpecsFromEdges treats a kb://<repo>/<path> ref whose
-// path the blob has an edge to as a local ref, which is what the edge says it
-// is.
+// review round 2): it learns this repo's id from a kb://<repo>/<path> ref
+// whose path the blob has an edge to (selfCandidates, withSelfRepo).
 func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer, keys []string) ([]RefEdgeRow, error) {
 	repoID := gs.repoIDOf(ctx, ex, "")
-	var out []RefEdgeRow
-	for _, b := range keys {
+	type blobRefs struct {
+		node  int64
+		specs []refSpec
+		cands map[string]bool
+	}
+	per := make([]blobRefs, len(keys))
+	batch := map[string]bool{}
+	for i, b := range keys {
 		specs, _, err := blobRefSpecsOf(ctx, ex, b, repoID)
 		if err != nil {
 			return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
@@ -534,10 +539,28 @@ func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer,
 		if err != nil {
 			return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
 		}
+		per[i] = blobRefs{node: node, specs: specs, cands: map[string]bool{}}
 		if repoID == "" {
-			if specs, err = selfSpecsFromEdges(ctx, ex, node, specs); err != nil {
+			edged, err := edgePathsOfNode(ctx, ex, node)
+			if err != nil {
 				return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
 			}
+			selfCandidates(specs, edged, per[i].cands)
+			selfCandidates(specs, edged, batch)
+		}
+	}
+	// The self id is learned over the whole batch (one blob's kb://self ref
+	// with an edge tells it for the others), else per blob.
+	batchSelf := onlyCandidate(batch)
+	var out []RefEdgeRow
+	for i, b := range keys {
+		node, specs := per[i].node, per[i].specs
+		if repoID == "" {
+			self := batchSelf
+			if self == "" {
+				self = onlyCandidate(per[i].cands)
+			}
+			specs = withSelfRepo(specs, self)
 		}
 		rows, err := expectedRefRows(ctx, ex, node, b, specs)
 		if err != nil {
@@ -552,7 +575,7 @@ func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer,
 // DERIVED_FROM edge read, put in the author's refs order (the blob parsed
 // from `objects`), so it equals the ref_edges read the backfill makes
 // possible. With the repo id unresolved, kb://<self>/ refs are recognised by
-// their edges (selfSpecsFromEdges); when the blob is unavailable it keeps
+// their edges (selfCandidates, withSelfRepo); when the blob is unavailable it keeps
 // edge order (the set is still right).
 func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegit.CtxExecer, branch, path, blob string) ([]RefSummary, error) {
 	found, err := graphDerivedFromNeighbours(ctx, ex, path, blob, false)
@@ -569,9 +592,13 @@ func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegi
 		if err != nil {
 			return nil, err
 		}
-		if specs, err = selfSpecsFromEdges(ctx, ex, node, specs); err != nil {
+		edged, err := edgePathsOfNode(ctx, ex, node)
+		if err != nil {
 			return nil, err
 		}
+		cands := map[string]bool{}
+		selfCandidates(specs, edged, cands)
+		specs = withSelfRepo(specs, onlyCandidate(cands))
 	}
 	ord := map[string]int{}
 	for _, s := range specs {
@@ -589,15 +616,28 @@ func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegi
 	return found, nil
 }
 
-// selfSpecsFromEdges is the fallback reads' answer to an unresolved repo id
-// (specs built with "" classify kb://<self>/ refs as cross-KB): a cross-KB
-// spec whose path the blob's refs node has a DERIVED_FROM edge to is a ref
-// into this repo (only local refs form edges), so it becomes local, keeping
-// its position; a later duplicate of a path already local is dropped. Only
-// the READ fallbacks use it; the write path never builds rows without the id.
-func selfSpecsFromEdges(ctx context.Context, ex storegit.CtxExecer, node int64, specs []refSpec) ([]refSpec, error) {
+// The fallback reads' answer to an unresolved repo id (specs built with ""
+// classify kb://<self>/ refs as cross-KB). The self id is LEARNED, not
+// guessed per ref (PR #694 review R3-N1):
+//   - a candidate is the repo R of a cross-KB spec kb://R/p whose blob has a
+//     DERIVED_FROM edge to p (only local refs form edges) and whose blob has
+//     NO explicit local spec for p (else the edge is the local spec's, and
+//     kb://R/p may well be another KB's fact at the same path);
+//   - with exactly one candidate R, R is this repo: every spec of R becomes
+//     local, at its own position (a later duplicate of a path already local
+//     is dropped). A kb://R/q ref with no edge (dropped as dangling) then
+//     comes out with NO row, as the table has none for a local ref without an
+//     edge, instead of a cross-KB row naming this repo;
+//   - with no candidate, or several (ambiguous), nothing is converted: a
+//     kb://<self>/ ref then reads as cross-KB, the best the blob tells.
+// Only the READ fallbacks use it; the write path never builds rows without
+// the id.
+
+// edgePathsOfNode is the target paths of a node's DERIVED_FROM edges.
+func edgePathsOfNode(ctx context.Context, ex storegit.CtxExecer, node int64) (map[string]bool, error) {
+	edged := map[string]bool{}
 	if node == 0 {
-		return specs, nil
+		return edged, nil
 	}
 	rows, err := ex.QueryContext(ctx, `
 		SELECT DISTINCT tp.value FROM edges e
@@ -607,24 +647,51 @@ func selfSpecsFromEdges(ctx context.Context, ex storegit.CtxExecer, node int64, 
 	if err != nil {
 		return nil, fmt.Errorf("edge paths of node %d: %w", node, err)
 	}
-	edged := map[string]bool{}
+	defer rows.Close()
 	for rows.Next() {
 		var p string
 		if err := rows.Scan(&p); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		edged[p] = true
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
+	return edged, rows.Err()
+}
+
+// selfCandidates adds to cands the repos that could be this one, per the
+// rule above, for one blob's specs and edge paths.
+func selfCandidates(specs []refSpec, edged map[string]bool, cands map[string]bool) {
+	local := map[string]bool{}
+	for _, s := range specs {
+		if s.repo == "" {
+			local[s.path] = true
+		}
 	}
+	for _, s := range specs {
+		if s.repo != "" && edged[s.path] && !local[s.path] {
+			cands[s.repo] = true
+		}
+	}
+}
+
+// onlyCandidate is the single candidate, or "" when there is none or several.
+func onlyCandidate(cands map[string]bool) string {
+	if len(cands) != 1 {
+		return ""
+	}
+	for r := range cands {
+		return r
+	}
+	return ""
+}
+
+// withSelfRepo makes every spec of selfID local (selfID "" changes nothing),
+// keeping positions and dropping a later duplicate of a local path.
+func withSelfRepo(specs []refSpec, selfID string) []refSpec {
 	out := make([]refSpec, 0, len(specs))
 	local := map[string]bool{}
 	for _, s := range specs {
-		if s.repo != "" && edged[s.path] {
+		if selfID != "" && s.repo == selfID {
 			s.repo = ""
 		}
 		if s.repo == "" {
@@ -635,7 +702,7 @@ func selfSpecsFromEdges(ctx context.Context, ex storegit.CtxExecer, node int64, 
 		}
 		out = append(out, s)
 	}
-	return out, nil
+	return out
 }
 
 // ---- drift, repair, backfill ---------------------------------------------
