@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 )
 
 func seedNStoreFacts(t *testing.T, ctx context.Context, n int) {
@@ -161,4 +162,38 @@ func TestQuery_MaxResults_RejectsNonPositive(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	require.Contains(t, resultText(t, result), "max_results")
+}
+
+// Q6 (PR C): the knomit_query cursor's frozen rows carry each hit's BLOB
+// (tool_queue.blob), the version a later FactSet started from that cursor
+// would materialize: the blob the branch held for the path when the query
+// ran, in relevance and in recent mode.
+//
+// Sabotage: drop Blob from the snapshot's QueueItem, and the rows carry "".
+func TestQuery_CursorRowsCarryTheHitsBlob(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	seedNStoreFacts(t, ctx, 5)
+	for _, args := range []map[string]any{
+		{"applies_to": []any{"store"}, "limit": 2},
+		{"applies_to": []any{"store"}, "limit": 2, "sort": "recent"},
+	} {
+		resp := runQuery(t, ctx, args)
+		require.NotNil(t, resp.Cursor, "%v", args)
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			items, err := svc.ToolSession().DequeuePaths(ctx, *resp.Cursor, 100)
+			require.NoError(t, err)
+			require.NotEmpty(t, items)
+			var paths []string
+			for _, it := range items {
+				paths = append(paths, it.Path)
+			}
+			cur, err := svc.FactQuery().CurrentBlobs(ctx, ri.AgentBranch(), paths)
+			require.NoError(t, err)
+			for _, it := range items {
+				require.NotEmpty(t, it.Blob, "%s: the row carries its blob (%v)", it.Path, args)
+				require.Equal(t, cur[it.Path].Blob, it.Blob, "%s: the version the query listed", it.Path)
+			}
+		}))
+	}
 }
