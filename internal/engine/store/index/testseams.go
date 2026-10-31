@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"knomit/internal/engine/store/model"
@@ -135,6 +136,42 @@ func (fq *FactQuery) SetOutdegreeByEdgesForTest(byEdges bool) {
 	fq.outdegreeByEdges.Store(byEdges)
 }
 
+// SetRootCommitForTest replaces the root-commit lookup of the fallback reads'
+// repo id (nil restores rh.RootCommit).
+func (gs *GraphStore) SetRootCommitForTest(f func(ctx context.Context, branch string) (string, error)) {
+	mustBeTest("SetRootCommitForTest")
+	if f == nil {
+		gs.rootCommit.Store(nil)
+		return
+	}
+	gs.rootCommit.Store(&f)
+}
+
+// ReverseDependentsPlanForTest is the EXPLAIN QUERY PLAN of the reverse walk
+// (byEdges: the edge fallback walk; else the ref_edges walk).
+func (gs *GraphStore) ReverseDependentsPlanForTest(ctx context.Context, byEdges bool) (string, error) {
+	mustBeTest("ReverseDependentsPlanForTest")
+	q, args := reverseDependentsByRowsSQL, []any{NodeFact, "kb/x.md", "kb/x.md"}
+	if byEdges {
+		q, args = reverseDependentsByEdgesSQL, []any{NodeFact, "kb/x.md", EdgeDerivedFrom, EdgeDerivedFrom, "kb/x.md"}
+	}
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, "EXPLAIN QUERY PLAN "+q, args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			return "", err
+		}
+		out = append(out, detail)
+	}
+	return strings.Join(out, "\n"), rows.Err()
+}
+
 // RepairRefEdgesForTest is repairRefEdges.
 func (si *Index) RepairRefEdgesForTest(ctx context.Context, branch string) (int, error) {
 	mustBeTest("RepairRefEdgesForTest")
@@ -244,7 +281,8 @@ func (si *Index) ResolveTargetCommitForTest(ctx context.Context, branch, sourceP
 // GraphAddDerivedFromAtCommitTxForTest is graphAddDerivedFromAtCommitTx.
 func (si *Index) GraphAddDerivedFromAtCommitTxForTest(ctx context.Context, tx storegit.CtxExecer, branch, sourcePath, sourceBlobHash, sourceCommit string, refs []string) error {
 	mustBeTest("GraphAddDerivedFromAtCommitTxForTest")
-	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refSpecsOf(refs, si.localRepoID(ctx, branch)))
+	repoID := si.localRepoID(ctx, branch)
+	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refSpecsOf(refs, repoID), repoID)
 }
 
 // CommitEarlierForTest is commitEarlier.

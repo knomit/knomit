@@ -445,11 +445,12 @@ func (si *Index) upsert(ctx context.Context, branch, commitHash string, rec fact
 // Logged on failure rather than returned: edges are recoverable via
 // rebuild and verify will flag any holes.
 func (si *Index) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
-	specs := refSpecsOf(refs, si.localRepoID(ctx, branch))
+	repoID := si.localRepoID(ctx, branch)
+	specs := refSpecsOf(refs, repoID)
 	if len(specs) == 0 {
 		return
 	}
-	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, path, blobHash, commitHash, specs); err != nil {
+	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, path, blobHash, commitHash, specs, repoID); err != nil {
 		log.Warn().Err(err).Str("path", path).Str("commit", commitHash).Msg("post-commit DERIVED_FROM edge write failed")
 	}
 }

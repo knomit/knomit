@@ -87,7 +87,13 @@ SELECT DISTINCT np.value
   JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
  WHERE np.value <> ?`
 
-// reverseDependentsByEdgesSQL is the walk over the DERIVED_FROM edges.
+// reverseDependentsByEdgesSQL is the walk over the DERIVED_FROM edges (the
+// fallback while ref_edges is not backfilled). Its recursive step is pinned
+// with CROSS JOINs (frontier, then its nodes by blob, then edges into them):
+// left free, the planner chose SEARCH e USING INDEX idx_edges_type, a scan of
+// every DERIVED_FROM edge per frontier row, which did not finish on a
+// 750k-edge store (PR #694 review round 2; the same query was dev's only
+// walk).
 const reverseDependentsByEdgesSQL = `
 WITH RECURSIVE
   kb(id) AS (SELECT id FROM property_keys WHERE key = 'blob_hash'),
@@ -108,8 +114,8 @@ WITH RECURSIVE
     UNION
     SELECT sb.value
       FROM deps d
-      JOIN node_props_text tb ON tb.key_id = (SELECT id FROM kb) AND tb.value = d.blob
-      JOIN edges e ON e.target_id = tb.node_id AND e.type = ?
+      CROSS JOIN node_props_text tb ON tb.key_id = (SELECT id FROM kb) AND tb.value = d.blob
+      CROSS JOIN edges e ON e.target_id = tb.node_id AND e.type = ?
       JOIN node_props_text sb ON sb.node_id = e.source_id AND sb.key_id = (SELECT id FROM kb)
   )
 SELECT DISTINCT np.value

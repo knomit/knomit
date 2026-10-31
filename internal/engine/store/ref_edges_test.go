@@ -880,10 +880,14 @@ func TestRefEdges_RebuildKeepsOneEdgePerPath(t *testing.T) {
 
 // PR #694 review N4: the v8 reset clears the backfill sentinel, so a version
 // on no branch (a rolled-back experiment's) gets its cross-KB row back from
-// the next backfill instead of losing it for good.
+// the backfill instead of losing it for good. Since review round 2 the
+// rebuild that spends the reset runs that backfill itself (an explicit full
+// rebuild never reaches the heal's), so after it the sentinel is set again
+// and the row is back.
 //
-// Sabotage: keep the sentinel in resetBlobRefsOnce, and the backfill does
-// nothing.
+// Sabotage: keep the sentinel in resetBlobRefsOnce (the backfill is skipped
+// and the row stays lost), or drop the backfill at the end of rebuildGraph
+// (the sentinel stays unset).
 func TestRefEdges_ResetReopensTheBackfillForOrphanVersions(t *testing.T) {
 	svc, _ := sideStore(t)
 	ctx := context.Background()
@@ -898,10 +902,138 @@ func TestRefEdges_ResetReopensTheBackfillForOrphanVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, node, "precondition: the orphaned version keeps its node")
 
-	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil)) // the v8 reset + drain
-	require.Empty(t, rowsOfBlob(allRefRows(t, db), eBlob), "precondition: the reset dropped the row and no branch re-creates it")
-	n, err := svc.si.BackfillRefEdges(ctx, "agent/test")
-	require.NoError(t, err)
-	require.Greater(t, n, 0)
+	var resets int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM meta WHERE key = 'derived_from_per_blob'`).Scan(&resets))
+	require.Zero(t, resets, "precondition: this rebuild spends the v8 reset")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil)) // the v8 reset + drain + backfill
+	var v string
+	require.NoError(t, db.QueryRow(`SELECT COALESCE((SELECT value FROM meta WHERE key = 'ref_edges_backfilled'), '')`).Scan(&v))
+	require.Equal(t, "1", v, "the rebuild set the sentinel again: readers use the table")
 	require.Equal(t, want, rowsOfBlob(allRefRows(t, db), eBlob), "the backfill restored the orphan's cross-KB row")
+}
+
+// PR #694 review round 2, R2-F1: the specs and rowsOK come from ONE repo-id
+// lookup. With the first k lookups failing and the rest succeeding (the
+// retry), a write of G citing kb://<self>/kb/r.md never stores that ref as a
+// cross-KB row naming this repo (whatever k: the reviewer's probe, ported).
+//
+// Sabotage: decide rowsOK with a second localRepoID call again, and k=3 stores
+// the self-repo cross-KB row.
+func TestRefEdges_SpecsAndRowsUseOneRepoIDLookup(t *testing.T) {
+	ctx := context.Background()
+	for k := 1; k <= 4; k++ {
+		t.Run(fmt.Sprintf("fail-first-%d-lookups", k), func(t *testing.T) {
+			svc := newMergeTestStore(t)
+			db := svc.si.RepoForTest().DB()
+			write(t, svc, "main", "kb/r.md", "R")
+			root, err := svc.si.RepoForTest().RootCommit(ctx, "main")
+			require.NoError(t, err)
+			self := fact.ID12(root)
+			real := svc.si.RepoForTest().RootCommit
+			calls := 0
+			svc.si.SetRootCommitForTest(func(ctx context.Context, b string) (string, error) {
+				calls++
+				if calls <= k {
+					return "", errors.New("transient")
+				}
+				return real(ctx, b)
+			})
+			_, gBlob := write(t, svc, "main", "kb/g.md", "G", "kb://"+self+"/kb/r.md")
+			require.Greater(t, calls, 0, "precondition: the lookup was reached")
+			for _, r := range rowsOfBlob(allRefRows(t, db), gBlob) {
+				require.NotEqual(t, self, r.Repo, "a kb://self ref is never stored as a cross-KB row naming this repo")
+			}
+		})
+	}
+}
+
+// PR #694 review round 2: the edge fallback blast-radius walk (used while the
+// sentinel is unset) has its recursive step pinned: the plan probes the
+// frontier's nodes by blob instead of scanning every DERIVED_FROM edge per
+// row; and on a deep chain it matches the table walk.
+//
+// Sabotage: unpin the recursive step (plain JOINs), and the plan uses
+// idx_edges_type.
+func TestRefEdgesReaders_EdgeFallbackWalkIsPinned(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	prev := "kb/c00.md"
+	write(t, svc, "main", prev, "C0")
+	for i := 1; i <= 25; i++ {
+		p := fmt.Sprintf("kb/c%02d.md", i)
+		write(t, svc, "main", p, fmt.Sprintf("C%d", i), prev)
+		prev = p
+	}
+	plan, err := svc.gq.ReverseDependentsPlanForTest(ctx, true)
+	require.NoError(t, err)
+	require.NotContains(t, plan, "idx_edges_type", "the edge walk does not scan every edge per frontier row:\n%s", plan)
+	require.Contains(t, plan, "SCAN d", "the recursive step starts from the frontier:\n%s", plan)
+
+	table, err := svc.gq.BlastRadius(ctx, "main", "kb/c00.md")
+	require.NoError(t, err)
+	require.Equal(t, 25, table, "precondition: the chain's 25 dependents")
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+	require.NoError(t, err)
+	edges, err := svc.gq.BlastRadius(ctx, "main", "kb/c00.md")
+	require.NoError(t, err)
+	require.Equal(t, table, edges, "the fallback walk matches the table walk")
+}
+
+// PR #694 review round 2: an explicit full Rebuild spends the v8 reset and
+// must leave the store backfilled (sentinel set, rows present, readers on the
+// table), not on the fallback until some later heal.
+//
+// Sabotage: drop the backfill at the end of rebuildGraph, and the sentinel
+// stays unset.
+func TestRefEdges_FullRebuildLeavesTheStoreBackfilled(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "main", "kb/r.md", "R")
+	cF, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	var v string
+	require.NoError(t, db.QueryRow(`SELECT COALESCE((SELECT value FROM meta WHERE key = 'ref_edges_backfilled'), '')`).Scan(&v))
+	require.Equal(t, "1", v, "the sentinel is set after the rebuild")
+	require.Len(t, rowsOfBlob(allRefRows(t, db), fBlob), 1, "the rows are there")
+	// Readers use the table: with the edges gone (and the sentinel set), the
+	// outgoing read still answers from the rows.
+	_, err := db.Exec(`DELETE FROM edges WHERE type = 'DERIVED_FROM'`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"kb/r.md"}, outOrder(t, svc, "main", "kb/f.md", cF), "outgoing reads the table")
+}
+
+// PR #694 review round 2: RefEdgesOfBlobs before the backfill with the repo id
+// unresolved falls back (as outgoing does) instead of failing: kb://<self>/
+// refs are recognised by their edges, in the author's order.
+//
+// Sabotage: return an error again when the repo id is unresolved, or skip
+// selfSpecsFromEdges (the self ref comes back as a cross-KB row).
+func TestRefEdges_LevelReadFallsBackWithoutTheRepoID(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	write(t, svc, "main", "kb/b.md", "B")
+	write(t, svc, "main", "kb/r.md", "R")
+	root, err := svc.si.RepoForTest().RootCommit(ctx, "main")
+	require.NoError(t, err)
+	self := fact.ID12(root)
+	c, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb://0123456789ab/kb/far.md", "kb://"+self+"/kb/r.md", "kb/b.md")
+	want, err := svc.gq.RefEdgesOfBlobs(ctx, []string{fBlob})
+	require.NoError(t, err)
+	require.Len(t, want, 3, "precondition: far (cross-KB), r (local, via kb://self), b")
+	require.Equal(t, "", want[1].Repo)
+	wantOut := outOrder(t, svc, "main", "kb/f.md", c)
+
+	_, err = db.Exec(`DELETE FROM ref_edges`)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+	require.NoError(t, err)
+	svc.gq.SetRootCommitForTest(func(context.Context, string) (string, error) { return "", errors.New("unresolved") })
+	defer svc.gq.SetRootCommitForTest(nil)
+	got, err := svc.gq.RefEdgesOfBlobs(ctx, []string{fBlob})
+	require.NoError(t, err, "no error without the repo id")
+	require.Equal(t, want, got, "the same rows, in the author's order")
+	require.Equal(t, wantOut, outOrder(t, svc, "main", "kb/f.md", c), "outgoing too")
 }

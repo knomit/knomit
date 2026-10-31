@@ -186,7 +186,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
 	tx storegit.CtxExecer,
 	branch, sourcePath, sourceBlobHash, sourceCommit string,
-	specs []refSpec,
+	specs []refSpec, repoID string,
 ) error {
 	srcID, err := si.graphNodeIDByBlob(ctx, sourcePath, sourceBlobHash)
 	if err != nil {
@@ -221,12 +221,14 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 	}
 
 	// The ref_edges rows need the repo id to tell kb://<self>/ refs from
-	// cross-KB ones (refSpecsOf). Unresolved (localRepoID retries on the next
-	// call), the specs the caller built are wrong for such refs: write the
-	// edges as before but leave the rows alone, so they are never rewritten
-	// from wrong specs; the drift that leaves is repaired by the next rebuild
-	// or revisit with the id (PR #694 review F1).
-	rowsOK := si.localRepoID(ctx, branch) != ""
+	// cross-KB ones (refSpecsOf). repoID is the id the caller built specs
+	// with, from ONE lookup: rowsOK must not come from a second lookup, which
+	// (localRepoID retries a failure) could succeed where the first failed
+	// and write rows from wrong specs (PR #694 review round 2, R2-F1).
+	// Unresolved, the edges are written as before but the rows are left
+	// alone; the drift that leaves is repaired by the next rebuild or revisit
+	// with the id (review F1).
+	rowsOK := repoID != ""
 
 	var targets []refTarget
 	resolved := false

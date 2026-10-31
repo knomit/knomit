@@ -277,7 +277,11 @@ func refEdgesOutOfBlob(ctx context.Context, ex storegit.CtxExecer, blob string) 
 // (its claim node and any other path it has been at: a rename), one row per
 // node. Own marks the citing blob's claim node (where #693 keeps its edges,
 // the edge read's "own" node); Commit is the claim's refs_commit, the edge
-// read's source_commit. The order is left to the caller
+// read's source_commit. The claim is chosen in Go, per citing blob, as the
+// lowest node id carrying refs_commit (readBlobClaim's rule), from a LEFT JOIN
+// on each node's refs_commit; the join order is pinned (k, then the citing
+// blobs, then their nodes) so the node probe uses (key_id, value) instead of
+// a skip-scan (PR #694 review round 2, P1). The order is left to the caller
 // (sortIncomingCandidates).
 func refEdgesIncomingRows(ctx context.Context, ex storegit.CtxExecer, blobHash string) ([]derivedFromNeighbour, error) {
 	rows, err := ex.QueryContext(ctx, `
@@ -289,45 +293,53 @@ func refEdgesIncomingRows(ctx context.Context, ex storegit.CtxExecer, blobHash s
 		                  (SELECT id FROM property_keys WHERE key = ?)           AS krc),
 		     s AS (SELECT DISTINCT r.source_blob AS sb
 		             FROM ref_edges r
-		            WHERE r.target_blob = ? AND r.target_repo = ''),
-		     c AS (SELECT s.sb,
-		                  (SELECT nb.node_id
-		                     FROM node_props_text nb
-		                     JOIN node_props_text rc ON rc.node_id = nb.node_id AND rc.key_id = k.krc
-		                    WHERE nb.key_id = k.kb AND nb.value = s.sb
-		                    ORDER BY nb.node_id LIMIT 1) AS cn
-		             FROM s CROSS JOIN k)
-		SELECT fb.node_id,
-		       fb.node_id = c.cn,
-		       c.sb,
-		       op.value,
+		            WHERE r.target_blob = ? AND r.target_repo = '')
+		SELECT fb.node_id, s.sb, op.value,
 		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kt), ''),
 		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kty), ''),
-		       COALESCE((SELECT value FROM node_props_text WHERE node_id = c.cn AND key_id = k.krc), ''),
+		       rc.value,
 		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kd), '')
-		  FROM c CROSS JOIN k
-		  JOIN node_props_text fb ON fb.key_id = k.kb AND fb.value = c.sb
-		  JOIN node_props_text op ON op.node_id = fb.node_id AND op.key_id = k.kp`, refsCommitKey, blobHash)
+		  FROM k CROSS JOIN s
+		  CROSS JOIN node_props_text fb ON fb.key_id = k.kb AND fb.value = s.sb
+		  JOIN node_props_text op ON op.node_id = fb.node_id AND op.key_id = k.kp
+		  LEFT JOIN node_props_text rc ON rc.node_id = fb.node_id AND rc.key_id = k.krc`, refsCommitKey, blobHash)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []derivedFromNeighbour
+	type claim struct {
+		node   int64
+		commit string
+	}
+	claims := map[string]claim{}
 	for rows.Next() {
 		var r derivedFromNeighbour
 		var deleted string
-		var own int
-		if err := rows.Scan(&r.NodeID, &own, &r.Blob, &r.Path, &r.Title, &r.Type, &r.Commit, &deleted); err != nil {
+		var rc sql.NullString
+		if err := rows.Scan(&r.NodeID, &r.Blob, &r.Path, &r.Title, &r.Type, &rc, &deleted); err != nil {
 			return nil, err
+		}
+		if rc.Valid {
+			if c, ok := claims[r.Blob]; !ok || r.NodeID < c.node {
+				claims[r.Blob] = claim{r.NodeID, rc.String}
+			}
 		}
 		if r.Path == "" {
 			continue
 		}
-		r.Own = own == 1
 		r.Deleted = deleted == "true"
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		c := claims[out[i].Blob]
+		out[i].Own = c.node != 0 && out[i].NodeID == c.node
+		out[i].Commit = c.commit
+	}
+	return out, nil
 }
 
 // sortIncomingCandidates puts incoming candidate rows in the documented order
@@ -482,7 +494,11 @@ func (gs *GraphStore) repoIDOf(ctx context.Context, ex storegit.CtxExecer, branc
 			return ""
 		}
 	}
-	root, err := gs.rh.RootCommit(ctx, branch)
+	lookup := gs.rh.RootCommit
+	if f := gs.rootCommit.Load(); f != nil {
+		lookup = *f
+	}
+	root, err := lookup(ctx, branch)
 	if err != nil {
 		return ""
 	}
@@ -493,11 +509,13 @@ func (gs *GraphStore) repoIDOf(ctx context.Context, ex storegit.CtxExecer, branc
 // each blob, derived exactly as the backfill derives it: the blob's refs
 // parsed from `objects`, and the edges on its refs node (expectedRefRows).
 // keys are sorted; the rows come back in (source_blob, ord) order.
+//
+// With the repo id unresolved it does not fail (as outgoing does not, PR #694
+// review round 2): selfSpecsFromEdges treats a kb://<repo>/<path> ref whose
+// path the blob has an edge to as a local ref, which is what the edge says it
+// is.
 func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer, keys []string) ([]RefEdgeRow, error) {
 	repoID := gs.repoIDOf(ctx, ex, "")
-	if repoID == "" {
-		return nil, fmt.Errorf("RefEdgesOfBlobs: ref_edges is not backfilled yet and the repo id is unresolved")
-	}
 	var out []RefEdgeRow
 	for _, b := range keys {
 		specs, _, err := blobRefSpecsOf(ctx, ex, b, repoID)
@@ -507,6 +525,11 @@ func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer,
 		node, err := refsNodeOfBlob(ctx, ex, b)
 		if err != nil {
 			return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
+		}
+		if repoID == "" {
+			if specs, err = selfSpecsFromEdges(ctx, ex, node, specs); err != nil {
+				return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
+			}
 		}
 		rows, err := expectedRefRows(ctx, ex, node, b, specs)
 		if err != nil {
@@ -520,20 +543,27 @@ func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer,
 // outgoingByEdgesInRefsOrder is the outgoing read before the backfill: the
 // DERIVED_FROM edge read, put in the author's refs order (the blob parsed
 // from `objects`), so it equals the ref_edges read the backfill makes
-// possible. When the repo id or the blob is unavailable it keeps edge order
-// (the set is still right).
+// possible. With the repo id unresolved, kb://<self>/ refs are recognised by
+// their edges (selfSpecsFromEdges); when the blob is unavailable it keeps
+// edge order (the set is still right).
 func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegit.CtxExecer, branch, path, blob string) ([]RefSummary, error) {
 	found, err := graphDerivedFromNeighbours(ctx, ex, path, blob, false)
 	if err != nil {
 		return nil, err
 	}
 	repoID := gs.repoIDOf(ctx, ex, branch)
-	if repoID == "" {
-		return found, nil
-	}
 	specs, _, err := blobRefSpecsOf(ctx, ex, blob, repoID)
 	if err != nil {
 		return nil, err
+	}
+	if repoID == "" {
+		node, err := refsNodeOfBlob(ctx, ex, blob)
+		if err != nil {
+			return nil, err
+		}
+		if specs, err = selfSpecsFromEdges(ctx, ex, node, specs); err != nil {
+			return nil, err
+		}
 	}
 	ord := map[string]int{}
 	for _, s := range specs {
@@ -549,6 +579,55 @@ func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegi
 	}
 	sort.SliceStable(found, func(i, j int) bool { return at(found[i].Path) < at(found[j].Path) })
 	return found, nil
+}
+
+// selfSpecsFromEdges is the fallback reads' answer to an unresolved repo id
+// (specs built with "" classify kb://<self>/ refs as cross-KB): a cross-KB
+// spec whose path the blob's refs node has a DERIVED_FROM edge to is a ref
+// into this repo (only local refs form edges), so it becomes local, keeping
+// its position; a later duplicate of a path already local is dropped. Only
+// the READ fallbacks use it; the write path never builds rows without the id.
+func selfSpecsFromEdges(ctx context.Context, ex storegit.CtxExecer, node int64, specs []refSpec) ([]refSpec, error) {
+	if node == 0 {
+		return specs, nil
+	}
+	rows, err := ex.QueryContext(ctx, `
+		SELECT DISTINCT tp.value FROM edges e
+		  JOIN node_props_text tp ON tp.node_id = e.target_id
+		       AND tp.key_id = (SELECT id FROM property_keys WHERE key = 'path')
+		 WHERE e.source_id = ? AND e.type = ?`, node, EdgeDerivedFrom)
+	if err != nil {
+		return nil, fmt.Errorf("edge paths of node %d: %w", node, err)
+	}
+	edged := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		edged[p] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]refSpec, 0, len(specs))
+	local := map[string]bool{}
+	for _, s := range specs {
+		if s.repo != "" && edged[s.path] {
+			s.repo = ""
+		}
+		if s.repo == "" {
+			if local[s.path] {
+				continue
+			}
+			local[s.path] = true
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // ---- drift, repair, backfill ---------------------------------------------

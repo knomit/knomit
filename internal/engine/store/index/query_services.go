@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"sync/atomic"
 
 	"knomit/internal/engine/store/internal/vcs"
@@ -30,7 +31,10 @@ type FactQuery struct {
 // GraphStore is the DERIVED_FROM / SIMILAR_TO graph queries.
 type GraphStore struct {
 	rh *vcs.Repo
-	ov atomic.Pointer[Overrides]
+	// rootCommit replaces rh.RootCommit for the fallback reads' repo id (a
+	// test seam; nil in production).
+	rootCommit atomic.Pointer[func(ctx context.Context, branch string) (string, error)]
+	ov         atomic.Pointer[Overrides]
 	// fault: see FactQuery.fault.
 	fault atomic.Pointer[ReadFault]
 }

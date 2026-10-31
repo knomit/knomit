@@ -712,7 +712,7 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		if srcID == 0 {
 			continue // the version has no graph node (orphaned): as phase B
 		}
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, specs); err != nil {
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, specs, repoID); err != nil {
 			failed = true
 			delete(done, key)
 			log.Warn().Err(err).Str("branch", branch).Str("path", e.path).Str("commit", e.commitHash[:8]).
@@ -1657,7 +1657,8 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		}
 		done[e.commitHash+"|"+e.path] = struct{}{}
 
-		specs := refSpecsOf(cf.rec.Refs, si.localRepoID(ctx, branch))
+		repoID := si.localRepoID(ctx, branch)
+		specs := refSpecsOf(cf.rec.Refs, repoID)
 		if len(specs) == 0 {
 			continue
 		}
@@ -1683,7 +1684,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 			continue
 		}
 
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, specs); err != nil {
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, specs, repoID); err != nil {
 			ownFailed = true
 			delete(done, e.commitHash+"|"+e.path)
 			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
@@ -1707,6 +1708,18 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 	// would turn a permanent per-blob failure into a re-index on every boot).
 	if _, err := si.repairRefEdges(ctx, branch); err != nil {
 		log.Warn().Err(err).Str("branch", branch).Msg("rebuildGraph: ref_edges repair failed; the next rebuild retries")
+	}
+	// The v8 reset (resetBlobRefsOnce, above) clears the backfill sentinel,
+	// and nothing else would set it again until the next heal: an explicit
+	// full Rebuild (spec.full) never runs the heal's backfill, so the readers
+	// would stay on the edge fallback indefinitely (PR #694 review round 2).
+	// Every rebuild therefore finishes the job when the sentinel is unset.
+	// Not fatal: on failure the readers keep falling back and the next heal
+	// or rebuild retries.
+	if !refEdgesReady(ctx, conn(ctx, si.rh.DB())) {
+		if _, err := si.BackfillRefEdges(ctx, branch); err != nil {
+			log.Warn().Err(err).Str("branch", branch).Msg("rebuildGraph: ref_edges backfill failed; reads fall back to the edges until it runs")
+		}
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
