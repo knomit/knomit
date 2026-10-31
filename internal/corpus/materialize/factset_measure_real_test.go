@@ -45,6 +45,8 @@ import (
 //     paths);
 //   D deep: every result cites 50 chains of 10 facts of its own, so a unit
 //     reaches Depth 10 and its 500-node cap through depth.
+//
+// KNOMIT_FACTSET_MEASURE_UNPIN=1 measures any shape unpinned.
 
 const measureEnv = "KNOMIT_FACTSET_MEASURE"
 
@@ -250,6 +252,12 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 	default:
 		t.Fatalf("unknown shape %q", name)
 	}
+	if os.Getenv("KNOMIT_FACTSET_MEASURE_UNPIN") != "" {
+		// Unpinned: every unit's targets are its roots' frontmatter refs at
+		// the versions live at the anchor (LiveAt), no ref_edges rows.
+		req.Options.Unpin = true
+		name += "-unpin"
+	}
 	t.Logf("SHAPE %s on %s (%s), GOMAXPROCS %d, %s/%s", name, os.Getenv("KNOMIT_FACTSET_MEASURE_DB"), branch,
 		runtime.GOMAXPROCS(0), runtime.GOOS, runtime.GOARCH)
 
@@ -270,7 +278,7 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 		_ = p2
 		t.Logf("%s %s: units %d; page 1 %s (search %s, planning+page %s; %d index reads, %d of them parsing row-less versions, %d units planned, max %d reads per unit); next page %s",
 			name, label, page.Units, first, st1.Search, first-st1.Search, st1.IndexQueries, st1.ParsedReads, st1.UnitsPlanned, st1.MaxUnitQueries, next)
-		if name == "REAL" {
+		if strings.HasPrefix(name, "REAL") {
 			t5 := time.Now()
 			var n countWriter
 			require.NoError(t, FactSetExport(ctx, f.scope(owner), f.b, nil, nil, *page.Cursor, func(FactSetEnv) io.Writer { return &n }))
@@ -318,7 +326,7 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 	}
 	t.Logf("%s: session-DB writes %d for %d FactSets (heartbeats included); per-path git reads %d", name, ti.FactSetWrites()-writes0, 2, gitReads.Load())
 
-	if name == "REAL" {
+	if strings.HasPrefix(name, "REAL") {
 		return
 	}
 	DropFactSetCacheForTest()
