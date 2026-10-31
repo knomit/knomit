@@ -21,7 +21,7 @@ type FactQuery struct {
 	// outdegreeByEdges makes the highlights' out-degree read the DERIVED_FROM
 	// edges instead of ref_edges (a test seam; false in production).
 	outdegreeByEdges atomic.Bool
-	ov atomic.Pointer[Overrides]
+	ov               atomic.Pointer[Overrides]
 	// fault is the failure-injection hook of Facade.SetReadFaultForTest;
 	// nil in production, where nothing can set it.
 	fault atomic.Pointer[ReadFault]

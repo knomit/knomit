@@ -1094,7 +1094,7 @@ func TestBlobEdges_MergeCarriesBlobUnchanged(t *testing.T) {
 	build := func(t *testing.T) world {
 		svc := newMergeTestStore(t)
 		t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
-		t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
+		t.Cleanup(func() { requireRowsMirrorEdges(t, svc) })                       // ref_edges mirrors the edges (PR B)
 		ctx := context.Background()
 		db := svc.si.RepoForTest().DB()
 		cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
@@ -1289,7 +1289,7 @@ func TestBlobEdges_SameBytesOnTwoBranches(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				svc := newMergeTestStore(t)
 				t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
-				t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
+				t.Cleanup(func() { requireRowsMirrorEdges(t, svc) })                       // ref_edges mirrors the edges (PR B)
 				ctx := context.Background()
 				db := svc.si.RepoForTest().DB()
 				cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
