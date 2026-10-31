@@ -46,6 +46,14 @@ func factsetPages(t *testing.T, first string, next func(cursor string) string) [
 	}
 }
 
+// factsetID is the FactSet id of a cursor token.
+func factsetID(cursor string) string {
+	if i := strings.IndexByte(cursor, '.'); i > 0 {
+		return cursor[:i]
+	}
+	return cursor
+}
+
 // The REST factset route and knomit_materialize's factset mode return the SAME
 // bytes for the same search, page for page, a seek page included; only the
 // cursor id differs (each surface mints its own, owned by its own endpoint).
@@ -92,16 +100,18 @@ func TestFactSet_RESTIsTheMCPFactSetPage(t *testing.T) {
 	// The defaults (no limit, no depth, every result) are the same too.
 	md := mcpCall(`{"search":{"path":"kb/u/"}}`)
 	rd := restCall(alphaFactSet + "?path=kb/u/")
-	require.Equal(t, strings.ReplaceAll(md, pageCursor(t, md), "CURSOR"), strings.ReplaceAll(rd, pageCursor(t, rd), "CURSOR"))
+	require.Equal(t, strings.ReplaceAll(md, factsetID(pageCursor(t, md)), "ID"), strings.ReplaceAll(rd, factsetID(pageCursor(t, rd)), "ID"))
 
 	// A seek page is the same on both surfaces too.
 	mcpFirst = mcpCall(`{"search":{"path":"kb/u/","type":["observation"]},"cross_kb":true,"depth":2,"limit":2}`)
 	restFirst = restCall(alphaFactSet + "?path=kb/u/&type=observation&cross_kb=true&depth=2&limit=2")
 	mc := pageCursor(t, mcpFirst)
 	rc := pageCursor(t, restFirst)
-	ms := strings.ReplaceAll(mcpCall(`{"cursor":"`+mc+`","unit":3}`), mc, "CURSOR")
-	rs := strings.ReplaceAll(restCall(alphaFactSet+"?cursor="+url.QueryEscape(rc)+"&unit=3"), rc, "CURSOR")
+	// A cursor is "<id>.<unit>.<section>": the ids differ, the positions not.
+	ms := strings.ReplaceAll(mcpCall(`{"cursor":"`+mc+`","unit":3}`), factsetID(mc), "ID")
+	rs := strings.ReplaceAll(restCall(alphaFactSet+"?cursor="+url.QueryEscape(rc)+"&unit=3"), factsetID(rc), "ID")
 	require.Equal(t, ms, rs)
+	require.Contains(t, rs, `"unit_from":3`)
 
 	// The MCP cursor is not the REST route's, and the reverse.
 	code, _ := restGet(t, h, alphaFactSet+"?cursor="+url.QueryEscape(mc))
