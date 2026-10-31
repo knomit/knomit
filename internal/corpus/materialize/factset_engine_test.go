@@ -612,8 +612,9 @@ func TestFactSet_F18_WatermarkRace(t *testing.T) {
 // that outlives it is ErrIndexMoved (503) with nothing written, a cancelled
 // context ends the wait at once, and wait 0 tries once.
 //
-// Sabotage: treat an unsettled watermark as settled (served during the
-// sync); treat "" as settled (served mid-Rebuild); give up at the first
+// Sabotage: treat an unsettled watermark as settled, before the search
+// (served during the sync) or after it (served when a sync starts during the
+// search); treat "" as settled (served mid-Rebuild); give up at the first
 // unsettled read (the cleared marker is not waited for).
 func TestFactSet_SearchWaitsForASettledWatermark(t *testing.T) {
 	f := newFactSetFixture(t)
@@ -666,6 +667,25 @@ func TestFactSet_SearchWaitsForASettledWatermark(t *testing.T) {
 	p := f.first(t, "o", f.request("kb/u/"))
 	require.GreaterOrEqual(t, time.Since(t0), 80*time.Millisecond, "it waited for the sync")
 	require.Equal(t, wm, p.Anchor, "a marker naming the watermark is a finished sync")
+
+	// A sync starts DURING the search (the marker appears after the first
+	// read): the hits are not anchored; the call searches again once the
+	// marker names the watermark.
+	n := 0
+	restoreHook := SetFactSetSearchHookForTest(func() {
+		if n == 0 {
+			setMarker(other)
+			go func() {
+				time.Sleep(30 * time.Millisecond)
+				_, _ = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, wm, key)
+			}()
+		}
+		n++
+	})
+	p = f.first(t, "o3", f.request("kb/u/"))
+	restoreHook()
+	require.Equal(t, 2, n, "the search that saw a sync start was not served")
+	require.Equal(t, wm, p.Anchor)
 
 	// Mid-Rebuild the watermark is "": not settled.
 	restore()
