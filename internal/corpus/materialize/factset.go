@@ -360,10 +360,9 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if sc.Pin == "" || sc.Owner == "" {
 		return FactSetPage{}, st, fmt.Errorf("%w: a factset cursor needs an owner and a binding identity", ErrInvalid)
 	}
-	if !takeSlot(buildSlots) {
-		return FactSetPage{}, st, ErrFactSetBusy
-	}
-	c := &fsCall{ctx: ctx, b: req.Binding, mgr: req.Manager, mayRead: req.MayRead, slot: true}
+	// No planning slot yet: searchAnchored takes it once the index has
+	// settled (a first call waiting for that holds none, review R3-1).
+	c := &fsCall{ctx: ctx, b: req.Binding, mgr: req.Manager, mayRead: req.MayRead}
 	c.r = newReader(req.Binding, req.Manager, req.MayRead, &c.st)
 	defer c.close()
 
@@ -464,13 +463,21 @@ func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factse
 		pause = min(2*pause, settlePollMax)
 		return nil
 	}
+	// The planning slot is held only for the search itself: a first call
+	// waiting for its index to settle holds none, so a sync burst cannot
+	// starve the pages, seeks and exports of existing FactSets (review R3-1).
+	// The slot is taken, refused at once when none is free, only once the
+	// watermark reads settled, and given back before every wait.
 	for {
-		w1, settled1, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
+		w1, gen1, settled1, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
 		if err != nil {
 			return "", nil, err
 		}
 		c.st.IndexQueries++
 		if settled1 {
+			if err := c.needSlot(); err != nil {
+				return "", nil, err
+			}
 			hits, err := runFactSetSearch(c.ctx, wm, req)
 			if err != nil {
 				return "", nil, err
@@ -478,14 +485,17 @@ func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factse
 			if h := factsetSearchHook; h != nil {
 				h()
 			}
-			w2, settled2, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
+			w2, gen2, settled2, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
 			if err != nil {
 				return "", nil, err
 			}
 			c.st.IndexQueries += 2
-			if w1 == w2 && settled1 && settled2 {
+			// gen: a whole Rebuild at the same head between the two reads
+			// (review R3-2) leaves w1 == w2 but bumps the generation.
+			if w1 == w2 && gen1 == gen2 && settled1 && settled2 {
 				return w1, hits, nil
 			}
+			c.releaseSlot()
 		}
 		if err := wait(); err != nil {
 			return "", nil, err

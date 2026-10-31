@@ -1273,7 +1273,7 @@ paths:
         WATERMARK (the commit the index reflects), read before and after the
         search; a move in between, an index sync in progress or a rebuild
         makes the first call wait for the index to settle (up to
-        `session.factset_anchor_wait`, 5s by default), then answer 503 with
+        `session.factset_anchor_wait`, 5s by default, at most 1m), then answer 503 with
         Retry-After. A version is
         a BLOB: a result's is the one the index held at the anchor; a pinned
         reference's is the one its citing version recorded; with `unpin`, or

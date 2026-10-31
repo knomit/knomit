@@ -532,37 +532,43 @@ func (hq *HistoryQuery) Watermark(ctx context.Context, branch string) (string, e
 // it: false while an Index.Sync is rewriting branch_facts past it (its
 // sync_pending marker names another head), when a read of the rows can see
 // versions from after the watermark, and false while the watermark is empty
-// (never synced, or a Rebuild rewriting every row). Both come from one statement, so one
-// snapshot. A FactSet's anchored search needs settled on both sides of the
-// search (review N1).
-func (hq *HistoryQuery) SettledWatermark(ctx context.Context, branch string) (wm string, settled bool, err error) {
+// (never synced, or a Rebuild rewriting every row). generation is the
+// branch's rebuild generation (RebuildGenKey), bumped by every Rebuild: a
+// whole Rebuild at the same head between two reads leaves the watermark
+// equal but the generation not (review R3-2). All three come from one
+// statement, so one snapshot. A FactSet's anchored search needs settled on
+// both sides of the search and both values unchanged.
+func (hq *HistoryQuery) SettledWatermark(ctx context.Context, branch string) (wm, generation string, settled bool, err error) {
 	if err := hq.probe("SettledWatermark"); err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	rows, err := conn(ctx, hq.rh.DB()).QueryContext(ctx,
-		`SELECT key, value FROM meta WHERE key IN (?, ?)`, "last_commit:"+branch, SyncPendingKey(branch))
+		`SELECT key, value FROM meta WHERE key IN (?, ?, ?)`, "last_commit:"+branch, SyncPendingKey(branch), RebuildGenKey(branch))
 	if err != nil {
-		return "", false, fmt.Errorf("SettledWatermark: %w", err)
+		return "", "", false, fmt.Errorf("SettledWatermark: %w", err)
 	}
 	defer rows.Close()
 	var pending string
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err != nil {
-			return "", false, fmt.Errorf("SettledWatermark: %w", err)
+			return "", "", false, fmt.Errorf("SettledWatermark: %w", err)
 		}
-		if k == SyncPendingKey(branch) {
+		switch k {
+		case SyncPendingKey(branch):
 			pending = v
-		} else {
+		case RebuildGenKey(branch):
+			generation = v
+		default:
 			wm = v
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", false, fmt.Errorf("SettledWatermark: %w", err)
+		return "", "", false, fmt.Errorf("SettledWatermark: %w", err)
 	}
 	// An empty watermark is a branch never synced or a Rebuild in progress
 	// (it sets "" before rewriting every row): no rows to anchor on.
-	return wm, wm != "" && (pending == "" || pending == wm), nil
+	return wm, generation, wm != "" && (pending == "" || pending == wm), nil
 }
 
 // ErrRefEdgesNotReady: ref_edges is not backfilled yet (the reads derive rows

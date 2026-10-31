@@ -1103,3 +1103,84 @@ func TestFactSet_B1_UnpinFollowsRefsUnresolvedAtWrite(t *testing.T) {
 	require.Equal(t, "1.1", reservedNumber(t, *p.Cursor, f.id12(), "kb/z/a.md"))
 	require.Equal(t, "1.2", reservedNumber(t, *p.Cursor, f.id12(), "kb/z/c.md"))
 }
+
+// R3-1: a first call waiting for its index to settle holds NO planning slot,
+// so a sync burst cannot starve existing FactSets: with
+// MaxConcurrentFactSetBuilds first calls waiting on an unsettled watermark,
+// no slot is in use, a page of an existing FactSet whose cache entry was
+// evicted (it must replan) is served, and so is its export (every unit
+// plans under a slot). The waiters still end in ErrIndexMoved at their
+// deadline. (Reviewer probe zz_probe_slotwait_test.go made real.)
+//
+// Sabotage: take the slot before the wait, as before (4 slots in use, the
+// page refused with ErrFactSetBusy and the export waiting out the waiters).
+func TestFactSet_AnchorWaitHoldsNoPlanningSlot(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/z/x.md", "X", "x.")
+	f.write(t, "kb/u/a.md", "A", "a.", "kb/z/x.md")
+	f.write(t, "kb/u/b.md", "B", "b.", "kb/z/x.md")
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Limit = 1
+	p := f.first(t, "reader", req)
+	require.True(t, p.HasMore)
+
+	const wait = 1500 * time.Millisecond
+	defer SetFactSetAnchorWaitForTest(wait)()
+	key := index.SyncPendingKey("agent/test")
+	_, err := storetest.RawDB(f.svc).Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, key, "0123456789abcdef0123456789abcdef01234567")
+	require.NoError(t, err)
+	errs := make([]error, MaxConcurrentFactSetBuilds)
+	var wg sync.WaitGroup
+	for i := range MaxConcurrentFactSetBuilds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, errs[i] = FactSetFirstPage(ctx, f.scope("w"+itoa(int32(i))), req)
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	require.Zero(t, BuildSlotsInUse(), "the waiting first calls hold no planning slot")
+
+	DropFactSetCacheForTest()
+	start := time.Now()
+	next, err := FactSetNextPage(ctx, f.scope("reader"), f.b, nil, nil, *p.Cursor, 0)
+	require.NoError(t, err, "an existing FactSet's page is served while first calls wait")
+	require.NotEmpty(t, next.Facts)
+	require.NoError(t, FactSetExport(ctx, f.scope("reader"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }),
+		"its export plans every unit under a slot while first calls wait")
+	require.Less(t, time.Since(start), wait/2, "neither waited for the waiters")
+
+	wg.Wait()
+	for i, err := range errs {
+		require.ErrorIs(t, err, ErrIndexMoved, "waiter %d", i)
+	}
+	require.Zero(t, BuildSlotsInUse())
+}
+
+// R3-2: a whole Rebuild at the same head between the two watermark reads
+// leaves the watermark equal and settled on both sides, yet the search may
+// have read half-rebuilt rows. The rebuild generation, read in the same
+// statement, differs, so that search is not served: the call searches
+// again and anchors at the (same) watermark.
+//
+// Sabotage: compare only the watermarks (the half-rebuilt search is served
+// after one search).
+func TestFactSet_SearchSpanningARebuildIsNotAnchored(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/u/a.md", "A", "a body.")
+	ctx := context.Background()
+	defer SetFactSetAnchorWaitForTest(2 * time.Second)()
+	wm, err := f.svc.HistoryQuery().Watermark(ctx, "agent/test")
+	require.NoError(t, err)
+	n := 0
+	defer SetFactSetSearchHookForTest(func() {
+		if n == 0 {
+			require.NoError(t, f.svc.IndexManager().Rebuild(ctx, "agent/test", nil))
+		}
+		n++
+	})()
+	p := f.first(t, "o", f.request("kb/u/"))
+	require.Equal(t, 2, n, "the search that spanned a Rebuild was not served")
+	require.Equal(t, wm, p.Anchor, "the Rebuild kept the head: same anchor")
+}

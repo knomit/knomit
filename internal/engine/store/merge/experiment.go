@@ -560,10 +560,11 @@ func (rh *Repo) ExpireExperiments(ctx context.Context, cutoff time.Time) ([]stri
 // FIRST, so a failure anywhere leaves the experiment row in place and the
 // whole operation retryable, rather than a record-less ref nobody can name.
 //
-// The two extra deletes are the ones DropBranch cannot do. `pipeline_watermarks`
-// and the `meta` watermark keys are keyed by branch NAME with no foreign key
-// to `branches`, so DropBranch does not see them — and this fork WROTE them,
-// so this teardown owns them. Leaving them behind is not inert: a later
+// The two extra deletes are the ones DropBranch does not do. `pipeline_watermarks`
+// and the `meta` graph_schema_version key are keyed by branch NAME with no
+// foreign key to `branches` — and this fork WROTE them, so this teardown owns
+// them. (DropBranch itself deletes the index's last_commit:, sync_pending: and
+// rebuild_gen: keys.) Leaving them behind is not inert: a later
 // experiment reusing the name inherits a watermark pointing at a commit its
 // branch has never contained, and its first review seeds nothing at all.
 func (rh *Repo) dropExperiment(ctx context.Context, exp model.Experiment) error {
@@ -575,11 +576,12 @@ func (rh *Repo) dropExperiment(ctx context.Context, exp model.Experiment) error 
 		`DELETE FROM pipeline_watermarks WHERE branch = ?`, branch); err != nil {
 		return fmt.Errorf("drop experiment watermarks: %w", err)
 	}
-	// The keys are spelled here as the index spells them (last_commit:,
-	// graph_schema_version:, and index.SyncPendingKey's sync_pending:).
+	// DropBranch above already deleted the branch's last_commit:,
+	// sync_pending: and rebuild_gen: keys (vcs DropBranchLocked, step 2c);
+	// only the index schema version is left to the experiment (a plain drop
+	// keeps it on purpose). Spelled as the index spells it.
 	if _, err := sqlite.Conn(ctx, rh.vr.DB()).ExecContext(ctx,
-		`DELETE FROM meta WHERE key IN (?, ?, ?)`,
-		"last_commit:"+branch, "graph_schema_version:"+branch, "sync_pending:"+branch); err != nil {
+		`DELETE FROM meta WHERE key = ?`, "graph_schema_version:"+branch); err != nil {
 		return fmt.Errorf("drop experiment meta keys: %w", err)
 	}
 	if err := rh.clearExperimentRewound(exp.Name); err != nil {
