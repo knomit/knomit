@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/index"
 )
 
@@ -152,4 +153,51 @@ func TestHealIndexBranches_AgentSyncFailureIsNotOk(t *testing.T) {
 	ok := healIndexBranches(context.Background(), f.im, "repo", fresh(f.phantom, f.real1), f.progress)
 	require.False(t, ok, "an agent-branch sync failure must flag the index as error")
 	require.Zero(t, f.started, "a branch that is not stale is synced, not rebuilt")
+}
+
+// The heal fills ref_edges once for a store indexed before the table existed
+// (rows gone, sentinel unset): after it, the store's rows are back, exactly as
+// the write path produced them.
+//
+// Sabotage: drop the BackfillRefEdges call from healIndexBranches, and the
+// rows stay empty.
+func TestHealIndexBranches_BackfillsRefEdges(t *testing.T) {
+	ctx := context.Background()
+	ri := bootRepo(t, newTestManager(t))
+	svc := testService(t, ri)
+	f := &healFixture{im: svc.IndexManager(), real0: ri.AgentBranch()}
+	body := func(title string, refs ...string) string {
+		ff := fact.NewFact("placeholder.md")
+		ff.Title, ff.Type, ff.Confidence, ff.Sources = title, fact.Observation, 0.8, 1
+		ff.Domain, ff.Refs = []string{"test"}, refs
+		out, err := fact.SerializeFact(ff)
+		require.NoError(t, err)
+		return out
+	}
+	_, err := svc.Facts().WriteFact(ctx, f.real0, "kb/r.md", body("R"), "r", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, f.real0, "kb/f.md", body("F", "kb/r.md", "kb://0123456789ab/kb/far.md"), "f", "")
+	require.NoError(t, err)
+	db := f.im.RepoForTest().DB()
+	snapshot := func() []string {
+		rows, err := db.Query(`SELECT source_blob || ' ' || ord || ' ' || target_repo || ' ' || target_path || ' ' || COALESCE(target_blob, '') FROM ref_edges ORDER BY source_blob, ord`)
+		require.NoError(t, err)
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var s string
+			require.NoError(t, rows.Scan(&s))
+			out = append(out, s)
+		}
+		return out
+	}
+	want := snapshot()
+	require.Len(t, want, 2, "precondition: F's local and cross-KB rows")
+	_, err = db.Exec(`DELETE FROM ref_edges`)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+	require.NoError(t, err)
+
+	require.True(t, healIndexBranches(ctx, f.im, "repo", fresh(f.real0), f.progress))
+	require.Equal(t, want, snapshot(), "the heal backfilled the rows")
 }
