@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -588,9 +589,205 @@ type fsCall struct {
 	e       *fsEntry
 	st      Stats
 	slot    bool
+	// pre: the reads made ahead for the window of units being planned; next:
+	// the following window, reading in the background.
+	pre  *prefetch
+	next *pending
+	// keepFrom is the unit the page being served starts in: plans before it
+	// are dropped as soon as the planner passes them.
+	keepFrom int
+}
+
+// prefetchWindow is how many units are read ahead at once: a replay or an
+// export of 500 units makes 84 windows of batched reads instead of a root
+// read and a level read per unit.
+var prefetchWindow = 6
+
+// prefetchParallel is how many statements a window's large reads are split
+// into and run at once (the store's read pool has four connections). The
+// reads are primary-key probes over a store far larger than one connection's
+// page cache, so they are bound by page access, and parallel readers overlap
+// it.
+const prefetchParallel = 4
+
+// prefetch reads ahead for units u..u+prefetchWindow-1: their roots'
+// metadata, their roots' ref rows, and then, in parallel, the metadata of
+// those rows' local targets (pinned) and the ref rows of those targets (level
+// 1, read speculatively: a target the unit links instead of expanding wastes
+// only its read). None of it depends on the written set, so it is what the
+// units' plans would read, batched and overlapped.
+//
+// It touches no field of c (it may run beside the planner): it returns its
+// window and what it read.
+func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre *prefetch, st Stats, err error) {
+	hi := min(len(fr.Roots)+1, u+prefetchWindow)
+	pre = &prefetch{lo: u, hi: hi, rows: map[string][]index.LevelRow{}, metas: map[index.VersionKey]index.TargetMeta{}}
+	var roots []index.TargetVersion
+	for _, root := range fr.Roots[u-1 : hi-1] {
+		if root.Blob != "" {
+			roots = append(roots, index.TargetVersion{Path: root.Path, Blob: root.Blob, Commit: root.Commit})
+		}
+	}
+	if len(roots) == 0 {
+		return pre, st, nil
+	}
+	metas, parsed, err := lv.Versions(roots)
+	if err != nil {
+		return nil, st, err
+	}
+	st.IndexQueries++
+	if parsed {
+		st.ParsedReads++
+	}
+	var blobs []string
+	for k, v := range metas {
+		pre.metas[k] = v
+		if v.HasMeta && len(v.Meta.Refs) > 0 {
+			blobs = append(blobs, k.Blob)
+		}
+	}
+	if len(blobs) == 0 {
+		return pre, st, nil
+	}
+	rows, err := lv.Refs(blobs)
+	if err != nil {
+		return nil, st, err
+	}
+	st.IndexQueries++
+	for _, b := range blobs {
+		pre.rows[b] = nil
+	}
+	var targets []index.TargetVersion
+	var children []string
+	seenChild := map[string]bool{}
+	for _, r := range rows {
+		pre.rows[r.SourceBlob] = append(pre.rows[r.SourceBlob], r)
+		if r.Repo == "" && r.TargetBlob != "" {
+			targets = append(targets, index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit})
+			if _, root := pre.rows[r.TargetBlob]; !root && !seenChild[r.TargetBlob] {
+				seenChild[r.TargetBlob] = true
+				children = append(children, r.TargetBlob)
+			}
+		}
+	}
+	if fr.Env.Unpinned {
+		targets = nil // versioned by LiveAt at the anchor instead
+	}
+	type part struct {
+		metas  map[index.VersionKey]index.TargetMeta
+		rows   []index.LevelRow
+		parsed bool
+		err    error
+	}
+	split := func(n int) [][2]int {
+		var out [][2]int
+		if n == 0 {
+			return out
+		}
+		step := (n + prefetchParallel - 1) / prefetchParallel
+		for lo := 0; lo < n; lo += step {
+			out = append(out, [2]int{lo, min(n, lo+step)})
+		}
+		return out
+	}
+	tParts, cParts := split(len(targets)), split(len(children))
+	results := make([]part, len(tParts)+len(cParts))
+	var wg sync.WaitGroup
+	for i, r := range tParts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i].metas, results[i].parsed, results[i].err = lv.Versions(targets[r[0]:r[1]])
+		}()
+	}
+	for i, r := range cParts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[len(tParts)+i].rows, results[len(tParts)+i].err = lv.Refs(children[r[0]:r[1]])
+		}()
+	}
+	wg.Wait()
+	for _, b := range children {
+		pre.rows[b] = nil
+	}
+	for _, r := range results {
+		if r.err != nil {
+			return nil, st, r.err
+		}
+		st.IndexQueries++
+		if r.parsed {
+			st.ParsedReads++
+		}
+		for k, v := range r.metas {
+			pre.metas[k] = v
+		}
+		for _, row := range r.rows {
+			pre.rows[row.SourceBlob] = append(pre.rows[row.SourceBlob], row)
+		}
+	}
+	return pre, st, nil
+}
+
+// pending is a window being read ahead in the background.
+type pending struct {
+	lo   int
+	done chan struct{}
+	pre  *prefetch
+	st   Stats
+	err  error
+}
+
+// startReadAhead reads window u in the background.
+func (c *fsCall) startReadAhead(fr *factsetFrozen, lv *index.LevelReader, u int) *pending {
+	pd := &pending{lo: u, done: make(chan struct{})}
+	go func() {
+		defer close(pd.done)
+		pd.pre, pd.st, pd.err = c.readAhead(fr, lv, u)
+	}()
+	return pd
+}
+
+// window makes c.pre cover unit u: the window read in the background when it
+// is the one u starts, else read now; then the NEXT window starts reading in
+// the background while u's window is planned (reads overlap planning).
+func (c *fsCall) window(fr *factsetFrozen, m *mount, u int) error {
+	if err := c.r.checkReady(c.ctx, m); err != nil {
+		return err
+	}
+	lv, err := c.r.level(c.ctx, m)
+	if err != nil {
+		return err
+	}
+	c.pre = nil
+	var pre *prefetch
+	var st Stats
+	if pd := c.next; pd != nil && pd.lo == u {
+		<-pd.done
+		pre, st, err = pd.pre, pd.st, pd.err
+	} else {
+		if pd != nil {
+			<-pd.done // a window nobody will plan: let it finish
+		}
+		pre, st, err = c.readAhead(fr, lv, u)
+	}
+	c.next = nil
+	c.st.add(st)
+	if err != nil {
+		return err
+	}
+	c.pre = pre
+	if pre.hi <= len(fr.Roots) {
+		c.next = c.startReadAhead(fr, lv, pre.hi)
+	}
+	return nil
 }
 
 func (c *fsCall) close() {
+	if c.next != nil {
+		<-c.next.done // its statements must finish before the reader closes
+		c.next = nil
+	}
 	c.releaseSlot()
 	if c.r != nil {
 		c.r.close()
@@ -737,18 +934,35 @@ func FactSetNextPageStats(ctx context.Context, sc CursorScope, b *repos.Binding,
 // entry): the two-level reservation.
 func (c *fsCall) ensureState() error {
 	e := c.e
-	if e.st.results != nil {
+	if e.st.built {
 		return nil
 	}
 	if err := c.needSlot(); err != nil {
 		return err
+	}
+	// Unit 1's window does not depend on the reservation: read it while the
+	// reservation is built.
+	if c.next == nil && (c.pre == nil || c.pre.lo != 1) {
+		m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
+		if err != nil {
+			return err
+		}
+		m.anchor = e.fr.Env.Anchor
+		if err := c.r.checkReady(c.ctx, m); err != nil {
+			return err
+		}
+		lv, err := c.r.level(c.ctx, m)
+		if err != nil {
+			return err
+		}
+		c.next = c.startReadAhead(e.fr, lv, 1)
 	}
 	st, err := c.reserve(e.fr)
 	if err != nil {
 		return err
 	}
 	e.st = *st
-	e.st.written = map[uint64]wRec{}
+	e.st.freshWritten()
 	e.planned, e.counts, e.plans = 0, nil, map[int]*plannedUnit{}
 	return nil
 }
@@ -767,7 +981,7 @@ func (c *fsCall) planUnitOf(u int) (*plannedUnit, error) {
 	if e.planned >= u {
 		// A seek backwards past the cached plans: replay from the frozen
 		// inputs, without bodies.
-		e.st.written = map[uint64]wRec{}
+		e.st.freshWritten()
 		e.planned, e.counts, e.plans = 0, nil, map[int]*plannedUnit{}
 	}
 	for e.planned < u {
@@ -785,9 +999,15 @@ func (c *fsCall) planUnitOf(u int) (*plannedUnit, error) {
 		e.planned = next
 		e.counts = append(e.counts, len(pu.secs))
 		e.plans[next] = pu
-		// The plans a page may still start in: a page spans at most
-		// HumanMaxLimit units, so sequential paging never replays.
-		delete(e.plans, next-HumanMaxLimit-1)
+		// Keep only the plans a later page may still start in: a page spans
+		// at most HumanMaxLimit units, and no page starts before the one
+		// being served (c.keepFrom), so a far seek holds one plan, not the
+		// whole way there; sequential paging never replays.
+		for k := range e.plans {
+			if k < c.keepFrom || k < next-HumanMaxLimit {
+				delete(e.plans, k)
+			}
+		}
 	}
 	return e.plans[u], nil
 }
@@ -800,7 +1020,12 @@ func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, 
 		return nil, err
 	}
 	m.anchor = fr.Env.Anchor
-	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), writeID: fr.WriteRepo, fs: st, unit: u, st: &c.st}
+	if c.pre == nil || u < c.pre.lo || u >= c.pre.hi {
+		if err := c.window(fr, m, u); err != nil {
+			return nil, err
+		}
+	}
+	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), writeID: fr.WriteRepo, fs: st, unit: u, st: &c.st, pre: c.pre}
 	before := c.st.IndexQueries
 	defer func() { c.st.MaxUnitQueries = max(c.st.MaxUnitQueries, c.st.IndexQueries-before) }()
 	n, err := p.rootNode(m, root.Path, root.Commit, root.Blob, root.Date)
@@ -832,13 +1057,10 @@ func applyUnit(st *fsState, pu *plannedUnit) error {
 		if s.link != nil {
 			continue
 		}
-		chk := factCheck(s.repo, s.rel)
-		if w, ok := st.written[s.h]; ok && w.check != chk {
-			err := errHashCollision{s.repo, s.rel}
+		if err := st.markWritten(s.h, factCheck(s.repo, s.rel), blob64(s.blob), s.repo, s.rel); err != nil {
 			logCollision(err)
 			return fmt.Errorf("%w: %w", ErrFactIdentity, err)
 		}
-		st.written[s.h] = wRec{check: chk, blob: blob64(s.blob)}
 	}
 	return nil
 }
@@ -860,23 +1082,27 @@ func applyUnit(st *fsState, pu *plannedUnit) error {
 // ref targets (RefTargetsOfBlobs, no target metadata), and the versions live
 // at the anchor (unpin) or at the frozen tips (cross-KB).
 func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
-	st := &fsState{results: make(map[uint64]rootRec, len(fr.Roots)), reserved: map[uint64]resRec{}}
+	st := &fsState{built: true}
+	collision := func(err error) (*fsState, error) {
+		logCollision(err)
+		return nil, fmt.Errorf("%w: %w", ErrFactIdentity, err)
+	}
+	roots := make([]fentry, len(fr.Roots))
 	for i, root := range fr.Roots {
-		h, chk := factHash(fr.WriteRepo, root.Path), factCheck(fr.WriteRepo, root.Path)
-		if old, dup := st.results[h]; dup {
-			if old.check != chk {
-				err := errHashCollision{fr.WriteRepo, root.Path}
-				logCollision(err)
-				return nil, fmt.Errorf("%w: %w", ErrFactIdentity, err)
-			}
-			continue
-		}
-		st.results[h] = rootRec{unit: int32(i + 1), check: chk, blob: blob64(root.Blob)}
+		roots[i] = fentry{h: factHash(fr.WriteRepo, root.Path), check: uint32(factCheck(fr.WriteRepo, root.Path)), blob: blob64(root.Blob), unit: uint16(i + 1)}
+	}
+	var err error
+	if st.results, err = freeze(roots, func(e fentry) (string, string) { return fr.WriteRepo, fr.Roots[int(e.unit)-1].Path }); err != nil {
+		return collision(err)
 	}
 	opts := fr.Env.options()
 	if opts.Depth < 1 || opts.MaxNodes < 2 {
 		return st, nil
 	}
+	// Every depth-1 entry a unit shows is a candidate, in unit order; freeze
+	// keeps the first unit's (the earliest owner wins). A result is never a
+	// candidate.
+	var cands []fentry
 	m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
 	if err != nil {
 		return nil, err
@@ -885,7 +1111,7 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 	if err := c.r.checkReady(c.ctx, m); err != nil {
 		return nil, err
 	}
-	const window = 50
+	const window = 25
 	for lo := 0; lo < len(fr.Roots); lo += window {
 		hi := min(len(fr.Roots), lo+window)
 		var keys []index.VersionKey
@@ -985,8 +1211,8 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 			if mt, ok := metas[index.VersionKey{Path: root.Path, Blob: root.Blob}]; !ok || fact.Type(mt.Type) == fact.Frame {
 				continue
 			}
-			unit := int32(i + 1)
-			included, k := 1, int32(0)
+			unit := i + 1
+			included, k := 1, 0
 			for _, t := range ts {
 				if included >= opts.MaxNodes {
 					break
@@ -1026,25 +1252,20 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 				included++
 				k++
 				h, chk := factHash(repo, t.path), factCheck(repo, t.path)
-				if r, isResult := st.results[h]; isResult {
-					if r.check != chk {
-						err := errHashCollision{repo, t.path}
-						logCollision(err)
-						return nil, fmt.Errorf("%w: %w", ErrFactIdentity, err)
+				if ri := st.results.find(h); ri >= 0 {
+					if st.results[ri].check != uint32(chk) {
+						return collision(errHashCollision{repo, t.path})
 					}
 					continue
 				}
-				if r, taken := st.reserved[h]; taken {
-					if r.check != chk {
-						err := errHashCollision{repo, t.path}
-						logCollision(err)
-						return nil, fmt.Errorf("%w: %w", ErrFactIdentity, err)
-					}
-					continue
-				}
-				st.reserved[h] = resRec{unit: unit, k: k, check: chk, blob: blob64(blob)}
+				cands = append(cands, fentry{h: h, check: uint32(chk), blob: blob64(blob), unit: uint16(unit), k: uint16(k)})
 			}
 		}
+	}
+	if st.reserved, err = freeze(cands, func(e fentry) (string, string) {
+		return "", fmt.Sprintf("FactHash %016x", e.h)
+	}); err != nil {
+		return collision(err)
 	}
 	return st, nil
 }
@@ -1067,6 +1288,7 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	if from.unit < 1 || from.unit > units {
 		return FactSetPage{}, fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
 	}
+	c.keepFrom = from.unit
 	pu, err := c.planUnitOf(from.unit)
 	if err != nil {
 		return FactSetPage{}, err

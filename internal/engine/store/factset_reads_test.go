@@ -145,14 +145,17 @@ func TestFactSetReads_CommitDates(t *testing.T) {
 	require.Greater(t, got[index.PathAtCommit{Path: "kb/d.md", Commit: c}], before)
 }
 
-// RefLevel is one level of a walk in one statement: the rows of a set of
-// citing blobs in (source_blob, ord) order, each local target joined to its
-// facts row and its target_commit's date; a cross-KB row carries none.
-// RefTargetsOfBlobs is the same rows without target_commit. Before the
-// backfill (sentinel unset, table empty) both derive the same rows.
+// The LevelReader is one walk call's reads: Refs is the ref rows of a set of
+// citing blobs in (source_blob, ord) order (the author's order); Versions is
+// the metadata and commit date of target versions, parsed from the blob when
+// a version has no facts row; Level is Refs, then Versions for only the
+// targets the caller has not seen. RefTargetsOfBlobs is the same rows without
+// target_commit. Before the backfill (sentinel unset, table empty) all of
+// them read the same.
 //
-// Sabotage: order RefLevel by target_path, and b comes before z.
-func TestFactSetReads_RefLevelAndTargets(t *testing.T) {
+// Sabotage: order Refs by target_path, and b comes before z; make Level read
+// the versions of known targets too, and z's version is read.
+func TestFactSetReads_LevelReaderAndTargets(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
@@ -161,21 +164,32 @@ func TestFactSetReads_RefLevelAndTargets(t *testing.T) {
 	_, fBlob := write(t, svc, "main", "kb/f.md", "F", "https://example.com/x", "kb/z.md", "kb/b.md", "kb://0123456789ab/kb/far.md")
 
 	check := func(when string) {
-		rows, err := svc.GraphStore().RefLevel(ctx, []string{fBlob, fBlob, ""})
+		lv, err := svc.GraphStore().NewLevelReader(ctx)
 		require.NoError(t, err)
-		require.Len(t, rows, 3, when)
-		require.Equal(t, []string{"kb/z.md", "kb/b.md", "kb/far.md"}, []string{rows[0].Path, rows[1].Path, rows[2].Path}, "%s: the author's order", when)
-		require.Equal(t, []int{1, 2, 3}, []int{rows[0].Ord, rows[1].Ord, rows[2].Ord}, when)
-		require.Equal(t, zBlob, rows[0].TargetBlob)
-		require.Equal(t, cZ, rows[0].TargetCommit)
-		require.True(t, rows[0].HasMeta, when)
-		require.Equal(t, "Z", rows[0].Meta.Title)
-		require.Positive(t, rows[0].Date)
-		require.Equal(t, bBlob, rows[1].TargetBlob)
-		require.Equal(t, cB, rows[1].TargetCommit)
-		require.Equal(t, "0123456789ab", rows[2].Repo)
-		require.Empty(t, rows[2].TargetBlob)
-		require.False(t, rows[2].HasMeta)
+		defer lv.Close()
+		rows, err := lv.Refs([]string{fBlob, fBlob, ""})
+		require.NoError(t, err)
+		require.Equal(t, []index.LevelRow{
+			{SourceBlob: fBlob, Ord: 1, Path: "kb/z.md", TargetBlob: zBlob, TargetCommit: cZ},
+			{SourceBlob: fBlob, Ord: 2, Path: "kb/b.md", TargetBlob: bBlob, TargetCommit: cB},
+			{SourceBlob: fBlob, Ord: 3, Repo: "0123456789ab", Path: "kb/far.md"},
+		}, rows, "%s: the author's order", when)
+		metas, parsed, err := lv.Versions([]index.TargetVersion{{Path: "kb/z.md", Blob: zBlob, Commit: cZ}, {Path: "kb/b.md", Blob: bBlob}})
+		require.NoError(t, err)
+		require.False(t, parsed)
+		z := metas[index.VersionKey{Path: "kb/z.md", Blob: zBlob}]
+		require.True(t, z.HasMeta, when)
+		require.Equal(t, "Z", z.Meta.Title)
+		require.Positive(t, z.Date, "dated at its commit")
+		require.Zero(t, metas[index.VersionKey{Path: "kb/b.md", Blob: bBlob}].Date, "no commit asked: no date")
+		lrows, lmetas, _, err := lv.Level([]string{fBlob}, func(p string) bool { return p == "kb/z.md" })
+		require.NoError(t, err)
+		require.Equal(t, rows, lrows)
+		require.Len(t, lmetas, 1, "%s: only the unseen target's version is read", when)
+		require.Equal(t, "B", lmetas[index.VersionKey{Path: "kb/b.md", Blob: bBlob}].Meta.Title)
+		_, none, _, err := lv.Level([]string{fBlob}, nil)
+		require.NoError(t, err)
+		require.Nil(t, none, "a nil filter reads no versions")
 		ts, err := svc.GraphStore().RefTargetsOfBlobs(ctx, []string{fBlob})
 		require.NoError(t, err)
 		require.Equal(t, []index.RefTarget{
@@ -192,6 +206,22 @@ func TestFactSetReads_RefLevelAndTargets(t *testing.T) {
 	require.NoError(t, err)
 	check("before the backfill, repo id resolved")
 
+	// A version with no facts row is parsed from its blob, and dated.
+	_, err = db.Exec(`DELETE FROM branch_facts WHERE path = 'kb/z.md'`)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM facts WHERE path = 'kb/z.md'`)
+	require.NoError(t, err)
+	lv, err := svc.GraphStore().NewLevelReader(ctx)
+	require.NoError(t, err)
+	metas, parsed, err := lv.Versions([]index.TargetVersion{{Path: "kb/z.md", Blob: zBlob, Commit: cZ}})
+	lv.Close()
+	require.NoError(t, err)
+	require.True(t, parsed)
+	z := metas[index.VersionKey{Path: "kb/z.md", Blob: zBlob}]
+	require.True(t, z.Meta.Parsed)
+	require.Equal(t, "Z", z.Meta.Title)
+	require.Positive(t, z.Date)
+
 	// F19 (store level): before the backfill with the repo id unresolved,
 	// the reference index is not ready.
 	svc.gq.SetRootCommitForTest(func(context.Context, string) (string, error) { return "", errors.New("unresolved") })
@@ -200,7 +230,8 @@ func TestFactSetReads_RefLevelAndTargets(t *testing.T) {
 }
 
 // F20 (store level): a ref whose target blob is missing from objects has no
-// row in RefLevel and RefTargetsOfBlobs; the other refs keep theirs.
+// row in the LevelReader's Refs and in RefTargetsOfBlobs; the other refs keep
+// theirs.
 func TestFactSetReads_MissingTargetBlobHasNoRow(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
@@ -210,7 +241,10 @@ func TestFactSetReads_MissingTargetBlobHasNoRow(t *testing.T) {
 	_, err := db.Exec(`DELETE FROM objects WHERE hash = ? AND type = 3`, tBlob)
 	require.NoError(t, err)
 	_, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/t.md", "kb/a.md")
-	rows, err := svc.GraphStore().RefLevel(ctx, []string{fBlob})
+	lv, err := svc.GraphStore().NewLevelReader(ctx)
+	require.NoError(t, err)
+	defer lv.Close()
+	rows, err := lv.Refs([]string{fBlob})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "kb/a.md", rows[0].Path)

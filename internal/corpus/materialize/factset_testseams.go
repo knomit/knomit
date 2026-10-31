@@ -107,3 +107,12 @@ func FactSetCachedForTest(cursor string) (bool, int64) {
 	}
 	return true, e.size
 }
+
+// SetFactSetPrefetchWindowForTest sets how many units are read ahead at once
+// (at least 1), and returns the restore.
+func SetFactSetPrefetchWindowForTest(n int) (restore func()) {
+	mustBeTest("SetFactSetPrefetchWindowForTest")
+	old := prefetchWindow
+	prefetchWindow = max(n, 1)
+	return func() { prefetchWindow = old }
+}

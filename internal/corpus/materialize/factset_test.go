@@ -195,11 +195,11 @@ func TestFactSet_F1_TwoLevelReservationExample(t *testing.T) {
 
 	e := cachedEntry(t, *p.Cursor)
 	reservedAs := func(path string) string {
-		r, ok := e.st.reserved[FactHash(f.b.Write().ID()[:12], path)]
+		u, k, ok := e.st.reservedOf(FactHash(f.b.Write().ID()[:12], path))
 		if !ok {
 			return ""
 		}
-		return itoa(r.unit) + "." + itoa(r.k)
+		return itoa(int32(u)) + "." + itoa(int32(k))
 	}
 	require.Equal(t, "1.1", reservedAs("kb/z/x.md"), "X: A and C cite it directly, A is earlier")
 	require.Equal(t, "1.2", reservedAs("kb/z/y.md"), "Y: A and B cite it directly, A is earlier")

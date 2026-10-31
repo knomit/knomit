@@ -182,7 +182,7 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 		return err
 	}
 	fr := c.e.fr
-	st := &fsState{results: c.e.st.results, reserved: c.e.st.reserved, written: map[uint64]wRec{}}
+	st := c.e.st.withFreshWritten()
 	c.releaseSlot()
 	fsCacheAccount(c.e)
 	c.e.mu.Unlock()
