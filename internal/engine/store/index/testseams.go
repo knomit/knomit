@@ -172,6 +172,27 @@ func (gs *GraphStore) ReverseDependentsPlanForTest(ctx context.Context, byEdges 
 	return strings.Join(out, "\n"), rows.Err()
 }
 
+// IncomingPlanForTest is the EXPLAIN QUERY PLAN of the ref_edges incoming
+// read.
+func (gs *GraphStore) IncomingPlanForTest(ctx context.Context) (string, error) {
+	mustBeTest("IncomingPlanForTest")
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, "EXPLAIN QUERY PLAN "+refEdgesIncomingSQL, refsCommitKey, "x")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			return "", err
+		}
+		out = append(out, detail)
+	}
+	return strings.Join(out, "\n"), rows.Err()
+}
+
 // RepairRefEdgesForTest is repairRefEdges.
 func (si *Index) RepairRefEdgesForTest(ctx context.Context, branch string) (int, error) {
 	mustBeTest("RepairRefEdgesForTest")

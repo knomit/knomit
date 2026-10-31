@@ -278,3 +278,20 @@ func requireTableReadsEqualEdgeReadsOnEveryBranch(t *testing.T, svc *Service) {
 	in, _ := requireTableReadsEqualEdgeReads(t, svc, branches...)
 	require.Greater(t, in, 0, "incoming compared real rows")
 }
+
+// PR #694 review round 2, P1: the incoming read's plan is the fast one: a
+// COVERING probe of idx_ref_edges_target (no table lookup per row), and each
+// citing blob's nodes found through (key_id, value), not a skip-scan.
+//
+// Sabotage: put back the target_repo filter (not covering), or unpin the join
+// order (FROM s CROSS JOIN k JOIN node_props_text fb: the skip-scan).
+func TestRefEdgesReaders_IncomingPlanIsCoveringAndPinned(t *testing.T) {
+	svc := newMergeTestStore(t)
+	write(t, svc, "main", "kb/r.md", "R")
+	write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	plan, err := svc.gq.IncomingPlanForTest(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, plan, "USING COVERING INDEX idx_ref_edges_target (target_blob=?)", "%s", plan)
+	require.Contains(t, plan, "(key_id=? AND value=?)", "%s", plan)
+	require.NotContains(t, plan, "ANY(key_id)", "%s", plan)
+}

@@ -57,7 +57,9 @@ func (gs *GraphStore) reverseDependentPaths(ctx context.Context, path string, us
 	return out, nil
 }
 
-// reverseDependentsByRowsSQL is the walk over ref_edges. The CROSS JOIN pins
+// reverseDependentsByRowsSQL is the walk over ref_edges, a covering read of
+// idx_ref_edges_target (only local rows carry a target_blob, so no
+// target_repo filter is needed; see refEdgesIncomingRows). The CROSS JOIN pins
 // the final step's order (dependents first, then their nodes): left free, the
 // planner scanned every node's blob_hash and probed deps.
 const reverseDependentsByRowsSQL = `
@@ -74,11 +76,11 @@ WITH RECURSIVE
   deps(blob) AS (
     SELECT r.source_blob
       FROM seed s
-      JOIN ref_edges r ON r.target_blob = s.blob AND r.target_repo = ''
+      JOIN ref_edges r ON r.target_blob = s.blob
     UNION
     SELECT r.source_blob
       FROM deps d
-      JOIN ref_edges r ON r.target_blob = d.blob AND r.target_repo = ''
+      JOIN ref_edges r ON r.target_blob = d.blob
   )
 SELECT DISTINCT np.value
   FROM deps

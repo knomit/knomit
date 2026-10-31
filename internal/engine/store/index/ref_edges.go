@@ -271,6 +271,28 @@ func refEdgesOutOfBlob(ctx context.Context, ex storegit.CtxExecer, blob string) 
 	return out, rows.Err()
 }
 
+// refEdgesIncomingSQL is refEdgesIncomingRows's statement (refs_commit key,
+// cited blob).
+const refEdgesIncomingSQL = `
+		WITH k AS (SELECT (SELECT id FROM property_keys WHERE key = 'path')      AS kp,
+		                  (SELECT id FROM property_keys WHERE key = 'blob_hash') AS kb,
+		                  (SELECT id FROM property_keys WHERE key = 'title')     AS kt,
+		                  (SELECT id FROM property_keys WHERE key = 'type')      AS kty,
+		                  (SELECT id FROM property_keys WHERE key = 'deleted')   AS kd,
+		                  (SELECT id FROM property_keys WHERE key = ?)           AS krc),
+		     s AS (SELECT DISTINCT r.source_blob AS sb
+		             FROM ref_edges r
+		            WHERE r.target_blob = ?)
+		SELECT fb.node_id, s.sb, op.value,
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kt), ''),
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kty), ''),
+		       rc.value,
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kd), '')
+		  FROM k CROSS JOIN s
+		  CROSS JOIN node_props_text fb ON fb.key_id = k.kb AND fb.value = s.sb
+		  JOIN node_props_text op ON op.node_id = fb.node_id AND op.key_id = k.kp
+		  LEFT JOIN node_props_text rc ON rc.node_id = fb.node_id AND rc.key_id = k.krc`
+
 // refEdgesIncomingRows is the incoming reference read of a version from
 // ref_edges: every blob with a local row citing blobHash (through
 // idx_ref_edges_target), described by EVERY Fact node of that citing blob
@@ -281,28 +303,14 @@ func refEdgesOutOfBlob(ctx context.Context, ex storegit.CtxExecer, blob string) 
 // lowest node id carrying refs_commit (readBlobClaim's rule), from a LEFT JOIN
 // on each node's refs_commit; the join order is pinned (k, then the citing
 // blobs, then their nodes) so the node probe uses (key_id, value) instead of
-// a skip-scan (PR #694 review round 2, P1). The order is left to the caller
+// a skip-scan (PR #694 review round 2, P1). There is no target_repo
+// filter: only local rows carry a target_blob (writeRefRowsTx writes NULL for
+// a cross-KB row, and the partial index holds no NULL), so the probe is a
+// COVERING read of idx_ref_edges_target (target_blob, then the primary key)
+// with no table lookup per row. The order is left to the caller
 // (sortIncomingCandidates).
 func refEdgesIncomingRows(ctx context.Context, ex storegit.CtxExecer, blobHash string) ([]derivedFromNeighbour, error) {
-	rows, err := ex.QueryContext(ctx, `
-		WITH k AS (SELECT (SELECT id FROM property_keys WHERE key = 'path')      AS kp,
-		                  (SELECT id FROM property_keys WHERE key = 'blob_hash') AS kb,
-		                  (SELECT id FROM property_keys WHERE key = 'title')     AS kt,
-		                  (SELECT id FROM property_keys WHERE key = 'type')      AS kty,
-		                  (SELECT id FROM property_keys WHERE key = 'deleted')   AS kd,
-		                  (SELECT id FROM property_keys WHERE key = ?)           AS krc),
-		     s AS (SELECT DISTINCT r.source_blob AS sb
-		             FROM ref_edges r
-		            WHERE r.target_blob = ? AND r.target_repo = '')
-		SELECT fb.node_id, s.sb, op.value,
-		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kt), ''),
-		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kty), ''),
-		       rc.value,
-		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kd), '')
-		  FROM k CROSS JOIN s
-		  CROSS JOIN node_props_text fb ON fb.key_id = k.kb AND fb.value = s.sb
-		  JOIN node_props_text op ON op.node_id = fb.node_id AND op.key_id = k.kp
-		  LEFT JOIN node_props_text rc ON rc.node_id = fb.node_id AND rc.key_id = k.krc`, refsCommitKey, blobHash)
+	rows, err := ex.QueryContext(ctx, refEdgesIncomingSQL, refsCommitKey, blobHash)
 	if err != nil {
 		return nil, err
 	}
