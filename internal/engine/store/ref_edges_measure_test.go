@@ -329,3 +329,87 @@ func TestRefEdges_MeasureLevels(t *testing.T) {
 			pass, len(roots), nf, tf, tf/time.Duration(len(roots)), te, te/time.Duration(len(roots)))
 	}
 }
+
+// TestRefEdges_MeasureReaders: incoming for a heavily cited target and blast
+// radius, edge read vs table read, warm. Seeds (once) a hot target
+// kb/m4/hot/t.md cited by KNOMIT_REFEDGES_MEASURE_HOT facts (default 2000)
+// into the store copy. Shape B's first root's first leaf is the blast-radius
+// probe (its unit's ring of 499 leaves plus the root reach it).
+func TestRefEdges_MeasureReaders(t *testing.T) {
+	path, branch := measureEnvOrSkip(t)
+	svc := openMeasureStore(t, path, branch, false)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	hot := "kb/m4/hot/t.md"
+	n := measureEnvInt("KNOMIT_REFEDGES_MEASURE_HOT", 2000)
+	var have int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id WHERE f.path = ?`, hot).Scan(&have))
+	if have == 0 {
+		t0 := time.Now()
+		_, _, err := svc.Facts().BatchWriteFacts(ctx, branch, map[string]string{hot: measureFact(t, hot, "hot target", nil)}, nil, "hot", "learn")
+		require.NoError(t, err)
+		for lo := 0; lo < n; lo += 500 {
+			files := map[string]string{}
+			for i := lo; i < min(n, lo+500); i++ {
+				p := fmt.Sprintf("kb/m4/hot/c/g%02d/%s.md", i/50, measureName("hot", i))
+				files[p] = measureFact(t, p, fmt.Sprintf("hot citer %d", i), []string{hot})
+			}
+			_, _, err := svc.Facts().BatchWriteFacts(ctx, branch, files, nil, "hot citers", "learn")
+			require.NoError(t, err)
+		}
+		t.Logf("seeded the hot target and %d citers in %s", n, time.Since(t0))
+	}
+	var hotCommit, leaf string
+	require.NoError(t, db.QueryRow(`SELECT bf.commit_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
+		WHERE f.path = ? AND bf.branch_id = (SELECT id FROM branches WHERE name = ?)`, hot, branch).Scan(&hotCommit))
+	_ = db.QueryRow(`SELECT f.path FROM facts f WHERE f.path LIKE 'kb/m4/b/d/g00/r000/s0/%' ORDER BY f.path LIMIT 1`).Scan(&leaf) // shape B only
+	var plan string
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT source_blob FROM ref_edges WHERE target_blob = 'x' AND target_repo = ''`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var a, b, c int
+		var d string
+		require.NoError(t, rows.Scan(&a, &b, &c, &d))
+		plan += d + "; "
+	}
+	rows.Close()
+	t.Logf("incoming probe plan: %s", plan)
+	for pass := 0; pass < 3; pass++ {
+		t0 := time.Now()
+		a, err := svc.gq.IncomingByEdgesForTest(ctx, branch, hot, hotCommit)
+		require.NoError(t, err)
+		t1 := time.Now()
+		b, err := svc.gq.IncomingAtCommit(ctx, branch, hot, hotCommit)
+		require.NoError(t, err)
+		t2 := time.Now()
+		require.Equal(t, a, b)
+		t.Logf("incoming of the hot target pass %d: %d rows; edges %s, table %s", pass, len(b), t1.Sub(t0), t2.Sub(t1))
+	}
+	probes := []string{hot}
+	if leaf != "" {
+		probes = append([]string{leaf}, probes...)
+	}
+	// The edge walk's recursive step can scan every DERIVED_FROM edge per
+	// frontier row (plan: SEARCH e USING INDEX idx_edges_type): on shape B it
+	// did not finish in 37 minutes. It is timed only on request.
+	edges := os.Getenv("KNOMIT_REFEDGES_MEASURE_EDGE_BLAST") != ""
+	for _, p := range probes {
+		for pass := 0; pass < 3; pass++ {
+			var a int
+			t0 := time.Now()
+			if edges {
+				var err error
+				a, err = svc.gq.BlastRadiusByEdgesForTest(ctx, branch, p)
+				require.NoError(t, err)
+			}
+			t1 := time.Now()
+			b, err := svc.gq.BlastRadius(ctx, branch, p)
+			require.NoError(t, err)
+			t2 := time.Now()
+			if edges {
+				require.Equal(t, a, b)
+			}
+			t.Logf("blast radius of %s pass %d: %d; edges %s (timed: %v), table %s", p, pass, b, t1.Sub(t0), edges, t2.Sub(t1))
+		}
+	}
+}

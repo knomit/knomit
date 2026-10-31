@@ -57,7 +57,9 @@ func (gs *GraphStore) reverseDependentPaths(ctx context.Context, path string, us
 	return out, nil
 }
 
-// reverseDependentsByRowsSQL is the walk over ref_edges.
+// reverseDependentsByRowsSQL is the walk over ref_edges. The CROSS JOIN pins
+// the final step's order (dependents first, then their nodes): left free, the
+// planner scanned every node's blob_hash and probed deps.
 const reverseDependentsByRowsSQL = `
 WITH RECURSIVE
   kb(id) AS (SELECT id FROM property_keys WHERE key = 'blob_hash'),
@@ -80,7 +82,7 @@ WITH RECURSIVE
   )
 SELECT DISTINCT np.value
   FROM deps
-  JOIN node_props_text nb ON nb.key_id = (SELECT id FROM kb) AND nb.value = deps.blob
+  CROSS JOIN node_props_text nb ON nb.key_id = (SELECT id FROM kb) AND nb.value = deps.blob
   JOIN node_props_text np ON np.node_id = nb.node_id
   JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
  WHERE np.value <> ?`
