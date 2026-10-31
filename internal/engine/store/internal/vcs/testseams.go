@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	storegit "knomit/internal/engine/store/git"
+	"knomit/internal/engine/store/internal/sqlite"
 	"knomit/internal/engine/store/model"
 )
 
@@ -467,4 +468,42 @@ func SetGitPathReadHookForTest(f func(name string)) (restore func()) {
 	}
 	old := gitPathReadHook.Swap(p)
 	return func() { gitPathReadHook.Store(old) }
+}
+
+// ResolveActiveCommitWalkForTest is ResolveActiveCommitForPath's fallback
+// (the commit_parents walk) alone, so a test can hold it to the same answers
+// as the commit_fp form.
+func (rh *Repo) ResolveActiveCommitWalkForTest(ctx context.Context, path, fromCommit string) (string, bool, error) {
+	mustBeTest()
+	return resolveActiveCommitWalk(ctx, sqlite.Conn(ctx, rh.db), path, fromCommit)
+}
+
+// ResolveActiveCommitJumpsCountingForTest is ResolveActiveCommitForPath's
+// commit_fp form, counting the SQL statements it runs (queries), so a test
+// can bound its cost in statements rather than time.
+func (rh *Repo) ResolveActiveCommitJumpsCountingForTest(ctx context.Context, path, fromCommit string) (hash string, ok, handled bool, queries int, err error) {
+	mustBeTest()
+	c := &countingExecer{CtxExecer: sqlite.Conn(ctx, rh.db)}
+	hash, ok, handled, err = resolveActiveCommitByJumps(ctx, c, path, fromCommit)
+	return hash, ok, handled, c.n, err
+}
+
+type countingExecer struct {
+	storegit.CtxExecer
+	n int
+}
+
+func (c *countingExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	c.n++
+	return c.CtxExecer.ExecContext(ctx, query, args...)
+}
+
+func (c *countingExecer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	c.n++
+	return c.CtxExecer.QueryContext(ctx, query, args...)
+}
+
+func (c *countingExecer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	c.n++
+	return c.CtxExecer.QueryRowContext(ctx, query, args...)
 }

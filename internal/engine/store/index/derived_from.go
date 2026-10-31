@@ -40,12 +40,10 @@ import (
 // the branch (parent ∉ branch_commits(B)). "deleted" rows do not stop
 // the walk — they're stepped over.
 //
-// Performance: each step does one git CommitObject lookup + one indexed
-// SQL query against commit_log. For branches where most refs target
-// frequently-modified facts the walk is O(1) per ref. For long-stable
-// targets it's O(commits-since-last-touch). An in-process cache keyed by
-// (refPath, sourceCommit) per ingest call is a possible optimisation if
-// this becomes hot.
+// Performance: ResolveActiveCommitForPath reads no git object; it examines
+// refPath's own writes nearest first and tests each against sourceCommit's
+// first-parent line with commit_fp jump pointers, O(log depth) statements
+// per write examined — independent of how long ago refPath was last written.
 func (si *Index) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
 	cur := sourceCommit
 	// Self-ref ("this fact derives from the previous version of this path"):

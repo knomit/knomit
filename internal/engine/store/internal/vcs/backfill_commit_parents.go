@@ -20,9 +20,11 @@ const commitParentsBackfillKey = "commit_parents_backfilled"
 //
 // Why this is needed: commit_parents was added after commit_log, so existing
 // repos boot with commit_log populated but commit_parents empty. The
-// recursive-CTE walk in ResolveActiveCommitForPath would short-circuit at
-// depth 1 without this. New commits are appended in-line by CommitLogApply;
-// only the historical backfill needs this one-off pass.
+// recursive-CTE walks over commit_parents (RevisionsBefore,
+// FactLiveAtCommit, and ResolveActiveCommitForPath's fallback for an
+// underived commit) would stop at depth 1 without this. New commits are
+// appended in-line by CommitLogApply; only the historical backfill needs
+// this one-off pass.
 func BackfillCommitParents(ctx context.Context, rh *Repo) error {
 	db := rh.db
 	var done string
