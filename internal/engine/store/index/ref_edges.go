@@ -415,7 +415,15 @@ const refRepairBatch = 500
 // are replaced atomically, so a crash leaves every blob either old or new.
 // The claim node is read inside the transaction, so a concurrent claim move
 // is never undone. Returns how many blobs' rows changed.
-func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []string) (int, error) {
+//
+// dropStray (the rebuild's repair, not the heal's backfill): first, in the
+// same transaction, delete every DERIVED_FROM edge out of any node of the
+// blob whose target path is not a local ref of the PARSED blob. Such an edge
+// cannot come from the write path (corruption only); an edge that should not
+// be there is removed rather than reported forever (user ruling, PR #694).
+// A blob that is missing from `objects` or does not parse drops nothing: its
+// refs are unknown (missing-blob edges are the dangling-edge drop's job).
+func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []string, dropStray bool) (int, error) {
 	if len(blobs) == 0 {
 		return 0, nil
 	}
@@ -425,12 +433,13 @@ func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []stri
 	for start := 0; start < len(blobs); start += refRepairBatch {
 		part := blobs[start:min(start+refRepairBatch, len(blobs))]
 		specs := make(map[string][]refSpec, len(part))
+		parsed := make(map[string]bool, len(part))
 		for _, b := range part {
-			s, err := si.blobRefSpecs(ctx, b, repoID)
+			s, ok, err := si.blobRefSpecs(ctx, b, repoID)
 			if err != nil {
 				return changed, err
 			}
-			specs[b] = s
+			specs[b], parsed[b] = s, ok
 		}
 		tctx, tx, own, err := beginTxIfNeeded(ctx, db)
 		if err != nil {
@@ -440,6 +449,11 @@ func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []stri
 			ex := conn(tctx, db)
 			n := 0
 			for _, b := range part {
+				if dropStray && parsed[b] {
+					if err := dropStrayRefEdgesTx(tctx, ex, b, specs[b]); err != nil {
+						return n, err
+					}
+				}
 				node, err := refsNodeOfBlob(tctx, ex, b)
 				if err != nil {
 					return n, err
@@ -478,23 +492,71 @@ func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []stri
 }
 
 // blobRefSpecs is the fact refs of a blob read from `objects` and parsed (no
-// tree walk). A blob missing from `objects`, or not a parsable fact, has none.
-func (si *Index) blobRefSpecs(ctx context.Context, blob, repoID string) ([]refSpec, error) {
+// tree walk). A blob missing from `objects`, or not a parsable fact, has none,
+// and ok=false says its refs are unknown.
+func (si *Index) blobRefSpecs(ctx context.Context, blob, repoID string) (specs []refSpec, ok bool, err error) {
 	var data []byte
-	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+	err = conn(ctx, si.rh.DB()).QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`, blob, vcs.BlobObjectType).Scan(&data)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("ref_edges: read blob %s: %w", blob, err)
+		return nil, false, fmt.Errorf("ref_edges: read blob %s: %w", blob, err)
 	}
 	rec, err := facts.ParseFactRecord("kb/x.md", string(data))
 	if err != nil {
 		log.Debug().Err(err).Str("blob", blob).Msg("ref_edges: blob is not a parsable fact; no rows")
-		return nil, nil
+		return nil, false, nil
 	}
-	return refSpecsOf(rec.Refs, repoID), nil
+	return refSpecsOf(rec.Refs, repoID), true, nil
+}
+
+// dropStrayRefEdgesTx deletes the DERIVED_FROM edges out of any node of blob
+// whose target path is not one of the blob's local refs (specs). Called inside
+// the repair transaction, before the blob's rows are rewritten from its edges.
+func dropStrayRefEdgesTx(ctx context.Context, ex storegit.CtxExecer, blob string, specs []refSpec) error {
+	local := map[string]bool{}
+	for _, s := range specs {
+		if s.repo == "" {
+			local[s.path] = true
+		}
+	}
+	rows, err := ex.QueryContext(ctx, `
+		SELECT e.id, tp.value
+		  FROM node_props_text nb
+		  JOIN edges e ON e.source_id = nb.node_id AND e.type = ?
+		  JOIN node_props_text tp ON tp.node_id = e.target_id
+		       AND tp.key_id = (SELECT id FROM property_keys WHERE key = 'path')
+		 WHERE nb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash') AND nb.value = ?`,
+		EdgeDerivedFrom, blob)
+	if err != nil {
+		return fmt.Errorf("ref_edges: edges of %s: %w", blob, err)
+	}
+	var stray []int64
+	for rows.Next() {
+		var id int64
+		var p string
+		if err := rows.Scan(&id, &p); err != nil {
+			rows.Close()
+			return fmt.Errorf("ref_edges: edges of %s: %w", blob, err)
+		}
+		if !local[p] {
+			stray = append(stray, id)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return fmt.Errorf("ref_edges: edges of %s: %w", blob, err)
+	}
+	for _, id := range stray {
+		if _, err := ex.ExecContext(ctx, `DELETE FROM edges WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("ref_edges: drop stray edge %d of %s: %w", id, blob, err)
+		}
+		log.Info().Str("blob", blob).Int64("edge", id).Msg("ref_edges repair: dropped a reference edge whose target is not among the blob's refs")
+	}
+	return nil
 }
 
 // refsNodeOfBlob is the node that carries the blob's reference edges: the
@@ -532,7 +594,7 @@ func (si *Index) repairRefEdges(ctx context.Context, branch string) (int, error)
 	if len(d.Blobs) == 0 {
 		return 0, nil
 	}
-	n, err := si.repairRefBlobs(ctx, branch, d.Blobs)
+	n, err := si.repairRefBlobs(ctx, branch, d.Blobs, true)
 	if err != nil {
 		return n, err
 	}
@@ -608,7 +670,7 @@ func (si *Index) BackfillRefEdges(ctx context.Context, branch string) (int, erro
 		blobs = append(blobs, b)
 	}
 	sort.Strings(blobs)
-	n, err := si.repairRefBlobs(ctx, branch, blobs)
+	n, err := si.repairRefBlobs(ctx, branch, blobs, false)
 	if err != nil {
 		return n, fmt.Errorf("BackfillRefEdges: %w", err)
 	}

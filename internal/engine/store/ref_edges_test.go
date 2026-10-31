@@ -283,9 +283,13 @@ func TestRefEdges_CrossKBRowsAreUnresolved(t *testing.T) {
 	}, rowsOfBlob(allRefRows(t, db), fBlob), "cross-KB row unresolved; the URL, the duplicate and the unresolved local ref get none")
 	require.Equal(t, []string{"kb/r.md"}, outOrder(t, svc, "main", "kb/f.md", c), "outgoing lists local refs only, as before")
 
-	// A version citing ONLY another KB has no edge but still gets its row.
-	_, gBlob := write(t, svc, "main", "kb/g.md", "G", "kb://0123456789ab/kb/far.md")
+	// A version citing ONLY another KB has no edge but still gets its row,
+	// written with a refs_commit claim at its introduction (user ruling, PR
+	// #694: accepted).
+	cG, gBlob := write(t, svc, "main", "kb/g.md", "G", "kb://0123456789ab/kb/far.md")
 	require.Equal(t, []refRow{{Blob: gBlob, Ord: 0, Repo: "0123456789ab", Path: "kb/far.md"}}, rowsOfBlob(allRefRows(t, db), gBlob))
+	require.Equal(t, cG, refsCommitOf(t, db, gBlob), "a cross-KB-only version is claimed like any other")
+	require.Zero(t, countEdgesOfBlob(allRefEdges(t, db), gBlob), "and has no edge")
 	requireRowsMirrorEdges(t, svc)
 }
 
@@ -582,4 +586,52 @@ func TestRefEdges_RevisitAtTheClaimFillsMissingRows(t *testing.T) {
 
 	require.NoError(t, svc.si.GraphAddDerivedFromAtCommitTxForTest(ctx, db, "main", "kb/f.md", fBlob, c, []string{"kb/r.md", "kb://0123456789ab/kb/far.md"}))
 	require.Equal(t, 1, reached, "with rows current, a revisit writes nothing")
+}
+
+// An edge whose target path is not among the source blob's refs (corruption
+// only: the write path never makes one) is drift Verify reports, and a rebuild
+// DROPS it (user ruling, PR #694: an edge that should not be there should not
+// be there), leaving no drift and the blob's real edge and rows untouched.
+//
+// Sabotage: call repairRefBlobs with dropStray=false from repairRefEdges, and
+// the stray edge survives the rebuild (and Verify keeps reporting it).
+func TestRefEdges_RebuildDropsAnEdgeNotInTheRefs(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
+	cS, sBlob := write(t, svc, "main", "kb/s.md", "S")
+	_, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil)) // spends the one-time v8 reset
+	wantRows := allRefRows(t, db)
+	require.Equal(t, map[string]string{"kb/r.md": rBlob}, edgesOfBlob(allRefEdges(t, db), fBlob))
+
+	// Plant F -> S, a path F does not cite.
+	src, err := svc.si.GraphNodeIDByBlobForTest(ctx, "kb/f.md", fBlob)
+	require.NoError(t, err)
+	tgt, err := svc.si.GraphNodeIDByBlobForTest(ctx, "kb/s.md", sBlob)
+	require.NoError(t, err)
+	id, err := svc.si.GraphInsertEdgeReturningIDForTest(ctx, src, tgt, index.EdgeDerivedFrom)
+	require.NoError(t, err)
+	require.NoError(t, svc.si.GraphSetEdgePropsForTest(ctx, id, map[string]string{"source_commit": cR, "target_commit": cS}))
+	require.Equal(t, map[string]string{"kb/r.md": rBlob, "kb/s.md": sBlob}, edgesOfBlob(allRefEdges(t, db), fBlob), "precondition: the stray edge is there")
+
+	rep, err := svc.Integrity().Verify(ctx, fsck.VerifyOpts{})
+	require.NoError(t, err)
+	reported := 0
+	for _, i := range rep.Issues {
+		if i.Category == fsck.CategoryRefEdges {
+			reported++
+			require.Contains(t, i.Detail, "1 edge(s) without a row, 0 row(s) without an edge")
+		}
+	}
+	require.Equal(t, 1, reported, "Verify reports the stray edge as drift")
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Equal(t, map[string]string{"kb/r.md": rBlob}, edgesOfBlob(allRefEdges(t, db), fBlob), "the rebuild dropped the stray edge, kept the real one")
+	var props int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM edge_props_text WHERE edge_id = ?`, id).Scan(&props))
+	require.Zero(t, props, "its properties went with it")
+	require.Equal(t, wantRows, allRefRows(t, db), "the rows are unchanged")
+	requireRowsMirrorEdges(t, svc)
 }
