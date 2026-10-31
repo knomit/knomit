@@ -41,16 +41,12 @@ type fsEntry struct {
 // slice (key, value, bucket overhead), measured once and kept as estimates;
 // the measurement matrix reports the heap actually held.
 const (
-	bytesPerWritten  = 40
-	bytesPerReserved = 48
-	bytesPerResult   = 40
-	bytesPerRoot     = 220
-	bytesPerSection  = 360
+	bytesPerRoot    = 220
+	bytesPerSection = 360
 )
 
 func (e *fsEntry) accountedSize() int64 {
-	n := int64(len(e.st.written))*bytesPerWritten + int64(len(e.st.reserved))*bytesPerReserved +
-		int64(len(e.st.results))*bytesPerResult + int64(len(e.counts))*8
+	n := e.st.bytes() + int64(len(e.counts))*8
 	if e.fr != nil {
 		n += int64(len(e.fr.Roots)) * bytesPerRoot
 	}

@@ -30,11 +30,11 @@ func (f *factsetFixture) first(t testing.TB, owner string, req FactSetRequest) F
 
 func reservedNumber(t testing.TB, cursor, repo, path string) string {
 	t.Helper()
-	r, ok := cachedEntry(t, cursor).st.reserved[FactHash(repo, path)]
+	u, k, ok := cachedEntry(t, cursor).st.reservedOf(FactHash(repo, path))
 	if !ok {
 		return ""
 	}
-	return itoa(r.unit) + "." + itoa(r.k)
+	return itoa(int32(u)) + "." + itoa(int32(k))
 }
 
 // pagesJSON pages a FactSet to its end and returns every page's JSON with the
@@ -150,7 +150,7 @@ func TestFactSet_F4_FrameAncestors(t *testing.T) {
 		require.Equal(t, []string{RoleAncestor, RoleAncestor, RoleAncestor}, roles)
 		e := cachedEntry(t, *p.Cursor)
 		for _, r := range e.st.reserved {
-			require.NotEqual(t, frameUnit, r.unit, "the frame unit reserves nothing")
+			require.NotEqual(t, frameUnit, int32(r.unit), "the frame unit reserves nothing")
 		}
 		require.Len(t, e.st.reserved, 1, "only the other unit's a")
 	}

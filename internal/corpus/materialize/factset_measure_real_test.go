@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -276,16 +277,36 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 			t.Logf("%s %s: export %s (%d KiB)", name, label, time.Since(t5), n.n>>10)
 			continue
 		}
+		var prof *os.File
+		if dir := os.Getenv("KNOMIT_FACTSET_MEASURE_PROFILE"); dir != "" && pass == 1 {
+			prof, err = os.Create(dir + "/seek-" + name + ".pprof")
+			require.NoError(t, err)
+			require.NoError(t, pprof.StartCPUProfile(prof))
+		}
 		t3 := time.Now()
 		ps, st3, err := FactSetNextPageStats(ctx, f.scope(owner), f.b, nil, nil, *page.Cursor, page.Units)
 		seek := time.Since(t3)
+		if prof != nil {
+			pprof.StopCPUProfile()
+			_ = prof.Close()
+		}
 		require.NoError(t, err)
 		_, cached := FactSetCachedForTest(*page.Cursor)
 		held := heapAlloc() - base
 		DropFactSetCacheForTest()
+		if dir := os.Getenv("KNOMIT_FACTSET_MEASURE_PROFILE"); dir != "" && pass == 1 {
+			prof, err = os.Create(dir + "/replay-" + name + ".pprof")
+			require.NoError(t, err)
+			require.NoError(t, pprof.StartCPUProfile(prof))
+		}
 		t4 := time.Now()
 		_, st4, err := FactSetNextPageStats(ctx, f.scope(owner), f.b, nil, nil, *page.Cursor, page.Units)
 		replay := time.Since(t4)
+		if prof != nil {
+			pprof.StopCPUProfile()
+			_ = prof.Close()
+			prof = nil
+		}
 		require.NoError(t, err)
 		t5 := time.Now()
 		var n countWriter
@@ -302,8 +323,21 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 	}
 	DropFactSetCacheForTest()
 	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	baseInuse := ms.HeapInuse
 	stop := peakSampler()
 	start := time.Now()
+	if dir := os.Getenv("KNOMIT_FACTSET_MEASURE_PROFILE"); dir != "" {
+		go func() {
+			time.Sleep(time.Duration(envInt("KNOMIT_FACTSET_MEASURE_HEAP_AT_MS", 2500)) * time.Millisecond)
+			if hf, err := os.Create(dir + "/heap-" + name + ".pprof"); err == nil {
+				runtime.GC()
+				_ = pprof.WriteHeapProfile(hf)
+				_ = hf.Close()
+			}
+		}()
+	}
 	var wg sync.WaitGroup
 	errs := make([]error, MaxConcurrentFactSetBuilds)
 	for i := range MaxConcurrentFactSetBuilds {
@@ -323,7 +357,7 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 	for _, err := range errs {
 		require.NoError(t, err)
 	}
-	t.Logf("%s concurrent x%d (first page + far seek each): wall %s; heap peak %.1f MiB; cache %.1f MiB accounted",
-		name, MaxConcurrentFactSetBuilds, time.Since(start), float64(peak)/(1<<20), float64(FactSetCacheBytes())/(1<<20))
+	t.Logf("%s concurrent x%d (first page + far seek each): wall %s; heap peak %.1f MiB (in use before: %.1f MiB); cache %.1f MiB accounted",
+		name, MaxConcurrentFactSetBuilds, time.Since(start), float64(peak)/(1<<20), float64(baseInuse)/(1<<20), float64(FactSetCacheBytes())/(1<<20))
 	require.Zero(t, gitReads.Load(), "no per-path git read")
 }

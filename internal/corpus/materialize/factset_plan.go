@@ -15,9 +15,11 @@ import (
 
 // The planner: ONE walk for every materialization, a single fact
 // (Plan, a unit with no FactSet around it) and every unit of a FactSet. It
-// reads only the index, in batches: every level of the walk is one set-based
-// read per KB (index.GraphStore.RefLevel: the ref_edges rows of the level's
-// blobs joined to their targets' facts rows and dates), a version is its BLOB
+// reads only the index, in batches: every level of the walk is one read per KB
+// (index.LevelReader.Level: the ref_edges rows of the level's blobs, then the
+// facts rows and dates of only the targets the unit has not seen, two
+// statements prepared once per call; a FactSet unit's level 0 is read ahead
+// for a window of units), a version is its BLOB
 // (a root: the blob branch_facts held at the anchor; a pinned ref: its
 // ref_edges target_blob; unpinned and cross-KB: the blob live at the anchor
 // or the frozen tip, index.HistoryQuery.LiveAt), and a body is read by blob
@@ -132,72 +134,6 @@ func (e errHashCollision) Error() string {
 	return fmt.Sprintf("factset: fact identity collision on %s in repo %s", e.rel, e.repo)
 }
 
-// ---- FactSet state (the cache's content) ---------------------------------
-
-// rootRec is a result's unit.
-type rootRec struct {
-	unit  int32
-	check uint64
-	blob  uint64
-}
-
-// resRec is a reserved direct reference: its owning unit and its place k
-// among that unit's depth-1 entries, and the version that unit writes.
-type resRec struct {
-	unit, k int32
-	check   uint64
-	blob    uint64
-}
-
-// wRec is a written fact: its check hash and the version written.
-type wRec struct{ check, blob uint64 }
-
-// fsState is a FactSet's cross-unit state: the results, the reserved map and
-// the written set. Nothing else crosses units.
-type fsState struct {
-	results  map[uint64]rootRec
-	reserved map[uint64]resRec
-	written  map[uint64]wRec
-}
-
-// plink says where a link node's fact is written.
-type plink struct {
-	unit   int // 0: a back link (the renderer resolves the anchor)
-	number string
-	back   bool
-	blob   uint64 // the written version (blob64); 0 when unknown
-}
-
-// lookup classifies a fact newly reached in unit: nil when it is written
-// here, else the link. A check mismatch is a collision.
-func (s *fsState) lookup(h, check uint64, repo, rel string, unit int) (*plink, error) {
-	if w, ok := s.written[h]; ok {
-		if w.check != check {
-			return nil, errHashCollision{repo, rel}
-		}
-		return &plink{back: true, blob: w.blob}, nil
-	}
-	if r, ok := s.results[h]; ok {
-		if r.check != check {
-			return nil, errHashCollision{repo, rel}
-		}
-		if int(r.unit) == unit {
-			return nil, nil
-		}
-		return &plink{unit: int(r.unit), number: strconv.Itoa(int(r.unit)), back: int(r.unit) < unit, blob: r.blob}, nil
-	}
-	if r, ok := s.reserved[h]; ok {
-		if r.check != check {
-			return nil, errHashCollision{repo, rel}
-		}
-		if int(r.unit) == unit {
-			return nil, nil
-		}
-		return &plink{unit: int(r.unit), number: fmt.Sprintf("%d.%d", r.unit, r.k), back: int(r.unit) < unit, blob: r.blob}, nil
-	}
-	return nil, nil
-}
-
 // ---- one unit -----------------------------------------------------------
 
 // pnode is one fact in a unit's plan.
@@ -247,6 +183,9 @@ type planner struct {
 	// order (a FactSet unit that is not a frame).
 	pinDirect bool
 	st        *Stats
+	// pre: reads made ahead for a window of FactSet units (nil for a single
+	// fact).
+	pre *prefetch
 }
 
 // wire renders a key as addressed on the wire: bare in the binding's write
@@ -284,16 +223,30 @@ func (p *planner) adopt(r pref, dist int) (*pnode, error) {
 	return n, nil
 }
 
-// levelReads is what one batched level read returned for one mount.
+// levelReads is what one level read returned for one mount.
 type levelReads struct {
-	rows map[string]map[[2]string]index.RefLevelRow // by source blob, then (repo, path)
-	live map[string]index.LiveVersion               // unpin: local targets at the anchor
+	rows  map[string][]index.LevelRow           // by source blob, in ord order
+	metas map[index.VersionKey]index.TargetMeta // pinned: the NEW local targets' versions
+	live  map[string]index.LiveVersion          // unpin: the new local targets at the anchor
+}
+
+// prefetch holds reads made ahead for a window of units (fsCall.prefetch):
+// the roots' ref rows and the metadata of the roots and of their local
+// targets. Level 0 of a unit never depends on the written set, so these are
+// exactly the reads the unit's plan would make, batched across units.
+type prefetch struct {
+	lo, hi int                                   // the units covered, [lo, hi)
+	rows   map[string][]index.LevelRow           // by root blob
+	metas  map[index.VersionKey]index.TargetMeta // roots and their targets
 }
 
 // resolveLevel reads and classifies the refs of every unresolved node of one
-// level: per mount ONE level read (pinned: RefLevel; unpinned: the ref
-// targets, then LiveAt at the anchor), plus one LiveAt per foreign repo at its
-// frozen tip for the level's cross-KB refs.
+// level. Per mount ONE level read (index.LevelReader.Level: the ref rows of
+// the level's blobs, then the metadata of only the local targets the unit has
+// not seen; level 0 of a FactSet unit comes from the prefetch); unpinned, the
+// new local targets are versioned by LiveAt at the anchor instead; plus one
+// LiveAt per foreign repo at its frozen tip for the level's new cross-KB
+// targets.
 func (p *planner) resolveLevel(level []*pnode) error {
 	byMount := map[*mount][]*pnode{}
 	var mounts []*mount
@@ -309,83 +262,115 @@ func (p *planner) resolveLevel(level []*pnode) error {
 	reads := map[*mount]*levelReads{}
 	for _, m := range mounts {
 		ns := byMount[m]
+		lr := &levelReads{rows: map[string][]index.LevelRow{}, metas: map[index.VersionKey]index.TargetMeta{}}
+		reads[m] = lr
 		var blobs []string
 		for _, n := range ns {
-			if hasFactRef(n) {
-				blobs = append(blobs, n.blob)
+			if !hasFactRef(n) {
+				continue
+			}
+			if pre := p.pre; pre != nil && m.id12 == p.writeID {
+				if rows, ok := pre.rows[n.blob]; ok {
+					lr.rows[n.blob] = rows
+					continue
+				}
+			}
+			blobs = append(blobs, n.blob)
+		}
+		known := func(path string) bool { _, seen := p.nodes[key{m.id12, path}]; return seen }
+		// ONE level read: the rows not read ahead (one statement), then the
+		// versions of the new local targets not read ahead (one statement).
+		var lv *index.LevelReader
+		if len(blobs) > 0 || !p.opts.Unpin {
+			if err := p.r.checkReady(p.ctx, m); err != nil {
+				return err
+			}
+			var err error
+			if lv, err = p.r.level(p.ctx, m); err != nil {
+				return err
 			}
 		}
-		lr := &levelReads{rows: map[string]map[[2]string]index.RefLevelRow{}}
-		reads[m] = lr
-		if len(blobs) == 0 {
-			continue
-		}
-		if err := p.r.checkReady(p.ctx, m); err != nil {
-			return err
-		}
-		if !p.opts.Unpin {
-			rows, err := m.svc.GraphStore().RefLevel(p.ctx, blobs)
+		read := false
+		if len(blobs) > 0 {
+			rows, err := lv.Refs(blobs)
 			if err != nil {
 				return err
 			}
-			p.st.IndexQueries++
-			// A target with no facts row (a pinned OLD version often has
-			// none): its metadata parsed from its blob, one batched read.
-			var orphans []index.VersionKey
+			read = true
 			for _, r := range rows {
-				if r.Repo == "" && r.TargetBlob != "" && !r.HasMeta {
-					orphans = append(orphans, index.VersionKey{Path: r.Path, Blob: r.TargetBlob})
+				lr.rows[r.SourceBlob] = append(lr.rows[r.SourceBlob], r)
+			}
+		}
+		if !p.opts.Unpin {
+			var want []index.TargetVersion
+			for _, byKey := range lr.rows {
+				for _, r := range byKey {
+					if r.Repo != "" || r.TargetBlob == "" || known(r.Path) {
+						continue
+					}
+					vk := index.VersionKey{Path: r.Path, Blob: r.TargetBlob}
+					if _, ok := lr.metas[vk]; ok {
+						continue
+					}
+					if p.pre != nil && m.id12 == p.writeID {
+						if v, ok := p.pre.metas[vk]; ok {
+							lr.metas[vk] = v
+							continue
+						}
+					}
+					want = append(want, index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit})
 				}
 			}
-			var parsed map[index.VersionKey]index.VersionMeta
-			if len(orphans) > 0 {
-				if parsed, err = m.svc.FactQuery().VersionsByBlob(p.ctx, orphans); err != nil {
+			if len(want) > 0 {
+				metas, parsed, err := lv.Versions(want)
+				if err != nil {
+					return err
+				}
+				read = true
+				if parsed {
+					p.st.ParsedReads++
+				}
+				for k, v := range metas {
+					lr.metas[k] = v
+				}
+			}
+		}
+		if read {
+			p.st.IndexQueries++
+		}
+		if p.opts.Unpin {
+			// Unpinned: the same target SET (the ref rows, the author's
+			// order), each NEW target at its version live at the anchor.
+			var paths []string
+			want := map[string]bool{}
+			for _, byKey := range lr.rows {
+				for _, r := range byKey {
+					if r.Repo == "" && !known(r.Path) && !want[r.Path] {
+						want[r.Path] = true
+						paths = append(paths, r.Path)
+					}
+				}
+			}
+			if len(paths) > 0 {
+				live, hist, err := m.svc.HistoryQuery().LiveAt(p.ctx, m.branch, m.anchor, paths)
+				if err != nil {
 					return err
 				}
 				p.st.IndexQueries++
-				p.st.ParsedReads++
-			}
-			for _, r := range rows {
-				if r.Repo == "" && r.TargetBlob != "" && !r.HasMeta {
-					if pm, ok := parsed[index.VersionKey{Path: r.Path, Blob: r.TargetBlob}]; ok {
-						r.Meta, r.HasMeta = pm, true
-					}
+				if hist {
+					p.st.HistoricalLiveAt++
 				}
-				put(lr.rows, r)
+				lr.live = live
 			}
-			continue
-		}
-		// Unpinned: the same target SET (ref_edges rows, the author's order),
-		// each at its version live at the anchor.
-		targets, err := m.svc.GraphStore().RefTargetsOfBlobs(p.ctx, blobs)
-		if err != nil {
-			return err
-		}
-		p.st.IndexQueries++
-		var paths []string
-		for _, t := range targets {
-			put(lr.rows, index.RefLevelRow{RefEdgeRow: index.RefEdgeRow{SourceBlob: t.SourceBlob, Ord: t.Ord, Repo: t.Repo, Path: t.Path, TargetBlob: t.TargetBlob}})
-			if t.Repo == "" {
-				paths = append(paths, t.Path)
-			}
-		}
-		if len(paths) > 0 {
-			live, hist, err := m.svc.HistoryQuery().LiveAt(p.ctx, m.branch, m.anchor, paths)
-			if err != nil {
-				return err
-			}
-			p.st.IndexQueries++
-			if hist {
-				p.st.HistoricalLiveAt++
-			}
-			lr.live = live
 		}
 	}
 
-	// Cross-KB refs: per foreign repo, one LiveAt at its frozen tip.
+	// Cross-KB refs: per foreign repo, one LiveAt at its frozen tip for the
+	// targets the unit has not seen.
 	foreign := map[string]map[string]index.LiveVersion{}
 	if p.opts.CrossKB {
 		want := map[string][]string{}
+		asked := map[key]bool{}
 		var repos []string
 		for _, n := range level {
 			if n.resolved {
@@ -396,6 +381,11 @@ func (p *planner) resolveLevel(level []*pnode) error {
 				if c.Kind != fact.RefForeignFact {
 					continue
 				}
+				k := key{c.RepoID, c.Path}
+				if _, seen := p.nodes[k]; seen || asked[k] {
+					continue
+				}
+				asked[k] = true
 				if _, ok := want[c.RepoID]; !ok {
 					repos = append(repos, c.RepoID)
 				}
@@ -434,16 +424,19 @@ func (p *planner) resolveLevel(level []*pnode) error {
 	return nil
 }
 
-func put(rows map[string]map[[2]string]index.RefLevelRow, r index.RefLevelRow) {
-	byKey := rows[r.SourceBlob]
-	if byKey == nil {
-		byKey = map[[2]string]index.RefLevelRow{}
-		rows[r.SourceBlob] = byKey
+// rowAt is the ref row of position ord in rows (ordered by ord), for the ref
+// (repo "" for local, path), advancing *j: refs are classified in ord order,
+// so one forward pass matches every row. A row exists only at the first
+// position of a target (ref_edges keeps a target cited twice at its first
+// position), which is also the only position classify asks for.
+func rowAt(rows []index.LevelRow, j *int, ord int, repo, path string) (index.LevelRow, bool) {
+	for *j < len(rows) && rows[*j].Ord < ord {
+		*j++
 	}
-	k := [2]string{r.Repo, r.Path}
-	if _, dup := byKey[k]; !dup {
-		byKey[k] = r
+	if *j < len(rows) && rows[*j].Ord == ord && rows[*j].Repo == repo && rows[*j].Path == path {
+		return rows[*j], true
 	}
+	return index.LevelRow{}, false
 }
 
 // hasFactRef reports whether n has a fact ref other than itself.
@@ -457,6 +450,15 @@ func hasFactRef(n *pnode) bool {
 	return false
 }
 
+// seenRef is a ref to a fact the unit already holds: a node with the version
+// THIS ref cites (pinned: its row's blob; unpinned or cross-KB: the version
+// live at the anchor or tip, which is the held node's), so builds_on can say
+// whether the citation is of another version. Its metadata is the held
+// node's: it is not read again.
+func seenRef(k key, t *pnode, blob, commit string) pref {
+	return pref{kind: refNode, target: k, m: t.m, commit: commit, blob: blob, meta: t.meta, date: t.date, latest: t.latest}
+}
+
 // classify turns n's refs, in the order written, into its classified refs: a
 // fact once per target, a source once per label. A local ref with no
 // ref_edges row (unresolved when its version was written, or its target blob
@@ -466,11 +468,12 @@ func hasFactRef(n *pnode) bool {
 func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[string]index.LiveVersion) {
 	seen := map[key]bool{}
 	labels := map[string]int{}
-	var rows map[[2]string]index.RefLevelRow
+	var rows []index.LevelRow
 	if lr != nil {
 		rows = lr.rows[n.blob]
 	}
-	for _, raw := range n.meta.Refs {
+	j := 0
+	for ord, raw := range n.meta.Refs {
 		c := fact.ClassifyRef(raw, n.m.id12)
 		switch c.Kind {
 		case fact.RefLocalFact, fact.RefForeignFact:
@@ -482,9 +485,14 @@ func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[stri
 				continue
 			}
 			seen[k] = true
+			held := p.nodes[k]
 			if c.Kind == fact.RefForeignFact {
 				if !p.opts.CrossKB {
 					n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonCrossKBOff}})
+					continue
+				}
+				if held != nil {
+					n.refs = append(n.refs, seenRef(k, held, held.blob, held.commit))
 					continue
 				}
 				live, ok := foreign[c.RepoID]
@@ -504,12 +512,16 @@ func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[stri
 					meta: v.Meta, date: v.Date, latest: true})
 				continue
 			}
-			row, ok := rows[[2]string{"", c.Path}]
-			if !ok {
+			row, ok := rowAt(rows, &j, ord, "", c.Path)
+			if !ok || row.TargetBlob == "" {
 				n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonNoVersion}})
 				continue
 			}
 			if p.opts.Unpin {
+				if held != nil {
+					n.refs = append(n.refs, seenRef(k, held, held.blob, held.commit))
+					continue
+				}
 				v, ok := lr.live[c.Path]
 				if !ok || !v.HasMeta {
 					continue // gone at the anchor: not rendered, not mentioned
@@ -517,12 +529,17 @@ func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[stri
 				n.refs = append(n.refs, pref{kind: refNode, target: k, m: n.m, commit: v.Commit, blob: v.Blob, meta: v.Meta, date: v.Date})
 				continue
 			}
-			if row.TargetBlob == "" || !row.HasMeta {
+			if held != nil {
+				n.refs = append(n.refs, seenRef(k, held, row.TargetBlob, row.TargetCommit))
+				continue
+			}
+			v, ok := lr.metas[index.VersionKey{Path: c.Path, Blob: row.TargetBlob}]
+			if !ok || !v.HasMeta {
 				n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonNoVersion}})
 				continue
 			}
 			n.refs = append(n.refs, pref{kind: refNode, target: k, m: n.m, commit: row.TargetCommit, blob: row.TargetBlob,
-				meta: row.Meta, date: row.Date})
+				meta: v.Meta, date: v.Date})
 		case fact.RefLocalSystemFile, fact.RefForeignSystemFile:
 			k := key{"\x00file:" + c.RepoID, c.Path}
 			if seen[k] {
@@ -790,8 +807,8 @@ func (p *planner) sections(root *pnode, order []*pnode, frame bool) (*plannedUni
 		}
 		if p.fs != nil && n.link == nil && n != root && !n.ancestor {
 			// A reserved fact is written by its owner at its fixed number.
-			if r, ok := p.fs.reserved[n.h]; ok {
-				if want := fmt.Sprintf("%d.%d", r.unit, r.k); int(r.unit) != p.unit || want != s.number {
+			if ru, rk, ok := p.fs.reservedOf(n.h); ok {
+				if want := fmt.Sprintf("%d.%d", ru, rk); ru != p.unit || want != s.number {
 					return nil, fmt.Errorf("factset: %s reserved as %s was planned as %s in unit %d", n.rel, want, s.number, p.unit)
 				}
 			}
@@ -850,23 +867,41 @@ func kindOfMeta(m index.VersionMeta) string {
 	return m.Kind
 }
 
-// rootNode reads a root's metadata at its version (one batched read); nil
-// when its blob has no metadata (gone at the anchor).
+// rootNode reads a root's metadata at its version (from the prefetch, else
+// one read); nil when its blob has no metadata (gone at the anchor).
 func (p *planner) rootNode(m *mount, rel, commit, blob string, date int64) (*pnode, error) {
 	if blob == "" {
 		return nil, nil
 	}
 	vk := index.VersionKey{Path: rel, Blob: blob}
-	metas, err := m.svc.FactQuery().VersionsByBlob(p.ctx, []index.VersionKey{vk})
-	if err != nil {
-		return nil, err
+	meta, ok := index.TargetMeta{}, false
+	if p.pre != nil {
+		meta, ok = p.pre.metas[vk]
 	}
-	p.st.IndexQueries++
-	meta, ok := metas[vk]
 	if !ok {
+		lv, err := p.r.level(p.ctx, m)
+		if err != nil {
+			return nil, err
+		}
+		metas, parsed, err := lv.Versions([]index.TargetVersion{{Path: rel, Blob: blob, Commit: commit}})
+		if err != nil {
+			return nil, err
+		}
+		p.st.IndexQueries++
+		if parsed {
+			p.st.ParsedReads++
+		}
+		if meta, ok = metas[vk]; !ok {
+			return nil, nil
+		}
+	}
+	if !meta.HasMeta {
 		return nil, nil
 	}
-	return p.newNode(key{m.id12, rel}, m, commit, blob, meta, date, 0, false), nil
+	if date == 0 {
+		date = meta.Date
+	}
+	return p.newNode(key{m.id12, rel}, m, commit, blob, meta.Meta, date, 0, false), nil
 }
 
 // logCollision logs a FactHash collision (the call fails with a 500).

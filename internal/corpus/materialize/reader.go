@@ -48,6 +48,9 @@ type reader struct {
 	// (one single-fact walk freezes it for itself).
 	tips map[string]frozenTip
 	st   *Stats
+	// levels are the per-mount level readers of this call (prepared
+	// statements, readiness read once), closed by close.
+	levels map[*mount]*index.LevelReader
 }
 
 func newReader(b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, st *Stats) *reader {
@@ -58,6 +61,10 @@ func newReader(b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, 
 }
 
 func (r *reader) close() {
+	for _, lv := range r.levels {
+		lv.Close()
+	}
+	r.levels = nil
 	for _, rel := range r.releases {
 		rel()
 	}
@@ -155,6 +162,22 @@ func (r *reader) checkReady(ctx context.Context, m *mount) error {
 	}
 	m.ready = true
 	return nil
+}
+
+// level is m's level reader for this call, opened on first use.
+func (r *reader) level(ctx context.Context, m *mount) (*index.LevelReader, error) {
+	if lv, ok := r.levels[m]; ok {
+		return lv, nil
+	}
+	lv, err := m.svc.GraphStore().NewLevelReader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if r.levels == nil {
+		r.levels = map[*mount]*index.LevelReader{}
+	}
+	r.levels[m] = lv
+	return lv, nil
 }
 
 // mountOf is the open mount of the repo with id12, the binding's or a
