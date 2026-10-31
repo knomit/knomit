@@ -690,40 +690,79 @@ func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre
 		}
 		return out
 	}
-	tParts, cParts := split(len(targets)), split(len(children))
-	results := make([]part, len(tParts)+len(cParts))
-	var wg sync.WaitGroup
-	for i, r := range tParts {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i].metas, results[i].parsed, results[i].err = lv.Versions(targets[r[0]:r[1]])
-		}()
-	}
-	for i, r := range cParts {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[len(tParts)+i].rows, results[len(tParts)+i].err = lv.Refs(children[r[0]:r[1]])
-		}()
-	}
-	wg.Wait()
-	for _, b := range children {
-		pre.rows[b] = nil
-	}
-	for _, r := range results {
-		if r.err != nil {
-			return nil, st, r.err
+	// Level by level, speculatively (the written set is not known here: a
+	// node the unit will link instead of expanding only wastes its read), the
+	// versions of the next level's nodes and the rows of this level's nodes,
+	// in parallel chunks, to the unit's depth and within a node budget of
+	// max_nodes per unit. Pinned only: unpinned and cross-KB versions are
+	// read by LiveAt at plan time.
+	budget := (hi - u) * fr.Env.MaxNodes
+	read := len(targets)
+	for dist := 1; ; dist++ {
+		if dist > fr.Env.Depth {
+			children = nil // their rows are never read: beyond the depth
 		}
-		st.IndexQueries++
-		if r.parsed {
-			st.ParsedReads++
+		tParts, cParts := split(len(targets)), split(len(children))
+		results := make([]part, len(tParts)+len(cParts))
+		var wg sync.WaitGroup
+		for i, r := range tParts {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[i].metas, results[i].parsed, results[i].err = lv.Versions(targets[r[0]:r[1]])
+			}()
 		}
-		for k, v := range r.metas {
-			pre.metas[k] = v
+		for i, r := range cParts {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[len(tParts)+i].rows, results[len(tParts)+i].err = lv.Refs(children[r[0]:r[1]])
+			}()
 		}
-		for _, row := range r.rows {
-			pre.rows[row.SourceBlob] = append(pre.rows[row.SourceBlob], row)
+		wg.Wait()
+		for _, b := range children {
+			pre.rows[b] = nil
+		}
+		var newRows []index.LevelRow
+		for _, r := range results {
+			if r.err != nil {
+				return nil, st, r.err
+			}
+			st.IndexQueries++
+			if r.parsed {
+				st.ParsedReads++
+			}
+			for k, v := range r.metas {
+				pre.metas[k] = v
+			}
+			for _, row := range r.rows {
+				pre.rows[row.SourceBlob] = append(pre.rows[row.SourceBlob], row)
+				newRows = append(newRows, row)
+			}
+		}
+		if fr.Env.Unpinned || len(newRows) == 0 || dist >= fr.Env.Depth+1 {
+			break
+		}
+		// The next level: the targets of the rows just read, their versions
+		// and, in the same round, their rows (a target with no refs costs one
+		// empty probe; waiting for its version first would cost a round).
+		targets, children = targets[:0], nil
+		for _, r := range newRows {
+			if r.Repo != "" || r.TargetBlob == "" {
+				continue
+			}
+			vk := index.VersionKey{Path: r.Path, Blob: r.TargetBlob}
+			if _, ok := pre.metas[vk]; !ok {
+				targets = append(targets, index.TargetVersion{Path: r.Path, Blob: r.TargetBlob, Commit: r.TargetCommit})
+			}
+			if _, done := pre.rows[r.TargetBlob]; !done && !seenChild[r.TargetBlob] {
+				seenChild[r.TargetBlob] = true
+				children = append(children, r.TargetBlob)
+			}
+		}
+		read += len(targets)
+		if read > budget || (len(targets) == 0 && len(children) == 0) {
+			break
 		}
 	}
 	return pre, st, nil

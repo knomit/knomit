@@ -514,20 +514,26 @@ func TestFactSet_F14_QueryBoundAndNoGit(t *testing.T) {
 		req.Options.Depth, req.Limit = depth, 1
 		p, st, err := FactSetFirstPage(ctx, f.scope("o"), req)
 		require.NoError(t, err)
-		maxQ := st.MaxUnitQueries
+		maxQ, total := st.MaxUnitQueries, st.IndexQueries
 		for p.HasMore {
 			p, st, err = FactSetNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
 			require.NoError(t, err)
-			maxQ = max(maxQ, st.MaxUnitQueries)
+			maxQ, total = max(maxQ, st.MaxUnitQueries), total+st.IndexQueries
 		}
-		require.Positive(t, maxQ)
-		require.LessOrEqual(t, maxQ, depth+2, "depth %d: per unit at most Depth+2 index reads", depth)
+		require.Positive(t, total, "the reads are counted")
+		require.LessOrEqual(t, maxQ, depth+2, "depth %d: per unit at most Depth+2 index reads (beyond the read-ahead)", depth)
 		_, _, err = FactSetNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 2)
 		require.NoError(t, err)
 		require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }))
 	}
-	_, _, err := PlanStats(ctx, Request{Binding: f.b, File: "kb/u/b.md", Options: DefaultOptions()})
-	require.NoError(t, err)
+	// The single-fact plan has no read-ahead: its one unit's reads are the
+	// level reads themselves, and stay within the bound.
+	for _, depth := range []int{1, 3} {
+		_, st, err := PlanStats(ctx, Request{Binding: f.b, File: "kb/u/b.md", Options: Options{Depth: depth, MaxNodes: MaxNodesLimit}})
+		require.NoError(t, err)
+		require.Positive(t, st.MaxUnitQueries)
+		require.LessOrEqual(t, st.MaxUnitQueries, depth+2, "single fact, depth %d", depth)
+	}
 	require.Empty(t, bad, "no per-fact git read and no OutgoingAtCommit")
 }
 
