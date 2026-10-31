@@ -184,10 +184,12 @@ func PlanStats(ctx context.Context, req Request) (*Document, Stats, error) {
 	if err != nil {
 		return nil, st, err
 	}
+	before := st.IndexQueries
 	u, err := p.planRoot(root)
 	if err != nil {
 		return nil, st, err
 	}
+	st.MaxUnitQueries = st.IndexQueries - before
 	doc := p.document(root, u)
 	keys := make([]bodyKey, len(doc.Nodes))
 	for i, n := range doc.Nodes {

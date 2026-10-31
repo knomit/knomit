@@ -38,6 +38,9 @@ func (f *factsetFixture) writeOn(t testing.TB, branch, path, title, body string,
 	ff.Title, ff.Body, ff.Type = title, body, typ
 	ff.Domain, ff.Entities, ff.Refs = []string{"testing"}, []string{}, refs
 	ff.Confidence, ff.Sources = conf, 1
+	if typ == fact.Frame {
+		ff.Kind = fact.Pragmatic
+	}
 	content, err := fact.SerializeFact(ff)
 	require.NoError(t, err)
 	res, err := f.svc.Facts().WriteFact(context.Background(), branch, path, content, "write "+path, "")

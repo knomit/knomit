@@ -11,9 +11,10 @@ import (
 
 // LiveVersionAt is the version of path live at commit x on the branch with
 // branchID, read from the derived history alone (no git object is decoded):
-//   - row is the change live at x (LiveChange's row: the nearest commit on
-//     x's first-parent line whose blob differs from its first parent's, a
-//     carried merge included), and blob is that row's blob;
+//   - commit is the change live at x AS THE ENTRY IT RESOLVES TO (a merge
+//     carrying the content resolves to the commit that wrote it), exactly as
+//     index.recordedCommit records branch_facts.commit_hash, and blob is that
+//     change's blob;
 //   - live is false when there is no such change, or when the path was
 //     DELETED on x's first-parent line after that change (a commit_log
 //     'deleted' row deeper than the change and on the line, visible on the
@@ -24,8 +25,8 @@ import (
 // the one that holds the blob (recordedCommit), never the earliest
 // introduction. x must be derived (every indexed commit is); an underived x
 // answers not live.
-func LiveVersionAt(ctx context.Context, q storegit.CtxExecer, t ChangeTables, path, x string, branchID int64) (row, blob string, live bool, err error) {
-	_, row, err = LiveChange(ctx, q, t, path, x, branchID)
+func LiveVersionAt(ctx context.Context, q storegit.CtxExecer, t ChangeTables, path, x string, branchID int64) (commit, blob string, live bool, err error) {
+	entry, row, err := LiveChange(ctx, q, t, path, x, branchID)
 	if err != nil || row == "" {
 		return "", "", false, err
 	}
@@ -80,8 +81,8 @@ func LiveVersionAt(ctx context.Context, q storegit.CtxExecer, t ChangeTables, pa
 			return "", "", false, err
 		}
 		if on {
-			return row, blob, false, nil
+			return entry, blob, false, nil
 		}
 	}
-	return row, blob, true, nil
+	return entry, blob, true, nil
 }
