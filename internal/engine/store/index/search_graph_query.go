@@ -13,9 +13,11 @@ import (
 // it. Visibility is "the citing blob is held on this branch", not "the
 // edge's source_commit is on it" (user ruling 2026-10-30, PR #693 round 4).
 //
-// Each returned entry is a distinct ref-event: the same source_path can
-// appear multiple times (different source_commits = different versions of
-// the source).
+// knomit is a temporal graph: incoming keeps every reference across all time,
+// one entry per citing VERSION (blob) and path, and the branch and commit view
+// disambiguates. The same source_path can appear several times, each version
+// at its own commit, including versions a newer version replaced (user ruling
+// 2026-10-30, PR #693 round 5; this is intended, not a bug).
 //
 // NO committed_at / wall-clock bound is applied. Incoming referrers are, by
 // nature, written AFTER the target version they point at, so a "source
@@ -129,38 +131,51 @@ func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 // the latest commit of its history at which the path held it ("" if never).
 type blobHolding struct{ now, past string }
 
-// blobHoldings answers, in one statement, how the branch holds each
-// candidate row's (path, blob); pairs it never held are absent from the map.
-// A second statement tells which candidate source commits are on the branch.
-// dates holds committed_at for every commit either statement returned.
+// blobHoldingsChunk is how many (path, blob) pairs, or source commits, one
+// blobHoldings statement binds. Each pair binds two variables and SQLite's
+// limit is 32766, so a citing blob with many nodes is answered in several
+// statements (PR #693 round 5, F3). A variable so a test can lower it.
+var blobHoldingsChunk = 4000
+
+// blobHoldings answers how the branch holds each candidate row's (path,
+// blob); pairs it never held are absent from the map. It also tells which
+// candidate source commits are on the branch, and dates holds committed_at
+// for every commit it returned. One statement per chunk of
+// blobHoldingsChunk pairs (and of source commits); the result does not
+// depend on the chunking.
 func (gs *GraphStore) blobHoldings(ctx context.Context, branchID int64, rows []derivedFromNeighbour) (held map[string]blobHolding, onBranch map[string]bool, dates map[string]int64, err error) {
 	type pair struct{ path, blob string }
 	seen := map[pair]bool{}
-	var values []string
-	var args []any
+	var pairs []pair
 	srcSeen := map[string]bool{}
-	var srcArgs []any
+	var srcs []string
 	for _, r := range rows {
 		p := pair{r.Path, r.Blob}
 		if !seen[p] {
 			seen[p] = true
-			values = append(values, "(?, ?)")
-			args = append(args, r.Path, r.Blob)
+			pairs = append(pairs, p)
 		}
 		if r.Commit != "" && !srcSeen[r.Commit] {
 			srcSeen[r.Commit] = true
-			srcArgs = append(srcArgs, r.Commit)
+			srcs = append(srcs, r.Commit)
 		}
 	}
 	db := conn(ctx, gs.rh.DB())
+	held = map[string]blobHolding{}
 	onBranch = map[string]bool{}
 	dates = map[string]int64{}
-	if len(srcArgs) > 0 {
-		ph := strings.TrimSuffix(strings.Repeat("?,", len(srcArgs)), ",")
+	chunk := max(blobHoldingsChunk, 1)
+	for start := 0; start < len(srcs); start += chunk {
+		batch := srcs[start:min(start+chunk, len(srcs))]
+		args := make([]any, len(batch))
+		for k, c := range batch {
+			args[k] = c
+		}
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
 		rs, err := db.QueryContext(ctx, fmt.Sprintf(`
 			SELECT bc.commit_hash, COALESCE((SELECT committed_at FROM commit_log WHERE commit_hash = bc.commit_hash LIMIT 1), 0)
 			  FROM branch_commits bc
-			 WHERE bc.branch_id = %d AND bc.commit_hash IN (%s)`, branchID, ph), srcArgs...)
+			 WHERE bc.branch_id = %d AND bc.commit_hash IN (%s)`, branchID, ph), args...)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("source commits on branch: %w", err)
 		}
@@ -179,47 +194,58 @@ func (gs *GraphStore) blobHoldings(ctx context.Context, branchID int64, rows []d
 			return nil, nil, nil, fmt.Errorf("source commits on branch: %w", err)
 		}
 	}
-	// branchID is an int64 from BranchID, formatted into the statement; the
-	// (path, blob) pairs are bound.
-	q := fmt.Sprintf(`
-		WITH c(path, blob) AS (VALUES %s),
-		h AS (
-			SELECT c.path, c.blob,
-			       (SELECT bf.commit_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
-			         WHERE bf.branch_id = %[2]d AND bf.path = c.path AND f.blob_hash = c.blob) AS now,
-			       (SELECT pc.commit_hash FROM path_changes pc
-			          JOIN branch_commits bc ON bc.commit_hash = pc.commit_hash AND bc.branch_id = %[2]d
-			         WHERE pc.path = c.path AND pc.blob = c.blob
-			         ORDER BY pc.fp_depth DESC, pc.commit_hash DESC LIMIT 1) AS past
-			  FROM c
-		)
-		SELECT path, blob, COALESCE(now, ''), COALESCE(past, ''),
-		       COALESCE((SELECT committed_at FROM commit_log WHERE commit_hash = now LIMIT 1), 0),
-		       COALESCE((SELECT committed_at FROM commit_log WHERE commit_hash = past LIMIT 1), 0)
-		  FROM h
-		 WHERE now IS NOT NULL OR past IS NOT NULL`, strings.Join(values, ", "), branchID)
-	rs, qerr := db.QueryContext(ctx, q, args...)
-	err = qerr
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("citing blob held on branch: %w", err)
-	}
-	defer rs.Close()
-	held = map[string]blobHolding{}
-	for rs.Next() {
-		var path, blob, now, past string
-		var tNow, tPast int64
-		if err := rs.Scan(&path, &blob, &now, &past, &tNow, &tPast); err != nil {
+	for start := 0; start < len(pairs); start += chunk {
+		batch := pairs[start:min(start+chunk, len(pairs))]
+		values := make([]string, len(batch))
+		args := make([]any, 0, 2*len(batch))
+		for k, p := range batch {
+			values[k] = "(?, ?)"
+			args = append(args, p.path, p.blob)
+		}
+		// branchID is an int64 from BranchID, formatted into the statement;
+		// the (path, blob) pairs are bound.
+		q := fmt.Sprintf(`
+			WITH c(path, blob) AS (VALUES %s),
+			h AS (
+				SELECT c.path, c.blob,
+				       (SELECT bf.commit_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
+				         WHERE bf.branch_id = %[2]d AND bf.path = c.path AND f.blob_hash = c.blob) AS now,
+				       (SELECT pc.commit_hash FROM path_changes pc
+				          JOIN branch_commits bc ON bc.commit_hash = pc.commit_hash AND bc.branch_id = %[2]d
+				         WHERE pc.path = c.path AND pc.blob = c.blob
+				         ORDER BY pc.fp_depth DESC, pc.commit_hash DESC LIMIT 1) AS past
+				  FROM c
+			)
+			SELECT path, blob, COALESCE(now, ''), COALESCE(past, ''),
+			       COALESCE((SELECT committed_at FROM commit_log WHERE commit_hash = now LIMIT 1), 0),
+			       COALESCE((SELECT committed_at FROM commit_log WHERE commit_hash = past LIMIT 1), 0)
+			  FROM h
+			 WHERE now IS NOT NULL OR past IS NOT NULL`, strings.Join(values, ", "), branchID)
+		rs, err := db.QueryContext(ctx, q, args...)
+		if err != nil {
 			return nil, nil, nil, fmt.Errorf("citing blob held on branch: %w", err)
 		}
-		if now != "" {
-			dates[now] = tNow
+		for rs.Next() {
+			var path, blob, now, past string
+			var tNow, tPast int64
+			if err := rs.Scan(&path, &blob, &now, &past, &tNow, &tPast); err != nil {
+				rs.Close()
+				return nil, nil, nil, fmt.Errorf("citing blob held on branch: %w", err)
+			}
+			if now != "" {
+				dates[now] = tNow
+			}
+			if past != "" {
+				dates[past] = tPast
+			}
+			held[path+"|"+blob] = blobHolding{now: now, past: past}
 		}
-		if past != "" {
-			dates[past] = tPast
+		rs.Close()
+		if err := rs.Err(); err != nil {
+			return nil, nil, nil, fmt.Errorf("citing blob held on branch: %w", err)
 		}
-		held[path+"|"+blob] = blobHolding{now: now, past: past}
 	}
-	return held, onBranch, dates, rs.Err()
+	return held, onBranch, dates, nil
 }
 
 // OutgoingAtCommit returns the set of (target_path, target_commit) refs

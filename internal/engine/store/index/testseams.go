@@ -64,6 +64,15 @@ func (si *Index) SetBeforeRefEdgesWriteHookForTest(f func() error) {
 	si.beforeRefEdgesWrite = f
 }
 
+// SetBlobHoldingsChunkForTest sets how many pairs one blobHoldings statement
+// binds and returns the previous value, for the caller to restore.
+func SetBlobHoldingsChunkForTest(n int) int {
+	mustBeTest("SetBlobHoldingsChunkForTest")
+	prev := blobHoldingsChunk
+	blobHoldingsChunk = n
+	return prev
+}
+
 // IntroducingCommitForTest is introducingCommit.
 func (si *Index) IntroducingCommitForTest(ctx context.Context, branch, path, blobHash, commit string) (string, error) {
 	mustBeTest("IntroducingCommitForTest")

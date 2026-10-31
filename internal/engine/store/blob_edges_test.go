@@ -1321,10 +1321,14 @@ func TestBlobEdges_SameBytesOnTwoBranches(t *testing.T) {
 				pinned, err := svc.si.RepoForTest().ReadBlobHashAtCommit(ctx, "kb/r.md", exC.Outgoing[0].Commit)
 				require.NoError(t, err)
 				require.Equal(t, rBlob, pinned)
-				head, ok := svc.FactQuery().LastCommitForPath(ctx, "brC", "kb/r.md")
-				require.True(t, ok)
-				require.Equal(t, cRC, head)
-				require.NotEqual(t, exC.Outgoing[0].Commit, head, "changed since cited: brC's R is not the version X cites")
+				_ = cRC
+				del, sup, err := svc.FactQuery().CitedVersionState(ctx, "brC", "kb/r.md", exC.Outgoing[0].Commit)
+				require.NoError(t, err)
+				require.False(t, del)
+				require.True(t, sup, "changed since cited on brC: brC's R blob is not the cited one")
+				del, sup, err = svc.FactQuery().CitedVersionState(ctx, "brA", "kb/r.md", exC.Outgoing[0].Commit)
+				require.NoError(t, err)
+				require.False(t, del || sup, "unchanged on brA")
 
 				// THEN MERGE.
 				before := graphCounts(t, db)
@@ -1411,9 +1415,10 @@ func TestBlobEdges_TargetResolvedOnAnotherBranchRendersOnTheReader(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, rABlob, pinned)
 	require.Equal(t, map[string]bool{"kb/x.md": false}, incomingPaths(t, svc, "brC", "kb/r.md", cRA))
-	head, ok := svc.FactQuery().LastCommitForPath(ctx, "brC", "kb/r.md")
-	require.True(t, ok)
-	require.NotEqual(t, cRA, head, "changed since cited on brC")
+	del, sup, err := svc.FactQuery().CitedVersionState(ctx, "brC", "kb/r.md", cRA)
+	require.NoError(t, err)
+	require.False(t, del)
+	require.True(t, sup, "changed since cited on brC (option 1: brC never had R_A)")
 }
 
 // A citer the reading branch held and then retracted is still listed there,
@@ -1444,4 +1449,105 @@ func TestBlobEdges_RetractedCiterOnTheSecondBranchIsListed(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, cC, in[0].Commit, "the brC commit that held it")
 	require.True(t, onBranch(t, db, "brC", in[0].Commit))
+}
+
+// F1 (round-5 review of #693; probe S): "changed since cited" is a BLOB
+// comparison. R and X (citing R) are written on sa, db moves on, and sa is
+// merged into db with both unchanged. On db the latest commit_log row for R
+// is the merge, but its blob is the cited one: not superseded (a commit
+// comparison flagged it). When db really changes R, it is superseded; sa is
+// still not. Absent from the branch: deleted, not superseded.
+//
+// Sabotage: compare the branch's latest commit_log row for R with the pin in
+// CitedVersionState (the pre-fix rule), and db flags R right after the merge.
+func TestBlobEdges_ChangedSinceCitedComparesBlobs(t *testing.T) {
+	ctx := context.Background()
+	svc := newMergeTestStore(t)
+	for _, b := range []string{"sa", "db"} {
+		require.NoError(t, svc.CreateBranch(ctx, b, "main"))
+		require.NoError(t, svc.IndexManager().Sync(ctx, b))
+	}
+	cR, _ := write(t, svc, "sa", "kb/r.md", "R")
+	write(t, svc, "sa", "kb/x.md", "X", "kb/r.md")
+	write(t, svc, "db", "kb/z.md", "Z")
+	require.NoError(t, svc.Merge().MergeBranch(ctx, "sa", "db", merge.StrategyLocalWins))
+	require.NoError(t, svc.IndexManager().Sync(ctx, "db"))
+	state := func(branch string) (bool, bool) {
+		head, err := svc.HeadCommit(ctx, branch)
+		require.NoError(t, err)
+		out, err := svc.gq.OutgoingAtCommit(ctx, branch, "kb/x.md", head)
+		require.NoError(t, err)
+		require.Len(t, out, 1)
+		require.Equal(t, cR, out[0].Commit)
+		del, sup, err := svc.FactQuery().CitedVersionState(ctx, branch, "kb/r.md", out[0].Commit)
+		require.NoError(t, err)
+		return del, sup
+	}
+	for _, b := range []string{"sa", "db"} {
+		del, sup := state(b)
+		require.False(t, del, b)
+		require.False(t, sup, "%s: R unchanged since cited", b)
+	}
+	write(t, svc, "db", "kb/r.md", "R changed on db")
+	del, sup := state("db")
+	require.False(t, del)
+	require.True(t, sup, "db's R blob differs from the cited one")
+	del, sup = state("sa")
+	require.False(t, del || sup, "sa unchanged")
+
+	_, err := svc.Facts().DeleteFact(ctx, "db", "kb/r.md", "retract")
+	require.NoError(t, err)
+	d, s, err := svc.FactQuery().CitedVersionState(ctx, "db", "kb/r.md", cR)
+	require.NoError(t, err)
+	require.True(t, d, "retracted on db: deleted")
+	require.False(t, s, "deleted excludes superseded")
+}
+
+// F2 (round-5 review; user ruling: correct as is): knomit is a temporal
+// graph, and incoming keeps every reference across all time; the branch and
+// commit view disambiguates. F v1 and v2 both cite R, v3 drops the ref: R's
+// incoming still lists kb/f.md for v1 and for v2, each at its own commit,
+// neither retracted.
+//
+// Sabotage: list only the citing versions the branch holds NOW (drop the
+// history half of blobHoldings), and both rows disappear.
+func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	cR, _ := write(t, svc, "main", "kb/r.md", "R")
+	c1, _ := write(t, svc, "main", "kb/f.md", "F v1", "kb/r.md")
+	c2, _ := write(t, svc, "main", "kb/f.md", "F v2", "kb/r.md")
+	write(t, svc, "main", "kb/f.md", "F v3 cites nothing")
+	in, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/r.md", cR)
+	require.NoError(t, err)
+	require.Len(t, in, 2, "both versions that cited R")
+	got := map[string]bool{}
+	for _, r := range in {
+		require.Equal(t, "kb/f.md", r.Path)
+		require.False(t, r.Deleted, "F is live (a newer version), not retracted")
+		got[r.Commit] = true
+	}
+	require.Equal(t, map[string]bool{c1: true, c2: true}, got, "each at its own commit")
+}
+
+// F3 (round-5 review): blobHoldings binds two variables per citing node, so
+// it runs in chunks. With the chunk lowered below the number of citing
+// nodes, R's incoming is identical (rows and order) to the unchunked answer.
+//
+// Sabotage: process only the first chunk, and the rows past it vanish.
+func TestBlobEdges_IncomingIsChunkIndependent(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	cR, _ := write(t, svc, "main", "kb/r.md", "R")
+	for i := 0; i < 7; i++ {
+		write(t, svc, "main", fmt.Sprintf("kb/c%d.md", i), fmt.Sprintf("C%d", i), "kb/r.md")
+	}
+	full, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/r.md", cR)
+	require.NoError(t, err)
+	require.Len(t, full, 7)
+	prev := index.SetBlobHoldingsChunkForTest(2)
+	defer index.SetBlobHoldingsChunkForTest(prev)
+	chunked, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/r.md", cR)
+	require.NoError(t, err)
+	require.Equal(t, full, chunked, "4 chunks of at most 2 pairs give the same rows in the same order")
 }

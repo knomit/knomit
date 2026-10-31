@@ -37,7 +37,7 @@ const explainHistoryPageSize = 20
 // explainTool returns the Tool definition for knomit_explain.
 func explainTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explain",
-		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. `file` is a fact under kb/, an artifact under artifacts/<area>/, or a system file under .knomit/ (read-only, by its exact path, case kept: ontology, triggers, recipes, skills, templates). A system file explained directly comes back as ONE node with kind `system_file`, its `blob`, `size` and raw `content` (`encoding: base64` when it is not UTF-8; over 256 KiB it has `content_truncated: true` and no content), and no history or children. A fact's refs to `.knomit/` files appear in its walk as `system_file` summary nodes pinned at the fact's commit (the file as it stood when the fact was written) — explain one with its `path` AND `commit` to read its content. A file node is `deleted: true` when the file is gone at the tip, or when there was no file at that path at the fact's commit (then it has no blob and no content to read; a symlink is never followed and counts as no file). The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. A revision marked `content_unavailable: true` has no diff: do not read that commit for its content. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
+		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. `file` is a fact under kb/, an artifact under artifacts/<area>/, or a system file under .knomit/ (read-only, by its exact path, case kept: ontology, triggers, recipes, skills, templates). A system file explained directly comes back as ONE node with kind `system_file`, its `blob`, `size` and raw `content` (`encoding: base64` when it is not UTF-8; over 256 KiB it has `content_truncated: true` and no content), and no history or children. A fact's refs to `.knomit/` files appear in its walk as `system_file` summary nodes pinned at the fact's commit (the file as it stood when the fact was written) — explain one with its `path` AND `commit` to read its content. A file node is `deleted: true` when the file is gone at the tip, or when there was no file at that path at the fact's commit (then it has no blob and no content to read; a symlink is never followed and counts as no file). The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. A revision marked `content_unavailable: true` has no diff: do not read that commit for its content. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its current content on this branch differs from the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
@@ -367,12 +367,14 @@ func readFactVersion(ctx context.Context, s mcpStore, branch, path, commit strin
 }
 
 // readNode reads a node for the walk: its pinned version plus how that version
-// relates to HEAD. Both flags describe the fact AT HEAD, independent of the
-// pinned version still being readable:
-//   - deleted: the fact is retracted at HEAD (gone since this edge formed).
-//   - superseded: the fact is still live but its HEAD revision is newer than the
-//     pinned `commit` — the referrer reasoned over an older version. Mutually
-//     exclusive with deleted.
+// relates to the branch's current version. Both flags describe the fact AT
+// HEAD, independent of the pinned version still being readable:
+//   - deleted: the branch holds no live version of the fact (retracted, or
+//     never on this branch).
+//   - superseded ("changed since cited"): the fact is live but the branch's
+//     current BLOB differs from the cited one. A blob comparison, not a commit
+//     one: a merge that carries the fact unchanged must not flag it
+//     (FactQuery.CitedVersionState). Mutually exclusive with deleted.
 //
 // ok is false when no version can be read or parsed.
 func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (parsed fact.Fact, deleted, superseded, ok bool) {
@@ -380,9 +382,10 @@ func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (par
 	if !ok {
 		return fact.Fact{}, false, false, false
 	}
-	headCommit, present := s.factQuery.LastCommitForPath(ctx, branch, path)
-	deleted = !present
-	superseded = present && headCommit != commit
+	deleted, superseded, err := s.factQuery.CitedVersionState(ctx, branch, path, commit)
+	if err != nil {
+		return parsed, false, false, true
+	}
 	return parsed, deleted, superseded, true
 }
 

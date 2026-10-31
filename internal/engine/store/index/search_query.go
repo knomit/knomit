@@ -224,28 +224,44 @@ func (fq *FactQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 	return all[opts.Offset:end], total, nil
 }
 
-// LastCommitForPath returns the commit hash of the most recent commit_log
-// entry for the given path, provided that entry's action is not 'deleted'.
-// Returns ("", false) if the path is not found or its latest action is deleted.
-func (fq *FactQuery) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
-	fq.probe("LastCommitForPath")
+// CitedVersionState relates a cited version of a fact, (path, commit), to the
+// reading branch's CURRENT version of that path:
+//   - deleted: the branch holds no live version of path (retracted or never
+//     there); then superseded is false;
+//   - superseded ("changed since cited", user ruling 2026-10-30): the cited
+//     BLOB differs from the blob the branch holds for path now
+//     (branch_facts). A commit comparison is wrong: after a merge carries an
+//     unchanged fact, the branch's latest commit_log row for it is the merge,
+//     and an unchanged target looked superseded (PR #693 round 5, F1).
+//
+// The cited blob is the one live at commit on its own first-parent line (the
+// version a reader of that pin sees, retracted pins stepping back to the last
+// version). A pin that resolves to nothing is not superseded.
+func (fq *FactQuery) CitedVersionState(ctx context.Context, branch, path, commit string) (deleted, superseded bool, err error) {
+	fq.probe("CitedVersionState")
 	branchID, err := fq.rh.BranchID(ctx, branch)
 	if err != nil {
-		return "", false
+		return false, false, fmt.Errorf("CitedVersionState: branchID: %w", err)
 	}
-	var hash, action string
-	err = conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
-		`SELECT cl.commit_hash, cl.action
-		 FROM commit_log cl
-		 JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-		 WHERE bc.branch_id = ? AND cl.path = ?
-		 ORDER BY cl.rowid DESC LIMIT 1`,
-		branchID, path,
-	).Scan(&hash, &action)
-	if err != nil || hash == "" || action == "deleted" {
-		return "", false
+	var current string
+	err = conn(ctx, fq.rh.DB()).QueryRowContext(ctx, `
+		SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path).Scan(&current)
+	if err == sql.ErrNoRows {
+		return true, false, nil
 	}
-	return hash, true
+	if err != nil {
+		return false, false, fmt.Errorf("CitedVersionState: current blob: %w", err)
+	}
+	at, ok, err := fq.rh.ResolveActiveCommitForPath(ctx, branch, path, commit)
+	if err != nil || !ok {
+		return false, false, nil
+	}
+	cited, err := fq.rh.ReadBlobHashAtCommit(ctx, path, at)
+	if err != nil {
+		return false, false, nil
+	}
+	return false, cited != current, nil
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
