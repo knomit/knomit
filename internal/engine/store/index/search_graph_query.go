@@ -268,8 +268,17 @@ func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	// it. The rows mirror the blob's edges (written in the same
 	// transaction; Verify's ref-edges check, repaired by a rebuild), so the
 	// set is the edge read's set.
+	//
+	// Until ref_edges is backfilled (a store upgraded from before it, while
+	// the heal runs), the rows of old versions are not there yet: read the
+	// edges instead, put in the same author's order, so the answer is the
+	// same before and after the backfill (PR #694 review N2).
 	return gs.outgoingAtCommit(ctx, branch, path, commitHash, func(blobHash string) ([]RefSummary, error) {
-		return refEdgesOutOfBlob(ctx, conn(ctx, gs.rh.DB()), blobHash)
+		db := conn(ctx, gs.rh.DB())
+		if !refEdgesReady(ctx, db) {
+			return gs.outgoingByEdgesInRefsOrder(ctx, db, branch, path, blobHash)
+		}
+		return refEdgesOutOfBlob(ctx, db, blobHash)
 	})
 }
 

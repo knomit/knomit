@@ -30,7 +30,10 @@
 --
 -- No data backfill here: a row's order needs the parsed blob, which SQL cannot
 -- read. index.BackfillRefEdges fills an existing store once (meta
--- ref_edges_backfilled), from the edges and the blobs in `objects`.
+-- ref_edges_backfilled), from the edges and the blobs in `objects`. Until the
+-- sentinel is set, outgoing reads fall back to the edges (GraphStore). A store
+-- with no Fact node yet (a new store) has nothing to backfill: its sentinel is
+-- set here, so its reads use the table from the start.
 CREATE TABLE IF NOT EXISTS ref_edges (
     source_blob   TEXT    NOT NULL,
     ord           INTEGER NOT NULL,
@@ -40,3 +43,7 @@ CREATE TABLE IF NOT EXISTS ref_edges (
     target_commit TEXT,
     PRIMARY KEY (source_blob, ord)
 ) WITHOUT ROWID;
+
+INSERT OR IGNORE INTO meta(key, value)
+SELECT 'ref_edges_backfilled', '1'
+ WHERE NOT EXISTS (SELECT 1 FROM node_labels WHERE label = 'Fact');

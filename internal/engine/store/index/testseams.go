@@ -91,6 +91,23 @@ func (gs *GraphStore) OutgoingByEdgesForTest(ctx context.Context, branch, path, 
 	})
 }
 
+// SetRootCommitForTest replaces the root-commit lookup localRepoID uses (nil
+// restores rh.RootCommit) and forgets the cached repo id, so the next call
+// resolves through f.
+func (si *Index) SetRootCommitForTest(f func(ctx context.Context, branch string) (string, error)) {
+	mustBeTest("SetRootCommitForTest")
+	si.repoIDMu.Lock()
+	defer si.repoIDMu.Unlock()
+	si.rootCommit = f
+	si.repoID = ""
+}
+
+// LocalRepoIDForTest is localRepoID.
+func (si *Index) LocalRepoIDForTest(ctx context.Context, branch string) string {
+	mustBeTest("LocalRepoIDForTest")
+	return si.localRepoID(ctx, branch)
+}
+
 // RepairRefEdgesForTest is repairRefEdges.
 func (si *Index) RepairRefEdgesForTest(ctx context.Context, branch string) (int, error) {
 	mustBeTest("RepairRefEdgesForTest")

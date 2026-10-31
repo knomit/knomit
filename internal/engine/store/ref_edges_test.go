@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/fsck"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/merge"
@@ -634,4 +635,273 @@ func TestRefEdges_RebuildDropsAnEdgeNotInTheRefs(t *testing.T) {
 	require.Zero(t, props, "its properties went with it")
 	require.Equal(t, wantRows, allRefRows(t, db), "the rows are unchanged")
 	requireRowsMirrorEdges(t, svc)
+}
+
+// plantEdge adds a DERIVED_FROM edge (with its commit props) from the node of
+// (srcPath, srcBlob) to the node of (tgtPath, tgtBlob), as corruption would.
+func plantEdge(t *testing.T, svc *Service, srcPath, srcBlob, tgtPath, tgtBlob, sourceCommit, targetCommit string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	src, err := svc.si.GraphNodeIDByBlobForTest(ctx, srcPath, srcBlob)
+	require.NoError(t, err)
+	require.NotZero(t, src)
+	tgt, err := svc.si.GraphNodeIDByBlobForTest(ctx, tgtPath, tgtBlob)
+	require.NoError(t, err)
+	require.NotZero(t, tgt)
+	id, err := svc.si.GraphInsertEdgeReturningIDForTest(ctx, src, tgt, index.EdgeDerivedFrom)
+	require.NoError(t, err)
+	require.NoError(t, svc.si.GraphSetEdgePropsForTest(ctx, id, map[string]string{"source_commit": sourceCommit, "target_commit": targetCommit}))
+	return id
+}
+
+// edgesOfBlobAll is every edge of the blob as "path@target_commit".
+func edgesOfBlobAll(t *testing.T, db *sql.DB, blob string) []string {
+	t.Helper()
+	var out []string
+	for _, e := range allRefEdges(t, db) {
+		if e.SrcBlob == blob {
+			out = append(out, e.TgtPath+"@"+e.TargetCommit)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func refDrift(t *testing.T, svc *Service) index.RefEdgeDrift {
+	t.Helper()
+	d, err := svc.si.RefEdgeDrift(context.Background())
+	require.NoError(t, err)
+	return d
+}
+
+// PR #694 review F1: with the repo id unresolved, kb://<self>/ refs read as
+// cross-KB. A rebuild then must drop NO edge (the repair is skipped) and
+// rewrite no row (the write path leaves rows alone); once the id resolves
+// again the next rebuild repairs normally. The unresolved state is a failing
+// root-commit lookup (the real trigger), through a seam.
+//
+// Sabotage: drop the empty-repo-id guard in repairRefBlobs (F's valid
+// kb://self edge is deleted), or set rowsOK := true in
+// graphAddDerivedFromAtCommitTx (F's local row becomes a cross-KB row).
+func TestRefEdges_UnresolvedRepoIDDropsAndRewritesNothing(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
+	cS, sBlob := write(t, svc, "main", "kb/s.md", "S")
+	root, err := svc.si.RepoForTest().RootCommit(ctx, "main")
+	require.NoError(t, err)
+	self := fact.ID12(root)
+	_, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb://"+self+"/kb/r.md")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil)) // spends the one-time v8 reset
+	require.Equal(t, map[string]string{"kb/r.md": rBlob}, edgesOfBlob(allRefEdges(t, db), fBlob), "precondition: the kb://self edge exists")
+	wantRows := []refRow{{Blob: fBlob, Ord: 0, Path: "kb/r.md", TBlob: rBlob, Commit: cR}}
+	require.Equal(t, wantRows, rowsOfBlob(allRefRows(t, db), fBlob))
+	stray := plantEdge(t, svc, "kb/f.md", fBlob, "kb/s.md", sBlob, cR, cS)
+	require.Equal(t, 1, refDrift(t, svc).MissingRows, "precondition: drift for the repair to act on")
+
+	lookups := 0
+	svc.si.SetRootCommitForTest(func(context.Context, string) (string, error) {
+		lookups++
+		return "", errors.New("root commit unavailable")
+	})
+	require.Empty(t, svc.si.LocalRepoIDForTest(ctx, "main"), "precondition: the repo id is unresolved")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Greater(t, lookups, 1, "the failing lookup was retried, not cached")
+	require.Equal(t, []string{"kb/r.md@" + cR, "kb/s.md@" + cS}, edgesOfBlobAll(t, db, fBlob), "no edge dropped: the valid kb://self edge survives (and so does the stray one)")
+	require.Equal(t, wantRows, rowsOfBlob(allRefRows(t, db), fBlob), "no row rewritten from the wrong specs")
+
+	svc.si.SetRootCommitForTest(nil)
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Equal(t, []string{"kb/r.md@" + cR}, edgesOfBlobAll(t, db, fBlob), "with the id back, the repair drops the stray edge only")
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM edges WHERE id = ?`, stray).Scan(&n))
+	require.Zero(t, n)
+	require.Equal(t, wantRows, rowsOfBlob(allRefRows(t, db), fBlob))
+	requireRowsMirrorEdges(t, svc)
+}
+
+// localRepoID retries a failed lookup on the next call and caches a success.
+//
+// Sabotage: cache the failure (return the cached "" without calling the
+// lookup again), and the second call stays "".
+func TestRefEdges_LocalRepoIDRetriesAFailedLookup(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	root, err := svc.si.RepoForTest().RootCommit(ctx, "main")
+	require.NoError(t, err)
+	calls := 0
+	svc.si.SetRootCommitForTest(func(ctx context.Context, branch string) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", errors.New("transient")
+		}
+		return root, nil
+	})
+	defer svc.si.SetRootCommitForTest(nil)
+	require.Empty(t, svc.si.LocalRepoIDForTest(ctx, "main"), "the first lookup fails")
+	require.Equal(t, fact.ID12(root), svc.si.LocalRepoIDForTest(ctx, "main"), "the next call retries")
+	require.Equal(t, fact.ID12(root), svc.si.LocalRepoIDForTest(ctx, "main"))
+	require.Equal(t, 2, calls, "a success is cached")
+}
+
+// PR #694 review N1: a blob that does not parse drops NOTHING on rebuild,
+// although it carries a stray edge: its refs are unknown. (A blob MISSING
+// from objects loses its edges to dropDanglingRefEdges anyway, before the
+// repair, so "drops nothing" is not observable for it; the parse case pins
+// the guard.)
+//
+// Sabotage: `dropStray || parsed[b]`, and the unparsable version loses both
+// edges.
+func TestRefEdges_RebuildDropsNothingFromAnUnparsableBlob(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, _ := write(t, svc, "main", "kb/r.md", "R")
+	cS, sBlob := write(t, svc, "main", "kb/s.md", "S")
+	c1, v1 := write(t, svc, "main", "kb/f.md", "F v1", "kb/r.md")
+	write(t, svc, "main", "kb/f.md", "F v2", "kb/r.md")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil)) // spends the one-time v8 reset
+	require.Equal(t, []string{"kb/r.md@" + cR}, edgesOfBlobAll(t, db, v1))
+	plantEdge(t, svc, "kb/f.md", v1, "kb/s.md", sBlob, c1, cS)
+	_, err := db.Exec(`UPDATE objects SET data = CAST('this is not a fact' AS BLOB) WHERE hash = ? AND type = 3`, v1)
+	require.NoError(t, err)
+	require.Contains(t, refDrift(t, svc).Blobs, v1, "precondition: the repair is asked to rewrite v1")
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Equal(t, []string{"kb/r.md@" + cR, "kb/s.md@" + cS}, edgesOfBlobAll(t, db, v1), "an unparsable blob drops nothing")
+}
+
+// PR #694 review N1: the heal's backfill never drops an edge, even a stray
+// one; the edge stays reported as drift until a rebuild.
+//
+// Sabotage: `dropStray || parsed[b]`, and the backfill drops the stray edge.
+func TestRefEdges_BackfillNeverDropsEdges(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, _ := write(t, svc, "main", "kb/r.md", "R")
+	cS, sBlob := write(t, svc, "main", "kb/s.md", "S")
+	cF, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	plantEdge(t, svc, "kb/f.md", fBlob, "kb/s.md", sBlob, cF, cS)
+	_, err := db.Exec(`DELETE FROM ref_edges`)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+	require.NoError(t, err)
+	n, err := svc.si.BackfillRefEdges(ctx, "main")
+	require.NoError(t, err)
+	require.Greater(t, n, 0, "the backfill ran")
+	require.Equal(t, []string{"kb/r.md@" + cR, "kb/s.md@" + cS}, edgesOfBlobAll(t, db, fBlob), "the backfill dropped nothing")
+	require.Equal(t, 1, refDrift(t, svc).MissingRows, "the stray edge is still reported")
+}
+
+// PR #694 review N2: on a store upgraded from before ref_edges (rows empty,
+// sentinel unset: the heal's backfill has not run yet), outgoing reads and the
+// level read answer exactly as after the backfill, author's order included. A
+// new store has the sentinel from the migration, so it reads the table.
+//
+// Sabotage: drop the fallback in OutgoingAtCommit (old versions have no refs)
+// or in RefEdgesOfBlobs (no rows).
+func TestRefEdges_ReadsAreTheSameBeforeAndAfterTheBackfill(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	var v string
+	require.NoError(t, db.QueryRow(`SELECT value FROM meta WHERE key = 'ref_edges_backfilled'`).Scan(&v))
+	require.Equal(t, "1", v, "a new store is marked backfilled by the migration")
+	write(t, svc, "main", "kb/b.md", "B")
+	commit, blobs, err := svc.Facts().BatchWriteFacts(ctx, "main", map[string]string{
+		"kb/f.md": testFactBody("F", 0.8, []string{"https://example.com/x", "kb/z.md", "kb://0123456789ab/kb/far.md", "kb/b.md"}),
+		"kb/z.md": testFactBody("Z", 0.8, nil),
+	}, nil, "f and z", "")
+	require.NoError(t, err)
+	require.NoError(t, svc.IndexManager().Sync(ctx, "main"))
+	cG, gBlob := write(t, svc, "main", "kb/g.md", "G", "kb/f.md", "kb/b.md")
+	write(t, svc, "main", "kb/f.md", "F2", "kb/b.md")
+	fBlob := blobs["kb/f.md"]
+	require.Equal(t, []string{"kb/b.md", "kb/z.md"}, edgeIDOrder(t, db, fBlob), "precondition: edge ids out of refs order")
+	type q struct{ p, c string }
+	asks := []q{{"kb/f.md", commit}, {"kb/g.md", cG}}
+	read := func() ([][]index.RefSummary, []index.RefEdgeRow) {
+		var outs [][]index.RefSummary
+		for _, a := range asks {
+			o, err := svc.gq.OutgoingAtCommit(ctx, "main", a.p, a.c)
+			require.NoError(t, err)
+			outs = append(outs, o)
+		}
+		rows, err := svc.gq.RefEdgesOfBlobs(ctx, []string{fBlob, gBlob})
+		require.NoError(t, err)
+		return outs, rows
+	}
+	wantOut, wantRows := read()
+	require.Equal(t, "kb/z.md", wantOut[0][0].Path, "the author's order")
+	require.Len(t, wantRows, 5, "F: z, far, b; G: f, b")
+
+	_, err = db.Exec(`DELETE FROM ref_edges`)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+	require.NoError(t, err)
+	gotOut, gotRows := read()
+	require.Equal(t, wantOut, gotOut, "outgoing before the backfill == after")
+	require.Equal(t, wantRows, gotRows, "the level read before the backfill == after")
+
+	_, err = svc.si.BackfillRefEdges(ctx, "main")
+	require.NoError(t, err)
+	gotOut, gotRows = read()
+	require.Equal(t, wantOut, gotOut)
+	require.Equal(t, wantRows, gotRows)
+}
+
+// PR #694 review N3: a second edge from one blob to one path (not producible
+// by the write path: the resolver ignores the branch and the claim fixes the
+// source commit) is drift a rebuild now converges: the first edge (the one
+// the row is built from) is kept, the second is dropped, drift 0.
+//
+// Sabotage: keep every edge whose path is a local ref (drop the kept[p]
+// check), and the duplicate survives the rebuild.
+func TestRefEdges_RebuildKeepsOneEdgePerPath(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
+	cR2, r2Blob := write(t, svc, "main", "kb/r.md", "R2")
+	// F pins R2 (written after it); plant a second F -> r edge to the old R.
+	cF, fBlob := write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil)) // spends the one-time v8 reset
+	require.Equal(t, []string{"kb/r.md@" + cR2}, edgesOfBlobAll(t, db, fBlob))
+	plantEdge(t, svc, "kb/f.md", fBlob, "kb/r.md", rBlob, cF, cR)
+	require.Equal(t, 1, refDrift(t, svc).MissingRows, "precondition: the duplicate is drift")
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	require.Equal(t, []string{"kb/r.md@" + cR2}, edgesOfBlobAll(t, db, fBlob), "the first edge is kept, the duplicate dropped")
+	require.Equal(t, []refRow{{Blob: fBlob, Ord: 0, Path: "kb/r.md", TBlob: r2Blob, Commit: cR2}}, rowsOfBlob(allRefRows(t, db), fBlob))
+	requireRowsMirrorEdges(t, svc)
+}
+
+// PR #694 review N4: the v8 reset clears the backfill sentinel, so a version
+// on no branch (a rolled-back experiment's) gets its cross-KB row back from
+// the next backfill instead of losing it for good.
+//
+// Sabotage: keep the sentinel in resetBlobRefsOnce, and the backfill does
+// nothing.
+func TestRefEdges_ResetReopensTheBackfillForOrphanVersions(t *testing.T) {
+	svc, _ := sideStore(t)
+	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
+	_, err := svc.Merge().OpenExperiment(ctx, "x", "", "agent/test")
+	require.NoError(t, err)
+	_, eBlob := write(t, svc, "exp/x", "kb/e.md", "E", "kb://0123456789ab/kb/far.md")
+	want := []refRow{{Blob: eBlob, Ord: 0, Repo: "0123456789ab", Path: "kb/far.md"}}
+	require.Equal(t, want, rowsOfBlob(allRefRows(t, db), eBlob))
+	require.NoError(t, svc.Merge().RollbackExperiment(ctx, "x"))
+	node, err := svc.si.GraphNodeIDByBlobForTest(ctx, "kb/e.md", eBlob)
+	require.NoError(t, err)
+	require.NotZero(t, node, "precondition: the orphaned version keeps its node")
+
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil)) // the v8 reset + drain
+	require.Empty(t, rowsOfBlob(allRefRows(t, db), eBlob), "precondition: the reset dropped the row and no branch re-creates it")
+	n, err := svc.si.BackfillRefEdges(ctx, "agent/test")
+	require.NoError(t, err)
+	require.Greater(t, n, 0)
+	require.Equal(t, want, rowsOfBlob(allRefRows(t, db), eBlob), "the backfill restored the orphan's cross-KB row")
 }

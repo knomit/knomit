@@ -780,10 +780,12 @@ func healIndexBranches(ctx context.Context, im *index.Index, repo string, branch
 	// (meta sentinel), from the edges and the blobs in the object table. It
 	// runs AFTER the branches above, so a store below GraphSchemaVersion 8,
 	// whose v8 rebuild resets the edges and rewrites them with their rows, is
-	// not backfilled from the old edges first; it still runs before the repo
-	// serves. Not fatal: until it runs, outgoing reads see no rows for old
-	// versions, Verify reports the drift, and the next heal (or any rebuild)
-	// retries.
+	// not backfilled from the old edges first. The heal is the index job, run
+	// in the background while the repo already serves (the index status reads
+	// "indexing"): until the sentinel is set, outgoing reads (OutgoingAtCommit,
+	// RefEdgesOfBlobs) derive the rows from the edges and the blobs instead, so
+	// they answer the same before and after. Not fatal: Verify reports the
+	// drift, and the next heal retries.
 	if len(branches) > 0 {
 		if n, err := im.BackfillRefEdges(ctx, branches[0].name); err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("ref_edges backfill failed; the next heal retries")

@@ -300,9 +300,12 @@ func (gs *GraphStore) RefEdgesOfBlobs(ctx context.Context, blobs []string) ([]Re
 	}
 	// Sorted, so the chunks' outputs concatenate in (source_blob, ord) order.
 	sort.Strings(keys)
+	db := conn(ctx, gs.rh.DB())
+	if !refEdgesReady(ctx, db) {
+		return gs.derivedRefRows(ctx, db, keys)
+	}
 	chunk := max(refEdgesChunk, 1)
 	var out []RefEdgeRow
-	db := conn(ctx, gs.rh.DB())
 	for start := 0; start < len(keys); start += chunk {
 		part := keys[start:min(start+chunk, len(keys))]
 		args := make([]any, len(part))
@@ -332,6 +335,98 @@ func (gs *GraphStore) RefEdgesOfBlobs(ctx context.Context, blobs []string) ([]Re
 		}
 	}
 	return out, nil
+}
+
+// ---- before the backfill: the read falls back to the edges ---------------
+
+// refEdgesReady reports whether ref_edges is complete for this store: the
+// backfill sentinel is set (by BackfillRefEdges, or by migration 000035 on a
+// store with no Fact node yet). It is cleared by the #693 v8 reset. Until it
+// is set, the readers derive the rows from the edges and the blobs instead
+// (PR #694 review N2: a store upgraded from before ref_edges serves while
+// the heal backfills). One primary-key read; an error counts as not ready
+// (the fallback is correct, only slower).
+func refEdgesReady(ctx context.Context, ex storegit.CtxExecer) bool {
+	var v string
+	err := ex.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, refEdgesBackfillKey).Scan(&v)
+	return err == nil && v == "1"
+}
+
+// repoIDOf is this repo's 12-hex id, from branch's root commit, or from the
+// first indexed branch when branch is "" ("" when neither resolves).
+func (gs *GraphStore) repoIDOf(ctx context.Context, ex storegit.CtxExecer, branch string) string {
+	if branch == "" {
+		if err := ex.QueryRowContext(ctx, `SELECT name FROM branches ORDER BY id LIMIT 1`).Scan(&branch); err != nil {
+			return ""
+		}
+	}
+	root, err := gs.rh.RootCommit(ctx, branch)
+	if err != nil {
+		return ""
+	}
+	return fact.ID12(root)
+}
+
+// derivedRefRows is what ref_edges holds (or will hold once backfilled) for
+// each blob, derived exactly as the backfill derives it: the blob's refs
+// parsed from `objects`, and the edges on its refs node (expectedRefRows).
+// keys are sorted; the rows come back in (source_blob, ord) order.
+func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer, keys []string) ([]RefEdgeRow, error) {
+	repoID := gs.repoIDOf(ctx, ex, "")
+	if repoID == "" {
+		return nil, fmt.Errorf("RefEdgesOfBlobs: ref_edges is not backfilled yet and the repo id is unresolved")
+	}
+	var out []RefEdgeRow
+	for _, b := range keys {
+		specs, _, err := blobRefSpecsOf(ctx, ex, b, repoID)
+		if err != nil {
+			return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
+		}
+		node, err := refsNodeOfBlob(ctx, ex, b)
+		if err != nil {
+			return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
+		}
+		rows, err := expectedRefRows(ctx, ex, node, b, specs)
+		if err != nil {
+			return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}
+
+// outgoingByEdgesInRefsOrder is the outgoing read before the backfill: the
+// DERIVED_FROM edge read, put in the author's refs order (the blob parsed
+// from `objects`), so it equals the ref_edges read the backfill makes
+// possible. When the repo id or the blob is unavailable it keeps edge order
+// (the set is still right).
+func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegit.CtxExecer, branch, path, blob string) ([]RefSummary, error) {
+	found, err := graphDerivedFromNeighbours(ctx, ex, path, blob, false)
+	if err != nil {
+		return nil, err
+	}
+	repoID := gs.repoIDOf(ctx, ex, branch)
+	if repoID == "" {
+		return found, nil
+	}
+	specs, _, err := blobRefSpecsOf(ctx, ex, blob, repoID)
+	if err != nil {
+		return nil, err
+	}
+	ord := map[string]int{}
+	for _, s := range specs {
+		if s.repo == "" {
+			ord[s.path] = s.ord
+		}
+	}
+	at := func(p string) int {
+		if o, ok := ord[p]; ok {
+			return o
+		}
+		return int(^uint(0) >> 1)
+	}
+	sort.SliceStable(found, func(i, j int) bool { return at(found[i].Path) < at(found[j].Path) })
+	return found, nil
 }
 
 // ---- drift, repair, backfill ---------------------------------------------
@@ -428,6 +523,15 @@ func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []stri
 		return 0, nil
 	}
 	repoID := si.localRepoID(ctx, branch)
+	if repoID == "" {
+		// Without the repo id every kb://<self>/ ref reads as cross-KB: the
+		// rows would be wrong and the stray-edge drop would delete VALID
+		// edges (PR #694 review F1). Skip the whole repair, as the backfill
+		// does; localRepoID retries on the next call.
+		log.Warn().Str("branch", branch).Int("blobs", len(blobs)).
+			Msg("ref_edges repair skipped: repo id unresolved")
+		return 0, nil
+	}
 	db := si.rh.DB()
 	changed := 0
 	for start := 0; start < len(blobs); start += refRepairBatch {
@@ -449,14 +553,14 @@ func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []stri
 			ex := conn(tctx, db)
 			n := 0
 			for _, b := range part {
-				if dropStray && parsed[b] {
-					if err := dropStrayRefEdgesTx(tctx, ex, b, specs[b]); err != nil {
-						return n, err
-					}
-				}
 				node, err := refsNodeOfBlob(tctx, ex, b)
 				if err != nil {
 					return n, err
+				}
+				if dropStray && parsed[b] {
+					if err := dropStrayRefEdgesTx(tctx, ex, b, node, specs[b]); err != nil {
+						return n, err
+					}
 				}
 				before, err := storedRefRows(tctx, ex, b)
 				if err != nil {
@@ -495,8 +599,13 @@ func (si *Index) repairRefBlobs(ctx context.Context, branch string, blobs []stri
 // tree walk). A blob missing from `objects`, or not a parsable fact, has none,
 // and ok=false says its refs are unknown.
 func (si *Index) blobRefSpecs(ctx context.Context, blob, repoID string) (specs []refSpec, ok bool, err error) {
+	return blobRefSpecsOf(ctx, conn(ctx, si.rh.DB()), blob, repoID)
+}
+
+// blobRefSpecsOf is blobRefSpecs over an execer.
+func blobRefSpecsOf(ctx context.Context, ex storegit.CtxExecer, blob, repoID string) (specs []refSpec, ok bool, err error) {
 	var data []byte
-	err = conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+	err = ex.QueryRowContext(ctx,
 		`SELECT data FROM objects WHERE hash = ? AND type = ?`, blob, vcs.BlobObjectType).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
@@ -512,10 +621,18 @@ func (si *Index) blobRefSpecs(ctx context.Context, blob, repoID string) (specs [
 	return refSpecsOf(rec.Refs, repoID), true, nil
 }
 
-// dropStrayRefEdgesTx deletes the DERIVED_FROM edges out of any node of blob
-// whose target path is not one of the blob's local refs (specs). Called inside
-// the repair transaction, before the blob's rows are rewritten from its edges.
-func dropStrayRefEdgesTx(ctx context.Context, ex storegit.CtxExecer, blob string, specs []refSpec) error {
+// dropStrayRefEdgesTx deletes, out of any node of blob, every DERIVED_FROM
+// edge that should not be there:
+//   - its target path is not one of the blob's local refs (specs);
+//   - it is not on the blob's refs node (node: the claim node, where #693
+//     keeps a blob's edges);
+//   - it is a second edge to a path the refs node already has an edge to
+//     (the first by edge id is kept: the one expectedRefRows builds the row
+//     from), so the repair converges to one edge per (blob, path).
+//
+// Called inside the repair transaction, before the blob's rows are rewritten
+// from its edges.
+func dropStrayRefEdgesTx(ctx context.Context, ex storegit.CtxExecer, blob string, node int64, specs []refSpec) error {
 	local := map[string]bool{}
 	for _, s := range specs {
 		if s.repo == "" {
@@ -523,27 +640,31 @@ func dropStrayRefEdgesTx(ctx context.Context, ex storegit.CtxExecer, blob string
 		}
 	}
 	rows, err := ex.QueryContext(ctx, `
-		SELECT e.id, tp.value
+		SELECT e.id, e.source_id, tp.value
 		  FROM node_props_text nb
 		  JOIN edges e ON e.source_id = nb.node_id AND e.type = ?
 		  JOIN node_props_text tp ON tp.node_id = e.target_id
 		       AND tp.key_id = (SELECT id FROM property_keys WHERE key = 'path')
-		 WHERE nb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash') AND nb.value = ?`,
+		 WHERE nb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash') AND nb.value = ?
+		 ORDER BY e.id`,
 		EdgeDerivedFrom, blob)
 	if err != nil {
 		return fmt.Errorf("ref_edges: edges of %s: %w", blob, err)
 	}
 	var stray []int64
+	kept := map[string]bool{}
 	for rows.Next() {
-		var id int64
+		var id, src int64
 		var p string
-		if err := rows.Scan(&id, &p); err != nil {
+		if err := rows.Scan(&id, &src, &p); err != nil {
 			rows.Close()
 			return fmt.Errorf("ref_edges: edges of %s: %w", blob, err)
 		}
-		if !local[p] {
+		if !local[p] || src != node || kept[p] {
 			stray = append(stray, id)
+			continue
 		}
+		kept[p] = true
 	}
 	err = rows.Err()
 	rows.Close()
@@ -554,7 +675,7 @@ func dropStrayRefEdgesTx(ctx context.Context, ex storegit.CtxExecer, blob string
 		if _, err := ex.ExecContext(ctx, `DELETE FROM edges WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("ref_edges: drop stray edge %d of %s: %w", id, blob, err)
 		}
-		log.Info().Str("blob", blob).Int64("edge", id).Msg("ref_edges repair: dropped a reference edge whose target is not among the blob's refs")
+		log.Info().Str("blob", blob).Int64("edge", id).Msg("ref_edges repair: dropped a reference edge that should not be there (target not among the blob's refs, off the refs node, or a second edge to one path)")
 	}
 	return nil
 }

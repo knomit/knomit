@@ -220,6 +220,14 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 		return nil // an arrival at a commit that does not hold the blob
 	}
 
+	// The ref_edges rows need the repo id to tell kb://<self>/ refs from
+	// cross-KB ones (refSpecsOf). Unresolved (localRepoID retries on the next
+	// call), the specs the caller built are wrong for such refs: write the
+	// edges as before but leave the rows alone, so they are never rewritten
+	// from wrong specs; the drift that leaves is repaired by the next rebuild
+	// or revisit with the id (PR #694 review F1).
+	rowsOK := si.localRepoID(ctx, branch) != ""
+
 	var targets []refTarget
 	resolved := false
 	// The claim is decided outside the transaction (it may read git for the
@@ -243,7 +251,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 			}
 			resolved = true
 		}
-		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets, specs)
+		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets, specs, rowsOK)
 		if err != nil {
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
 		}
@@ -330,7 +338,10 @@ func (si *Index) resolveRefTargets(ctx context.Context, branch, sourcePath, sour
 // author's order (specs), and replace whatever rows the blob had: a claim
 // move or a void claim re-claimed replaces the rows with the edges, and a
 // fill-in (Sync's pass 2, a rebuild) adds the rows of the edges it adds.
-func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget, specs []refSpec) (applied bool, err error) {
+//
+// rowsOK=false (the repo id is unresolved, so specs may misclassify
+// kb://<self>/ refs): the rows are neither checked nor written.
+func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget, specs []refSpec, rowsOK bool) (applied bool, err error) {
 	// Nothing to write (the claim is already this node and commit, every
 	// edge exists and the rows match them): no transaction, so a caller
 	// re-visiting a resolved blob never takes the write lock.
@@ -347,6 +358,9 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 			}
 		}
 		if !missing {
+			if !rowsOK {
+				return true, nil
+			}
 			current, err := refRowsCurrent(ctx, conn(ctx, si.rh.DB()), srcID, blobHash, specs)
 			if err != nil {
 				return false, err
@@ -428,8 +442,10 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 			return false, err
 		}
 	}
-	if err := writeRefRowsTx(tctx, db, srcID, blobHash, specs); err != nil {
-		return false, err
+	if rowsOK {
+		if err := writeRefRowsTx(tctx, db, srcID, blobHash, specs); err != nil {
+			return false, err
+		}
 	}
 	if own {
 		if err := tx.Commit(); err != nil {
@@ -606,6 +622,14 @@ func resetBlobRefsOnce(ctx context.Context, tx storegit.CtxExecer) error {
 	// every branch writes both again.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM ref_edges`); err != nil {
 		return fmt.Errorf("reset reference edges: ref_edges: %w", err)
+	}
+	// The drain re-creates rows only for blobs on a branch; a version on no
+	// branch would lose its cross-KB rows for good. Clearing the backfill
+	// sentinel makes the next backfill (the heal's, right after its
+	// rebuilds) scan for them again (PR #694 review N4), and outgoing reads
+	// fall back to the edges until it has run.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, refEdgesBackfillKey); err != nil {
+		return fmt.Errorf("reset reference edges: backfill sentinel: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) SELECT ? || name, '1' FROM branches`, blobRefsPendingPrefix); err != nil {
 		return fmt.Errorf("reset reference edges: pending branches: %w", err)

@@ -75,11 +75,15 @@ type Index struct {
 	// was not in the object store (DanglingRefsSkipped).
 	danglingRefsSkipped atomic.Int64
 
-	// This repo's 12-hex identity (root-commit prefix), resolved once and
-	// cached — it is immutable for the life of the repo. Used to tell a
-	// kb://<own-id>/… ref (a local edge) from a foreign one.
-	repoIDOnce sync.Once
-	repoID     string
+	// This repo's 12-hex identity (root-commit prefix), cached once resolved
+	// — it is immutable for the life of the repo. Used to tell a
+	// kb://<own-id>/… ref (a local edge) from a foreign one. A failed
+	// resolution is NOT cached: the next call retries (repoIDMu).
+	repoIDMu sync.Mutex
+	repoID   string
+	// rootCommit resolves a branch's root commit (rh.RootCommit; a test seam
+	// replaces it to stand in for a failing lookup).
+	rootCommit func(ctx context.Context, branch string) (string, error)
 
 	// syncSuspended, when true, makes Sync a no-op. It is toggled around a bulk
 	// Replay into a TRANSIENT store (the origin clone) that a single full
@@ -1904,18 +1908,29 @@ func localFactRefs(refs []string, localRepoID string) []string {
 //     *sql.DB deadlocks the pool under concurrency. See
 //     kb/invariants/store/no-reentrant-sql-from-vtab-cursors.
 //
-// The sync.Once keeps the cost to one walk per index.Index, not one per ref.
-// The branch argument is therefore only read on the first call — safe because
-// every branch of a repo shares the same root commit (see RootCommit).
+// The cache keeps the cost to one walk per index.Index once resolved, not one
+// per ref. The branch argument is therefore only read until the id resolves —
+// safe because every branch of a repo shares the same root commit (see
+// RootCommit). A FAILED walk is not cached: the next call retries, so one
+// transient RootCommit error does not leave kb:// self-refs edgeless, and the
+// ref_edges repair and backfill disabled, for the life of the process (PR
+// #694 review F1).
 func (si *Index) localRepoID(ctx context.Context, branch string) string {
-	si.repoIDOnce.Do(func() {
-		root, err := si.rh.RootCommit(ctx, branch)
-		if err != nil {
-			log.Warn().Err(err).Str("branch", branch).
-				Msg("searchIndex: repo id unresolved; kb:// self-refs will not form edges")
-			return
-		}
-		si.repoID = fact.ID12(root)
-	})
+	si.repoIDMu.Lock()
+	defer si.repoIDMu.Unlock()
+	if si.repoID != "" {
+		return si.repoID
+	}
+	lookup := si.rootCommit
+	if lookup == nil {
+		lookup = si.rh.RootCommit
+	}
+	root, err := lookup(ctx, branch)
+	if err != nil {
+		log.Warn().Err(err).Str("branch", branch).
+			Msg("searchIndex: repo id unresolved; kb:// self-refs will not form edges (retried on the next call)")
+		return ""
+	}
+	si.repoID = fact.ID12(root)
 	return si.repoID
 }
