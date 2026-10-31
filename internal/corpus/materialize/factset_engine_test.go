@@ -748,8 +748,9 @@ func (w writerFunc) Write(b []byte) (int, error) { return w(b) }
 // (ErrFactSetBusy) while a page served from an already planned unit takes no
 // slot; over the export cap an export is refused at once.
 //
-// Sabotage: let the search ask for one more than Facts (501 units); make the
-// planning slot or the export slot always available (no refusal).
+// Sabotage: drop the Facts truncation and let the search ask for one more
+// (501 units); give the planning or the export slots room for 1000 (no
+// refusal).
 func TestFactSet_F16_Bounds(t *testing.T) {
 	f := newFactSetFixture(t)
 	ctx := context.Background()
