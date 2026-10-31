@@ -1238,6 +1238,189 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/branches/{branch}/search/factset:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [search, facts]
+      summary: Page a search materialized as a factset (server-side cursor)
+      description: |
+        Materializes a SEARCH as a factset: every result (up to `facts`) is one
+        unit, in search order, expanded top-down by the same planner as
+        `/facts/{path}/materialize/pages` under `depth` and `max_nodes`. Each
+        response is BYTE FOR BYTE the page `knomit_materialize` returns in
+        factset mode (`search` instead of `file`) for the same input.
+
+        RESERVATION AND WRITE ONCE: before any unit is planned, the results
+        are reserved, each for its own unit, and each result's DIRECT
+        references for the first unit, in result order, whose own limits show
+        them at depth 1 (numbered "N.k"; nothing at depth 0 or max_nodes 1).
+        A fact is written once: a result in its own unit, a reserved fact by
+        its owner at its number, any other fact where the walk first reaches
+        it. Every other appearance is a link, a heading-only node
+        (`written: false`, no body, no builds_on): a FORWARD link names the
+        unit and number where the fact will be written ("see 2.2"); a BACK
+        link carries only the `anchor_id` of the section already served
+        (links are anchors the reader resolves). Every appearance of a fact
+        has the same `anchor_id`: `f-<16 hex>`, a 64-bit hash of (repo,
+        path). A link carries `cited_blob` (the version cited there) and
+        `different_version` (that version is not the one written: blob
+        identity, so ANY change). Units are planned as pages need them:
+        `units_walked` and `sections` say how far.
+
+        VERSIONS: the factset is anchored at the write mount's INDEX
+        WATERMARK (the commit the index reflects), read before and after the
+        search; a move in between, an index sync in progress or a rebuild
+        makes the first call wait for the index to settle (up to
+        `session.factset_anchor_wait`, 5s by default), then answer 503 with
+        Retry-After. A version is
+        a BLOB: a result's is the one the index held at the anchor; a pinned
+        reference's is the one its citing version recorded; with `unpin`, or
+        across KBs, the one live at the anchor or at the other repo's tip,
+        frozen at the first call for every repo the caller reaches. `commit`
+        is metadata: the commit that holds the blob.
+
+        NOW MARKS: every section that shows a version carries, in `marks`,
+        `changed_since_cited` when the reading branch holds another version of
+        that fact NOW, or `deleted` when it holds none; computed when the page
+        is served, against the branch's current index (a cross-KB section:
+        that repo's read branch). They are annotations: structure, numbers
+        and links stay as of the anchor.
+
+        FIRST CALL (no `cursor`): the search parameters are the repo
+        `/search` route's, as the UI's results list sends them (`q`,
+        `entities`, `domain`, `domain_exact`, `path`, `type`,
+        `exclude_type`, `kind`, `exclude_kind`, `origin`, `ep`, `motifs`,
+        `motif_match`, `min_confidence`, `min_similarity`, `since_fork`),
+        plus `sort` (`relevance`, the default, is `/search`; `recent` is the
+        `/facts` collection's order). The server runs the search itself, up
+        to `facts`: its first 50 units are EXACTLY the list the UI shows (the
+        same call at limit 50, in its order; ties in a text search are
+        ordered by path), and only when that list is full does the factset
+        extend past it, appending the further results of the same search at
+        limit `facts` in their order. A list shorter than 50 is the whole
+        factset. The factset's options are `facts` (1-500, default every result up
+        to 500), `depth`, `max_nodes`, `unpin`, `cross_kb` (as for one fact)
+        and `limit` (sections per page, 1-5, default 3). Any other parameter
+        is a 400. The frozen inputs (results, anchor, tips) are written ONCE,
+        as one session row; the planned state is an in-memory cache rebuilt
+        by replay when it is evicted. A search with no results is a 200 page
+        with `units: 0` and no cursor. A result that is gone at the anchor
+        keeps its unit as a heading alone (`unavailable: true`).
+
+        TITLE: free text as a sentence, then " for <entities>", then
+        " (<domains>)"; no text: the entities lead; domains only: the
+        domains. With none of the three, the other filters in words:
+        `[types as plurals, else kinds or origins + " facts", else "Facts"]
+        [about <motifs>] [in <path breadcrumb>] [qualifiers]`, e.g.
+        "Hypotheses about misattributed env defect", "Invariants in
+        Architecture › fleet", "Facts (confidence ≥ 0.8)"; motifs alone
+        are their words; no filter at all is "All facts in <repo>".
+        `search_line` always spells out the whole search.
+
+        LATER CALLS: pass ONLY `cursor`, or `cursor` and `unit` to continue
+        from that unit's first section (1 to `units`, forward or back; out
+        of range is a 400). Any other parameter is a 400. The cursor is
+        `<id>.<unit>.<section>`: the position after the page, so paging
+        writes nothing on the server, and two calls with one cursor both get
+        the same page. The last page's cursor points past the end (still good
+        for a seek); a plain page from there, or from any position past the
+        factset's extent, is a 400.
+
+        OWNERSHIP AND BOUNDS: a cursor belongs to this route and the caller's
+        principal (and the binding's read set); another owner's, an unknown
+        or an idle-expired cursor answer the same 404. One factset per owner:
+        a new first call replaces the owner's previous factset. At most 4
+        calls plan factset units at once on the server (a page from planned
+        units plans nothing); a call over that, one that finds the session
+        store's lock taken past its timeout, one whose index moved during the
+        search twice, or one on a store whose reference index is still being
+        backfilled with its repo id unresolved, is a 503 with Retry-After.
+        The cache budget (`session.factset_memory_mib`, 64 MiB) evicts the
+        least recently used factsets; the next page replays them. Cross-KB
+        refs are followed only into repos the caller reaches; resuming a
+        cursor with a credential that does not reach a repo it froze is the
+        404. A fact-identity collision (two facts on one 64-bit hash) is a
+        500, never a silently dropped subtree.
+      operationId: getSearchFactSetPage
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, only `unit` is accepted." }
+        - { name: unit, in: query, required: false, schema: { type: integer, minimum: 1 }, description: "With `cursor` only: continue from this unit's first section." }
+        - { name: q, in: query, required: false, schema: { type: string } }
+        - { name: entities, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: domain, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: domain_exact, in: query, required: false, schema: { type: boolean } }
+        - { name: path, in: query, required: false, schema: { type: string } }
+        - { name: type, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: exclude_type, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: kind, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: exclude_kind, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: origin, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: ep, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: motifs, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: motif_match, in: query, required: false, schema: { type: string, enum: [exact, stem, token-2] } }
+        - { name: min_confidence, in: query, required: false, schema: { type: number } }
+        - { name: min_similarity, in: query, required: false, schema: { type: number } }
+        - { name: since_fork, in: query, required: false, schema: { type: boolean } }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [relevance, recent], default: relevance } }
+        - { name: facts, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 500 } }
+        - { name: depth, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 10, default: 4 } }
+        - { name: max_nodes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+        - { name: unpin, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 5, default: 3 }, description: "First call only: sections per page, frozen in the cursor." }
+      responses:
+        "200":
+          description: One page of the factset
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FactSetPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/search/factset/export:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [search, facts]
+      summary: Export a whole factset as one agent document
+      description: |
+        The whole factset of `cursor` (its only parameter) as one markdown
+        agent document, sent as an attachment (`Content-Disposition:
+        attachment; filename="<slug of the title, at most 48
+        characters>-<first 8 characters of the cursor>.md"`): a header with
+        the title and the full search, then one `##` heading per unit,
+        every section once, every link as an in-document anchor (a back
+        link resolved to the number written), and a "Now:" note where a
+        section carries a now mark. It is the same stream the pages read,
+        from unit 1 to the end, never partial: a failure after the first
+        bytes aborts the response. The cursor's position is irrelevant and
+        nothing is written. Owned like the pages: another owner's or an
+        unknown cursor is the same 404. Each unit is planned under one of
+        the 4 planning slots, given back before that unit is written, so a
+        stalled download holds no planning slot. At most 8 exports stream at
+        once on the server (over that: a 503 with Retry-After), and each
+        write of the stream must complete within a minute, else the export
+        aborts. A 500 is any other failure before the first byte.
+      operationId: exportSearchFactSet
+      parameters:
+        - { name: cursor, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The factset as markdown
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            text/markdown: { schema: { type: string } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches/{branch}/search:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -5289,6 +5472,75 @@ components:
         cursor:   { type: string, nullable: true, description: "Pass it back alone for the next page; null on the last page." }
         has_more: { type: boolean }
 
+    FactSetPage:
+      type: object
+      description: >
+        One page of a factset (internal/corpus/materialize FactSetPage), the page
+        knomit_materialize returns in factset mode. The envelope repeats on
+        every page; `facts` holds whole sections in factset order.
+      required: [mode, title, search_line, search, anchor, audience, unpinned, cross_kb, depth, max_nodes, facts_limit, units, units_walked, sections, instructions_version, facts, unit_from, unit_to, cursor, has_more]
+      properties:
+        mode:        { type: string, enum: [factset] }
+        title:       { type: string, description: "The mechanical title, built from the search on the server." }
+        search_line: { type: string, description: "The whole search spelled out, the filters the title leaves out included." }
+        search:      { type: object, description: "The frozen search as data (text, entities, domains, path, types, ..., sort)." }
+        anchor:      { type: string, description: "The write mount's index watermark the factset is anchored at (the commit the index reflected at the first call)." }
+        audience:    { type: string, enum: [human] }
+        unpinned:    { type: boolean }
+        cross_kb:    { type: boolean }
+        depth:       { type: integer }
+        max_nodes:   { type: integer }
+        facts_limit: { type: integer, description: "The Facts limit the first call asked for." }
+        units:       { type: integer, description: "Units (search results) in the factset." }
+        units_walked: { type: integer, description: "Units planned so far (units are planned as pages need them)." }
+        sections:    { type: integer, description: "Sections (written and links) in the units planned so far." }
+        instructions_version: { type: string }
+        instructions: { type: string, description: "Reading instructions, page 1 only." }
+        facts:
+          type: array
+          items: { $ref: "#/components/schemas/FactSetNode" }
+        unit_from: { type: integer }
+        unit_to:   { type: integer }
+        cursor:    { type: string, nullable: true, description: "\"<id>.<unit>.<section>\": the position after this page. Set on every page of a non-empty factset (the last page's points past the end); pass it back alone, or with unit to seek." }
+        has_more:  { type: boolean }
+
+    FactSetNode:
+      description: >
+        One appearance: a MaterializeNode of its unit's own plan (`n` is the
+        ordinal inside the unit; builds_on point inside the unit; anchor_id is
+        the fact's identity, the same in every appearance) plus its place in
+        the factset. A link (`written: false`) has no body, builds_on,
+        not_included or sources. `marks` may carry `changed_since_cited` or
+        `deleted` (NOW, against the reading branch).
+      allOf:
+        - $ref: "#/components/schemas/MaterializeNode"
+        - type: object
+          required: [unit, number, tree_depth, written]
+          properties:
+            unit:       { type: integer }
+            number:     { type: string, description: "Section number: the unit root is \"5\", its sections \"5.1\", \"5.1.2\"; \"\" for a frame's ancestor." }
+            tree_depth: { type: integer, description: "Depth in the unit's walk tree (not the BFS `depth`)." }
+            parent:     { type: integer, description: "n of the tree parent in the unit; absent for the root and ancestors." }
+            written:    { type: boolean }
+            unavailable: { type: boolean, description: "A unit root whose search result is gone at the factset's anchor: a heading alone, under the title the search listed, \"(no longer available)\"; written is false and there is no link." }
+            link:
+              type: object
+              description: Where this fact is written. A back link carries only the anchor.
+              required: [anchor_id, direction, cited_blob]
+              properties:
+                unit:              { type: integer, description: "Forward links only: the unit where the fact is written." }
+                number:            { type: string, description: "Forward links only: its number there (\"7\" for a result, \"7.3\" for a reserved direct reference)." }
+                anchor_id:         { type: string, description: "f-<16 hex>: the written section's anchor." }
+                direction:         { type: string, enum: [forward, back] }
+                cited_blob:        { type: string, description: "The version (blob) cited at this appearance." }
+                different_version: { type: boolean, description: "The version cited here is not the version written (blob identity: any change)." }
+            unit_truncated:
+              type: object
+              description: On a unit root, the unit's own walk cuts.
+              properties:
+                depth: { type: integer }
+                nodes: { type: integer }
+
     MaterializeNode:
       type: object
       required: [n, path, repo, commit, depth, role, title, type, kind, confidence, anchor_id]
@@ -5296,7 +5548,8 @@ components:
         n:          { type: integer, description: "Ordinal in reading order, from 1." }
         path:       { type: string }
         repo:       { type: string, description: "The fact's repo id (12 hex)." }
-        commit:     { type: string, description: "The version written (pinned, or the latest version frozen on the first call)." }
+        commit:     { type: string, description: "The commit that holds the version shown (metadata; the version is `blob`)." }
+        blob:       { type: string, description: "The version shown: its blob hash." }
         depth:      { type: integer, description: "Shortest ref distance from the root; an ancestor's upward hop count." }
         role:       { type: string, enum: [root, ancestor, focal, ref] }
         title:      { type: string }
@@ -5313,8 +5566,8 @@ components:
               n:                 { type: integer }
               title:             { type: string }
               id:                { type: string }
-              anchor_id:         { type: string }
-              different_version: { type: boolean, description: "The citing fact cited a version whose BODY differs from the one written (changed since cited)." }
+              anchor_id:         { type: string, description: "f-<16 hex> of the cited fact." }
+              different_version: { type: boolean, description: "The citing fact cited another version (blob) than the one written: any change, a commit difference alone excluded." }
         not_included:
           type: array
           items:
@@ -5333,8 +5586,9 @@ components:
               url:   { type: string }
         marks:
           type: array
-          items: { type: string, enum: [latest_other_kb] }
-        anchor_id: { type: string }
+          description: "latest_other_kb: read cross-KB at that repo's tip. In a factset also changed_since_cited / deleted (NOW, against the reading branch)."
+          items: { type: string, enum: [latest_other_kb, changed_since_cited, deleted] }
+        anchor_id: { type: string, description: "f-<16 hex>: a 64-bit hash of (repo, path), the same in every appearance of the fact." }
         section:   { type: string, description: "A frame's group heading written before this fact, if any." }
 
     FactCreateRequest:

@@ -57,6 +57,13 @@ func (si *Index) SetBeforeGraphTxHookForTest(f func()) {
 	si.beforeGraphTx = f
 }
 
+// SetBeforeSyncCASHookForTest installs f to run in Sync after the rows are
+// written and before the watermark moves; nil removes it.
+func (si *Index) SetBeforeSyncCASHookForTest(f func()) {
+	mustBeTest("SetBeforeSyncCASHookForTest")
+	si.beforeSyncCAS = f
+}
+
 // SetBeforeRefEdgesWriteHookForTest installs f to run inside the reference
 // edge transaction, after the claim is written and before the edges are; an
 // error aborts the transaction. nil removes it.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/materialize"
@@ -49,7 +50,7 @@ const errSessionBusy = "the session store is busy; nothing was consumed — retr
 
 func materializeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_materialize",
-		mcpgo.WithDescription("Materialize ONE fact together with the facts it stands on, as one document in reading order, every fact in full. Use it to hand a fact and its foundations to someone at once (an agent's brief, a frame's context, a human-readable write-up); use knomit_explain instead to inspect a fact's provenance and history, and knomit_query to find facts. The content is the fact's refs walk: every fact it cites, recursively, to `depth` (default 4, max 10), at most `max_nodes` facts (default 200, max 500); a fact reached twice is written once and later citations link back to it; a cited fact that was not written is listed as \"not included\" with the reason. By default every ref is read at the version the citing fact cited (historical: the output depends only on the fact, the anchor `commit` and the options); `unpin: true` reads every ref at its latest version instead and silently leaves out a cited fact that is gone. A frame (type frame) is ordered differently: its ancestors (the frames it refs, recursively, whatever their distance, each with its own content only) come first, then the frame, then what it stands on. Refs into another knowledge base are followed only with `cross_kb: true`, at that knowledge base's latest version. `audience: \"agent\"` returns the document as markdown text in `text`; `audience: \"human\"` returns the facts as data in `facts`, plus `instructions` on the first page for writing them up as an article. Results are paged: while `has_more` is true, call again with `cursor` (and nothing else but `binding` and optionally `limit`). Read-only; never writes."),
+		mcpgo.WithDescription("Materialize ONE fact together with the facts it stands on, as one document in reading order, every fact in full. Use it to hand a fact and its foundations to someone at once (an agent's brief, a frame's context, a human-readable write-up); use knomit_explain instead to inspect a fact's provenance and history, and knomit_query to find facts. The content is the fact's refs walk: every fact it cites, recursively, to `depth` (default 4, max 10), at most `max_nodes` facts (default 200, max 500); a fact reached twice is written once and later citations link back to it; a cited fact that was not written is listed as \"not included\" with the reason. Every fact's version is its blob (`blob`); `commit` is the commit that holds it. By default every ref is read at the version the citing fact cited (historical: the output depends only on the fact, the anchor `commit` and the options); `unpin: true` reads every ref at its latest version instead and silently leaves out a cited fact that is gone. A frame (type frame) is ordered differently: its ancestors (the frames it refs, recursively, whatever their distance, each with its own content only) come first, then the frame, then what it stands on. Refs into another knowledge base are followed only with `cross_kb: true`, at that knowledge base's latest version. `audience: \"agent\"` returns the document as markdown text in `text`; `audience: \"human\"` returns the facts as data in `facts`, plus `instructions` on the first page for writing them up as an article. Results are paged: while `has_more` is true, call again with `cursor` (and nothing else but `binding` and optionally `limit`). Read-only; never writes."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Description("The fact to materialize: a path under kb/ (e.g. kb/decisions/x/abc123.md), or kb://<id>/… for a fact in another mount of this binding. Required unless `cursor` is passed."),
@@ -77,7 +78,17 @@ func materializeTool() mcpgo.Tool {
 			mcpgo.Description("The `cursor` from the previous page. With it, every other argument except `binding` and `limit` is refused: the document was fixed by the first call."),
 		),
 		mcpgo.WithNumber("limit",
-			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. The first call's limit is kept for every later page of its cursor; passing limit with cursor changes it for that page only. A page also stops before it would exceed the transport's size cap."),
+			mcpgo.Description("Most facts per page: agent default 25, max 100; human default 3, max 5. The first call's limit is kept for every later page of its cursor; passing limit with cursor changes it for that page only (not for a factset cursor, whose page size is fixed). A page also stops before it would exceed the transport's size cap."),
+		),
+		mcpgo.WithObject("search",
+			mcpgo.Description("FACTSET MODE, instead of `file`: materialize a SEARCH as a factset. The search runs on the server (the same filters as knomit_query and the UI's results list; sort relevance or recent) and every result, up to `facts`, becomes one unit: that result's own materialization under `depth` and `max_nodes`, in search order. Before any unit is planned, each result is reserved for its own unit and each result's direct references for the first unit whose limits show them (numbered \"N.k\"). A fact is written once; every other appearance is a heading-only node with a `link`: \"forward\" names the unit and number where it will be written, \"back\" gives only the `anchor_id` of the section already served (every appearance of a fact shares its anchor_id). `marks` may say `changed_since_cited` or `deleted`: the branch holds another version, or none, NOW. Each node carries `unit`, `number` (\"5\", \"5.1.2\"), `tree_depth` and `blob` (the version shown); each page carries `title`, `search_line` and `units`. Human pages only (audience omitted or \"human\"), byte-identical to the REST GET …/search/factset pages. Page with `cursor` (it carries the position: the same cursor gives the same page); add `unit` to continue from another unit."),
+			mcpgo.Properties(factsetSearchKeys),
+		),
+		mcpgo.WithNumber("facts",
+			mcpgo.Description("FactSet mode: the most search results (units), 1 to 500. Default: every result, up to 500. Fewer keeps the best matches."),
+		),
+		mcpgo.WithNumber("unit",
+			mcpgo.Description("FactSet mode, with `cursor` only: continue from this unit's first section (1 to the factset's `units`), forward or back."),
 		),
 	)
 }
@@ -103,7 +114,28 @@ func MaterializeHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallTool
 		defer releaseWrite()
 
 		if cursor := req.GetString("cursor", ""); cursor != "" {
+			// Only a factset THIS caller owns routes to the factset resume; another
+			// owner's factset cursor takes the path of a cursor that does not
+			// exist, so every refusal reads the same (d870cc94).
+			factset, err := materialize.IsFactSetCursor(ctx, materializeScope(ctx, b, sWrite), cursor)
+			if err != nil {
+				return factsetToolError(err), nil
+			}
+			if factset {
+				return materializeFactSetResume(ctx, req, b, mgr, sWrite, cursor)
+			}
+			if _, ok := req.GetArguments()["unit"]; ok {
+				return mcpgo.NewToolResultError("unit is for a factset cursor only"), nil
+			}
 			return materializeResume(ctx, req, b, mgr, sWrite, cursor)
+		}
+		if isFactSetFirst(req) {
+			return materializeFactSetFirst(ctx, req, b, mgr, sWrite)
+		}
+		for _, k := range append(factsetOnlyArgs, "unit") {
+			if _, ok := req.GetArguments()[k]; ok {
+				return mcpgo.NewToolResultError(k + " is for factset mode only: pass `search` instead of `file`"), nil
+			}
 		}
 		return materializeFirst(ctx, req, b, mgr, sWrite)
 	}
@@ -145,11 +177,11 @@ func materializeFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.B
 		File: file, Commit: req.GetString("commit", ""), Options: opts,
 	})
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return materializeToolError(err, file), nil
 	}
 	page, err := materialize.FirstPage(ctx, materializeScope(ctx, b, sWrite), doc, audience, limit)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return materializeToolError(err, file), nil
 	}
 	return marshalMaterializePage(page)
 }
@@ -163,15 +195,43 @@ func materializeResume(ctx context.Context, req mcpgo.CallToolRequest, b *repos.
 	}
 	page, err := materialize.NextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor,
 		func(audience string, frozen int) (int, error) { return materializeLimit(req, audience, frozen) })
-	switch {
-	case errors.Is(err, materialize.ErrCursorExpired):
-		return mcpgo.NewToolResultError(errMaterializeExpired), nil
-	case errors.Is(err, materialize.ErrCursorBusy):
-		return mcpgo.NewToolResultError(errSessionBusy), nil
-	case err != nil:
-		return mcpgo.NewToolResultError(err.Error()), nil
+	if err != nil {
+		return materializeToolError(err, ""), nil
 	}
 	return marshalMaterializePage(page)
+}
+
+// errMaterializeFailed is the tool error of every single-fact failure that
+// is not the caller's to fix: the cause is logged, never returned.
+const errMaterializeFailed = "the document could not be materialized; retry, or start over without cursor"
+
+// materializeArgError is an argument the caller passed wrong (limit): its
+// text is the caller's to read.
+type materializeArgError struct{ error }
+
+// materializeToolError maps a single-fact planner or page error to a stable
+// tool error: the caller's own mistakes (an invalid request, a fact that is
+// not there, a bad argument) keep their text; every retry-able state has a
+// fixed text; anything else is logged and returned as errMaterializeFailed,
+// so no internal error text (SQL, paths, wrapped causes) reaches the caller
+// (review N3).
+func materializeToolError(err error, file string) *mcpgo.CallToolResult {
+	var arg materializeArgError
+	switch {
+	case errors.As(err, &arg):
+		return mcpgo.NewToolResultError(arg.Error())
+	case errors.Is(err, materialize.ErrCursorExpired):
+		return mcpgo.NewToolResultError(errMaterializeExpired)
+	case errors.Is(err, materialize.ErrCursorBusy), errors.Is(err, materialize.ErrStoreBusy):
+		return mcpgo.NewToolResultError(errSessionBusy)
+	case errors.Is(err, materialize.ErrNotReady):
+		return mcpgo.NewToolResultError(materialize.ErrNotReady.Error())
+	case errors.Is(err, materialize.ErrInvalid), errors.Is(err, materialize.ErrNotFound):
+		return mcpgo.NewToolResultError(err.Error())
+	default:
+		log.Error().Err(err).Str("file", file).Msg("knomit_materialize failed")
+		return mcpgo.NewToolResultError(errMaterializeFailed)
+	}
 }
 
 // materializeScope pins a cursor to the binding (pin and read set) and to
@@ -212,13 +272,13 @@ func materializeLimit(req mcpgo.CallToolRequest, audience string, def int) (int,
 	}
 	v, present, err := intArgument(req, "limit")
 	if err != nil {
-		return 0, err
+		return 0, materializeArgError{err}
 	}
 	if !present {
 		return def, nil
 	}
 	if v < 1 {
-		return 0, errors.New("limit must be at least 1")
+		return 0, materializeArgError{errors.New("limit must be at least 1")}
 	}
 	return min(v, max), nil
 }

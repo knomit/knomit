@@ -267,6 +267,40 @@ type SessionConfig struct {
 	ClientDeadAfter   string `toml:"client_dead_after"`
 	ClientHiddenAfter string `toml:"client_hidden_after"`
 	ClientRetention   string `toml:"client_retention"`
+	// FactSetMemoryMiB is the process-wide CACHE budget, in MiB, for
+	// materialized searches (FactSets): what each derives from its frozen
+	// session row (reserved map, written set, recent unit plans). Past it the
+	// least recently used FactSets are evicted; a later page rebuilds one by
+	// replaying its units without bodies, so eviction costs time, never
+	// correctness. 0 or unset is the default (64). The working memory of a
+	// plan in progress is bounded by the cap on concurrent FactSet planning
+	// (materialize.MaxConcurrentFactSetBuilds), not here.
+	FactSetMemoryMiB int `toml:"factset_memory_mib"`
+	// FactSetAnchorWait is how long a FactSet's first call waits for its
+	// branch's index to settle (no sync rewriting rows past the watermark,
+	// no Rebuild in progress) before it answers 503 with Retry-After; the
+	// request's own context still bounds it. A Go duration; empty is the
+	// default (5s); "0" tries once and never waits.
+	FactSetAnchorWait string `toml:"factset_anchor_wait"`
+}
+
+// DefaultFactSetAnchorWait is session.factset_anchor_wait when unset.
+const DefaultFactSetAnchorWait = 5 * time.Second
+
+// FactSetAnchorWaitDuration parses session.factset_anchor_wait (empty: the
+// default). Validate refuses a value it cannot parse or a negative one.
+func (s SessionConfig) FactSetAnchorWaitDuration() (time.Duration, error) {
+	if strings.TrimSpace(s.FactSetAnchorWait) == "" {
+		return DefaultFactSetAnchorWait, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(s.FactSetAnchorWait))
+	if err != nil {
+		return 0, fmt.Errorf("config: session.factset_anchor_wait must be a Go duration (e.g. 5s), got %q", s.FactSetAnchorWait)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("config: session.factset_anchor_wait must not be negative, got %q", s.FactSetAnchorWait)
+	}
+	return d, nil
 }
 
 // ExperimentsConfig configures the experiment lifecycle: an `exp/<name>`
@@ -728,6 +762,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_SESSION_CLIENT_DEAD_AFTER", &cfg.Session.ClientDeadAfter)
 	envOr("KNOMIT_SESSION_CLIENT_HIDDEN_AFTER", &cfg.Session.ClientHiddenAfter)
 	envOr("KNOMIT_SESSION_CLIENT_RETENTION", &cfg.Session.ClientRetention)
+	envOr("KNOMIT_SESSION_FACTSET_ANCHOR_WAIT", &cfg.Session.FactSetAnchorWait)
 	envOr("KNOMIT_DISCOVERY_EFFORT_DEFAULT", &cfg.Discovery.EffortDefault)
 	envOr("KNOMIT_DISCOVERY_BRIDGE", &cfg.Discovery.Bridge)
 	envOr("KNOMIT_LOG_FORMAT", &cfg.Log.Format)
@@ -845,6 +880,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.OntologyRoot) == "" {
 		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	if _, err := c.Session.FactSetAnchorWaitDuration(); err != nil {
+		return err
 	}
 	// F25: artifacts/ is the agents' working-file root, kept out of discovery
 	// only by sitting BESIDE the ontology root. An ontology root that is that

@@ -427,6 +427,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 		items[i] = model.QueueItem{
 			Path:       wirePath(b, targets[ref.Mount].RT, e.Path),
 			CommitHash: e.CommitHash,
+			Blob:       e.BlobHash,
 			SortKey:    i,
 			State:      string(state),
 		}
@@ -766,6 +767,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		items = append(items, model.QueueItem{
 			Path:       wirePath(b, targets[ref.Mount].RT, r.Path),
 			CommitHash: r.CommitHash,
+			Blob:       r.BlobHash,
 			SortKey:    i,
 			State:      string(state),
 		})

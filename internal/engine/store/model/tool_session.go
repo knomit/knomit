@@ -5,7 +5,9 @@ import "errors"
 // ErrSessionBusy wraps a DequeuePaths failure caused by the session DB staying
 // locked past its busy timeout (SQLITE_BUSY / SQLITE_LOCKED). The dequeue was
 // rolled back, so nothing was consumed and the same call may be retried.
-// Only DequeuePaths returns it: a busy error on a later write of a page (a
+// DequeuePaths and the FactSet writes (sessions.ToolIndex.CreateFactSet,
+// TouchFactSet, DeleteFactSet: one BEGIN IMMEDIATE transaction each, rolled
+// back on failure) return it: a busy error on a later write of a page (a
 // re-enqueue after the dequeue committed) is NOT safe to retry and is never
 // marked with it.
 var ErrSessionBusy = errors.New("session store busy")
@@ -35,6 +37,10 @@ type ToolSession struct {
 type QueueItem struct {
 	Path       string
 	CommitHash string
-	SortKey    int
-	State      string
+	// Blob is the version's blob hash when the producer knows it (knomit_query
+	// writes the hit's blob), "" otherwise. With CommitHash it names exactly the
+	// version the cursor froze.
+	Blob    string
+	SortKey int
+	State   string
 }
