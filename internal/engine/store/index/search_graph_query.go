@@ -35,6 +35,13 @@ import (
 // where the edge's target_commit likewise differs from the resolved anchor.
 func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
 	gs.probe("IncomingAtCommit")
+	return gs.incomingAtCommit(ctx, branch, path, commitHash, true)
+}
+
+// incomingAtCommit is IncomingAtCommit reading the citing versions from
+// ref_edges (useTable, once backfilled) or from the DERIVED_FROM edges (a
+// test pins the two equal).
+func (gs *GraphStore) incomingAtCommit(ctx context.Context, branch, path, commitHash string, useTable bool) ([]RefSummary, error) {
 	branchID, err := gs.rh.BranchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branchID: %w", err)
@@ -82,9 +89,13 @@ func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 	// path holds the blob on this branch, now (branch_facts) or in its
 	// history (path_changes on its commits: a retracted citer, a rename's old
 	// path), so a path that only another branch has does not surface here.
-	found, err := graphDerivedFromNeighbourRows(ctx, conn(ctx, gs.rh.DB()), blobHash, true)
+	//
+	// The citing versions come from ref_edges (idx_ref_edges_target), or,
+	// until the table is backfilled (PR #694 review N2), from the edges;
+	// either way in the same documented order (sortIncomingCandidates).
+	found, err := gs.incomingCandidates(ctx, blobHash, useTable)
 	if err != nil {
-		return nil, fmt.Errorf("IncomingAtCommit: read edges: %w", err)
+		return nil, fmt.Errorf("IncomingAtCommit: read references: %w", err)
 	}
 	if len(found) == 0 {
 		return []RefSummary{}, nil
@@ -124,6 +135,28 @@ func (gs *GraphStore) IncomingAtCommit(ctx context.Context, branch, path, commit
 		out = append(out, rs)
 	}
 	return out, nil
+}
+
+// incomingCandidates is the citing versions of blobHash, one row per Fact
+// node of each citing blob, in sortIncomingCandidates order: from ref_edges
+// when it is backfilled (or always, useTable=true and ready), else from the
+// DERIVED_FROM edges.
+func (gs *GraphStore) incomingCandidates(ctx context.Context, blobHash string, useTable bool) ([]derivedFromNeighbour, error) {
+	db := conn(ctx, gs.rh.DB())
+	var found []derivedFromNeighbour
+	var err error
+	if useTable && refEdgesReady(ctx, db) {
+		found, err = refEdgesIncomingRows(ctx, db, blobHash)
+	} else {
+		found, err = graphDerivedFromNeighbourRows(ctx, db, blobHash, true)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := sortIncomingCandidates(ctx, gs.rh, found); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // blobHolding is how a branch holds one (path, blob) pair: the commit it
@@ -248,9 +281,9 @@ func (gs *GraphStore) blobHoldings(ctx context.Context, branchID int64, rows []d
 	return held, onBranch, dates, nil
 }
 
-// OutgoingAtCommit returns the set of (target_path, target_commit) refs
-// asserted by (path, commitHash) — DERIVED_FROM edges OUT of this Fact
-// where source_commit edge property matches.
+// OutgoingAtCommit returns the (target_path, target_commit) refs asserted by
+// the version of path live at commitHash — the ref_edges rows of its blob
+// (the mirror of its DERIVED_FROM edges), in the author's refs order.
 //
 // Unlike IncomingAtCommit, this does not filter by branch_commits: outgoing
 // edges naturally reflect the source's commit, which is already pinned by
@@ -262,6 +295,30 @@ func (gs *GraphStore) blobHoldings(ctx context.Context, branchID int64, rows []d
 // applied — branch reachability is intentionally not enforced here.
 func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
 	gs.probe("OutgoingAtCommit")
+	// The version's references come from ref_edges (one covering range scan
+	// of its blob's rows), in the AUTHOR's refs order (ord), not the
+	// DERIVED_FROM edge id order the edge read used, which does not follow
+	// it. The rows mirror the blob's edges (written in the same
+	// transaction; Verify's ref-edges check, repaired by a rebuild), so the
+	// set is the edge read's set.
+	//
+	// Until ref_edges is backfilled (a store upgraded from before it, while
+	// the heal runs), the rows of old versions are not there yet: read the
+	// edges instead, put in the same author's order, so the answer is the
+	// same before and after the backfill (PR #694 review N2).
+	return gs.outgoingAtCommit(ctx, branch, path, commitHash, func(blobHash string) ([]RefSummary, error) {
+		db := conn(ctx, gs.rh.DB())
+		if !refEdgesReady(ctx, db) {
+			return gs.outgoingByEdgesInRefsOrder(ctx, db, branch, path, blobHash)
+		}
+		return refEdgesOutOfBlob(ctx, db, blobHash)
+	})
+}
+
+// outgoingAtCommit is OutgoingAtCommit with the read of a blob's references
+// passed in (ref_edges in production; the DERIVED_FROM edge read in a test
+// that pins the two equal).
+func (gs *GraphStore) outgoingAtCommit(ctx context.Context, branch, path, commitHash string, refsOf func(blobHash string) ([]RefSummary, error)) ([]RefSummary, error) {
 	// Sparse-history walk-back: edges are stored anchored to the source's
 	// actual write-commit. Resolve `commitHash` (the query anchor) into the
 	// source path's effective write-commit ≤ commitHash. Without this, queries
@@ -292,9 +349,9 @@ func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	if blobHash == "" {
 		return nil, nil
 	}
-	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, false)
+	found, err := refsOf(blobHash)
 	if err != nil {
-		return nil, fmt.Errorf("OutgoingAtCommit: read edges: %w", err)
+		return nil, fmt.Errorf("OutgoingAtCommit: read references: %w", err)
 	}
 	candidates := make([]RefSummary, 0, len(found))
 	for _, rs := range found {

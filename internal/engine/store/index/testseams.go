@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"knomit/internal/engine/store/model"
@@ -62,6 +63,140 @@ func (si *Index) SetBeforeGraphTxHookForTest(f func()) {
 func (si *Index) SetBeforeRefEdgesWriteHookForTest(f func() error) {
 	mustBeTest("SetBeforeRefEdgesWriteHookForTest")
 	si.beforeRefEdgesWrite = f
+}
+
+// SetBeforeRefRowsWriteHookForTest installs f to run inside the reference
+// edge transaction, after the claim and the edges are written and before the
+// ref_edges rows are; an error aborts the transaction. nil removes it.
+func (si *Index) SetBeforeRefRowsWriteHookForTest(f func() error) {
+	mustBeTest("SetBeforeRefRowsWriteHookForTest")
+	si.beforeRefRowsWrite = f
+}
+
+// SetRefEdgesChunkForTest sets how many blobs one RefEdgesOfBlobs statement
+// binds and returns the previous value, for the caller to restore.
+func SetRefEdgesChunkForTest(n int) int {
+	mustBeTest("SetRefEdgesChunkForTest")
+	old := refEdgesChunk
+	refEdgesChunk = n
+	return old
+}
+
+// OutgoingByEdgesForTest is OutgoingAtCommit reading the DERIVED_FROM edges
+// (the read before ref_edges) instead of ref_edges: everything else, the
+// anchor resolution and the filters, is the same code.
+func (gs *GraphStore) OutgoingByEdgesForTest(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	mustBeTest("OutgoingByEdgesForTest")
+	return gs.outgoingAtCommit(ctx, branch, path, commitHash, func(blobHash string) ([]RefSummary, error) {
+		return graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, false)
+	})
+}
+
+// SetRootCommitForTest replaces the root-commit lookup localRepoID uses (nil
+// restores rh.RootCommit) and forgets the cached repo id, so the next call
+// resolves through f.
+func (si *Index) SetRootCommitForTest(f func(ctx context.Context, branch string) (string, error)) {
+	mustBeTest("SetRootCommitForTest")
+	si.repoIDMu.Lock()
+	defer si.repoIDMu.Unlock()
+	si.rootCommit = f
+	si.repoID = ""
+}
+
+// LocalRepoIDForTest is localRepoID.
+func (si *Index) LocalRepoIDForTest(ctx context.Context, branch string) string {
+	mustBeTest("LocalRepoIDForTest")
+	return si.localRepoID(ctx, branch)
+}
+
+// IncomingByEdgesForTest is IncomingAtCommit reading the DERIVED_FROM edges
+// instead of ref_edges; everything else is the same code.
+func (gs *GraphStore) IncomingByEdgesForTest(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	mustBeTest("IncomingByEdgesForTest")
+	return gs.incomingAtCommit(ctx, branch, path, commitHash, false)
+}
+
+// BlastRadiusByEdgesForTest is BlastRadius walking the DERIVED_FROM edges.
+func (gs *GraphStore) BlastRadiusByEdgesForTest(ctx context.Context, branch, path string) (int, error) {
+	mustBeTest("BlastRadiusByEdgesForTest")
+	return gs.blastRadius(ctx, branch, path, false)
+}
+
+// ReverseDependentPathsByEdgesForTest is ReverseDependentPaths walking the
+// DERIVED_FROM edges.
+func (gs *GraphStore) ReverseDependentPathsByEdgesForTest(ctx context.Context, path string) (map[string]struct{}, error) {
+	mustBeTest("ReverseDependentPathsByEdgesForTest")
+	return gs.reverseDependentPaths(ctx, path, false)
+}
+
+// SetOutdegreeByEdgesForTest makes the highlights' out-degree read the
+// DERIVED_FROM edges (true) or ref_edges (false).
+func (fq *FactQuery) SetOutdegreeByEdgesForTest(byEdges bool) {
+	mustBeTest("SetOutdegreeByEdgesForTest")
+	fq.outdegreeByEdges.Store(byEdges)
+}
+
+// SetRootCommitForTest replaces the root-commit lookup of the fallback reads'
+// repo id (nil restores rh.RootCommit).
+func (gs *GraphStore) SetRootCommitForTest(f func(ctx context.Context, branch string) (string, error)) {
+	mustBeTest("SetRootCommitForTest")
+	if f == nil {
+		gs.rootCommit.Store(nil)
+		return
+	}
+	gs.rootCommit.Store(&f)
+}
+
+// ReverseDependentsPlanForTest is the EXPLAIN QUERY PLAN of the reverse walk
+// (byEdges: the edge fallback walk; else the ref_edges walk).
+func (gs *GraphStore) ReverseDependentsPlanForTest(ctx context.Context, byEdges bool) (string, error) {
+	mustBeTest("ReverseDependentsPlanForTest")
+	q, args := reverseDependentsByRowsSQL, []any{NodeFact, "kb/x.md", "kb/x.md"}
+	if byEdges {
+		q, args = reverseDependentsByEdgesSQL, []any{NodeFact, "kb/x.md", EdgeDerivedFrom, EdgeDerivedFrom, "kb/x.md"}
+	}
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, "EXPLAIN QUERY PLAN "+q, args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			return "", err
+		}
+		out = append(out, detail)
+	}
+	return strings.Join(out, "\n"), rows.Err()
+}
+
+// IncomingPlanForTest is the EXPLAIN QUERY PLAN of the ref_edges incoming
+// read.
+func (gs *GraphStore) IncomingPlanForTest(ctx context.Context) (string, error) {
+	mustBeTest("IncomingPlanForTest")
+	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, "EXPLAIN QUERY PLAN "+refEdgesIncomingSQL, refsCommitKey, "x")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			return "", err
+		}
+		out = append(out, detail)
+	}
+	return strings.Join(out, "\n"), rows.Err()
+}
+
+// RepairRefEdgesForTest is repairRefEdges.
+func (si *Index) RepairRefEdgesForTest(ctx context.Context, branch string) (int, error) {
+	mustBeTest("RepairRefEdgesForTest")
+	return si.repairRefEdges(ctx, branch)
 }
 
 // SetBlobHoldingsChunkForTest sets how many pairs one blobHoldings statement
@@ -167,7 +302,8 @@ func (si *Index) ResolveTargetCommitForTest(ctx context.Context, branch, sourceP
 // GraphAddDerivedFromAtCommitTxForTest is graphAddDerivedFromAtCommitTx.
 func (si *Index) GraphAddDerivedFromAtCommitTxForTest(ctx context.Context, tx storegit.CtxExecer, branch, sourcePath, sourceBlobHash, sourceCommit string, refs []string) error {
 	mustBeTest("GraphAddDerivedFromAtCommitTxForTest")
-	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refs)
+	repoID := si.localRepoID(ctx, branch)
+	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refSpecsOf(refs, repoID), repoID)
 }
 
 // CommitEarlierForTest is commitEarlier.
@@ -209,7 +345,7 @@ func (si *Index) GraphBuildSimilarityEdgesForTest(ctx context.Context, path, blo
 // ReverseDependentPathsForTest is reverseDependentPaths.
 func (gs *GraphStore) ReverseDependentPathsForTest(ctx context.Context, path string) (map[string]struct{}, error) {
 	mustBeTest("ReverseDependentPathsForTest")
-	return gs.reverseDependentPaths(ctx, path)
+	return gs.reverseDependentPaths(ctx, path, true)
 }
 
 // GraphNodeIDByPropsForTest is graphNodeIDByProps.

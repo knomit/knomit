@@ -75,11 +75,15 @@ type Index struct {
 	// was not in the object store (DanglingRefsSkipped).
 	danglingRefsSkipped atomic.Int64
 
-	// This repo's 12-hex identity (root-commit prefix), resolved once and
-	// cached — it is immutable for the life of the repo. Used to tell a
-	// kb://<own-id>/… ref (a local edge) from a foreign one.
-	repoIDOnce sync.Once
-	repoID     string
+	// This repo's 12-hex identity (root-commit prefix), cached once resolved
+	// — it is immutable for the life of the repo. Used to tell a
+	// kb://<own-id>/… ref (a local edge) from a foreign one. A failed
+	// resolution is NOT cached: the next call retries (repoIDMu).
+	repoIDMu sync.Mutex
+	repoID   string
+	// rootCommit resolves a branch's root commit (rh.RootCommit; a test seam
+	// replaces it to stand in for a failing lookup).
+	rootCommit func(ctx context.Context, branch string) (string, error)
 
 	// syncSuspended, when true, makes Sync a no-op. It is toggled around a bulk
 	// Replay into a TRANSIENT store (the origin clone) that a single full
@@ -114,6 +118,11 @@ type Index struct {
 	// claim is written and before the edges are: an error from it aborts the
 	// transaction, which is how a test stands in for a crash between the two.
 	beforeRefEdgesWrite func() error
+	// beforeRefRowsWrite fires inside applyBlobRefs's transaction, after the
+	// claim and the edges are written and before the blob's ref_edges rows
+	// are: an error from it aborts the transaction (a test's crash between
+	// the edges and the rows).
+	beforeRefRowsWrite func() error
 }
 
 // simEdgeKey identifies a fact version for node-id caching during the
@@ -692,8 +701,8 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		if err != nil {
 			continue
 		}
-		localRefs := localFactRefs(rec.Refs, repoID)
-		if len(localRefs) == 0 {
+		specs := refSpecsOf(rec.Refs, repoID)
+		if len(specs) == 0 {
 			continue
 		}
 		srcID, err := si.graphNodeIDByBlob(ctx, e.path, blobHash)
@@ -703,7 +712,7 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		if srcID == 0 {
 			continue // the version has no graph node (orphaned): as phase B
 		}
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, localRefs); err != nil {
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, specs, repoID); err != nil {
 			failed = true
 			delete(done, key)
 			log.Warn().Err(err).Str("branch", branch).Str("path", e.path).Str("commit", e.commitHash[:8]).
@@ -1648,8 +1657,9 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		}
 		done[e.commitHash+"|"+e.path] = struct{}{}
 
-		localRefs := localFactRefs(cf.rec.Refs, si.localRepoID(ctx, branch))
-		if len(localRefs) == 0 {
+		repoID := si.localRepoID(ctx, branch)
+		specs := refSpecsOf(cf.rec.Refs, repoID)
+		if len(specs) == 0 {
 			continue
 		}
 
@@ -1674,7 +1684,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 			continue
 		}
 
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, localRefs); err != nil {
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, specs, repoID); err != nil {
 			ownFailed = true
 			delete(done, e.commitHash+"|"+e.path)
 			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
@@ -1688,6 +1698,28 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 	// re-run by the next rebuild.
 	if err := si.reResolvePendingBranches(ctx, branch, done, ownFailed); err != nil {
 		return 0, fmt.Errorf("rebuildGraph: %w", err)
+	}
+
+	// ref_edges mirrors the DERIVED_FROM edges. The write path keeps the two
+	// in step, but a store can drift (a crash before PR B's backfill, a
+	// hand edit, a bug): rewrite the rows of every blob whose rows disagree
+	// with its edges, so drift Verify reports does not outlive a rebuild. A
+	// failure is logged, not fatal (the next rebuild retries; failing it
+	// would turn a permanent per-blob failure into a re-index on every boot).
+	if _, err := si.repairRefEdges(ctx, branch); err != nil {
+		log.Warn().Err(err).Str("branch", branch).Msg("rebuildGraph: ref_edges repair failed; the next rebuild retries")
+	}
+	// The v8 reset (resetBlobRefsOnce, above) clears the backfill sentinel,
+	// and nothing else would set it again until the next heal: an explicit
+	// full Rebuild (spec.full) never runs the heal's backfill, so the readers
+	// would stay on the edge fallback indefinitely (PR #694 review round 2).
+	// Every rebuild therefore finishes the job when the sentinel is unset.
+	// Not fatal: on failure the readers keep falling back and the next heal
+	// or rebuild retries.
+	if !refEdgesReady(ctx, conn(ctx, si.rh.DB())) {
+		if _, err := si.BackfillRefEdges(ctx, branch); err != nil {
+			log.Warn().Err(err).Str("branch", branch).Msg("rebuildGraph: ref_edges backfill failed; reads fall back to the edges until it runs")
+		}
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
@@ -1859,15 +1891,11 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 // as paths — they never matched, so the edge was dropped without a trace.
 //
 // Foreign kb:// refs, src:// refs (knomit holds no source objects), external
-// URLs, and malformed refs are all excluded.
+// URLs, and malformed refs are all excluded. It is the local half of
+// refSpecsOf (which the edge writers use, for the order and the cross-KB
+// refs of ref_edges): a path cited twice is listed once.
 func localFactRefs(refs []string, localRepoID string) []string {
-	var out []string
-	for _, raw := range refs {
-		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
-			out = append(out, r.Path)
-		}
-	}
-	return out
+	return localPaths(refSpecsOf(refs, localRepoID))
 }
 
 // localRepoID returns this repo's 12-hex identity, resolving it once.
@@ -1893,18 +1921,29 @@ func localFactRefs(refs []string, localRepoID string) []string {
 //     *sql.DB deadlocks the pool under concurrency. See
 //     kb/invariants/store/no-reentrant-sql-from-vtab-cursors.
 //
-// The sync.Once keeps the cost to one walk per index.Index, not one per ref.
-// The branch argument is therefore only read on the first call — safe because
-// every branch of a repo shares the same root commit (see RootCommit).
+// The cache keeps the cost to one walk per index.Index once resolved, not one
+// per ref. The branch argument is therefore only read until the id resolves —
+// safe because every branch of a repo shares the same root commit (see
+// RootCommit). A FAILED walk is not cached: the next call retries, so one
+// transient RootCommit error does not leave kb:// self-refs edgeless, and the
+// ref_edges repair and backfill disabled, for the life of the process (PR
+// #694 review F1).
 func (si *Index) localRepoID(ctx context.Context, branch string) string {
-	si.repoIDOnce.Do(func() {
-		root, err := si.rh.RootCommit(ctx, branch)
-		if err != nil {
-			log.Warn().Err(err).Str("branch", branch).
-				Msg("searchIndex: repo id unresolved; kb:// self-refs will not form edges")
-			return
-		}
-		si.repoID = fact.ID12(root)
-	})
+	si.repoIDMu.Lock()
+	defer si.repoIDMu.Unlock()
+	if si.repoID != "" {
+		return si.repoID
+	}
+	lookup := si.rootCommit
+	if lookup == nil {
+		lookup = si.rh.RootCommit
+	}
+	root, err := lookup(ctx, branch)
+	if err != nil {
+		log.Warn().Err(err).Str("branch", branch).
+			Msg("searchIndex: repo id unresolved; kb:// self-refs will not form edges (retried on the next call)")
+		return ""
+	}
+	si.repoID = fact.ID12(root)
 	return si.repoID
 }

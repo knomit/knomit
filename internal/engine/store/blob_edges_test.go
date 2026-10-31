@@ -109,6 +109,7 @@ func countEdgesOfBlob(edges []refEdge, blob string) int {
 // (graphAddDerivedFromAtCommitTx ignores !write), and the blob re-pins to R1.
 func TestBlobEdges_UserExample(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	c1, rBlob := write(t, svc, "main", "kb/r.md", "R")
@@ -186,6 +187,7 @@ func TestBlobEdges_MergeCarryingABlobAddsNothing(t *testing.T) {
 // destination's R2 at that point).
 func TestBlobEdges_ConflictResolvingMergeAddsNewEdges(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	write(t, svc, "main", "kb/r.md", "R")
@@ -274,6 +276,7 @@ func TestBlobEdges_ExperimentCommitAddsNothing(t *testing.T) {
 func TestBlobEdges_IdenticalBytesOnTwoBranchesAndRebuild(t *testing.T) {
 	run := func(t *testing.T, laterFirst bool) []refEdge {
 		svc := newMergeTestStore(t)
+		t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 		ctx := context.Background()
 		db := svc.si.RepoForTest().DB()
 		write(t, svc, "main", "kb/r.md", "R")
@@ -310,10 +313,14 @@ func TestBlobEdges_IdenticalBytesOnTwoBranchesAndRebuild(t *testing.T) {
 	require.Equal(t, a[0].SrcBlob, b[0].SrcBlob)
 }
 
-// resetRefEdgesForTest drops every DERIVED_FROM edge and refs mark.
+// resetRefEdgesForTest drops every DERIVED_FROM edge, refs mark and
+// ref_edges row (the rows mirror the edges; the store-wide reset drops all
+// three).
 func resetRefEdgesForTest(t *testing.T, db *sql.DB) {
 	t.Helper()
 	_, err := db.Exec(`DELETE FROM edges WHERE type = 'DERIVED_FROM'`)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM ref_edges`)
 	require.NoError(t, err)
 	_, err = db.Exec(`DELETE FROM node_props_text WHERE key_id = (SELECT id FROM property_keys WHERE key = 'refs_commit')`)
 	require.NoError(t, err)
@@ -409,11 +416,27 @@ func TestBlobEdges_AncestorPrecedesDescendantOnATie(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
-	a, _ := write(t, svc, "main", "kb/a.md", "A")
-	var d string
-	for i := 0; i < 64 && (d == "" || d > a); i++ {
-		d, _ = write(t, svc, "main", "kb/b.md", fmt.Sprintf("B %d", i))
+	// A chain of commits, each the previous one's child; the pair is an
+	// ancestor a and a later descendant d whose hash sorts BELOW a's. Such a
+	// pair is missing only if every hash in the chain sorts above the one
+	// before it (odds 1/16! for 16 commits), so the precondition holds by
+	// construction (it used to search for a d below one fixed a, and failed
+	// about 2 runs in 30 when a's hash was small: PR #694 review R3-N3).
+	var chain []string
+	for i := 0; i < 16; i++ {
+		c, _ := write(t, svc, "main", "kb/b.md", fmt.Sprintf("B %d", i))
+		chain = append(chain, c)
 	}
+	var a, d string
+	for i := 0; i < len(chain) && a == ""; i++ {
+		for j := i + 1; j < len(chain); j++ {
+			if chain[j] < chain[i] {
+				a, d = chain[i], chain[j]
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, a, "precondition: an ancestor/descendant pair with the descendant's hash first")
 	require.Less(t, d, a, "precondition: the descendant's hash sorts first")
 	_, err := db.Exec(`UPDATE commit_log SET committed_at = 1000 WHERE commit_hash IN (?, ?)`, a, d)
 	require.NoError(t, err)
@@ -597,6 +620,7 @@ func TestBlobEdges_InterruptedUpgradeDrainResumes(t *testing.T) {
 // branch), and the incremental pin is the merge's R2.
 func TestBlobEdges_UpgradeThenMergeCommitRebuildEqualsIncremental(t *testing.T) {
 	svc, _ := sideStore(t)
+	t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	cR, rBlob := write(t, svc, "agent/test", "kb/r.md", "R")
@@ -676,6 +700,7 @@ func TestBlobEdges_IntroducingCommitIsTheEarliestHolder(t *testing.T) {
 // the other branch's kb/h.md shows up on main.
 func TestBlobEdges_RenameIncomingListsTheLivePath(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	c1, _ := write(t, svc, "main", "kb/r.md", "R")
 	write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
@@ -825,6 +850,7 @@ func TestBlobEdges_ClaimAndEdgesAreAtomic(t *testing.T) {
 // rebuilding every branch from scratch gives the incremental edges.
 func TestBlobEdges_ConflictMergeRebuildEqualsIncremental(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	write(t, svc, "main", "kb/r.md", "R")
@@ -859,6 +885,7 @@ func TestBlobEdges_MergedSideBlobRebuildEqualsIncremental(t *testing.T) {
 			main := "main"
 			if viaExperiment {
 				svc, _ = sideStore(t)
+				t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 				main = "agent/test"
 			} else {
 				svc = newMergeTestStore(t)
@@ -909,6 +936,7 @@ func TestBlobEdges_RolledBackExperimentClaimIsVoid(t *testing.T) {
 	for _, samePath := range []bool{true, false} {
 		t.Run(map[bool]string{true: "same-path", false: "new-path"}[samePath], func(t *testing.T) {
 			svc, _ := sideStore(t)
+			t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 			ctx := context.Background()
 			db := svc.si.RepoForTest().DB()
 			cR, rBlob := write(t, svc, "agent/test", "kb/r.md", "R")
@@ -1081,6 +1109,8 @@ func TestBlobEdges_MergeCarriesBlobUnchanged(t *testing.T) {
 	}
 	build := func(t *testing.T) world {
 		svc := newMergeTestStore(t)
+		t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
+		t.Cleanup(func() { requireRowsMirrorEdges(t, svc) })                       // ref_edges mirrors the edges (PR B)
 		ctx := context.Background()
 		db := svc.si.RepoForTest().DB()
 		cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
@@ -1274,6 +1304,8 @@ func TestBlobEdges_SameBytesOnTwoBranches(t *testing.T) {
 			name := map[bool]string{true: "same-path", false: "other-path"}[samePath] + "/" + mode
 			t.Run(name, func(t *testing.T) {
 				svc := newMergeTestStore(t)
+				t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
+				t.Cleanup(func() { requireRowsMirrorEdges(t, svc) })                       // ref_edges mirrors the edges (PR B)
 				ctx := context.Background()
 				db := svc.si.RepoForTest().DB()
 				cR, rBlob := write(t, svc, "main", "kb/r.md", "R")
@@ -1432,6 +1464,7 @@ func TestBlobEdges_TargetResolvedOnAnotherBranchRendersOnTheReader(t *testing.T)
 // half of blobHoldings), and the retracted citer disappears from brC.
 func TestBlobEdges_RetractedCiterOnTheSecondBranchIsListed(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")
@@ -1515,6 +1548,7 @@ func TestBlobEdges_ChangedSinceCitedComparesBlobs(t *testing.T) {
 // rows disappear.
 func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")
 	c1, _ := write(t, svc, "main", "kb/f.md", "F v1", "kb/r.md")
@@ -1541,6 +1575,7 @@ func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
 // Sabotage: process only the first chunk, and the rows past it vanish.
 func TestBlobEdges_IncomingIsChunkIndependent(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")

@@ -26,8 +26,77 @@ import (
 // node that first carried it, so each step widens to every node of the same
 // blob (a rename's node at another path) before following edges, and the
 // dependents' paths are read from every node of their blobs.
-func (gs *GraphStore) reverseDependentPaths(ctx context.Context, path string) (map[string]struct{}, error) {
-	const q = `
+//
+// The walk reads ref_edges (target_blob -> source_blob through
+// idx_ref_edges_target, local rows only) once the table is backfilled, and
+// the DERIVED_FROM edges before that (PR #694 review N2), or when useTable is
+// false (a test pins the two equal). Both give the same set: the rows mirror
+// the edges, and a row's target_blob is the blob of the edge's target node.
+func (gs *GraphStore) reverseDependentPaths(ctx context.Context, path string, useTable bool) (map[string]struct{}, error) {
+	db := conn(ctx, gs.rh.DB())
+	q, args := reverseDependentsByRowsSQL, []any{NodeFact, path, path}
+	if !useTable || !refEdgesReady(ctx, db) {
+		q, args = reverseDependentsByEdgesSQL, []any{NodeFact, path, EdgeDerivedFrom, EdgeDerivedFrom, path}
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("reverseDependentPaths %q: %w", path, err)
+	}
+	defer rows.Close()
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("reverseDependentPaths %q: scan: %w", path, err)
+		}
+		out[p] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reverseDependentPaths %q: rows: %w", path, err)
+	}
+	return out, nil
+}
+
+// reverseDependentsByRowsSQL is the walk over ref_edges, a covering read of
+// idx_ref_edges_target (only local rows carry a target_blob, so no
+// target_repo filter is needed; see refEdgesIncomingRows). The CROSS JOIN pins
+// the final step's order (dependents first, then their nodes): left free, the
+// planner scanned every node's blob_hash and probed deps.
+const reverseDependentsByRowsSQL = `
+WITH RECURSIVE
+  kb(id) AS (SELECT id FROM property_keys WHERE key = 'blob_hash'),
+  seed(blob) AS (
+    SELECT nb.value
+      FROM node_props_text np
+      JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
+      JOIN node_labels nl ON nl.node_id = np.node_id AND nl.label = ?
+      JOIN node_props_text nb ON nb.node_id = np.node_id AND nb.key_id = (SELECT id FROM kb)
+     WHERE np.value = ?
+  ),
+  deps(blob) AS (
+    SELECT r.source_blob
+      FROM seed s
+      JOIN ref_edges r ON r.target_blob = s.blob
+    UNION
+    SELECT r.source_blob
+      FROM deps d
+      JOIN ref_edges r ON r.target_blob = d.blob
+  )
+SELECT DISTINCT np.value
+  FROM deps
+  CROSS JOIN node_props_text nb ON nb.key_id = (SELECT id FROM kb) AND nb.value = deps.blob
+  JOIN node_props_text np ON np.node_id = nb.node_id
+  JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
+ WHERE np.value <> ?`
+
+// reverseDependentsByEdgesSQL is the walk over the DERIVED_FROM edges (the
+// fallback while ref_edges is not backfilled). Its recursive step is pinned
+// with CROSS JOINs (frontier, then its nodes by blob, then edges into them):
+// left free, the planner chose SEARCH e USING INDEX idx_edges_type, a scan of
+// every DERIVED_FROM edge per frontier row, which did not finish on a
+// 750k-edge store (PR #694 review round 2; the same query was dev's only
+// walk).
+const reverseDependentsByEdgesSQL = `
 WITH RECURSIVE
   kb(id) AS (SELECT id FROM property_keys WHERE key = 'blob_hash'),
   seed(blob) AS (
@@ -47,8 +116,8 @@ WITH RECURSIVE
     UNION
     SELECT sb.value
       FROM deps d
-      JOIN node_props_text tb ON tb.key_id = (SELECT id FROM kb) AND tb.value = d.blob
-      JOIN edges e ON e.target_id = tb.node_id AND e.type = ?
+      CROSS JOIN node_props_text tb ON tb.key_id = (SELECT id FROM kb) AND tb.value = d.blob
+      CROSS JOIN edges e ON e.target_id = tb.node_id AND e.type = ?
       JOIN node_props_text sb ON sb.node_id = e.source_id AND sb.key_id = (SELECT id FROM kb)
   )
 SELECT DISTINCT np.value
@@ -57,25 +126,6 @@ SELECT DISTINCT np.value
   JOIN node_props_text np ON np.node_id = nb.node_id
   JOIN property_keys k ON k.id = np.key_id AND k.key = 'path'
  WHERE np.value <> ?`
-	rows, err := conn(ctx, gs.rh.DB()).QueryContext(ctx, q,
-		NodeFact, path, EdgeDerivedFrom, EdgeDerivedFrom, path)
-	if err != nil {
-		return nil, fmt.Errorf("reverseDependentPaths %q: %w", path, err)
-	}
-	defer rows.Close()
-	out := make(map[string]struct{})
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, fmt.Errorf("reverseDependentPaths %q: scan: %w", path, err)
-		}
-		out[p] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("reverseDependentPaths %q: rows: %w", path, err)
-	}
-	return out, nil
-}
 
 // ReverseDependentPaths returns all paths transitively DERIVED_FROM any version
 // of `path` (all historical versions are seeded), NOT liveness-filtered.
@@ -85,7 +135,7 @@ func (gs *GraphStore) ReverseDependentPaths(ctx context.Context, path string) (m
 	if err := gs.probe("ReverseDependentPaths"); err != nil {
 		return nil, err
 	}
-	return gs.reverseDependentPaths(ctx, path)
+	return gs.reverseDependentPaths(ctx, path, true)
 }
 
 // BlastRadius counts the distinct facts that are LIVE on `branch` at HEAD and
@@ -95,7 +145,13 @@ func (gs *GraphStore) ReverseDependentPaths(ctx context.Context, path string) (m
 // whose dependents are all retracted at HEAD.
 func (gs *GraphStore) BlastRadius(ctx context.Context, branch, path string) (int, error) {
 	gs.probe("BlastRadius")
-	deps, err := gs.reverseDependentPaths(ctx, path)
+	return gs.blastRadius(ctx, branch, path, true)
+}
+
+// blastRadius is BlastRadius over ref_edges (useTable, once backfilled) or the
+// DERIVED_FROM edges.
+func (gs *GraphStore) blastRadius(ctx context.Context, branch, path string, useTable bool) (int, error) {
+	deps, err := gs.reverseDependentPaths(ctx, path, useTable)
 	if err != nil {
 		return 0, err
 	}

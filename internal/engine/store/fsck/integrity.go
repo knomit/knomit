@@ -67,6 +67,7 @@ const (
 	CategoryFactFormat         = "fact-format"
 	CategoryGraphCoherence     = "graph-coherence"
 	CategoryReferenceBlobs     = "reference-blobs"
+	CategoryRefEdges           = "ref-edges"
 	CategoryDerivedTables      = "derived-tables"
 	CategoryDatabase           = "database"
 	CategorySchemaVersion      = "schema-version"
@@ -277,6 +278,7 @@ func (s *Checker) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	report.Issues = append(report.Issues, s.checkEmbeddingIdentity(ctx)...)
 	report.Issues = append(report.Issues, s.checkGraphCoherence(ctx)...)
 	report.Issues = append(report.Issues, s.checkReferenceBlobs(ctx)...)
+	report.Issues = append(report.Issues, s.checkRefEdges(ctx)...)
 	report.Issues = append(report.Issues, s.checkDerivedTables(ctx)...)
 	report.Issues = append(report.Issues, s.checkDatabase(ctx)...)
 	report.Issues = append(report.Issues, s.checkSchemaVersion(ctx)...)
@@ -1673,6 +1675,25 @@ func (s *Checker) checkReferenceBlobs(ctx context.Context) []IntegrityIssue {
 	}
 	return []IntegrityIssue{{Severity: SeverityError, Category: CategoryReferenceBlobs,
 		Detail: fmt.Sprintf("%d reference edge(s) name a source or target blob that is not in the object store; rebuild the index", n)}}
+}
+
+// checkRefEdges reports drift between ref_edges (the flat reference rows
+// every outgoing read uses) and the DERIVED_FROM edges they mirror, compared
+// as sets of (source blob, target path, target blob, target commit): an edge
+// with no identical row, and a local row with no identical edge. Either way an
+// outgoing read and the graph disagree. A rebuild of the index repairs it.
+func (s *Checker) checkRefEdges(ctx context.Context) []IntegrityIssue {
+	d, err := s.si.RefEdgeDrift(ctx)
+	if err != nil {
+		return []IntegrityIssue{{Severity: SeverityError, Category: CategoryRefEdges,
+			Detail: fmt.Sprintf("compare ref_edges with DERIVED_FROM edges: %v", err)}}
+	}
+	if d.MissingRows == 0 && d.OrphanRows == 0 {
+		return nil
+	}
+	return []IntegrityIssue{{Severity: SeverityError, Category: CategoryRefEdges,
+		Detail: fmt.Sprintf("ref_edges drift from DERIVED_FROM edges: %d edge(s) without a row, %d row(s) without an edge, over %d blob(s) (e.g. %s); rebuild the index",
+			d.MissingRows, d.OrphanRows, len(d.Blobs), strings.Join(d.Examples, "; "))}}
 }
 
 // Checker is the integrity checker: Verify and PruneGeneratedRefs. It holds only what the checks read: the

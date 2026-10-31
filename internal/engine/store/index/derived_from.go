@@ -186,7 +186,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
 	tx storegit.CtxExecer,
 	branch, sourcePath, sourceBlobHash, sourceCommit string,
-	refs []string,
+	specs []refSpec, repoID string,
 ) error {
 	srcID, err := si.graphNodeIDByBlob(ctx, sourcePath, sourceBlobHash)
 	if err != nil {
@@ -220,6 +220,16 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 		return nil // an arrival at a commit that does not hold the blob
 	}
 
+	// The ref_edges rows need the repo id to tell kb://<self>/ refs from
+	// cross-KB ones (refSpecsOf). repoID is the id the caller built specs
+	// with, from ONE lookup: rowsOK must not come from a second lookup, which
+	// (localRepoID retries a failure) could succeed where the first failed
+	// and write rows from wrong specs (PR #694 review round 2, R2-F1).
+	// Unresolved, the edges are written as before but the rows are left
+	// alone; the drift that leaves is repaired by the next rebuild or revisit
+	// with the id (review F1).
+	rowsOK := repoID != ""
+
 	var targets []refTarget
 	resolved := false
 	// The claim is decided outside the transaction (it may read git for the
@@ -238,12 +248,12 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 			return nil
 		}
 		if !resolved {
-			if targets, err = si.resolveRefTargets(ctx, branch, sourcePath, sourceCommit, refs); err != nil {
+			if targets, err = si.resolveRefTargets(ctx, branch, sourcePath, sourceCommit, localPaths(specs)); err != nil {
 				return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
 			}
 			resolved = true
 		}
-		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets)
+		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets, specs, rowsOK)
 		if err != nil {
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
 		}
@@ -320,14 +330,23 @@ func (si *Index) resolveRefTargets(ctx context.Context, branch, sourcePath, sour
 	return out, nil
 }
 
-// applyBlobRefs writes the claim and the edges in ONE transaction. It first
-// re-reads the claim inside the transaction: when it is no longer the one
-// the decision was made on (another indexer moved it), nothing is written
-// and applied=false, and the caller decides again.
-func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget) (applied bool, err error) {
-	// Nothing to write (the claim is already this node and commit, and every
-	// edge exists): no transaction, so a caller re-visiting a resolved blob
-	// never takes the write lock.
+// applyBlobRefs writes the claim, the edges and the blob's ref_edges rows in
+// ONE transaction. It first re-reads the claim inside the transaction: when it
+// is no longer the one the decision was made on (another indexer moved it),
+// nothing is written and applied=false, and the caller decides again.
+//
+// The ref_edges rows (writeRefRowsTx) are derived, inside the same
+// transaction, from the edges now on srcID and the blob's refs in the
+// author's order (specs), and replace whatever rows the blob had: a claim
+// move or a void claim re-claimed replaces the rows with the edges, and a
+// fill-in (Sync's pass 2, a rebuild) adds the rows of the edges it adds.
+//
+// rowsOK=false (the repo id is unresolved, so specs may misclassify
+// kb://<self>/ refs): the rows are neither checked nor written.
+func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget, specs []refSpec, rowsOK bool) (applied bool, err error) {
+	// Nothing to write (the claim is already this node and commit, every
+	// edge exists and the rows match them): no transaction, so a caller
+	// re-visiting a resolved blob never takes the write lock.
 	if seen.live() && seen.node == srcID && seen.at == sourceCommit {
 		missing := false
 		for _, t := range targets {
@@ -341,7 +360,16 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 			}
 		}
 		if !missing {
-			return true, nil
+			if !rowsOK {
+				return true, nil
+			}
+			current, err := refRowsCurrent(ctx, conn(ctx, si.rh.DB()), srcID, blobHash, specs)
+			if err != nil {
+				return false, err
+			}
+			if current {
+				return true, nil
+			}
 		}
 	}
 	tctx, tx, own, err := beginTxIfNeeded(ctx, si.rh.DB())
@@ -409,6 +437,16 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 			"target_commit": t.targetCommit,
 		}); err != nil {
 			return false, fmt.Errorf("set props: %w", err)
+		}
+	}
+	if si.beforeRefRowsWrite != nil {
+		if err := si.beforeRefRowsWrite(); err != nil {
+			return false, err
+		}
+	}
+	if rowsOK {
+		if err := writeRefRowsTx(tctx, db, srcID, blobHash, specs); err != nil {
+			return false, err
 		}
 	}
 	if own {
@@ -581,6 +619,19 @@ func resetBlobRefsOnce(ctx context.Context, tx storegit.CtxExecer) error {
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM node_props_text WHERE key_id = (SELECT id FROM property_keys WHERE key = ?)`, refsCommitKey); err != nil {
 		return fmt.Errorf("reset reference edges: marks: %w", err)
+	}
+	// ref_edges mirrors the edges: it goes with them, and the re-resolve of
+	// every branch writes both again.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ref_edges`); err != nil {
+		return fmt.Errorf("reset reference edges: ref_edges: %w", err)
+	}
+	// The drain re-creates rows only for blobs on a branch; a version on no
+	// branch would lose its cross-KB rows for good. Clearing the backfill
+	// sentinel makes the next backfill (the heal's, right after its
+	// rebuilds) scan for them again (PR #694 review N4), and outgoing reads
+	// fall back to the edges until it has run.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, refEdgesBackfillKey); err != nil {
+		return fmt.Errorf("reset reference edges: backfill sentinel: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) SELECT ? || name, '1' FROM branches`, blobRefsPendingPrefix); err != nil {
 		return fmt.Errorf("reset reference edges: pending branches: %w", err)
@@ -809,8 +860,14 @@ func (si *Index) commitEarlier(ctx context.Context, a, b string) (bool, error) {
 // by), else the git committer time (a commit being indexed is not in
 // commit_log yet). ok=false when neither is readable.
 func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) {
+	return commitTimeOf(ctx, si.rh, h)
+}
+
+// commitTimeOf is commitTime over a repo handle (shared with the incoming
+// order, sortIncomingCandidates).
+func commitTimeOf(ctx context.Context, rh *vcs.Repo, h string) (int64, bool, error) {
 	var t int64
-	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+	err := conn(ctx, rh.DB()).QueryRowContext(ctx,
 		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`, h).Scan(&t)
 	if err == nil {
 		return t, true, nil
@@ -818,7 +875,7 @@ func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) 
 	if err != sql.ErrNoRows {
 		return 0, false, fmt.Errorf("commit time of %s: %w", h, err)
 	}
-	_, gt, gerr := si.rh.CommitParentsAndTime(h)
+	_, gt, gerr := rh.CommitParentsAndTime(h)
 	if gerr != nil {
 		return 0, false, nil
 	}
@@ -830,13 +887,18 @@ func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) 
 // at older commits, so it is bounded by the commits of that second, plus
 // whatever clock skew puts above it).
 func (si *Index) sameSecondAncestors(ctx context.Context, h string, t int64) (int, error) {
+	return sameSecondAncestorsOf(ctx, si.rh, h, t)
+}
+
+// sameSecondAncestorsOf is sameSecondAncestors over a repo handle.
+func sameSecondAncestorsOf(ctx context.Context, rh *vcs.Repo, h string, t int64) (int, error) {
 	seen := map[string]struct{}{h: {}}
 	stack := []string{h}
 	n := 0
 	for len(stack) > 0 {
 		c := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		parents, _, err := si.rh.CommitParentsAndTime(c)
+		parents, _, err := rh.CommitParentsAndTime(c)
 		if err != nil {
 			continue // a missing commit object ends the walk on that side
 		}
@@ -845,7 +907,7 @@ func (si *Index) sameSecondAncestors(ctx context.Context, h string, t int64) (in
 				continue
 			}
 			seen[p] = struct{}{}
-			pt, ok, err := si.commitTime(ctx, p)
+			pt, ok, err := commitTimeOf(ctx, rh, p)
 			if err != nil {
 				return 0, err
 			}

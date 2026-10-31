@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"sync/atomic"
 
 	"knomit/internal/engine/store/internal/vcs"
@@ -18,7 +19,10 @@ import (
 // FactQuery is the fact read/search/existence queries.
 type FactQuery struct {
 	rh *vcs.Repo
-	ov atomic.Pointer[Overrides]
+	// outdegreeByEdges makes the highlights' out-degree read the DERIVED_FROM
+	// edges instead of ref_edges (a test seam; false in production).
+	outdegreeByEdges atomic.Bool
+	ov               atomic.Pointer[Overrides]
 	// fault is the failure-injection hook of Facade.SetReadFaultForTest;
 	// nil in production, where nothing can set it.
 	fault atomic.Pointer[ReadFault]
@@ -27,7 +31,10 @@ type FactQuery struct {
 // GraphStore is the DERIVED_FROM / SIMILAR_TO graph queries.
 type GraphStore struct {
 	rh *vcs.Repo
-	ov atomic.Pointer[Overrides]
+	// rootCommit replaces rh.RootCommit for the fallback reads' repo id (a
+	// test seam; nil in production).
+	rootCommit atomic.Pointer[func(ctx context.Context, branch string) (string, error)]
+	ov         atomic.Pointer[Overrides]
 	// fault: see FactQuery.fault.
 	fault atomic.Pointer[ReadFault]
 }
