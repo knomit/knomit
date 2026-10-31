@@ -529,7 +529,6 @@ func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer,
 		cands map[string]bool
 	}
 	per := make([]blobRefs, len(keys))
-	batch := map[string]bool{}
 	for i, b := range keys {
 		specs, _, err := blobRefSpecsOf(ctx, ex, b, repoID)
 		if err != nil {
@@ -546,12 +545,19 @@ func (gs *GraphStore) derivedRefRows(ctx context.Context, ex storegit.CtxExecer,
 				return nil, fmt.Errorf("RefEdgesOfBlobs: %w", err)
 			}
 			selfCandidates(specs, edged, per[i].cands)
-			selfCandidates(specs, edged, batch)
 		}
 	}
 	// The self id is learned over the whole batch (one blob's kb://self ref
-	// with an edge tells it for the others), else per blob.
-	batchSelf := onlyCandidate(batch)
+	// with an edge tells it for the others), from the unambiguous blobs only
+	// (batchSelfRepo), else per blob.
+	var batchSelf string
+	if repoID == "" {
+		perCands := make([]map[string]bool, len(per))
+		for i := range per {
+			perCands[i] = per[i].cands
+		}
+		batchSelf = batchSelfRepo(perCands)
+	}
 	var out []RefEdgeRow
 	for i, b := range keys {
 		node, specs := per[i].node, per[i].specs
@@ -629,7 +635,15 @@ func (gs *GraphStore) outgoingByEdgesInRefsOrder(ctx context.Context, ex storegi
 //     comes out with NO row, as the table has none for a local ref without an
 //     edge, instead of a cross-KB row naming this repo;
 //   - with no candidate, or several (ambiguous), nothing is converted: a
-//     kb://<self>/ ref then reads as cross-KB, the best the blob tells.
+//     kb://<self>/ ref then reads as cross-KB, the best the blob tells;
+//   - over a batch (RefEdgesOfBlobs), the id is learned from the blobs with
+//     EXACTLY ONE candidate (batchSelfRepo): when they all agree on one R, R
+//     applies to every blob of the batch, the ambiguous ones and the ones
+//     with no candidate included. An ambiguous blob does not vote, so it
+//     cannot switch the batch step off (PR #694 delta review D1). When the
+//     unambiguous blobs disagree (only a corrupted store can do that), there
+//     is no batch id and each blob falls back to its own single candidate,
+//     which is exactly what outgoing's per-blob read learns for it.
 // Only the READ fallbacks use it; the write path never builds rows without
 // the id.
 
@@ -672,6 +686,19 @@ func selfCandidates(specs []refSpec, edged map[string]bool, cands map[string]boo
 			cands[s.repo] = true
 		}
 	}
+}
+
+// batchSelfRepo is the self id a batch learns: the one candidate shared by
+// every blob that has exactly one, or "" when no blob has exactly one or
+// those blobs disagree. Blobs with no candidate or several are not counted.
+func batchSelfRepo(perBlob []map[string]bool) string {
+	learned := map[string]bool{}
+	for _, cands := range perBlob {
+		if r := onlyCandidate(cands); r != "" {
+			learned[r] = true
+		}
+	}
+	return onlyCandidate(learned)
 }
 
 // onlyCandidate is the single candidate, or "" when there is none or several.
