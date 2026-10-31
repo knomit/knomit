@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -56,6 +57,13 @@ type Stats struct {
 	// MaxUnitQueries is the most index reads one unit's plan made (the
 	// bound: Depth+2, plus one per foreign repo per level).
 	MaxUnitQueries int
+	// ParsedReads is the level reads that also had to parse target versions
+	// with no facts row (one extra batched read each; real stores have them,
+	// kb/gotchas/store/graph/derived-from-order).
+	ParsedReads int
+	// Search is the time a first call spent in the search (the watermark
+	// reads included), reported apart from planning.
+	Search time.Duration
 }
 
 func (s *Stats) add(o Stats) {
@@ -65,6 +73,7 @@ func (s *Stats) add(o Stats) {
 	s.HistoricalLiveAt += o.HistoricalLiveAt
 	s.CacheMisses += o.CacheMisses
 	s.MaxUnitQueries = max(s.MaxUnitQueries, o.MaxUnitQueries)
+	s.ParsedReads += o.ParsedReads
 }
 
 // FactHash is a fact's identity in a FactSet: 64 bits of FNV-1a over (repo
@@ -334,6 +343,7 @@ func (p *planner) resolveLevel(level []*pnode) error {
 					return err
 				}
 				p.st.IndexQueries++
+				p.st.ParsedReads++
 			}
 			for _, r := range rows {
 				if r.Repo == "" && r.TargetBlob != "" && !r.HasMeta {

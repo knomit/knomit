@@ -349,7 +349,9 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if err := c.r.checkReady(ctx, wm); err != nil {
 		return FactSetPage{}, c.st, err
 	}
+	searchStart := time.Now()
 	anchor, hits, err := c.searchAnchored(wm, req)
+	c.st.Search = time.Since(searchStart)
 	if err != nil {
 		return FactSetPage{}, c.st, err
 	}
