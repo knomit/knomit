@@ -267,6 +267,15 @@ type SessionConfig struct {
 	ClientDeadAfter   string `toml:"client_dead_after"`
 	ClientHiddenAfter string `toml:"client_hidden_after"`
 	ClientRetention   string `toml:"client_retention"`
+	// FactSetMemoryMiB is the process-wide CACHE budget, in MiB, for
+	// materialized searches (FactSets): what each derives from its frozen
+	// session row (reserved map, written set, recent unit plans). Past it the
+	// least recently used FactSets are evicted; a later page rebuilds one by
+	// replaying its units without bodies, so eviction costs time, never
+	// correctness. 0 or unset is the default (64). The working memory of a
+	// plan in progress is bounded by the cap on concurrent FactSet planning
+	// (materialize.MaxConcurrentFactSetBuilds), not here.
+	FactSetMemoryMiB int `toml:"factset_memory_mib"`
 }
 
 // ExperimentsConfig configures the experiment lifecycle: an `exp/<name>`

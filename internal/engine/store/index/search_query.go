@@ -32,8 +32,12 @@ type RecentFactEntry struct {
 	Expires     string   `json:"expires,omitempty"`
 	CommittedAt int64    `json:"committed_at"`
 	CommitHash  string   `json:"commit_hash"`
-	Operation   string   `json:"operation,omitempty"`
-	Score       float64  `json:"score,omitempty"`
+	// BlobHash is the version's blob (facts.blob_hash of the branch_facts
+	// row): with CommitHash it names exactly the version listed. Not on the
+	// wire; a FactSet freezes it (materialize).
+	BlobHash  string  `json:"-"`
+	Operation string  `json:"operation,omitempty"`
+	Score     float64 `json:"score,omitempty"`
 	// Context is the fact's F22 context map, read from its blob.
 	Context map[string]any `json:"context,omitempty"`
 }
@@ -100,7 +104,7 @@ func (fq *FactQuery) RecentFacts(ctx context.Context, branch string, opts Search
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, `+contextBlobColumn+`
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, f.blob_hash, `+contextBlobColumn+`
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
@@ -120,7 +124,7 @@ func (fq *FactQuery) RecentFacts(ctx context.Context, branch string, opts Search
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON, motifsJSON string
 		var ctxBlob []byte
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash, &ctxBlob); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash, &e.BlobHash, &ctxBlob); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		var refs []string
@@ -167,7 +171,7 @@ func (fq *FactQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 
 	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
-		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, `+contextBlobColumn+`
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash, f.blob_hash, `+contextBlobColumn+`
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
@@ -186,7 +190,7 @@ func (fq *FactQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 		var e RecentFactEntry
 		var domainJSON, entitiesJSON, motifsJSON string
 		var ctxBlob []byte
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash, &ctxBlob); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.Expires, &e.CommittedAt, &e.Operation, &e.CommitHash, &e.BlobHash, &ctxBlob); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		var refs []string
@@ -919,6 +923,27 @@ func (fq *FactQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	return fq.search(ctx, branch, q)
 }
 
+// searchCandidate is one vector-search hit with its metadata.
+type searchCandidate struct {
+	rec   facts.FactWithBody
+	score float64
+}
+
+// rankCandidates orders hits by cosine, highest first, and equal cosines by
+// path, so a tie has ONE order (the candidates come from an IN query with no
+// ORDER BY): the UI's results list and a factset materializing it
+// (materialize.runFactSetSearch) read the same order. Stable insertion sort.
+func rankCandidates(c []searchCandidate) {
+	ahead := func(a, b searchCandidate) bool {
+		return a.score > b.score || (a.score == b.score && a.rec.Path < b.rec.Path)
+	}
+	for i := 1; i < len(c); i++ {
+		for j := i; j > 0 && ahead(c[j], c[j-1]); j-- {
+			c[j], c[j-1] = c[j-1], c[j]
+		}
+	}
+}
+
 // search is Search without the test override.
 func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := fq.rh.BranchID(ctx, branch)
@@ -979,10 +1004,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	}
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
-	type candidate struct {
-		rec   facts.FactWithBody
-		score float64
-	}
+	type candidate = searchCandidate
 
 	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
 	th := model.EmbedderThresholds(fq.rh.Embedder())
@@ -1171,11 +1193,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		return nil, nil
 	}
 
-	for i := 1; i < len(candidates); i++ {
-		for j := i; j > 0 && candidates[j].score > candidates[j-1].score; j-- {
-			candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
-		}
-	}
+	rankCandidates(candidates)
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}

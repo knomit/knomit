@@ -256,6 +256,11 @@ func planMaterialize(w http.ResponseWriter, r *http.Request, q url.Values, b *re
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", err.Error(), r.URL.Path)
 	case errors.Is(err, materialize.ErrNotFound):
 		hal.WriteProblem(w, http.StatusNotFound, "Fact not found", err.Error(), r.URL.Path)
+	case errors.Is(err, materialize.ErrNotReady):
+		// The store's reference index is still being backfilled with its
+		// repo id unresolved: retry-able, never a failure.
+		w.Header().Set("Retry-After", materializeBusyRetryAfter)
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Materialize busy", materialize.ErrNotReady.Error(), r.URL.Path)
 	case err != nil:
 		log.Error().Err(err).Str("file", file).Msg("materialize failed")
 		hal.WriteProblem(w, http.StatusInternalServerError, "Materialize failed", err.Error(), r.URL.Path)

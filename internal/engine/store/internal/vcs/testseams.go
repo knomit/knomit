@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -442,4 +443,28 @@ func (d *testingDir) write(s *storegit.Storer, existing *object.Tree) (plumbing.
 		return plumbing.ZeroHash, fmt.Errorf("encode tree: %w", err)
 	}
 	return s.SetEncodedObject(obj)
+}
+
+// gitPathReadHook, when set, is told the name of every per-path git read
+// (ReadFileAtCommit, ReadBlobHashAtCommit, ResolveActiveCommitForPath) as it
+// starts. nil in production: one atomic load per call.
+var gitPathReadHook atomic.Pointer[func(name string)]
+
+func noteGitPathRead(name string) {
+	if h := gitPathReadHook.Load(); h != nil {
+		(*h)(name)
+	}
+}
+
+// SetGitPathReadHookForTest installs f as the per-path git read hook (nil
+// removes it) and returns the restore. A test that must prove a read path
+// decodes no git object per fact fails from f.
+func SetGitPathReadHookForTest(f func(name string)) (restore func()) {
+	mustBeTest()
+	var p *func(string)
+	if f != nil {
+		p = &f
+	}
+	old := gitPathReadHook.Swap(p)
+	return func() { gitPathReadHook.Store(old) }
 }

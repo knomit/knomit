@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/mcp"
 	"knomit/internal/edge/oauth"
@@ -258,6 +259,13 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		a.Close()
 		return nil, fmt.Errorf("start manager: %w", err)
 	}
+
+	// The materialized-search (FactSet) cache is process-wide: one budget
+	// across every repo's FactSets, and its heartbeat keeps ahead of the
+	// session reaper's TTL. Wired here: package repos cannot import
+	// materialize (materialize imports repos).
+	materialize.SetFactSetCacheBudget(int64(cfg.Session.FactSetMemoryMiB) << 20)
+	materialize.SetFactSetIdleTTL(a.manager.ToolIdleTTL())
 
 	// Client-session recording. Set AFTER Start: the store is opened there,
 	// over the control.db handle the repo registry owns, so reading it into

@@ -723,6 +723,16 @@ func (ri *RepoInstance) hostContext(ctx context.Context, agentBranch string) con
 	return auth.WithRepoReach(ctx, func(repo string) bool { return repo == ri.Name() })
 }
 
+// ToolIdleTTL is session.tool_idle_ttl as parsed and validated by Start (its
+// default before Start): how long a tool cursor may sit idle before the
+// session reaper deletes it.
+func (m *Manager) ToolIdleTTL() time.Duration {
+	if m.sessionCfg.ToolIdleTTL > 0 {
+		return m.sessionCfg.ToolIdleTTL
+	}
+	return defaultToolIdleTTL
+}
+
 // ByRootID returns the registered repo whose ROOT-COMMIT id is id: the full
 // hash, or its 12-hex wire prefix as it appears in kb://<id12>/… paths. This
 // is the fact-addressing identity (RepoInstance.ID), NOT the registry uid
