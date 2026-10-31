@@ -824,3 +824,71 @@ func TestFactSet_F17_ExportIsTheConcatenatedPages(t *testing.T) {
 	require.Contains(t, buf.String(), "Now: the branch holds another version of this fact.")
 	require.Equal(t, sb.String(), buf.String())
 }
+
+// tree_depth is the depth in the WALK TREE (reading order), not the BFS
+// distance (fact 33b57847): r cites a then b, a cites c, c cites d, b cites
+// d. BFS puts d at distance 2 (through b); the reading order writes it under
+// c, at tree depth 3, numbered 1.1.1.1. (A direct reference of the root is
+// always the root's child in a FactSet: pinDirect.)
+//
+// Sabotage: set tree_depth from the BFS depth, and d reads 2.
+func TestFactSet_TreeDepthIsTheWalkTreeNotBFS(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/z/d.md", "D", "d body.")
+	f.write(t, "kb/z/c.md", "C", "c body.", "kb/z/d.md")
+	f.write(t, "kb/z/b.md", "B", "b body.", "kb/z/d.md")
+	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/c.md")
+	f.write(t, "kb/u/r.md", "R", "r body.", "kb/z/a.md", "kb/z/b.md")
+	req := f.request("kb/u/")
+	req.Limit = 5
+	p := f.first(t, "o", req)
+	byPath := map[string]FactSetNode{}
+	for _, n := range p.Facts {
+		byPath[n.Path] = n
+	}
+	c, d := byPath["kb/z/c.md"], byPath["kb/z/d.md"]
+	require.Equal(t, 2, d.Depth, "BFS: d is two hops from r (through b)")
+	require.Equal(t, 3, d.TreeDepth, "the walk tree: d is under c, under a")
+	require.Equal(t, "1.1.1.1", d.Number)
+	require.Equal(t, c.N, d.Parent)
+	require.Equal(t, 2, c.TreeDepth)
+	require.Equal(t, "1.2", byPath["kb/z/b.md"].Number)
+}
+
+// A result with no version at the anchor (here: its index row and blob are
+// gone from the store between the search and the planning, a state only
+// damage makes) keeps its unit as a heading alone, under the title the search
+// listed: unavailable, never an error.
+//
+// Sabotage: make a gone root an error, and the first call fails.
+func TestFactSet_ResultGoneAtTheAnchorIsAHeadingUnit(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/u/b.md", "B", "b body.")
+	f.write(t, "kb/u/a.md", "A", "a body.", "kb/u/b.md")
+	db := storetest.RawDB(f.svc)
+	restore := SetFactSetSearchHookForTest(func() {
+		var blob string
+		require.NoError(t, db.QueryRow(`SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id WHERE bf.path = 'kb/u/b.md'`).Scan(&blob))
+		_, err := db.Exec(`DELETE FROM branch_facts WHERE path = 'kb/u/b.md'`)
+		require.NoError(t, err)
+		_, err = db.Exec(`DELETE FROM facts WHERE blob_hash = ?`, blob)
+		require.NoError(t, err)
+		require.NoError(t, storetest.DeleteObject(f.svc, blob))
+	})
+	req := f.request("kb/u/")
+	req.Limit = 5
+	p := f.first(t, "o", req)
+	restore()
+	nodes := readAll(t, f, "o", p)
+	require.Equal(t, []row{{"1", "u/a", ""}, {"2", "u/b", ""}}, rowsOf(nodes))
+	require.Equal(t, []string{"kb/u/b.md|" + ReasonNoVersion}, omitted(nodes[0]), "a's ref to b has no version to show")
+	gone := nodes[1]
+	require.True(t, gone.Unavailable)
+	require.False(t, gone.Written)
+	require.Equal(t, "B", gone.Title, "the title the search listed")
+	require.Empty(t, gone.Body)
+	require.Empty(t, gone.Marks, "no version shown: no now mark")
+	var buf bytes.Buffer
+	require.NoError(t, FactSetExport(context.Background(), f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return &buf }))
+	require.Contains(t, buf.String(), "## 2. B "+UnavailableNote)
+}
