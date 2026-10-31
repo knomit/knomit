@@ -470,20 +470,18 @@ func SetGitPathReadHookForTest(f func(name string)) (restore func()) {
 	return func() { gitPathReadHook.Store(old) }
 }
 
-// FirstParentChainCTEForTest is the first-parent walk the history readers
-// ran before LineEvents (ResolveActiveCommitForPath, RevisionsBefore,
-// FactLiveAtCommit, each with its own SELECT ... ORDER BY fpc.depth): it
-// binds the start commit and yields fpc(commit_hash, depth) over
-// commit_parents, parent_order = 0. Kept as the oracle the equivalence tests
-// hold LineEvents to; no production reader uses it.
-const FirstParentChainCTEForTest = `
-	WITH RECURSIVE fpc(commit_hash, depth) AS (
-	    SELECT ?, 0
-	    UNION ALL
-	    SELECT cp.parent_hash, fpc.depth + 1
-	      FROM commit_parents cp
-	      JOIN fpc ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
-	)`
+// SetLineEventsAfterDepthHookForTest installs f to run inside LineEvents'
+// commit_fp form after it reads the start commit's depth (nil removes it),
+// and returns the restore.
+func SetLineEventsAfterDepthHookForTest(f func()) (restore func()) {
+	mustBeTest()
+	var p *func()
+	if f != nil {
+		p = &f
+	}
+	old := lineEventsAfterDepthHook.Swap(p)
+	return func() { lineEventsAfterDepthHook.Store(old) }
+}
 
 // LineEventsWalkForTest is LineEvents' fallback (the commit_parents walk)
 // alone, so a test can hold it to the same answers as the commit_fp form.

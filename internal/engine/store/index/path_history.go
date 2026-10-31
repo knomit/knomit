@@ -278,7 +278,7 @@ func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 	if err != nil {
 		return nil, fmt.Errorf("RevisionsBefore: branchID: %w", err)
 	}
-	evs, err := vcs.LineEvents(ctx, conn(ctx, hq.rh.DB()), anchorCommit, vcs.LineQuery{
+	evs, err := vcs.LineEvents(ctx, hq.rh.DB(), anchorCommit, vcs.LineQuery{
 		Path: path, Writes: true, BranchID: branchID, Limit: limit,
 	})
 	if err != nil {

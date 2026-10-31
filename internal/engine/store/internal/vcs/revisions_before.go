@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync/atomic"
+
+	"github.com/go-git/go-git/v5/plumbing"
 
 	storegit "knomit/internal/engine/store/git"
-	"knomit/internal/engine/store/internal/sqlite"
 )
 
 // ResolveActiveCommitForPath returns the most recent commit on fromCommit's
@@ -39,7 +41,7 @@ func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fr
 	if fromCommit == "" {
 		return "", false, nil
 	}
-	evs, err := LineEvents(ctx, sqlite.Conn(ctx, rh.db), fromCommit, LineQuery{Path: path, Writes: true, Limit: 1})
+	evs, err := LineEvents(ctx, rh.db, fromCommit, LineQuery{Path: path, Writes: true, Limit: 1})
 	if err != nil {
 		return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
 	}
@@ -68,13 +70,13 @@ type LineEvent struct {
 	Action      string
 }
 
-// LineEvents returns the commit_log rows that q selects at commits on
-// from's FIRST-PARENT LINE (from included), nearest first, at most q.Limit.
+// LineEvents returns the commit_log rows that lq selects at commits on
+// from's FIRST-PARENT LINE (from included), nearest first, at most lq.Limit.
 // It answers exactly what this did before:
 //
 //	WITH RECURSIVE fpc AS (from, then parent_order = 0 over commit_parents)
 //	SELECT ... FROM fpc JOIN commit_log [JOIN branch_commits] ...
-//	 ORDER BY fpc.depth LIMIT q.Limit
+//	 ORDER BY fpc.depth LIMIT lq.Limit
 //
 // whose ORDER BY made SQLite produce and sort the WHOLE first-parent chain
 // before its LIMIT (a recursive CTE stops early under a bare LIMIT, never
@@ -89,30 +91,69 @@ type LineEvent struct {
 // the rows examined are only the path's own events (on any branch) at or
 // below from's depth; it does not grow with the length of the history.
 //
+// ONE SNAPSHOT: every statement of a call runs in one read transaction — the
+// caller's, when ctx carries one, else a deferred BEGIN on one connection of
+// db's pool — so a concurrent re-derivation or rebuild committing between two
+// statements cannot mix row generations into one answer (the old single
+// statement was one snapshot by construction).
+//
 // FALLBACK (lineEventsByWalk, over commit_parents, stopping once it has
-// q.Limit rows) whenever commit_fp cannot answer in full:
+// lq.Limit rows) whenever commit_fp cannot answer in full:
 //   - from has NO commit_fp row (not derived): there is no depth to jump
 //     from;
 //   - from is STRUCTURALLY DEGRADED (commit_fp.degraded = 2: a parent commit
 //     was missing when it or an ancestor was derived, so depth and jump
-//     pointers are cut at that boundary) AND fewer than q.Limit rows were
+//     pointers are cut at that boundary) AND fewer than lq.Limit rows were
 //     found above the boundary. commit_parents still holds the edges past
 //     the boundary, so the walk can see rows the jumps cannot. Rows found
 //     above the boundary are the walk's first rows too, so a full answer
-//     needs no fallback. (degraded = 1, content_unavailable, leaves depth
-//     and pointers intact and changes nothing here.)
+//     needs no fallback;
+//   - a jump CONTRADICTS the rows (onLine reports broken): a node on the way
+//     down has a depth other than the one its distance from from implies, or
+//     runs out of jump pointers before the jump is done. Neither happens in a
+//     consistent store; both are what an inconsistent row would look like, so
+//     the walk answers instead of a possibly wrong jump.
+//
+// degraded = 1 (content_unavailable) leaves depth and pointers as they were
+// derived and changes nothing here — because re-derivation never turns a
+// row with degraded < 2 into a boundary under descendants derived over it
+// (deriver.wouldCutDerivedLine).
 //
 // WHY commit_fp AGREES WITH commit_parents everywhere else: both record
 // git's first-parent edges (fsck checks commit_parents against the commit
 // objects); commit_fp rows are written parents first, before a commit is
-// recorded in branch_commits (kb invariant 11606a61), so every first-parent
-// ancestor of a derived, undegraded commit is derived, with the depth the
-// commit_parents walk would count. commit_log rows at commits with no
-// commit_fp row cannot be on such a commit's line, so the JOIN dropping them
-// changes no answer. Where commit_parents is itself incomplete (a backfill
-// that skipped an unreadable commit) the jumps follow git and the old walk
-// stopped short; the jumps are the correct answer there.
-func LineEvents(ctx context.Context, q storegit.CtxExecer, from string, lq LineQuery) ([]LineEvent, error) {
+// recorded in branch_commits (kb invariant 11606a61), and every row's depth
+// and pointers agree with its first-parent ancestors' rows (kept so by
+// wouldCutDerivedLine), so every first-parent ancestor of a derived,
+// undegraded commit is derived, with the depth the commit_parents walk would
+// count. commit_log rows at commits with no commit_fp row cannot be on such a
+// commit's line, so the JOIN dropping them changes no answer. Where
+// commit_parents is itself incomplete (a backfill that skipped an unreadable
+// commit) the jumps follow git and the old walk stopped short; the jumps are
+// the correct answer there.
+func LineEvents(ctx context.Context, db *sql.DB, from string, lq LineQuery) ([]LineEvent, error) {
+	if lq.Limit <= 0 {
+		return nil, nil
+	}
+	if tx := storegit.TxFromContext(ctx); tx != nil {
+		return lineEvents(ctx, tx, from, lq)
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("first-parent line: conn: %w", err)
+	}
+	defer conn.Close()
+	// A deferred BEGIN: the first SELECT pins one WAL read snapshot; no write
+	// lock is taken (the pool's _txlock=immediate applies to BeginTx only).
+	if _, err := conn.ExecContext(ctx, `BEGIN`); err != nil {
+		return nil, fmt.Errorf("first-parent line: begin: %w", err)
+	}
+	defer conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`) //nolint:errcheck
+	return lineEvents(ctx, conn, from, lq)
+}
+
+// lineEvents is LineEvents on one executor (already a single snapshot).
+func lineEvents(ctx context.Context, q storegit.CtxExecer, from string, lq LineQuery) ([]LineEvent, error) {
 	evs, complete, err := lineEventsByJumps(ctx, q, from, lq)
 	if err != nil || complete {
 		return evs, err
@@ -120,30 +161,42 @@ func LineEvents(ctx context.Context, q storegit.CtxExecer, from string, lq LineQ
 	return lineEventsByWalk(ctx, q, from, lq)
 }
 
-// lineActionSQL is the action filter of a LineQuery over commit_log alias cl.
-func lineActionSQL(lq LineQuery) string {
+// lineWrites binds LineQuery.Writes as an integer parameter.
+func lineWrites(lq LineQuery) int {
 	if lq.Writes {
-		return ` AND cl.action IN ('added','modified')`
+		return 1
 	}
-	return ``
-}
-
-// lineBranchSQL restricts commit_log alias cl to the LineQuery's branch.
-func lineBranchSQL(lq LineQuery) string {
-	if lq.BranchID == 0 {
-		return ``
-	}
-	return ` AND EXISTS (SELECT 1 FROM branch_commits bc WHERE bc.branch_id = ` + fmt.Sprint(lq.BranchID) + ` AND bc.commit_hash = cl.commit_hash)`
+	return 0
 }
 
 // linePage is how many candidate rows lineEventsByJumps reads per query.
 const linePage = 16
 
+// lineCandidatesSQL pages a LineQuery's candidates, deepest first. Binds ?1
+// path, ?2/?3 the keyset (depth, commit) to continue below, ?4 the page
+// size, ?5 the branch id (0 = any branch), ?6 writes only (1) or every
+// action (0). The text is constant, so the statement is prepared once.
+const lineCandidatesSQL = `
+	SELECT cl.commit_hash, fp.depth
+	  FROM commit_log cl
+	  JOIN commit_fp fp ON fp.commit_hash = cl.commit_hash
+	 WHERE cl.path = ?1
+	   AND (?6 = 0 OR cl.action IN ('added','modified'))
+	   AND (?5 = 0 OR EXISTS (SELECT 1 FROM branch_commits bc
+	                           WHERE bc.branch_id = ?5 AND bc.commit_hash = cl.commit_hash))
+	   AND (fp.depth < ?2 OR (fp.depth = ?2 AND cl.commit_hash < ?3))
+	 ORDER BY fp.depth DESC, cl.commit_hash DESC
+	 LIMIT ?4`
+
+// LineEventsAfterDepthHook, when set (tests only), runs after
+// lineEventsByJumps has read from's depth and before its first candidate
+// page: a test commits a change there to prove the call reads one snapshot.
+var lineEventsAfterDepthHook atomic.Pointer[func()]
+
 // lineEventsByJumps is LineEvents over commit_fp. complete is false when the
 // caller must walk commit_parents instead (see LineEvents' FALLBACK); evs is
 // then partial and must be discarded. Every query is read to the end and
-// closed before the next runs, so nothing holds a pool connection while
-// asking for another (kb decision 189c424e).
+// closed before the next runs (kb decision 189c424e).
 func lineEventsByJumps(ctx context.Context, q storegit.CtxExecer, from string, lq LineQuery) (evs []LineEvent, complete bool, err error) {
 	if lq.Limit <= 0 {
 		return nil, true, nil
@@ -156,6 +209,9 @@ func lineEventsByJumps(ctx context.Context, q storegit.CtxExecer, from string, l
 	if err != nil {
 		return nil, false, fmt.Errorf("first-parent line: depth: %w", err)
 	}
+	if h := lineEventsAfterDepthHook.Load(); h != nil {
+		(*h)()
+	}
 	type cand struct {
 		commit string
 		depth  int
@@ -167,14 +223,8 @@ func lineEventsByJumps(ctx context.Context, q storegit.CtxExecer, from string, l
 	afterDepth, afterCommit := xDepth, "\xff"
 pages:
 	for {
-		rows, err := q.QueryContext(ctx, `
-			SELECT cl.commit_hash, fp.depth
-			  FROM commit_log cl
-			  JOIN commit_fp fp ON fp.commit_hash = cl.commit_hash
-			 WHERE cl.path = ?`+lineActionSQL(lq)+lineBranchSQL(lq)+`
-			   AND (fp.depth < ? OR (fp.depth = ? AND cl.commit_hash < ?))
-			 ORDER BY fp.depth DESC, cl.commit_hash DESC
-			 LIMIT ?`, lq.Path, afterDepth, afterDepth, afterCommit, linePage)
+		rows, err := q.QueryContext(ctx, lineCandidatesSQL,
+			lq.Path, afterDepth, afterCommit, linePage, lq.BranchID, lineWrites(lq))
 		if err != nil {
 			return nil, false, fmt.Errorf("first-parent line: candidates: %w", err)
 		}
@@ -194,9 +244,12 @@ pages:
 		// At most one commit per depth is on the line, so the candidates on
 		// it, in this order, are the line's rows nearest first.
 		for _, c := range cands {
-			on, err := onFirstParentLine(ctx, q, ActiveTables, c.commit, c.depth, from, xDepth)
+			on, broken, err := onLine(ctx, q, c.commit, c.depth, from, xDepth)
 			if err != nil {
 				return nil, false, fmt.Errorf("first-parent line: %w", err)
+			}
+			if broken {
+				return nil, false, nil
 			}
 			if on {
 				hits = append(hits, c.commit)
@@ -227,29 +280,72 @@ pages:
 	return evs, true, nil
 }
 
-// LineWalkCTE is the fallback walk of LineEvents over commit_parents for
-// query lq. It binds ?1 = the start commit, ?2 = the path and ?3 = the limit,
-// and yields walk(commit_hash, depth, hits) newest → oldest along
-// parent_order = 0, where hits counts the commits so far (this one included)
-// with a commit_log row lq selects. The recursive step expands only while
+// onLine reports whether r (at depth rDepth) is x or one of x's first-parent
+// ancestors, by jumping x down xDepth-rDepth steps with the commit_fp jump
+// pointers — onFirstParentLine, CHECKED: broken is true when the rows
+// contradict the jump, i.e. a node reached on the way has a depth other than
+// x's depth minus its distance from x, or has no pointer for the next jump
+// (a node at depth d has one for every 2^k <= d, and the remaining steps
+// never exceed the current node's depth). A consistent store never reports
+// broken; the caller walks commit_parents when it does.
+func onLine(ctx context.Context, q storegit.CtxExecer, r string, rDepth int, x string, xDepth int) (on, broken bool, err error) {
+	steps := xDepth - rDepth
+	if steps < 0 {
+		return false, false, nil
+	}
+	cur, want := x, xDepth
+	for level := 0; steps > 0; level++ {
+		if steps&1 == 1 {
+			var depth int
+			var ups []byte
+			err := q.QueryRowContext(ctx, `SELECT depth, ups FROM `+ActiveTables.FP+` WHERE commit_hash = ?`, cur).Scan(&depth, &ups)
+			if err == sql.ErrNoRows {
+				return false, true, nil
+			}
+			if err != nil {
+				return false, false, fmt.Errorf("first-parent jump: %w", err)
+			}
+			off := level * len(plumbing.ZeroHash)
+			if depth != want || off+len(plumbing.ZeroHash) > len(ups) {
+				return false, true, nil
+			}
+			var h plumbing.Hash
+			copy(h[:], ups[off:])
+			cur = h.String()
+			want -= 1 << level
+		}
+		steps >>= 1
+	}
+	return cur == r, false, nil
+}
+
+// LineWalkCTE is the fallback walk of LineEvents over commit_parents. It
+// binds ?1 the start commit, ?2 the path, ?3 the limit, ?4 the branch id
+// (0 = any branch) and ?5 writes only (1) or every action (0), and yields
+// walk(commit_hash, depth, hits) newest → oldest along parent_order = 0,
+// where hits counts the commits so far (this one included) with a
+// commit_log row the query selects. The recursive step expands only while
 // hits < limit, so the walk ends at the limit-th such commit (or the end of
 // the chain): it yields at most (steps to that commit) + 1 rows, whatever
 // the outer query does with them. Exported so a test can count them.
-func LineWalkCTE(lq LineQuery) string {
-	hit := func(c string) string {
-		return `EXISTS (SELECT 1 FROM commit_log cl WHERE cl.commit_hash = ` + c + ` AND cl.path = ?2` +
-			lineActionSQL(lq) + lineBranchSQL(lq) + `)`
-	}
-	return `
+const LineWalkCTE = `
 	WITH RECURSIVE walk(commit_hash, depth, hits) AS (
-	    SELECT ?1, 0, ` + hit("?1") + `
+	    SELECT ?1, 0, EXISTS (SELECT 1 FROM commit_log cl WHERE cl.commit_hash = ?1 AND cl.path = ?2
+	                AND (?5 = 0 OR cl.action IN ('added','modified'))
+	                AND (?4 = 0 OR EXISTS (SELECT 1 FROM branch_commits bc WHERE bc.branch_id = ?4 AND bc.commit_hash = cl.commit_hash)))
 	    UNION ALL
-	    SELECT cp.parent_hash, walk.depth + 1, walk.hits + ` + hit("cp.parent_hash") + `
+	    SELECT cp.parent_hash, walk.depth + 1, walk.hits + EXISTS (SELECT 1 FROM commit_log cl WHERE cl.commit_hash = cp.parent_hash AND cl.path = ?2
+	                AND (?5 = 0 OR cl.action IN ('added','modified'))
+	                AND (?4 = 0 OR EXISTS (SELECT 1 FROM branch_commits bc WHERE bc.branch_id = ?4 AND bc.commit_hash = cl.commit_hash)))
 	      FROM walk
 	      JOIN commit_parents cp ON cp.commit_hash = walk.commit_hash AND cp.parent_order = 0
 	     WHERE walk.hits < ?3
 	)`
-}
+
+// lineRowFilterSQL is the walk's filter on commit_log alias cl (the same
+// filter LineWalkCTE counts hits with).
+const lineRowFilterSQL = ` AND (?5 = 0 OR cl.action IN ('added','modified'))
+	AND (?4 = 0 OR EXISTS (SELECT 1 FROM branch_commits bc WHERE bc.branch_id = ?4 AND bc.commit_hash = cl.commit_hash))`
 
 // lineEventsByWalk is LineEvents over commit_parents (LineWalkCTE). Its
 // ORDER BY sorts only the walk's own rows, which the walk bounds.
@@ -257,13 +353,13 @@ func lineEventsByWalk(ctx context.Context, q storegit.CtxExecer, from string, lq
 	if lq.Limit <= 0 {
 		return nil, nil
 	}
-	rows, err := q.QueryContext(ctx, LineWalkCTE(lq)+`
+	rows, err := q.QueryContext(ctx, LineWalkCTE+`
 		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
 		  FROM walk
 		  JOIN commit_log cl ON cl.commit_hash = walk.commit_hash AND cl.path = ?2
-		 WHERE 1 = 1`+lineActionSQL(lq)+lineBranchSQL(lq)+`
+		 WHERE 1 = 1`+lineRowFilterSQL+`
 		 ORDER BY walk.depth ASC
-		 LIMIT ?3`, from, lq.Path, lq.Limit)
+		 LIMIT ?3`, from, lq.Path, lq.Limit, lq.BranchID, lineWrites(lq))
 	if err != nil {
 		return nil, fmt.Errorf("first-parent line: walk: %w", err)
 	}

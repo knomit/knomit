@@ -143,7 +143,7 @@ func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 	// The most recent commit_log event of ANY action on commit's
 	// first-parent line (vcs.LineEvents: commit_fp jump pointers, the
 	// commit_parents walk as fallback).
-	evs, err := vcs.LineEvents(ctx, conn(ctx, fq.rh.DB()), commit, vcs.LineQuery{Path: path, Limit: 1})
+	evs, err := vcs.LineEvents(ctx, fq.rh.DB(), commit, vcs.LineQuery{Path: path, Limit: 1})
 	if err != nil {
 		return false, fmt.Errorf("FactLiveAtCommit: %w", err)
 	}

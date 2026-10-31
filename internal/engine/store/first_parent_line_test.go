@@ -21,11 +21,24 @@ import (
 // (commit_fp jump pointers, the commit_parents walk as fallback). Each oracle
 // below is the reader's old query, verbatim.
 
+// firstParentChainCTE is the first-parent walk the history readers ran
+// before vcs.LineEvents (each with its own SELECT ... ORDER BY fpc.depth): it
+// binds the start commit and yields fpc(commit_hash, depth) over
+// commit_parents, parent_order = 0. The oracles below are built on it.
+const firstParentChainCTE = `
+	WITH RECURSIVE fpc(commit_hash, depth) AS (
+	    SELECT ?, 0
+	    UNION ALL
+	    SELECT cp.parent_hash, fpc.depth + 1
+	      FROM commit_parents cp
+	      JOIN fpc ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
+	)`
+
 // oracleActiveCommit is ResolveActiveCommitForPath's old query.
 func oracleActiveCommit(t *testing.T, db *sql.DB, path, from string) (string, bool) {
 	t.Helper()
 	var hash string
-	err := db.QueryRow(vcs.FirstParentChainCTEForTest+`
+	err := db.QueryRow(firstParentChainCTE+`
 		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
@@ -43,7 +56,7 @@ func oracleActiveCommit(t *testing.T, db *sql.DB, path, from string) (string, bo
 func oracleLiveAt(t *testing.T, db *sql.DB, path, from string) bool {
 	t.Helper()
 	var action string
-	err := db.QueryRow(vcs.FirstParentChainCTEForTest+`
+	err := db.QueryRow(firstParentChainCTE+`
 		SELECT cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
@@ -61,7 +74,7 @@ func oracleLiveAt(t *testing.T, db *sql.DB, path, from string) bool {
 // applied as RevisionsBefore does).
 func oracleRevisionsBefore(t *testing.T, db *sql.DB, branchID int64, path, from string, limit int) []model.RevisionMeta {
 	t.Helper()
-	rows, err := db.Query(vcs.FirstParentChainCTEForTest+`
+	rows, err := db.Query(firstParentChainCTE+`
 		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
@@ -550,12 +563,15 @@ func TestFirstParentLine_CostIsBounded(t *testing.T) {
 
 	// The walk stops at the Limit-th hit.
 	walkRows := func(from string, lq vcs.LineQuery) int {
-		var c int
-		require.NoError(t, db.QueryRow(vcs.LineWalkCTE(lq)+` SELECT count(*) FROM walk`, from, lq.Path, lq.Limit).Scan(&c))
+		var c, writes int
+		if lq.Writes {
+			writes = 1
+		}
+		require.NoError(t, db.QueryRow(vcs.LineWalkCTE+` SELECT count(*) FROM walk`, from, lq.Path, lq.Limit, lq.BranchID, writes).Scan(&c))
 		return c
 	}
 	var chain int
-	require.NoError(t, db.QueryRow(vcs.FirstParentChainCTEForTest+` SELECT count(*) FROM fpc`, tip).Scan(&chain))
+	require.NoError(t, db.QueryRow(firstParentChainCTE+` SELECT count(*) FROM fpc`, tip).Scan(&chain))
 	require.Equal(t, 4, walkRows(tip, shapes["resolve"]), "3 commits, then the writer")
 	require.Equal(t, 1, walkRows(writer, shapes["resolve"]))
 	require.Equal(t, tipDepth-firstDepth+1, walkRows(tip, shapes["revisions limit 2"]), "down to the second write")

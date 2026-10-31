@@ -352,7 +352,15 @@ func (rh *Repo) deriveCommits(ctx context.Context, d *deriver, order []*commitMe
 		}
 		for _, p := range prepared {
 			if replace {
-				err = d.clear(bctx, tx, p.c.Hash.String())
+				var keep bool
+				if keep, err = d.wouldCutDerivedLine(bctx, tx, p); err == nil && keep {
+					log.Warn().Str("commit", p.c.Hash.String()).
+						Msg("path changes: re-derivation would cut a line its descendants were derived over; kept as it was")
+					continue
+				}
+				if err == nil {
+					err = d.clear(bctx, tx, p.c.Hash.String())
+				}
 			}
 			if err == nil {
 				err = d.apply(bctx, tx, p)
@@ -996,6 +1004,55 @@ func (d *deriver) clear(ctx context.Context, tx *sql.Tx, hash string) error {
 		}
 	}
 	return nil
+}
+
+// wouldCutDerivedLine reports whether re-deriving the commit of pc in place
+// would turn a row with degraded < 2 into a structural boundary (a parent
+// commit now missing from the object store, or a parent row now structural).
+// Such a re-derivation must not happen: the commit's descendants were
+// derived over its CURRENT depth and jump pointers (degradation propagates
+// only when a commit is applied), so giving it depth 0 and no pointers would
+// leave every descendant with depths and pointers that disagree with it,
+// still marked undegraded. The first-parent readers trust undegraded rows
+// (vcs.LineEvents, LiveChange) and would silently skip this commit's writes.
+// The row is kept as it was instead; it stays degraded (1) and a later
+// :rebuild retries it once the objects are back.
+//
+// INVARIANT this preserves: every commit_fp row's depth and pointers agree
+// with its first-parent ancestors' rows. In-place re-derivation can then only
+// (a) leave depth and pointers as they were (degraded 1 -> 0 or 1, same
+// parents present) or (b) replace a structural row (degraded = 2), whose
+// descendants are all degraded = 2 (propagated at apply through any parent)
+// and are re-derived after it in the same parents-first pass.
+func (d *deriver) wouldCutDerivedLine(ctx context.Context, tx *sql.Tx, pc *preparedCommit) (bool, error) {
+	var old int
+	err := tx.QueryRowContext(ctx, `SELECT degraded FROM `+d.t.FP+` WHERE commit_hash = ?`, pc.c.Hash.String()).Scan(&old)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil // not derived: nothing below was derived over it
+	}
+	if err != nil {
+		return false, fmt.Errorf("path changes: degraded mark: %w", err)
+	}
+	if old == degradedStructural {
+		return false, nil
+	}
+	for i, p := range pc.c.Parents {
+		if pc.parentAbsent[i] {
+			return true, nil
+		}
+		var pdeg int
+		err := tx.QueryRowContext(ctx, `SELECT degraded FROM `+d.t.FP+` WHERE commit_hash = ?`, p.String()).Scan(&pdeg)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // apply reports an underived parent
+		}
+		if err != nil {
+			return false, fmt.Errorf("path changes: parent degraded mark: %w", err)
+		}
+		if pdeg == degradedStructural {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // apply writes a prepared commit's first-parent depth, jump pointers,
