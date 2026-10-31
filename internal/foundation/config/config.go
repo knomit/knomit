@@ -280,15 +280,26 @@ type SessionConfig struct {
 	// branch's index to settle (no sync rewriting rows past the watermark,
 	// no Rebuild in progress) before it answers 503 with Retry-After; the
 	// request's own context still bounds it. A Go duration; empty is the
-	// default (5s); "0" tries once and never waits.
+	// default (5s); "0" tries once and never waits; at most FactSetStallLimit
+	// (1m).
 	FactSetAnchorWait string `toml:"factset_anchor_wait"`
 }
 
 // DefaultFactSetAnchorWait is session.factset_anchor_wait when unset.
 const DefaultFactSetAnchorWait = 5 * time.Second
 
+// FactSetStallLimit is the longest a FactSet request may make no progress:
+// the per-write deadline of a FactSet export's stream (the listeners run with
+// WriteTimeout 0, so the export edge sets this one itself), and therefore
+// also the cap of session.factset_anchor_wait, during which a first call
+// writes nothing at all. A wait the server would not tolerate between two
+// writes of an export is not one it should spend before the first byte of a
+// page. Not derived from any corpus: it is the server's own stall bound.
+const FactSetStallLimit = time.Minute
+
 // FactSetAnchorWaitDuration parses session.factset_anchor_wait (empty: the
-// default). Validate refuses a value it cannot parse or a negative one.
+// default). Validate refuses a value it cannot parse, a negative one, or one
+// above FactSetStallLimit.
 func (s SessionConfig) FactSetAnchorWaitDuration() (time.Duration, error) {
 	if strings.TrimSpace(s.FactSetAnchorWait) == "" {
 		return DefaultFactSetAnchorWait, nil
@@ -299,6 +310,9 @@ func (s SessionConfig) FactSetAnchorWaitDuration() (time.Duration, error) {
 	}
 	if d < 0 {
 		return 0, fmt.Errorf("config: session.factset_anchor_wait must not be negative, got %q", s.FactSetAnchorWait)
+	}
+	if d > FactSetStallLimit {
+		return 0, fmt.Errorf("config: session.factset_anchor_wait must be at most %s (the server's stall limit for a FactSet request), got %q", FactSetStallLimit, s.FactSetAnchorWait)
 	}
 	return d, nil
 }

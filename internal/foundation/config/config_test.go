@@ -1051,3 +1051,25 @@ func TestSession_FactSetAnchorWait(t *testing.T) {
 		}
 	}
 }
+
+// session.factset_anchor_wait is capped at the server's FactSet stall limit
+// (the export's per-write deadline): exactly the limit is accepted, a value
+// past it is refused by FactSetAnchorWaitDuration and by Validate.
+//
+// Sabotage: drop the cap, and "1h" is accepted.
+func TestSession_FactSetAnchorWaitIsCapped(t *testing.T) {
+	got, err := SessionConfig{FactSetAnchorWait: FactSetStallLimit.String()}.FactSetAnchorWaitDuration()
+	if err != nil || got != FactSetStallLimit {
+		t.Fatalf("the limit itself: got %v, %v", got, err)
+	}
+	for _, v := range []string{"61s", "1h"} {
+		if _, err := (SessionConfig{FactSetAnchorWait: v}).FactSetAnchorWaitDuration(); err == nil {
+			t.Fatalf("%q: want an error past %s", v, FactSetStallLimit)
+		}
+		c := Defaults()
+		c.Session.FactSetAnchorWait = v
+		if c.Validate() == nil {
+			t.Fatalf("%q: Validate must refuse it", v)
+		}
+	}
+}

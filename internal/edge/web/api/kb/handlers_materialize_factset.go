@@ -20,6 +20,7 @@ import (
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/sessions"
 	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 )
 
 // The factset routes: GET /repos/{repo}/branches/{branch}/search/factset pages a
@@ -182,8 +183,9 @@ func handleSearchFactSetExport(mgr *repos.Manager) http.HandlerFunc {
 // listeners run with no WriteTimeout (a long download is legitimate), so
 // without it a client that stops reading would hold its export slot and
 // reader forever; with it, a write that cannot complete in this time fails,
-// and the export aborts (never a short file).
-const factsetExportWriteTimeout = time.Minute
+// and the export aborts (never a short file). It is the server's FactSet
+// stall limit, which also caps session.factset_anchor_wait.
+const factsetExportWriteTimeout = config.FactSetStallLimit
 
 // deadlineWriter sets the connection's write deadline before every write.
 // A ResponseWriter that cannot (a test recorder) just writes.

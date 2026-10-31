@@ -240,6 +240,12 @@ func (si *Index) casLastCommit(ctx context.Context, branch, prev, next string) (
 // the watermark reaches that head.
 func SyncPendingKey(branch string) string { return "sync_pending:" + branch }
 
+// RebuildGenKey is the meta key of a branch's rebuild generation: a counter
+// every Index.Rebuild of the branch bumps, so a reader can tell a Rebuild
+// that ran to completion at the same head between two of its reads (the
+// watermark reads the same before and after; review R3-2).
+func RebuildGenKey(branch string) string { return "rebuild_gen:" + branch }
+
 func (si *Index) setSyncPending(ctx context.Context, branch, head string) error {
 	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, SyncPendingKey(branch), head)
@@ -566,6 +572,14 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 		}
 	}()
 
+	// Bump the generation BEFORE clearing the watermark: a reader whose
+	// first read saw the old generation and the watermark either sees ""
+	// (unsettled) or, once the Rebuild is done, the new generation.
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`INSERT INTO meta(key, value) VALUES (?, '1')
+		 ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`, RebuildGenKey(branch)); err != nil {
+		return fmt.Errorf("rebuild: bump generation: %w", err)
+	}
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}

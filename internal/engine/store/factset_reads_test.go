@@ -174,7 +174,7 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 			return
 		}
 		rowAhead = cur["kb/a.md"].Blob
-		midSettledWm, midSettled, midErr = hq.SettledWatermark(ctx, "main")
+		midSettledWm, _, midSettled, midErr = hq.SettledWatermark(ctx, "main")
 		if midErr != nil {
 			return
 		}
@@ -201,7 +201,7 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 	require.NoError(t, svc.si.RepoForTest().DB().QueryRow(
 		`SELECT COUNT(*) FROM meta WHERE key = ?`, index.SyncPendingKey("main")).Scan(&pending))
 	require.Zero(t, pending, "a completed sync clears its marker")
-	sw, settled, err := hq.SettledWatermark(ctx, "main")
+	sw, _, settled, err := hq.SettledWatermark(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, wm, sw)
 	require.True(t, settled, "sync done: settled")
@@ -253,11 +253,19 @@ func TestFactSetReads_StaleMarkerIsCleared(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, h1, h2)
 
+	_, genBefore, _, err := hq.SettledWatermark(ctx, "main")
+	require.NoError(t, err)
 	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
-	wm, settled, err := hq.SettledWatermark(ctx, "main")
+	wm, genAfter, settled, err := hq.SettledWatermark(ctx, "main")
 	require.NoError(t, err)
 	require.Equal(t, h2, wm)
 	require.Empty(t, pending("main"), "Rebuild clears the marker with the watermark")
+	require.NotEqual(t, genBefore, genAfter, "R3-2: a Rebuild bumps the branch's generation")
+	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
+	wm2, genAgain, _, err := hq.SettledWatermark(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, wm, wm2, "a Rebuild at the same head leaves the watermark equal")
+	require.NotEqual(t, genAfter, genAgain, "but not the generation")
 	require.True(t, settled, "a rebuilt, idle branch is settled")
 	_, hist, err := hq.LiveAt(ctx, "main", wm, []string{"kb/a.md"})
 	require.NoError(t, err)
@@ -272,21 +280,24 @@ func TestFactSetReads_StaleMarkerIsCleared(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.si.SyncLocked(ctx, "main"))
 	require.Equal(t, h2, pending("main"), "a marker naming the head is harmless and kept")
-	_, settled, err = hq.SettledWatermark(ctx, "main")
+	_, _, settled, err = hq.SettledWatermark(ctx, "main")
 	require.NoError(t, err)
 	require.True(t, settled)
 
-	// DropBranch removes the branch's watermark and marker.
+	// DropBranch removes the branch's watermark, marker and rebuild generation.
 	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
 	require.NoError(t, svc.IndexManager().Sync(ctx, "feature"))
 	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, index.SyncPendingKey("feature"), h1)
 	require.NoError(t, err)
+	require.NoError(t, svc.si.Rebuild(ctx, "feature", nil)) // writes rebuild_gen:feature
+	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, index.SyncPendingKey("feature"), h1)
+	require.NoError(t, err)
 	require.NoError(t, svc.rh.DropBranch(ctx, "feature"))
 	var n int
-	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM meta WHERE key IN (?, ?)`, "last_commit:feature", index.SyncPendingKey("feature")).Scan(&n))
-	require.Zero(t, n, "a dropped branch keeps no watermark and no marker")
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM meta WHERE key IN (?, ?, ?)`, "last_commit:feature", index.SyncPendingKey("feature"), index.RebuildGenKey("feature")).Scan(&n))
+	require.Zero(t, n, "a dropped branch keeps no watermark, no marker and no rebuild generation")
 	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
-	fw, settled, err := hq.SettledWatermark(ctx, "feature")
+	fw, _, settled, err := hq.SettledWatermark(ctx, "feature")
 	require.NoError(t, err)
 	require.Equal(t, h2, fw, "the recreated branch inherits its parent's watermark")
 	require.True(t, settled)
