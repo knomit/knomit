@@ -285,10 +285,30 @@ func requireTableReadsEqualEdgeReadsOnEveryBranch(t *testing.T, svc *Service) {
 //
 // Sabotage: put back the target_repo filter (not covering), or unpin the join
 // order (FROM s CROSS JOIN k JOIN node_props_text fb: the skip-scan).
+//
+// Production stores carry planner statistics (PRAGMA optimize at open), and
+// the bad plan only appears with realistic ones, so the test loads the
+// statistics measured on the 250k-fact store before asking for the plan.
 func TestRefEdgesReaders_IncomingPlanIsCoveringAndPinned(t *testing.T) {
 	svc := newMergeTestStore(t)
+	db := svc.si.RepoForTest().DB()
 	write(t, svc, "main", "kb/r.md", "R")
 	write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
+	_, err := db.Exec(`ANALYZE`)
+	require.NoError(t, err)
+	for _, st := range [][3]string{
+		{"node_props_text", "idx_node_props_text_key_value", "2255547 1001 1 1"},
+		{"node_props_text", "sqlite_autoindex_node_props_text_1", "2255547 9 1"},
+		{"ref_edges", "idx_ref_edges_target", "748500 3"},
+		{"ref_edges", "ref_edges", "748500 2 1"},
+	} {
+		_, err := db.Exec(`DELETE FROM sqlite_stat1 WHERE tbl = ? AND idx = ?`, st[0], st[1])
+		require.NoError(t, err)
+		_, err = db.Exec(`INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES (?, ?, ?)`, st[0], st[1], st[2])
+		require.NoError(t, err)
+	}
+	_, err = db.Exec(`ANALYZE sqlite_schema`)
+	require.NoError(t, err)
 	plan, err := svc.gq.IncomingPlanForTest(context.Background())
 	require.NoError(t, err)
 	require.Contains(t, plan, "USING COVERING INDEX idx_ref_edges_target (target_blob=?)", "%s", plan)
