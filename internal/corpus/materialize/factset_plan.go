@@ -274,7 +274,7 @@ func (p *planner) adopt(r pref, dist int) (*pnode, error) {
 // levelReads is what one batched level read returned for one mount.
 type levelReads struct {
 	rows map[string]map[[2]string]index.RefLevelRow // by source blob, then (repo, path)
-	live map[string]index.LiveVersion              // unpin: local targets at the anchor
+	live map[string]index.LiveVersion               // unpin: local targets at the anchor
 }
 
 // resolveLevel reads and classifies the refs of every unresolved node of one
