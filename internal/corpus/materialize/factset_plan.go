@@ -53,6 +53,9 @@ type Stats struct {
 	HistoricalLiveAt int
 	// CacheMisses is the FactSets rebuilt from their frozen row (a replay).
 	CacheMisses int
+	// MaxUnitQueries is the most index reads one unit's plan made (the
+	// bound: Depth+2, plus one per foreign repo per level).
+	MaxUnitQueries int
 }
 
 func (s *Stats) add(o Stats) {
@@ -61,6 +64,7 @@ func (s *Stats) add(o Stats) {
 	s.UnitsPlanned += o.UnitsPlanned
 	s.HistoricalLiveAt += o.HistoricalLiveAt
 	s.CacheMisses += o.CacheMisses
+	s.MaxUnitQueries = max(s.MaxUnitQueries, o.MaxUnitQueries)
 }
 
 // FactHash is a fact's identity in a FactSet: 64 bits of FNV-1a over (repo

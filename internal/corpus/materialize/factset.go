@@ -799,6 +799,8 @@ func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, 
 	}
 	m.anchor = fr.Env.Anchor
 	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), writeID: fr.WriteRepo, fs: st, unit: u, st: &c.st}
+	before := c.st.IndexQueries
+	defer func() { c.st.MaxUnitQueries = max(c.st.MaxUnitQueries, c.st.IndexQueries-before) }()
 	n, err := p.rootNode(m, root.Path, root.Commit, root.Blob, root.Date)
 	if err != nil {
 		return nil, err
