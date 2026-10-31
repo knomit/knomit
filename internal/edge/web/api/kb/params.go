@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/engine/store/index"
 
 	"knomit/internal/edge/web/hal"
@@ -36,9 +37,22 @@ const (
 // ok=false, in which case the caller must return immediately without
 // touching w again.
 func limitParam(w http.ResponseWriter, r *http.Request) (int, bool) {
+	return limitParamOr(w, r, defaultLimit)
+}
+
+// listLimitParam is limitParam for the two routes the UI's results list
+// reads (the repo /search route and the /facts collection): absent, it is
+// materialize.UIListLimit, the ONE place the list's length is written, so a
+// FactSet's first UIListLimit units are that list by construction.
+func listLimitParam(w http.ResponseWriter, r *http.Request) (int, bool) {
+	return limitParamOr(w, r, materialize.UIListLimit)
+}
+
+// limitParamOr is limitParam with def for an absent ?limit=.
+func limitParamOr(w http.ResponseWriter, r *http.Request, def int) (int, bool) {
 	v := r.URL.Query().Get("limit")
 	if v == "" {
-		return defaultLimit, true
+		return def, true
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
