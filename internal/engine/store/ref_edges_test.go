@@ -1128,3 +1128,117 @@ func TestRefEdges_FallbackLearnsTheSelfRepoID(t *testing.T) {
 		require.Equal(t, table, got, "the fallback equals the table: no row for the dangling kb://self ref")
 	})
 }
+
+// The fallback learns the self repo id over a BATCH from the blobs with
+// exactly one candidate, and applies it to every blob of the batch (PR #694
+// delta review D1/D2). An ambiguous blob alone converts nothing.
+func TestRefEdges_FallbackLearnsTheSelfRepoIDOverTheBatch(t *testing.T) {
+	ctx := context.Background()
+	const foreign = "0123456789ab"
+	// unbackfilled empties the table and drops the sentinel, so reads go
+	// through the edge fallback, and makes the repo id unresolvable.
+	unbackfilled := func(t *testing.T, svc *Service) {
+		db := svc.si.RepoForTest().DB()
+		_, err := db.Exec(`DELETE FROM ref_edges`)
+		require.NoError(t, err)
+		_, err = db.Exec(`DELETE FROM meta WHERE key = 'ref_edges_backfilled'`)
+		require.NoError(t, err)
+		svc.gq.SetRootCommitForTest(func(context.Context, string) (string, error) { return "", errors.New("unavailable") })
+		t.Cleanup(func() { svc.gq.SetRootCommitForTest(nil) })
+	}
+	read := func(t *testing.T, svc *Service, blobs ...string) []index.RefEdgeRow {
+		rows, err := svc.gq.RefEdgesOfBlobs(ctx, blobs)
+		require.NoError(t, err)
+		return rows
+	}
+	of := func(rows []index.RefEdgeRow, blob string) []index.RefEdgeRow {
+		var out []index.RefEdgeRow
+		for _, r := range rows {
+			if r.SourceBlob == blob {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	selfOf := func(t *testing.T, svc *Service) string {
+		root, err := svc.si.RepoForTest().RootCommit(ctx, "main")
+		require.NoError(t, err)
+		return fact.ID12(root)
+	}
+
+	// (a) A's kb://self ref with an edge teaches the id to C, which has no
+	// candidate of its own (its only kb://self ref lost its edge as
+	// dangling): C gets no row, as in the table, instead of a cross-KB row
+	// naming this repo.
+	t.Run("batch-teaches-a-blob-with-no-candidate", func(t *testing.T) {
+		svc := newMergeTestStore(t)
+		db := svc.si.RepoForTest().DB()
+		_, rBlob := write(t, svc, "main", "kb/r.md", "R")
+		_, gBlob := write(t, svc, "main", "kb/g.md", "G")
+		self := selfOf(t, svc)
+		_, aBlob := write(t, svc, "main", "kb/a.md", "A", "kb://"+self+"/kb/r.md")
+		_, cBlob := write(t, svc, "main", "kb/c.md", "C", "kb://"+self+"/kb/g.md")
+		_, err := db.Exec(`DELETE FROM objects WHERE hash = ? AND type = 3`, gBlob)
+		require.NoError(t, err)
+		_, err = db.Exec(`DELETE FROM edges WHERE id IN (SELECT e.id FROM edges e
+			JOIN node_props_text tb ON tb.node_id = e.target_id AND tb.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash')
+			WHERE e.type = 'DERIVED_FROM' AND tb.value = ?)`, gBlob)
+		require.NoError(t, err)
+		_, err = svc.si.RepairRefEdgesForTest(ctx, "main")
+		require.NoError(t, err)
+		table := read(t, svc, aBlob, cBlob)
+		require.Len(t, table, 1, "precondition: A's local r row only, none for C")
+		require.Equal(t, aBlob, table[0].SourceBlob)
+		require.Equal(t, "", table[0].Repo)
+		require.Equal(t, rBlob, table[0].TargetBlob)
+
+		unbackfilled(t, svc)
+		alone := read(t, svc, cBlob)
+		require.Len(t, alone, 1, "precondition: C alone has no candidate and keeps its ref cross-KB")
+		require.Equal(t, self, alone[0].Repo)
+
+		got := read(t, svc, aBlob, cBlob)
+		require.Empty(t, of(got, cBlob), "in the batch C learns the id from A: no row for its dangling kb://self ref")
+		require.Equal(t, table, got, "the batch fallback equals the table")
+	})
+
+	// (b) B alone has two candidates (the foreign repo and self both cite
+	// kb/r.md, which B has an edge to and no explicit local ref for): it is
+	// ambiguous, so nothing is converted and both refs read as cross-KB.
+	t.Run("an-ambiguous-blob-alone-converts-nothing", func(t *testing.T) {
+		svc := newMergeTestStore(t)
+		write(t, svc, "main", "kb/r.md", "R")
+		self := selfOf(t, svc)
+		_, bBlob := write(t, svc, "main", "kb/b.md", "B", "kb://"+foreign+"/kb/r.md", "kb://"+self+"/kb/r.md")
+		unbackfilled(t, svc)
+		got := read(t, svc, bBlob)
+		require.Equal(t, []index.RefEdgeRow{
+			{SourceBlob: bBlob, Ord: 0, Repo: foreign, Path: "kb/r.md"},
+			{SourceBlob: bBlob, Ord: 1, Repo: self, Path: "kb/r.md"},
+		}, got, "neither candidate is picked: both refs stay cross-KB, unpinned")
+	})
+
+	// (c) The D1 batch: A (one candidate, self) and the ambiguous B. A does
+	// the learning, and B gets self applied: ord 0 stays the foreign cross-KB
+	// row, ord 1 is the local pinned row, as in the table.
+	t.Run("an-ambiguous-blob-does-not-switch-batch-learning-off", func(t *testing.T) {
+		svc := newMergeTestStore(t)
+		rCommit, rBlob := write(t, svc, "main", "kb/r.md", "R")
+		self := selfOf(t, svc)
+		_, aBlob := write(t, svc, "main", "kb/a.md", "A", "kb://"+self+"/kb/r.md")
+		_, bBlob := write(t, svc, "main", "kb/b.md", "B", "kb://"+foreign+"/kb/r.md", "kb://"+self+"/kb/r.md")
+		table := read(t, svc, aBlob, bBlob)
+		require.Equal(t, []index.RefEdgeRow{
+			{SourceBlob: bBlob, Ord: 0, Repo: foreign, Path: "kb/r.md"},
+			{SourceBlob: bBlob, Ord: 1, Repo: "", Path: "kb/r.md", TargetBlob: rBlob, TargetCommit: rCommit},
+		}, of(table, bBlob), "precondition: the table's rows for B")
+
+		unbackfilled(t, svc)
+		got := read(t, svc, aBlob, bBlob)
+		require.Equal(t, []index.RefEdgeRow{
+			{SourceBlob: bBlob, Ord: 0, Repo: foreign, Path: "kb/r.md"},
+			{SourceBlob: bBlob, Ord: 1, Repo: "", Path: "kb/r.md", TargetBlob: rBlob, TargetCommit: rCommit},
+		}, of(got, bBlob), "B's ord 1 comes back as the local pinned row")
+		require.Equal(t, table, got, "the batch fallback equals the table")
+	})
+}
