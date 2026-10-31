@@ -589,8 +589,8 @@ func TestFactSet_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
 // tip is not frozen; a cursor whose frozen tips include a repo the resuming
 // caller does not reach is the expiry 404.
 //
-// Sabotage: freeze tips without asking mayRead, and the narrow caller's ref
-// into beta is followed.
+// Sabotage: drop the reach check in reader.target, and the narrow caller is
+// served the wide caller's cursor.
 func TestFactSet_F11_UnreachableRepoIsUnavailable(t *testing.T) {
 	m := newMatStoreManager(t, "alpha", "beta")
 	alpha, beta := m.Get("alpha"), m.Get("beta")
