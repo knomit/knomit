@@ -47,3 +47,31 @@ func TestLocalFactRefs_EmptyRepoID(t *testing.T) {
 		t.Fatalf("localFactRefs = %v, want [kb/bare.md]", got)
 	}
 }
+
+// refSpecsOf is the ordered fact refs of a version (ref_edges): ord counts
+// EVERY ref, so it equals json_each(facts.refs).key; local and cross-KB refs
+// get a spec, the rest none; a (repo, path) cited twice keeps its first ord.
+func TestRefSpecsOf(t *testing.T) {
+	const local = "3ec012f5b4d2"
+	got := refSpecsOf([]string{
+		"https://example.com/x",                    // 0: external, no spec
+		"kb://7b4887ce51d9/kb/invariants/z/ghi.md", // 1: cross-KB
+		"kb/decisions/x/abc.md",                    // 2: local
+		"src://7b4887ce51d9/internal/x.go@aaa:bbb", // 3: source, no spec
+		"kb://3ec012f5b4d2/kb/decisions/x/abc.md",  // 4: the same local fact, qualified: dropped
+		"kb://3ec012f5b4d2/kb/invariants/y/def.md", // 5: local, qualified
+	}, local)
+	want := []refSpec{
+		{ord: 1, repo: "7b4887ce51d9", path: "kb/invariants/z/ghi.md"},
+		{ord: 2, repo: "", path: "kb/decisions/x/abc.md"},
+		{ord: 5, repo: "", path: "kb/invariants/y/def.md"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("refSpecsOf = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("refSpecsOf = %+v, want %+v", got, want)
+		}
+	}
+}

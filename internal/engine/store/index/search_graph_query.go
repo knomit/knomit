@@ -248,9 +248,9 @@ func (gs *GraphStore) blobHoldings(ctx context.Context, branchID int64, rows []d
 	return held, onBranch, dates, nil
 }
 
-// OutgoingAtCommit returns the set of (target_path, target_commit) refs
-// asserted by (path, commitHash) — DERIVED_FROM edges OUT of this Fact
-// where source_commit edge property matches.
+// OutgoingAtCommit returns the (target_path, target_commit) refs asserted by
+// the version of path live at commitHash — the ref_edges rows of its blob
+// (the mirror of its DERIVED_FROM edges), in the author's refs order.
 //
 // Unlike IncomingAtCommit, this does not filter by branch_commits: outgoing
 // edges naturally reflect the source's commit, which is already pinned by
@@ -262,6 +262,21 @@ func (gs *GraphStore) blobHoldings(ctx context.Context, branchID int64, rows []d
 // applied — branch reachability is intentionally not enforced here.
 func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
 	gs.probe("OutgoingAtCommit")
+	// The version's references come from ref_edges (one covering range scan
+	// of its blob's rows), in the AUTHOR's refs order (ord), not the
+	// DERIVED_FROM edge id order the edge read used, which does not follow
+	// it. The rows mirror the blob's edges (written in the same
+	// transaction; Verify's ref-edges check, repaired by a rebuild), so the
+	// set is the edge read's set.
+	return gs.outgoingAtCommit(ctx, branch, path, commitHash, func(blobHash string) ([]RefSummary, error) {
+		return refEdgesOutOfBlob(ctx, conn(ctx, gs.rh.DB()), blobHash)
+	})
+}
+
+// outgoingAtCommit is OutgoingAtCommit with the read of a blob's references
+// passed in (ref_edges in production; the DERIVED_FROM edge read in a test
+// that pins the two equal).
+func (gs *GraphStore) outgoingAtCommit(ctx context.Context, branch, path, commitHash string, refsOf func(blobHash string) ([]RefSummary, error)) ([]RefSummary, error) {
 	// Sparse-history walk-back: edges are stored anchored to the source's
 	// actual write-commit. Resolve `commitHash` (the query anchor) into the
 	// source path's effective write-commit ≤ commitHash. Without this, queries
@@ -292,9 +307,9 @@ func (gs *GraphStore) OutgoingAtCommit(ctx context.Context, branch, path, commit
 	if blobHash == "" {
 		return nil, nil
 	}
-	found, err := graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, false)
+	found, err := refsOf(blobHash)
 	if err != nil {
-		return nil, fmt.Errorf("OutgoingAtCommit: read edges: %w", err)
+		return nil, fmt.Errorf("OutgoingAtCommit: read references: %w", err)
 	}
 	candidates := make([]RefSummary, 0, len(found))
 	for _, rs := range found {

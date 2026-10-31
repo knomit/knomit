@@ -440,15 +440,16 @@ func (si *Index) upsert(ctx context.Context, branch, commitHash string, rec fact
 }
 
 // writePostCommitDerivedFrom writes time-aware DERIVED_FROM edges for the
-// given (path, blob_hash) at commitHash. Filters refs to local-only.
+// given (path, blob_hash) at commitHash, and its ref_edges rows (every fact
+// ref, local and cross-KB, in the author's order).
 // Logged on failure rather than returned: edges are recoverable via
 // rebuild and verify will flag any holes.
 func (si *Index) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
-	localRefs := localFactRefs(refs, si.localRepoID(ctx, branch))
-	if len(localRefs) == 0 {
+	specs := refSpecsOf(refs, si.localRepoID(ctx, branch))
+	if len(specs) == 0 {
 		return
 	}
-	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, path, blobHash, commitHash, localRefs); err != nil {
+	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, path, blobHash, commitHash, specs); err != nil {
 		log.Warn().Err(err).Str("path", path).Str("commit", commitHash).Msg("post-commit DERIVED_FROM edge write failed")
 	}
 }

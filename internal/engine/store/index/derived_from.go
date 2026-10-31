@@ -186,7 +186,7 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
 	tx storegit.CtxExecer,
 	branch, sourcePath, sourceBlobHash, sourceCommit string,
-	refs []string,
+	specs []refSpec,
 ) error {
 	srcID, err := si.graphNodeIDByBlob(ctx, sourcePath, sourceBlobHash)
 	if err != nil {
@@ -238,12 +238,12 @@ func (si *Index) graphAddDerivedFromAtCommitTx(
 			return nil
 		}
 		if !resolved {
-			if targets, err = si.resolveRefTargets(ctx, branch, sourcePath, sourceCommit, refs); err != nil {
+			if targets, err = si.resolveRefTargets(ctx, branch, sourcePath, sourceCommit, localPaths(specs)); err != nil {
 				return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
 			}
 			resolved = true
 		}
-		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets)
+		applied, err := si.applyBlobRefs(ctx, seen, srcID, sourceBlobHash, sourceCommit, targets, specs)
 		if err != nil {
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: %w", err)
 		}
@@ -320,14 +320,20 @@ func (si *Index) resolveRefTargets(ctx context.Context, branch, sourcePath, sour
 	return out, nil
 }
 
-// applyBlobRefs writes the claim and the edges in ONE transaction. It first
-// re-reads the claim inside the transaction: when it is no longer the one
-// the decision was made on (another indexer moved it), nothing is written
-// and applied=false, and the caller decides again.
-func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget) (applied bool, err error) {
-	// Nothing to write (the claim is already this node and commit, and every
-	// edge exists): no transaction, so a caller re-visiting a resolved blob
-	// never takes the write lock.
+// applyBlobRefs writes the claim, the edges and the blob's ref_edges rows in
+// ONE transaction. It first re-reads the claim inside the transaction: when it
+// is no longer the one the decision was made on (another indexer moved it),
+// nothing is written and applied=false, and the caller decides again.
+//
+// The ref_edges rows (writeRefRowsTx) are derived, inside the same
+// transaction, from the edges now on srcID and the blob's refs in the
+// author's order (specs), and replace whatever rows the blob had: a claim
+// move or a void claim re-claimed replaces the rows with the edges, and a
+// fill-in (Sync's pass 2, a rebuild) adds the rows of the edges it adds.
+func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64, blobHash, sourceCommit string, targets []refTarget, specs []refSpec) (applied bool, err error) {
+	// Nothing to write (the claim is already this node and commit, every
+	// edge exists and the rows match them): no transaction, so a caller
+	// re-visiting a resolved blob never takes the write lock.
 	if seen.live() && seen.node == srcID && seen.at == sourceCommit {
 		missing := false
 		for _, t := range targets {
@@ -341,7 +347,13 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 			}
 		}
 		if !missing {
-			return true, nil
+			current, err := refRowsCurrent(ctx, conn(ctx, si.rh.DB()), srcID, blobHash, specs)
+			if err != nil {
+				return false, err
+			}
+			if current {
+				return true, nil
+			}
 		}
 	}
 	tctx, tx, own, err := beginTxIfNeeded(ctx, si.rh.DB())
@@ -410,6 +422,14 @@ func (si *Index) applyBlobRefs(ctx context.Context, seen blobClaim, srcID int64,
 		}); err != nil {
 			return false, fmt.Errorf("set props: %w", err)
 		}
+	}
+	if si.beforeRefRowsWrite != nil {
+		if err := si.beforeRefRowsWrite(); err != nil {
+			return false, err
+		}
+	}
+	if err := writeRefRowsTx(tctx, db, srcID, blobHash, specs); err != nil {
+		return false, err
 	}
 	if own {
 		if err := tx.Commit(); err != nil {
@@ -581,6 +601,11 @@ func resetBlobRefsOnce(ctx context.Context, tx storegit.CtxExecer) error {
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM node_props_text WHERE key_id = (SELECT id FROM property_keys WHERE key = ?)`, refsCommitKey); err != nil {
 		return fmt.Errorf("reset reference edges: marks: %w", err)
+	}
+	// ref_edges mirrors the edges: it goes with them, and the re-resolve of
+	// every branch writes both again.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ref_edges`); err != nil {
+		return fmt.Errorf("reset reference edges: ref_edges: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) SELECT ? || name, '1' FROM branches`, blobRefsPendingPrefix); err != nil {
 		return fmt.Errorf("reset reference edges: pending branches: %w", err)

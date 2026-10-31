@@ -64,6 +64,39 @@ func (si *Index) SetBeforeRefEdgesWriteHookForTest(f func() error) {
 	si.beforeRefEdgesWrite = f
 }
 
+// SetBeforeRefRowsWriteHookForTest installs f to run inside the reference
+// edge transaction, after the claim and the edges are written and before the
+// ref_edges rows are; an error aborts the transaction. nil removes it.
+func (si *Index) SetBeforeRefRowsWriteHookForTest(f func() error) {
+	mustBeTest("SetBeforeRefRowsWriteHookForTest")
+	si.beforeRefRowsWrite = f
+}
+
+// SetRefEdgesChunkForTest sets how many blobs one RefEdgesOfBlobs statement
+// binds and returns the previous value, for the caller to restore.
+func SetRefEdgesChunkForTest(n int) int {
+	mustBeTest("SetRefEdgesChunkForTest")
+	old := refEdgesChunk
+	refEdgesChunk = n
+	return old
+}
+
+// OutgoingByEdgesForTest is OutgoingAtCommit reading the DERIVED_FROM edges
+// (the read before ref_edges) instead of ref_edges: everything else, the
+// anchor resolution and the filters, is the same code.
+func (gs *GraphStore) OutgoingByEdgesForTest(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	mustBeTest("OutgoingByEdgesForTest")
+	return gs.outgoingAtCommit(ctx, branch, path, commitHash, func(blobHash string) ([]RefSummary, error) {
+		return graphDerivedFromNeighbours(ctx, conn(ctx, gs.rh.DB()), path, blobHash, false)
+	})
+}
+
+// RepairRefEdgesForTest is repairRefEdges.
+func (si *Index) RepairRefEdgesForTest(ctx context.Context, branch string) (int, error) {
+	mustBeTest("RepairRefEdgesForTest")
+	return si.repairRefEdges(ctx, branch)
+}
+
 // SetBlobHoldingsChunkForTest sets how many pairs one blobHoldings statement
 // binds and returns the previous value, for the caller to restore.
 func SetBlobHoldingsChunkForTest(n int) int {
@@ -167,7 +200,7 @@ func (si *Index) ResolveTargetCommitForTest(ctx context.Context, branch, sourceP
 // GraphAddDerivedFromAtCommitTxForTest is graphAddDerivedFromAtCommitTx.
 func (si *Index) GraphAddDerivedFromAtCommitTxForTest(ctx context.Context, tx storegit.CtxExecer, branch, sourcePath, sourceBlobHash, sourceCommit string, refs []string) error {
 	mustBeTest("GraphAddDerivedFromAtCommitTxForTest")
-	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refs)
+	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refSpecsOf(refs, si.localRepoID(ctx, branch)))
 }
 
 // CommitEarlierForTest is commitEarlier.

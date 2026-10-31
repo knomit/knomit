@@ -114,6 +114,11 @@ type Index struct {
 	// claim is written and before the edges are: an error from it aborts the
 	// transaction, which is how a test stands in for a crash between the two.
 	beforeRefEdgesWrite func() error
+	// beforeRefRowsWrite fires inside applyBlobRefs's transaction, after the
+	// claim and the edges are written and before the blob's ref_edges rows
+	// are: an error from it aborts the transaction (a test's crash between
+	// the edges and the rows).
+	beforeRefRowsWrite func() error
 }
 
 // simEdgeKey identifies a fact version for node-id caching during the
@@ -692,8 +697,8 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		if err != nil {
 			continue
 		}
-		localRefs := localFactRefs(rec.Refs, repoID)
-		if len(localRefs) == 0 {
+		specs := refSpecsOf(rec.Refs, repoID)
+		if len(specs) == 0 {
 			continue
 		}
 		srcID, err := si.graphNodeIDByBlob(ctx, e.path, blobHash)
@@ -703,7 +708,7 @@ func (si *Index) reResolveBranchRefs(ctx context.Context, branch string, done ma
 		if srcID == 0 {
 			continue // the version has no graph node (orphaned): as phase B
 		}
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, localRefs); err != nil {
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, blobHash, e.commitHash, specs); err != nil {
 			failed = true
 			delete(done, key)
 			log.Warn().Err(err).Str("branch", branch).Str("path", e.path).Str("commit", e.commitHash[:8]).
@@ -1648,8 +1653,8 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 		}
 		done[e.commitHash+"|"+e.path] = struct{}{}
 
-		localRefs := localFactRefs(cf.rec.Refs, si.localRepoID(ctx, branch))
-		if len(localRefs) == 0 {
+		specs := refSpecsOf(cf.rec.Refs, si.localRepoID(ctx, branch))
+		if len(specs) == 0 {
 			continue
 		}
 
@@ -1674,7 +1679,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 			continue
 		}
 
-		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, localRefs); err != nil {
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.DB(), branch, e.path, cf.blobHash, e.commitHash, specs); err != nil {
 			ownFailed = true
 			delete(done, e.commitHash+"|"+e.path)
 			log.Warn().Err(err).Str("path", e.path).Str("commit", e.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
@@ -1688,6 +1693,16 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 	// re-run by the next rebuild.
 	if err := si.reResolvePendingBranches(ctx, branch, done, ownFailed); err != nil {
 		return 0, fmt.Errorf("rebuildGraph: %w", err)
+	}
+
+	// ref_edges mirrors the DERIVED_FROM edges. The write path keeps the two
+	// in step, but a store can drift (a crash before PR B's backfill, a
+	// hand edit, a bug): rewrite the rows of every blob whose rows disagree
+	// with its edges, so drift Verify reports does not outlive a rebuild. A
+	// failure is logged, not fatal (the next rebuild retries; failing it
+	// would turn a permanent per-blob failure into a re-index on every boot).
+	if _, err := si.repairRefEdges(ctx, branch); err != nil {
+		log.Warn().Err(err).Str("branch", branch).Msg("rebuildGraph: ref_edges repair failed; the next rebuild retries")
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
@@ -1859,15 +1874,11 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 // as paths — they never matched, so the edge was dropped without a trace.
 //
 // Foreign kb:// refs, src:// refs (knomit holds no source objects), external
-// URLs, and malformed refs are all excluded.
+// URLs, and malformed refs are all excluded. It is the local half of
+// refSpecsOf (which the edge writers use, for the order and the cross-KB
+// refs of ref_edges): a path cited twice is listed once.
 func localFactRefs(refs []string, localRepoID string) []string {
-	var out []string
-	for _, raw := range refs {
-		if r := fact.ClassifyRef(raw, localRepoID); r.Kind == fact.RefLocalFact {
-			out = append(out, r.Path)
-		}
-	}
-	return out
+	return localPaths(refSpecsOf(refs, localRepoID))
 }
 
 // localRepoID returns this repo's 12-hex identity, resolving it once.

@@ -752,6 +752,19 @@ type healBranch struct {
 // failed branch's schema version key, so it reports stale again next time.
 func healIndexBranches(ctx context.Context, im *index.Index, repo string, branches []healBranch, progress model.RebuildProgress) (ok bool) {
 	healFailed := false
+	// ref_edges (migration 000035) mirrors the DERIVED_FROM edges in the
+	// author's refs order; a store indexed before it existed is filled once
+	// (meta sentinel), from the edges and the blobs in the object table, before
+	// any sync or rebuild reads it. Not fatal: until it runs, outgoing reads see
+	// no rows for old versions, Verify reports the drift, and the next heal (or
+	// any rebuild) retries.
+	if len(branches) > 0 {
+		if n, err := im.BackfillRefEdges(ctx, branches[0].name); err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("ref_edges backfill failed; the next heal retries")
+		} else if n > 0 {
+			log.Info().Str("repo", repo).Int("blobs", n).Msg("ref_edges backfilled")
+		}
+	}
 	for i, branch := range branches {
 		if branch.stale {
 			if err := im.Rebuild(ctx, branch.name, progress); err != nil {
