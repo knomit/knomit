@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidate_RejectsEmptyOntologyRoot regresses the bug where a TOML
@@ -1013,5 +1014,40 @@ func TestLoad_ExternalAddressesFromTOML(t *testing.T) {
 	}
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "external_addresses") {
 		t.Fatalf("a path must fail the load, got %v", err)
+	}
+}
+
+// session.factset_anchor_wait: empty is the default, "0" never waits, a
+// value is parsed, and Validate refuses a bad or negative one.
+//
+// Sabotage: return the default for every value, and "0" and "750ms" read
+// as 5s.
+func TestSession_FactSetAnchorWait(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want time.Duration
+		bad  bool
+	}{
+		{"", DefaultFactSetAnchorWait, false},
+		{"0", 0, false},
+		{"750ms", 750 * time.Millisecond, false},
+		{"soon", 0, true},
+		{"-1s", 0, true},
+	} {
+		got, err := SessionConfig{FactSetAnchorWait: tc.in}.FactSetAnchorWaitDuration()
+		if tc.bad {
+			if err == nil {
+				t.Fatalf("%q: want an error", tc.in)
+			}
+			c := Defaults()
+			c.Session.FactSetAnchorWait = tc.in
+			if c.Validate() == nil {
+				t.Fatalf("%q: Validate must refuse it", tc.in)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Fatalf("%q: got %v, %v; want %v", tc.in, got, err, tc.want)
+		}
 	}
 }

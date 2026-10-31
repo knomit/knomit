@@ -566,12 +566,15 @@ func TestFactSet_F15_RootVersionAfterAMerge(t *testing.T) {
 	require.Equal(t, wrote, p.Facts[0].Commit, "the commit that wrote the blob, not the merge")
 }
 
-// F18. The watermark race: the index advancing during the search is retried
-// once; advancing again is ErrIndexMoved (503), and nothing is written.
+// F18. The watermark race: the index advancing during the search is searched
+// again once it holds still; advancing on every search until the deadline
+// (session.factset_anchor_wait) is ErrIndexMoved (503), and nothing is
+// written.
 //
 // Sabotage: skip the second watermark read, and the moving index is served.
 func TestFactSet_F18_WatermarkRace(t *testing.T) {
 	f := newFactSetFixture(t)
+	defer SetFactSetAnchorWaitForTest(300 * time.Millisecond)()
 	f.write(t, "kb/u/a.md", "A", "a body.")
 	n := 0
 	restore := SetFactSetSearchHookForTest(func() {
@@ -595,36 +598,89 @@ func TestFactSet_F18_WatermarkRace(t *testing.T) {
 	writes := f.svc.ToolSession().FactSetWrites()
 	_, _, err = FactSetFirstPage(context.Background(), f.scope("o2"), f.request("kb/u/"))
 	require.ErrorIs(t, err, ErrIndexMoved)
-	require.Equal(t, 2, n)
+	require.GreaterOrEqual(t, n, 2, "searched again while the deadline allowed")
 	require.Equal(t, writes, f.svc.ToolSession().FactSetWrites(), "nothing written")
 }
 
-// N1: a sync in flight (Index.Sync rewrites branch_facts before it moves the
-// watermark, holding a sync_pending marker meanwhile) leaves the watermark
-// unchanged across the search, yet the hits may be versions from after it:
-// the search is not anchored while a marker names another head, and is
-// anchored again once the marker names the watermark (the sync done).
+// N1 and round 2: a sync in flight (Index.Sync rewrites branch_facts before
+// it moves the watermark, holding a sync_pending marker meanwhile) leaves the
+// watermark unchanged across the search, yet the hits may be versions from
+// after it; an empty watermark is a Rebuild rewriting every row (or a branch
+// never synced). Neither is anchored on. The first call WAITS for a settled
+// watermark, bounded by session.factset_anchor_wait and its context: a
+// marker cleared within the wait is served (anchored at the watermark), one
+// that outlives it is ErrIndexMoved (503) with nothing written, a cancelled
+// context ends the wait at once, and wait 0 tries once.
 //
-// Sabotage: compare only the two watermarks (ignore settled), and a FactSet
-// is created during the sync.
-func TestFactSet_SearchIsNotAnchoredDuringASync(t *testing.T) {
+// Sabotage: treat an unsettled watermark as settled (served during the
+// sync); treat "" as settled (served mid-Rebuild); give up at the first
+// unsettled read (the cleared marker is not waited for).
+func TestFactSet_SearchWaitsForASettledWatermark(t *testing.T) {
 	f := newFactSetFixture(t)
 	f.write(t, "kb/u/a.md", "A", "a body.")
 	db := storetest.RawDB(f.svc)
-	wm, err := f.svc.HistoryQuery().Watermark(context.Background(), "agent/test")
+	ctx := context.Background()
+	wm, err := f.svc.HistoryQuery().Watermark(ctx, "agent/test")
 	require.NoError(t, err)
 	key := index.SyncPendingKey("agent/test")
-	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, key, "0123456789abcdef0123456789abcdef01234567")
-	require.NoError(t, err)
+	setMarker := func(v string) {
+		_, err := db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, key, v)
+		require.NoError(t, err)
+	}
+	other := "0123456789abcdef0123456789abcdef01234567"
 	writes := f.svc.ToolSession().FactSetWrites()
-	_, _, err = FactSetFirstPage(context.Background(), f.scope("o"), f.request("kb/u/"))
+
+	// A sync in flight past the deadline.
+	restore := SetFactSetAnchorWaitForTest(150 * time.Millisecond)
+	setMarker(other)
+	t0 := time.Now()
+	_, _, err = FactSetFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
 	require.ErrorIs(t, err, ErrIndexMoved, "rows may be past the watermark: not anchored")
+	require.GreaterOrEqual(t, time.Since(t0), 150*time.Millisecond, "it waited for the deadline")
 	require.Equal(t, writes, f.svc.ToolSession().FactSetWrites(), "nothing written")
 
-	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, wm, key)
-	require.NoError(t, err)
+	// Wait 0 tries once and does not wait.
+	restore()
+	restore = SetFactSetAnchorWaitForTest(0)
+	t0 = time.Now()
+	_, _, err = FactSetFirstPage(ctx, f.scope("o"), f.request("kb/u/"))
+	require.ErrorIs(t, err, ErrIndexMoved)
+	require.Less(t, time.Since(t0), 100*time.Millisecond)
+
+	// A cancelled context ends the wait.
+	restore()
+	restore = SetFactSetAnchorWaitForTest(10 * time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	t0 = time.Now()
+	_, _, err = FactSetFirstPage(cctx, f.scope("o"), f.request("kb/u/"))
+	cancel()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(t0), 2*time.Second, "the context, not the 10s deadline, ended it")
+
+	// The sync finishes within the wait: served, anchored at the watermark.
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		_, _ = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, wm, key)
+	}()
+	t0 = time.Now()
 	p := f.first(t, "o", f.request("kb/u/"))
+	require.GreaterOrEqual(t, time.Since(t0), 80*time.Millisecond, "it waited for the sync")
 	require.Equal(t, wm, p.Anchor, "a marker naming the watermark is a finished sync")
+
+	// Mid-Rebuild the watermark is "": not settled.
+	restore()
+	defer SetFactSetAnchorWaitForTest(100 * time.Millisecond)()
+	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, key)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE meta SET value = '' WHERE key = ?`, "last_commit:agent/test")
+	require.NoError(t, err)
+	writes = f.svc.ToolSession().FactSetWrites()
+	_, _, err = FactSetFirstPage(ctx, f.scope("o2"), f.request("kb/u/"))
+	require.ErrorIs(t, err, ErrIndexMoved, "an empty watermark has no rows to anchor on")
+	require.Equal(t, writes, f.svc.ToolSession().FactSetWrites())
+	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, wm, "last_commit:agent/test")
+	require.NoError(t, err)
+	require.Equal(t, wm, f.first(t, "o2", f.request("kb/u/")).Anchor)
 }
 
 // F19. Before the ref_edges backfill (sentinel unset, table empty) the

@@ -531,7 +531,8 @@ func (hq *HistoryQuery) Watermark(ctx context.Context, branch string) (string, e
 // SettledWatermark is Watermark plus whether the branch's derived rows are AT
 // it: false while an Index.Sync is rewriting branch_facts past it (its
 // sync_pending marker names another head), when a read of the rows can see
-// versions from after the watermark. Both come from one statement, so one
+// versions from after the watermark, and false while the watermark is empty
+// (never synced, or a Rebuild rewriting every row). Both come from one statement, so one
 // snapshot. A FactSet's anchored search needs settled on both sides of the
 // search (review N1).
 func (hq *HistoryQuery) SettledWatermark(ctx context.Context, branch string) (wm string, settled bool, err error) {
@@ -559,7 +560,9 @@ func (hq *HistoryQuery) SettledWatermark(ctx context.Context, branch string) (wm
 	if err := rows.Err(); err != nil {
 		return "", false, fmt.Errorf("SettledWatermark: %w", err)
 	}
-	return wm, pending == "" || pending == wm, nil
+	// An empty watermark is a branch never synced or a Rebuild in progress
+	// (it sets "" before rewriting every row): no rows to anchor on.
+	return wm, wm != "" && (pending == "" || pending == wm), nil
 }
 
 // ErrRefEdgesNotReady: ref_edges is not backfilled yet (the reads derive rows

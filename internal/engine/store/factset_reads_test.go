@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -209,6 +210,86 @@ func TestFactSetReads_LiveAtDuringSync(t *testing.T) {
 	require.False(t, hist, "sync done: the fast path again")
 	require.Equal(t, a2, after["kb/a.md"].Blob)
 	require.Equal(t, cA2, after["kb/a.md"].Commit)
+}
+
+// R2-1: a marker a failed sync left must not outlive the state it guards.
+// The sync at H1 panics (marker H1); the branch moves to H2 without a sync
+// (suspended, as a bulk replay or an external ref update); a Rebuild brings
+// the watermark to H2. The rebuilt branch is settled and LiveAt at its
+// watermark takes the fast path. Sync's already-at-HEAD return clears a
+// marker naming another head (and keeps none naming the head), and dropping
+// a branch removes its watermark and marker, so a branch recreated under the
+// name inherits its parent's watermark and starts settled.
+//
+// Sabotage: keep the marker in Rebuild (the rebuilt branch stays unsettled);
+// skip the early return's clearing; keep the keys in DropBranch.
+func TestFactSetReads_StaleMarkerIsCleared(t *testing.T) {
+	svc := newMergeTestStore(t)
+	ctx := context.Background()
+	hq := svc.HistoryQuery()
+	db := svc.si.RepoForTest().DB()
+	pending := func(branch string) string {
+		var v string
+		err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, index.SyncPendingKey(branch)).Scan(&v)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ""
+		}
+		require.NoError(t, err)
+		return v
+	}
+	write(t, svc, "main", "kb/a.md", "A")
+	svc.si.SetBeforeSyncCASHookForTest(func() { panic("crash mid-sync") })
+	func() {
+		defer func() { _ = recover() }()
+		write(t, svc, "main", "kb/a.md", "A two")
+	}()
+	svc.si.SetBeforeSyncCASHookForTest(nil)
+	h1 := pending("main")
+	require.NotEmpty(t, h1, "the failed sync left its marker")
+	svc.si.SetSyncSuspended(true)
+	write(t, svc, "main", "kb/b.md", "B")
+	svc.si.SetSyncSuspended(false)
+	h2, err := svc.HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.NotEqual(t, h1, h2)
+
+	require.NoError(t, svc.si.Rebuild(ctx, "main", nil))
+	wm, settled, err := hq.SettledWatermark(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, h2, wm)
+	require.Empty(t, pending("main"), "Rebuild clears the marker with the watermark")
+	require.True(t, settled, "a rebuilt, idle branch is settled")
+	_, hist, err := hq.LiveAt(ctx, "main", wm, []string{"kb/a.md"})
+	require.NoError(t, err)
+	require.False(t, hist, "LiveAt at the rebuilt watermark takes the fast path")
+
+	// Already at HEAD: a stale marker is cleared, the head's own is kept.
+	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, index.SyncPendingKey("main"), h1)
+	require.NoError(t, err)
+	require.NoError(t, svc.si.SyncLocked(ctx, "main"))
+	require.Empty(t, pending("main"), "the early return clears a marker naming another head")
+	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, index.SyncPendingKey("main"), h2)
+	require.NoError(t, err)
+	require.NoError(t, svc.si.SyncLocked(ctx, "main"))
+	require.Equal(t, h2, pending("main"), "a marker naming the head is harmless and kept")
+	_, settled, err = hq.SettledWatermark(ctx, "main")
+	require.NoError(t, err)
+	require.True(t, settled)
+
+	// DropBranch removes the branch's watermark and marker.
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
+	require.NoError(t, svc.IndexManager().Sync(ctx, "feature"))
+	_, err = db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, index.SyncPendingKey("feature"), h1)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.DropBranch(ctx, "feature"))
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM meta WHERE key IN (?, ?)`, "last_commit:feature", index.SyncPendingKey("feature")).Scan(&n))
+	require.Zero(t, n, "a dropped branch keeps no watermark and no marker")
+	require.NoError(t, svc.CreateBranch(ctx, "feature", "main"))
+	fw, settled, err := hq.SettledWatermark(ctx, "feature")
+	require.NoError(t, err)
+	require.Equal(t, h2, fw, "the recreated branch inherits its parent's watermark")
+	require.True(t, settled)
 }
 
 // CommitDates reads commit_log's (commit, path) primary key, batched.

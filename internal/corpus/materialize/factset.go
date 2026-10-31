@@ -18,6 +18,7 @@ import (
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/sessions"
+	"knomit/internal/foundation/config"
 )
 
 // A FACTSET materializes a search: every result is one unit, in search order,
@@ -296,6 +297,29 @@ func SetFactSetIdleTTL(d time.Duration) {
 	}
 }
 
+// factsetAnchorWait is session.factset_anchor_wait: how long a first call
+// waits for a settled watermark before ErrIndexMoved.
+var factsetAnchorWait atomic.Int64
+
+func init() { factsetAnchorWait.Store(int64(config.DefaultFactSetAnchorWait)) }
+
+// SetFactSetAnchorWait sets how long a first call waits for its branch's
+// index to settle (session.factset_anchor_wait); 0 tries once; a negative
+// value is ignored.
+func SetFactSetAnchorWait(d time.Duration) {
+	if d >= 0 {
+		factsetAnchorWait.Store(int64(d))
+	}
+}
+
+// settlePoll is the first and the longest pause between two looks at an
+// unsettled watermark: short against a sync's write window, doubling, so a
+// burst of syncs costs a handful of meta reads, not a spin.
+const (
+	settlePollMin = 5 * time.Millisecond
+	settlePollMax = 100 * time.Millisecond
+)
+
 // factsetNow is the heartbeat's clock (a test seam freezes it).
 var factsetNow = time.Now
 
@@ -413,34 +437,60 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 
 // searchAnchored runs the search between two reads of the write mount's
 // index watermark (the commit branch_facts reflects): when they agree, every
-// hit's (commit, blob) is its version AT that anchor. It retries once; a
-// second move is ErrIndexMoved.
+// hit's (commit, blob) is its version AT that anchor, provided both reads are
+// settled (HistoryQuery.SettledWatermark). Otherwise it waits and tries again
+// until session.factset_anchor_wait passes, then returns ErrIndexMoved.
 func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factsetHit, error) {
-	for attempt := 0; attempt < 2; attempt++ {
+	// The hits are branch_facts rows, AT the watermark only when no sync was
+	// rewriting them past it on either side of the search and the watermark
+	// did not move (a sync moves it last, review N1). Until then the call
+	// waits, bounded by session.factset_anchor_wait and the request's
+	// context, and searches only once the watermark has settled; past the
+	// deadline it is ErrIndexMoved (503, Retry-After).
+	deadline := time.Now().Add(time.Duration(factsetAnchorWait.Load()))
+	pause := settlePollMin
+	wait := func() error {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return ErrIndexMoved
+		}
+		t := time.NewTimer(min(pause, left))
+		defer t.Stop()
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-t.C:
+		}
+		pause = min(2*pause, settlePollMax)
+		return nil
+	}
+	for {
 		w1, settled1, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
 		if err != nil {
 			return "", nil, err
 		}
-		hits, err := runFactSetSearch(c.ctx, wm, req)
-		if err != nil {
+		c.st.IndexQueries++
+		if settled1 {
+			hits, err := runFactSetSearch(c.ctx, wm, req)
+			if err != nil {
+				return "", nil, err
+			}
+			if h := factsetSearchHook; h != nil {
+				h()
+			}
+			w2, settled2, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
+			if err != nil {
+				return "", nil, err
+			}
+			c.st.IndexQueries += 2
+			if w1 == w2 && settled1 && settled2 {
+				return w1, hits, nil
+			}
+		}
+		if err := wait(); err != nil {
 			return "", nil, err
-		}
-		if h := factsetSearchHook; h != nil {
-			h()
-		}
-		w2, settled2, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
-		if err != nil {
-			return "", nil, err
-		}
-		c.st.IndexQueries += 3
-		// The hits are branch_facts rows, AT the watermark only when no sync
-		// was rewriting them past it on either side of the search (a sync
-		// moves the watermark last, review N1).
-		if w1 == w2 && settled1 && settled2 {
-			return w1, hits, nil
 		}
 	}
-	return "", nil, ErrIndexMoved
 }
 
 // freezeTips is the indexed tip, now, of every repo other than the write
@@ -596,9 +646,10 @@ type fsCall struct {
 	// the following window, reading in the background.
 	pre  *prefetch
 	next *pending
-	// noPipeline: no window is read in the background, so every read is
-	// made inside the planning slot (the export: it gives the slot back
-	// between units, and a background window would read outside it).
+	// noPipeline: no window is read in the background, so every PLANNING
+	// read is made inside the planning slot (the export: it gives the slot
+	// back between units, and a background window would read outside it;
+	// its inflate reads run without the slot either way).
 	noPipeline bool
 	// keepFrom is the unit the page being served starts in: plans before it
 	// are dropped as soon as the planner passes them.

@@ -329,6 +329,18 @@ func (rh *Repo) DropBranchLocked(ctx context.Context, name string, id int64) err
 	if err := rh.onDropBranchRows(ctx, id); err != nil {
 		return err
 	}
+	// 2c. Delete the branch's index watermark and in-flight sync marker
+	// (meta last_commit:<name>, sync_pending:<name>). Left behind, the
+	// watermark would mark a dropped branch as maintained (fsck's
+	// indexedBranches) and, since CreateBranch inherits the parent's
+	// watermark with INSERT OR IGNORE, a branch recreated under the name
+	// would keep the dropped one's watermark instead; a stale marker would
+	// keep the recreated branch unsettled (review R2-1). The keys are spelled
+	// as the index spells them.
+	if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx,
+		`DELETE FROM meta WHERE key IN (?, ?)`, "last_commit:"+name, "sync_pending:"+name); err != nil {
+		return fmt.Errorf("drop branch meta: %w", err)
+	}
 	// 3. Delete the branches row. This cascades into branch_commits via
 	// the FK defined in migration 000004.
 	if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branches WHERE id = ?`, id); err != nil {

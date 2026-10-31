@@ -246,6 +246,14 @@ func (si *Index) setSyncPending(ctx context.Context, branch, head string) error 
 	return err
 }
 
+// clearStaleSyncPending removes a marker that names another head than head,
+// the watermark the branch's rows are at.
+func (si *Index) clearStaleSyncPending(ctx context.Context, branch, head string) error {
+	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = ? AND value != ?`, SyncPendingKey(branch), head)
+	return err
+}
+
 // clearSyncPending removes the marker only while it still names head: a
 // newer sync that set its own marker keeps it.
 func (si *Index) clearSyncPending(ctx context.Context, branch, head string) error {
@@ -384,6 +392,14 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 
 	if last == head {
 		log.Debug().Str("head", head[:8]).Msg("index sync: already at HEAD, skipping")
+		// A marker naming another head is a failed sync's: the watermark
+		// reached head some other way (a Rebuild after the branch moved
+		// without a sync), and the rows are at it. Sync and Rebuild hold the
+		// branch lock, so no sync of this branch is in flight to own it
+		// (review R2-1).
+		if err := si.clearStaleSyncPending(ctx, branch, head); err != nil {
+			return fmt.Errorf("sync: clear stale pending marker: %w", err)
+		}
 		return nil
 	}
 
@@ -649,6 +665,14 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 		}
 	}
 
+	// Every derived row of the branch was just rewritten at head, so a
+	// marker a failed sync left (naming any head) is void: clear it with
+	// the watermark, or the rebuilt branch stays unsettled while idle
+	// (review R2-1).
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = ?`, SyncPendingKey(branch)); err != nil {
+		return fmt.Errorf("rebuild: clear pending marker: %w", err)
+	}
 	return si.setLastCommit(ctx, branch, head)
 }
 

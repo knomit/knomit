@@ -158,9 +158,11 @@ var factsetExportFault func(unit int) error
 // read, from unit 1 to the end, on its OWN written set (the cached entry is
 // left as it is): it plans a unit holding a planning slot (waiting for one)
 // and gives the slot back before it writes, so a slow download never keeps
-// other FactSets from being planned. It reads nothing outside the slot (no
-// background window), and what it holds between units is charged to the
-// cache budget (fsCharge). The first unit is planned and inflated
+// other FactSets from being planned. Its PLANNING reads (the window, the
+// levels) are made inside the slot, never in a background window; its body
+// and RULE 1 reads (inflate: BlobsByHash, CurrentBlobs) run after the slot is
+// given back, bounded by the export slots and exportChunk sections at a time.
+// What it holds between units is charged to the cache budget (fsCharge). The first unit is planned and inflated
 // before anything is written, so a refusal is still a clean error; a failure
 // after that is returned with the stream started (the edge aborts the
 // connection: the export is never partial).
@@ -190,9 +192,10 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 	c.e.mu.Unlock()
 	c.e = nil
 	defer c.close()
-	// Every read is made holding a planning slot (no background window),
-	// and what the export holds between units is charged to the cache
-	// budget (review N2).
+	// The planning reads are made holding a planning slot (no background
+	// window); inflate's body and RULE 1 reads below run without it. What
+	// the export holds between units is charged to the cache budget (review
+	// N2).
 	c.noPipeline = true
 	charge := &fsCharge{}
 	defer fsCacheUncharge(charge)

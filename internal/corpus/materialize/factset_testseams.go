@@ -123,3 +123,12 @@ func FactSetBackgroundReadsForTest() int64 {
 	mustBeTest("FactSetBackgroundReadsForTest")
 	return backgroundReads.Load()
 }
+
+// SetFactSetAnchorWaitForTest sets session.factset_anchor_wait and returns
+// the restore.
+func SetFactSetAnchorWaitForTest(d time.Duration) (restore func()) {
+	mustBeTest("SetFactSetAnchorWaitForTest")
+	old := factsetAnchorWait.Load()
+	factsetAnchorWait.Store(int64(d))
+	return func() { factsetAnchorWait.Store(old) }
+}
