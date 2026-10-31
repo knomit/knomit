@@ -331,8 +331,9 @@ func graphDerivedFromNeighbours(ctx context.Context, ex storegit.CtxExecer, path
 // edge physically sits on (own) or another node of the same blob.
 type derivedFromNeighbour struct {
 	RefSummary
-	Blob string
-	Own  bool
+	Blob   string
+	Own    bool
+	NodeID int64
 }
 
 func graphDerivedFromNeighbourRows(ctx context.Context, ex storegit.CtxExecer, blobHash string, incoming bool) ([]derivedFromNeighbour, error) {
@@ -397,6 +398,7 @@ func graphDerivedFromNeighbourRows(ctx context.Context, ex storegit.CtxExecer, b
 			continue
 		}
 		seen[nodeID] = struct{}{}
+		r.NodeID = nodeID
 		r.Deleted = deleted == "true"
 		out = append(out, r)
 	}

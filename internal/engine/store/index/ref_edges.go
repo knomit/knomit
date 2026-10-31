@@ -271,6 +271,128 @@ func refEdgesOutOfBlob(ctx context.Context, ex storegit.CtxExecer, blob string) 
 	return out, rows.Err()
 }
 
+// refEdgesIncomingRows is the incoming reference read of a version from
+// ref_edges: every blob with a local row citing blobHash (through
+// idx_ref_edges_target), described by EVERY Fact node of that citing blob
+// (its claim node and any other path it has been at: a rename), one row per
+// node. Own marks the citing blob's claim node (where #693 keeps its edges,
+// the edge read's "own" node); Commit is the claim's refs_commit, the edge
+// read's source_commit. The order is left to the caller
+// (sortIncomingCandidates).
+func refEdgesIncomingRows(ctx context.Context, ex storegit.CtxExecer, blobHash string) ([]derivedFromNeighbour, error) {
+	rows, err := ex.QueryContext(ctx, `
+		WITH k AS (SELECT (SELECT id FROM property_keys WHERE key = 'path')      AS kp,
+		                  (SELECT id FROM property_keys WHERE key = 'blob_hash') AS kb,
+		                  (SELECT id FROM property_keys WHERE key = 'title')     AS kt,
+		                  (SELECT id FROM property_keys WHERE key = 'type')      AS kty,
+		                  (SELECT id FROM property_keys WHERE key = 'deleted')   AS kd,
+		                  (SELECT id FROM property_keys WHERE key = ?)           AS krc),
+		     s AS (SELECT DISTINCT r.source_blob AS sb
+		             FROM ref_edges r
+		            WHERE r.target_blob = ? AND r.target_repo = ''),
+		     c AS (SELECT s.sb,
+		                  (SELECT nb.node_id
+		                     FROM node_props_text nb
+		                     JOIN node_props_text rc ON rc.node_id = nb.node_id AND rc.key_id = k.krc
+		                    WHERE nb.key_id = k.kb AND nb.value = s.sb
+		                    ORDER BY nb.node_id LIMIT 1) AS cn
+		             FROM s CROSS JOIN k)
+		SELECT fb.node_id,
+		       fb.node_id = c.cn,
+		       c.sb,
+		       op.value,
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kt), ''),
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kty), ''),
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = c.cn AND key_id = k.krc), ''),
+		       COALESCE((SELECT value FROM node_props_text WHERE node_id = fb.node_id AND key_id = k.kd), '')
+		  FROM c CROSS JOIN k
+		  JOIN node_props_text fb ON fb.key_id = k.kb AND fb.value = c.sb
+		  JOIN node_props_text op ON op.node_id = fb.node_id AND op.key_id = k.kp`, refsCommitKey, blobHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []derivedFromNeighbour
+	for rows.Next() {
+		var r derivedFromNeighbour
+		var deleted string
+		var own int
+		if err := rows.Scan(&r.NodeID, &own, &r.Blob, &r.Path, &r.Title, &r.Type, &r.Commit, &deleted); err != nil {
+			return nil, err
+		}
+		if r.Path == "" {
+			continue
+		}
+		r.Own = own == 1
+		r.Deleted = deleted == "true"
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// sortIncomingCandidates puts incoming candidate rows in the documented order
+// (the same for the ref_edges read and the edge read): by the citing
+// version's source commit in commitEarlier's TOTAL order (committed_at, then
+// the number of same-second ancestors, then the hash; a commit with no
+// readable time last), then the citing blob, then the citer's path. It is
+// chronological in the citing version (so it matches write order, as the
+// edge read's edge-id order mostly did) and depends on no row id, so a
+// rebuild does not reorder it. The same-second ancestor count is computed
+// only for commits that tie on committed_at with another one in the list.
+func sortIncomingCandidates(ctx context.Context, rh *vcs.Repo, rows []derivedFromNeighbour) error {
+	type key struct {
+		ok   bool
+		t    int64
+		anc  int
+		hash string
+	}
+	keys := map[string]*key{}
+	perSecond := map[int64]int{}
+	for _, r := range rows {
+		if _, done := keys[r.Commit]; done {
+			continue
+		}
+		k := &key{hash: r.Commit}
+		if r.Commit != "" {
+			t, ok, err := commitTimeOf(ctx, rh, r.Commit)
+			if err != nil {
+				return fmt.Errorf("incoming order: %w", err)
+			}
+			k.t, k.ok = t, ok
+			if ok {
+				perSecond[t]++
+			}
+		}
+		keys[r.Commit] = k
+	}
+	for _, k := range keys {
+		if k.ok && perSecond[k.t] > 1 {
+			n, err := sameSecondAncestorsOf(ctx, rh, k.hash, k.t)
+			if err != nil {
+				return fmt.Errorf("incoming order: %w", err)
+			}
+			k.anc = n
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := keys[rows[i].Commit], keys[rows[j].Commit]
+		switch {
+		case a.ok != b.ok:
+			return a.ok
+		case a.t != b.t:
+			return a.t < b.t
+		case a.anc != b.anc:
+			return a.anc < b.anc
+		case a.hash != b.hash:
+			return a.hash < b.hash
+		case rows[i].Blob != rows[j].Blob:
+			return rows[i].Blob < rows[j].Blob
+		}
+		return rows[i].Path < rows[j].Path
+	})
+	return nil
+}
+
 // refEdgesChunk is how many source blobs one RefEdgesOfBlobs statement binds
 // (one variable each; SQLite's limit is 32766). A variable so a test can
 // lower it.

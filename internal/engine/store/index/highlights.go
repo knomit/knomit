@@ -106,7 +106,12 @@ type Highlight struct {
 // to the blob and sit on the node that first carried it (claimBlobRefs), so a
 // live node at another path with the same blob (a rename) is matched by blob,
 // not by node id.
-func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
+//
+// byRows (ref_edges is backfilled) reads the out-degree from ref_edges: the
+// distinct target paths of a blob's local rows, which mirror its edges. The
+// edge form is kept for a store whose ref_edges is not backfilled yet (PR
+// #694 review N2) and for the test that pins the two equal.
+func liveFactNodeCTE(branchID int64, pathPrefix string, byRows bool) (string, []any) {
 	q := `
 		WITH live AS (
 		    SELECT f.path, f.title, f.type, f.confidence, f.blob_hash, bf.commit_hash,
@@ -130,7 +135,16 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 		      JOIN property_keys kb ON kb.id = npb.key_id AND kb.key = 'blob_hash'
 		      JOIN node_labels nl ON nl.node_id = npp.node_id AND nl.label = 'Fact'
 		),
-		outd AS (
+		outd AS (`
+	if byRows {
+		q += `
+		    SELECT source_blob AS bh, COUNT(DISTINCT target_path) AS d
+		      FROM ref_edges
+		     WHERE target_repo = ''
+		     GROUP BY source_blob
+		)`
+	} else {
+		q += `
 		    SELECT sb.value AS bh, COUNT(DISTINCT tp.value) AS d
 		      FROM edges e
 		      JOIN node_props_text sb ON sb.node_id = e.source_id
@@ -140,7 +154,14 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 		     WHERE e.type = 'DERIVED_FROM'
 		     GROUP BY sb.value
 		)`
+	}
 	return q, args
+}
+
+// outdegreeByRows reports whether the out-degree reads ref_edges: the table
+// is backfilled, and no test asked for the edge form.
+func (fq *FactQuery) outdegreeByRows(ctx context.Context) bool {
+	return !fq.outdegreeByEdges.Load() && refEdgesReady(ctx, conn(ctx, fq.rh.DB()))
 }
 
 // highlights returns the top-N facts for the branch, path-scoped, ranked by
@@ -199,7 +220,7 @@ func (fq *FactQuery) highlightRows(ctx context.Context, branchID int64, pathPref
 		order = `ORDER BY impact DESC, live.confidence DESC`
 	}
 
-	cte, args := liveFactNodeCTE(branchID, pathPrefix)
+	cte, args := liveFactNodeCTE(branchID, pathPrefix, fq.outdegreeByRows(ctx))
 	where := ``
 	if exclude {
 		// Built from highlightExcludedTypes rather than a literal list so the
@@ -313,7 +334,7 @@ func (fq *FactQuery) separationCounts(ctx context.Context, branchID int64) (topF
 		      LEFT JOIN node ON node.pa = live.path AND node.bh = live.blob_hash
 		      LEFT JOIN outd ON outd.bh = node.bh
 		  ) j`
-	cte, args := liveFactNodeCTE(branchID, "")
+	cte, args := liveFactNodeCTE(branchID, "", fq.outdegreeByRows(ctx))
 	for _, t := range highlightExcludedTypes {
 		args = append(args, t)
 	}

@@ -108,6 +108,33 @@ func (si *Index) LocalRepoIDForTest(ctx context.Context, branch string) string {
 	return si.localRepoID(ctx, branch)
 }
 
+// IncomingByEdgesForTest is IncomingAtCommit reading the DERIVED_FROM edges
+// instead of ref_edges; everything else is the same code.
+func (gs *GraphStore) IncomingByEdgesForTest(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	mustBeTest("IncomingByEdgesForTest")
+	return gs.incomingAtCommit(ctx, branch, path, commitHash, false)
+}
+
+// BlastRadiusByEdgesForTest is BlastRadius walking the DERIVED_FROM edges.
+func (gs *GraphStore) BlastRadiusByEdgesForTest(ctx context.Context, branch, path string) (int, error) {
+	mustBeTest("BlastRadiusByEdgesForTest")
+	return gs.blastRadius(ctx, branch, path, false)
+}
+
+// ReverseDependentPathsByEdgesForTest is ReverseDependentPaths walking the
+// DERIVED_FROM edges.
+func (gs *GraphStore) ReverseDependentPathsByEdgesForTest(ctx context.Context, path string) (map[string]struct{}, error) {
+	mustBeTest("ReverseDependentPathsByEdgesForTest")
+	return gs.reverseDependentPaths(ctx, path, false)
+}
+
+// SetOutdegreeByEdgesForTest makes the highlights' out-degree read the
+// DERIVED_FROM edges (true) or ref_edges (false).
+func (fq *FactQuery) SetOutdegreeByEdgesForTest(byEdges bool) {
+	mustBeTest("SetOutdegreeByEdgesForTest")
+	fq.outdegreeByEdges.Store(byEdges)
+}
+
 // RepairRefEdgesForTest is repairRefEdges.
 func (si *Index) RepairRefEdgesForTest(ctx context.Context, branch string) (int, error) {
 	mustBeTest("RepairRefEdgesForTest")
@@ -259,7 +286,7 @@ func (si *Index) GraphBuildSimilarityEdgesForTest(ctx context.Context, path, blo
 // ReverseDependentPathsForTest is reverseDependentPaths.
 func (gs *GraphStore) ReverseDependentPathsForTest(ctx context.Context, path string) (map[string]struct{}, error) {
 	mustBeTest("ReverseDependentPathsForTest")
-	return gs.reverseDependentPaths(ctx, path)
+	return gs.reverseDependentPaths(ctx, path, true)
 }
 
 // GraphNodeIDByPropsForTest is graphNodeIDByProps.

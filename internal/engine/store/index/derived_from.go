@@ -858,8 +858,14 @@ func (si *Index) commitEarlier(ctx context.Context, a, b string) (bool, error) {
 // by), else the git committer time (a commit being indexed is not in
 // commit_log yet). ok=false when neither is readable.
 func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) {
+	return commitTimeOf(ctx, si.rh, h)
+}
+
+// commitTimeOf is commitTime over a repo handle (shared with the incoming
+// order, sortIncomingCandidates).
+func commitTimeOf(ctx context.Context, rh *vcs.Repo, h string) (int64, bool, error) {
 	var t int64
-	err := conn(ctx, si.rh.DB()).QueryRowContext(ctx,
+	err := conn(ctx, rh.DB()).QueryRowContext(ctx,
 		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`, h).Scan(&t)
 	if err == nil {
 		return t, true, nil
@@ -867,7 +873,7 @@ func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) 
 	if err != sql.ErrNoRows {
 		return 0, false, fmt.Errorf("commit time of %s: %w", h, err)
 	}
-	_, gt, gerr := si.rh.CommitParentsAndTime(h)
+	_, gt, gerr := rh.CommitParentsAndTime(h)
 	if gerr != nil {
 		return 0, false, nil
 	}
@@ -879,13 +885,18 @@ func (si *Index) commitTime(ctx context.Context, h string) (int64, bool, error) 
 // at older commits, so it is bounded by the commits of that second, plus
 // whatever clock skew puts above it).
 func (si *Index) sameSecondAncestors(ctx context.Context, h string, t int64) (int, error) {
+	return sameSecondAncestorsOf(ctx, si.rh, h, t)
+}
+
+// sameSecondAncestorsOf is sameSecondAncestors over a repo handle.
+func sameSecondAncestorsOf(ctx context.Context, rh *vcs.Repo, h string, t int64) (int, error) {
 	seen := map[string]struct{}{h: {}}
 	stack := []string{h}
 	n := 0
 	for len(stack) > 0 {
 		c := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		parents, _, err := si.rh.CommitParentsAndTime(c)
+		parents, _, err := rh.CommitParentsAndTime(c)
 		if err != nil {
 			continue // a missing commit object ends the walk on that side
 		}
@@ -894,7 +905,7 @@ func (si *Index) sameSecondAncestors(ctx context.Context, h string, t int64) (in
 				continue
 			}
 			seen[p] = struct{}{}
-			pt, ok, err := si.commitTime(ctx, p)
+			pt, ok, err := commitTimeOf(ctx, rh, p)
 			if err != nil {
 				return 0, err
 			}

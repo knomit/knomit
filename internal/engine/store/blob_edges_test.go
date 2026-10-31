@@ -684,6 +684,7 @@ func TestBlobEdges_IntroducingCommitIsTheEarliestHolder(t *testing.T) {
 // the other branch's kb/h.md shows up on main.
 func TestBlobEdges_RenameIncomingListsTheLivePath(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	c1, _ := write(t, svc, "main", "kb/r.md", "R")
 	write(t, svc, "main", "kb/f.md", "F", "kb/r.md")
@@ -1092,6 +1093,7 @@ func TestBlobEdges_MergeCarriesBlobUnchanged(t *testing.T) {
 	}
 	build := func(t *testing.T) world {
 		svc := newMergeTestStore(t)
+		t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 		t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 		ctx := context.Background()
 		db := svc.si.RepoForTest().DB()
@@ -1286,6 +1288,7 @@ func TestBlobEdges_SameBytesOnTwoBranches(t *testing.T) {
 			name := map[bool]string{true: "same-path", false: "other-path"}[samePath] + "/" + mode
 			t.Run(name, func(t *testing.T) {
 				svc := newMergeTestStore(t)
+				t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 				t.Cleanup(func() { requireRowsMirrorEdges(t, svc) }) // ref_edges mirrors the edges (PR B)
 				ctx := context.Background()
 				db := svc.si.RepoForTest().DB()
@@ -1445,6 +1448,7 @@ func TestBlobEdges_TargetResolvedOnAnotherBranchRendersOnTheReader(t *testing.T)
 // half of blobHoldings), and the retracted citer disappears from brC.
 func TestBlobEdges_RetractedCiterOnTheSecondBranchIsListed(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")
@@ -1528,6 +1532,7 @@ func TestBlobEdges_ChangedSinceCitedComparesBlobs(t *testing.T) {
 // rows disappear.
 func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")
 	c1, _ := write(t, svc, "main", "kb/f.md", "F v1", "kb/r.md")
@@ -1554,6 +1559,7 @@ func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
 // Sabotage: process only the first chunk, and the rows past it vanish.
 func TestBlobEdges_IncomingIsChunkIndependent(t *testing.T) {
 	svc := newMergeTestStore(t)
+	t.Cleanup(func() { requireTableReadsEqualEdgeReadsOnEveryBranch(t, svc) }) // ref_edges is the read path (PR #694)
 	ctx := context.Background()
 	db := svc.si.RepoForTest().DB()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")

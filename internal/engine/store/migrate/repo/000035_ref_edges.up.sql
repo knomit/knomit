@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS ref_edges (
     PRIMARY KEY (source_blob, ord)
 ) WITHOUT ROWID;
 
+-- The incoming direction (IncomingAtCommit, BlastRadius) probes by the CITED
+-- blob: "which blobs cite this version". Anchored by blob alone, as the edge
+-- read was (a version is a blob; the path is not part of the match), so the
+-- index is (target_blob); being a WITHOUT ROWID table, each entry also carries
+-- (source_blob, ord), so the probe never touches the table. Partial: cross-KB
+-- rows (target_blob NULL) are never probed this way.
+CREATE INDEX IF NOT EXISTS idx_ref_edges_target ON ref_edges(target_blob) WHERE target_blob IS NOT NULL;
+
 INSERT OR IGNORE INTO meta(key, value)
 SELECT 'ref_edges_backfilled', '1'
  WHERE NOT EXISTS (SELECT 1 FROM node_labels WHERE label = 'Fact');

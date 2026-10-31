@@ -18,6 +18,9 @@ import (
 // FactQuery is the fact read/search/existence queries.
 type FactQuery struct {
 	rh *vcs.Repo
+	// outdegreeByEdges makes the highlights' out-degree read the DERIVED_FROM
+	// edges instead of ref_edges (a test seam; false in production).
+	outdegreeByEdges atomic.Bool
 	ov atomic.Pointer[Overrides]
 	// fault is the failure-injection hook of Facade.SetReadFaultForTest;
 	// nil in production, where nothing can set it.
