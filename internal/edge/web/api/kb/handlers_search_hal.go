@@ -132,7 +132,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			minSimilarity = v
 		}
 
-		limit, ok := limitParam(w, r)
+		limit, ok := listLimitParam(w, r)
 		if !ok {
 			return
 		}

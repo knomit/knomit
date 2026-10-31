@@ -73,7 +73,7 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 		a := hal.Anchor{Branch: branch}
 		qp := r.URL.Query()
 
-		limit, ok := limitParam(w, r)
+		limit, ok := listLimitParam(w, r)
 		if !ok {
 			return
 		}

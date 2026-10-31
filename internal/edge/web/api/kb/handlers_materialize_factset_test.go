@@ -78,6 +78,26 @@ func searchPaths(t *testing.T, h http.Handler, query string) []string {
 	return out
 }
 
+// recentPaths is what the /facts collection lists for query (sort=recent).
+func recentPaths(t *testing.T, h http.Handler, query string) []string {
+	t.Helper()
+	code, _, body := getMaterialize(t, h, "/repos/alpha/branches/agent:test/facts?"+query)
+	require.Equal(t, http.StatusOK, code, body)
+	var v struct {
+		Embedded struct {
+			Facts []struct {
+				Path string `json:"path"`
+			} `json:"facts"`
+		} `json:"_embedded"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &v))
+	var out []string
+	for _, r := range v.Embedded.Facts {
+		out = append(out, r.Path)
+	}
+	return out
+}
+
 // seedShared writes the factset fixture under kb/u/ (the results) and kb/z/
 // (what they build on):
 //
@@ -328,10 +348,13 @@ func TestFactSet_CursorOwnershipRefusalAndReplacement(t *testing.T) {
 
 // Paging past the UI's 50: the factset holds every result up to Facts (the
 // default is all, capped at 500), and its first 50 units are the /search
-// list's 50, in order. facts=N keeps the best N.
+// list's DEFAULT page, in order (F23: the list's length is written once, as
+// materialize.UIListLimit, the route's default; the UI sends no limit), and
+// likewise for sort=recent and the /facts collection. facts=N keeps the best
+// N.
 //
 // Sabotage: run the search with the UI's limit (50), and unit 51.. is
-// missing.
+// missing; give the routes another default, and the list is not the prefix.
 func TestFactSet_PagesPastFiftyResults(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	alpha := m.Get("alpha")
@@ -339,8 +362,9 @@ func TestFactSet_PagesPastFiftyResults(t *testing.T) {
 		writeMatFact(t, alpha, "agent/test", fmt.Sprintf("kb/p/f%02d.md", i), fmt.Sprintf("F%02d", i), "body.")
 	}
 	h := asPrincipal("u1", newTestRouter(m))
-	ui := searchPaths(t, h, "path=kb/p/&limit=50")
-	require.Len(t, ui, 50)
+	ui := searchPaths(t, h, "path=kb/p/")
+	require.Len(t, ui, materialize.UIListLimit, "the /search route's default page is the UI list")
+	require.Equal(t, 50, materialize.UIListLimit)
 
 	nodes, pages := readFactSet(t, h, factsetBase+"?path=kb/p/&depth=0&limit=5")
 	require.Equal(t, 60, pages[0].Units)
@@ -350,6 +374,15 @@ func TestFactSet_PagesPastFiftyResults(t *testing.T) {
 	}
 	require.Len(t, roots, 60)
 	require.Equal(t, ui, roots[:50], "the first 50 units are the list the UI shows")
+
+	recentList := recentPaths(t, h, "path=kb/p/&sort=recent")
+	require.Len(t, recentList, materialize.UIListLimit, "the /facts collection's default page is the UI list")
+	rnodes, _ := readFactSet(t, h, factsetBase+"?path=kb/p/&sort=recent&depth=0&limit=5")
+	var rroots []string
+	for _, n := range rnodes {
+		rroots = append(rroots, n.Path)
+	}
+	require.Equal(t, recentList, rroots[:50], "sort=recent: the first 50 units are the recent list")
 
 	_, few := readFactSet(t, h, factsetBase+"?path=kb/p/&depth=0&limit=5&facts=7")
 	require.Equal(t, 7, few[0].Units)
