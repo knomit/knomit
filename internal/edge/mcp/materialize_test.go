@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"strings"
 	"testing"
 
@@ -192,8 +193,9 @@ func omitted(n materialize.Node) []string {
 // pinned at a version that carries the cycle: drafts first, then C is
 // rewritten to cite R, then A, B and R are rewritten (new content, so new
 // versions) to cite the new C, A and B. R's two versions differ only in
-// confidence: C cites the OLDER R, whose body is the same, so that citation
-// is not marked as a different version (bodies are compared, never commits).
+// confidence: C cites the OLDER R, whose body is the same but whose BLOB is
+// not, so that citation IS marked as a different version (ruling Q3: blobs
+// are compared, never bodies or commits).
 func seedT1(t *testing.T, ri *repos.RepoInstance) {
 	obs(t, ri, "kb/t1/d.md", "D")
 	writeMat(t, ri, "kb/t1/c.md", "C", "C draft.", fact.Observation)
@@ -224,7 +226,10 @@ func TestMaterialize_RefsOrderBackRefsAndCycle(t *testing.T) {
 	c := nodeByTitle(t, nodes, "C")
 	require.Equal(t, []int{1}, linkNs(c), "the cycle C→R is a back-reference to F01, never a second copy")
 	require.NotEqual(t, nodes[0].Commit, rCitedByC(t, ri), "C cites an OLDER version of R than the one written")
-	require.False(t, c.BuildsOn[0].DifferentVersion, "C cites an older R whose body is identical: not a different version")
+	// Ruling Q3 (2026-10-31): different_version compares BLOBS, so ANY
+	// change counts: the older R differs from the written one in its
+	// confidence alone (its body is the same), and that is a different version.
+	require.True(t, c.BuildsOn[0].DifferentVersion, "C cites an older R (another blob: confidence 0.88): a different version")
 	require.Equal(t, materialize.Truncation{}, first.Truncated, "nothing was cut at depth 2")
 }
 
@@ -744,11 +749,15 @@ func TestMaterialize_AgentPagesConcatenateToTheDocument(t *testing.T) {
 		require.Equal(t, want, got, "limit %d", limit)
 	}
 
-	// The shape, with the volatile parts (anchor, dates) normalized.
+	// The shape, with the volatile parts (anchor, dates) normalized, and each
+	// fact's anchor (f-<16 hex> of FactHash(repo, path), the same in every
+	// appearance) shown as f-<file id> for reading.
 	norm := strings.ReplaceAll(want, doc.Anchor[:7], "ANCHOR")
 	for _, n := range doc.Nodes {
 		require.NotEmpty(t, n.Date)
 		norm = strings.ReplaceAll(norm, n.Date, "DATE")
+		require.Equal(t, materialize.AnchorOf(materialize.FactHash(n.Repo, n.Path)), n.AnchorID, "the anchor of %s", n.Path)
+		norm = strings.ReplaceAll(norm, n.AnchorID, "f-"+strings.TrimSuffix(path.Base(n.Path), ".md"))
 	}
 	bt := "`"
 	require.Equal(t, `# Src

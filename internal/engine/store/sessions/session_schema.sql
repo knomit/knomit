@@ -36,12 +36,26 @@ CREATE TABLE tool_queue (
     session_id  TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
     path        TEXT NOT NULL,
     commit_hash TEXT NOT NULL,
+    blob        TEXT NOT NULL DEFAULT '',     -- the version's blob hash when the producer knows it (knomit_query: the hit's blob)
     sort_key    INTEGER NOT NULL DEFAULT 0,   -- SQL-orderable consume order (was `depth`)
     state       TEXT NOT NULL DEFAULT '',     -- per-item JSON payload (query: frozen snippet)
     PRIMARY KEY (session_id, path, commit_hash)
 );
 
 CREATE INDEX tool_queue_session_sort ON tool_queue(session_id, sort_key);
+
+-- A materialized search (internal/corpus/materialize FactSet): its FROZEN
+-- inputs, written ONCE at creation in the same transaction as its
+-- tool_sessions row (which carries owner, binding pin and read set, and is
+-- what the idle reaper deletes, cascading here). JSON: the search, the
+-- options, the anchor, the frozen tips of the reachable repos and the roots as
+-- (repo, path, commit, blob). Never updated: the reading position travels in
+-- the cursor token, and the walk's state is an in-memory cache rebuilt by
+-- replay.
+CREATE TABLE factsets (
+    session_id TEXT PRIMARY KEY REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    frozen     BLOB NOT NULL
+);
 CREATE INDEX tool_sessions_last_used ON tool_sessions(last_used_at);
 
 -- Pipeline work-stealing sessions (review/distill/reflect/hypothesize).

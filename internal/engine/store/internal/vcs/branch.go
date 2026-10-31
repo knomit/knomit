@@ -571,6 +571,7 @@ func (rh *Repo) ResolveRef(ctx context.Context, branch string) (plumbing.Hash, e
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
 func (rh *Repo) ReadFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+	noteGitPathRead("ReadFileAtCommit")
 	rh.gitTreeReads.Add(1)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
@@ -622,6 +623,7 @@ func (rh *Repo) FirstParentCommit(ctx context.Context, commitHash string) (strin
 // sufficient. Compare with ReadFileAtCommit above which falls back for
 // pre-normalisation legacy paths.
 func (rh *Repo) ReadBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+	noteGitPathRead("ReadBlobHashAtCommit")
 	rh.gitTreeReads.Add(1)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)

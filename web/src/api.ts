@@ -2567,7 +2567,10 @@ export const api = {
     const { text, domains, entities } = parseSearchQuery(q);
     const allDomains = [...domains, ...(opts?.domains || [])];
     const allEntities = [...entities, ...(opts?.entities || [])];
-    const p = new URLSearchParams({ limit: '50' });
+    // No limit: the server's default is the results list's length
+    // (materialize.UIListLimit), the one place it is written, so a FactSet
+    // of this search starts with exactly this list.
+    const p = new URLSearchParams();
     if (text) p.set('q', text);
     if (allDomains.length) p.set('domain', allDomains.join(','));
     if (allEntities.length) p.set('entities', allEntities.join(','));
@@ -2598,7 +2601,8 @@ export const api = {
   },
 
   factCommits: (repo: string, branch: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {
-    const p = new URLSearchParams({ limit: '50' });
+    // No limit: the server's default page size applies.
+    const p = new URLSearchParams();
     if (after) p.set('after', after);
     if (from) p.set('from', from);
     if (before) p.set('before', before);
@@ -2662,11 +2666,14 @@ export const api = {
   cancelIndex: (cancelHref: string): Promise<RepoInfo> =>
     fetchJSON<RepoInfo>(apiUrl(cancelHref), { method: 'POST' }),
 
-  recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
+  recent: (repo: string, branch: string, path: string, query = '', limit?: number, offset = 0,
     opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[];
              motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean }
   ): Promise<RecentResponse> => {
-    const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
+    // Without a limit the server's default is the results list's length
+    // (materialize.UIListLimit).
+    const p = new URLSearchParams({ sort: 'recent', path, offset: String(offset) });
+    if (limit !== undefined) p.set('limit', String(limit));
     if (query) p.set('q', query);
     // CSV, like every other multi-value facet here: `type` is OR-combined
     // server-side (splitCSV → SearchOptions.IncludeTypes), so a second type chip

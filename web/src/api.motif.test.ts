@@ -220,3 +220,27 @@ describe('the /motifs collection and cluster clients', () => {
     expect(c.definition).toBeUndefined();
   });
 });
+
+// F23 (PR C): the results list's length is written ONCE, on the server
+// (materialize.UIListLimit, the /search and /facts default). The client sends
+// no limit for the list, so the FactSet of a search starts with exactly the
+// list the UI shows. Sabotage: send limit=50 again, and these fail.
+describe('the results list takes the server default limit', () => {
+  it('api.search sends no limit', () => {
+    const f = mockFetch();
+    api.search('r', 'b', 'some text', 'kb/x/');
+    expect(urlOf(f).pathname).toBe('/api/v1/repos/r/branches/b/search');
+    expect(paramOf(f, 'q')).toBe('some text');
+    expect(urlOf(f).searchParams.has('limit')).toBe(false);
+  });
+
+  it('api.recent sends no limit unless the caller pages with one', () => {
+    const f = mockFetch();
+    api.recent('r', 'b', 'kb', '');
+    expect(paramOf(f, 'sort')).toBe('recent');
+    expect(urlOf(f).searchParams.has('limit')).toBe(false);
+    api.recent('r', 'b', 'kb', '', 7, 14);
+    expect(urlOf(f, 1).searchParams.get('limit')).toBe('7');
+    expect(urlOf(f, 1).searchParams.get('offset')).toBe('14');
+  });
+});
