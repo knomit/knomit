@@ -54,8 +54,9 @@ func chainWalkActiveCommit(t *testing.T, db *sql.DB, path, from string) (string,
 // (21 off-line candidates above main's own write) answers nothing; count
 // 'deleted' rows as writes, and the delete commit answers itself; drop the
 // walk's `walk.wrote = 0` guard and take its last wrote row, and the oldest
-// write is answered; order candidates by committed_at, and the reversed-times
-// phase answers an ancestor.
+// write is answered; order candidates by committed_at instead of depth, and
+// main's own write of kb/s.md is passed over (already as indexed, and in the
+// reversed-times phase an ancestor would be preferred whatever the paging).
 func TestResolveActiveCommitForPath_EqualsChainWalk(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
