@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
@@ -58,4 +61,24 @@ func TestMaterialize_BusySessionStoreIsRetryable(t *testing.T) {
 	var p matPage
 	require.NoError(t, json.Unmarshal([]byte(text), &p), text)
 	require.Equal(t, first.NTo+1, p.NFrom, "the retry serves the page the busy call did not")
+}
+
+// N7 (review of PR #692): a factset failure that is not the caller's to fix is
+// a FIXED tool text, as on REST: the internal error (SQL, a file path) is
+// only logged. The caller's own input errors and the factset's bounds are
+// still named.
+//
+// Sabotage: return err.Error() for the default case, and the path leaks.
+func TestFactSetToolError_InternalTextNeverLeaks(t *testing.T) {
+	internal := fmt.Errorf("spill factset: open: /home/someone/.knomit/x.db.factsets/abc.db: %w", errors.New("disk I/O error"))
+	res := factsetToolError(internal)
+	require.True(t, res.IsError)
+	text := resultText(t, res)
+	require.Equal(t, errFactSetFailed, text)
+	require.NotContains(t, text, "/home/")
+
+	invalid := factsetToolError(fmt.Errorf("%w: facts must be between 1 and 500, got 0", materialize.ErrInvalid))
+	require.Contains(t, resultText(t, invalid), "facts must be between 1 and 500")
+	require.Equal(t, errMaterializeExpired, resultText(t, factsetToolError(materialize.ErrCursorExpired)))
+	require.Equal(t, errSessionBusy, resultText(t, factsetToolError(materialize.ErrStoreBusy)))
 }

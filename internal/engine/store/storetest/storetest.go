@@ -118,3 +118,11 @@ func SetFallbackAgentID(f func(branch string) string) { vcs.SetTestFallbackAgent
 // SetFastDurability turns SQLite's fsyncs off for every database this test
 // binary opens from then on. Call it from TestMain, before m.Run.
 func SetFastDurability(on bool) { sqlite.SetTestFastDurability(on) }
+
+// SetGitPathReadHook installs f as the hook every per-path git read of every
+// store in this test binary reports to (ReadFileAtCommit, ReadBlobHashAtCommit,
+// ResolveActiveCommitForPath), and returns the restore. A read path that must
+// decode no git object per fact fails the test from f.
+func SetGitPathReadHook(f func(name string)) (restore func()) {
+	return vcs.SetGitPathReadHookForTest(f)
+}

@@ -53,6 +53,7 @@ const FirstParentChainCTE = `
 // facts.Index's fallback-before read resolves the last-valid version through the
 // SAME index walk the graph resolver uses, instead of a divergent go-git walk.
 func (rh *Repo) ResolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+	noteGitPathRead("ResolveActiveCommitForPath")
 	if fromCommit == "" {
 		return "", false, nil
 	}

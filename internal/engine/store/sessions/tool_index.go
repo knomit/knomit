@@ -22,6 +22,10 @@ import (
 // DB handle to reach for by mistake.
 type ToolIndex struct {
 	db *sql.DB
+	// fsWrites counts the FactSet writes (factset_index.go).
+	fsWrites factsetWrites
+	// hooks run when the owning store closes (OnClose).
+	hooks closeHooks
 }
 
 // CreateToolSession creates a new tool session for the given tool, branch, path
@@ -143,14 +147,14 @@ func (ti *ToolIndex) EnqueuePaths(ctx context.Context, sessionID string, items [
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO tool_queue(session_id, path, commit_hash, sort_key, state) VALUES (?, ?, ?, ?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO tool_queue(session_id, path, commit_hash, blob, sort_key, state) VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("EnqueuePaths prepare: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, item := range items {
-		if _, err := stmt.ExecContext(ctx, sessionID, item.Path, item.CommitHash, item.SortKey, item.State); err != nil {
+		if _, err := stmt.ExecContext(ctx, sessionID, item.Path, item.CommitHash, item.Blob, item.SortKey, item.State); err != nil {
 			return fmt.Errorf("EnqueuePaths exec: %w", err)
 		}
 	}
@@ -191,7 +195,7 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 	}()
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT rowid, path, commit_hash, sort_key, state FROM tool_queue
+		`SELECT rowid, path, commit_hash, blob, sort_key, state FROM tool_queue
 		 WHERE session_id = ?
 		 ORDER BY sort_key ASC, rowid ASC
 		 LIMIT ?`,
@@ -206,7 +210,7 @@ func (ti *ToolIndex) DequeuePaths(ctx context.Context, sessionID string, limit i
 	for rows.Next() {
 		var rowID int64
 		var item model.QueueItem
-		if err := rows.Scan(&rowID, &item.Path, &item.CommitHash, &item.SortKey, &item.State); err != nil {
+		if err := rows.Scan(&rowID, &item.Path, &item.CommitHash, &item.Blob, &item.SortKey, &item.State); err != nil {
 			rows.Close()
 			return nil, busy(fmt.Errorf("DequeuePaths scan: %w", err))
 		}
