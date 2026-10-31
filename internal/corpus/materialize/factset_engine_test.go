@@ -742,3 +742,85 @@ func TestFactSet_ExportStreamsWithoutAPlanningSlot(t *testing.T) {
 type writerFunc func([]byte) (int, error)
 
 func (w writerFunc) Write(b []byte) (int, error) { return w(b) }
+
+// F16. Bounds: 501 results make 500 units (the Facts cap); over the
+// planning-slot cap a call that must plan is refused at once
+// (ErrFactSetBusy) while a page served from an already planned unit takes no
+// slot; over the export cap an export is refused at once.
+//
+// Sabotage: let the search ask for one more than Facts (501 units); make the
+// planning slot or the export slot always available (no refusal).
+func TestFactSet_F16_Bounds(t *testing.T) {
+	f := newFactSetFixture(t)
+	ctx := context.Background()
+	files := map[string]string{}
+	for i := range 501 {
+		ff := fact.NewFact("kb/c/r" + leftPad(i) + ".md")
+		ff.Title, ff.Body, ff.Type = "R"+leftPad(i), "body.", fact.Observation
+		ff.Domain, ff.Entities, ff.Confidence, ff.Sources = []string{"testing"}, []string{}, 0.7, 1
+		content, err := fact.SerializeFact(ff)
+		require.NoError(t, err)
+		files["kb/c/r"+leftPad(i)+".md"] = content
+	}
+	_, _, err := f.svc.Facts().BatchWriteFacts(ctx, "agent/test", files, nil, "501 facts", "")
+	require.NoError(t, err)
+	req := f.request("kb/c/")
+	req.Options.Depth, req.Limit = 0, 5
+	p := f.first(t, "cap", req)
+	require.Equal(t, 500, p.Units, "501 results, 500 units")
+
+	seedABC(t, f)
+	one := f.request("kb/u/")
+	one.Options.Depth, one.Limit = 3, 1
+	p1 := f.first(t, "o", one)
+	release := ReserveFactSetBuildsForTest(MaxConcurrentFactSetBuilds)
+	_, _, err = FactSetFirstPage(ctx, f.scope("busy"), one)
+	require.ErrorIs(t, err, ErrFactSetBusy, "a first call must plan: refused at once")
+	p2, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, 0)
+	require.NoError(t, err, "section 2 of unit 1, already planned: no slot needed")
+	require.Equal(t, "1.1", p2.Facts[0].Number)
+	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p2.Cursor, 2)
+	require.ErrorIs(t, err, ErrFactSetBusy, "unit 2 must be planned: refused")
+	release()
+	require.Zero(t, BuildSlotsInUse())
+
+	release = ReserveFactSetExportsForTest(MaxConcurrentFactSetExports)
+	err = FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(FactSetEnv) io.Writer { return io.Discard })
+	release()
+	require.ErrorIs(t, err, ErrFactSetExportsBusy)
+}
+
+func leftPad(i int) string {
+	s := itoa(int32(i))
+	for len(s) < 3 {
+		s = "0" + s
+	}
+	return s
+}
+
+// F17. The export is the pages: its bytes are the export header followed by
+// every page's sections rendered by the one renderer (renderFactSetNode),
+// back links resolved from the anchors already rendered, in page order.
+//
+// Sabotage: render the export's sections with another builder (drop the
+// "Now:" note there), and the two differ.
+func TestFactSet_F17_ExportIsTheConcatenatedPages(t *testing.T) {
+	f := newFactSetFixture(t)
+	seedABC(t, f)
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Options.Depth, req.Limit = 3, 2
+	p := f.first(t, "o", req)
+	// A change after creation: its "Now:" note is in the pages and the export.
+	f.write(t, "kb/z/q.md", "Q", "q changed.", "kb/z/r.md")
+	var sb strings.Builder
+	sb.WriteString(renderFactSetHeader(p.FactSetEnv))
+	nums := factsetNumbers{}
+	for _, n := range readAll(t, f, "o", p) {
+		sb.WriteString(renderFactSetNode(n, nums))
+	}
+	var buf bytes.Buffer
+	require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return &buf }))
+	require.Contains(t, buf.String(), "Now: the branch holds another version of this fact.")
+	require.Equal(t, sb.String(), buf.String())
+}
