@@ -8,8 +8,9 @@ import (
 // graphInsertEdgeReturningID inserts an edge into the edges table and returns
 // its rowid. Uses INSERT (no OR IGNORE) because it is for DERIVED_FROM, which
 // migration 000015's ux_edges_merge_identity exempts: multi-edges are
-// intentional there, one per ref-event, distinguished by their source_commit /
-// target_commit properties. Dedup is the caller's job — see the property-aware
+// intentional there: one per (source blob, cited path), written once at the
+// blob's earliest introduction, with source_commit / target_commit
+// properties. Dedup is the caller's job — see the property-aware
 // guard in derived_from.go.
 //
 // Only sound for DERIVED_FROM. Every other type is covered by the unique index,

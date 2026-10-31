@@ -283,8 +283,10 @@ func (si *Index) upsert(ctx context.Context, branch, commitHash string, rec fact
 		// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
 		// resolves to the bare *sql.DB rather than the committed tx.
 		ctx = storegit.WithoutTx(ctx)
-		// Write time-aware DERIVED_FROM edges for the new (path, commit) ref-event.
-		// Each new commit asserting the same content is its own ref-event.
+		// A COW hit: this blob is already indexed.
+		// The blob's reference edges were written when it was first seen; this
+		// arrival writes none (claimBlobRefs), unless it is a strictly earlier
+		// introduction of the blob than the one recorded.
 		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
 		return nil
 	}

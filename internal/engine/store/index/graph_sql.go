@@ -295,63 +295,110 @@ func graphDeleteIncomingEdges(ctx context.Context, ex storegit.CtxExecer, nodeID
 }
 
 // graphDerivedFromNeighbours returns the DERIVED_FROM edges incident to the
-// Fact version (path, blobHash), described from the far endpoint's side.
+// fact VERSION blobHash, described from the far endpoint's side.
+//
+// Anchored by BLOB, not by (path, blob): reference edges belong to the blob
+// and sit on the one Fact node that first carried it (claimBlobRefs), so a
+// rename's node at another path, or any other node of the same blob, reads
+// the same edges. path is not part of the match.
 //
 // incoming=true  → edges INTO that version; each RefSummary describes the
-// SOURCE fact and carries the edge's source_commit.
-// incoming=false → edges OUT of it; describes the TARGET fact and carries
-// target_commit.
+// SOURCE fact and carries the edge's source_commit. The source is a blob too:
+// one row per Fact node of the citing blob (the node the edge sits on, and
+// every other path that blob has been at, e.g. a rename's live node), so a
+// rename f→g lists kb/g.md and not only the retracted kb/f.md. Callers that
+// need to know which rows are the edge's own node use
+// graphDerivedFromNeighbourRows.
+// incoming=false → edges OUT of it; describes the TARGET fact (the node at
+// the cited path) and carries target_commit.
 //
-// Replaces the two json_each(cypher(...)) readers. Title/type/deleted and the
-// commit property are optional, so they are LEFT JOINed and default to "".
+// Order: by edge id, then far node id; a far node reached by two edges is
+// listed once, at its first edge.
 func graphDerivedFromNeighbours(ctx context.Context, ex storegit.CtxExecer, path, blobHash string, incoming bool) ([]RefSummary, error) {
+	rows, err := graphDerivedFromNeighbourRows(ctx, ex, blobHash, incoming)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RefSummary, len(rows))
+	for i, r := range rows {
+		out[i] = r.RefSummary
+	}
+	return out, nil
+}
+
+// derivedFromNeighbour is one far endpoint of graphDerivedFromNeighbourRows:
+// its summary, the far node's blob, and whether the far node is the one the
+// edge physically sits on (own) or another node of the same blob.
+type derivedFromNeighbour struct {
+	RefSummary
+	Blob string
+	Own  bool
+}
+
+func graphDerivedFromNeighbourRows(ctx context.Context, ex storegit.CtxExecer, blobHash string, incoming bool) ([]derivedFromNeighbour, error) {
 	anchorCol, otherCol, commitKey := "target_id", "source_id", "source_commit"
 	if !incoming {
 		anchorCol, otherCol, commitKey = "source_id", "target_id", "target_commit"
 	}
+	// far: the far endpoint node(s). Outgoing: the edge's target node.
+	// Incoming: every node whose blob_hash is the source node's.
+	far := fmt.Sprintf(`JOIN node_props_text eb ON eb.node_id = e.%[1]s AND eb.key_id = kab.id
+		JOIN node_props_text fb ON fb.key_id = kab.id AND fb.value = eb.value`, otherCol)
+	if !incoming {
+		far = fmt.Sprintf(`JOIN node_props_text fb ON fb.node_id = e.%[1]s AND fb.key_id = kab.id`, otherCol)
+	}
 
 	// anchorCol/otherCol are internal constants, never caller input.
 	q := fmt.Sprintf(`
-		SELECT op.value,
+		SELECT fb.node_id,
+		       fb.node_id = e.%[2]s,
+		       fb.value,
+		       op.value,
 		       COALESCE(ot.value, ''),
 		       COALESCE(oty.value, ''),
 		       COALESCE(ec.value, ''),
 		       COALESCE(od.value, '')
-		FROM edges e
-		JOIN node_props_text ap ON ap.node_id = e.%[1]s
-		JOIN property_keys kap ON kap.id = ap.key_id AND kap.key = 'path'
-		JOIN node_props_text ab ON ab.node_id = e.%[1]s
+		FROM node_props_text ab
 		JOIN property_keys kab ON kab.id = ab.key_id AND kab.key = 'blob_hash'
-		JOIN node_props_text op ON op.node_id = e.%[2]s
+		JOIN edges e ON e.%[1]s = ab.node_id
+		%[3]s
+		JOIN node_props_text op ON op.node_id = fb.node_id
 		JOIN property_keys kop ON kop.id = op.key_id AND kop.key = 'path'
 		LEFT JOIN property_keys kot ON kot.key = 'title'
-		LEFT JOIN node_props_text ot ON ot.node_id = e.%[2]s AND ot.key_id = kot.id
+		LEFT JOIN node_props_text ot ON ot.node_id = fb.node_id AND ot.key_id = kot.id
 		LEFT JOIN property_keys koty ON koty.key = 'type'
-		LEFT JOIN node_props_text oty ON oty.node_id = e.%[2]s AND oty.key_id = koty.id
+		LEFT JOIN node_props_text oty ON oty.node_id = fb.node_id AND oty.key_id = koty.id
 		LEFT JOIN property_keys kod ON kod.key = 'deleted'
-		LEFT JOIN node_props_text od ON od.node_id = e.%[2]s AND od.key_id = kod.id
+		LEFT JOIN node_props_text od ON od.node_id = fb.node_id AND od.key_id = kod.id
 		LEFT JOIN property_keys kec ON kec.key = ?
 		LEFT JOIN edge_props_text ec ON ec.edge_id = e.id AND ec.key_id = kec.id
-		WHERE e.type = ? AND ap.value = ? AND ab.value = ?`, anchorCol, otherCol)
+		WHERE e.type = ? AND ab.value = ?
+		ORDER BY e.id, fb.node_id`, anchorCol, otherCol, far)
 
-	rows, err := ex.QueryContext(ctx, q, commitKey, EdgeDerivedFrom, path, blobHash)
+	rows, err := ex.QueryContext(ctx, q, commitKey, EdgeDerivedFrom, blobHash)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []RefSummary
+	var out []derivedFromNeighbour
+	seen := map[int64]struct{}{}
 	for rows.Next() {
-		var rs RefSummary
+		var r derivedFromNeighbour
+		var nodeID int64
 		var deleted string
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &deleted); err != nil {
+		if err := rows.Scan(&nodeID, &r.Own, &r.Blob, &r.Path, &r.Title, &r.Type, &r.Commit, &deleted); err != nil {
 			return nil, err
 		}
-		if rs.Path == "" {
+		if r.Path == "" {
 			continue
 		}
-		rs.Deleted = deleted == "true"
-		out = append(out, rs)
+		if _, dup := seen[nodeID]; dup {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		r.Deleted = deleted == "true"
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

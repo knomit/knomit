@@ -102,10 +102,10 @@ type Highlight struct {
 // separationCounts) always passing pathPrefix == "" — a constant string
 // couldn't vary its own placeholder count.
 //
-// outd counts DISTINCT target PATHS per source node, not edge rows: a
-// DERIVED_FROM edge is written once per ref per source_commit (see the
-// Highlight.Impact doc comment), so the same lineage re-asserted at a second
-// commit must not double the count.
+// outd counts DISTINCT target PATHS per source BLOB: reference edges belong
+// to the blob and sit on the node that first carried it (claimBlobRefs), so a
+// live node at another path with the same blob (a rename) is matched by blob,
+// not by node id.
 func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 	q := `
 		WITH live AS (
@@ -131,12 +131,14 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 		      JOIN node_labels nl ON nl.node_id = npp.node_id AND nl.label = 'Fact'
 		),
 		outd AS (
-		    SELECT e.source_id AS nid, COUNT(DISTINCT tp.value) AS d
+		    SELECT sb.value AS bh, COUNT(DISTINCT tp.value) AS d
 		      FROM edges e
+		      JOIN node_props_text sb ON sb.node_id = e.source_id
+		      JOIN property_keys ksb ON ksb.id = sb.key_id AND ksb.key = 'blob_hash'
 		      JOIN node_props_text tp ON tp.node_id = e.target_id
 		      JOIN property_keys ktp ON ktp.id = tp.key_id AND ktp.key = 'path'
 		     WHERE e.type = 'DERIVED_FROM'
-		     GROUP BY e.source_id
+		     GROUP BY sb.value
 		)`
 	return q, args
 }
@@ -213,7 +215,7 @@ func (fq *FactQuery) highlightRows(ctx context.Context, branchID int64, pathPref
 		       COALESCE(cl.committed_at, 0), live.expires
 		  FROM live
 		  LEFT JOIN node ON node.pa = live.path AND node.bh = live.blob_hash
-		  LEFT JOIN outd ON outd.nid = node.nid
+		  LEFT JOIN outd ON outd.bh = node.bh
 		  LEFT JOIN commit_log cl
 		         ON cl.commit_hash = live.commit_hash AND cl.path = live.path
 		` + where + `
@@ -309,7 +311,7 @@ func (fq *FactQuery) separationCounts(ctx context.Context, branchID int64) (topF
 		    SELECT live.type AS type, COALESCE(outd.d, 0) AS d
 		      FROM live
 		      LEFT JOIN node ON node.pa = live.path AND node.bh = live.blob_hash
-		      LEFT JOIN outd ON outd.nid = node.nid
+		      LEFT JOIN outd ON outd.bh = node.bh
 		  ) j`
 	cte, args := liveFactNodeCTE(branchID, "")
 	for _, t := range highlightExcludedTypes {

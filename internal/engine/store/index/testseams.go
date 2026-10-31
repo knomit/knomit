@@ -56,6 +56,29 @@ func (si *Index) SetBeforeGraphTxHookForTest(f func()) {
 	si.beforeGraphTx = f
 }
 
+// SetBeforeRefEdgesWriteHookForTest installs f to run inside the reference
+// edge transaction, after the claim is written and before the edges are; an
+// error aborts the transaction. nil removes it.
+func (si *Index) SetBeforeRefEdgesWriteHookForTest(f func() error) {
+	mustBeTest("SetBeforeRefEdgesWriteHookForTest")
+	si.beforeRefEdgesWrite = f
+}
+
+// SetBlobHoldingsChunkForTest sets how many pairs one blobHoldings statement
+// binds and returns the previous value, for the caller to restore.
+func SetBlobHoldingsChunkForTest(n int) int {
+	mustBeTest("SetBlobHoldingsChunkForTest")
+	prev := blobHoldingsChunk
+	blobHoldingsChunk = n
+	return prev
+}
+
+// IntroducingCommitForTest is introducingCommit.
+func (si *Index) IntroducingCommitForTest(ctx context.Context, branch, path, blobHash, commit string) (string, error) {
+	mustBeTest("IntroducingCommitForTest")
+	return si.introducingCommit(ctx, branch, path, blobHash, commit)
+}
+
 // SetSubgraphEdgeChunkSizeForTest sets the chunk size SubgraphEdges binds
 // per query and returns the previous value, for the caller to restore.
 func SetSubgraphEdgeChunkSizeForTest(n int) int {
@@ -145,6 +168,12 @@ func (si *Index) ResolveTargetCommitForTest(ctx context.Context, branch, sourceP
 func (si *Index) GraphAddDerivedFromAtCommitTxForTest(ctx context.Context, tx storegit.CtxExecer, branch, sourcePath, sourceBlobHash, sourceCommit string, refs []string) error {
 	mustBeTest("GraphAddDerivedFromAtCommitTxForTest")
 	return si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, sourcePath, sourceBlobHash, sourceCommit, refs)
+}
+
+// CommitEarlierForTest is commitEarlier.
+func (si *Index) CommitEarlierForTest(ctx context.Context, a, b string) (bool, error) {
+	mustBeTest("CommitEarlierForTest")
+	return si.commitEarlier(ctx, a, b)
 }
 
 // GraphNodeIDByBlobForTest is graphNodeIDByBlob.
