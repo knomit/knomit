@@ -1509,8 +1509,10 @@ func TestBlobEdges_ChangedSinceCitedComparesBlobs(t *testing.T) {
 // incoming still lists kb/f.md for v1 and for v2, each at its own commit,
 // neither retracted.
 //
-// Sabotage: list only the citing versions the branch holds NOW (drop the
-// history half of blobHoldings), and both rows disappear.
+// Two rules each keep these rows (the edge's own node with its source_commit
+// on the branch, and the path's history on the branch), so the sabotage
+// drops both: keep only the citing versions the branch holds NOW, and both
+// rows disappear.
 func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
@@ -1531,20 +1533,27 @@ func TestBlobEdges_IncomingKeepsEveryVersionThatCited(t *testing.T) {
 }
 
 // F3 (round-5 review): blobHoldings binds two variables per citing node, so
-// it runs in chunks. With the chunk lowered below the number of citing
-// nodes, R's incoming is identical (rows and order) to the unchunked answer.
+// it runs in chunks. The same bytes X (citing R) at seven paths: one blob,
+// one edge on the first node, and six other nodes that are listed only
+// through blobHoldings. With the chunk lowered to 2, R's incoming is
+// identical (rows and order) to the unchunked answer.
 //
 // Sabotage: process only the first chunk, and the rows past it vanish.
 func TestBlobEdges_IncomingIsChunkIndependent(t *testing.T) {
 	svc := newMergeTestStore(t)
 	ctx := context.Background()
+	db := svc.si.RepoForTest().DB()
 	cR, _ := write(t, svc, "main", "kb/r.md", "R")
+	var xBlob string
 	for i := 0; i < 7; i++ {
-		write(t, svc, "main", fmt.Sprintf("kb/c%d.md", i), fmt.Sprintf("C%d", i), "kb/r.md")
+		_, b := write(t, svc, "main", fmt.Sprintf("kb/c%d.md", i), "X", "kb/r.md")
+		require.True(t, xBlob == "" || b == xBlob, "precondition: one blob")
+		xBlob = b
 	}
+	require.Equal(t, 1, countEdgesOfBlob(allRefEdges(t, db), xBlob), "precondition: one edge")
 	full, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/r.md", cR)
 	require.NoError(t, err)
-	require.Len(t, full, 7)
+	require.Len(t, full, 7, "one row per path holding the citing blob")
 	prev := index.SetBlobHoldingsChunkForTest(2)
 	defer index.SetBlobHoldingsChunkForTest(prev)
 	chunked, err := svc.gq.IncomingAtCommit(ctx, "main", "kb/r.md", cR)
