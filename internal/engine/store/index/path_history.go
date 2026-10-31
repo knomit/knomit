@@ -263,8 +263,8 @@ func (h *changeHeap) Pop() any {
 // History is bounded to the ancestry of `anchorCommit`: revisions committed
 // after the anchor are never surfaced ("explain as of C" rewinds the timeline).
 //
-// Walks first-parent ancestry via the shared FirstParentChainCTE — NEVER
-// wall-clock ordering. See resolveTargetCommit's doc-comment for the
+// Walks first-parent ancestry via vcs.LineEvents (commit_fp jump pointers,
+// the commit_parents walk as fallback) — NEVER wall-clock ordering. See resolveTargetCommit's doc-comment for the
 // merge-branch rationale. The walk is scoped to `branch` by joining
 // branch_commits on the resolved branch_id, so revisions reachable only via an
 // off-branch lineage never surface even when anchorCommit was committed
@@ -278,32 +278,17 @@ func (hq *HistoryQuery) RevisionsBefore(ctx context.Context, branch, path, ancho
 	if err != nil {
 		return nil, fmt.Errorf("RevisionsBefore: branchID: %w", err)
 	}
-	rows, err := conn(ctx, hq.rh.DB()).QueryContext(ctx, vcs.FirstParentChainCTE+`
-		SELECT cl.commit_hash, COALESCE(cl.committed_at, 0), cl.message, cl.action
-		  FROM fpc
-		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
-		  JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-		 WHERE bc.branch_id = ? AND cl.path = ? AND cl.action IN ('added','modified')
-		 ORDER BY fpc.depth ASC
-		 LIMIT ?
-	`, anchorCommit, branchID, path, limit)
+	evs, err := vcs.LineEvents(ctx, conn(ctx, hq.rh.DB()), anchorCommit, vcs.LineQuery{
+		Path: path, Writes: true, BranchID: branchID, Limit: limit,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("RevisionsBefore: %w", err)
 	}
-	defer rows.Close()
-
-	var out []model.RevisionMeta
-	for rows.Next() {
-		var rm model.RevisionMeta
-		var msg string
-		if err := rows.Scan(&rm.Commit, &rm.CommittedAt, &msg, &rm.Action); err != nil {
-			return nil, fmt.Errorf("RevisionsBefore: scan: %w", err)
-		}
-		rm.Message = vcs.FirstLine(msg)
-		out = append(out, rm)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("RevisionsBefore: rows: %w", err)
+	var out []model.RevisionMeta // nil when there is none, as before
+	for _, ev := range evs {
+		out = append(out, model.RevisionMeta{
+			Commit: ev.Commit, CommittedAt: ev.CommittedAt, Message: vcs.FirstLine(ev.Message), Action: ev.Action,
+		})
 	}
 	return out, nil
 }

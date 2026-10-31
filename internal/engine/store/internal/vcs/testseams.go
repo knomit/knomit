@@ -470,22 +470,37 @@ func SetGitPathReadHookForTest(f func(name string)) (restore func()) {
 	return func() { gitPathReadHook.Store(old) }
 }
 
-// ResolveActiveCommitWalkForTest is ResolveActiveCommitForPath's fallback
-// (the commit_parents walk) alone, so a test can hold it to the same answers
-// as the commit_fp form.
-func (rh *Repo) ResolveActiveCommitWalkForTest(ctx context.Context, path, fromCommit string) (string, bool, error) {
+// FirstParentChainCTEForTest is the first-parent walk the history readers
+// ran before LineEvents (ResolveActiveCommitForPath, RevisionsBefore,
+// FactLiveAtCommit, each with its own SELECT ... ORDER BY fpc.depth): it
+// binds the start commit and yields fpc(commit_hash, depth) over
+// commit_parents, parent_order = 0. Kept as the oracle the equivalence tests
+// hold LineEvents to; no production reader uses it.
+const FirstParentChainCTEForTest = `
+	WITH RECURSIVE fpc(commit_hash, depth) AS (
+	    SELECT ?, 0
+	    UNION ALL
+	    SELECT cp.parent_hash, fpc.depth + 1
+	      FROM commit_parents cp
+	      JOIN fpc ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
+	)`
+
+// LineEventsWalkForTest is LineEvents' fallback (the commit_parents walk)
+// alone, so a test can hold it to the same answers as the commit_fp form.
+func (rh *Repo) LineEventsWalkForTest(ctx context.Context, from string, lq LineQuery) ([]LineEvent, error) {
 	mustBeTest()
-	return resolveActiveCommitWalk(ctx, sqlite.Conn(ctx, rh.db), path, fromCommit)
+	return lineEventsByWalk(ctx, sqlite.Conn(ctx, rh.db), from, lq)
 }
 
-// ResolveActiveCommitJumpsCountingForTest is ResolveActiveCommitForPath's
-// commit_fp form, counting the SQL statements it runs (queries), so a test
-// can bound its cost in statements rather than time.
-func (rh *Repo) ResolveActiveCommitJumpsCountingForTest(ctx context.Context, path, fromCommit string) (hash string, ok, handled bool, queries int, err error) {
+// LineEventsJumpsCountingForTest is LineEvents' commit_fp form alone,
+// counting the SQL statements it runs, so a test can bound its cost in
+// statements rather than time. complete is false where LineEvents would
+// fall back to the walk.
+func (rh *Repo) LineEventsJumpsCountingForTest(ctx context.Context, from string, lq LineQuery) (evs []LineEvent, complete bool, statements int, err error) {
 	mustBeTest()
 	c := &countingExecer{CtxExecer: sqlite.Conn(ctx, rh.db)}
-	hash, ok, handled, err = resolveActiveCommitByJumps(ctx, c, path, fromCommit)
-	return hash, ok, handled, c.n, err
+	evs, complete, err = lineEventsByJumps(ctx, c, from, lq)
+	return evs, complete, c.n, err
 }
 
 type countingExecer struct {

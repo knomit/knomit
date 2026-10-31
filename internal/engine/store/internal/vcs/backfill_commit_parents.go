@@ -19,10 +19,9 @@ const commitParentsBackfillKey = "commit_parents_backfilled"
 // guarded by a meta-table sentinel so it runs at most once per database.
 //
 // Why this is needed: commit_parents was added after commit_log, so existing
-// repos boot with commit_log populated but commit_parents empty. The
-// recursive-CTE walks over commit_parents (RevisionsBefore,
-// FactLiveAtCommit, and ResolveActiveCommitForPath's fallback for an
-// underived commit) would stop at depth 1 without this. New commits are
+// repos boot with commit_log populated but commit_parents empty.
+// LineEvents' fallback walk over commit_parents (for an underived or
+// structurally degraded commit) would stop at depth 1 without this. New commits are
 // appended in-line by CommitLogApply; only the historical backfill needs
 // this one-off pass.
 func BackfillCommitParents(ctx context.Context, rh *Repo) error {

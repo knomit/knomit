@@ -140,21 +140,17 @@ func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 		return false, nil
 	}
 
-	var action string
-	err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx, vcs.FirstParentChainCTE+`
-		SELECT cl.action
-		  FROM fpc
-		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
-		 WHERE cl.path = ?
-		 ORDER BY fpc.depth ASC
-		 LIMIT 1
-	`, commit, path).Scan(&action)
-	if err == sql.ErrNoRows {
-		return false, nil // path never written in this ancestry
-	}
+	// The most recent commit_log event of ANY action on commit's
+	// first-parent line (vcs.LineEvents: commit_fp jump pointers, the
+	// commit_parents walk as fallback).
+	evs, err := vcs.LineEvents(ctx, conn(ctx, fq.rh.DB()), commit, vcs.LineQuery{Path: path, Limit: 1})
 	if err != nil {
 		return false, fmt.Errorf("FactLiveAtCommit: %w", err)
 	}
+	if len(evs) == 0 {
+		return false, nil // path never written in this ancestry
+	}
+	action := evs[0].Action
 	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
 	return action == "added" || action == "modified", nil
 }

@@ -37,7 +37,7 @@ func factVersionDate(ctx context.Context, ri *repos.RepoInstance, branch, path, 
 // against an already-acquired service.
 //
 // RevisionsBefore is the ONLY correct source here. It walks first-parent
-// ancestry via the shared firstParentChainCTE and joins branch_commits, so a
+// ancestry (vcs.LineEvents) restricted to branch_commits, so a
 // sibling-branch commit merged back in cannot win. Do NOT replace this with a
 // direct commit_log query: the index commit_log_path_time (path, committed_at
 // DESC) makes `ORDER BY committed_at DESC LIMIT 1` look like the obvious
