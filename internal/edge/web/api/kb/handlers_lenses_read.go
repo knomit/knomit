@@ -14,6 +14,7 @@ import (
 	"knomit/internal/engine/store/model"
 
 	"knomit/internal/engine/store/index"
+	"knomit/internal/engine/store/vocab"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -214,50 +215,15 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 			return
 		}
 
-		// Widen each term to its MERGED cluster before the fan-out. The store's
-		// tiers resolve a term through ONE branch's alias table, so a mount that
-		// spells the shape differently would contribute nothing to a filter the
-		// lens's own vocabulary counted — see expandLensMotifs.
-		motifs, ok = expandLensMotifs(w, r, b, motifs)
-		if !ok {
-			return
-		}
-
-		// Ontology-aware fan-out target selection — the same seam MCP queryRecent
-		// uses. A kb://-qualified path restricts to a single mount (with the
-		// filter made repo-relative); an unqualified path applies per mount,
-		// skipping mounts whose ontology lacks the topic.
-		targets, err := federate.ReadTargetsFor(b, path)
-		if err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-				err.Error(), r.URL.Path)
-			return
-		}
-
-		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
-		// unknown mount name).
-		targets, ok = narrowByRepo(w, r, b, targets, qp["repo"])
-		if !ok {
-			return
-		}
-
-		// Shared filter set across mounts (per-mount Path is set below). This
-		// mirrors the lens /search handler and the repo facts collection so a lens
-		// answers a filtered browse EXACTLY like the repos it federates — every
-		// selecting filter is forwarded, not just path+text. Forwarding only
-		// path/text silently drops filters the caller sent (wrong data, not merely
-		// wrong order), diverging from both the repo and MCP twins.
-		queryVec, err := lensQueryVec(r.Context(), emb, text)
-		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list facts", err.Error(), r.URL.Path)
-			return
-		}
+		// Shared filter set across mounts (per-mount Path is set by the fused
+		// read). This mirrors the lens /search handler and the repo facts
+		// collection so a lens answers a filtered browse EXACTLY like the repos it
+		// federates — every selecting filter is forwarded, not just path+text.
+		// Forwarding only path/text silently drops filters the caller sent (wrong
+		// data, not merely wrong order), diverging from both the repo and MCP
+		// twins.
 		base := index.SearchOptions{
 			Text: text,
-			// Embedded ONCE for the whole fan-out, not once per mount — see
-			// lensQueryVec. A text-less browse leaves this nil and never
-			// reaches an embedder at all.
-			QueryVec: queryVec,
 			// `entity` (singular) is the canonical name advertised by the HAL
 			// template and matches the data-model column; `entities` (plural) is a
 			// back-compat alias. Merge both, exactly as the repo facts collection
@@ -284,12 +250,35 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 			// Limit is set per fan-out round below — see `depth`.
 			Offset: 0,
 		}
-		now := timeNow()
-		if !applyExpiryParams(w, r, &base, now) {
+
+		// Plan the fused read — the SAME planning MCP queryRecent goes through
+		// (federate.PlanFused): widen each motif term to its MERGED cluster over
+		// the full read set, select the ontology-aware fan-out targets (a
+		// kb://-qualified path restricts to one mount), narrow by the optional
+		// repeatable `repo=<mount name>` (422 on an unknown name), and embed the
+		// query ONCE for the whole fan-out (lensQueryVec; a text-less browse never
+		// reaches an embedder).
+		plan, ok := planLensRead(w, r, federate.FusedQuery{
+			Binding:  b,
+			Path:     path,
+			Repos:    qp["repo"],
+			Opts:     base,
+			Clusters: lensMotifClusters,
+			Embed:    lensEmbed(emb),
+		}, "Failed to list facts")
+		if !ok {
 			return
 		}
-		if !applyContextParams(w, r, &base) {
+		targets := plan.Targets
+		now := timeNow()
+		if !applyExpiryParams(w, r, &plan.Opts, now) {
 			return
+		}
+		if !applyContextParams(w, r, &plan.Opts) {
+			return
+		}
+		recentLeg := func(ctx context.Context, t federate.Target, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
+			return recentFacts(ctx, t.RT.RI, t.RT.Branch, q)
 		}
 
 		// Each mount answers the count with its own SELECT COUNT(*), independent
@@ -341,28 +330,39 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 			// Fan out to every selected mount at its Binding-resolved branch. Any
 			// mount error fails the whole request — a lens must never silently shrink
 			// its read set (RFC §9.1).
-			lists := make([][]index.RecentFactEntry, len(targets))
-			diags = make([]index.SearchDiag, len(targets))
+			//
+			// The fused read orders the union honouring whichever key each mount
+			// ordered by — exactly as MCP queryRecent does, because it is the same
+			// function. RecentFacts returns each mount's list committed_at-DESC for
+			// a text-LESS query, but RELEVANCE-ranked WITH a text query (the store's
+			// recentFactsSearch behaviour). Commit timestamps are comparable across
+			// mounts (k-way timestamp merge), but per-mount relevance ranks are NOT
+			// (RFC §7.1), so a text query fuses by reciprocal rank. FuseRRF's N=1
+			// identity also preserves lens-of-one byte-identity with the repo facts
+			// endpoint, which a global timestamp re-sort would silently break. Rows
+			// are then deduped by repo-relative path (write mount wins, then binding
+			// order).
+			//
+			// Serial: this listing has always read its mounts one after another
+			// (see federate.FusedOptions.Serial).
+			plan.Opts.Limit = depth
+			res, err := federate.FusedRecent(r.Context(), plan, recentLeg, federate.FusedOptions{Serial: true})
+			if err != nil {
+				var f *federate.MountError
+				errors.As(err, &f)
+				httpx.WriteStoreError(w, r, f.Err, "Failed to list facts", targets[f.Mount].RT.Branch)
+				return
+			}
+			diags = res.Diags
 			mountTotal = 0
 			truncated = false
-			fetched := 0
 			// The merge horizon: the newest commit timestamp below which some
 			// truncated mount may still be hiding a row. Zero while nothing is
 			// truncated, which makes every row safe — the exact case.
 			horizon := int64(0)
-			for i, t := range targets {
-				q := base
-				q.Path = t.Path
-				q.Limit = depth
-				q.Diag = &diags[i]
-				entries, n, err := recentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
-				if err != nil {
-					httpx.WriteStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
-					return
-				}
-				lists[i] = entries
+			for i, entries := range res.Lists {
+				n := res.Totals[i]
 				mountTotal += n
-				fetched += len(entries)
 				if len(entries) < n {
 					truncated = true
 					// This mount is holding rows we did not fetch, and every one
@@ -375,42 +375,11 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 				}
 			}
 
-			// Dedupe by repo-relative path (write mount wins, then binding order).
-			winner := federate.WriteFirstWinners(targets, b.Write(), lists,
-				func(e index.RecentFactEntry) string { return e.Path })
-
-			// Order the union honouring whichever key each mount ordered by — exactly
-			// as MCP queryRecent does. RecentFacts returns each mount's list
-			// committed_at-DESC for a text-LESS query, but RELEVANCE-ranked WITH a text
-			// query (the store's recentFactsSearch behaviour). Commit timestamps are
-			// comparable across mounts (k-way timestamp merge), but per-mount relevance
-			// ranks are NOT (RFC §7.1), so a text query fuses by reciprocal rank.
-			// FuseRRF's N=1 identity also preserves lens-of-one byte-identity with the
-			// repo facts endpoint, which a global timestamp re-sort would silently break.
-			var order []federate.MountRef
-			if text != "" {
-				order = federate.FuseRRF(lensListLens(lists))
-			} else {
-				stamps := make([][]int64, len(targets))
-				for i, list := range lists {
-					stamps[i] = make([]int64, len(list))
-					for j, e := range list {
-						stamps[i][j] = e.CommittedAt
-					}
-				}
-				order = federate.MergeRecent(stamps, fetched)
-			}
-
-			// Emit deduped rows in recency order: keep a row only when its mount is
-			// the winner for that rel path (each rel path is unique within a mount,
-			// so the winner's copy appears exactly once in the merged order).
-			rows = make([]lensFactItem, 0, len(winner))
-			for _, ref := range order {
-				e := lists[ref.Mount][ref.Rank]
-				if winner[e.Path] != ref.Mount {
-					continue
-				}
-				t := targets[ref.Mount]
+			// Emit the deduped rows in merged order.
+			rows = make([]lensFactItem, 0, len(res.Hits))
+			for _, h := range res.Hits {
+				e := h.Row
+				t := h.Target
 				// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the default
 				// (epistemic) so the field is omitted on the wire.
 				kind := e.Kind
@@ -760,30 +729,71 @@ func lensWirePath(b *repos.Binding, rt repos.ReadTarget, rel string) string {
 //
 // On the 422 path it writes the problem response and returns ok=false; the
 // caller must return immediately without writing again.
+//
+// The narrowing itself is federate.NarrowByRepo, the one the fused search plans
+// with; this adapter only renders its error.
 func narrowByRepo(w http.ResponseWriter, r *http.Request, b *repos.Binding, targets []federate.Target, sel []string) ([]federate.Target, bool) {
-	if len(sel) == 0 {
-		return targets, true
-	}
-	known := make(map[string]bool, len(b.Reads()))
-	for _, rt := range b.Reads() {
-		known[rt.RI.Name()] = true
-	}
-	want := make(map[string]bool, len(sel))
-	for _, name := range sel {
-		if !known[name] {
-			hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo",
-				`no mount named "`+name+`" in lens "`+b.Name()+`"`, r.URL.Path)
-			return nil, false
-		}
-		want[name] = true
-	}
-	kept := make([]federate.Target, 0, len(targets))
-	for _, t := range targets {
-		if want[t.RT.RI.Name()] {
-			kept = append(kept, t)
-		}
+	kept, err := federate.NarrowByRepo(b, targets, sel)
+	if err != nil {
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo", err.Error(), r.URL.Path)
+		return nil, false
 	}
 	return kept, true
+}
+
+// lensMotifClusters reads one mount's motif vocabulary for the fused read's
+// motif widening (federate.ExpandMotifTerms, through federate.PlanFused).
+// Branch-wide: cluster identity is a property of the lens, not of the path the
+// reader stands in.
+func lensMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error) {
+	return motifClusters(ctx, rt.RI, rt.Branch, "")
+}
+
+// lensEmbed is the fused read's once-per-fan-out query embedding (lensQueryVec).
+func lensEmbed(emb model.Embedder) func(context.Context, string) ([]float32, error) {
+	return func(ctx context.Context, text string) ([]float32, error) {
+		return lensQueryVec(ctx, emb, text)
+	}
+}
+
+// planLensRead runs federate.PlanFused for a lens list handler and renders a
+// planning failure exactly as the handlers did before the pipeline was shared:
+//
+//   - motif widening: httpx.WriteStoreError with "Failed to resolve motif
+//     filter" and the failing mount's branch (federate.MotifReadError), so
+//     store.ErrBranchNotFound reads `no branch named "<branch>"` and not
+//     `no branch named ""`;
+//   - target selection: 400 "Invalid parameter";
+//   - repo= narrowing: 422 "Unknown repo";
+//   - the query embedding: 500 with the handler's own title (embedTitle).
+//
+// On failure it writes the response and returns ok=false.
+func planLensRead(w http.ResponseWriter, r *http.Request, q federate.FusedQuery, embedTitle string) (*federate.FusedPlan, bool) {
+	plan, err := federate.PlanFused(r.Context(), q)
+	if err == nil {
+		return plan, true
+	}
+	var pe *federate.PlanError
+	if !errors.As(err, &pe) {
+		hal.WriteProblem(w, http.StatusInternalServerError, embedTitle, err.Error(), r.URL.Path)
+		return nil, false
+	}
+	switch pe.Stage {
+	case federate.StageMotifs:
+		var readErr *federate.MotifReadError
+		branch := ""
+		if errors.As(pe.Err, &readErr) {
+			branch = readErr.Branch
+		}
+		httpx.WriteStoreError(w, r, pe.Err, "Failed to resolve motif filter", branch)
+	case federate.StageTargets:
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", pe.Err.Error(), r.URL.Path)
+	case federate.StageRepos:
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo", pe.Err.Error(), r.URL.Path)
+	default: // federate.StageEmbed
+		hal.WriteProblem(w, http.StatusInternalServerError, embedTitle, pe.Err.Error(), r.URL.Path)
+	}
+	return nil, false
 }
 
 // lensSearchItem is one row of the lens union search collection. It carries the
@@ -898,39 +908,9 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 			return
 		}
 
-		// Widen each term to its MERGED cluster before the fan-out. The store's
-		// tiers resolve a term through ONE branch's alias table, so a mount that
-		// spells the shape differently would contribute nothing to a filter the
-		// lens's own vocabulary counted — see expandLensMotifs.
-		motifs, ok = expandLensMotifs(w, r, b, motifs)
-		if !ok {
-			return
-		}
-
-		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
-		// uses. A kb://-qualified path restricts to one mount (filter made
-		// repo-relative); an unqualified path applies per mount.
-		targets, err := federate.ReadTargetsFor(b, qp.Get("path"))
-		if err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-				err.Error(), r.URL.Path)
-			return
-		}
-
-		// Optional repeatable `repo=<mount name>` narrows the fan-out (422 on an
-		// unknown mount name).
-		targets, ok = narrowByRepo(w, r, b, targets, qp["repo"])
-		if !ok {
-			return
-		}
-
-		// Shared query across mounts (per-mount Path is set below). Depth is the
-		// per-mount candidate cap; the fused union is truncated to `limit` last.
-		queryVec, err := lensQueryVec(r.Context(), emb, qp.Get("q"))
-		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Search failed", err.Error(), r.URL.Path)
-			return
-		}
+		// Shared query across mounts (per-mount Path is set by the fused read).
+		// Depth is the per-mount candidate cap; the fused union is truncated to
+		// `limit` last.
 		base := index.SearchOptions{
 			Text:           qp.Get("q"),
 			Entities:       splitCSV(qp.Get("entities")),
@@ -952,66 +932,64 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 			MinConfidence: minConfidence,
 			MinSimilarity: minSimilarity,
 			Limit:         maxLensSearchCandidates,
-			// Embedded ONCE for the whole fan-out, not once per mount — see
-			// lensQueryVec.
-			QueryVec: queryVec,
 		}
+
+		// Plan the fused read — the SAME planning MCP queryFirstCall goes through
+		// (federate.PlanFused): widen each motif term to its MERGED cluster over
+		// the full read set, select the ontology-aware fan-out targets (a
+		// kb://-qualified path restricts to one mount), narrow by the optional
+		// repeatable `repo=<mount name>` (422 on an unknown name), and embed the
+		// query ONCE for the whole fan-out, not once per mount (lensQueryVec).
+		plan, ok := planLensRead(w, r, federate.FusedQuery{
+			Binding:  b,
+			Path:     qp.Get("path"),
+			Repos:    qp["repo"],
+			Opts:     base,
+			Clusters: lensMotifClusters,
+			Embed:    lensEmbed(emb),
+		}, "Search failed")
+		if !ok {
+			return
+		}
+		targets := plan.Targets
 		now := timeNow()
-		if !applyExpiryParams(w, r, &base, now) {
+		if !applyExpiryParams(w, r, &plan.Opts, now) {
 			return
 		}
-		if !applyContextParams(w, r, &base) {
+		if !applyContextParams(w, r, &plan.Opts) {
 			return
 		}
 
-		// Fan out to every selected mount at its Binding-resolved branch. Any mount
-		// error fails the whole request — a lens must never silently shrink its read
-		// set (RFC §9.1). The embedder (possibly nil when embeddings are disabled)
-		// is forwarded exactly as the repo /search handler forwards it.
-		//
-		// Fanned out CONCURRENTLY: mounts are independent databases with nothing
-		// to serialise on, so a lens's search cost is the slowest mount rather
-		// than the sum of all of them. Each goroutine writes only lists[i], and
-		// the fusion below reads that slice in mount order — a mount's index IS
-		// its identity to FuseRRF and WriteFirstWinners, so results must never be
-		// appended from inside a goroutine.
-		lists := make([][]index.SearchResult, len(targets))
-		diags := make([]index.SearchDiag, len(targets))
-		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
-			q := base
-			q.Path = t.Path
-			q.Diag = &diags[i]
-			res, err := searchRepo(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
-			if err != nil {
-				return "Search failed", err
+		// Fan out to every selected mount at its Binding-resolved branch,
+		// CONCURRENTLY, and fuse the per-mount ranked lists by reciprocal rank —
+		// the SAME function MCP knomit_query calls (federate.FusedSearch). Any
+		// mount error fails the whole request — a lens must never silently shrink
+		// its read set (RFC §9.1) — and the error reported is the lowest-indexed
+		// mount's. RRF orders by per-mount rank, never by native score, so a fused
+		// order is not a naive interleave. Rows are deduped by repo-relative path
+		// with the write mount winning, even when a shadowed copy ranks higher.
+		// The embedder (possibly nil when embeddings are disabled) is forwarded
+		// exactly as the repo /search handler forwards it.
+		fused, err := federate.FusedSearch(r.Context(), plan,
+			func(ctx context.Context, t federate.Target, q index.SearchOptions) ([]index.SearchResult, error) {
+				return searchRepo(ctx, t.RT.RI, emb, t.RT.Branch, q)
+			}, federate.FusedOptions{})
+		if err != nil {
+			var f *federate.MountError
+			errors.As(err, &f)
+			title := "Search failed"
+			if f.Panicked {
+				title = "Mount failed"
 			}
-			lists[i] = res
-			return "", nil
-		}); f != nil {
-			httpx.WriteStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+			httpx.WriteStoreError(w, r, f.Err, title, targets[f.Mount].RT.Branch)
 			return
 		}
+		diags := fused.Diags
 
-		// Fuse the per-mount ranked lists by reciprocal rank fusion — the SAME
-		// ordering MCP knomit_query produces (RFC §7.1). RRF orders by per-mount
-		// rank, never by native score, so a fused order is not a naive interleave.
-		order := federate.FuseRRF(lensListLens(lists))
-
-		// Dedupe by repo-relative path (write mount wins, then binding order).
-		winner := federate.WriteFirstWinners(targets, b.Write(), lists,
-			func(res index.SearchResult) string { return res.Path })
-
-		// Emit deduped rows in fused order: keep a row only when its mount is the
-		// winner for that rel path. A shadowed copy is dropped even when it ranks
-		// higher than the winner (each rel path is unique within a mount, so the
-		// winner's copy appears exactly once in the fused order).
-		rows := make([]lensSearchItem, 0, len(winner))
-		for _, ref := range order {
-			res := lists[ref.Mount][ref.Rank]
-			if winner[res.Path] != ref.Mount {
-				continue
-			}
-			t := targets[ref.Mount]
+		rows := make([]lensSearchItem, 0, len(fused.Hits))
+		for _, h := range fused.Hits {
+			res := h.Row
+			t := h.Target
 			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the default
 			// (epistemic) so the field is omitted on the wire.
 			kind := res.Kind
@@ -1162,13 +1140,4 @@ func filterByPrefixFold(values []string, prefix string) []string {
 		}
 	}
 	return out
-}
-
-// lensListLens returns each list's length, the shape federate.FuseRRF consumes.
-func lensListLens[T any](lists [][]T) []int {
-	ns := make([]int, len(lists))
-	for i, l := range lists {
-		ns[i] = len(l)
-	}
-	return ns
 }
