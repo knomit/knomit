@@ -155,22 +155,20 @@ var factsetExportFault func(unit int) error
 // FactSetExport writes the whole FactSet of cursor to w as one agent
 // document: the header, then every unit under its own "##" heading, every
 // section once, links as in-document anchors. It is the same stream the pages
-// read, from unit 1 to the end, on its OWN written set (the cached entry is
-// left as it is): it plans a unit holding a planning slot (waiting for one)
-// and gives the slot back before it writes, so a slow download never keeps
-// other FactSets from being planned. Its PLANNING reads (the window, the
-// levels) are made inside the slot, never in a background window; its body
-// and RULE 1 reads (inflate: BlobsByHash, CurrentBlobs) run after the slot is
-// given back, bounded by the export slots and exportChunk sections at a time.
-// What it holds between units is charged to the cache budget (fsCharge). The first unit is planned and inflated
-// before anything is written, so a refusal is still a clean error; a failure
-// after that is returned with the stream started (the edge aborts the
-// connection: the export is never partial).
+// read, from unit 1 to the end, on the SAME planned prefix (a unit within it
+// is re-planned alone; past it the export extends it, exactly as a page
+// would, so an export also plans ahead for the pages). It reserves planning
+// memory per unit (waiting for it while the budget is full) and gives it back
+// before it writes, so a slow download holds no planning memory and no
+// extension token. Its PLANNING reads (the window, the levels) are made
+// inside the reservation, never in a background window; its body and RULE 1
+// reads (inflate: BlobsByHash, CurrentBlobs) run after it, exportChunk
+// sections at a time. Nothing bounds the export as a whole: the edge's
+// per-write stall limit ends a download that stops moving. The first unit is
+// planned and inflated before anything is written, so a refusal is still a
+// clean error; a failure after that is returned with the stream started (the
+// edge aborts the connection: the export is never partial).
 func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, cursor string, start func(env FactSetEnv) io.Writer) error {
-	if !takeSlot(exportSlots) {
-		return ErrFactSetExportsBusy
-	}
-	defer func() { <-exportSlots }()
 	id, _, ok := parseCursor(cursor)
 	if !ok {
 		return ErrCursorExpired
@@ -179,34 +177,9 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 	if err != nil {
 		return err
 	}
-	// The shared maps (results, reserved) are built once and never change;
-	// the written set is the export's own.
-	if err := c.ensureState(); err != nil {
-		c.unlock()
-		return err
-	}
-	fr := c.e.fr
-	st := c.e.st.withFreshWritten()
-	c.releaseSlot()
-	fsCacheAccount(c.e)
-	c.e.mu.Unlock()
-	c.e = nil
-	defer c.close()
-	// The planning reads are made holding a planning slot (no background
-	// window); inflate's body and RULE 1 reads below run without it. What
-	// the export holds between units is charged to the cache budget (review
-	// N2).
+	defer c.done()
 	c.noPipeline = true
-	charge := &fsCharge{}
-	defer fsCacheUncharge(charge)
-	held := func(pu *plannedUnit) int64 {
-		n := st.bytes() + int64(len(fr.Roots))*bytesPerRoot + c.pre.bytes()
-		if pu != nil {
-			n += int64(len(pu.secs)) * bytesPerSection
-		}
-		return n
-	}
-	fsCacheCharge(charge, held(nil))
+	fr := c.e.fr
 
 	var w io.Writer
 	nums := factsetNumbers{}
@@ -216,17 +189,8 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 				return err
 			}
 		}
-		if err := c.waitSlot(); err != nil {
-			return err
-		}
-		pu, err := c.planUnit(fr, st, u)
-		if err == nil {
-			err = applyUnit(st, pu)
-		}
-		if err == nil {
-			fsCacheCharge(charge, held(pu))
-		}
-		c.releaseSlot()
+		pu, err := c.planUnitOf(u)
+		c.releaseBudget()
 		if err != nil {
 			return err
 		}
@@ -253,19 +217,4 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 		}
 	}
 	return nil
-}
-
-// waitSlot takes a planning slot, waiting for one (an export never fails
-// mid-stream for want of a slot).
-func (c *fsCall) waitSlot() error {
-	if c.slot {
-		return nil
-	}
-	select {
-	case buildSlots <- struct{}{}:
-		c.slot = true
-		return nil
-	case <-c.ctx.Done():
-		return c.ctx.Err()
-	}
 }

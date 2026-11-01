@@ -1343,22 +1343,27 @@ paths:
         once: a first call never ends another factset. A factset ends when it
         is closed (`DELETE` on this resource, or `close: true` on
         `knomit_materialize`), when it has been idle for the session idle
-        time (`session.tool_idle_ttl`), or when the server restarts. At most 4
-        calls plan factset units at once on the server (a page from planned
-        units plans nothing); a call over that, one that finds the session
+        time (`session.tool_idle_ttl`), or when the server restarts. A page is
+        a function of the factset and the position alone: any unit can be
+        read in any order, by any number of calls at once, with the same
+        bytes. A call that must plan units reserves planning memory under the
+        budget (`session.factset_memory_mib`, 64 MiB, which also holds the
+        cached factsets, least recently used evicted first) and waits while
+        it is full; one that waited a minute, one that finds the session
         store's lock taken past its timeout, one whose index moved during the
         search twice, or one on a store whose reference index is still being
         backfilled with its repo id unresolved, is a 503 with Retry-After.
-        The cache budget (`session.factset_memory_mib`, 64 MiB) evicts the
-        least recently used factsets; the next page replays them. Cross-KB
+        An evicted factset is planned again by the next page. Cross-KB
         refs are followed only into repos the caller reaches. Reach is
         checked when content of a repo is read, not when a cursor is resumed:
         a repo that became unreachable after the first call (archived,
         removed, access revoked, or beyond a narrower credential) does not
         fail the factset, and content read from it later shows as
-        kb_unavailable, like any missing target. Pages already planned and
-        cached are not re-read, so a re-read may differ from bytes sent
-        earlier. A fact-identity collision (two facts on one 64-bit hash) is a
+        kb_unavailable, like any missing target. Units already planned are
+        not re-planned for reach, and a unit planned or re-planned while
+        reach differs may differ from bytes sent earlier (the same position
+        gives the same bytes only while reach stays the same). A
+        fact-identity collision (two facts on one 64-bit hash) is a
         500, never a silently dropped subtree.
       operationId: getSearchFactSetPage
       parameters:
@@ -1442,12 +1447,13 @@ paths:
         from unit 1 to the end, never partial: a failure after the first
         bytes aborts the response. The cursor's position is irrelevant and
         nothing is written. Owned like the pages: another owner's or an
-        unknown cursor is the same 404. Each unit is planned under one of
-        the 4 planning slots, given back before that unit is written, so a
-        stalled download holds no planning slot. At most 8 exports stream at
-        once on the server (over that: a 503 with Retry-After), and each
-        write of the stream must complete within a minute, else the export
-        aborts. A 500 is any other failure before the first byte.
+        unknown cursor is the same 404. Each unit is planned holding
+        planning memory, given back before that unit is written, so a
+        stalled download holds none; there is no cap on exports streaming at
+        once and no deadline on the whole export, but each write of the
+        stream must complete within a minute, else the export aborts. A 503
+        with Retry-After is a call that waited a minute for planning memory
+        before the first byte; a 500 is any other failure before it.
       operationId: exportSearchFactSet
       parameters:
         - { name: cursor, in: query, required: true, schema: { type: string } }

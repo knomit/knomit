@@ -211,8 +211,8 @@ func handleSearchFactSetExport(mgr *repos.Manager) http.HandlerFunc {
 
 // factsetExportWriteTimeout bounds each write of an export's stream. The
 // listeners run with no WriteTimeout (a long download is legitimate), so
-// without it a client that stops reading would hold its export slot and
-// reader forever; with it, a write that cannot complete in this time fails,
+// without it a client that stops reading would hold its reader and its
+// FactSet's cache entry forever; with it, a write that cannot complete in this time fails,
 // and the export aborts (never a short file). It is the server's FactSet
 // stall limit, which also caps session.factset_anchor_wait.
 const factsetExportWriteTimeout = config.FactSetStallLimit
@@ -316,13 +316,10 @@ func writeFactSetError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, materialize.ErrInvalid):
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", err.Error(), r.URL.Path)
 	case errors.Is(err, materialize.ErrFactSetBusy), errors.Is(err, materialize.ErrStoreBusy),
-		errors.Is(err, materialize.ErrFactSetExportsBusy), errors.Is(err, materialize.ErrIndexMoved),
-		errors.Is(err, materialize.ErrNotReady):
+		errors.Is(err, materialize.ErrIndexMoved), errors.Is(err, materialize.ErrNotReady):
 		w.Header().Set("Retry-After", materializeBusyRetryAfter)
 		detail := "the server is busy building other factsets; retry shortly"
 		switch {
-		case errors.Is(err, materialize.ErrFactSetExportsBusy):
-			detail = materialize.ErrFactSetExportsBusy.Error()
 		case errors.Is(err, materialize.ErrIndexMoved):
 			detail = materialize.ErrIndexMoved.Error()
 		case errors.Is(err, materialize.ErrNotReady):

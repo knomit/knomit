@@ -825,11 +825,11 @@ func TestFactSet_F22_HashCollisionIsRefused(t *testing.T) {
 
 // Export: one document, every section once, links resolved to the numbers
 // written (back links from the anchors the export rendered), the RULE 1 note,
-// and no planning slot held while it writes.
+// and no planning memory held while it writes.
 //
-// Sabotage: keep the planning slot while writing, and the writer sees one in
-// use.
-func TestFactSet_ExportStreamsWithoutAPlanningSlot(t *testing.T) {
+// Sabotage: keep the planning memory while writing, and the writer sees a
+// plan in flight.
+func TestFactSet_ExportStreamsWithoutPlanningMemory(t *testing.T) {
 	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
@@ -839,12 +839,12 @@ func TestFactSet_ExportStreamsWithoutAPlanningSlot(t *testing.T) {
 	var buf bytes.Buffer
 	var inUse []int
 	w := writerFunc(func(b []byte) (int, error) {
-		inUse = append(inUse, BuildSlotsInUse())
+		inUse = append(inUse, FactSetPlansInFlightForTest())
 		return buf.Write(b)
 	})
 	require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return w }))
 	for _, n := range inUse {
-		require.Zero(t, n, "no planning slot is held while the export writes")
+		require.Zero(t, n, "no planning memory is held while the export writes")
 	}
 	doc := buf.String()
 	require.Contains(t, doc, "### 1.1.2 Z (see [2.2](#"+AnchorOf(FactHash(f.id12(), "kb/z/z.md"))+"))")
@@ -852,77 +852,55 @@ func TestFactSet_ExportStreamsWithoutAPlanningSlot(t *testing.T) {
 	require.Equal(t, 1, strings.Count(doc, "<a id=\""+AnchorOf(FactHash(f.id12(), "kb/z/z.md"))+"\">"), "one target per fact")
 }
 
-// N2: an export reads only inside its planning slot (no background window,
-// where a page pipelines one) and what it holds between units is charged to
-// the cache budget: the accounted total is above the cached entries while it
-// runs and back to them after, and with a budget the entry fits alone, the
-// charge evicts the idle entry.
+// N2: an export reads only while it holds planning memory (no background
+// window, where a page pipelines one), holds it while it plans a unit and
+// gives it back before it writes; and it plans on the SHARED prefix: an
+// export of an unplanned FactSet extends the cached entry to its last unit,
+// so the pages after it plan nothing.
 //
 // Sabotage: let the export pipeline its windows (background reads appear);
-// drop the charge (the total never rises, the entry is never evicted).
-func TestFactSet_ExportIsChargedAndReadsInItsSlot(t *testing.T) {
+// keep the memory across units (a plan is in flight between units); plan the
+// export on its own written state (the entry is not extended).
+func TestFactSet_ExportPlansTheSharedPrefixInsideItsReservation(t *testing.T) {
 	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
 	defer SetFactSetPrefetchWindowForTest(1)()
-	defer SetFactSetCacheBudget(0)
-	SetFactSetCacheBudget(1 << 30)
-	DropFactSetCacheForTest()
 	req := f.request("kb/u/")
 	req.Options.Depth, req.Limit = 3, 1
 	p := f.first(t, "o", req)
-	bg := FactSetBackgroundReadsForTest()
-	require.Len(t, readAll(t, f, "o", p), 18)
-	require.Greater(t, FactSetBackgroundReadsForTest(), bg, "pages read the next window in the background")
-	cached, size := FactSetCachedForTest(*p.Cursor)
-	require.True(t, cached)
-	require.Positive(t, size)
-	base := FactSetCacheBytes()
+	DropFactSetCacheForTest()
 
-	var during []int64
-	var entryCached []bool
+	var planning, between []int
+	defer SetFactSetExtendHookForTest(func(int) { planning = append(planning, FactSetPlansInFlightForTest()) })()
 	defer SetFactSetExportFaultForTest(func(int) error {
-		during = append(during, FactSetCacheBytes())
-		c, _ := FactSetCachedForTest(*p.Cursor)
-		entryCached = append(entryCached, c)
+		between = append(between, FactSetPlansInFlightForTest())
 		return nil
 	})()
-	export := func() {
-		t.Helper()
-		require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }))
-	}
-	bg = FactSetBackgroundReadsForTest()
-	export()
+	bg := FactSetBackgroundReadsForTest()
+	require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }))
 	require.Equal(t, bg, FactSetBackgroundReadsForTest(), "the export reads nothing in the background")
-	require.Len(t, during, 2, "units 2 and 3 were observed")
-	for i, d := range during {
-		require.Greater(t, d, base, "unit %d: the export's held state is charged", i+2)
-		require.True(t, entryCached[i], "a budget with room evicts nothing")
-	}
-	require.Equal(t, base, FactSetCacheBytes(), "the charge is given back")
+	require.Equal(t, []int{1, 1, 1}, planning, "units 1-3 extended the prefix, each inside a reservation")
+	require.Equal(t, []int{0, 0}, between, "nothing held between units")
+	require.Zero(t, FactSetPlansInFlightForTest())
 
-	during, entryCached = nil, nil
-	SetFactSetCacheBudget(size + 1)
-	export()
-	require.Len(t, entryCached, 2)
-	for i := range entryCached {
-		require.False(t, entryCached[i], "unit %d: entry + charge exceed the budget, the idle entry is evicted", i+2)
-	}
-	require.Zero(t, FactSetCacheBytes(), "entry evicted, charge given back")
+	e := cachedEntry(t, *p.Cursor)
+	planned, _ := e.st.extent()
+	require.Equal(t, 3, planned, "the export extended the shared prefix")
+	_, st, err := FactSetNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 3)
+	require.NoError(t, err)
+	require.Zero(t, st.CacheMisses)
+	require.LessOrEqual(t, st.UnitsPlanned, 1, "a seek after the export never replays")
 }
 
 type writerFunc func([]byte) (int, error)
 
 func (w writerFunc) Write(b []byte) (int, error) { return w(b) }
 
-// F16. Bounds: 501 results make 500 units (the Facts cap); over the
-// planning-slot cap a call that must plan is refused at once
-// (ErrFactSetBusy) while a page served from an already planned unit takes no
-// slot; over the export cap an export is refused at once.
+// F16. Bounds: 501 results make 500 units (the Facts cap).
 //
 // Sabotage: drop the Facts truncation and let the search ask for one more
-// (501 units); give the planning or the export slots room for 1000 (no
-// refusal).
+// (501 units).
 func TestFactSet_F16_Bounds(t *testing.T) {
 	f := newFactSetFixture(t)
 	ctx := context.Background()
@@ -942,25 +920,6 @@ func TestFactSet_F16_Bounds(t *testing.T) {
 	p := f.first(t, "cap", req)
 	require.Equal(t, 500, p.Units, "501 results, 500 units")
 
-	seedABC(t, f)
-	one := f.request("kb/u/")
-	one.Options.Depth, one.Limit = 3, 1
-	p1 := f.first(t, "o", one)
-	release := ReserveFactSetBuildsForTest(MaxConcurrentFactSetBuilds)
-	_, _, err = FactSetFirstPage(ctx, f.scope("busy"), one)
-	require.ErrorIs(t, err, ErrFactSetBusy, "a first call must plan: refused at once")
-	p2, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, 0)
-	require.NoError(t, err, "section 2 of unit 1, already planned: no slot needed")
-	require.Equal(t, "1.1", p2.Facts[0].Number)
-	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p2.Cursor, 2)
-	require.ErrorIs(t, err, ErrFactSetBusy, "unit 2 must be planned: refused")
-	release()
-	require.Zero(t, BuildSlotsInUse())
-
-	release = ReserveFactSetExportsForTest(MaxConcurrentFactSetExports)
-	err = FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p1.Cursor, func(FactSetEnv) io.Writer { return io.Discard })
-	release()
-	require.ErrorIs(t, err, ErrFactSetExportsBusy)
 }
 
 func leftPad(i int) string {
@@ -1107,17 +1066,16 @@ func TestFactSet_B1_UnpinFollowsRefsUnresolvedAtWrite(t *testing.T) {
 	require.Equal(t, "1.2", reservedNumber(t, *p.Cursor, f.id12(), "kb/z/c.md"))
 }
 
-// R3-1: a first call waiting for its index to settle holds NO planning slot,
-// so a sync burst cannot starve existing FactSets: with
-// MaxConcurrentFactSetBuilds first calls waiting on an unsettled watermark,
-// no slot is in use, a page of an existing FactSet whose cache entry was
-// evicted (it must replan) is served, and so is its export (every unit
-// plans under a slot). The waiters still end in ErrIndexMoved at their
+// R3-1: a first call waiting for its index to settle holds NO planning
+// memory, so a sync burst cannot starve existing FactSets: with first calls
+// waiting on an unsettled watermark, no plan is in flight, a page of an
+// existing FactSet whose cache entry was evicted (it must replan) is served,
+// and so is its export. The waiters still end in ErrIndexMoved at their
 // deadline. (Reviewer probe zz_probe_slotwait_test.go made real.)
 //
-// Sabotage: take the slot before the wait, as before (4 slots in use, the
-// page refused with ErrFactSetBusy and the export waiting out the waiters).
-func TestFactSet_AnchorWaitHoldsNoPlanningSlot(t *testing.T) {
+// Sabotage: reserve the memory before the wait (plans in flight while they
+// wait).
+func TestFactSet_AnchorWaitHoldsNoPlanningMemory(t *testing.T) {
 	f := newFactSetFixture(t)
 	f.write(t, "kb/z/x.md", "X", "x.")
 	f.write(t, "kb/u/a.md", "A", "a.", "kb/z/x.md")
@@ -1133,9 +1091,10 @@ func TestFactSet_AnchorWaitHoldsNoPlanningSlot(t *testing.T) {
 	key := index.SyncPendingKey("agent/test")
 	_, err := storetest.RawDB(f.svc).Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, key, "0123456789abcdef0123456789abcdef01234567")
 	require.NoError(t, err)
-	errs := make([]error, MaxConcurrentFactSetBuilds)
+	const waiters = 4
+	errs := make([]error, waiters)
 	var wg sync.WaitGroup
-	for i := range MaxConcurrentFactSetBuilds {
+	for i := range waiters {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1143,7 +1102,7 @@ func TestFactSet_AnchorWaitHoldsNoPlanningSlot(t *testing.T) {
 		}()
 	}
 	time.Sleep(200 * time.Millisecond)
-	require.Zero(t, BuildSlotsInUse(), "the waiting first calls hold no planning slot")
+	require.Zero(t, FactSetPlansInFlightForTest(), "the waiting first calls hold no planning memory")
 
 	DropFactSetCacheForTest()
 	start := time.Now()
@@ -1151,14 +1110,14 @@ func TestFactSet_AnchorWaitHoldsNoPlanningSlot(t *testing.T) {
 	require.NoError(t, err, "an existing FactSet's page is served while first calls wait")
 	require.NotEmpty(t, next.Facts)
 	require.NoError(t, FactSetExport(ctx, f.scope("reader"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }),
-		"its export plans every unit under a slot while first calls wait")
+		"its export plans every unit while first calls wait")
 	require.Less(t, time.Since(start), wait/2, "neither waited for the waiters")
 
 	wg.Wait()
 	for i, err := range errs {
 		require.ErrorIs(t, err, ErrIndexMoved, "waiter %d", i)
 	}
-	require.Zero(t, BuildSlotsInUse())
+	require.Zero(t, FactSetPlansInFlightForTest())
 }
 
 // R3-2: a whole Rebuild at the same head between the two watermark reads

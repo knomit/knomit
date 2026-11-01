@@ -35,11 +35,14 @@ import (
 // Streaming (rulings of 2026-10-30): the FROZEN inputs (the results as (repo,
 // path, commit, blob), the anchor = the write mount's index watermark, the
 // frozen tips of every repo the caller can reach) are written ONCE, at
-// creation, as one session-DB row. The written set and the reserved map live
-// in an in-memory CACHE under a budget; a lost or evicted entry is rebuilt by
-// replaying units without bodies. The reading position travels in the cursor
-// token, so pages never write the session DB (only a heartbeat, at most once
-// per quarter of the idle TTL).
+// creation, as one session-DB row. The reserved map and the planned PREFIX
+// (each written fact with the unit that first wrote it) live in an in-memory
+// CACHE under a budget; a page is a pure function of (FactSet, position): a
+// unit within the prefix is re-planned alone against it, any number of calls
+// at once, and only extending the prefix is done once, by one call. A lost or
+// evicted entry is planned again up to what the next call needs. The reading
+// position travels in the cursor token, so pages never write the session DB
+// (only a heartbeat, at most once per quarter of the idle TTL).
 
 // FactSet bounds.
 const (
@@ -48,15 +51,6 @@ const (
 	DefaultFactSetFacts = MaxFactSetFacts
 	// MaxFactSetFacts caps the units, the same ceiling as max_nodes.
 	MaxFactSetFacts = 500
-	// MaxConcurrentFactSetBuilds caps the calls PLANNING FactSet units at
-	// once, server-wide (a first call, or a page, seek or export that must
-	// plan); one over it is refused at once (ErrFactSetBusy, retry-able). A
-	// page served from a planned unit takes no slot, and an export holds one
-	// only while it plans a unit, never while it writes.
-	MaxConcurrentFactSetBuilds = 4
-	// MaxConcurrentFactSetExports caps the exports streaming at once,
-	// server-wide; one over it is refused at once (ErrFactSetExportsBusy).
-	MaxConcurrentFactSetExports = 8
 	// UIListLimit is how many results the web UI's results list shows: the
 	// default limit of the repo /search route and of the /facts collection
 	// (which the UI no longer sends). A FactSet's first UIListLimit units are
@@ -85,11 +79,10 @@ const (
 )
 
 var (
-	// ErrFactSetBusy: MaxConcurrentFactSetBuilds calls are planning; retry.
-	ErrFactSetBusy = errors.New("too many factsets are being built right now; retry shortly")
-	// ErrFactSetExportsBusy: MaxConcurrentFactSetExports exports are
-	// streaming; retry.
-	ErrFactSetExportsBusy = errors.New("too many factsets are being exported right now; retry shortly")
+	// ErrFactSetBusy: the FactSet memory budget (session.factset_memory_mib)
+	// stayed full for as long as a call waits for planning memory
+	// (config.FactSetStallLimit); retry.
+	ErrFactSetBusy = errors.New("the server stayed busy building other factsets; retry shortly")
 	// ErrIndexMoved: the write mount's index advanced during the search,
 	// twice; nothing was written; retry.
 	ErrIndexMoved = errors.New("the index moved while the search ran; retry shortly")
@@ -263,27 +256,7 @@ func parseCursor(tok string) (string, fpos, bool) {
 	return tok[:j], fpos{u, s}, true
 }
 
-// ---- slots, heartbeat ---------------------------------------------------------
-
-var (
-	buildSlots  = make(chan struct{}, MaxConcurrentFactSetBuilds)
-	exportSlots = make(chan struct{}, MaxConcurrentFactSetExports)
-)
-
-// BuildSlotsInUse is how many planning slots calls hold right now.
-func BuildSlotsInUse() int { return len(buildSlots) }
-
-// ExportSlotsInUse is how many export slots calls hold right now.
-func ExportSlotsInUse() int { return len(exportSlots) }
-
-func takeSlot(ch chan struct{}) bool {
-	select {
-	case ch <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
+// ---- heartbeat ---------------------------------------------------------------
 
 // factsetIdleTTL is session.tool_idle_ttl: the reaper deletes a FactSet idle
 // longer than it, and the heartbeat is written once per quarter of it.
@@ -364,9 +337,10 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if sc.Pin == "" || sc.Owner == "" {
 		return FactSetPage{}, st, fmt.Errorf("%w: a factset cursor needs an owner and a binding identity", ErrInvalid)
 	}
-	// No planning slot yet: searchAnchored takes it once the index has
+	// No planning memory yet: searchAnchored reserves it once the index has
 	// settled (a first call waiting for that holds none, review R3-1).
-	c := &fsCall{ctx: ctx, b: req.Binding, mgr: req.Manager, mayRead: req.MayRead}
+	c := &fsCall{ctx: ctx, b: req.Binding, mgr: req.Manager, mayRead: req.MayRead,
+		reserve: fsPlanReserve(req.Facts, req.Options.MaxNodes, false)}
 	c.r = newReader(req.Binding, req.Manager, req.MayRead, &c.st)
 	defer c.close()
 
@@ -407,7 +381,7 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if c.r.tips == nil {
 		c.r.tips = map[string]frozenTip{}
 	}
-	e := &fsEntry{fr: fr, ti: sc.Sessions}
+	e := newFSEntry("", sc.Sessions, fr)
 	c.e = e
 	if err := c.ensureState(); err != nil {
 		return FactSetPage{}, c.st, err
@@ -421,17 +395,16 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 		return FactSetPage{}, c.st, err
 	}
 	e.id = id
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	fsCachePut(e)
 	page, err := c.page(fpos{1, 0}, true)
 	if err != nil {
 		// The caller never got the cursor: nothing may stay behind.
 		fsCacheDrop(id)
+		fsCacheRelease(e)
 		_ = sc.Sessions.DeleteFactSet(context.WithoutCancel(ctx), id)
 		return FactSetPage{}, c.st, err
 	}
-	fsCacheAccount(e)
+	fsCacheRelease(e)
 	return page, c.st, nil
 }
 
@@ -464,10 +437,10 @@ func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factse
 		pause = min(2*pause, settlePollMax)
 		return nil
 	}
-	// The planning slot is held only for the search itself: a first call
-	// waiting for its index to settle holds none, so a sync burst cannot
-	// starve the pages, seeks and exports of existing FactSets (review R3-1).
-	// The slot is taken, refused at once when none is free, only once the
+	// Planning memory is held only from the search on: a first call waiting
+	// for its index to settle holds none, so a sync burst cannot starve the
+	// pages, seeks and exports of existing FactSets (review R3-1). It is
+	// reserved (waiting for memory when the budget is full) only once the
 	// watermark reads settled, and given back before every wait.
 	for {
 		w1, gen1, settled1, err := wm.svc.HistoryQuery().SettledWatermark(c.ctx, wm.branch)
@@ -476,7 +449,7 @@ func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factse
 		}
 		c.st.IndexQueries++
 		if settled1 {
-			if err := c.needSlot(); err != nil {
+			if err := c.needBudget(); err != nil {
 				return "", nil, err
 			}
 			hits, err := runFactSetSearch(c.ctx, wm, req)
@@ -496,7 +469,7 @@ func (c *fsCall) searchAnchored(wm *mount, req FactSetRequest) (string, []factse
 			if w1 == w2 && gen1 == gen2 && settled1 && settled2 {
 				return w1, hits, nil
 			}
-			c.releaseSlot()
+			c.releaseBudget()
 		}
 		if err := wait(); err != nil {
 			return "", nil, err
@@ -643,7 +616,8 @@ func factsetSearchOnce(ctx context.Context, m *mount, req FactSetRequest, limit 
 
 // ---- a call on a FactSet ---------------------------------------------------
 
-// fsCall is one call's handle: its reader, its stats, its planning slot.
+// fsCall is one call's handle: its reader, its stats, its planning memory
+// and, while it extends the prefix, the entry's extension token.
 type fsCall struct {
 	ctx     context.Context
 	b       *repos.Binding
@@ -652,22 +626,23 @@ type fsCall struct {
 	r       *reader
 	e       *fsEntry
 	st      Stats
-	slot    bool
+	// res is the planning memory this call holds (nil: none); reserve is
+	// how much it takes when it must plan (0: fsPlanReserve of its entry).
+	res     *fsReservation
+	reserve int64
+	token   bool
 	// pre: the reads made ahead for the window of units being planned; next:
 	// the following window, reading in the background.
 	pre  *prefetch
 	next *pending
 	// noPipeline: no window is read in the background, so every PLANNING
-	// read is made inside the planning slot (the export: it gives the slot
-	// back between units, and a background window would read outside it;
-	// its inflate reads run without the slot either way).
+	// read is made while the call holds its planning memory (the export: it
+	// gives the memory back between units, and a background window would
+	// read outside it; its inflate reads run without it either way).
 	noPipeline bool
-	// keepFrom is the unit the page being served starts in: plans before it
-	// are dropped as soon as the planner passes them.
-	keepFrom int
 }
 
-// prefetchWindow is how many units are read ahead at once: a replay or an
+// prefetchWindow is how many units are read ahead at once: a far seek or an
 // export of 500 units makes 84 windows of batched reads instead of a root
 // read and a level read per unit.
 var prefetchWindow = 6
@@ -903,37 +878,66 @@ func (c *fsCall) close() {
 		<-c.next.done // its statements must finish before the reader closes
 		c.next = nil
 	}
-	c.releaseSlot()
+	c.giveToken()
+	c.releaseBudget()
 	if c.r != nil {
 		c.r.close()
 	}
 }
 
-func (c *fsCall) releaseSlot() {
-	if c.slot {
-		<-buildSlots
-		c.slot = false
+func (c *fsCall) releaseBudget() {
+	if c.res != nil {
+		c.res.release()
+		c.res = nil
 	}
 }
 
-// needSlot takes a planning slot for this call, once (refused at once when
-// the cap is reached).
-func (c *fsCall) needSlot() error {
-	if c.slot {
+// needBudget reserves this call's planning memory, once, waiting for it
+// while the budget is full (fsReserve). A call reserves BEFORE it takes the
+// extension token, never after: a token holder never waits for memory.
+func (c *fsCall) needBudget() error {
+	if c.res != nil {
 		return nil
 	}
-	if !takeSlot(buildSlots) {
-		return ErrFactSetBusy
+	n := c.reserve
+	if n == 0 && c.e != nil {
+		n = fsPlanReserve(len(c.e.fr.Roots), c.e.fr.Env.MaxNodes, c.e.st.built.Load())
 	}
-	c.slot = true
+	res, err := fsReserve(c.ctx, n)
+	if err != nil {
+		return err
+	}
+	c.res = res
 	return nil
+}
+
+// takeToken waits for the entry's extension token (or the context).
+func (c *fsCall) takeToken() error {
+	if c.token {
+		return nil
+	}
+	select {
+	case c.e.ext <- struct{}{}:
+		c.token = true
+		return nil
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
+}
+
+func (c *fsCall) giveToken() {
+	if c.token {
+		<-c.e.ext
+		c.token = false
+	}
 }
 
 // openFactSet checks a cursor's id against sc exactly as every cursor is
 // checked (every mismatch is ErrCursorExpired: unknown, another tool's,
 // another binding's or read set's, another owner's), writes the bounded
-// heartbeat, and returns the call with its cache entry LOCKED (released by
-// unlock). The ROW decides on every call, cache hit or replay.
+// heartbeat, and returns the call holding its cache entry (given back by
+// done; other calls on the FactSet run alongside). The ROW decides on every
+// call, cache hit or miss.
 func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, id string) (*fsCall, error) {
 	if sc.Pin == "" || sc.Owner == "" || sc.Pin != b.PinID() {
 		return nil, ErrCursorExpired
@@ -966,9 +970,8 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 			c.close()
 			return nil, ErrCursorExpired
 		}
-		e = &fsEntry{id: id, ti: sc.Sessions, fr: &fr}
 		c.st.CacheMisses++
-		e = fsCachePutIfAbsent(e)
+		e = fsCachePutIfAbsent(newFSEntry(id, sc.Sessions, &fr))
 	}
 	// No up-front reach check of the frozen tips: a repo this caller can no
 	// longer read (archived, removed, access revoked, a narrower credential)
@@ -980,17 +983,17 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 	if c.r.tips == nil {
 		c.r.tips = map[string]frozenTip{}
 	}
-	e.mu.Lock()
 	c.e = e
 	return c, nil
 }
 
-func (c *fsCall) unlock() {
-	if c.e != nil {
-		fsCacheAccount(c.e)
-		c.e.mu.Unlock()
-	}
+// done ends the call: its token and memory back, its entry re-measured and
+// given back.
+func (c *fsCall) done() {
 	c.close()
+	if c.e != nil {
+		fsCacheRelease(c.e)
+	}
 }
 
 // IsFactSetCursor reports whether cursor names a FactSet THIS caller may read
@@ -1072,7 +1075,7 @@ func FactSetNextPageStats(ctx context.Context, sc CursorScope, b *repos.Binding,
 	if err != nil {
 		return FactSetPage{}, Stats{}, err
 	}
-	defer c.unlock()
+	defer c.done()
 	units := len(c.e.fr.Roots)
 	if unit != 0 {
 		if unit < 1 || unit > units {
@@ -1084,19 +1087,28 @@ func FactSetNextPageStats(ctx context.Context, sc CursorScope, b *repos.Binding,
 	return page, c.st, err
 }
 
-// ensureState builds the FactSet's results and reserved maps (once per cache
-// entry): the two-level reservation.
+// ensureState builds the FactSet's results and reserved tables (once per
+// cache entry, by the call holding the extension token): the two-level
+// reservation.
 func (c *fsCall) ensureState() error {
 	e := c.e
-	if e.st.built {
+	if e.st.built.Load() {
 		return nil
 	}
-	if err := c.needSlot(); err != nil {
+	if err := c.needBudget(); err != nil {
 		return err
 	}
+	if err := c.takeToken(); err != nil {
+		return err
+	}
+	defer c.giveToken()
+	if e.st.built.Load() {
+		return nil // built by the call that held the token before us
+	}
 	// Unit 1's window does not depend on the reservation: read it while the
-	// reservation is built.
-	if c.next == nil && (c.pre == nil || c.pre.lo != 1) {
+	// reservation is built (not for a call that reads nothing in the
+	// background: the export).
+	if c.next == nil && !c.noPipeline && (c.pre == nil || c.pre.lo != 1) {
 		m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
 		if err != nil {
 			return err
@@ -1111,59 +1123,77 @@ func (c *fsCall) ensureState() error {
 		}
 		c.next = c.startReadAhead(e.fr, lv, 1)
 	}
-	st, err := c.reserve(e.fr)
+	results, reserved, err := c.reserveTables(e.fr)
 	if err != nil {
 		return err
 	}
-	e.st = *st
-	e.st.freshWritten()
-	e.planned, e.counts, e.plans = 0, nil, map[int]*plannedUnit{}
+	e.st.setTables(results, reserved)
 	return nil
 }
 
-// planUnitOf returns unit u's plan (no bodies), planning and replaying from
-// unit 1 as needed: the cache keeps the written set up to the planned extent
-// and the plans of the last few units; anything before that is replayed.
+// factsetExtendHook runs before the call holding the extension token plans
+// each unit past the prefix (a test seam: a test blocks an extension in it).
+// nil in production.
+var factsetExtendHook func(unit int)
+
+// planUnitOf returns unit u's plan (no bodies). A unit within the planned
+// prefix is a READ: its kept plan, or the unit re-planned alone against the
+// prefix (what units before it wrote), never a replay, and any number of
+// calls do this at once. A unit past the prefix is planned by EXTENDING it:
+// the call holding the extension token plans the units up to u one by one,
+// applying each to the prefix; a call that needs the prefix extended waits,
+// on its own context, until another call's extension reaches u or the token
+// is free.
 func (c *fsCall) planUnitOf(u int) (*plannedUnit, error) {
 	if err := c.ensureState(); err != nil {
 		return nil, err
 	}
 	e := c.e
-	if pu, ok := e.plans[u]; ok && u <= e.planned {
+	if pu := e.plan(u); pu != nil {
 		return pu, nil
 	}
-	if e.planned >= u {
-		// A seek backwards past the cached plans: replay from the frozen
-		// inputs, without bodies.
-		e.st.freshWritten()
-		e.planned, e.counts, e.plans = 0, nil, map[int]*plannedUnit{}
+	if err := c.needBudget(); err != nil {
+		return nil, err
 	}
-	for e.planned < u {
-		if err := c.needSlot(); err != nil {
-			return nil, err
-		}
-		next := e.planned + 1
-		pu, err := c.planUnit(e.fr, &e.st, next)
-		if err != nil {
-			return nil, err
-		}
-		if err := applyUnit(&e.st, pu); err != nil {
-			return nil, err
-		}
-		e.planned = next
-		e.counts = append(e.counts, len(pu.secs))
-		e.plans[next] = pu
-		// Keep only the plans a later page may still start in: a page spans
-		// at most HumanMaxLimit units, and no page starts before the one
-		// being served (c.keepFrom), so a far seek holds one plan, not the
-		// whole way there; sequential paging never replays.
-		for k := range e.plans {
-			if k < c.keepFrom || k < next-HumanMaxLimit {
-				delete(e.plans, k)
+	for {
+		planned, grew := e.st.extent()
+		if u <= planned {
+			c.giveToken()
+			pu, err := c.planUnit(e.fr, &e.st, u)
+			if err != nil {
+				return nil, err
 			}
+			e.keepPlan(u, pu)
+			return pu, nil
+		}
+		if c.token {
+			break
+		}
+		select {
+		case e.ext <- struct{}{}:
+			c.token = true
+		case <-grew:
+		case <-c.ctx.Done():
+			return nil, c.ctx.Err()
 		}
 	}
-	return e.plans[u], nil
+	defer c.giveToken()
+	planned, _ := e.st.extent()
+	var pu *plannedUnit
+	for next := planned + 1; next <= u; next++ {
+		if h := factsetExtendHook; h != nil {
+			h(next)
+		}
+		var err error
+		if pu, err = c.planUnit(e.fr, &e.st, next); err != nil {
+			return nil, err
+		}
+		if err := e.st.apply(next, pu); err != nil {
+			return nil, err
+		}
+		e.keepPlan(next, pu)
+	}
+	return pu, nil
 }
 
 // planUnit plans unit u over the cross-unit state st (no bodies).
@@ -1204,22 +1234,7 @@ func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, 
 	return pu, nil
 }
 
-// applyUnit adds a planned unit's written facts (and an unavailable root's
-// heading) to the written set.
-func applyUnit(st *fsState, pu *plannedUnit) error {
-	for _, s := range pu.secs {
-		if s.link != nil {
-			continue
-		}
-		if err := st.markWritten(s.h, factCheck(s.repo, s.rel), blob64(s.blob), s.repo, s.rel); err != nil {
-			logCollision(err)
-			return fmt.Errorf("%w: %w", ErrFactIdentity, err)
-		}
-	}
-	return nil
-}
-
-// reserve builds the results map and the reserved map from the frozen roots
+// reserveTables builds the results map and the reserved map from the frozen roots
 // (#692 round-3 rule, unchanged semantics):
 //   - every result owns its own unit;
 //   - each result's DIRECT references are reserved for the first unit, in
@@ -1235,23 +1250,21 @@ func applyUnit(st *fsState, pu *plannedUnit) error {
 // It reads, per window of results: their metadata (frame detection), their
 // ref targets (RefTargetsOfBlobs, no target metadata), and the versions live
 // at the anchor (unpin) or at the frozen tips (cross-KB).
-func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
-	st := &fsState{built: true}
-	collision := func(err error) (*fsState, error) {
+func (c *fsCall) reserveTables(fr *factsetFrozen) (results, reserved ftab, err error) {
+	collision := func(err error) (ftab, ftab, error) {
 		logCollision(err)
-		return nil, fmt.Errorf("%w: %w", ErrFactIdentity, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrFactIdentity, err)
 	}
 	roots := make([]fentry, len(fr.Roots))
 	for i, root := range fr.Roots {
 		roots[i] = fentry{h: factHash(fr.WriteRepo, root.Path), check: uint32(factCheck(fr.WriteRepo, root.Path)), blob: blob64(root.Blob), unit: uint16(i + 1)}
 	}
-	var err error
-	if st.results, err = freeze(roots, func(e fentry) (string, string) { return fr.WriteRepo, fr.Roots[int(e.unit)-1].Path }); err != nil {
+	if results, err = freeze(roots, func(e fentry) (string, string) { return fr.WriteRepo, fr.Roots[int(e.unit)-1].Path }); err != nil {
 		return collision(err)
 	}
 	opts := fr.Env.options()
 	if opts.Depth < 1 || opts.MaxNodes < 2 {
-		return st, nil
+		return results, nil, nil
 	}
 	// Every depth-1 entry a unit shows is a candidate, in unit order; freeze
 	// keeps the first unit's (the earliest owner wins). A result is never a
@@ -1259,11 +1272,11 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 	var cands []fentry
 	m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	m.anchor = fr.Env.Anchor
 	if err := c.r.checkReady(c.ctx, m); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	const window = 25
 	for lo := 0; lo < len(fr.Roots); lo += window {
@@ -1279,7 +1292,7 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 		}
 		metas, err := m.svc.FactQuery().VersionsByBlob(c.ctx, keys)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		c.st.IndexQueries++
 		var blobs []string
@@ -1322,7 +1335,7 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 			}
 		} else {
 			if targets, err = m.svc.GraphStore().RefTargetsOfBlobs(c.ctx, blobs); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			c.st.IndexQueries++
 		}
@@ -1345,7 +1358,7 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 		if opts.Unpin && len(local) > 0 {
 			live, hist, err := m.svc.HistoryQuery().LiveAt(c.ctx, m.branch, m.anchor, local)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			c.st.IndexQueries++
 			if hist {
@@ -1362,17 +1375,17 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 		for _, id := range foreignRepos {
 			fm, err := c.r.foreign(c.ctx, id)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if fm == nil {
 				continue
 			}
 			if err := c.r.checkReady(c.ctx, fm); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			live, hist, err := fm.svc.HistoryQuery().LiveAt(c.ctx, fm.branch, fm.anchor, foreignPaths[id])
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			c.st.IndexQueries++
 			if hist {
@@ -1436,8 +1449,8 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 				included++
 				k++
 				h, chk := factHash(repo, t.path), factCheck(repo, t.path)
-				if ri := st.results.find(h); ri >= 0 {
-					if st.results[ri].check != uint32(chk) {
+				if ri := results.find(h); ri >= 0 {
+					if results[ri].check != uint32(chk) {
 						return collision(errHashCollision{repo, t.path})
 					}
 					continue
@@ -1446,12 +1459,12 @@ func (c *fsCall) reserve(fr *factsetFrozen) (*fsState, error) {
 			}
 		}
 	}
-	if st.reserved, err = freeze(cands, func(e fentry) (string, string) {
+	if reserved, err = freeze(cands, func(e fentry) (string, string) {
 		return "", fmt.Sprintf("FactHash %016x", e.h)
 	}); err != nil {
 		return collision(err)
 	}
-	return st, nil
+	return results, reserved, nil
 }
 
 // refTarget is one ref target of a root, as the reservation reads it.
@@ -1472,7 +1485,6 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	if from.unit < 1 || from.unit > units {
 		return FactSetPage{}, fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
 	}
-	c.keepFrom = from.unit
 	pu, err := c.planUnitOf(from.unit)
 	if err != nil {
 		return FactSetPage{}, err
@@ -1498,11 +1510,17 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	}
 	var cands []cand
 	at := from
+	// walked is the highest unit this page plans: what sequential paging
+	// had planned when it served this page (a page's candidates always reach
+	// the previous page's last unit), so UnitsWalked and Sections depend on
+	// the position only, never on what other calls planned.
+	walked := from.unit
 	for len(cands) < fr.Limit && at.unit <= units {
 		pu, err := c.planUnitOf(at.unit)
 		if err != nil {
 			return FactSetPage{}, err
 		}
+		walked = max(walked, at.unit)
 		for at.sec < len(pu.secs) && len(cands) < fr.Limit {
 			cd := cand{unit: at.unit, sec: pu.secs[at.sec]}
 			at.sec++
@@ -1552,10 +1570,8 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	tok := cursorToken(c.e.id, next)
 	page.Cursor = &tok
 	page.HasMore = next.unit <= units
-	page.UnitsWalked = c.e.planned
-	for _, n := range c.e.counts {
-		page.Sections += n
-	}
+	page.UnitsWalked = walked
+	page.Sections = c.e.st.sectionsThrough(walked)
 	return page, nil
 }
 

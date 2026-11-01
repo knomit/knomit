@@ -195,20 +195,22 @@ func TestFactSet_F1_TwoLevelReservationExample(t *testing.T) {
 
 	e := cachedEntry(t, *p.Cursor)
 	// The compact written state: a result or a reserved fact written at its
-	// reserved version is a bit over its frozen table; only the rest (p, q,
-	// r, s) is in the extra set.
-	bits := func(b bitset) int {
-		n := 0
-		for i := range len(b) * 64 {
-			if b.has(i) {
-				n++
+	// reserved version is marked, with the unit that first wrote it, over its
+	// frozen table; only the rest (p, q, r, s) is in the extra set.
+	firsts := func(w units) []int {
+		var out []int
+		for _, u := range w {
+			if u != 0 {
+				out = append(out, int(u))
 			}
 		}
-		return n
+		return out
 	}
-	require.Equal(t, 3, bits(e.st.wRoot), "a, b, c")
-	require.Equal(t, 4, bits(e.st.wRes), "x, y, z, w")
+	e.st.mu.RLock()
+	require.ElementsMatch(t, []int{1, 2, 3}, firsts(e.st.wRoot), "a, b, c, each by its own unit")
+	require.ElementsMatch(t, []int{1, 1, 2, 3}, firsts(e.st.wRes), "x, y by unit 1, z by unit 2, w by unit 3")
 	require.Equal(t, 4, e.st.extra.len(), "p, q, r, s")
+	e.st.mu.RUnlock()
 	reservedAs := func(path string) string {
 		u, k, ok := e.st.reservedOf(FactHash(f.b.Write().ID()[:12], path))
 		if !ok {
