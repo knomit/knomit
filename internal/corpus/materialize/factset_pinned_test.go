@@ -129,7 +129,8 @@ func exportWith(t testing.TB, sc CursorScope, b *repos.Binding, cursor string) s
 // page, later pages, seek and export.
 //
 // Sabotage: make freezePinned always set WireRepo (drop the wireID != home
-// guard), and the frozen bytes differ ("wire_repo" appears).
+// guard), and the repo path's own row carries "wire_repo": its frozen bytes
+// are no longer what they were before the split.
 func TestFactSet_Pinned_RepoPathIsByteIdentical(t *testing.T) {
 	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
@@ -250,6 +251,22 @@ func TestFactSet_Pinned_HomeIsNotTheWireRepo(t *testing.T) {
 	require.Equal(t, lp.r, fr.HomeRepo)
 	require.Equal(t, lp.alpha.id12(), fr.WireRepo, "the wire repo is frozen beside the home")
 
+	// The reservation: R facts at R's pinned blobs, nothing of W.
+	e := cachedEntry(t, *p.Cursor)
+	cur, err := lp.beta.svc.FactQuery().CurrentBlobs(context.Background(), "agent/test", []string{"kb/z/x.md", "kb/z/y.md", "kb/z/z.md", "kb/z/w.md"})
+	require.NoError(t, err)
+	curW, err := lp.alpha.svc.FactQuery().CurrentBlobs(context.Background(), "agent/test", []string{"kb/z/z.md"})
+	require.NoError(t, err)
+	require.NotEqual(t, cur["kb/z/z.md"].Blob, curW["kb/z/z.md"].Blob, "W's and R's versions differ")
+	for path, want := range map[string]string{"kb/z/x.md": "1.1", "kb/z/y.md": "1.2", "kb/z/z.md": "2.2", "kb/z/w.md": "3.1"} {
+		i := e.st.reserved.find(FactHash(lp.r, path))
+		require.GreaterOrEqual(t, i, 0, "%s is reserved as an R fact", path)
+		got := e.st.reserved[i]
+		require.Equal(t, want, itoa(int32(got.unit))+"."+itoa(int32(got.k)), path)
+		require.Equal(t, blob64(cur[path].Blob), got.blob, "%s is reserved at R's pinned blob", path)
+		require.Negative(t, e.st.reserved.find(FactHash(lp.alpha.id12(), path)), "%s: nothing of W is reserved", path)
+	}
+
 	basePages, _, _ := pagesWith(t, lp.betaSC, lp.beta.b, lp.base)
 	subPages, _, _ := pagesWith(t, lp.sc, lp.lens, p)
 	require.Equal(t, asWire(basePages, lp.r), subPages, "the sub is R's repo FactSet with kb://R/ paths")
@@ -272,21 +289,6 @@ func TestFactSet_Pinned_HomeIsNotTheWireRepo(t *testing.T) {
 	require.NotNil(t, nodes[3].Link)
 	require.Equal(t, LinkForward, nodes[3].Link.Direction)
 	require.Equal(t, "2.2", nodes[3].Link.Number)
-
-	e := cachedEntry(t, *p.Cursor)
-	cur, err := lp.beta.svc.FactQuery().CurrentBlobs(context.Background(), "agent/test", []string{"kb/z/x.md", "kb/z/y.md", "kb/z/z.md", "kb/z/w.md"})
-	require.NoError(t, err)
-	curW, err := lp.alpha.svc.FactQuery().CurrentBlobs(context.Background(), "agent/test", []string{"kb/z/z.md"})
-	require.NoError(t, err)
-	require.NotEqual(t, cur["kb/z/z.md"].Blob, curW["kb/z/z.md"].Blob, "W's and R's versions differ")
-	for path, want := range map[string]string{"kb/z/x.md": "1.1", "kb/z/y.md": "1.2", "kb/z/z.md": "2.2", "kb/z/w.md": "3.1"} {
-		i := e.st.reserved.find(FactHash(lp.r, path))
-		require.GreaterOrEqual(t, i, 0, "%s is reserved as an R fact", path)
-		got := e.st.reserved[i]
-		require.Equal(t, want, itoa(int32(got.unit))+"."+itoa(int32(got.k)), path)
-		require.Equal(t, blob64(cur[path].Blob), got.blob, "%s is reserved at R's pinned blob", path)
-		require.Negative(t, e.st.reserved.find(FactHash(lp.alpha.id12(), path)), "%s: nothing of W is reserved", path)
-	}
 }
 
 // Home != wire, B9: a page served from KEPT plans plans nothing, so nothing
