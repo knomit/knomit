@@ -1331,8 +1331,8 @@ paths:
         writes nothing on the server, and two calls with one cursor both get
         the same page. The last page's cursor points past the end (still good
         for a seek); a plain page from there, or from any position past the
-        factset's extent, is a 400. A position inside a unit that has
-        since shrunk (a cited repo became unreachable and the factset was
+        factset's last unit, is a 400. A position inside a unit that has
+        since shrunk (a cited repo became unreachable and the unit was
         re-planned) continues at the next unit's first section; it is never
         a 400.
 
@@ -1357,8 +1357,8 @@ paths:
         factsets in use); one that waited a minute, one that finds the
         session store's lock taken past its timeout, one whose index moved
         during the search twice, or one on a store whose reference index is
-        still being
-        backfilled with its repo id unresolved, is a 503 with Retry-After.
+        still being backfilled with its repo id unresolved, is a 503 with
+        Retry-After.
         An evicted factset is planned again by the next page. Cross-KB
         refs are followed only into repos the caller reaches. Reach is
         checked when content of a repo is read, not when a cursor is resumed:
