@@ -1328,7 +1328,10 @@ paths:
         writes nothing on the server, and two calls with one cursor both get
         the same page. The last page's cursor points past the end (still good
         for a seek); a plain page from there, or from any position past the
-        factset's extent, is a 400.
+        factset's extent, is a 400. A position inside a unit that has
+        since shrunk (a cited repo became unreachable and the factset was
+        re-planned) continues at the next unit's first section; it is never
+        a 400.
 
         OWNERSHIP, LIFETIME AND BOUNDS: a factset belongs to the caller's
         principal alone, not to this route, plus the binding (its repo pin and

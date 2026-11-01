@@ -776,8 +776,11 @@ func TestFactSet_F21_Cursor(t *testing.T) {
 	id := mustID(t, *p.Cursor)
 	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, id+".4.0", 0)
 	require.ErrorIs(t, err, ErrInvalid, "unit 4 of 3")
-	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, id+".1.99", 0)
-	require.ErrorIs(t, err, ErrInvalid, "section 99 of unit 1")
+	pg, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, id+".1.99", 0)
+	require.NoError(t, err, "section 99 of unit 1: the unit shrank, continue at unit 2")
+	require.Equal(t, 2, pg.UnitFrom)
+	_, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, id+".3.99", 0)
+	require.ErrorIs(t, err, ErrInvalid, "past the last unit's end is the end answer")
 
 	var wg sync.WaitGroup
 	out := make([][]byte, 8)

@@ -1478,7 +1478,18 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 		return FactSetPage{}, err
 	}
 	if from.sec >= len(pu.secs) {
-		return FactSetPage{}, fmt.Errorf("%w: the cursor's position is past unit %d's end", ErrInvalid, from.unit)
+		// A unit shrank since this position was issued (a replay re-planned
+		// it without a repo that has since gone): the cursor was valid, so
+		// continue at the next unit's start; past the last unit is the
+		// normal end-of-FactSet answer.
+		from = fpos{from.unit + 1, 0}
+		if from.unit > units {
+			return FactSetPage{}, fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
+		}
+		c.keepFrom = from.unit
+		if pu, err = c.planUnitOf(from.unit); err != nil {
+			return FactSetPage{}, err
+		}
 	}
 	type cand struct {
 		unit int

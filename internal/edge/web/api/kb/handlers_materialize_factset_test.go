@@ -811,6 +811,33 @@ func TestFactSet_ResumeAfterACitedRepoIsGone(t *testing.T) {
 	}
 }
 
+// A cursor issued before a cited repo went away never 400s because its unit
+// shrank: with beta gone and the cache dropped, unit 1 is re-planned as just
+// r1 (x is unavailable-less: not written), so position 1.1 lies past its end
+// and the resume continues at unit 2's first section. Past the last unit is
+// still the end-of-FactSet 400.
+//
+// Sabotage: restore the ErrInvalid "past unit N's end" answer in fsCall.page
+// and the resume is a 400.
+func TestFactSet_ResumeInsideAShrunkUnitContinuesAtTheNextUnit(t *testing.T) {
+	_, h, _, _, blocked := factsetGoneFixture(t)
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&cross_kb=true&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, 1, p1.Facts[0].Unit)
+	require.True(t, strings.HasSuffix(*p1.Cursor, ".1.1"), *p1.Cursor)
+	(*blocked)["beta"] = true
+	materialize.DropFactSetCacheForTest()
+	code, p2, body := getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(*p1.Cursor))
+	require.Equal(t, http.StatusOK, code, "a valid cursor must not 400 when its unit shrank: %s", body)
+	require.Equal(t, 2, p2.UnitFrom, body)
+	require.Equal(t, "kb/u/r2.md", p2.Facts[0].Path, "continues at unit 2's first section")
+	require.Equal(t, 2, p2.Facts[0].Unit)
+	// a position past the last unit is still the end answer
+	last := strings.TrimSuffix(*p1.Cursor, ".1.1") + ".3.0"
+	code, _, body = getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(last))
+	require.Equal(t, http.StatusBadRequest, code, body)
+}
+
 // Unknown id, another principal and a wrong pin stay the identical 404,
 // whatever the state of the cited repos (no existence oracle).
 //
