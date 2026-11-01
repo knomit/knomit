@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"slices"
 	"strconv"
 	"time"
 
@@ -174,14 +175,23 @@ type pref struct {
 
 // planner plans one unit.
 type planner struct {
-	ctx     context.Context
-	r       *reader
-	opts    Options
-	writeID string
-	fs      *fsState // nil for a single fact
-	unit    int
-	nodes   map[key]*pnode
-	incl    []*pnode
+	ctx  context.Context
+	r    *reader
+	opts Options
+	// homeID is the repo the unit's root lives in (a FactSet's home; the
+	// write repo for a single fact): it keys the read-ahead, which holds
+	// that repo's rows only. wireID is the repo whose paths go out bare
+	// (the binding's write repo): every other repo's path is kb://<id12>/…,
+	// the one canonical form (10a3bcc0). For a repo FactSet and a single
+	// fact the two are the same repo; a lens sub-FactSet whose home is a
+	// read member R has wireID = the lens write repo, so R's sections go out
+	// as kb://R/….
+	homeID string
+	wireID string
+	fs     *fsState // nil for a single fact
+	unit   int
+	nodes  map[key]*pnode
+	incl   []*pnode
 	// pinDirect keeps every depth-1 node its root's child in the reading
 	// order (a FactSet unit that is not a frame).
 	pinDirect bool
@@ -192,9 +202,10 @@ type planner struct {
 }
 
 // wire renders a key as addressed on the wire: bare in the binding's write
-// repo, kb://<id12>/… everywhere else.
+// repo (wireID), kb://<id12>/… everywhere else, the home repo included when
+// it is not the write repo.
 func (p *planner) wire(k key) string {
-	if k.repo == p.writeID {
+	if k.repo == p.wireID {
 		return k.rel
 	}
 	return fact.KBScheme + k.repo + "/" + k.rel
@@ -238,9 +249,31 @@ type levelReads struct {
 // targets. Level 0 of a unit never depends on the written set, so these are
 // exactly the reads the unit's plan would make, batched across units.
 type prefetch struct {
-	lo, hi int                                      // the units covered, [lo, hi)
-	rows   map[string][]index.LevelRow              // by root blob
-	metas  map[index.TargetVersion]index.TargetMeta // roots and their targets, by (path, blob, commit)
+	units []int                                    // the units covered, ascending (one home repo's units)
+	rows  map[string][]index.LevelRow              // by root blob
+	metas map[index.TargetVersion]index.TargetMeta // roots and their targets, by (path, blob, commit)
+}
+
+// covers reports whether unit u is one of the window's units.
+func (pre *prefetch) covers(u int) bool {
+	_, ok := slices.BinarySearch(pre.units, u)
+	return ok
+}
+
+// first is the window's first unit (0 for an empty window).
+func (pre *prefetch) first() int {
+	if len(pre.units) == 0 {
+		return 0
+	}
+	return pre.units[0]
+}
+
+// last is the window's last unit (0 for an empty window).
+func (pre *prefetch) last() int {
+	if len(pre.units) == 0 {
+		return 0
+	}
+	return pre.units[len(pre.units)-1]
 }
 
 // resolveLevel reads and classifies the refs of every unresolved node of one
@@ -275,7 +308,7 @@ func (p *planner) resolveLevel(level []*pnode) error {
 			if p.opts.Unpin || !hasFactRef(n) {
 				continue
 			}
-			if pre := p.pre; pre != nil && m.id12 == p.writeID {
+			if pre := p.pre; pre != nil && m.id12 == p.homeID {
 				if rows, ok := pre.rows[n.blob]; ok {
 					lr.rows[n.blob] = rows
 					continue
@@ -318,7 +351,7 @@ func (p *planner) resolveLevel(level []*pnode) error {
 					if _, ok := lr.metas[tv]; ok {
 						continue
 					}
-					if p.pre != nil && m.id12 == p.writeID {
+					if p.pre != nil && m.id12 == p.homeID {
 						if v, ok := p.pre.metas[tv]; ok {
 							lr.metas[tv] = v
 							continue

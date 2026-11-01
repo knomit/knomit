@@ -51,6 +51,17 @@ type reader struct {
 	// levels are the per-mount level readers of this call (prepared
 	// statements, readiness read once), closed by close.
 	levels map[*mount]*index.LevelReader
+	// homes are the FactSet home repos registered for this call
+	// (registerHome), by id12: opened on first use at their branch, read as
+	// of their anchor, ahead of every other route (see registerHome).
+	homes map[string]homeSpec
+}
+
+// homeSpec is a registered home repo: where it is opened and the commit its
+// live versions are read as of.
+type homeSpec struct {
+	ri             *repos.RepoInstance
+	branch, anchor string
 }
 
 func newReader(b *repos.Binding, mgr *repos.Manager, mayRead func(string) bool, st *Stats) *reader {
@@ -103,12 +114,69 @@ func (r *reader) open(ri *repos.RepoInstance, branch string) (*mount, error) {
 	return m, nil
 }
 
+// registerHome records the HOME repo of a FactSet (the repo its results live
+// in: the write repo for a repo FactSet, a lens member for a lens
+// sub-FactSet) for this call, at branch, read as of anchor. It opens nothing:
+// the store is acquired on first use (homeMount). Every route to that repo in
+// this call (homeMount, mountOf, foreign) then resolves to this one mount.
+//
+// It must run when a FactSet call opens, before any read. A FactSet reader
+// has non-nil tips (only the tips frozen with cross_kb, often none), and
+// foreign admits no repo without a frozen tip, so without the registration a
+// page served from kept plans (no planning, hence no home open) would read
+// the bodies and RULE 1 marks of a non-write home through foreign and fail
+// with "repo R is not available" (design B9). Only the binding's own mounts
+// can be a home (89b26b07: they are always readable); any other id is not
+// available.
+func (r *reader) registerHome(id12, branch, anchor string) error {
+	var ri *repos.RepoInstance
+	if fact.ID12(r.b.Write().ID()) == id12 {
+		ri = r.b.Write()
+	} else if rt, ok := r.b.ByID(id12); ok {
+		ri = rt.RI
+	} else {
+		return fmt.Errorf("repo %s is not available", id12)
+	}
+	if r.homes == nil {
+		r.homes = map[string]homeSpec{}
+	}
+	r.homes[id12] = homeSpec{ri: ri, branch: branch, anchor: anchor}
+	if m, ok := r.mounts[id12]; ok && m != nil {
+		m.anchor = anchor
+	}
+	return nil
+}
+
+// homeMount is the open mount of the registered home repo id12 (opened on
+// first use, its anchor set); ok is false when id12 is not a registered home.
+func (r *reader) homeMount(id12 string) (*mount, bool, error) {
+	hs, ok := r.homes[id12]
+	if !ok {
+		return nil, false, nil
+	}
+	m, err := r.open(hs.ri, hs.branch)
+	if err != nil {
+		return nil, true, err
+	}
+	m.anchor = hs.anchor
+	return m, true, nil
+}
+
 // foreign returns the mount of a repo entered through a cross-KB ref, read at
 // its frozen tip, or nil when the repo is not available to this caller (not
 // registered, refused by reach, its store not openable, or, in a FactSet, a
-// repo whose tip was not frozen at creation).
+// repo whose tip was not frozen at creation). A registered home repo is its
+// home mount.
 func (r *reader) foreign(ctx context.Context, id12 string) (*mount, error) {
 	if m, ok := r.mounts[id12]; ok {
+		return m, nil
+	}
+	if m, ok, err := r.homeMount(id12); ok {
+		if err != nil {
+			// Unavailable, as for any other repo whose store will not open.
+			r.mounts[id12] = nil
+			return nil, nil
+		}
 		return m, nil
 	}
 	ri, branch, ok := r.target(id12)
@@ -180,11 +248,15 @@ func (r *reader) level(ctx context.Context, m *mount) (*index.LevelReader, error
 	return lv, nil
 }
 
-// mountOf is the open mount of the repo with id12, the binding's or a
-// reachable registered one at its frozen tip.
+// mountOf is the open mount of the repo with id12: a registered FactSet home
+// first, else the binding's, else a reachable registered one at its frozen
+// tip.
 func (r *reader) mountOf(ctx context.Context, id12 string) (*mount, error) {
 	if m, ok := r.mounts[id12]; ok && m != nil {
 		return m, nil
+	}
+	if m, ok, err := r.homeMount(id12); ok {
+		return m, err
 	}
 	if id := fact.ID12(r.b.Write().ID()); id == id12 {
 		return r.open(r.b.Write(), r.b.WriteMountBranch())

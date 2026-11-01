@@ -179,7 +179,8 @@ func PlanStats(ctx context.Context, req Request) (*Document, Stats, error) {
 	}
 	r := newReader(req.Binding, req.Manager, req.MayRead, &st)
 	defer r.close()
-	p := &planner{ctx: ctx, r: r, opts: req.Options, writeID: fact.ID12(req.Binding.Write().ID()), st: &st}
+	writeID := fact.ID12(req.Binding.Write().ID())
+	p := &planner{ctx: ctx, r: r, opts: req.Options, homeID: writeID, wireID: writeID, st: &st}
 	root, err := p.singleRoot(req)
 	if err != nil {
 		return nil, st, err
