@@ -709,6 +709,9 @@ func TestLensFactSet_PerUnitReadBoundOverThreeMounts(t *testing.T) {
 // drop, under -race; every page equals the sequential page at the same
 // position.
 //
+// Each member has 12 results, more than a sub keeps plans for (keptPlans),
+// so the readers re-plan units and read windows while the other reads.
+//
 // Sabotage (the window state on the shared facade entry instead of the call:
 // attachLens reuses one lensCall per entry): -race reports a data race.
 func TestLensFactSet_TwoReadersAlternateCursors(t *testing.T) {
@@ -716,8 +719,9 @@ func TestLensFactSet_TwoReadersAlternateCursors(t *testing.T) {
 	lt := newLensTrio(t)
 	for _, f := range lt.members() {
 		seedABCBodies(t, f, f.ri.Name())
-		for j, leaf := range []string{"a", "b", "c"} {
-			f.write(t, "kb/u/"+f.ri.Name()+"-"+leaf+".md", strings.ToUpper(leaf), cosBody(0.9-0.1*float64(j), leaf+" in "+f.ri.Name()+"."), "kb/z/x.md", "kb/z/y.md")
+		for j := 0; j < 12; j++ {
+			leaf := string(rune('a' + j))
+			f.write(t, "kb/u/"+f.ri.Name()+"-"+leaf+".md", strings.ToUpper(leaf), cosBody(0.9-0.03*float64(j), leaf+" in "+f.ri.Name()+"."), "kb/z/x.md", "kb/z/y.md")
 		}
 	}
 	req := lt.request("anything", "kb/u/")
