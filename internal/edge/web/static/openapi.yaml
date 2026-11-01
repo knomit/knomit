@@ -1269,7 +1269,10 @@ paths:
         path). A link carries `cited_blob` (the version cited there) and
         `different_version` (that version is not the one written: blob
         identity, so ANY change). Units are planned as pages need them:
-        `units_walked` and `sections` say how far.
+        `units_walked` is the highest unit THIS page walked (what reading
+        the factset in order reports at this position, whatever other
+        calls planned) and `sections` counts the sections of units
+        1..`units_walked`.
 
         VERSIONS: the factset is anchored at the write mount's INDEX
         WATERMARK (the commit the index reflects), read before and after the
@@ -1306,8 +1309,8 @@ paths:
         to 500), `depth`, `max_nodes`, `unpin`, `cross_kb` (as for one fact)
         and `limit` (sections per page, 1-5, default 3). Any other parameter
         is a 400. The frozen inputs (results, anchor, tips) are written ONCE,
-        as one session row; the planned state is an in-memory cache rebuilt
-        by replay when it is evicted. A search with no results is a 200 page
+        as one session row; the planned state is an in-memory cache, planned
+        again on the next call when it is evicted. A search with no results is a 200 page
         with `units: 0` and no cursor. A result that is gone at the anchor
         keeps its unit as a heading alone (`unavailable: true`).
 
@@ -1349,9 +1352,12 @@ paths:
         bytes. A call that must plan units reserves planning memory under the
         budget (`session.factset_memory_mib`, 64 MiB, which also holds the
         cached factsets, least recently used evicted first) and waits while
-        it is full; one that waited a minute, one that finds the session
-        store's lock taken past its timeout, one whose index moved during the
-        search twice, or one on a store whose reference index is still being
+        it is full (the budget is soft: one plan is always admitted when no
+        other is in flight, so the process may exceed it by one plan plus the
+        factsets in use); one that waited a minute, one that finds the
+        session store's lock taken past its timeout, one whose index moved
+        during the search twice, or one on a store whose reference index is
+        still being
         backfilled with its repo id unresolved, is a 503 with Retry-After.
         An evicted factset is planned again by the next page. Cross-KB
         refs are followed only into repos the caller reaches. Reach is
@@ -5540,8 +5546,8 @@ components:
         max_nodes:   { type: integer }
         facts_limit: { type: integer, description: "The Facts limit the first call asked for." }
         units:       { type: integer, description: "Units (search results) in the factset." }
-        units_walked: { type: integer, description: "Units planned so far (units are planned as pages need them)." }
-        sections:    { type: integer, description: "Sections (written and links) in the units planned so far." }
+        units_walked: { type: integer, description: "The highest unit this page walked: what reading the factset in order reports at this position, whatever other calls planned." }
+        sections:    { type: integer, description: "Sections (written and links) in units 1..units_walked." }
         instructions_version: { type: string }
         instructions: { type: string, description: "Reading instructions, page 1 only." }
         facts:

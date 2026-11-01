@@ -12,7 +12,25 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/foundation/config"
 )
+
+// isolateFactSetGlobals resets the FactSet engine's package globals when the
+// test ends, pass or fail, so one red test does not cascade into the next
+// (the budget, the budget wait, the hooks, the cache).
+func isolateFactSetGlobals(t testing.TB) {
+	t.Helper()
+	window := prefetchWindow
+	t.Cleanup(func() {
+		factsetExtendHook = nil
+		factsetExportFault = nil
+		prefetchWindow = window
+		factsetBudgetWait.Store(int64(config.FactSetStallLimit))
+		SetFactSetCacheBudget(0)
+		DropFactSetCacheForTest()
+	})
+}
 
 // seedSixteen writes 16 results (kb/u/r000..r013, r900, r901) whose own refs
 // share four leaves, one fact cited at two versions (t at c1 and at c3, one
@@ -64,6 +82,7 @@ func sequentialPages(t testing.TB, f *factsetFixture, owner string, p FactSetPag
 // before the unit (backward reads turn first appearances into back links);
 // report the cache's extent as UnitsWalked (pages differ after a far read).
 func TestFactSet_RandomAccessIsByteIdentical(t *testing.T) {
+	isolateFactSetGlobals(t)
 	type tc struct {
 		name  string
 		seed  func(testing.TB, *factsetFixture)
@@ -166,6 +185,7 @@ func TestFactSet_RandomAccessIsByteIdentical(t *testing.T) {
 // Sabotage: reset the prefix on a backward seek (the old replay): the seek
 // to unit 10 plans 10 units.
 func TestFactSet_BackwardSeekDoesNotReplay(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	seedSixteen(t, f)
 	ctx := context.Background()
@@ -191,12 +211,14 @@ func TestFactSet_BackwardSeekDoesNotReplay(t *testing.T) {
 // Calls on one FactSet run in parallel: while an extension is blocked inside
 // planning (holding the extension token), reads of every planned unit are
 // served; a call that needs the extension waits for it and, cancelled,
-// returns its context's error at once; once the extension proceeds, the
-// waiter's twin is served.
+// returns its context's error at once, holding no planning memory while it
+// waits; once the extension proceeds, the waiter's twin is served.
 //
 // Sabotage: make a read of a planned unit take the extension token (calls
-// serialize): the reads wait behind the blocked extension and time out.
+// serialize): the reads wait behind the blocked extension and time out; keep
+// the waiter's memory while it waits (two plans in flight).
 func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	seedSixteen(t, f)
 	ctx := context.Background()
@@ -263,6 +285,8 @@ func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
 		t.Fatalf("unit 15 needs the blocked extension, yet the call returned: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
+	require.Equal(t, 1, FactSetPlansInFlightForTest(),
+		"only the blocked extension holds planning memory: the waiter gave its back while it waits")
 	cancel()
 	select {
 	case err := <-waited:
@@ -288,6 +312,7 @@ func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
 // cancelled, and the call freed mid-wait is refused); admit over the budget
 // (the waiter is served while the memory is held).
 func TestFactSet_PlanningWaitsForMemoryInsteadOfRefusing(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
@@ -311,7 +336,10 @@ func TestFactSet_PlanningWaitsForMemoryInsteadOfRefusing(t *testing.T) {
 
 	defer SetFactSetCacheBudget(0)
 	SetFactSetCacheBudget(1)
-	release := HoldFactSetPlanningMemoryForTest(1)
+	var once sync.Once
+	hold := HoldFactSetPlanningMemoryForTest(1)
+	release := func() { once.Do(hold) }
+	t.Cleanup(release)
 	wctx, cancel := context.WithCancel(ctx)
 	waited := make(chan error, 1)
 	go func() {
@@ -340,4 +368,31 @@ func TestFactSet_PlanningWaitsForMemoryInsteadOfRefusing(t *testing.T) {
 	_, _, err = FactSetFirstPage(ctx, f.scope("freed"), req)
 	require.NoError(t, err, "served once the memory is given back")
 	require.Zero(t, FactSetPlansInFlightForTest())
+}
+
+// The cache entry's growth is charged while a call still holds it: an export
+// of a cold FactSet holds its entry (never evicted) from its first unit to its
+// last, and the budget sees the reserved table and the prefix grow between
+// its units, before the export ends.
+//
+// Sabotage: charge the entry only when the call gives it back (the budget
+// reads 0 bytes all through the export).
+func TestFactSet_PrefixGrowthIsChargedWhileHeld(t *testing.T) {
+	isolateFactSetGlobals(t)
+	f := newFactSetFixture(t)
+	seedSixteen(t, f)
+	ctx := context.Background()
+	req := f.request("kb/u/")
+	req.Options.Depth, req.Limit = 3, 1
+	p := f.first(t, "o", req)
+	DropFactSetCacheForTest()
+	var during []int64
+	defer SetFactSetExportFaultForTest(func(int) error {
+		during = append(during, FactSetCacheBytes())
+		return nil
+	})()
+	require.NoError(t, FactSetExport(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return io.Discard }))
+	require.Len(t, during, 15, "units 2..16 observed while the export was writing")
+	require.Positive(t, during[0], "the tables and unit 1 are charged before unit 2")
+	require.Greater(t, during[len(during)-1], during[0], "the prefix's growth is charged as it grows")
 }

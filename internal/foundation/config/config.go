@@ -274,8 +274,11 @@ type SessionConfig struct {
 	// Past it the least recently used idle FactSets are evicted (a later page
 	// plans one again without bodies, so eviction costs time, never
 	// correctness), and a call that must plan waits for memory (at most
-	// FactSetStallLimit, then 503) instead of being refused. 0 or unset is
-	// the default (64).
+	// FactSetStallLimit, then 503) instead of being refused. The budget is
+	// SOFT: one plan is always admitted when no other plan is in flight, so
+	// the process may exceed it by one plan's reservation plus the FactSets
+	// in use (never evicted while a call holds them). 0 or unset is the
+	// default (64).
 	FactSetMemoryMiB int `toml:"factset_memory_mib"`
 	// FactSetAnchorWait is how long a FactSet's first call waits for its
 	// branch's index to settle (no sync rewriting rows past the watermark,

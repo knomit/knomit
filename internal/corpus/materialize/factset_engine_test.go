@@ -419,6 +419,7 @@ func mustID(t testing.TB, cursor string) string {
 // Sabotage: rebuild an evicted entry without its reserved map, and the pages
 // after the eviction write Z in unit 1 (no forward link).
 func TestFactSet_F12_ReplayAfterEviction(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
@@ -806,6 +807,7 @@ func TestFactSet_F21_Cursor(t *testing.T) {
 //
 // Sabotage: ignore the check hash, and y is served as a back link to x.
 func TestFactSet_F22_HashCollisionIsRefused(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	f.write(t, "kb/z/y.md", "Y", "y body.")
 	f.write(t, "kb/z/x.md", "X", "x body.")
@@ -830,6 +832,7 @@ func TestFactSet_F22_HashCollisionIsRefused(t *testing.T) {
 // Sabotage: keep the planning memory while writing, and the writer sees a
 // plan in flight.
 func TestFactSet_ExportStreamsWithoutPlanningMemory(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
@@ -862,6 +865,7 @@ func TestFactSet_ExportStreamsWithoutPlanningMemory(t *testing.T) {
 // keep the memory across units (a plan is in flight between units); plan the
 // export on its own written state (the entry is not extended).
 func TestFactSet_ExportPlansTheSharedPrefixInsideItsReservation(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	seedABC(t, f)
 	ctx := context.Background()
@@ -1076,6 +1080,7 @@ func TestFactSet_B1_UnpinFollowsRefsUnresolvedAtWrite(t *testing.T) {
 // Sabotage: reserve the memory before the wait (plans in flight while they
 // wait).
 func TestFactSet_AnchorWaitHoldsNoPlanningMemory(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	f.write(t, "kb/z/x.md", "X", "x.")
 	f.write(t, "kb/u/a.md", "A", "a.", "kb/z/x.md")

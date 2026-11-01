@@ -138,9 +138,10 @@ func (env FactSetEnv) options() Options {
 // FactSetPage is one page of a FactSet: whole sections in FactSet order.
 type FactSetPage struct {
 	FactSetEnv
-	// UnitsWalked and Sections are how far the FactSet is planned so far
-	// (units are planned as pages need them): Sections is exact for the
-	// planned units only.
+	// UnitsWalked is the highest unit THIS page walked: what sequential
+	// paging reports at this position, never the cache's planned extent
+	// (which depends on what other calls read). Sections counts the
+	// sections of units 1..UnitsWalked.
 	UnitsWalked  int           `json:"units_walked"`
 	Sections     int           `json:"sections"`
 	Instructions string        `json:"instructions,omitempty"`
@@ -396,15 +397,14 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	}
 	e.id = id
 	fsCachePut(e)
+	defer fsCacheRelease(e)
 	page, err := c.page(fpos{1, 0}, true)
 	if err != nil {
 		// The caller never got the cursor: nothing may stay behind.
 		fsCacheDrop(id)
-		fsCacheRelease(e)
 		_ = sc.Sessions.DeleteFactSet(context.WithoutCancel(ctx), id)
 		return FactSetPage{}, c.st, err
 	}
-	fsCacheRelease(e)
 	return page, c.st, nil
 }
 
@@ -911,24 +911,11 @@ func (c *fsCall) needBudget() error {
 	return nil
 }
 
-// takeToken waits for the entry's extension token (or the context).
-func (c *fsCall) takeToken() error {
-	if c.token {
-		return nil
-	}
-	select {
-	case c.e.ext <- struct{}{}:
-		c.token = true
-		return nil
-	case <-c.ctx.Done():
-		return c.ctx.Err()
-	}
-}
-
 func (c *fsCall) giveToken() {
 	if c.token {
 		<-c.e.ext
 		c.token = false
+		c.e.st.wake() // a waiter takes it, or finds its unit planned
 	}
 }
 
@@ -966,7 +953,9 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 			c.close()
 			return nil, fmt.Errorf("factset frozen row: %w", err)
 		}
-		if fr.V != frozenVersion {
+		if fr.V != frozenVersion || len(fr.Roots) > MaxFactSetFacts {
+			// Another version, or a row no first call could have written
+			// (the prefix keeps units in 16 bits): it reads as expired.
 			c.close()
 			return nil, ErrCursorExpired
 		}
@@ -1095,16 +1084,13 @@ func (c *fsCall) ensureState() error {
 	if e.st.built.Load() {
 		return nil
 	}
-	if err := c.needBudget(); err != nil {
+	if err := c.acquireToken(func() bool { return e.st.built.Load() }); err != nil {
 		return err
 	}
-	if err := c.takeToken(); err != nil {
-		return err
-	}
-	defer c.giveToken()
-	if e.st.built.Load() {
+	if !c.token {
 		return nil // built by the call that held the token before us
 	}
+	defer c.giveToken()
 	// Unit 1's window does not depend on the reservation: read it while the
 	// reservation is built (not for a call that reads nothing in the
 	// background: the export).
@@ -1128,7 +1114,41 @@ func (c *fsCall) ensureState() error {
 		return err
 	}
 	e.st.setTables(results, reserved)
+	fsCacheAccount(e) // the tables are charged now, not when the call ends
 	return nil
+}
+
+// acquireToken takes the entry's extension token (the caller must not hold
+// it), holding planning memory, unless done() reports the work already done:
+// then it returns holding the memory but no token. A call that must wait for another call's token gives
+// its memory back while it waits and reserves again once woken: a waiter
+// holds no planning memory. Memory is always reserved BEFORE the token is
+// taken, so a token holder never waits for memory.
+func (c *fsCall) acquireToken(done func() bool) error {
+	for {
+		if err := c.needBudget(); err != nil {
+			return err
+		}
+		_, woke := c.e.st.extent()
+		if done() {
+			return nil
+		}
+		select {
+		case c.e.ext <- struct{}{}:
+			c.token = true
+			if done() { // the holder before us did it
+				c.giveToken()
+			}
+			return nil
+		default:
+		}
+		c.releaseBudget()
+		select {
+		case <-woke: // the prefix grew, the tables were built, or the token came free
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		}
+	}
 }
 
 // factsetExtendHook runs before the call holding the extension token plans
@@ -1152,30 +1172,16 @@ func (c *fsCall) planUnitOf(u int) (*plannedUnit, error) {
 	if pu := e.plan(u); pu != nil {
 		return pu, nil
 	}
-	if err := c.needBudget(); err != nil {
+	if err := c.acquireToken(func() bool { planned, _ := e.st.extent(); return u <= planned }); err != nil {
 		return nil, err
 	}
-	for {
-		planned, grew := e.st.extent()
-		if u <= planned {
-			c.giveToken()
-			pu, err := c.planUnit(e.fr, &e.st, u)
-			if err != nil {
-				return nil, err
-			}
-			e.keepPlan(u, pu)
-			return pu, nil
+	if !c.token {
+		pu, err := c.planUnit(e.fr, &e.st, u)
+		if err != nil {
+			return nil, err
 		}
-		if c.token {
-			break
-		}
-		select {
-		case e.ext <- struct{}{}:
-			c.token = true
-		case <-grew:
-		case <-c.ctx.Done():
-			return nil, c.ctx.Err()
-		}
+		e.keepPlan(u, pu)
+		return pu, nil
 	}
 	defer c.giveToken()
 	planned, _ := e.st.extent()
@@ -1192,6 +1198,9 @@ func (c *fsCall) planUnitOf(u int) (*plannedUnit, error) {
 			return nil, err
 		}
 		e.keepPlan(next, pu)
+		// Charge the prefix's growth as it happens: an export or a far seek
+		// holds the entry (never evicted) for its whole run.
+		fsCacheAccount(e)
 	}
 	return pu, nil
 }

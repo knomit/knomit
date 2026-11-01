@@ -180,6 +180,17 @@ func (s *fsState) extent() (int, <-chan struct{}) {
 	return s.planned, s.grew
 }
 
+// wake wakes every call waiting on extent's channel without growing the
+// prefix (the extension token came free, or the tables were built).
+func (s *fsState) wake() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.grew != nil {
+		close(s.grew)
+		s.grew = nil
+	}
+}
+
 // sectionsThrough is the number of sections of units 1..u (u <= planned).
 func (s *fsState) sectionsThrough(u int) int {
 	s.mu.RLock()
