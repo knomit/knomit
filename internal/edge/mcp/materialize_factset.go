@@ -18,6 +18,14 @@ import (
 // that search as a factset (materialize.FactSetFirstPage), and a factset cursor pages
 // it (materialize.FactSetNextPage). The pages are byte for byte the REST
 // GET …/search/factset pages for the same input: one shared builder.
+//
+// On a LENS endpoint (a binding that reads more than its write repo) the same
+// calls materialize the lens's own list: the engine's lens facade runs the
+// fused lens search (the one knomit_query runs on a lens, motif widening
+// through mcpMotifClusters), one sub-FactSet per member, ONE cursor row in the
+// write repo's session DB. cross_kb=true is refused there (ruling Lens 2) and
+// search.repo narrows to members by name (ruling Lens 6). A one-member lens
+// stays the write repo's FactSet.
 
 // factsetSearchKeys are the keys of the `search` object.
 var factsetSearchKeys = map[string]any{
@@ -39,6 +47,8 @@ var factsetSearchKeys = map[string]any{
 	"motif_match":    map[string]any{"type": "string", "enum": []string{"exact", "stem", "token-2"}},
 	"min_confidence": map[string]any{"type": "number"},
 	"min_similarity": map[string]any{"type": "number"},
+	"repo": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+		"description": "Lens endpoints only: search only these member repos, by name (the lens list's repo filter)."},
 	"sort": map[string]any{"type": "string", "enum": []string{materialize.SortRelevance, materialize.SortRecent},
 		"description": "relevance (default): the search list; recent: newest first."},
 }
@@ -87,6 +97,9 @@ func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *
 	breq := materialize.FactSetRequest{
 		Binding: b, Manager: mgr, MayRead: callerMayRead(ctx), Search: search, Options: opts,
 		Facts: materialize.DefaultFactSetFacts, Limit: materialize.HumanDefaultLimit,
+		// A lens FactSet widens motif terms exactly as knomit_query on the
+		// lens does; a repo FactSet never reads it.
+		Clusters: mcpMotifClusters,
 	}
 	for _, a := range []struct {
 		name string
@@ -257,7 +270,7 @@ func factsetSearchArg(raw any) (materialize.FactSetSearch, error) {
 		str("text", &s.Text), str("path", &s.Path), str("motif_match", &s.MotifMatch), str("sort", &s.Sort),
 		list("entities", &s.Entities), list("domain", &s.Domains), list("type", &s.Types),
 		list("exclude_type", &s.ExcludeTypes), list("kind", &s.Kinds), list("exclude_kind", &s.ExcludeKinds),
-		list("origin", &s.Origins), list("ep", &s.Episodes), list("motifs", &s.Motifs),
+		list("origin", &s.Origins), list("ep", &s.Episodes), list("motifs", &s.Motifs), list("repo", &s.Repos),
 		num("min_confidence", &s.MinConfidence), num("min_similarity", &s.MinSimilarity),
 		boolean("domain_exact", &s.DomainExact),
 	} {

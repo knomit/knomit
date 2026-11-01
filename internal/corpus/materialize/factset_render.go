@@ -179,6 +179,9 @@ func FactSetExport(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *r
 	}
 	defer c.done()
 	c.noPipeline = true
+	if c.lc != nil {
+		return c.lc.export(c, start)
+	}
 	fr := c.e.fr
 
 	var w io.Writer

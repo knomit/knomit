@@ -146,9 +146,14 @@ var reasonText = map[string]string{
 	ReasonKBUnavail:   "other knowledge base not available",
 	ReasonNotInThatKB: "not in that knowledge base",
 	ReasonSystemFile:  "system file",
+	ReasonLensRepo:    "another repo of this lens; not followed",
 }
 
 func omissionText(o Omission) string {
+	if o.Reason == ReasonLensRepo {
+		// Ruling Lens 1: labelled with the repo name and the fact path.
+		return fmt.Sprintf("%s `%s` (%s)", o.RepoName, relOf(o.Path), reasonText[o.Reason])
+	}
 	if o.Title != "" {
 		return fmt.Sprintf("%s (`%s`, %s)", o.Title, o.ID, reasonText[o.Reason])
 	}

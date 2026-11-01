@@ -41,7 +41,12 @@ type FactSetSearch struct {
 	MinConfidence float64  `json:"min_confidence,omitempty"`
 	MinSimilarity float64  `json:"min_similarity,omitempty"`
 	SinceFork     bool     `json:"since_fork,omitempty"`
-	Sort          string   `json:"sort"`
+	// Repos is the lens list's repo= narrowing (ruling Lens 6 / Q-L8): only
+	// these lens members, by repo name, are searched, so the FactSet equals
+	// the narrowed lens list. On a repository's own FactSet only that
+	// repository's name is accepted, and it narrows nothing.
+	Repos []string `json:"repos,omitempty"`
+	Sort  string   `json:"sort"`
 }
 
 // validate refuses a search the store would misread.
@@ -94,6 +99,22 @@ func (s FactSetSearch) options(limit int, pathsIn []string) index.SearchOptions 
 // root is the ontology root the path is shown under; name is the repo the
 // factset reads, for "All facts in <name>".
 func FactSetTitle(s FactSetSearch, root, name string) string {
+	all := "All facts"
+	if name != "" {
+		all = "All facts in " + name
+	}
+	return factsetTitle(s, root, all)
+}
+
+// FactSetLensTitle is a lens FactSet's title: FactSetTitle's rules, except
+// that a search with no filter is "All in lens <lens>" (ruling Lens 5), the
+// lens's name standing where a repo title has the repo's.
+func FactSetLensTitle(s FactSetSearch, root, lens string) string {
+	return factsetTitle(s, root, "All in lens "+lens)
+}
+
+// factsetTitle is FactSetTitle with the no-filter title supplied.
+func factsetTitle(s FactSetSearch, root, all string) string {
 	text := sentence(s.Text)
 	ents := listPhrase(s.Entities)
 	switch {
@@ -108,7 +129,7 @@ func FactSetTitle(s FactSetSearch, root, name string) string {
 	case len(s.Domains) > 0:
 		return capitalize(listPhrase(s.Domains))
 	}
-	return fallbackTitle(s, root, name)
+	return fallbackTitle(s, root, all)
 }
 
 // fallbackTitle is the title of a search with no text, entities or domains
@@ -124,12 +145,14 @@ func FactSetTitle(s FactSetSearch, root, name string) string {
 //     "(confidence ≥ 0.8)";
 //   - motifs and nothing else: the motif words alone, "Misattributed env
 //     defect";
-//   - no filter at all: "All facts in <name>".
+//   - no filter at all: all ("All facts in <name>"; a lens's
+//     "All in lens <lens>").
 //
 // The title is in sentence case: only its first letter is capitalized.
-// Excluded types and kinds, episodes and a similarity floor (inert without
-// text) stay out of it; the search line spells them out.
-func fallbackTitle(s FactSetSearch, root, name string) string {
+// Excluded types and kinds, episodes, a similarity floor (inert without
+// text) and a lens's repo narrowing stay out of it; the search line spells
+// them out.
+func fallbackTitle(s FactSetSearch, root, all string) string {
 	head := ""
 	switch {
 	case len(s.Types) > 0:
@@ -160,10 +183,7 @@ func fallbackTitle(s FactSetSearch, root, name string) string {
 		return capitalize(about)
 	}
 	if head == "" && about == "" && where == "" && len(quals) == 0 {
-		if name == "" {
-			return "All facts"
-		}
-		return "All facts in " + name
+		return all
 	}
 	if head == "" {
 		head = "facts"
@@ -285,6 +305,7 @@ func SearchLine(s FactSetSearch) string {
 	if s.Path != "" {
 		parts = append(parts, "path "+s.Path)
 	}
+	add("repo", s.Repos)
 	add("type", s.Types)
 	add("not type", s.ExcludeTypes)
 	add("kind", s.Kinds)

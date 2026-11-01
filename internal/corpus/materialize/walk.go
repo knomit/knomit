@@ -28,6 +28,10 @@ const (
 	ReasonKBUnavail   = "kb_unavailable" // no repo registered here has that id
 	ReasonNotInThatKB = "not_in_that_kb" // the other repo does not hold the fact
 	ReasonSystemFile  = "system_file"    // a .knomit/ file: read it with knomit_explain
+	// ReasonLensRepo: a ref into ANOTHER member of the lens a lens FactSet
+	// reads (ruling Lens 1): never followed, a leaf labelled with that
+	// member's repo name (Omission.RepoName) and the fact path.
+	ReasonLensRepo = "lens_repo"
 )
 
 // MarkLatestOtherKB marks a node reached through a cross-KB ref: such a ref
@@ -140,6 +144,10 @@ type Omission struct {
 	ID     string `json:"id,omitempty"`
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
+	// RepoName is the repo name of a ReasonLensRepo leaf (the lens member the
+	// ref points into), frozen when the lens FactSet was created; empty for
+	// every other reason, so no other omission's bytes change.
+	RepoName string `json:"repo_name,omitempty"`
 }
 
 // Source is a non-fact ref: an external URL or a source-code ref.

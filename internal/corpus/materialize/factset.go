@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/index"
@@ -112,23 +113,32 @@ type FactSetRequest struct {
 	Embed func(ctx context.Context, text string) ([]float32, error)
 	// Limit is the page size, frozen in the cursor (1..HumanMaxLimit).
 	Limit int
+	// Clusters reads one lens mount's motif vocabulary for the fused lens
+	// search's motif widening (federate.ExpandMotifTerms), the reader the
+	// edge's own lens list uses. Only a lens FactSet reads it; nil widens
+	// nothing.
+	Clusters federate.MotifClusterReader
 }
 
 // FactSetEnv is what every page of a FactSet repeats.
 type FactSetEnv struct {
-	Mode                string        `json:"mode"`
-	Title               string        `json:"title"`
-	SearchLine          string        `json:"search_line"`
-	Search              FactSetSearch `json:"search"`
-	Anchor              string        `json:"anchor"`
-	Audience            string        `json:"audience"`
-	Unpinned            bool          `json:"unpinned"`
-	CrossKB             bool          `json:"cross_kb"`
-	Depth               int           `json:"depth"`
-	MaxNodes            int           `json:"max_nodes"`
-	FactsLimit          int           `json:"facts_limit"`
-	Units               int           `json:"units"`
-	InstructionsVersion string        `json:"instructions_version"`
+	Mode       string        `json:"mode"`
+	Title      string        `json:"title"`
+	SearchLine string        `json:"search_line"`
+	Search     FactSetSearch `json:"search"`
+	Anchor     string        `json:"anchor"`
+	// Anchors is a lens FactSet's per-mount anchor (ruling Lens 4): every
+	// lens member's id12 -> the settled index watermark its roots were read
+	// at. Anchor is then the write member's. Repo pages never carry it.
+	Anchors             map[string]string `json:"anchors,omitempty"`
+	Audience            string            `json:"audience"`
+	Unpinned            bool              `json:"unpinned"`
+	CrossKB             bool              `json:"cross_kb"`
+	Depth               int               `json:"depth"`
+	MaxNodes            int               `json:"max_nodes"`
+	FactsLimit          int               `json:"facts_limit"`
+	Units               int               `json:"units"`
+	InstructionsVersion string            `json:"instructions_version"`
 }
 
 func (env FactSetEnv) options() Options {
@@ -163,7 +173,11 @@ type FactSetPage struct {
 // not_included or sources (it is terminal), and Link.
 type FactSetNode struct {
 	Node
-	Unit      int    `json:"unit"`
+	Unit int `json:"unit"`
+	// RepoName is the repo a lens FactSet's unit root comes from (ruling
+	// Lens 7), frozen at creation, so a UI can name it on each unit. Only
+	// lens pages carry it, and only on unit roots.
+	RepoName  string `json:"repo_name,omitempty"`
 	Number    string `json:"number"`
 	TreeDepth int    `json:"tree_depth"`
 	// Parent is the n of the node's tree parent in its unit; 0 for the unit
@@ -229,6 +243,13 @@ type factsetFrozen struct {
 	WireRepo string               `json:"wire_repo,omitempty"`
 	Tips     map[string]frozenTip `json:"tips,omitempty"`
 	Roots    []frozenRoot         `json:"roots"`
+
+	// A lens sub-FactSet (never marshaled: a sub is not a session row, its
+	// frozen form is one entry of the facade's row, lensFrozen): sub is its
+	// index in the facade, lensRepos every lens member (id12 -> name), for
+	// the ruling Lens 1 leaves. Both zero for a repo FactSet.
+	sub       int
+	lensRepos map[string]string
 }
 
 // wireID is the repo whose paths go out bare (see WireRepo).
@@ -349,11 +370,17 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if err := req.Search.validate(); err != nil {
 		return FactSetPage{}, st, err
 	}
-	if req.Binding.IsLens() {
-		return FactSetPage{}, st, fmt.Errorf("%w: a factset materializes one repository's search; this binding is a lens", ErrInvalid)
-	}
 	if sc.Pin == "" || sc.Owner == "" {
 		return FactSetPage{}, st, fmt.Errorf("%w: a factset cursor needs an owner and a binding identity", ErrInvalid)
+	}
+	if req.Binding.IsLens() {
+		// A binding that reads more than its write repo is the lens facade
+		// (factset_lens.go). A ONE-member lens is not IsLens and stays here,
+		// on the repo path (ruling Lens 6 / Q-L9).
+		return lensFactSetFirstPage(ctx, sc, req)
+	}
+	if err := checkRepoNarrowing(req.Binding, req.Search.Repos); err != nil {
+		return FactSetPage{}, st, err
 	}
 	// No planning memory yet: searchAnchored reserves it once the index has
 	// settled (a first call waiting for that holds none, review R3-1).
@@ -750,6 +777,10 @@ type fsCall struct {
 	// gives the memory back between units, and a background window would
 	// read outside it; its inflate reads run without it either way).
 	noPipeline bool
+	// lc is set when c works on a lens facade (factset_lens.go): c.e is then
+	// the sub-FactSet being planned at the moment, and the read-ahead is the
+	// facade's window over global units.
+	lc *lensCall
 }
 
 // prefetchWindow is how many units are read ahead at once: a far seek or an
@@ -1006,6 +1037,9 @@ func (c *fsCall) close() {
 		<-c.next.done // its statements must finish before the reader closes
 		c.next = nil
 	}
+	if c.lc != nil {
+		c.lc.wait()
+	}
 	c.giveToken()
 	c.releaseBudget()
 	if c.r != nil {
@@ -1075,6 +1109,24 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 	c := &fsCall{ctx: ctx, b: b, mgr: mgr, mayRead: mayRead}
 	c.r = newReader(b, mgr, mayRead, &c.st)
 	e := fsCacheGet(id, sc.Sessions)
+	if e == nil && frozenVersionOf(row.Frozen) == frozenVersionLens {
+		le, err := decodeLensFrozen(row.Frozen)
+		if err != nil {
+			c.close()
+			return nil, err
+		}
+		c.st.CacheMisses++
+		e = fsCachePutIfAbsent(newLensEntry(id, sc.Sessions, le))
+	}
+	if e != nil && e.lens != nil {
+		// The lens facade: the same row checks ran above; now every sub's
+		// home is registered before any read (attachLens).
+		if err := c.attachLens(e); err != nil {
+			c.done()
+			return nil, err
+		}
+		return c, nil
+	}
 	if e == nil {
 		var fr factsetFrozen
 		if err := json.Unmarshal(row.Frozen, &fr); err != nil {
@@ -1109,6 +1161,9 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 // given back.
 func (c *fsCall) done() {
 	c.close()
+	if c.lc != nil {
+		c.e = c.lc.facade // c.e was the last sub planned; the cache holds the facade
+	}
 	if c.e != nil {
 		fsCacheRelease(c.e)
 	}
@@ -1194,6 +1249,10 @@ func FactSetNextPageStats(ctx context.Context, sc CursorScope, b *repos.Binding,
 		return FactSetPage{}, Stats{}, err
 	}
 	defer c.done()
+	if c.lc != nil {
+		page, err := c.lc.nextPage(c, at, unit)
+		return page, c.st, err
+	}
 	units := len(c.e.fr.Roots)
 	if unit != 0 {
 		if unit < 1 || unit > units {
@@ -1223,7 +1282,7 @@ func (c *fsCall) ensureState() error {
 	// Unit 1's window does not depend on the reservation: read it while the
 	// reservation is built (not for a call that reads nothing in the
 	// background: the export).
-	if c.next == nil && !c.noPipeline && (c.pre == nil || !c.pre.covers(e.fr.HomeRepo, 1)) {
+	if c.lc == nil && c.next == nil && !c.noPipeline && (c.pre == nil || !c.pre.covers(e.fr.HomeRepo, 1)) {
 		m, err := c.home()
 		if err != nil {
 			return err
@@ -1340,12 +1399,19 @@ func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, 
 	if err != nil {
 		return nil, err
 	}
-	if c.pre == nil || !c.pre.covers(fr.HomeRepo, u) {
+	switch {
+	case c.lc != nil:
+		// A lens sub: the facade's window over GLOBAL units covers it.
+		if err := c.lc.cover(c, fr, u); err != nil {
+			return nil, err
+		}
+	case c.pre == nil || !c.pre.covers(fr.HomeRepo, u):
 		if err := c.window(fr, m, u); err != nil {
 			return nil, err
 		}
 	}
-	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), homeID: fr.HomeRepo, wireID: fr.wireID(), fs: st, unit: u, st: &c.st, pre: c.pre}
+	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), homeID: fr.HomeRepo, wireID: fr.wireID(), fs: st, unit: u, st: &c.st, pre: c.pre,
+		lensRepos: fr.lensRepos}
 	before := c.st.IndexQueries
 	defer func() { c.st.MaxUnitQueries = max(c.st.MaxUnitQueries, c.st.IndexQueries-before) }()
 	n, err := p.rootNode(m, root.Path, root.Commit, root.Blob, root.Date)
@@ -1718,10 +1784,12 @@ func (c *fsCall) inflate(secs []section, unitOf func(int) int) ([]FactSetNode, e
 	// as unavailable, a heading alone, like a root gone at the anchor. The
 	// planned cache is not re-planned, so numbering and structure hold.
 	secs = slices.Clone(secs)
-	home := c.e.fr.HomeRepo
 	gone := map[string]bool{}
 	for i, s := range secs {
-		if s.unavailable || s.repo == home {
+		// A registered home is never "gone": the FactSet's own home (a repo
+		// FactSet registers only that one), or any sub's home on a lens page,
+		// whose sections come from several homes at once.
+		if _, home := c.r.homes[s.repo]; s.unavailable || home {
 			continue
 		}
 		g, seen := gone[s.repo]

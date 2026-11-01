@@ -189,9 +189,13 @@ var sameLayerEdges = map[string]bool{
 	// materialize reads one fact's reference closure across the binding's
 	// mounts and, cross-KB, any repo the Manager registers (ByRootID).
 	"corpus/materialize -> corpus/repos": true,
-	"corpus/resolutions -> corpus/refs":  true,
-	"corpus/resolutions -> corpus/repos": true,
-	"corpus/synthesize -> corpus/repos":  true,
+	// A lens FactSet's roots are the lens list itself: the facade runs the ONE
+	// fused lens read (federate.PlanFused + FusedSearch/FusedRecent) the REST
+	// and MCP lens lists run. federate imports nothing of materialize.
+	"corpus/materialize -> corpus/federate": true,
+	"corpus/resolutions -> corpus/refs":     true,
+	"corpus/resolutions -> corpus/repos":    true,
+	"corpus/synthesize -> corpus/repos":     true,
 	// The trigger child (the F07 dispatcher, 14c) is a sibling of events
 	// under corpus/repos: its emit publishes the `trigger` event
 	// (events.TriggerEvent) through the *events.TaskPublisher the parent hands

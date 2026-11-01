@@ -199,6 +199,11 @@ type planner struct {
 	// pre: reads made ahead for a window of FactSet units (nil for a single
 	// fact).
 	pre *prefetch
+	// lensRepos is set only for a lens sub-FactSet: every member of the lens
+	// (id12 -> repo name, frozen at creation). A ref into one of them is a
+	// ReasonLensRepo leaf (ruling Lens 1), never followed; a ref to any other
+	// repo stays the plain cross_kb_off omission (subs run with CrossKB off).
+	lensRepos map[string]string
 }
 
 // wire renders a key as addressed on the wire: bare in the binding's write
@@ -530,6 +535,12 @@ func (p *planner) classify(n *pnode, lr *levelReads, foreign map[string]map[stri
 			seen[k] = true
 			held := p.nodes[k]
 			if c.Kind == fact.RefForeignFact {
+				if name, member := p.lensRepos[c.RepoID]; member {
+					// Ruling Lens 1: a ref into another lens member is never
+					// followed, whatever cross_kb says; nothing of it is read.
+					n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonLensRepo, RepoName: name}})
+					continue
+				}
 				if !p.opts.CrossKB {
 					n.refs = append(n.refs, pref{kind: refOmit, omit: Omission{Path: p.wire(k), Reason: ReasonCrossKBOff}})
 					continue
