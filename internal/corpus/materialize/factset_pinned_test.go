@@ -471,7 +471,7 @@ func TestFactSet_Pinned_WindowIsPerHome(t *testing.T) {
 	_, err = c.planUnitOf(1)
 	require.NoError(t, err)
 	require.True(t, c.pre.covers(w, 1), "A's window covers A's unit 1")
-	require.False(t, c.pre.covers(r, 1), "A's window does not cover B's unit 1")
+	preA := c.pre
 
 	require.NoError(t, c.startPinned(frB(), ti))
 	c.st.MaxUnitQueries = 0
@@ -480,6 +480,7 @@ func TestFactSet_Pinned_WindowIsPerHome(t *testing.T) {
 	require.Equal(t, wantQ, c.st.MaxUnitQueries, "B's unit 1 reads what it reads alone")
 	require.Equal(t, r, c.pre.home, "B's unit 1 was planned with R's window")
 	require.True(t, c.pre.covers(r, 1))
+	require.False(t, preA.covers(r, 1), "A's window does not cover B's unit 1")
 	require.Equal(t, len(want.secs), len(got.secs))
 	for i := range want.secs {
 		require.Equal(t, want.secs[i].wire, got.secs[i].wire)
