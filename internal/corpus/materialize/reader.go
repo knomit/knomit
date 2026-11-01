@@ -135,7 +135,9 @@ func (r *reader) registerHome(id12, branch, anchor string) error {
 	} else if rt, ok := r.b.ByID(id12); ok {
 		ri = rt.RI
 	} else {
-		return fmt.Errorf("repo %s is not available", id12)
+		// Reads like a cursor that does not exist (404), never a 500: the
+		// FactSet names a home the binding no longer mounts.
+		return fmt.Errorf("%w: repo %s is not available", ErrCursorExpired, id12)
 	}
 	if r.homes == nil {
 		r.homes = map[string]homeSpec{}

@@ -122,11 +122,15 @@ func exportWith(t testing.TB, sc CursorScope, b *repos.Binding, cursor string) s
 	return buf.String()
 }
 
-// Byte identity of the seam. The repo path (FactSetFirstPage: search, then
-// the seam with home = wire = write) and the seam called directly with the
-// same home, wire, env and the roots the search returned make the SAME
+// The seam equals FactSetFirstPage. The repo path (FactSetFirstPage: search,
+// then the seam with home = wire = write) and the seam called directly with
+// the same home, wire, env and the roots the search returned make the SAME
 // frozen row byte for byte (no wire_repo field: omitempty) and the same first
-// page, later pages, seek and export.
+// page, later pages, seek and export. Both sides run the seam, so this does
+// NOT show identity with the code before the split: that is held by the
+// existing suite (F1-F22, random access) and by
+// TestFactSet_RepoFrozenRowAndFirstPageGolden, whose goldens were generated
+// on the pre-seam code.
 //
 // Sabotage: make freezePinned always set WireRepo (drop the wireID != home
 // guard), and the repo path's own row carries "wire_repo": its frozen bytes
@@ -364,4 +368,121 @@ func TestFactSet_Pinned_ReadBoundHoldsOnTheHome(t *testing.T) {
 		restoreGit()
 	}
 	require.Empty(t, bad, "no per-fact git read and no OutgoingAtCommit on R")
+}
+
+// A home outside the binding reads like a cursor that does not exist
+// (ErrCursorExpired, a 404 at the edges), never a 500.
+func TestFactSet_Pinned_HomeOutsideTheBindingIsExpired(t *testing.T) {
+	f := newFactSetFixture(t)
+	r := newReader(f.b, nil, nil, nil)
+	defer r.close()
+	err := r.registerHome("0123456789ab", "agent/test", "")
+	require.ErrorIs(t, err, ErrCursorExpired)
+	require.Contains(t, err.Error(), "repo 0123456789ab is not available")
+	require.NoError(t, r.registerHome(f.id12(), "agent/test", ""), "the write repo is a home")
+}
+
+// A pinned FactSet with NO roots is legal (a lens member whose slice of the
+// fused search is empty): it starts (reservation built, an empty read-ahead
+// window), its first page is the ordinary "past the end" 400, and, once it
+// is a session row, a resume is the same 400 and the export writes nothing.
+// None of it panics.
+//
+// Sabotage: build the background window's pending as pending{lo: units[0]}
+// (no empty-window guard), and startPinned panics with index out of range.
+func TestFactSet_Pinned_ZeroRootsIsLegal(t *testing.T) {
+	isolateFactSetGlobals(t)
+	f := newFactSetFixture(t)
+	f.write(t, "kb/u/a.md", "A", "a body.")
+	ctx := context.Background()
+	anchor, err := f.svc.HistoryQuery().Watermark(ctx, "agent/test")
+	require.NoError(t, err)
+	env := FactSetEnv{Mode: FactSetMode, Title: "empty", Anchor: anchor, Audience: AudienceHuman,
+		Depth: 3, MaxNodes: MaxFactSetFacts, FactsLimit: DefaultFactSetFacts, InstructionsVersion: FactSetInstructionsVersion}
+	fr := freezePinned(pinnedHome{ID: f.id12(), Branch: "agent/test"}, f.id12(), env, 5, nil)
+	require.Empty(t, fr.Roots)
+
+	c := &fsCall{ctx: ctx, b: f.b}
+	c.r = newReader(f.b, nil, nil, &c.st)
+	require.NoError(t, c.startPinned(fr, f.svc.ToolSession()))
+	require.True(t, c.e.st.built.Load(), "the (empty) reservation was built")
+	_, err = c.page(fpos{1, 0}, true)
+	require.ErrorIs(t, err, ErrInvalid)
+	c.close()
+
+	frozen, err := json.Marshal(fr)
+	require.NoError(t, err)
+	sc := f.scope("o")
+	id, err := sc.Sessions.CreateFactSet(ctx, factsetTool(5), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, frozen)
+	require.NoError(t, err)
+	cursor := cursorToken(id, fpos{1, 0})
+	_, err = FactSetNextPage(ctx, sc, f.b, nil, nil, cursor, 0)
+	require.ErrorIs(t, err, ErrInvalid)
+	started := false
+	require.NoError(t, FactSetExport(ctx, sc, f.b, nil, nil, cursor, func(FactSetEnv) io.Writer { started = true; return io.Discard }))
+	require.False(t, started, "nothing to export")
+}
+
+// The read-ahead window is per HOME: a unit number names a unit only within
+// one FactSet, so one call that plans the sub-FactSets of two homes (F3's
+// facade does, on one reader) must not take sub A's window for sub B's unit
+// 1. Here one call starts and plans unit 1 of a sub over W (alpha), then
+// starts and plans unit 1 of a sub over R (beta): B's unit reads exactly
+// what it reads in a call of its own, and the window it was planned with is
+// R's.
+//
+// Sabotage: drop the home from prefetch.covers (compare the unit only), and
+// B's unit 1 is "covered" by A's window: it is planned without a read-ahead
+// of its own and reads its level-0 rows itself.
+func TestFactSet_Pinned_WindowIsPerHome(t *testing.T) {
+	isolateFactSetGlobals(t)
+	lp := newLensPair(t, 1, 5)
+	ctx := context.Background()
+	reqA := lp.alpha.request("kb/u/")
+	reqA.Options.Depth, reqA.Options.MaxNodes, reqA.Limit = 1, MaxFactSetFacts, 5
+	pa, _, err := FactSetFirstPage(ctx, lp.alpha.scope("o"), reqA)
+	require.NoError(t, err)
+	_, frAlpha := frozenOf(t, lp.alpha.scope("o"), *pa.Cursor)
+	w, r := lp.alpha.id12(), lp.r
+	frA := func() *factsetFrozen {
+		return freezePinned(pinnedHome{ID: w, Branch: "agent/test"}, w, frAlpha.Env, 5, hitsOf(frAlpha))
+	}
+	frB := func() *factsetFrozen {
+		return freezePinned(pinnedHome{ID: r, Branch: "agent/test"}, w, lp.baseFR.Env, 5, hitsOf(lp.baseFR))
+	}
+	ti := lp.alpha.svc.ToolSession()
+	newCall := func() *fsCall {
+		c := &fsCall{ctx: ctx, b: lp.lens}
+		c.r = newReader(lp.lens, nil, nil, &c.st)
+		return c
+	}
+
+	// B's unit 1 in a call of its own: the baseline.
+	solo := newCall()
+	require.NoError(t, solo.startPinned(frB(), ti))
+	want, err := solo.planUnitOf(1)
+	require.NoError(t, err)
+	wantQ := solo.st.MaxUnitQueries
+	solo.close()
+
+	c := newCall()
+	defer c.close()
+	require.NoError(t, c.startPinned(frA(), ti))
+	_, err = c.planUnitOf(1)
+	require.NoError(t, err)
+	require.True(t, c.pre.covers(w, 1), "A's window covers A's unit 1")
+	require.False(t, c.pre.covers(r, 1), "A's window does not cover B's unit 1")
+
+	require.NoError(t, c.startPinned(frB(), ti))
+	c.st.MaxUnitQueries = 0
+	got, err := c.planUnitOf(1)
+	require.NoError(t, err)
+	require.Equal(t, wantQ, c.st.MaxUnitQueries, "B's unit 1 reads what it reads alone")
+	require.Equal(t, r, c.pre.home, "B's unit 1 was planned with R's window")
+	require.True(t, c.pre.covers(r, 1))
+	require.Equal(t, len(want.secs), len(got.secs))
+	for i := range want.secs {
+		require.Equal(t, want.secs[i].wire, got.secs[i].wire)
+		require.Equal(t, want.secs[i].number, got.secs[i].number)
+	}
 }

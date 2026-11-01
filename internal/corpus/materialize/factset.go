@@ -435,19 +435,32 @@ func freezePinned(home pinnedHome, wireID string, env FactSetEnv, limit int, hit
 }
 
 // startPinned makes c the call on a NEW FactSet over fr, not yet a session
-// row: it takes fr's tips, registers fr's home in c's reader, makes the
-// cache entry (not yet in the cache) and builds the reservation (the results
-// and reserved tables) in memory.
+// row: it attaches a new cache entry (not yet in the cache, attachPinned)
+// and builds the reservation (the results and reserved tables) in memory. A
+// FactSet with no roots is legal (a lens member whose slice is empty): it
+// starts, reads nothing ahead and has no units.
 func (c *fsCall) startPinned(fr *factsetFrozen, ti *sessions.ToolIndex) error {
-	c.r.tips = fr.Tips
-	if c.r.tips == nil {
-		c.r.tips = map[string]frozenTip{}
-	}
-	c.e = newFSEntry("", ti, fr)
-	if err := c.registerHome(); err != nil {
+	if err := c.attachPinned(newFSEntry("", ti, fr)); err != nil {
 		return err
 	}
 	return c.ensureState()
+}
+
+// attachPinned makes e the FactSet c works on: its frozen tips become the
+// reader's (an empty map when none: foreign then admits no repo) and its
+// home is registered in the reader, before any read. Every call on a
+// FactSet attaches it: a resume (openFactSet, after the row checks) and a
+// creation (startPinned). A lens facade (F3) attaches each sub-FactSet, which
+// is not a session row, the same way. The caller must have checked the
+// binding identity AND the read set first: the pin does not cover a lens's
+// membership, and registration only refuses a home outside the binding.
+func (c *fsCall) attachPinned(e *fsEntry) error {
+	c.e = e
+	c.r.tips = e.fr.Tips
+	if c.r.tips == nil {
+		c.r.tips = map[string]frozenTip{}
+	}
+	return c.registerHome()
 }
 
 // createPinned writes the ONE session row of c's started FactSet (a new
@@ -752,7 +765,8 @@ var prefetchWindow = 6
 const prefetchParallel = 4
 
 // windowUnits is the window of units that starts at u: u and the units after
-// it, at most prefetchWindow, all of this FactSet's home.
+// it, at most prefetchWindow, all of this FactSet's home; empty when u is past
+// the last unit (a FactSet with no roots has only the empty window).
 func windowUnits(fr *factsetFrozen, u int) []int {
 	hi := min(len(fr.Roots)+1, u+prefetchWindow)
 	units := make([]int, 0, max(0, hi-u))
@@ -773,7 +787,7 @@ func windowUnits(fr *factsetFrozen, u int) []int {
 // It touches no field of c (it may run beside the planner): it returns its
 // window and what it read.
 func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, units []int) (pre *prefetch, st Stats, err error) {
-	pre = &prefetch{units: units, rows: map[string][]index.LevelRow{}, metas: map[index.TargetVersion]index.TargetMeta{}}
+	pre = &prefetch{home: fr.HomeRepo, units: units, rows: map[string][]index.LevelRow{}, metas: map[index.TargetVersion]index.TargetMeta{}}
 	var roots []index.TargetVersion
 	for _, u := range units {
 		if root := fr.Roots[u-1]; root.Blob != "" {
@@ -928,6 +942,7 @@ var backgroundReads atomic.Int64
 
 // pending is a window being read ahead in the background.
 type pending struct {
+	home string
 	lo   int
 	done chan struct{}
 	pre  *prefetch
@@ -935,10 +950,14 @@ type pending struct {
 	err  error
 }
 
-// startReadAhead reads the window of units in the background.
+// startReadAhead reads the window of units in the background. An empty
+// window reads nothing (lo 0 matches no unit).
 func (c *fsCall) startReadAhead(fr *factsetFrozen, lv *index.LevelReader, units []int) *pending {
 	backgroundReads.Add(1)
-	pd := &pending{lo: units[0], done: make(chan struct{})}
+	pd := &pending{home: fr.HomeRepo, done: make(chan struct{})}
+	if len(units) > 0 {
+		pd.lo = units[0]
+	}
 	go func() {
 		defer close(pd.done)
 		pd.pre, pd.st, pd.err = c.readAhead(fr, lv, units)
@@ -961,7 +980,7 @@ func (c *fsCall) window(fr *factsetFrozen, m *mount, u int) error {
 	c.pre = nil
 	var pre *prefetch
 	var st Stats
-	if pd := c.next; pd != nil && pd.lo == u {
+	if pd := c.next; pd != nil && pd.home == fr.HomeRepo && pd.lo == u {
 		<-pd.done
 		pre, st, err = pd.pre, pd.st, pd.err
 	} else {
@@ -1077,14 +1096,9 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 	// mayRead (89b26b07) whenever content of that repo is first read in a
 	// call, and an unreachable repo reads as kb_unavailable, like a missing
 	// target. Units already planned and cached are not re-read.
-	c.r.tips = e.fr.Tips
-	if c.r.tips == nil {
-		c.r.tips = map[string]frozenTip{}
-	}
-	c.e = e
 	// The home is registered before any read: a page served from kept plans
 	// plans nothing, yet reads its bodies and RULE 1 marks from the home.
-	if err := c.registerHome(); err != nil {
+	if err := c.attachPinned(e); err != nil {
 		c.done()
 		return nil, err
 	}
@@ -1209,7 +1223,7 @@ func (c *fsCall) ensureState() error {
 	// Unit 1's window does not depend on the reservation: read it while the
 	// reservation is built (not for a call that reads nothing in the
 	// background: the export).
-	if c.next == nil && !c.noPipeline && (c.pre == nil || c.pre.first() != 1) {
+	if c.next == nil && !c.noPipeline && (c.pre == nil || !c.pre.covers(e.fr.HomeRepo, 1)) {
 		m, err := c.home()
 		if err != nil {
 			return err
@@ -1326,7 +1340,7 @@ func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, 
 	if err != nil {
 		return nil, err
 	}
-	if c.pre == nil || !c.pre.covers(u) {
+	if c.pre == nil || !c.pre.covers(fr.HomeRepo, u) {
 		if err := c.window(fr, m, u); err != nil {
 			return nil, err
 		}

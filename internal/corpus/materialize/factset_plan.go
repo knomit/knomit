@@ -249,23 +249,23 @@ type levelReads struct {
 // targets. Level 0 of a unit never depends on the written set, so these are
 // exactly the reads the unit's plan would make, batched across units.
 type prefetch struct {
-	units []int                                    // the units covered, ascending (one home repo's units)
+	// home is the repo the window's units live in: a unit number names a
+	// unit only within one FactSet, so a window covers (home, unit), never a
+	// bare unit (one call may plan the sub-FactSets of several homes).
+	home  string
+	units []int                                    // the units covered, ascending (all of home)
 	rows  map[string][]index.LevelRow              // by root blob
 	metas map[index.TargetVersion]index.TargetMeta // roots and their targets, by (path, blob, commit)
 }
 
-// covers reports whether unit u is one of the window's units.
-func (pre *prefetch) covers(u int) bool {
+// covers reports whether unit u of the FactSet whose home is home is one of
+// the window's units.
+func (pre *prefetch) covers(home string, u int) bool {
+	if pre.home != home {
+		return false
+	}
 	_, ok := slices.BinarySearch(pre.units, u)
 	return ok
-}
-
-// first is the window's first unit (0 for an empty window).
-func (pre *prefetch) first() int {
-	if len(pre.units) == 0 {
-		return 0
-	}
-	return pre.units[0]
 }
 
 // last is the window's last unit (0 for an empty window).
