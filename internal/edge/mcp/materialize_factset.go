@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/engine/store/model"
 )
 
 // FactSet mode of knomit_materialize: `search` instead of `file` materializes
@@ -64,7 +65,7 @@ func isFactSetFirst(req mcpgo.CallToolRequest) bool {
 
 // materializeFactSetFirst builds the factset of the `search` argument and returns
 // page 1.
-func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, mgr *repos.Manager, sWrite mcpStore) (*mcpgo.CallToolResult, error) {
+func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, mgr *repos.Manager, sWrite mcpStore, emb model.Embedder) (*mcpgo.CallToolResult, error) {
 	args := req.GetArguments()
 	if _, ok := args["file"]; ok {
 		return mcpgo.NewToolResultError("pass `file` (one fact) or `search` (a factset), not both"), nil
@@ -100,6 +101,14 @@ func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *
 		// A lens FactSet widens motif terms exactly as knomit_query on the
 		// lens does; a repo FactSet never reads it.
 		Clusters: mcpMotifClusters,
+	}
+	if b.IsLens() {
+		// The lens list's single query vector (knomit_query on the lens embeds
+		// through fanoutQueryVec): one inference for the whole fan-out. A repo
+		// FactSet leaves embedding to its store, as before.
+		breq.Embed = func(ctx context.Context, text string) ([]float32, error) {
+			return fanoutQueryVec(ctx, emb, text)
+		}
 	}
 	for _, a := range []struct {
 		name string

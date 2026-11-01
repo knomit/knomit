@@ -14,6 +14,7 @@ import (
 	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/foundation/auth"
 )
 
@@ -97,8 +98,14 @@ func materializeTool() mcpgo.Tool {
 }
 
 // MaterializeHandler serves knomit_materialize. mgr reaches every repo
-// registered on the server, for cross_kb.
-func MaterializeHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// registered on the server, for cross_kb. embedders[0], when given, is the
+// server embedder a lens FactSet embeds its query with ONCE for the whole
+// fan-out, as knomit_query on the lens does (fanoutQueryVec).
+func MaterializeHandler(mgr *repos.Manager, embedders ...model.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var emb model.Embedder
+	if len(embedders) > 0 && embedders[0] != nil {
+		emb = embedders[0]
+	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		if err := rejectUnknownArguments(req, materializeTool()); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
@@ -136,7 +143,7 @@ func MaterializeHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallTool
 			return materializeResume(ctx, req, b, mgr, sWrite, cursor)
 		}
 		if isFactSetFirst(req) {
-			return materializeFactSetFirst(ctx, req, b, mgr, sWrite)
+			return materializeFactSetFirst(ctx, req, b, mgr, sWrite, emb)
 		}
 		for _, k := range append(factsetOnlyArgs, "unit") {
 			if _, ok := req.GetArguments()[k]; ok {

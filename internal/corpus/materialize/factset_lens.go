@@ -109,6 +109,15 @@ func decodeLensFrozen(raw []byte) (*lensFrozen, error) {
 	if lf.V != frozenVersionLens || len(lf.Subs) == 0 || len(lf.Order) > MaxFactSetFacts {
 		return nil, ErrCursorExpired
 	}
+	// One sub per member: two subs of one repo would register one home twice
+	// and number two FactSets' units as one.
+	seen := make(map[string]bool, len(lf.Subs))
+	for _, sub := range lf.Subs {
+		if sub.Repo == "" || seen[sub.Repo] {
+			return nil, ErrCursorExpired
+		}
+		seen[sub.Repo] = true
+	}
 	counts := make([]int, len(lf.Subs))
 	for _, s := range lf.Order {
 		if s < 0 || s >= len(lf.Subs) {
@@ -186,33 +195,45 @@ func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetReques
 	c.r = newReader(b, req.Manager, req.MayRead, &c.st)
 	defer c.close()
 
-	reads := b.Reads()
-	mounts := make([]*mount, len(reads))
-	for i, rt := range reads {
-		m, err := c.r.open(rt.RI, rt.Branch)
-		if err != nil {
-			return FactSetPage{}, c.st, err
-		}
-		if err := c.r.checkReady(ctx, m); err != nil {
-			return FactSetPage{}, c.st, err
-		}
-		mounts[i] = m
-	}
+	write := b.Write()
+	writeID := fact.ID12(write.ID())
 	searchStart := time.Now()
 	plan, err := planLensSearch(ctx, req)
 	if err != nil {
 		return FactSetPage{}, c.st, err
+	}
+	// Only the mounts the search actually reads are opened, checked and
+	// sandwiched: the plan's targets (a member narrowed out by repo= or skipped
+	// by the path filter's topic is not one), and under since_fork the write
+	// member alone. A member not searched has no roots and needs no anchor, so
+	// an unsettled one (never synced, mid-sync) cannot make this call busy.
+	reads := b.Reads()
+	mounts := make([]*mount, len(reads)) // by Reads() index; nil: not searched
+	if !req.NoResults {
+		for _, t := range plan.Targets {
+			if req.Search.SinceFork && fact.ID12(t.RT.RI.ID()) != writeID {
+				continue
+			}
+			m, err := c.r.open(t.RT.RI, t.RT.Branch)
+			if err != nil {
+				return FactSetPage{}, c.st, err
+			}
+			if err := c.r.checkReady(ctx, m); err != nil {
+				return FactSetPage{}, c.st, err
+			}
+			mounts[t.Mount] = m
+		}
 	}
 	anchors, per, order, err := c.lensSearchAnchored(mounts, plan, req)
 	c.st.Search = time.Since(searchStart)
 	if err != nil {
 		return FactSetPage{}, c.st, err
 	}
-	write := b.Write()
-	writeID := fact.ID12(write.ID())
-	anchorMap := make(map[string]string, len(mounts))
+	anchorMap := map[string]string{}
 	for i, m := range mounts {
-		anchorMap[m.id12] = anchors[i]
+		if m != nil {
+			anchorMap[m.id12] = anchors[i]
+		}
 	}
 	env := FactSetEnv{
 		Mode: FactSetMode, Title: FactSetLensTitle(req.Search, write.OntologyRoot(), b.Name()),
@@ -224,17 +245,20 @@ func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetReques
 		return FactSetPage{FactSetEnv: env, Facts: []FactSetNode{}}, c.st, nil
 	}
 	lf := &lensFrozen{V: frozenVersionLens, Env: env, Limit: req.Limit, WireRepo: writeID, Order: order}
-	for i, m := range mounts {
+	for i, rt := range reads {
 		// The F2 seam, once per member: that member's slice of the fused
-		// list, its own anchor, the lens write repo as the wire.
+		// list, its own anchor, the lens write repo as the wire. A member the
+		// search did not read is an empty sub with no anchor; it stays a sub
+		// so its name labels refs into it (ruling Lens 1).
+		id := fact.ID12(rt.RI.ID())
 		subEnv := env
 		subEnv.Anchor, subEnv.Anchors, subEnv.Units = anchors[i], nil, len(per[i])
-		fr := freezePinned(pinnedHome{ID: m.id12, Branch: reads[i].Branch}, writeID, subEnv, req.Limit, per[i])
+		fr := freezePinned(pinnedHome{ID: id, Branch: rt.Branch}, writeID, subEnv, req.Limit, per[i])
 		roots := fr.Roots
 		if roots == nil {
 			roots = []frozenRoot{}
 		}
-		lf.Subs = append(lf.Subs, lensSub{Repo: m.id12, Name: reads[i].RI.Name(), Branch: reads[i].Branch, Anchor: anchors[i], Roots: roots})
+		lf.Subs = append(lf.Subs, lensSub{Repo: id, Name: rt.RI.Name(), Branch: rt.Branch, Anchor: anchors[i], Roots: roots})
 	}
 	facade := newLensEntry("", sc.Sessions, lf)
 	if err := c.attachLens(facade); err != nil {
@@ -295,6 +319,9 @@ func planLensSearch(ctx context.Context, req FactSetRequest) (*federate.FusedPla
 			if err != nil {
 				return nil, fmt.Errorf("search: embed query: %w", err)
 			}
+			if v == nil {
+				return nil, nil // no embedder: every mount embeds for itself
+			}
 			if len(v) == 0 {
 				return nil, errors.New("search: embed query: embedder returned an empty vector")
 			}
@@ -351,6 +378,9 @@ func (c *fsCall) lensSearchAnchored(mounts []*mount, plan *federate.FusedPlan, r
 		out := make([]mark, len(mounts))
 		all := true
 		for i, m := range mounts {
+			if m == nil {
+				continue // not searched: no roots, no anchor (see lensFactSetFirstPage)
+			}
 			w, gen, settled, err := m.svc.HistoryQuery().SettledWatermark(c.ctx, m.branch)
 			if err != nil {
 				return nil, false, err
@@ -412,22 +442,25 @@ func (c *fsCall) lensSearchAnchored(mounts []*mount, plan *federate.FusedPlan, r
 func (c *fsCall) runLensSearch(mounts []*mount, plan *federate.FusedPlan, req FactSetRequest) ([][]factsetHit, []int, error) {
 	byID := make(map[string]*mount, len(mounts))
 	for _, m := range mounts {
-		byID[m.id12] = m
+		if m != nil {
+			byID[m.id12] = m
+		}
 	}
 	writeID := fact.ID12(c.b.Write().ID())
 	legMount := func(t federate.Target, q *index.SearchOptions) (*mount, bool, error) {
-		m := byID[fact.ID12(t.RT.RI.ID())]
-		if m == nil {
-			return nil, false, fmt.Errorf("lens mount %s was not opened", t.RT.RI.Name())
-		}
+		id := fact.ID12(t.RT.RI.ID())
 		if req.NoResults {
-			return m, false, nil
+			return nil, false, nil
 		}
 		if req.Search.SinceFork {
-			if m.id12 != writeID {
-				return m, false, nil
+			if id != writeID {
+				return nil, false, nil
 			}
 			q.PathsIn = req.PathsIn
+		}
+		m := byID[id]
+		if m == nil {
+			return nil, false, fmt.Errorf("lens mount %s was not opened", t.RT.RI.Name())
 		}
 		return m, true, nil
 	}
@@ -437,13 +470,18 @@ func (c *fsCall) runLensSearch(mounts []*mount, plan *federate.FusedPlan, req Fa
 	}
 	var hits []hit
 	if req.Search.Sort == SortRecent {
-		res, err := federate.FusedRecent(c.ctx, plan, func(ctx context.Context, t federate.Target, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
+		// The lens list's recency read, merge-horizon deepening included
+		// (federate.FusedRecentDeep, shared with REST /lenses/{lens}/facts):
+		// write-first dedupe can spend a fork's whole depth on copies, so a
+		// text-less listing runs deeper until req.Facts merged rows are
+		// provably complete. With text it runs once.
+		res, _, err := federate.FusedRecentDeep(c.ctx, plan, func(ctx context.Context, t federate.Target, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
 			m, read, err := legMount(t, &q)
 			if err != nil || !read {
 				return nil, 0, err
 			}
 			return m.svc.FactQuery().RecentFacts(ctx, m.branch, q)
-		}, federate.FusedOptions{})
+		}, federate.FusedOptions{}, MaxFactSetFacts, req.Facts, federate.MaxRecencyDepth)
 		if err != nil {
 			return nil, nil, fmt.Errorf("search: %w", err)
 		}
@@ -517,12 +555,24 @@ func (c *fsCall) attachLens(e *fsEntry) error {
 	c.e = e
 	c.r.tips = map[string]frozenTip{}
 	writeID := fact.ID12(c.b.Write().ID())
+	// The row must describe THIS binding: its wire is the binding's write
+	// repo, and every read member is mounted at the branch the row froze. The
+	// read-set fingerprint already covers both; this keeps a row that
+	// disagrees (a forged or stale scope) from being served at all.
+	if le.fr.WireRepo != writeID {
+		return ErrCursorExpired
+	}
 	built := true
 	for _, sub := range le.subs {
 		fr := sub.fr
 		branch := fr.Branch
 		if fr.HomeRepo == writeID {
 			branch = c.b.WriteMountBranch()
+		} else if rt, ok := c.b.ByID(fr.HomeRepo); ok {
+			if rt.Branch != fr.Branch {
+				return ErrCursorExpired
+			}
+			branch = rt.Branch
 		}
 		if err := c.r.registerHome(fr.HomeRepo, branch, fr.Env.Anchor); err != nil {
 			return err
@@ -793,101 +843,18 @@ func (lc *lensCall) nextPage(c *fsCall, at fpos, unit int) (FactSetPage, error) 
 	return lc.page(c, at, false)
 }
 
-// page is fsCall.page over GLOBAL units: whole sections from `from`, at most
-// the frozen limit, at least one, measured against PageCap; bodies and RULE 1
-// marks for the emitted sections only (one inflate over sections of any
-// number of homes); then the remap.
+// page is fsCall.page over GLOBAL units (the shared buildPage): each global
+// unit planned through its sub, inflated with the sub's local unit, then
+// remapped; one inflate covers sections of any number of homes.
 func (lc *lensCall) page(c *fsCall, from fpos, first bool) (FactSetPage, error) {
 	le := lc.le
-	units := len(le.fr.Order)
-	pastEnd := func() error {
-		return fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
-	}
-	if from.unit < 1 || from.unit > units {
-		return FactSetPage{}, pastEnd()
-	}
-	pu, err := lc.planGlobal(c, from.unit)
-	if err != nil {
-		return FactSetPage{}, err
-	}
-	if from.sec >= len(pu.secs) {
-		from = fpos{from.unit + 1, 0}
-		if from.unit > units {
-			return FactSetPage{}, pastEnd()
-		}
-		if _, err = lc.planGlobal(c, from.unit); err != nil {
-			return FactSetPage{}, err
-		}
-	}
-	type cand struct {
-		unit int // global
-		sec  section
-		next fpos
-	}
-	var cands []cand
-	at := from
-	walked := from.unit
-	for len(cands) < le.fr.Limit && at.unit <= units {
-		pu, err := lc.planGlobal(c, at.unit)
-		if err != nil {
-			return FactSetPage{}, err
-		}
-		walked = max(walked, at.unit)
-		for at.sec < len(pu.secs) && len(cands) < le.fr.Limit {
-			cd := cand{unit: at.unit, sec: pu.secs[at.sec]}
-			at.sec++
-			if at.sec >= len(pu.secs) {
-				at = fpos{at.unit + 1, 0}
-			}
-			cd.next = at
-			cands = append(cands, cd)
-			if at.sec == 0 {
-				break
-			}
-		}
-	}
-	secs := make([]section, len(cands))
-	for i, cd := range cands {
-		secs[i] = cd.sec
-	}
-	nodes, err := c.inflate(secs, func(i int) int { return le.localOf[cands[i].unit-1] })
-	if err != nil {
-		return FactSetPage{}, err
-	}
-	for i := range nodes {
-		le.remap(le.fr.Order[cands[i].unit-1], &nodes[i])
-	}
-	env := le.fr.Env
-	build := func(k int) FactSetPage {
-		p := FactSetPage{FactSetEnv: env, Facts: nodes[:k], UnitFrom: nodes[0].Unit, UnitTo: nodes[k-1].Unit}
-		if first {
-			p.Instructions = FactSetInstructions
-		}
-		return p
-	}
-	placeholder := strings.Repeat("0", 36) + ".500.99999"
-	used := 1
-	for k := 2; k <= len(nodes); k++ {
-		p := build(k)
-		p.Cursor, p.HasMore = &placeholder, true
-		p.UnitsWalked, p.Sections = MaxFactSetFacts, MaxFactSetFacts*MaxNodesLimit
-		out, err := json.Marshal(p)
-		if err != nil {
-			return FactSetPage{}, err
-		}
-		if len(out) > PageCap {
-			break
-		}
-		used = k
-	}
-	page := build(used)
-	next := cands[used-1].next
-	tok := cursorToken(lc.facade.id, next)
-	page.Cursor = &tok
-	page.HasMore = next.unit <= units
-	page.UnitsWalked = walked
-	page.Sections = le.sectionsThrough(walked)
-	return page, nil
+	return c.buildPage(pageSource{
+		env: le.fr.Env, limit: le.fr.Limit, units: len(le.fr.Order), id: lc.facade.id,
+		plan:     func(g int) (*plannedUnit, error) { return lc.planGlobal(c, g) },
+		unitOf:   func(g int) int { return le.localOf[g-1] },
+		emit:     func(g int, n *FactSetNode) { le.remap(le.fr.Order[g-1], n) },
+		sections: le.sectionsThrough,
+	}, from, first)
 }
 
 // export is FactSetExport on the facade: every GLOBAL unit in order, each

@@ -1677,16 +1677,49 @@ type refTarget struct {
 
 // ---- pages ----------------------------------------------------------------------
 
+// pageSource is how one page reads a FactSet: a repo FactSet's units
+// directly (fsCall.page), a lens facade's GLOBAL units through its subs
+// (lensCall.page). Both share buildPage, so the candidate walk, the PageCap
+// measure and the cursor are one definition.
+type pageSource struct {
+	env   FactSetEnv
+	limit int    // sections per page (frozen)
+	units int    // the FactSet's units
+	id    string // the FactSet id the cursor names
+	// plan is unit u's plan.
+	plan func(u int) (*plannedUnit, error)
+	// unitOf is the unit number unit u's sections are inflated with (its own
+	// for a repo FactSet, its sub's local unit on a lens).
+	unitOf func(u int) int
+	// emit adjusts unit u's inflated node (nil: none; a lens remaps).
+	emit func(u int, n *FactSetNode)
+	// sections is the sections of units 1..walked.
+	sections func(walked int) int
+}
+
 // page serves the sections from `from`: whole sections, at most the frozen
 // limit, at least one, measured against PageCap; bodies are read by blob only
 // for the sections it emits, and the RULE 1 marks are computed for them now.
 func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	fr := c.e.fr
-	units := len(fr.Roots)
-	if from.unit < 1 || from.unit > units {
-		return FactSetPage{}, fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
+	return c.buildPage(pageSource{
+		env: fr.Env, limit: fr.Limit, units: len(fr.Roots), id: c.e.id,
+		plan:     c.planUnitOf,
+		unitOf:   func(u int) int { return u },
+		sections: c.e.st.sectionsThrough,
+	}, from, first)
+}
+
+// buildPage is one page over src (see pageSource).
+func (c *fsCall) buildPage(src pageSource, from fpos, first bool) (FactSetPage, error) {
+	units := src.units
+	pastEnd := func() error {
+		return fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
 	}
-	pu, err := c.planUnitOf(from.unit)
+	if from.unit < 1 || from.unit > units {
+		return FactSetPage{}, pastEnd()
+	}
+	pu, err := src.plan(from.unit)
 	if err != nil {
 		return FactSetPage{}, err
 	}
@@ -1697,9 +1730,9 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 		// past the last unit is the normal end-of-FactSet answer.
 		from = fpos{from.unit + 1, 0}
 		if from.unit > units {
-			return FactSetPage{}, fmt.Errorf("%w: the cursor is past the end of the factset; seek with unit (1 to %d)", ErrInvalid, units)
+			return FactSetPage{}, pastEnd()
 		}
-		if pu, err = c.planUnitOf(from.unit); err != nil {
+		if _, err = src.plan(from.unit); err != nil {
 			return FactSetPage{}, err
 		}
 	}
@@ -1715,13 +1748,13 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	// the previous page's last unit), so UnitsWalked and Sections depend on
 	// the position only, never on what other calls planned.
 	walked := from.unit
-	for len(cands) < fr.Limit && at.unit <= units {
-		pu, err := c.planUnitOf(at.unit)
+	for len(cands) < src.limit && at.unit <= units {
+		pu, err := src.plan(at.unit)
 		if err != nil {
 			return FactSetPage{}, err
 		}
 		walked = max(walked, at.unit)
-		for at.sec < len(pu.secs) && len(cands) < fr.Limit {
+		for at.sec < len(pu.secs) && len(cands) < src.limit {
 			cd := cand{unit: at.unit, sec: pu.secs[at.sec]}
 			at.sec++
 			if at.sec >= len(pu.secs) {
@@ -1738,13 +1771,17 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	for i, cd := range cands {
 		secs[i] = cd.sec
 	}
-	nodes, err := c.inflate(secs, func(i int) int { return cands[i].unit })
+	nodes, err := c.inflate(secs, func(i int) int { return src.unitOf(cands[i].unit) })
 	if err != nil {
 		return FactSetPage{}, err
 	}
-	env := fr.Env
+	if src.emit != nil {
+		for i := range nodes {
+			src.emit(cands[i].unit, &nodes[i])
+		}
+	}
 	build := func(k int) FactSetPage {
-		p := FactSetPage{FactSetEnv: env, Facts: nodes[:k], UnitFrom: nodes[0].Unit, UnitTo: nodes[k-1].Unit}
+		p := FactSetPage{FactSetEnv: src.env, Facts: nodes[:k], UnitFrom: nodes[0].Unit, UnitTo: nodes[k-1].Unit}
 		if first {
 			p.Instructions = FactSetInstructions
 		}
@@ -1767,11 +1804,11 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 	}
 	page := build(used)
 	next := cands[used-1].next
-	tok := cursorToken(c.e.id, next)
+	tok := cursorToken(src.id, next)
 	page.Cursor = &tok
 	page.HasMore = next.unit <= units
 	page.UnitsWalked = walked
-	page.Sections = c.e.st.sectionsThrough(walked)
+	page.Sections = src.sections(walked)
 	return page, nil
 }
 

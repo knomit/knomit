@@ -90,6 +90,19 @@ func (lensCosEmbedder) Thresholds() modelparams.Thresholds { return modelparams.
 // lensCosEmbedder) and its own repo binding.
 func newLensMember(t testing.TB, name string) *factsetFixture {
 	t.Helper()
+	f := newUnsyncedLensMember(t, name)
+	// One fact, so the member's index has synced once and its watermark is
+	// set: a never-synced index has an empty watermark, which never reads
+	// settled (production syncs every store when it opens). No cos marker:
+	// no text search ever finds it.
+	f.write(t, "kb/seed/"+name+".md", "Seed", "seed of "+name+".")
+	return f
+}
+
+// newUnsyncedLensMember is a lens member whose index has never synced: its
+// watermark is empty, so it never reads settled.
+func newUnsyncedLensMember(t testing.TB, name string) *factsetFixture {
+	t.Helper()
 	svc, err := store.Open(filepath.Join(t.TempDir(), name+".db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
@@ -98,13 +111,7 @@ func newLensMember(t testing.TB, name string) *factsetFixture {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: name, UID: "uid-" + name, AgentBranch: "agent/test", Svc: svc, OntologyRoot: "kb", Embedder: lensCosEmbedder{},
 	})
-	f := &factsetFixture{ri: ri, svc: svc, b: repos.NewBindingOfRepo(ri, "agent/test")}
-	// One fact, so the member's index has synced once and its watermark is
-	// set: a never-synced index has an empty watermark, which never reads
-	// settled (production syncs every store when it opens). No cos marker:
-	// no text search ever finds it.
-	f.write(t, "kb/seed/"+name+".md", "Seed", "seed of "+name+".")
-	return f
+	return &factsetFixture{ri: ri, svc: svc, b: repos.NewBindingOfRepo(ri, "agent/test")}
 }
 
 // lensTrio is the three-member lens W (alpha), R1 (beta), R2 (gamma).
