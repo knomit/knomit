@@ -50,6 +50,14 @@ func TestIsMutatingRequest(t *testing.T) {
 		// /lenses/X/mcp segment must NOT bypass the gate.
 		{"PUT", "/api/v1/repos/core/branches/main/facts/x/lenses/evil/mcp", true},
 		{"POST", "/api/v1/repos/core/facts/lenses/x/mcp", true},
+		// Closing a factset frees the caller's own read session: not a write.
+		// Only DELETE on the factset resource itself; a fact path that ends
+		// in /search/factset, the export, and other methods stay gated.
+		{"DELETE", "/api/v1/repos/core/branches/main/search/factset", false},
+		{"POST", "/api/v1/repos/core/branches/main/search/factset", true},
+		{"DELETE", "/api/v1/repos/core/branches/main/search/factset/export", true},
+		{"DELETE", "/api/v1/repos/core/branches/main/facts/x/search/factset", true},
+		{"DELETE", "/api/v1/repos/core/branches/main/search/factsetx", true},
 	}
 	for _, c := range cases {
 		if got := isMutatingRequest(c.method, c.path); got != c.want {

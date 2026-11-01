@@ -1328,10 +1328,17 @@ paths:
         for a seek); a plain page from there, or from any position past the
         factset's extent, is a 400.
 
-        OWNERSHIP AND BOUNDS: a cursor belongs to this route and the caller's
-        principal (and the binding's read set); another owner's, an unknown
-        or an idle-expired cursor answer the same 404. One factset per owner:
-        a new first call replaces the owner's previous factset. At most 4
+        OWNERSHIP, LIFETIME AND BOUNDS: a factset belongs to the caller's
+        principal alone, not to this route, plus the binding (its repo pin and
+        read set): the same principal pages, seeks, exports and closes it
+        here or through `knomit_materialize` on any MCP endpoint bound to the
+        same repo and branch, whichever surface made it. Another principal's,
+        another binding's, an unknown, a closed or an idle-expired cursor
+        answer the same 404. A principal may hold any number of factsets at
+        once: a first call never ends another factset. A factset ends when it
+        is closed (`DELETE` on this resource, or `close: true` on
+        `knomit_materialize`), when it has been idle for the session idle
+        time (`session.tool_idle_ttl`), or when the server restarts. At most 4
         calls plan factset units at once on the server (a page from planned
         units plans nothing); a call over that, one that finds the session
         store's lock taken past its timeout, one whose index moved during the
@@ -1376,6 +1383,29 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/FactSetPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+    delete:
+      tags: [search, facts]
+      summary: Close a factset
+      description: |
+        Closes the factset `cursor` belongs to (any of its cursors; the
+        position is ignored): its frozen inputs are deleted on the server and
+        every cursor of it then answers 404, here, on the export and on
+        `knomit_materialize`. `cursor` is the only parameter (anything else is
+        a 400, and so is a cursor that is not a factset cursor at all).
+        Another principal's factset, another binding's, an unknown and an
+        already closed one all answer the same 404, and nothing is closed.
+        Closing needs only read: it frees the caller's own read session and
+        changes nothing in the knowledge base, so it is not gated as a write.
+      operationId: deleteSearchFactSet
+      parameters:
+        - { name: cursor, in: query, required: true, schema: { type: string }, description: "Any cursor of the factset to close." }
+      responses:
+        "204": { description: The factset is closed }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }

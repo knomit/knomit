@@ -6,7 +6,7 @@ import "errors"
 // locked past its busy timeout (SQLITE_BUSY / SQLITE_LOCKED). The dequeue was
 // rolled back, so nothing was consumed and the same call may be retried.
 // DequeuePaths and the FactSet writes (sessions.ToolIndex.CreateFactSet,
-// TouchFactSet, DeleteFactSet: one BEGIN IMMEDIATE transaction each, rolled
+// TouchFactSet, DeleteFactSet, CloseFactSet: one BEGIN IMMEDIATE transaction each, rolled
 // back on failure) return it: a busy error on a later write of a page (a
 // re-enqueue after the dequeue committed) is NOT safe to retry and is never
 // marked with it.

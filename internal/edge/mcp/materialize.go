@@ -50,7 +50,7 @@ const errSessionBusy = "the session store is busy; nothing was consumed — retr
 
 func materializeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_materialize",
-		mcpgo.WithDescription("Materialize ONE fact together with the facts it stands on, as one document in reading order, every fact in full. Use it to hand a fact and its foundations to someone at once (an agent's brief, a frame's context, a human-readable write-up); use knomit_explain instead to inspect a fact's provenance and history, and knomit_query to find facts. The content is the fact's refs walk: every fact it cites, recursively, to `depth` (default 4, max 10), at most `max_nodes` facts (default 200, max 500); a fact reached twice is written once and later citations link back to it; a cited fact that was not written is listed as \"not included\" with the reason. Every fact's version is its blob (`blob`); `commit` is the commit that holds it. By default every ref is read at the version the citing fact cited (historical: the output depends only on the fact, the anchor `commit` and the options); `unpin: true` reads every ref at its latest version instead and silently leaves out a cited fact that is gone. A frame (type frame) is ordered differently: its ancestors (the frames it refs, recursively, whatever their distance, each with its own content only) come first, then the frame, then what it stands on. Refs into another knowledge base are followed only with `cross_kb: true`, at that knowledge base's latest version. `audience: \"agent\"` returns the document as markdown text in `text`; `audience: \"human\"` returns the facts as data in `facts`, plus `instructions` on the first page for writing them up as an article. Results are paged: while `has_more` is true, call again with `cursor` (and nothing else but `binding` and optionally `limit`). Read-only; never writes."),
+		mcpgo.WithDescription("Materialize ONE fact together with the facts it stands on, as one document in reading order, every fact in full. Use it to hand a fact and its foundations to someone at once (an agent's brief, a frame's context, a human-readable write-up); use knomit_explain instead to inspect a fact's provenance and history, and knomit_query to find facts. The content is the fact's refs walk: every fact it cites, recursively, to `depth` (default 4, max 10), at most `max_nodes` facts (default 200, max 500); a fact reached twice is written once and later citations link back to it; a cited fact that was not written is listed as \"not included\" with the reason. Every fact's version is its blob (`blob`); `commit` is the commit that holds it. By default every ref is read at the version the citing fact cited (historical: the output depends only on the fact, the anchor `commit` and the options); `unpin: true` reads every ref at its latest version instead and silently leaves out a cited fact that is gone. A frame (type frame) is ordered differently: its ancestors (the frames it refs, recursively, whatever their distance, each with its own content only) come first, then the frame, then what it stands on. Refs into another knowledge base are followed only with `cross_kb: true`, at that knowledge base's latest version. `audience: \"agent\"` returns the document as markdown text in `text`; `audience: \"human\"` returns the facts as data in `facts`, plus `instructions` on the first page for writing them up as an article. Results are paged: while `has_more` is true, call again with `cursor` (and nothing else but `binding` and optionally `limit`). A factset stays open until it is idle for the session idle time or closed with `close: true` and its cursor. Never writes to the knowledge base."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Description("The fact to materialize: a path under kb/ (e.g. kb/decisions/x/abc123.md), or kb://<id>/… for a fact in another mount of this binding. Required unless `cursor` is passed."),
@@ -90,6 +90,9 @@ func materializeTool() mcpgo.Tool {
 		mcpgo.WithNumber("unit",
 			mcpgo.Description("FactSet mode, with `cursor` only: continue from this unit's first section (1 to the factset's `units`), forward or back."),
 		),
+		mcpgo.WithBoolean("close",
+			mcpgo.Description("FactSet mode, with `cursor` only (and `binding`): true closes the factset that cursor belongs to (any of its cursors), freeing it on the server; its cursors then read as expired. You may hold many factsets at once; close the ones you are done with. A factset you do not own, or that does not exist, answers the expired text and nothing is closed."),
+		),
 	)
 }
 
@@ -113,11 +116,14 @@ func MaterializeHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallTool
 		}
 		defer releaseWrite()
 
+		if _, ok := req.GetArguments()["close"]; ok {
+			return materializeFactSetClose(ctx, req, b, sWrite)
+		}
 		if cursor := req.GetString("cursor", ""); cursor != "" {
 			// Only a factset THIS caller owns routes to the factset resume; another
 			// owner's factset cursor takes the path of a cursor that does not
 			// exist, so every refusal reads the same (d870cc94).
-			factset, err := materialize.IsFactSetCursor(ctx, materializeScope(ctx, b, sWrite), cursor)
+			factset, err := materialize.IsFactSetCursor(ctx, factsetScope(ctx, b, sWrite), cursor)
 			if err != nil {
 				return factsetToolError(err), nil
 			}
@@ -234,13 +240,24 @@ func materializeToolError(err error, file string) *mcpgo.CallToolResult {
 	}
 }
 
-// materializeScope pins a cursor to the binding (pin and read set) and to
-// the caller (endpoint + principal, callerOwner).
+// materializeScope pins a single-fact cursor to the binding (pin and read
+// set) and to the caller (endpoint + principal, callerOwner). A FactSet takes
+// factsetScope instead.
 func materializeScope(ctx context.Context, b *repos.Binding, sWrite mcpStore) materialize.CursorScope {
 	return materialize.CursorScope{
 		Sessions: sWrite.toolSession, Branch: b.WriteMountBranch(), Pin: b.PinID(),
 		ReadSet: federate.ReadSetFingerprint(b), Owner: callerOwner(ctx),
 	}
+}
+
+// factsetScope pins a FactSet to the binding (pin and read set) and to the
+// caller's principal ALONE (materialize.FactSetOwner): no endpoint, so the
+// same principal reaches its FactSets from any MCP endpoint with the same
+// binding, and from the REST factset routes.
+func factsetScope(ctx context.Context, b *repos.Binding, sWrite mcpStore) materialize.CursorScope {
+	sc := materializeScope(ctx, b, sWrite)
+	sc.Owner = materialize.FactSetOwner(ctx)
+	return sc
 }
 
 // callerMayRead is the cross-KB read check for a repo the binding does not

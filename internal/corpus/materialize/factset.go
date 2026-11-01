@@ -18,6 +18,7 @@ import (
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/sessions"
+	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 )
 
@@ -338,8 +339,10 @@ var factsetSearchHook func()
 
 // FactSetFirstPage runs the search at the write mount's index watermark,
 // freezes the results, the anchor and (with cross_kb) the tips of every repo
-// the caller can reach, writes the ONE session row (replacing the owner's
-// previous FactSet), builds the reservation in memory and returns page 1.
+// the caller can reach, writes the ONE session row (a new FactSet beside any
+// the owner already holds), builds the reservation in memory and returns
+// page 1. sc.Owner must be FactSetOwner: a FactSet belongs to the principal
+// alone, whichever surface or endpoint it was made on.
 func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (FactSetPage, Stats, error) {
 	var st Stats
 	if err := req.Options.Validate(); err != nil {
@@ -412,12 +415,9 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if err != nil {
 		return FactSetPage{}, c.st, err
 	}
-	id, replaced, err := sc.Sessions.CreateFactSet(ctx, factsetTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, frozen)
+	id, err := sc.Sessions.CreateFactSet(ctx, factsetTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, frozen)
 	if err != nil {
 		return FactSetPage{}, c.st, err
-	}
-	for _, old := range replaced {
-		fsCacheDrop(old)
 	}
 	e.id = id
 	e.mu.Lock()
@@ -1010,6 +1010,48 @@ func IsFactSetCursor(ctx context.Context, sc CursorScope, cursor string) (bool, 
 	}
 	return row != nil && row.Status == "active" && row.Binding != "" && row.Binding == sc.Pin &&
 		row.ReadSet == sc.ReadSet && row.Owner == sc.Owner, nil
+}
+
+// FactSetOwner is who owns a FactSet: the caller's principal alone
+// (auth.Principal.String(), the identity the auth edge verified), with no
+// endpoint or route. A FactSet made over MCP is therefore paged, exported and
+// closed over REST by the same principal, and the reverse, and across MCP
+// endpoints, as long as the binding pin and read set match too (the row
+// checks all three). Every other cursor (query, explain, single-fact
+// materialize) stays owned by endpoint + principal. A context with no
+// principal (an in-process caller) owns as "", which never creates or
+// resumes a FactSet.
+func FactSetOwner(ctx context.Context) string {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.IsZero() {
+		return ""
+	}
+	return p.String()
+}
+
+// CloseFactSet ends the FactSet a cursor names (any cursor of it: the position
+// is ignored): its session row and frozen inputs are deleted and its cache
+// entry dropped. A FactSet of another owner, pin or read set, and an unknown
+// one, are ErrCursorExpired alike and nothing is deleted. A cursor that is not
+// a FactSet cursor at all (by its syntax) is ErrInvalid. A page already being
+// served when the close lands finishes; its cursor then reads as expired.
+func CloseFactSet(ctx context.Context, sc CursorScope, cursor string) error {
+	id, _, ok := parseCursor(cursor)
+	if !ok {
+		return fmt.Errorf("%w: close takes a factset cursor (<id>.<unit>.<section>)", ErrInvalid)
+	}
+	if sc.Pin == "" || sc.Owner == "" {
+		return ErrCursorExpired
+	}
+	closed, err := sc.Sessions.CloseFactSet(ctx, id, sc.Pin, sc.ReadSet, sc.Owner)
+	if err != nil {
+		return err
+	}
+	if !closed {
+		return ErrCursorExpired
+	}
+	fsCacheDrop(id)
+	return nil
 }
 
 // FactSetNextPage serves the page at cursor's position, or, with unit > 0,

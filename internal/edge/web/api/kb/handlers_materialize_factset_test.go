@@ -294,16 +294,16 @@ func TestFactSet_Seek(t *testing.T) {
 }
 
 // A cursor refuses every argument but unit, and the refusal consumes
-// nothing; the cursor belongs to the route and the principal; a new first
-// call by the same owner replaces the old factset (one active factset per
-// endpoint + principal).
+// nothing; the cursor belongs to the principal; another principal's first
+// call leaves it alone, and so does the owner's own: one principal holds many
+// factsets at once.
 //
-// Sabotage: drop the owner comparison in openFactSet (u2 is served), or the
-// DELETE in CreateFactSet (the old cursor still pages).
+// Sabotage: drop the owner comparison in openFactSet (u2 is served), or put
+// the owner-wide DELETE back in CreateFactSet (the old cursor is a 404).
 //
 // A position past the extent is a 400, not a 404: the cursor is the
 // caller's, the position is wrong.
-func TestFactSet_CursorOwnershipRefusalAndReplacement(t *testing.T) {
+func TestFactSet_CursorOwnershipRefusalAndManyPerOwner(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	router := newTestRouter(m)
@@ -320,7 +320,7 @@ func TestFactSet_CursorOwnershipRefusalAndReplacement(t *testing.T) {
 	code, _, foreign := getFactSet(t, other, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code)
 	require.Equal(t, ghost, foreign, "another principal's cursor reads exactly like none")
-	// The single-fact pages route is another endpoint.
+	// The single-fact pages route is another tool's cursor.
 	code, _, _ = getFactSet(t, owner, "/repos/alpha/branches/agent:test/facts/kb/u/r1.md/materialize/pages?cursor="+c)
 	require.Equal(t, http.StatusNotFound, code)
 
@@ -328,22 +328,96 @@ func TestFactSet_CursorOwnershipRefusalAndReplacement(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, "1.1", p2.Facts[0].Number, "the refused calls changed nothing")
 
-	// Another principal's factset does not replace this one; the owner's does.
+	// Neither another principal's factset nor the owner's next one ends it.
 	code, _, body = getFactSet(t, other, factsetBase+"?path=kb/u/&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	code, _, _ = getFactSet(t, owner, factsetBase+"?cursor="+c)
 	require.Equal(t, http.StatusOK, code, "u2's factset left u1's alone")
-	code, _, body = getFactSet(t, owner, factsetBase+"?path=kb/z/&limit=1")
+	code, pz, body := getFactSet(t, owner, factsetBase+"?path=kb/z/&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
-	code, _, gone := getFactSet(t, owner, factsetBase+"?cursor="+c)
-	require.Equal(t, http.StatusNotFound, code, "a new first call replaced the owner's old factset")
-	require.Equal(t, ghost, gone)
+	code, again, body := getFactSet(t, owner, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusOK, code, "the owner's second factset left the first open: %s", body)
+	require.Equal(t, "1.1", again.Facts[0].Number)
+	code, z2, body := getFactSet(t, owner, factsetBase+"?cursor="+url.QueryEscape(*pz.Cursor))
+	require.Equal(t, http.StatusOK, code, "and the second pages too: %s", body)
+	require.Contains(t, z2.SearchLine, "path kb/z/", "the second cursor serves its own search")
 
 	code, p3, body := getFactSet(t, owner, factsetBase+"?path=kb/u/&depth=2&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
 	id := (*p3.Cursor)[:strings.IndexByte(*p3.Cursor, '.')]
 	code, _, body = getFactSet(t, owner, factsetBase+"?cursor="+id+".3.0")
 	require.Equal(t, http.StatusBadRequest, code, "unit 3 of 2: past the extent: %s", body)
+}
+
+// One principal holds two factsets at once and pages them ALTERNATELY: each
+// serves exactly the bytes it serves when paged alone (only the factset id in
+// the cursor differs), page for page, to the end.
+//
+// Sabotage: put the owner-wide DELETE back in CreateFactSet, and the first
+// factset's next page is a 404; key the cache by owner instead of id, and
+// one factset's page shows the other's sections.
+func TestFactSet_TwoFactSetsOfOneOwnerPageAlternately(t *testing.T) {
+	m := newMatStoreManager(t, "alpha")
+	seedShared(t, m.Get("alpha"))
+	h := asPrincipal("u1", newTestRouter(m))
+	searchA := factsetBase + "?path=kb/u/&depth=2&limit=1"
+	searchB := factsetBase + "?path=kb/z/&depth=1&limit=1"
+	get := func(u string) string {
+		code, _, body := getFactSet(t, h, u)
+		require.Equal(t, http.StatusOK, code, "%s: %s", u, body)
+		return body
+	}
+	next := func(c string) string { return get(factsetBase + "?cursor=" + url.QueryEscape(c)) }
+	alone := func(first string) []string {
+		var pages []string
+		for {
+			var p materialize.FactSetPage
+			require.NoError(t, json.Unmarshal([]byte(first), &p), first)
+			norm := first
+			if p.Cursor != nil {
+				norm = strings.ReplaceAll(first, (*p.Cursor)[:strings.IndexByte(*p.Cursor, '.')], "ID")
+			}
+			pages = append(pages, norm)
+			if !p.HasMore {
+				return pages
+			}
+			first = next(*p.Cursor)
+		}
+	}
+	aloneA := alone(get(searchA))
+	aloneB := alone(get(searchB))
+	require.Greater(t, len(aloneA), 3)
+	require.Greater(t, len(aloneB), 2)
+	require.NotEqual(t, aloneA[0], aloneB[0], "the two searches differ")
+
+	// Both open before either is paged; then one page of each in turn.
+	firstA, firstB := get(searchA), get(searchB)
+	var gotA, gotB []string
+	curA, curB := firstA, firstB
+	moreA, moreB := true, true
+	step := func(raw string, got *[]string) (string, bool) {
+		var p materialize.FactSetPage
+		require.NoError(t, json.Unmarshal([]byte(raw), &p), raw)
+		norm := raw
+		if p.Cursor != nil {
+			norm = strings.ReplaceAll(raw, (*p.Cursor)[:strings.IndexByte(*p.Cursor, '.')], "ID")
+		}
+		*got = append(*got, norm)
+		if !p.HasMore {
+			return "", false
+		}
+		return next(*p.Cursor), true
+	}
+	for moreA || moreB {
+		if moreA {
+			curA, moreA = step(curA, &gotA)
+		}
+		if moreB {
+			curB, moreB = step(curB, &gotB)
+		}
+	}
+	require.Equal(t, aloneA, gotA, "factset A paged alternately with B is A paged alone")
+	require.Equal(t, aloneB, gotB, "factset B paged alternately with A is B paged alone")
 }
 
 // Paging past the UI's 50: the factset holds every result up to Facts (the
@@ -714,4 +788,67 @@ func TestFactSet_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
 	for i, p := range roots[50:] {
 		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", 50+i), p, "then the rest, deterministically")
 	}
+}
+
+func deleteFactSet(t *testing.T, h http.Handler, u string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, u, nil))
+	return rec.Code, rec.Body.String()
+}
+
+// DELETE …/search/factset?cursor= closes the caller's factset: 204, and every
+// cursor of it then reads like one that never existed (page, seek, export, a
+// second close). Another principal's close, and the close of an unknown id,
+// are the same 404 and close nothing. Closing one factset leaves the owner's
+// other one open.
+//
+// Sabotage: drop the owner from CloseFactSet's DELETE (u2's close is a 204
+// and u1's factset is gone), or skip the delete (the closed cursor still
+// pages).
+func TestFactSet_DeleteClosesOnlyTheOwnersFactSet(t *testing.T) {
+	m := newMatStoreManager(t, "alpha")
+	seedShared(t, m.Get("alpha"))
+	router := newTestRouter(m)
+	owner, other := asPrincipal("u1", router), asPrincipal("u2", router)
+
+	code, p, body := getFactSet(t, owner, factsetBase+"?path=kb/u/&depth=2&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	c := url.QueryEscape(*p.Cursor)
+	code, keep, body := getFactSet(t, owner, factsetBase+"?path=kb/z/&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	const ghost = "00000000-0000-4000-8000-000000000000.1.0"
+
+	code, ghostClose := deleteFactSet(t, other, factsetBase+"?cursor="+ghost)
+	require.Equal(t, http.StatusNotFound, code)
+	code, foreignClose := deleteFactSet(t, other, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusNotFound, code)
+	require.Equal(t, ghostClose, foreignClose, "closing another principal's factset reads exactly like closing none")
+	code, p2, body := getFactSet(t, owner, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusOK, code, "u2's close closed nothing: %s", body)
+	require.Equal(t, "1.1", p2.Facts[0].Number)
+
+	for _, bad := range []string{"", "?cursor=" + c + "&unit=1", "?cursor=not-a-factset-cursor"} {
+		code, body := deleteFactSet(t, owner, factsetBase+bad)
+		require.Equal(t, http.StatusBadRequest, code, "%q: %s", bad, body)
+	}
+
+	code, body = deleteFactSet(t, owner, factsetBase+"?cursor="+url.QueryEscape(*p2.Cursor))
+	require.Equal(t, http.StatusNoContent, code, "any cursor of the factset closes it: %s", body)
+	require.Empty(t, body)
+
+	_, _, ghostPage := getFactSet(t, owner, factsetBase+"?cursor="+ghost)
+	code, _, gone := getFactSet(t, owner, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusNotFound, code)
+	require.Equal(t, ghostPage, gone, "a closed factset's cursor reads like none")
+	code, _, _ = getFactSet(t, owner, factsetBase+"?cursor="+c+"&unit=2")
+	require.Equal(t, http.StatusNotFound, code)
+	code, _, _ = getMaterialize(t, owner, factsetBase+"/export?cursor="+c)
+	require.Equal(t, http.StatusNotFound, code)
+	code, again := deleteFactSet(t, owner, factsetBase+"?cursor="+c)
+	require.Equal(t, http.StatusNotFound, code)
+	require.Equal(t, ghostClose, again, "a second close reads like closing none")
+
+	code, _, body = getFactSet(t, owner, factsetBase+"?cursor="+url.QueryEscape(*keep.Cursor))
+	require.Equal(t, http.StatusOK, code, "the owner's other factset stays open: %s", body)
 }

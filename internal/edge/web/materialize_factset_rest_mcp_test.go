@@ -56,7 +56,8 @@ func factsetID(cursor string) string {
 
 // The REST factset route and knomit_materialize's factset mode return the SAME
 // bytes for the same search, page for page, a seek page included; only the
-// cursor id differs (each surface mints its own, owned by its own endpoint).
+// cursor id differs (each first call mints a new factset; the cross-surface
+// paging of ONE factset is TestFactSet_OneFactSetAcrossRESTAndMCP).
 //
 // Sabotage: build the MCP search line from the raw arguments instead of
 // FactSetSearch, or give MCP a different default page size, and a page differs.
@@ -113,14 +114,218 @@ func TestFactSet_RESTIsTheMCPFactSetPage(t *testing.T) {
 	require.Equal(t, ms, rs)
 	require.Contains(t, rs, `"unit_from":3`)
 
-	// The MCP cursor is not the REST route's, and the reverse.
-	code, _ := restGet(t, h, alphaFactSet+"?cursor="+url.QueryEscape(mc))
-	require.Equal(t, http.StatusNotFound, code)
-	text, isErr := callToolAt(t, h, alphaMCP, sid, "knomit_materialize", `{"cursor":"`+rc+`"}`)
-	require.True(t, isErr, text)
 	// A factset cursor refuses every other argument on MCP as on REST.
-	text, isErr = callToolAt(t, h, alphaMCP, sid, "knomit_materialize", `{"cursor":"`+mc+`","limit":5}`)
+	text, isErr := callToolAt(t, h, alphaMCP, sid, "knomit_materialize", `{"cursor":"`+mc+`","limit":5}`)
 	require.True(t, isErr, text)
+}
+
+// stripCursorID replaces the factset id of raw's cursor with ID.
+func stripCursorID(t *testing.T, raw string) string {
+	t.Helper()
+	if c := pageCursor(t, raw); c != "" {
+		return strings.ReplaceAll(raw, factsetID(c), "ID")
+	}
+	return raw
+}
+
+// mcpSession is one principal's MCP session on endpoint.
+type mcpSession struct {
+	t        *testing.T
+	h        http.Handler
+	endpoint string
+	sid      string
+}
+
+func newMCPSession(t *testing.T, h http.Handler, endpoint string) mcpSession {
+	t.Helper()
+	_, sid := rpcAt(t, h, endpoint, "", initBody)
+	return mcpSession{t: t, h: h, endpoint: endpoint, sid: sid}
+}
+
+func (s mcpSession) call(args string) (string, bool) {
+	s.t.Helper()
+	return callToolAt(s.t, s.h, s.endpoint, s.sid, "knomit_materialize", args)
+}
+
+func (s mcpSession) ok(args string) string {
+	s.t.Helper()
+	text, isErr := s.call(args)
+	require.False(s.t, isErr, text)
+	return text
+}
+
+// ONE factset belongs to its principal, not to the surface or endpoint that
+// made it (user ruling 2026-11-01): a factset made over MCP pages, seeks and
+// exports over REST, one made over REST pages over MCP, and one made on
+// alpha's MCP endpoint pages on the unscoped /api/v1/mcp endpoint bound to
+// the same repo and branch. Each continues exactly where the other surface
+// left it. Another principal, on either surface, gets the answer an unknown
+// id gets, byte for byte.
+//
+// Sabotage: put the endpoint or route back into the factset owner
+// (callerOwner in factsetScope, or the URL path in the REST factsetScope), and
+// every cross-surface call is the 404 / expired text.
+func TestFactSet_OneFactSetAcrossRESTAndMCP(t *testing.T) {
+	f := newOAuthWebFixture(t, testIssuer)
+	m, alpha, _ := newMaterializeRepos(t)
+	f.s.Manager = m
+	cs := newClientSessionsStore(t) // knomit_bind mints its handle there
+	m.SetClientSessions(cs)
+	f.s.ClientSessions = cs
+	writeObs(t, alpha, "kb/z/s.md", "S")
+	writeObs(t, alpha, "kb/u/r1.md", "R1", "kb/z/s.md")
+	writeObs(t, alpha, "kb/u/r2.md", "R2", "kb/u/r1.md")
+	writeObs(t, alpha, "kb/u/r3.md", "R3", "kb/z/s.md")
+
+	handler := func(subject string) http.Handler {
+		tok := f.mint(t, subject, testIssuer+"/api/v1", []string{"read"}, auth.Read)
+		return withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
+	}
+	h, hOther := handler("laptop"), handler("desktop")
+	mine := newMCPSession(t, h, alphaMCP)
+	theirs := newMCPSession(t, hOther, alphaMCP)
+	restOK := func(h http.Handler, u string) string {
+		code, body := restGet(t, h, u)
+		require.Equal(t, http.StatusOK, code, "%s: %s", u, body)
+		return body
+	}
+
+	// The reference: a factset paged on REST alone.
+	const search = `?path=kb/u/&depth=1&limit=1`
+	ref := factsetPages(t, restOK(h, alphaFactSet+search), func(c string) string {
+		return restOK(h, alphaFactSet+"?cursor="+url.QueryEscape(c))
+	})
+	require.Greater(t, len(ref), 3)
+
+	// Made over MCP, paged over REST from page 2 on.
+	first := mine.ok(`{"search":{"path":"kb/u/"},"depth":1,"limit":1}`)
+	got := factsetPages(t, first, func(c string) string { return restOK(h, alphaFactSet+"?cursor="+url.QueryEscape(c)) })
+	require.Equal(t, ref, got, "an MCP factset pages over REST, page for page")
+	mc := pageCursor(t, first)
+	seek := restOK(h, alphaFactSet+"?cursor="+url.QueryEscape(mc)+"&unit=2")
+	require.Contains(t, seek, `"unit_from":2`, "and seeks over REST")
+	code, export := restGet(t, h, alphaFactSet+"/export?cursor="+url.QueryEscape(mc))
+	require.Equal(t, http.StatusOK, code, export)
+	require.Equal(t, 3, strings.Count(export, "\n## "), "the export of an MCP factset over REST holds every unit: %s", export)
+
+	// Made over REST, paged over MCP.
+	rfirst := restOK(h, alphaFactSet+search)
+	got = factsetPages(t, rfirst, func(c string) string { return mine.ok(`{"cursor":"` + c + `"}`) })
+	require.Equal(t, ref, got, "a REST factset pages over MCP, page for page")
+
+	// Made on alpha's endpoint, paged on the unscoped endpoint bound to alpha.
+	unscoped := newMCPSession(t, h, "/api/v1/mcp")
+	bound, isErr := callToolAt(t, h, "/api/v1/mcp", unscoped.sid, "knomit_bind", `{"repo":"alpha"}`)
+	require.False(t, isErr, bound)
+	var bind struct {
+		Binding string `json:"binding"`
+	}
+	require.NoError(t, json.NewDecoder(strings.NewReader(bound)).Decode(&bind), bound)
+	require.NotEmpty(t, bind.Binding)
+	first = mine.ok(`{"search":{"path":"kb/u/"},"depth":1,"limit":1}`)
+	got = factsetPages(t, first, func(c string) string {
+		return unscoped.ok(`{"cursor":"` + c + `","binding":"` + bind.Binding + `"}`)
+	})
+	require.Equal(t, ref, got, "a factset made on one MCP endpoint pages on another with the same binding")
+
+	// Another principal: the unknown id's answer, on both surfaces.
+	const ghost = "00000000-0000-4000-8000-000000000000.1.0"
+	code, ghostREST := restGet(t, hOther, alphaFactSet+"?cursor="+ghost)
+	require.Equal(t, http.StatusNotFound, code)
+	code, foreignREST := restGet(t, hOther, alphaFactSet+"?cursor="+url.QueryEscape(mc))
+	require.Equal(t, http.StatusNotFound, code)
+	require.Equal(t, ghostREST, foreignREST, "another principal's MCP factset reads like none over REST")
+	code, foreignExport := restGet(t, hOther, alphaFactSet+"/export?cursor="+url.QueryEscape(mc))
+	require.Equal(t, http.StatusNotFound, code, foreignExport)
+	ghostMCP, gErr := theirs.call(`{"cursor":"` + ghost + `"}`)
+	foreignMCP, fErr := theirs.call(`{"cursor":"` + pageCursor(t, rfirst) + `"}`)
+	require.True(t, gErr, ghostMCP)
+	require.True(t, fErr, foreignMCP)
+	require.Equal(t, ghostMCP, foreignMCP, "another principal's REST factset reads like none over MCP")
+
+	// The owner is still served on both surfaces: nothing was consumed.
+	require.Equal(t, stripCursorID(t, restOK(h, alphaFactSet+"?cursor="+url.QueryEscape(mc))),
+		stripCursorID(t, mine.ok(`{"cursor":"`+mc+`"}`)))
+}
+
+// restDelete sends DELETE u through h.
+func restDelete(t *testing.T, h http.Handler, u string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, u, nil))
+	b, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+	return rec.Code, string(b)
+}
+
+// Closing: knomit_materialize's `close: true` with a cursor closes its
+// factset, and so does REST DELETE …/search/factset?cursor=, each for the
+// other surface too (the factset is the principal's). A closed factset reads
+// like none on both. Another principal's close, on either surface, answers
+// exactly what closing an unknown id answers, and the factset still pages.
+// The close needs only read: the tokens here hold read alone, and REST DELETE
+// is otherwise a write behind the write gate.
+//
+// Sabotage: drop the owner from the close (another principal closes it), or
+// gate the factset DELETE as a write (the read token's DELETE is a 403).
+func TestFactSet_CloseOverMCPAndREST(t *testing.T) {
+	f := newOAuthWebFixture(t, testIssuer)
+	m, alpha, _ := newMaterializeRepos(t)
+	f.s.Manager = m
+	writeObs(t, alpha, "kb/u/r1.md", "R1")
+	writeObs(t, alpha, "kb/u/r2.md", "R2")
+	handler := func(subject string) http.Handler {
+		tok := f.mint(t, subject, testIssuer+"/api/v1", []string{"read"}, auth.Read)
+		return withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
+	}
+	h, hOther := handler("laptop"), handler("desktop")
+	mine, theirs := newMCPSession(t, h, alphaMCP), newMCPSession(t, hOther, alphaMCP)
+	const ghost = "00000000-0000-4000-8000-000000000000.1.0"
+	open := func() string { return pageCursor(t, mine.ok(`{"search":{"path":"kb/u/"},"limit":1}`)) }
+
+	// Another principal's close: the unknown id's answer, and nothing closed.
+	a := open()
+	ghostClose, gErr := theirs.call(`{"close":true,"cursor":"` + ghost + `"}`)
+	foreignClose, fErr := theirs.call(`{"close":true,"cursor":"` + a + `"}`)
+	require.True(t, gErr, ghostClose)
+	require.True(t, fErr, foreignClose)
+	require.Equal(t, ghostClose, foreignClose)
+	code, ghostDel := restDelete(t, hOther, alphaFactSet+"?cursor="+ghost)
+	require.Equal(t, http.StatusNotFound, code, ghostDel)
+	code, foreignDel := restDelete(t, hOther, alphaFactSet+"?cursor="+url.QueryEscape(a))
+	require.Equal(t, http.StatusNotFound, code)
+	require.Equal(t, ghostDel, foreignDel)
+	mine.ok(`{"cursor":"` + a + `"}`)
+
+	// close takes only cursor and binding, and close must be true.
+	for _, bad := range []string{`{"close":true}`, `{"close":false,"cursor":"` + a + `"}`, `{"close":true,"cursor":"` + a + `","unit":1}`} {
+		text, isErr := mine.call(bad)
+		require.True(t, isErr, "%s: %s", bad, text)
+	}
+	mine.ok(`{"cursor":"` + a + `"}`)
+
+	// Closed over MCP: gone on MCP and on REST.
+	ghostPage, _ := mine.call(`{"cursor":"` + ghost + `"}`)
+	closed := mine.ok(`{"close":true,"cursor":"` + a + `"}`)
+	require.JSONEq(t, `{"closed":true}`, closed)
+	page, isErr := mine.call(`{"cursor":"` + a + `"}`)
+	require.True(t, isErr, page)
+	require.Equal(t, ghostPage, page, "a closed factset reads like none over MCP")
+	code, body := restGet(t, h, alphaFactSet+"?cursor="+url.QueryEscape(a))
+	require.Equal(t, http.StatusNotFound, code, body)
+	again, isErr := mine.call(`{"close":true,"cursor":"` + a + `"}`)
+	require.True(t, isErr, again)
+	require.Equal(t, ghostClose, again, "a second close reads like closing none")
+
+	// Closed over REST (with a read-only token): gone on REST and on MCP.
+	b := open()
+	code, body = restDelete(t, h, alphaFactSet+"?cursor="+url.QueryEscape(b))
+	require.Equal(t, http.StatusNoContent, code, body)
+	code, _ = restGet(t, h, alphaFactSet+"?cursor="+url.QueryEscape(b))
+	require.Equal(t, http.StatusNotFound, code)
+	page, isErr = mine.call(`{"cursor":"` + b + `"}`)
+	require.True(t, isErr, page)
+	require.Equal(t, ghostPage, page, "a factset closed over REST reads like none over MCP")
 }
 
 // N1 (review of PR #692): on MCP, another owner's live factset cursor and a

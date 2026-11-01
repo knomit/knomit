@@ -18,7 +18,7 @@ CREATE TABLE tool_sessions (
     path_prefix  TEXT NOT NULL DEFAULT '',
     binding      TEXT NOT NULL DEFAULT '',   -- binding IDENTITY the cursor is frozen to: `repo:<uid>` or `lens:<uid>` (Binding.PinID, lenses RFC §7.3) — NOT the display name, so a repo/lens rename leaves an in-flight cursor resumable; resume through another binding is rejected
     read_set     TEXT NOT NULL DEFAULT '',   -- canonical read-set fingerprint (id12@branch,… sorted) the cursor is frozen to; resume against a re-pinned read set is rejected, indistinguishably from expiry (lenses RFC §7.3)
-    owner        TEXT NOT NULL DEFAULT '',   -- WHO may resume it: the MCP endpoint it was minted on plus the caller's principal (mcp.callerOwner); resume by another owner is rejected, indistinguishably from expiry
+    owner        TEXT NOT NULL DEFAULT '',   -- WHO may resume it, indistinguishably from expiry for anyone else: for a query/explain/single-fact cursor the endpoint or route it was minted on plus the caller's principal (mcp.callerOwner); for a FactSet the principal ALONE (materialize.FactSetOwner), so one principal reaches it from REST and every MCP endpoint with the same binding
     last_commit  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'active',
     created_at   TEXT NOT NULL,
@@ -47,7 +47,8 @@ CREATE INDEX tool_queue_session_sort ON tool_queue(session_id, sort_key);
 -- A materialized search (internal/corpus/materialize FactSet): its FROZEN
 -- inputs, written ONCE at creation in the same transaction as its
 -- tool_sessions row (which carries owner, binding pin and read set, and is
--- what the idle reaper deletes, cascading here). JSON: the search, the
+-- what the idle reaper and an explicit close delete, cascading here). An
+-- owner may hold any number of FactSets. JSON: the search, the
 -- options, the anchor, the frozen tips of the reachable repos and the roots as
 -- (repo, path, commit, blob). Never updated: the reading position travels in
 -- the cursor token, and the walk's state is an in-memory cache rebuilt by
