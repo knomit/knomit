@@ -121,15 +121,29 @@ func (e *fsEntry) accountedSize() int64 {
 	return n
 }
 
-// fsPlanReserve is the working memory a call reserves before it plans on fr:
-// the two read-ahead windows it may hold (the one being planned and the next,
-// read in the background) and the plan, each at most max_nodes sections per
-// unit; and, while the FactSet's tables are not built, the reservation's
-// candidates (24 bytes per depth-1 entry of every root).
+// Planning working memory, measured on the synthetic 500 results x 499
+// distinct refs store (Apple M4, Go heap in use, GC slack included, which is
+// what the process really holds): a far seek through 500 units at max_nodes
+// 500 peaked 30 MiB above what it kept (two read-ahead windows of 6 units
+// and the unit being planned: about 4 KiB per node), and a first call
+// building the reservation of 500 x 499 depth-1 refs peaked 33 MiB (about
+// 128 bytes per depth-1 entry).
+const (
+	bytesPerPlanNode     = 4 << 10
+	bytesPerReservedEdge = 128
+)
+
+// fsPlanReserve is the working memory a call reserves before it plans on a
+// FactSet of roots results at maxNodes: the two read-ahead windows it may
+// hold (the one being planned and the next, read in the background) and the
+// plan, each at most maxNodes nodes per unit; while the FactSet's tables are
+// not built, at least the reservation's working set (every root's depth-1
+// entries).
 func fsPlanReserve(roots, maxNodes int, built bool) int64 {
-	n := int64(2*prefetchWindow+1) * int64(max(maxNodes, 1)) * bytesPerSection
+	nodes := int64(max(maxNodes, 1))
+	n := int64(2*prefetchWindow+1) * nodes * bytesPerPlanNode
 	if !built {
-		n += int64(roots) * int64(max(maxNodes, 1)) * 24
+		n = max(n, int64(roots)*nodes*bytesPerReservedEdge)
 	}
 	return n
 }

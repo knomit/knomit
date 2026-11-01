@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,7 +19,7 @@ import (
 // seek to the last unit, a backward seek to unit 3 after it, two readers
 // alternating at units 3 and 400 of one FactSet, and 4 and 16 FactSets built
 // and far-sought at once (wall time, heap peak, and how many calls were
-// refused).
+// refused; KNOMIT_FACTSET_MEASURE_CONC lists other counts, e.g. "1,4,16").
 func TestFactSet_MeasureAccess(t *testing.T) {
 	if os.Getenv(measureEnv) == "" || os.Getenv("KNOMIT_FACTSET_MEASURE_SHAPE") == "" {
 		t.Skip("set " + measureEnv + "=1, KNOMIT_FACTSET_MEASURE_DB and KNOMIT_FACTSET_MEASURE_SHAPE to measure")
@@ -62,7 +64,16 @@ func TestFactSet_MeasureAccess(t *testing.T) {
 	t.Logf("%s ACCESS alternating readers at 3 / 400: %d calls, mean %s per call, %d units planned in all",
 		name, 2*rounds, total/(2*rounds), planned)
 
-	for _, n := range []int{4, 16} {
+	conc := []int{4, 16}
+	if v := os.Getenv("KNOMIT_FACTSET_MEASURE_CONC"); v != "" {
+		conc = nil
+		for _, f := range strings.Split(v, ",") {
+			n, err := strconv.Atoi(f)
+			require.NoError(t, err)
+			conc = append(conc, n)
+		}
+	}
+	for _, n := range conc {
 		DropFactSetCacheForTest()
 		runtime.GC()
 		var ms runtime.MemStats
