@@ -6,7 +6,6 @@ import (
 	"hash/fnv"
 	"strconv"
 	"time"
-	"unsafe"
 
 	"github.com/rs/zerolog/log"
 
@@ -35,8 +34,10 @@ import (
 // first (own data only, any distance, bounded by MaxNodes), topologically by
 // a post-order walk over frame refs, then the frame, then the ordinary walk.
 //
-// In a FactSet each newly reached fact is classified in refs order: in the
-// WRITTEN set (an earlier unit wrote it) it is a back link, terminal; a
+// In a FactSet each newly reached fact is classified in refs order: WRITTEN
+// by an earlier unit (the prefix records the first unit of each written
+// fact, so this holds for a unit re-planned after later units were planned)
+// it is a back link, terminal; a
 // result of another unit, or reserved for a later unit, it is a forward link,
 // terminal; otherwise it is included. Links count toward MaxNodes. A unit's
 // depth-1 entries stay its root's children in the reading order (pinDirect),
@@ -50,12 +51,13 @@ type Stats struct {
 	IndexQueries int
 	// ObjectReads is the blobs read from the object table (bodies).
 	ObjectReads int
-	// UnitsPlanned is the units planned (replays included).
+	// UnitsPlanned is the units planned (extending the prefix, or a unit
+	// within it re-planned alone).
 	UnitsPlanned int
 	// HistoricalLiveAt is the LiveAt reads that ran the historical path
 	// (the branch had moved past the anchor or tip).
 	HistoricalLiveAt int
-	// CacheMisses is the FactSets rebuilt from their frozen row (a replay).
+	// CacheMisses is the FactSets not cached, rebuilt from their frozen row.
 	CacheMisses int
 	// MaxUnitQueries is the most index reads one unit's plan made (the
 	// bound: Depth+2, plus one per foreign repo per level).
@@ -239,34 +241,6 @@ type prefetch struct {
 	lo, hi int                                      // the units covered, [lo, hi)
 	rows   map[string][]index.LevelRow              // by root blob
 	metas  map[index.TargetVersion]index.TargetMeta // roots and their targets, by (path, blob, commit)
-}
-
-// bytes is the accounted size of a window held between units (the export
-// keeps one across its slot-less writes): every string's bytes plus the
-// struct and map-entry overhead, the same estimate style as the cache's.
-func (pre *prefetch) bytes() int64 {
-	if pre == nil {
-		return 0
-	}
-	const mapEntry = 48
-	rowSize := int64(unsafe.Sizeof(index.LevelRow{}))
-	keySize := int64(unsafe.Sizeof(index.TargetVersion{}))
-	metaSize := int64(unsafe.Sizeof(index.TargetMeta{}))
-	var n int64
-	for b, rows := range pre.rows {
-		n += mapEntry + int64(len(b)) + 24
-		for _, r := range rows {
-			n += rowSize + int64(len(r.SourceBlob)+len(r.Repo)+len(r.Path)+len(r.TargetBlob)+len(r.TargetCommit))
-		}
-	}
-	for k, m := range pre.metas {
-		n += mapEntry + keySize + metaSize + int64(len(k.Path)+len(k.Blob)+len(k.Commit))
-		n += int64(len(m.Meta.Blob) + len(m.Meta.Title) + len(m.Meta.Kind) + len(m.Meta.Type))
-		for _, r := range m.Meta.Refs {
-			n += 16 + int64(len(r))
-		}
-	}
-	return n
 }
 
 // resolveLevel reads and classifies the refs of every unresolved node of one

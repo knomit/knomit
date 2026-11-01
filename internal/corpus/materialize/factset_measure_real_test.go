@@ -347,8 +347,9 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 		}()
 	}
 	var wg sync.WaitGroup
-	errs := make([]error, MaxConcurrentFactSetBuilds)
-	for i := range MaxConcurrentFactSetBuilds {
+	const concurrent = 4
+	errs := make([]error, concurrent)
+	for i := range concurrent {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -366,6 +367,6 @@ func TestFactSet_MeasureMatrix(t *testing.T) {
 		require.NoError(t, err)
 	}
 	t.Logf("%s concurrent x%d (first page + far seek each): wall %s; heap peak %.1f MiB (in use before: %.1f MiB); cache %.1f MiB accounted",
-		name, MaxConcurrentFactSetBuilds, time.Since(start), float64(peak)/(1<<20), float64(baseInuse)/(1<<20), float64(FactSetCacheBytes())/(1<<20))
+		name, concurrent, time.Since(start), float64(peak)/(1<<20), float64(baseInuse)/(1<<20), float64(FactSetCacheBytes())/(1<<20))
 	require.Zero(t, gitReads.Load(), "no per-path git read")
 }

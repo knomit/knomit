@@ -1269,7 +1269,10 @@ paths:
         path). A link carries `cited_blob` (the version cited there) and
         `different_version` (that version is not the one written: blob
         identity, so ANY change). Units are planned as pages need them:
-        `units_walked` and `sections` say how far.
+        `units_walked` is the highest unit THIS page walked (what reading
+        the factset in order reports at this position, whatever other
+        calls planned) and `sections` counts the sections of units
+        1..`units_walked`.
 
         VERSIONS: the factset is anchored at the write mount's INDEX
         WATERMARK (the commit the index reflects), read before and after the
@@ -1306,8 +1309,8 @@ paths:
         to 500), `depth`, `max_nodes`, `unpin`, `cross_kb` (as for one fact)
         and `limit` (sections per page, 1-5, default 3). Any other parameter
         is a 400. The frozen inputs (results, anchor, tips) are written ONCE,
-        as one session row; the planned state is an in-memory cache rebuilt
-        by replay when it is evicted. A search with no results is a 200 page
+        as one session row; the planned state is an in-memory cache, planned
+        again on the next call when it is evicted. A search with no results is a 200 page
         with `units: 0` and no cursor. A result that is gone at the anchor
         keeps its unit as a heading alone (`unavailable: true`).
 
@@ -1328,8 +1331,8 @@ paths:
         writes nothing on the server, and two calls with one cursor both get
         the same page. The last page's cursor points past the end (still good
         for a seek); a plain page from there, or from any position past the
-        factset's extent, is a 400. A position inside a unit that has
-        since shrunk (a cited repo became unreachable and the factset was
+        factset's last unit, is a 400. A position inside a unit that has
+        since shrunk (a cited repo became unreachable and the unit was
         re-planned) continues at the next unit's first section; it is never
         a 400.
 
@@ -1343,22 +1346,30 @@ paths:
         once: a first call never ends another factset. A factset ends when it
         is closed (`DELETE` on this resource, or `close: true` on
         `knomit_materialize`), when it has been idle for the session idle
-        time (`session.tool_idle_ttl`), or when the server restarts. At most 4
-        calls plan factset units at once on the server (a page from planned
-        units plans nothing); a call over that, one that finds the session
-        store's lock taken past its timeout, one whose index moved during the
-        search twice, or one on a store whose reference index is still being
-        backfilled with its repo id unresolved, is a 503 with Retry-After.
-        The cache budget (`session.factset_memory_mib`, 64 MiB) evicts the
-        least recently used factsets; the next page replays them. Cross-KB
+        time (`session.tool_idle_ttl`), or when the server restarts. A page is
+        a function of the factset and the position alone: any unit can be
+        read in any order, by any number of calls at once, with the same
+        bytes. A call that must plan units reserves planning memory under the
+        budget (`session.factset_memory_mib`, 64 MiB, which also holds the
+        cached factsets, least recently used evicted first) and waits while
+        it is full (the budget is soft: one plan is always admitted when no
+        other is in flight, so the process may exceed it by one plan plus the
+        factsets in use); one that waited a minute, one that finds the
+        session store's lock taken past its timeout, one whose index moved
+        during the search twice, or one on a store whose reference index is
+        still being backfilled with its repo id unresolved, is a 503 with
+        Retry-After.
+        An evicted factset is planned again by the next page. Cross-KB
         refs are followed only into repos the caller reaches. Reach is
         checked when content of a repo is read, not when a cursor is resumed:
         a repo that became unreachable after the first call (archived,
         removed, access revoked, or beyond a narrower credential) does not
         fail the factset, and content read from it later shows as
-        kb_unavailable, like any missing target. Pages already planned and
-        cached are not re-read, so a re-read may differ from bytes sent
-        earlier. A fact-identity collision (two facts on one 64-bit hash) is a
+        kb_unavailable, like any missing target. Units already planned are
+        not re-planned for reach, and a unit planned or re-planned while
+        reach differs may differ from bytes sent earlier (the same position
+        gives the same bytes only while reach stays the same). A
+        fact-identity collision (two facts on one 64-bit hash) is a
         500, never a silently dropped subtree.
       operationId: getSearchFactSetPage
       parameters:
@@ -1442,12 +1453,13 @@ paths:
         from unit 1 to the end, never partial: a failure after the first
         bytes aborts the response. The cursor's position is irrelevant and
         nothing is written. Owned like the pages: another owner's or an
-        unknown cursor is the same 404. Each unit is planned under one of
-        the 4 planning slots, given back before that unit is written, so a
-        stalled download holds no planning slot. At most 8 exports stream at
-        once on the server (over that: a 503 with Retry-After), and each
-        write of the stream must complete within a minute, else the export
-        aborts. A 500 is any other failure before the first byte.
+        unknown cursor is the same 404. Each unit is planned holding
+        planning memory, given back before that unit is written, so a
+        stalled download holds none; there is no cap on exports streaming at
+        once and no deadline on the whole export, but each write of the
+        stream must complete within a minute, else the export aborts. A 503
+        with Retry-After is a call that waited a minute for planning memory
+        before the first byte; a 500 is any other failure before it.
       operationId: exportSearchFactSet
       parameters:
         - { name: cursor, in: query, required: true, schema: { type: string } }
@@ -5534,8 +5546,8 @@ components:
         max_nodes:   { type: integer }
         facts_limit: { type: integer, description: "The Facts limit the first call asked for." }
         units:       { type: integer, description: "Units (search results) in the factset." }
-        units_walked: { type: integer, description: "Units planned so far (units are planned as pages need them)." }
-        sections:    { type: integer, description: "Sections (written and links) in the units planned so far." }
+        units_walked: { type: integer, description: "The highest unit this page walked: what reading the factset in order reports at this position, whatever other calls planned." }
+        sections:    { type: integer, description: "Sections (written and links) in units 1..units_walked." }
         instructions_version: { type: string }
         instructions: { type: string, description: "Reading instructions, page 1 only." }
         facts:

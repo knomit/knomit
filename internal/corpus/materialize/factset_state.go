@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"sync"
+	"sync/atomic"
 )
 
 // A FactSet's cross-unit state in compact form. Go maps cost about twice
@@ -16,11 +18,17 @@ import (
 //     built: sorted slices of compact entries (FactHash, check hash, blob64,
 //     unit, k), searched by binary search, shared read-only by every call
 //     and the export (24 bytes each);
-//   - "written" is a bitset over each frozen table (a reserved fact or a
-//     result written by its own unit is marked, not copied: its version is
-//     the one reserved), plus an extra set for every other written fact: a
-//     sorted slice of 24-byte entries with a small unsorted tail merged in
-//     every extraTail inserts.
+//   - "written" records, per written fact, the unit that FIRST wrote it: a
+//     uint16 per entry of each frozen table (a reserved fact or a result
+//     written by its own unit is marked, not copied: its version is the one
+//     reserved), plus an extra set for every other written fact: a sorted
+//     slice of entries with a small unsorted tail merged in every extraTail
+//     inserts.
+//
+// A fact is written at most once in a FactSet (every later appearance is a
+// link), so "written before unit u" is "first written in a unit < u": ONE
+// growing prefix (units 1..planned) answers every unit u <= planned, and a
+// unit is re-planned alone, never by replaying the units before it.
 //
 // The check hash is kept beside every FactHash (64 bits in the extra set, 32
 // in the frozen tables), so a collision is still detected wherever a key is
@@ -47,16 +55,22 @@ func (t ftab) find(h uint64) int {
 	return -1
 }
 
-// bitset is a set of indexes into a frozen table.
-type bitset []uint64
+// units is, per entry of a frozen table, the unit that first wrote it (0:
+// not written in the planned prefix).
+type units []uint16
 
-func newBitset(n int) bitset    { return make(bitset, (n+63)/64) }
-func (b bitset) has(i int) bool { return b[i/64]&(1<<(i%64)) != 0 }
-func (b bitset) set(i int)      { b[i/64] |= 1 << (i % 64) }
-func (b bitset) bytes() int64   { return int64(len(b)) * 8 }
+func (w units) bytes() int64 { return int64(len(w)) * 2 }
 
-// xentry is one written fact that is neither a result nor reserved.
-type xentry struct{ h, check, blob uint64 }
+// writtenBefore reports whether entry i was first written by a unit < u.
+func (w units) writtenBefore(i, u int) bool { return w[i] != 0 && int(w[i]) < u }
+
+// xentry is one written fact that is neither a result nor reserved (or was
+// written at another version than the reserved one), with the unit that
+// first wrote it.
+type xentry struct {
+	h, check, blob uint64
+	unit           uint16
+}
 
 // extraTail is how many inserts the extra set takes unsorted before it
 // merges them into its sorted main slice: lookups stay a binary search plus
@@ -122,35 +136,76 @@ func (s *hset) merge() {
 }
 
 func (s *hset) len() int     { return len(s.main) + len(s.tail) }
-func (s *hset) bytes() int64 { return int64(len(s.main))*24 + int64(len(s.tail))*48 }
+func (s *hset) bytes() int64 { return int64(len(s.main))*32 + int64(len(s.tail))*56 }
 
 // fsState is a FactSet's cross-unit state: the frozen results and reserved
-// tables, and what has been written.
+// tables (written once, before built is set, never changed after), and the
+// planned PREFIX: what units 1..planned wrote, with the first unit of each,
+// and each planned unit's section count. The prefix only grows; mu guards it
+// (lookups take the read lock, one per lookup; applying a unit takes the
+// write lock once).
 type fsState struct {
-	built    bool
+	built    atomic.Bool
 	results  ftab
 	reserved ftab
-	wRoot    bitset
-	wRes     bitset
-	extra    hset
+
+	mu      sync.RWMutex
+	wRoot   units
+	wRes    units
+	extra   hset
+	planned int
+	counts  []int         // counts[u-1]: unit u's sections
+	grew    chan struct{} // closed (and replaced) whenever planned grows
 }
 
-// freshWritten clears what has been written (a replay starts over); the
-// frozen tables stay.
-func (s *fsState) freshWritten() {
-	s.wRoot, s.wRes, s.extra = newBitset(len(s.results)), newBitset(len(s.reserved)), hset{}
+// setTables installs the frozen tables and an empty prefix, then marks the
+// state built (the caller holds the extension token).
+func (s *fsState) setTables(results, reserved ftab) {
+	s.mu.Lock()
+	s.results, s.reserved = results, reserved
+	s.wRoot, s.wRes, s.extra = make(units, len(results)), make(units, len(reserved)), hset{}
+	s.planned, s.counts = 0, nil
+	s.mu.Unlock()
+	s.built.Store(true)
 }
 
-// withFreshWritten is s's frozen tables with its own, empty, written state
-// (the export's).
-func (s *fsState) withFreshWritten() *fsState {
-	c := &fsState{built: true, results: s.results, reserved: s.reserved}
-	c.freshWritten()
-	return c
+// extent is the planned prefix: units 1..planned, and a channel closed when
+// it grows.
+func (s *fsState) extent() (int, <-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.grew == nil {
+		s.grew = make(chan struct{})
+	}
+	return s.planned, s.grew
+}
+
+// wake wakes every call waiting on extent's channel without growing the
+// prefix (the extension token came free, or the tables were built).
+func (s *fsState) wake() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.grew != nil {
+		close(s.grew)
+		s.grew = nil
+	}
+}
+
+// sectionsThrough is the number of sections of units 1..u (u <= planned).
+func (s *fsState) sectionsThrough(u int) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, c := range s.counts[:min(u, len(s.counts))] {
+		n += c
+	}
+	return n
 }
 
 func (s *fsState) bytes() int64 {
-	return int64(len(s.results)+len(s.reserved))*24 + s.wRoot.bytes() + s.wRes.bytes() + s.extra.bytes()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return int64(len(s.results)+len(s.reserved))*24 + s.wRoot.bytes() + s.wRes.bytes() + s.extra.bytes() + int64(len(s.counts))*8
 }
 
 // reservedOf is the reservation of h, if any.
@@ -170,13 +225,19 @@ type plink struct {
 }
 
 // lookup classifies a fact newly reached in unit: nil when it is written
-// here, else the link. A check mismatch is a collision.
+// here, else the link. Only what units BEFORE unit wrote counts, so any unit
+// up to the planned extent is classified exactly as when it was first
+// planned. A check mismatch is a collision.
 func (s *fsState) lookup(h, check uint64, repo, rel string, unit int) (*plink, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if e, ok := s.extra.get(h); ok {
 		if e.check != check {
 			return nil, errHashCollision{repo, rel}
 		}
-		return &plink{back: true, blob: e.blob}, nil
+		if int(e.unit) < unit {
+			return &plink{back: true, blob: e.blob}, nil
+		}
 	}
 	ri := s.results.find(h)
 	if ri >= 0 && s.results[ri].check != uint32(check) {
@@ -187,9 +248,9 @@ func (s *fsState) lookup(h, check uint64, repo, rel string, unit int) (*plink, e
 		return nil, errHashCollision{repo, rel}
 	}
 	switch {
-	case ri >= 0 && s.wRoot.has(ri):
+	case ri >= 0 && s.wRoot.writtenBefore(ri, unit):
 		return &plink{back: true, blob: s.results[ri].blob}, nil
-	case vi >= 0 && s.wRes.has(vi):
+	case vi >= 0 && s.wRes.writtenBefore(vi, unit):
 		return &plink{back: true, blob: s.reserved[vi].blob}, nil
 	case ri >= 0:
 		r := s.results[ri]
@@ -207,9 +268,11 @@ func (s *fsState) lookup(h, check uint64, repo, rel string, unit int) (*plink, e
 	return nil, nil
 }
 
-// markWritten records one written fact: a result or a reserved fact written
-// at its reserved version is a bit; anything else goes to the extra set.
-func (s *fsState) markWritten(h, check, blob uint64, repo, rel string) error {
+// markWritten records one fact first written by unit (the caller holds mu):
+// a result or a reserved fact written at its reserved version is marked in
+// its table; anything else goes to the extra set. A fact already recorded
+// (unit applied again after a failed extension) keeps its record.
+func (s *fsState) markWritten(h, check, blob uint64, repo, rel string, unit int) error {
 	if e, ok := s.extra.get(h); ok {
 		if e.check != check {
 			return errHashCollision{repo, rel}
@@ -221,7 +284,9 @@ func (s *fsState) markWritten(h, check, blob uint64, repo, rel string) error {
 			return errHashCollision{repo, rel}
 		}
 		if s.results[i].blob == blob {
-			s.wRoot.set(i)
+			if s.wRoot[i] == 0 {
+				s.wRoot[i] = uint16(unit)
+			}
 			return nil
 		}
 	}
@@ -230,11 +295,39 @@ func (s *fsState) markWritten(h, check, blob uint64, repo, rel string) error {
 			return errHashCollision{repo, rel}
 		}
 		if s.reserved[i].blob == blob {
-			s.wRes.set(i)
+			if s.wRes[i] == 0 {
+				s.wRes[i] = uint16(unit)
+			}
 			return nil
 		}
 	}
-	s.extra.put(xentry{h: h, check: check, blob: blob})
+	s.extra.put(xentry{h: h, check: check, blob: blob, unit: uint16(unit)})
+	return nil
+}
+
+// apply extends the prefix by unit planned+1: it records the unit's written
+// facts and its section count, and wakes every call waiting for the extent.
+func (s *fsState) apply(unit int, pu *plannedUnit) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if unit != s.planned+1 {
+		return fmt.Errorf("factset: unit %d applied after unit %d", unit, s.planned)
+	}
+	for _, sec := range pu.secs {
+		if sec.link != nil {
+			continue
+		}
+		if err := s.markWritten(sec.h, factCheck(sec.repo, sec.rel), blob64(sec.blob), sec.repo, sec.rel, unit); err != nil {
+			logCollision(err)
+			return fmt.Errorf("%w: %w", ErrFactIdentity, err)
+		}
+	}
+	s.planned = unit
+	s.counts = append(s.counts, len(pu.secs))
+	if s.grew != nil {
+		close(s.grew)
+	}
+	s.grew = make(chan struct{})
 	return nil
 }
 

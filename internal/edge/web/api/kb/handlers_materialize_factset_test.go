@@ -478,22 +478,40 @@ func TestFactSet_TitleAndSearchLine(t *testing.T) {
 	require.Equal(t, materialize.FactSetInstructions, p.Instructions)
 }
 
-// Overload bounds on the REST edge: over the concurrent-build cap is a 503
-// with Retry-After and writes nothing.
+// Overload on the REST edge: there is no cap on concurrent builds or
+// exports; a call that must plan WAITS for planning memory while the budget
+// is full, and only past the budget wait is it a 503 with Retry-After,
+// writing nothing (a first call, and an export of an evicted FactSet); once
+// memory is free both are served.
 //
-// Sabotage: block on the slot instead of refusing, and the call hangs.
-func TestFactSet_ConcurrentBuildCapIs503(t *testing.T) {
+// Sabotage: map ErrFactSetBusy to nothing special (a 500); refuse at once
+// without waiting (the held memory released during the wait is not seen and
+// the waiting call is still a 503).
+func TestFactSet_FullBudgetWaitsThen503(t *testing.T) {
 	m := newMatStoreManager(t, "alpha")
 	seedShared(t, m.Get("alpha"))
 	h := asPrincipal("u1", newTestRouter(m))
-	release := materialize.ReserveFactSetBuildsForTest(materialize.MaxConcurrentFactSetBuilds)
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	defer materialize.SetFactSetCacheBudget(0)
+	materialize.SetFactSetCacheBudget(1)
+	defer materialize.SetFactSetBudgetWaitForTest(100 * time.Millisecond)()
+	release := materialize.HoldFactSetPlanningMemoryForTest(1)
+
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"?path=kb/u/", nil))
-	release()
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
 	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
-	code, _, body := getFactSet(t, h, factsetBase+"?path=kb/u/")
-	require.Equal(t, http.StatusOK, code, "a slot freed is a slot: %s", body)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"/export?cursor="+url.QueryEscape(*p1.Cursor), nil))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
+
+	// Memory freed DURING the wait: the waiting call proceeds.
+	defer materialize.SetFactSetBudgetWaitForTest(time.Minute)()
+	go func() { time.Sleep(100 * time.Millisecond); release() }()
+	code, _, body = getFactSet(t, h, factsetBase+"?path=kb/u/")
+	require.Equal(t, http.StatusOK, code, "served once the memory is free: %s", body)
 }
 
 // Export: the whole factset as one agent document, one "##" per unit, every
@@ -563,7 +581,7 @@ func (d *deadlineRecorder) Write(p []byte) (int, error) {
 // Q5 (review of PR #692, round 2): every write of an export's stream sets
 // the connection's write deadline about a minute ahead. The listeners run
 // with WriteTimeout 0, so this deadline is the only thing that stops a
-// client that stops reading from holding its export slot forever.
+// client that stops reading from holding its export forever.
 //
 // Sabotage: drop the SetWriteDeadline call, or stream to the raw
 // ResponseWriter, and a write goes out with no deadline.
@@ -587,24 +605,6 @@ func TestFactSet_ExportSetsAWriteDeadlineOnEveryWrite(t *testing.T) {
 	for _, d := range rec.deadlines {
 		require.WithinDuration(t, start.Add(time.Minute), d, 30*time.Second, "about a minute ahead")
 	}
-}
-
-// Over the export cap an export is refused at once: a 503 with
-// Retry-After, nothing streamed.
-//
-// Sabotage: map ErrFactSetExportsBusy to nothing special, and it is a 500.
-func TestFactSet_ExportCapIs503(t *testing.T) {
-	m := newMatStoreManager(t, "alpha")
-	seedShared(t, m.Get("alpha"))
-	h := asPrincipal("u1", newTestRouter(m))
-	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&limit=1")
-	require.Equal(t, http.StatusOK, code, body)
-	release := materialize.ReserveFactSetExportsForTest(materialize.MaxConcurrentFactSetExports)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, factsetBase+"/export?cursor="+*p1.Cursor, nil))
-	release()
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
-	require.Equal(t, materializeBusyRetryAfter, rec.Header().Get("Retry-After"))
 }
 
 // F11. A repo entered cross-KB is read at ONE tip for the whole FactSet,

@@ -14,31 +14,44 @@ func mustBeTest(name string) {
 	}
 }
 
-// ReserveFactSetBuildsForTest takes n planning slots and returns their
-// release, so a test drives the cap without timing.
-func ReserveFactSetBuildsForTest(n int) func() {
-	mustBeTest("ReserveFactSetBuildsForTest")
-	for range n {
-		buildSlots <- struct{}{}
-	}
-	return func() {
-		for range n {
-			<-buildSlots
-		}
-	}
+// SetFactSetExtendHookForTest runs f before the call holding a FactSet's
+// extension token plans each unit past the planned prefix (a test blocks an
+// extension in it), and returns the restore.
+func SetFactSetExtendHookForTest(f func(unit int)) (restore func()) {
+	mustBeTest("SetFactSetExtendHookForTest")
+	old := factsetExtendHook
+	factsetExtendHook = f
+	return func() { factsetExtendHook = old }
 }
 
-// ReserveFactSetExportsForTest takes n export slots and returns their release.
-func ReserveFactSetExportsForTest(n int) func() {
-	mustBeTest("ReserveFactSetExportsForTest")
-	for range n {
-		exportSlots <- struct{}{}
-	}
-	return func() {
-		for range n {
-			<-exportSlots
-		}
-	}
+// SetFactSetBudgetWaitForTest sets how long a call waits for planning memory
+// before ErrFactSetBusy, and returns the restore.
+func SetFactSetBudgetWaitForTest(d time.Duration) (restore func()) {
+	mustBeTest("SetFactSetBudgetWaitForTest")
+	old := factsetBudgetWait.Load()
+	factsetBudgetWait.Store(int64(d))
+	return func() { factsetBudgetWait.Store(old) }
+}
+
+// HoldFactSetPlanningMemoryForTest reserves n bytes of planning memory as a
+// plan in flight would (at once, whatever the budget) and returns its
+// release: with the budget below n, every call that must plan waits.
+func HoldFactSetPlanningMemoryForTest(n int64) (release func()) {
+	mustBeTest("HoldFactSetPlanningMemoryForTest")
+	fsCache.mu.Lock()
+	fsCache.total += n
+	fsCache.inflight++
+	fsCache.mu.Unlock()
+	r := &fsReservation{size: n}
+	return r.release
+}
+
+// FactSetPlansInFlightForTest is how many calls hold planning memory now.
+func FactSetPlansInFlightForTest() int {
+	mustBeTest("FactSetPlansInFlightForTest")
+	fsCache.mu.Lock()
+	defer fsCache.mu.Unlock()
+	return fsCache.inflight
 }
 
 // SetFactSetExportFaultForTest makes the export fail before planning unit u
@@ -79,7 +92,7 @@ func SetFactHashForTest(f func(repo, rel string) uint64) (restore func()) {
 }
 
 // DropFactSetCacheForTest empties the FactSet cache: the next call on any
-// FactSet rebuilds it from its frozen row by replay.
+// FactSet rebuilds it from its frozen row, planning again what it needs.
 func DropFactSetCacheForTest() {
 	mustBeTest("DropFactSetCacheForTest")
 	c := fsCache
