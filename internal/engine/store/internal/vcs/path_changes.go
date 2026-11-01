@@ -1042,11 +1042,13 @@ type refreshedRow struct {
 // derived when every parent was present — and is never recomputed here: a
 // parent now missing would make every path look added.
 //
-// The diff base is the row's link with the lowest parent_order (the first
-// parent that has the path, as prepare chooses it): that parent's blob, read
-// from its tree when the parent commit is present, else the link's stored
-// from_blob. A row whose blob, or whose base, still cannot be read stays
-// unavailable.
+// The diff base is the stored from_blob of the row's link with the lowest
+// parent_order: the blob of the first parent that has the path, recorded
+// when the row was derived (prepare diffs against that same parent). A row
+// whose blob, or whose base blob, still cannot be read stays unavailable; so
+// does one whose base was unknown at derivation (from_blob empty, a parent
+// tree missing then) — the base is not re-read from the parent here, and that
+// row is repaired by a full re-derivation once its parents are present.
 func (d *deriver) prepareContentRefresh(ctx context.Context, pc *preparedCommit) (*contentRefresh, error) {
 	q := sqlite.Conn(ctx, d.rh.db)
 	hash := pc.c.Hash.String()
@@ -1083,10 +1085,9 @@ func (d *deriver) prepareContentRefresh(ctx context.Context, pc *preparedCommit)
 		if miss {
 			continue
 		}
-		var po int
 		var fromBlob string
-		err = q.QueryRowContext(ctx, `SELECT parent_order, from_blob FROM `+d.t.Links+`
-			WHERE path = ? AND commit_hash = ? ORDER BY parent_order LIMIT 1`, path, hash).Scan(&po, &fromBlob)
+		err = q.QueryRowContext(ctx, `SELECT from_blob FROM `+d.t.Links+`
+			WHERE path = ? AND commit_hash = ? ORDER BY parent_order LIMIT 1`, path, hash).Scan(&fromBlob)
 		if errors.Is(err, sql.ErrNoRows) {
 			// An addition: nothing to diff; its content is readable now.
 			out.rows = append(out.rows, refreshedRow{path: path, blob: to.String()})
@@ -1096,19 +1097,7 @@ func (d *deriver) prepareContentRefresh(ctx context.Context, pc *preparedCommit)
 			return nil, fmt.Errorf("path changes: refresh link: %w", err)
 		}
 		base := plumbing.ZeroHash
-		if po < len(pc.c.Parents) && !pc.parentAbsent[po] {
-			pcm, err := d.commit(pc.c.Parents[po])
-			if err != nil {
-				return nil, err
-			}
-			b, bst, err := d.blobAt(pcm.Tree, path)
-			if err != nil {
-				return nil, err
-			}
-			if bst == blobPresent {
-				base = b
-			}
-		} else if fromBlob != "" {
+		if fromBlob != "" {
 			base = plumbing.NewHash(fromBlob)
 		}
 		if base.IsZero() {
