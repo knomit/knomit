@@ -295,9 +295,12 @@ func TestFactSet_Pinned_HomeIsNotTheWireRepo(t *testing.T) {
 // opens the home through planning; its bodies and RULE 1 marks still read
 // through R, because every call registers its home when it opens.
 //
-// Sabotage: delete the registerHome call in openFactSet, and the seek fails
-// with "repo <R> is not available" (the FactSet reader's foreign route admits
-// no repo without a frozen tip).
+// Sabotage: register the home only when planning opens it (delete the
+// registerHome call in openFactSet and call it from fsCall.home instead),
+// and the seek fails with "repo <R> is not available": nothing is planned,
+// so bodies and RULE 1 reach R through the FactSet reader's foreign route,
+// which admits no repo without a frozen tip. (Deleting the call alone fails
+// earlier and louder: fsCall.home refuses an unregistered home.)
 func TestFactSet_Pinned_KeptPlanPageReadsTheHome(t *testing.T) {
 	isolateFactSetGlobals(t)
 	lp := newLensPair(t, 3, 1)
