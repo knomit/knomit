@@ -93,3 +93,40 @@ func TestFactSet_RepoFrozenRowAndFirstPageGolden(t *testing.T) {
 	checkGolden(t, "frozen.json", normalizeGolden(string(row.Frozen), id, repo))
 	checkGolden(t, "first_page.json", normalizeGolden(mustJSON(t, p), id, repo))
 }
+
+// Pre-split identity of an UNPINNED repo FactSet replayed after its branch
+// moved (the F10 scenario): every page after a commit changed a ref target
+// and the cache was dropped, against a golden generated on the pre-seam code
+// (dev 8f34e391). Unpinned planning reads LiveAt AT THE ANCHOR, so this pins
+// that the home mount still carries the frozen anchor on a resume.
+//
+// Sabotage: drop `m.anchor = hs.anchor` in reader.homeMount, and the replay
+// differs from the golden.
+func TestFactSet_RepoUnpinnedReplayGolden(t *testing.T) {
+	isolateFactSetGlobals(t)
+	f := newFactSetFixture(t)
+	ctx := context.Background()
+	f.write(t, "kb/z/s.md", "S", "s body.")
+	f.write(t, "kb/z/t.md", "T", "t body.", "kb/z/s.md")
+	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/s.md")
+	f.write(t, "kb/z/b.md", "B", "b body.")
+	f.write(t, "kb/u/u.md", "U", "u body.", "kb/z/t.md", "kb/z/a.md", "kb/z/b.md")
+	f.write(t, "kb/u/v.md", "V", "v body.", "kb/z/a.md", "kb/z/s.md")
+	_, err := f.svc.Facts().DeleteFact(ctx, "agent/test", "kb/z/t.md", "retract t")
+	require.NoError(t, err)
+	req := f.request("kb/u/")
+	req.Options.Unpin, req.Limit = true, 1
+	p := f.first(t, "o", req)
+	id := mustID(t, *p.Cursor)
+	f.write(t, "kb/z/a.md", "A", "a body, changed after creation.")
+	f.write(t, "kb/z/b.md", "B", "b body, changed after creation.", "kb/z/s.md")
+	DropFactSetCacheForTest()
+	pages := []string{mustJSON(t, p)}
+	for p.HasMore {
+		p, err = FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 0)
+		require.NoError(t, err)
+		pages = append(pages, mustJSON(t, p))
+	}
+	require.Greater(t, len(pages), 3)
+	checkGolden(t, "unpinned_replay.json", normalizeGolden(strings.Join(pages, "\n"), id, f.id12()))
+}
