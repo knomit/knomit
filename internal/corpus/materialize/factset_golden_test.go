@@ -127,6 +127,6 @@ func TestFactSet_RepoUnpinnedReplayGolden(t *testing.T) {
 		require.NoError(t, err)
 		pages = append(pages, mustJSON(t, p))
 	}
-	require.Greater(t, len(pages), 3)
 	checkGolden(t, "unpinned_replay.json", normalizeGolden(strings.Join(pages, "\n"), id, f.id12()))
+	require.Greater(t, len(pages), 3, "several pages")
 }
