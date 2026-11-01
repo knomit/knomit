@@ -211,13 +211,13 @@ func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
 		seekWant[u] = mustJSON(t, got)
 	}
 	DropFactSetCacheForTest()
-	_, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 8) // prefix: units 1..8
+	_, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 12) // prefix: units 1..12, plans of 5..12 kept
 	require.NoError(t, err)
 
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	defer SetFactSetExtendHookForTest(func(unit int) {
-		if unit == 9 {
+		if unit == 13 {
 			once.Do(func() { close(entered) })
 			<-release
 		}
@@ -229,13 +229,17 @@ func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
 	}()
 	<-entered
 
-	for u := 1; u <= 8; u++ {
+	replanned := 0
+	for u := 1; u <= 12; u++ {
 		done := make(chan string, 1)
 		go func() {
-			got, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, u)
+			got, st, err := FactSetNextPageStats(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, u)
 			if err != nil {
 				done <- "error: " + err.Error()
 				return
+			}
+			if u <= 4 && st.UnitsPlanned > 0 {
+				replanned++
 			}
 			done <- mustJSON(t, got)
 		}()
@@ -246,16 +250,17 @@ func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
 			t.Fatalf("unit %d: a read of a planned unit waited for the blocked extension", u)
 		}
 	}
+	require.Equal(t, 4, replanned, "units 1-4 (not kept) were re-planned, beside the extension")
 
 	wctx, cancel := context.WithCancel(ctx)
 	waited := make(chan error, 1)
 	go func() {
-		_, err := FactSetNextPage(wctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 12)
+		_, err := FactSetNextPage(wctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 15)
 		waited <- err
 	}()
 	select {
 	case err := <-waited:
-		t.Fatalf("unit 12 needs the blocked extension, yet the call returned: %v", err)
+		t.Fatalf("unit 15 needs the blocked extension, yet the call returned: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 	cancel()
@@ -268,9 +273,9 @@ func TestFactSet_ReadsRunBesideABlockedExtension(t *testing.T) {
 
 	close(release)
 	require.NoError(t, <-extended)
-	got, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 12)
+	got, err := FactSetNextPage(ctx, f.scope("o"), f.b, nil, nil, *p.Cursor, 15)
 	require.NoError(t, err)
-	require.Equal(t, seekWant[12], mustJSON(t, got))
+	require.Equal(t, seekWant[15], mustJSON(t, got))
 }
 
 // No slot count: twelve first calls at once (three times the old four
