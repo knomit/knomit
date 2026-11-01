@@ -238,11 +238,9 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
 			IncludeOrigins: splitCSV(qp.Get("origin")),
 			EpisodeOps:     splitCSV(qp.Get("ep")),
-			// Motif terms resolve PER MOUNT against each repo's own alias
-			// vocabulary — there is no cross-mount cluster identity. A mount
-			// that judge-merged two spellings answers for both; one that keeps
-			// them apart answers only for the exact term. Deliberate semantics
-			// (design 2026-08-28), mirrored in openapi.yaml.
+			// The caller's raw motif terms. federate.PlanFused (below) widens each
+			// to its MERGED cluster over the lens's full read set before the
+			// fan-out — see federate.ExpandMotifTerms.
 			Motifs:        motifs,
 			MotifMatch:    motifMatch,
 			MinConfidence: minConfidence,
@@ -348,9 +346,8 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 			plan.Opts.Limit = depth
 			res, err := federate.FusedRecent(r.Context(), plan, recentLeg, federate.FusedOptions{Serial: true})
 			if err != nil {
-				var f *federate.MountError
-				errors.As(err, &f)
-				httpx.WriteStoreError(w, r, f.Err, "Failed to list facts", targets[f.Mount].RT.Branch)
+				// Serial: no panic is recovered, so the title is always this one.
+				writeLensMountError(w, r, err, targets, "Failed to list facts")
 				return
 			}
 			diags = res.Diags
@@ -773,27 +770,46 @@ func planLensRead(w http.ResponseWriter, r *http.Request, q federate.FusedQuery,
 	if err == nil {
 		return plan, true
 	}
-	var pe *federate.PlanError
-	if !errors.As(err, &pe) {
-		hal.WriteProblem(w, http.StatusInternalServerError, embedTitle, err.Error(), r.URL.Path)
-		return nil, false
+	// PlanFused returns only *PlanError; anything else (none today) renders as
+	// the server error of the default case.
+	var stage federate.FusedStage
+	cause := err
+	if pe := (*federate.PlanError)(nil); errors.As(err, &pe) {
+		stage, cause = pe.Stage, pe.Err
 	}
-	switch pe.Stage {
+	switch stage {
 	case federate.StageMotifs:
 		var readErr *federate.MotifReadError
 		branch := ""
-		if errors.As(pe.Err, &readErr) {
+		if errors.As(cause, &readErr) {
 			branch = readErr.Branch
 		}
-		httpx.WriteStoreError(w, r, pe.Err, "Failed to resolve motif filter", branch)
+		httpx.WriteStoreError(w, r, cause, "Failed to resolve motif filter", branch)
 	case federate.StageTargets:
-		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", pe.Err.Error(), r.URL.Path)
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", cause.Error(), r.URL.Path)
 	case federate.StageRepos:
-		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo", pe.Err.Error(), r.URL.Path)
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo", cause.Error(), r.URL.Path)
 	default: // federate.StageEmbed
-		hal.WriteProblem(w, http.StatusInternalServerError, embedTitle, pe.Err.Error(), r.URL.Path)
+		hal.WriteProblem(w, http.StatusInternalServerError, embedTitle, cause.Error(), r.URL.Path)
 	}
 	return nil, false
+}
+
+// writeLensMountError renders a failed fused-read leg: the lowest-indexed
+// failing mount's error through httpx.WriteStoreError, with that mount's
+// branch (so store.ErrBranchNotFound names it) and title — or "Mount failed"
+// for a recovered panic. An error that is not a *federate.MountError (none
+// today) is rendered with title and no branch.
+func writeLensMountError(w http.ResponseWriter, r *http.Request, err error, targets []federate.Target, title string) {
+	var f *federate.MountError
+	if !errors.As(err, &f) {
+		httpx.WriteStoreError(w, r, err, title, "")
+		return
+	}
+	if f.Panicked {
+		title = "Mount failed"
+	}
+	httpx.WriteStoreError(w, r, f.Err, title, targets[f.Mount].RT.Branch)
 }
 
 // lensSearchItem is one row of the lens union search collection. It carries the
@@ -922,11 +938,9 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
 			IncludeOrigins: splitCSV(qp.Get("origin")),
 			EpisodeOps:     splitCSV(qp.Get("ep")),
-			// Motif terms resolve PER MOUNT against each repo's own alias
-			// vocabulary — there is no cross-mount cluster identity. A mount
-			// that judge-merged two spellings answers for both; one that keeps
-			// them apart answers only for the exact term. Deliberate semantics
-			// (design 2026-08-28), mirrored in openapi.yaml.
+			// The caller's raw motif terms. federate.PlanFused (below) widens each
+			// to its MERGED cluster over the lens's full read set before the
+			// fan-out — see federate.ExpandMotifTerms.
 			Motifs:        motifs,
 			MotifMatch:    motifMatch,
 			MinConfidence: minConfidence,
@@ -975,13 +989,7 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 				return searchRepo(ctx, t.RT.RI, emb, t.RT.Branch, q)
 			}, federate.FusedOptions{})
 		if err != nil {
-			var f *federate.MountError
-			errors.As(err, &f)
-			title := "Search failed"
-			if f.Panicked {
-				title = "Mount failed"
-			}
-			httpx.WriteStoreError(w, r, f.Err, title, targets[f.Mount].RT.Branch)
+			writeLensMountError(w, r, err, targets, "Search failed")
 			return
 		}
 		diags := fused.Diags

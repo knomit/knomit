@@ -217,3 +217,28 @@ func TestPlanFused_StagesInOrder(t *testing.T) {
 	require.Equal(t, StageMotifs, stage(err))
 	require.ErrorIs(t, err, readErr)
 }
+
+// Target.Mount is the mount's index into Binding.Reads(), and it survives the
+// re-indexing narrowing causes: after repo=zulu the only target is at position
+// 0 of the plan, but its leg and its hit still say mount 2.
+func TestFused_TargetMountIsStableAcrossNarrowing(t *testing.T) {
+	b, mounts := fusedFixture(t)
+	var legSaw atomic.Int64
+	legSaw.Store(-1)
+	leg := func(_ context.Context, t Target, _ index.SearchOptions) ([]index.SearchResult, error) {
+		legSaw.Store(int64(t.Mount))
+		var r index.SearchResult
+		r.Path = "kb/z.md"
+		return []index.SearchResult{r}, nil
+	}
+
+	plan, err := PlanFused(context.Background(), FusedQuery{Binding: b, Repos: []string{"zulu"}})
+	require.NoError(t, err)
+	require.Len(t, plan.Targets, 1)
+	res, err := FusedSearch(context.Background(), plan, leg, FusedOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, legSaw.Load(), "the leg sees zulu's binding index, not its plan position")
+	require.Equal(t, 0, res.Hits[0].Mount, "Hit.Mount is the plan position")
+	require.Equal(t, 2, res.Hits[0].Target.Mount, "Target.Mount is the stable identity")
+	require.Same(t, mounts[2], res.Hits[0].Target.RT.RI)
+}

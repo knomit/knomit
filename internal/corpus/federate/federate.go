@@ -180,6 +180,13 @@ func topicOfPathFilter(pathFilter string) string {
 type Target struct {
 	RT   repos.ReadTarget
 	Path string
+	// Mount is the mount's STABLE identity within its binding: its index into
+	// Binding.Reads(), set by ReadTargetsFor and kept by NarrowByRepo. It is
+	// NOT the target's position in a target list — topic skipping, a qualified
+	// path and repo= narrowing all drop targets, so list positions shift while
+	// Mount does not. A fused-read leg (and a FactSet looking up a per-mount
+	// anchor) keys on it.
+	Mount int
 }
 
 // WriteFirstWinners computes the per-mount dedupe winners shared by EVERY lens
@@ -236,17 +243,24 @@ func ReadTargetsFor(b *repos.Binding, pathFilter string) ([]Target, error) {
 		if !ok {
 			return nil, fmt.Errorf("repo %s is not mounted in this binding", id)
 		}
-		return []Target{{RT: rt, Path: rel}}, nil
+		mount := 0
+		for i, r := range b.Reads() {
+			if r.RI == rt.RI {
+				mount = i
+				break
+			}
+		}
+		return []Target{{RT: rt, Path: rel, Mount: mount}}, nil
 	}
 	topic := topicOfPathFilter(rel)
 	var out []Target
-	for _, rt := range b.Reads() {
+	for i, rt := range b.Reads() {
 		if topic != "" {
 			if o := rt.RI.Ontology(); o != nil && !containsString(o.TopicNames(), topic) {
 				continue
 			}
 		}
-		out = append(out, Target{RT: rt, Path: rel})
+		out = append(out, Target{RT: rt, Path: rel, Mount: i})
 	}
 	return out, nil
 }

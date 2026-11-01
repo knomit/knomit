@@ -11,13 +11,13 @@ import (
 
 // The fused lens read: ONE definition of how a lens answers a list query, shared
 // by every surface that lists a lens — REST /lenses/{lens}/search and
-// /lenses/{lens}/facts, MCP knomit_query (relevance and sort=recent), and the
-// lens FactSet's root search. Before it existed the REST handlers and the MCP
-// tool each carried their own copy of the same pipeline, which is the
-// mirrored-implementation shape that has already drifted twice on lens
-// surfaces (a fix landing on one copy only). One function makes "the FactSet's
-// roots are the lens list" true by construction rather than by being edited in
-// step.
+// /lenses/{lens}/facts and MCP knomit_query (relevance and sort=recent). The
+// lens FactSet's root search is PLANNED to call it too (F3, not built yet).
+// Before it existed the REST handlers and the MCP tool each carried their own
+// copy of the same pipeline, which is the mirrored-implementation shape that
+// has already drifted twice on lens surfaces (a fix landing on one copy only).
+// One function is what will make "the FactSet's roots are the lens list" true
+// by construction rather than by being edited in step.
 //
 // The pipeline, in order:
 //
@@ -38,8 +38,10 @@ import (
 // surface has its own problem documents / tool errors), page truncation (REST
 // pages by offset/limit, MCP by max_results and a cursor), and how one mount is
 // read. The leg is the caller's, which is also the seam a FactSet needs to read
-// every mount at an anchor it froze: pass a leg that reads Target.RT.RI at that
-// mount's anchor instead of at Target.RT.Branch.
+// every mount at an anchor it froze: pass a leg that looks the anchor up by
+// Target.Mount (the mount's stable index into Binding.Reads(), unchanged by
+// narrowing) and reads Target.RT.RI at that anchor instead of at
+// Target.RT.Branch.
 
 // FusedStage names the planning step a PlanError came from, so each surface can
 // render the failure the way it did before the pipeline was shared.
@@ -264,10 +266,11 @@ type FusedOptions struct {
 
 // Hit is one row of a fused read, with the mount it came from.
 //
-// Mount indexes FusedPlan.Targets; Target carries the mount's RepoInstance
-// (Target.RT.RI: its ID() is the repo identity, its Name() the mount name) and
-// the branch the row was read at. The pinned version the row came from is the
-// row's own CommitHash / BlobHash.
+// Mount indexes FusedPlan.Targets (a POSITION, which narrowing shifts);
+// Target.Mount is the mount's STABLE index into Binding.Reads(). Target carries
+// the mount's RepoInstance (Target.RT.RI: its ID() is the repo identity, its
+// Name() the mount name) and the branch the row was read at. The pinned version
+// the row came from is the row's own CommitHash / BlobHash.
 type Hit[T any] struct {
 	Mount  int
 	Target Target
@@ -297,11 +300,15 @@ func (f *Fused[T]) ListLens() []int {
 
 // SearchLeg reads one mount's relevance-ranked list. q is the plan's Opts with
 // Path set to the target's repo-relative filter and Diag to the mount's slot.
+// t.Mount is the mount's stable identity (its index into Binding.Reads()); a
+// leg that reads per-mount state — a frozen anchor, a watermark — keys on it,
+// never on the target's position in the plan.
 type SearchLeg func(ctx context.Context, t Target, q index.SearchOptions) ([]index.SearchResult, error)
 
 // RecentLeg reads one mount's recency listing and that mount's total count. It
 // must return the list committed_at DESC when q.Text is empty (RecentFacts
-// returns it relevance-ranked when q.Text is set).
+// returns it relevance-ranked when q.Text is set). t.Mount is the stable
+// per-mount identity, as for SearchLeg.
 type RecentLeg func(ctx context.Context, t Target, q index.SearchOptions) ([]index.RecentFactEntry, int, error)
 
 // FusedSearch is the relevance read: the legs' ranked lists fused by

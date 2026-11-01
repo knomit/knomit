@@ -122,6 +122,14 @@ func TestReadTargetsFor(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Same(t, repoB, got[0].RT.RI)
 	require.Equal(t, "kb/x.md", got[0].Path)
+	require.Equal(t, 1, got[0].Mount, "Mount is the binding index, not the list position")
+
+	// A topic skip drops repoA; repoB keeps its binding index.
+	got, err = federate.ReadTargetsFor(b, "kb/other/")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Same(t, repoB, got[0].RT.RI)
+	require.Equal(t, 1, got[0].Mount)
 
 	// Qualified to an unmounted ID → error containing "not mounted".
 	_, err = federate.ReadTargetsFor(b, federate.QualifyPath("aaaaaaaaaaaa", "kb/x.md"))
