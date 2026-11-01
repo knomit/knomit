@@ -103,7 +103,7 @@ func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *
 	if c := req.GetString("commit", ""); c != "" {
 		return mcpgo.NewToolResultError("a factset is materialized at the branch tip: the search reads the live index, so `commit` is not accepted"), nil
 	}
-	page, _, err := materialize.FactSetFirstPage(ctx, materializeScope(ctx, b, sWrite), breq)
+	page, _, err := materialize.FactSetFirstPage(ctx, factsetScope(ctx, b, sWrite), breq)
 	if err != nil {
 		return factsetToolError(err), nil
 	}
@@ -128,11 +128,36 @@ func materializeFactSetResume(ctx context.Context, req mcpgo.CallToolRequest, b 
 	if present && unit < 1 {
 		return mcpgo.NewToolResultError("unit must be at least 1"), nil
 	}
-	page, err := materialize.FactSetNextPage(ctx, materializeScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor, unit)
+	page, err := materialize.FactSetNextPage(ctx, factsetScope(ctx, b, sWrite), b, mgr, callerMayRead(ctx), cursor, unit)
 	if err != nil {
 		return factsetToolError(err), nil
 	}
 	return marshalFactSetPage(page)
+}
+
+// materializeFactSetClose serves `close: true`: it closes the factset of
+// `cursor`. It takes nothing but close, cursor and binding. Another owner's
+// factset and one that does not exist answer the same expired text
+// (d870cc94), and nothing is closed.
+func materializeFactSetClose(ctx context.Context, req mcpgo.CallToolRequest, b *repos.Binding, sWrite mcpStore) (*mcpgo.CallToolResult, error) {
+	for k := range req.GetArguments() {
+		switch k {
+		case "close", "cursor", "binding":
+		default:
+			return mcpgo.NewToolResultError(fmt.Sprintf("%s cannot be passed with close: pass only close, cursor (and binding)", k)), nil
+		}
+	}
+	if v, ok := req.GetArguments()["close"].(bool); !ok || !v {
+		return mcpgo.NewToolResultError("close must be true"), nil
+	}
+	cursor := req.GetString("cursor", "")
+	if cursor == "" {
+		return mcpgo.NewToolResultError("close needs the cursor of the factset to close"), nil
+	}
+	if err := materialize.CloseFactSet(ctx, factsetScope(ctx, b, sWrite), cursor); err != nil {
+		return factsetToolError(err), nil
+	}
+	return mcpgo.NewToolResultText(`{"closed":true}`), nil
 }
 
 // factsetToolError maps a factset error to its tool error, with the REST route's

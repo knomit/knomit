@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -34,6 +35,11 @@ func fleetRepoMutatingRoutes(t *testing.T, s *Server, repo, branch string) [][2]
 			return nil
 		}
 		if !strings.HasPrefix(route, "/repos/{repo}") || strings.HasSuffix(route, "/mcp") {
+			return nil
+		}
+		// Closing a FactSet deletes session data, never repository data: the
+		// one DELETE the gate lets through (TestFleetRepo_FactSetCloseIsNotRefused).
+		if method == http.MethodDelete && route == "/repos/{repo}/branches/{branch}/search/factset" {
 			return nil
 		}
 		p := strings.NewReplacer("{repo}", repo, "{branch}", urlBranch(branch), "{name}", "x", "{sessionID}", "s1",
@@ -175,6 +181,76 @@ func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 	// Control: another repository is not gated.
 	rec := send(http.MethodPost, "/repos/kb/rename", `{"name":"kb2"}`, "socket")
 	require.Equal(t, http.StatusOK, rec.Code, "control: a non-fleet repository renames: %s", rec.Body.String())
+}
+
+// User ruling 2026-11-01: closing a FactSet (REST DELETE
+// …/search/factset?cursor=) on the FLEET repository is not a repository
+// mutation (it deletes the caller's session row and cache entry), so the fleet
+// gate lets it through: a FactSet opened on the fleet repository closes with
+// 204 and its cursor then reads as none. Every other mutating route is still
+// 409 fleet_repository: the export path's DELETE (no such route; never
+// exempted) and a fact DELETE stay refused, and nothing was committed.
+// SABOTAGE: drop the isRepoFactSetResource arm from fleetRepoMutation -> the
+// close is 409 -> red; widen it to any DELETE under /branches/ -> the fact
+// DELETE is not 409 -> red.
+func TestFleetRepo_FactSetCloseIsNotRefused(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	fleetURL, root := seedFleetBare(t, dir)
+	m, key := restFleetManager(t, dir)
+	join := joinOverSocket(t, &Server{Manager: m, Grants: localWriteGrants()}, key, fleetURL, root)
+	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	ri := m.Get(st.FleetRepo)
+	require.NotNil(t, ri)
+	require.True(t, ri.IsFleet())
+	s := &Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}
+	h := s.NewAPIRouter()
+	send := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, localPeer(httptest.NewRequest(method, path, nil)))
+		return rec
+	}
+	tip := func() string {
+		var c string
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			c, err = svc.HeadCommit(ctx, ri.AgentBranch())
+			require.NoError(t, err)
+		}))
+		return c
+	}
+	before := tip()
+	fs := "/repos/" + st.FleetRepo + "/branches/" + urlBranch(ri.AgentBranch()) + "/search/factset"
+
+	open := send(http.MethodGet, fs+"?depth=0&limit=1")
+	require.Equal(t, http.StatusOK, open.Code, open.Body.String())
+	var page struct {
+		Units  int     `json:"units"`
+		Cursor *string `json:"cursor"`
+	}
+	require.NoError(t, json.Unmarshal(open.Body.Bytes(), &page))
+	require.Greater(t, page.Units, 0, "the fleet repository has facts to materialize: %s", open.Body.String())
+	require.NotNil(t, page.Cursor)
+	cur := url.QueryEscape(*page.Cursor)
+
+	rec := send(http.MethodDelete, fs+"?cursor="+cur)
+	require.Equal(t, http.StatusNoContent, rec.Code, "closing a FactSet on the fleet repository: %s", rec.Body.String())
+	rec = send(http.MethodGet, fs+"?cursor="+cur)
+	require.Equal(t, http.StatusNotFound, rec.Code, "the closed FactSet reads as none: %s", rec.Body.String())
+
+	// Other fleet-repository mutations are still refused.
+	for _, rt := range [][2]string{
+		{http.MethodDelete, fs + "/export?cursor=" + cur},
+		{http.MethodDelete, "/repos/" + st.FleetRepo + "/branches/" + urlBranch(ri.AgentBranch()) + "/facts/kb/x.md"},
+		{http.MethodPost, fs},
+		{http.MethodPost, "/repos/" + st.FleetRepo + "/rename"},
+	} {
+		rec := send(rt[0], rt[1])
+		require.Equal(t, http.StatusConflict, rec.Code, "%s %s: %s", rt[0], rt[1], rec.Body.String())
+		require.Contains(t, rec.Body.String(), `"code":"fleet_repository"`)
+	}
+	require.Equal(t, before, tip(), "nothing was committed on the fleet repository")
 }
 
 // GET /repos marks the fleet repository `fleet: true`, and no other row, so

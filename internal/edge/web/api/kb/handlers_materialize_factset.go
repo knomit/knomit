@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -19,7 +18,6 @@ import (
 	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/sessions"
-	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/config"
 )
 
@@ -51,17 +49,14 @@ var factsetOptionParams = map[string]bool{
 // factsetUnitParam is the seek parameter, the only one a cursor call may add.
 const factsetUnitParam = "unit"
 
-// restFactSetOwner is who owns a factset cursor: the factset route (the export route
-// shares it) plus the caller's principal.
-func restFactSetOwner(r *http.Request) string {
-	p, _ := auth.FromContext(r.Context())
-	return strings.TrimSuffix(r.URL.Path, factsetExportSuffix) + " " + p.String()
-}
-
+// factsetScope pins a factset to the binding (pin and read set) and to the
+// caller's principal ALONE (materialize.FactSetOwner): not to the route, so a
+// factset made over MCP by the same principal with the same binding pages,
+// exports and closes here, and the reverse.
 func factsetScope(r *http.Request, b *repos.Binding, ts *sessions.ToolIndex) materialize.CursorScope {
 	return materialize.CursorScope{
 		Sessions: ts, Branch: b.WriteMountBranch(), Pin: b.PinID(),
-		ReadSet: federate.ReadSetFingerprint(b), Owner: restFactSetOwner(r),
+		ReadSet: federate.ReadSetFingerprint(b), Owner: materialize.FactSetOwner(r.Context()),
 	}
 }
 
@@ -128,6 +123,41 @@ func handleSearchFactSet(emb model.Embedder, mgr *repos.Manager) http.HandlerFun
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)
+	}
+}
+
+// handleCloseFactSet serves DELETE …/search/factset?cursor=…: it closes the
+// factset of cursor (any of its cursors) and answers 204. Another owner's
+// factset, and one that does not exist, answer the same 404 as a GET with
+// that cursor, and nothing is closed.
+func handleCloseFactSet() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := repos.RepoFromContext(r.Context())
+		b := repos.NewBindingOfRepo(ri, httpx.BranchFromContext(r.Context()))
+		q := r.URL.Query()
+		for k := range q {
+			if k != materializeCursorParam {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"closing a factset takes only cursor, got "+strconv.Quote(k), r.URL.Path)
+				return
+			}
+		}
+		cursor := q.Get(materializeCursorParam)
+		if cursor == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", "cursor is required", r.URL.Path)
+			return
+		}
+		svc, release, err := b.Write().Acquire()
+		if err != nil {
+			httpx.WriteStoreUnavailable(w, r)
+			return
+		}
+		defer release()
+		if err := materialize.CloseFactSet(r.Context(), factsetScope(r, b, svc.ToolSession()), cursor); err != nil {
+			writeFactSetError(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

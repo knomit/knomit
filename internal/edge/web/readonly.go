@@ -35,12 +35,22 @@ import (
 var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
 	`(?:/repos/[^/]+/branches/[^/]+/mcp|/lenses/[^/]+/mcp|/mcp)(/|$)`)
 
+// factsetClosePattern matches the REST factset resource, whose DELETE closes
+// the caller's own factset. Closing frees a read session the caller made by
+// reading (a GET); it changes nothing in any knowledge base, so it is not
+// gated as a write, exactly as knomit_materialize's `close` is a read tool's
+// option. Anchored on both ends: only the factset resource itself.
+var factsetClosePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
+	`/repos/[^/]+/branches/[^/]+/search/factset$`)
+
 // isMutatingRequest reports whether a request would mutate state and therefore
 // must be rejected in read-only mode. Mutating HTTP methods are gated unless
-// the path is the MCP dispatch route.
+// the path is the MCP dispatch route, or the request closes a factset.
 func isMutatingRequest(method, path string) bool {
 	switch method {
-	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	case http.MethodDelete:
+		return !mcpRoutePattern.MatchString(path) && !factsetClosePattern.MatchString(path)
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
 		return !mcpRoutePattern.MatchString(path)
 	default:
 		return false

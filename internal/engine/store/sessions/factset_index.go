@@ -100,39 +100,17 @@ func (ti *ToolIndex) factsetWrite(ctx context.Context, op string, fn func(c *sql
 	return nil
 }
 
-// CreateFactSet writes a new FactSet cursor in ONE transaction: it deletes
-// owner's previous FactSet cursors (one FactSet per endpoint + principal: a
-// new first call replaces the old one; the cascade drops their frozen rows),
-// then inserts the session row and the frozen inputs. It returns the new id
-// and the ids it replaced (so the caller can drop their cache entries).
-func (ti *ToolIndex) CreateFactSet(ctx context.Context, tool, branch, binding, readSet, owner string, frozen []byte) (string, []string, error) {
+// CreateFactSet writes a new FactSet cursor in ONE transaction: the session
+// row and the frozen inputs. It only inserts: an owner holds any number of
+// FactSets at once, and a FactSet ends only by CloseFactSet, the idle reaper,
+// or the session DB wipe on store open.
+func (ti *ToolIndex) CreateFactSet(ctx context.Context, tool, branch, binding, readSet, owner string, frozen []byte) (string, error) {
 	if !strings.HasPrefix(tool, FactSetToolPrefix) {
-		return "", nil, fmt.Errorf("CreateFactSet: tool %q is not a factset tool", tool)
+		return "", fmt.Errorf("CreateFactSet: tool %q is not a factset tool", tool)
 	}
 	id := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
-	var replaced []string
 	err := ti.factsetWrite(ctx, "CreateFactSet", func(c *sql.Conn) error {
-		replaced = replaced[:0]
-		rows, err := c.QueryContext(ctx, `SELECT id FROM tool_sessions WHERE owner = ? AND tool LIKE ?`, owner, FactSetToolPrefix+"%")
-		if err != nil {
-			return fmt.Errorf("CreateFactSet replace: %w", err)
-		}
-		for rows.Next() {
-			var old string
-			if err := rows.Scan(&old); err != nil {
-				rows.Close()
-				return err
-			}
-			replaced = append(replaced, old)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if _, err := c.ExecContext(ctx, `DELETE FROM tool_sessions WHERE owner = ? AND tool LIKE ?`, owner, FactSetToolPrefix+"%"); err != nil {
-			return fmt.Errorf("CreateFactSet replace: %w", err)
-		}
 		if _, err := c.ExecContext(ctx,
 			`INSERT INTO tool_sessions(id, tool, branch, path_prefix, binding, read_set, owner, last_commit, status, created_at, updated_at, last_used_at)
 			 VALUES (?, ?, ?, '', ?, ?, ?, '', 'active', ?, ?, ?)`,
@@ -145,13 +123,13 @@ func (ti *ToolIndex) CreateFactSet(ctx context.Context, tool, branch, binding, r
 		return nil
 	})
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	return id, replaced, nil
+	return id, nil
 }
 
 // GetFactSet reads a FactSet cursor's row; nil when there is none (unknown,
-// reaped, replaced, or another tool's session). A read only: no write.
+// reaped, closed, or another tool's session). A read only: no write.
 func (ti *ToolIndex) GetFactSet(ctx context.Context, id string) (*FactSetRow, error) {
 	var r FactSetRow
 	var lastUsed string
@@ -187,6 +165,37 @@ func (ti *ToolIndex) DeleteFactSet(ctx context.Context, id string) error {
 		_, err := c.ExecContext(ctx, `DELETE FROM tool_sessions WHERE id = ?`, id)
 		return err
 	})
+}
+
+// CloseFactSet deletes the FactSet id ONLY when it is an active FactSet of
+// exactly this binding pin, read set and owner, in one statement (the cascade
+// drops its frozen row). It reports whether a row was deleted: false for an
+// unknown id and for another owner's, pin's or read set's FactSet alike, so
+// the caller answers both the same way.
+func (ti *ToolIndex) CloseFactSet(ctx context.Context, id, binding, readSet, owner string) (bool, error) {
+	if binding == "" || owner == "" {
+		return false, nil
+	}
+	var closed bool
+	err := ti.factsetWrite(ctx, "CloseFactSet", func(c *sql.Conn) error {
+		res, err := c.ExecContext(ctx,
+			`DELETE FROM tool_sessions
+			  WHERE id = ? AND tool LIKE ? AND status = 'active' AND binding = ? AND read_set = ? AND owner = ?`,
+			id, FactSetToolPrefix+"%", binding, readSet, owner)
+		if err != nil {
+			return fmt.Errorf("CloseFactSet: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("CloseFactSet: %w", err)
+		}
+		closed = n > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return closed, nil
 }
 
 // closeHooks run once when the store owning this index closes.

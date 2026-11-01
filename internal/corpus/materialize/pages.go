@@ -130,8 +130,9 @@ type CursorScope struct {
 	Pin string
 	// ReadSet is federate.ReadSetFingerprint of the binding.
 	ReadSet string
-	// Owner is the endpoint plus the caller's principal: a cursor belongs to
-	// both (another owner reads it as expired).
+	// Owner is who the cursor belongs to (another owner reads it as
+	// expired): for a single-fact cursor, the endpoint or route plus the
+	// caller's principal; for a FactSet, the principal alone (FactSetOwner).
 	Owner string
 }
 
