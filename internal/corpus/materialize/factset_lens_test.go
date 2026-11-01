@@ -363,8 +363,17 @@ func TestLensFactSet_RemapsTheFourNumberFields(t *testing.T) {
 	p := lt.first(t, req)
 	require.Equal(t, 4, p.Units)
 	pages := allPages(t, lt.scope(), lt.lens, p)
+	// Roots by tree position, not by number (the numbers are under test).
+	var roots []FactSetNode
+	for _, pg := range pages {
+		for _, n := range pg.Facts {
+			if n.TreeDepth == 0 && n.Parent == 0 {
+				roots = append(roots, n)
+			}
+		}
+	}
 	require.Equal(t, []string{"kb/u/w1.md", wireOf(lt.lens, lt.r1.ri, "kb/u/a.md"), "kb/u/w2.md", wireOf(lt.lens, lt.r1.ri, "kb/u/b.md")},
-		paths(unitRoots(pages...)))
+		paths(roots))
 
 	var unitA []FactSetNode
 	for _, pg := range pages {
