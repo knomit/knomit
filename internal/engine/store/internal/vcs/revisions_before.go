@@ -3,10 +3,12 @@ package vcs
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"sync/atomic"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/engine/store/git"
 )
@@ -148,8 +150,27 @@ func LineEvents(ctx context.Context, db *sql.DB, from string, lq LineQuery) ([]L
 	if _, err := conn.ExecContext(ctx, `BEGIN`); err != nil {
 		return nil, fmt.Errorf("first-parent line: begin: %w", err)
 	}
-	defer conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`) //nolint:errcheck
+	defer endLineSnapshot(ctx, conn)
 	return lineEvents(ctx, conn, from, lq)
+}
+
+// lineRollback ends LineEvents' read transaction. A variable so a test can
+// make it fail.
+var lineRollback = func(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, `ROLLBACK`)
+	return err
+}
+
+// endLineSnapshot rolls back LineEvents' read transaction on conn. If the
+// ROLLBACK fails the connection may still be inside that transaction, and
+// returned to the pool it would hand the next caller a stale snapshot (or
+// refuse its BEGIN): it is marked bad instead (driver.ErrBadConn through
+// Conn.Raw), so database/sql closes it rather than pooling it.
+func endLineSnapshot(ctx context.Context, conn *sql.Conn) {
+	if err := lineRollback(context.WithoutCancel(ctx), conn); err != nil {
+		log.Warn().Err(err).Msg("first-parent line: rollback failed; discarding the connection")
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
 }
 
 // lineEvents is LineEvents on one executor (already a single snapshot).
