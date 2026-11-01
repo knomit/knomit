@@ -68,8 +68,12 @@ func TestFactSet_Lens_MCPEmbedsTheQueryOnce(t *testing.T) {
 // exactly the text an unknown cursor gets on that endpoint (the pins differ:
 // lens:<uid> against repo:<uid>), and nothing is served.
 //
-// Sabotage (drop the pin comparison in IsFactSetCursor and openFactSet): the
-// lens cursor is served on the repo endpoint.
+// The pin and the read-set fingerprint each refuse it on their own (dropping
+// one alone is not caught here, by design: they are redundant).
+//
+// Sabotage (drop BOTH the pin and the read-set comparisons in
+// IsFactSetCursor and openFactSet): the repo cursor is resumed on the lens
+// endpoint and answers a different text.
 func TestFactSet_Lens_CursorsDoNotCrossEndpoints(t *testing.T) {
 	m, alpha, beta, _, _, lens := newLensE2E(t)
 	obs(t, alpha, "kb/architecture/u/a1.md", "A1")
