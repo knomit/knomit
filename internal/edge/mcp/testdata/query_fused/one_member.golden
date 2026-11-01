@@ -1,0 +1,12 @@
+== relevance text
+error: false
+{"facts":[{"file":"kb/s/2.md","title":"solo two","type":"observation","score":90.00000059604645,"body":"---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nmotifs: [drift-config]\nrefs: []\n---\n# solo two\n\ncos=0.9\n","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["drift-config"],"refs":[],"committed_at":"<t1>"}},{"file":"kb/s/1.md","title":"solo one","type":"observation","score":69.9999988079071,"body":"---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nmotifs: [config-drift]\nrefs: []\n---\n# solo one\n\ncos=0.7\n","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["config-drift"],"refs":[],"committed_at":"<t1>"}}],"cursor":null,"has_more":false}
+== relevance motif
+error: false
+{"facts":[{"file":"kb/s/1.md","title":"solo one","type":"observation","score":69.9999988079071,"body":"---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nmotifs: [config-drift]\nrefs: []\n---\n# solo one\n\ncos=0.7\n","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["config-drift"],"refs":[],"committed_at":"<t1>"}}],"cursor":null,"has_more":false}
+== recent
+error: false
+{"facts":[{"file":"kb/s/1.md","title":"solo one","type":"observation","score":0,"body":"cos=0.7","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["config-drift"],"refs":[],"committed_at":"<t1>"}},{"file":"kb/s/2.md","title":"solo two","type":"observation","score":0,"body":"cos=0.9","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["drift-config"],"refs":[],"committed_at":"<t1>"}}],"cursor":null,"has_more":false}
+== recent text
+error: false
+{"facts":[{"file":"kb/s/2.md","title":"solo two","type":"observation","score":90.00000059604645,"body":"cos=0.9","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["drift-config"],"refs":[],"committed_at":"<t1>"}},{"file":"kb/s/1.md","title":"solo one","type":"observation","score":69.9999988079071,"body":"cos=0.7","commit":"<sha>","frontmatter":{"domain":[],"confidence":0.9,"sources":1,"entities":[],"motifs":["config-drift"],"refs":[],"committed_at":"<t1>"}}],"cursor":null,"has_more":false}

@@ -1,0 +1,12 @@
+== relevance text
+error: false
+{"facts":[],"cursor":null,"has_more":false}
+== relevance filter-only
+error: false
+{"facts":[],"cursor":null,"has_more":false}
+== recent
+error: false
+{"facts":[],"cursor":null,"has_more":false}
+== recent text
+error: false
+{"facts":[],"cursor":null,"has_more":false}

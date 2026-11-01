@@ -1,0 +1,12 @@
+== GET /lenses/eng/search?q=x
+status: 200
+{"results":[{"path":"kb/s/2.md","title":"solo two","score":90.00000059604645,"type":"observation","motifs":["drift-config"],"confidence":0.9,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}},{"path":"kb/s/1.md","title":"solo one","score":69.9999988079071,"type":"observation","motifs":["config-drift"],"confidence":0.9,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}}],"total":2}
+== GET /lenses/eng/search?q=x&motifs=config-drift
+status: 200
+{"results":[{"path":"kb/s/1.md","title":"solo one","score":69.9999988079071,"type":"observation","motifs":["config-drift"],"confidence":0.9,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}}],"total":1}
+== GET /lenses/eng/facts
+status: 200
+{"facts":[{"path":"kb/s/1.md","title":"solo one","type":"observation","motifs":["config-drift"],"committed_at":"<t1>","operation":"learn","score":0,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}},{"path":"kb/s/2.md","title":"solo two","type":"observation","motifs":["drift-config"],"committed_at":"<t1>","operation":"learn","score":0,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}}],"total":2}
+== GET /lenses/eng/facts?q=x
+status: 200
+{"facts":[{"path":"kb/s/2.md","title":"solo two","type":"observation","motifs":["drift-config"],"committed_at":"<t1>","operation":"learn","score":90.00000059604645,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}},{"path":"kb/s/1.md","title":"solo one","type":"observation","motifs":["config-drift"],"committed_at":"<t1>","operation":"learn","score":69.9999988079071,"source":{"repo":"solo","id":"<id:solo>","branch":"machine/test"}}],"total":2}

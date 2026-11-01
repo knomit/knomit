@@ -1,0 +1,9 @@
+== GET /lenses/eng/facts
+status: 500
+{"type":"about:blank","title":"Failed to list facts","status":500,"detail":"mid recent down","instance":"/lenses/eng/facts"}
+== GET /lenses/eng/facts?q=x
+status: 500
+{"type":"about:blank","title":"Failed to list facts","status":500,"detail":"mid recent down","instance":"/lenses/eng/facts"}
+== GET /lenses/eng/facts?repo=zulu
+status: 500
+{"type":"about:blank","title":"Failed to list facts","status":500,"detail":"zulu recent down","instance":"/lenses/eng/facts"}
