@@ -24,7 +24,8 @@ import (
 //
 // It is ONE gate over the whole subtree, by method, so a mutating route
 // added later is covered without anyone remembering to. Reads (GET, HEAD,
-// OPTIONS) pass, and so does the MCP mount: MCP is a POST for reads too, and
+// OPTIONS) pass, and so does DELETE on the FactSet resource (closing a
+// FactSet frees session data, not repo data), and so does the MCP mount: MCP is a POST for reads too, and
 // every MCP write on the fleet repository is refused by
 // RepoInstance.WritableBranch. Any other repository, and a name that
 // resolves to none (the handler's own 404 then answers), pass unchanged.
@@ -65,7 +66,26 @@ func fleetRepoMutation(m *repos.Manager, r *http.Request) bool {
 	if ri == nil || !ri.IsFleet() {
 		return false
 	}
+	if r.Method == http.MethodDelete && isRepoFactSetResource(r.URL.EscapedPath(), name) {
+		return false
+	}
 	return !isRepoMCPMount(r.URL.EscapedPath(), name)
+}
+
+// isRepoFactSetResource: the escaped path is exactly
+// …/repos/{name}/branches/{branch}/search/factset. Its DELETE closes the
+// caller's own FactSet: that deletes transient session data (a row of the
+// session DB and a cache entry), never repository data, so the fleet gate lets
+// it through (user ruling 2026-11-01). Matched on the whole shape: the export
+// below it, and a fact path that ends in search/factset, are not it.
+func isRepoFactSetResource(escaped, name string) bool {
+	marker := "/repos/" + url.PathEscape(name) + "/branches/"
+	i := strings.Index(escaped, marker)
+	if i < 0 {
+		return false
+	}
+	parts := strings.Split(escaped[i+len(marker):], "/")
+	return len(parts) == 3 && parts[0] != "" && parts[1] == "search" && parts[2] == "factset"
 }
 
 // isRepoMCPMount: the escaped path is exactly …/repos/{name}/branches/{branch}/mcp

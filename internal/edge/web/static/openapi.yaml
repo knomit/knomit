@@ -24,7 +24,9 @@ tags:
       HEAD and OPTIONS) under `/repos/{repo}` that names it — rename, archive,
       the repo PATCH, PUT and DELETE origin, the upstream, origin sessions,
       the pushed-branch merge, fact, branch and experiment writes, index and
-      synthesis jobs, and every other route there, the MCP mount aside —
+      synthesis jobs, and every other route there, the MCP mount and
+      `DELETE …/branches/{branch}/search/factset` (closing a factset deletes
+      the caller's session data, never repository data) aside —
       answers 409 with `code: fleet_repository`, and the operation does not
       run. It changes only through `/fleet` (POST /fleet/host,
       POST /fleet/follow, /fleet/leave, /fleet/decommission, …). Reads stay
@@ -1400,7 +1402,9 @@ paths:
         Another principal's factset, another binding's, an unknown and an
         already closed one all answer the same 404, and nothing is closed.
         Closing needs only read: it frees the caller's own read session and
-        changes nothing in the knowledge base, so it is not gated as a write.
+        changes nothing in the knowledge base, so it is not gated as a write,
+        and it is not refused on the fleet repository either (no 409
+        `fleet_repository`).
       operationId: deleteSearchFactSet
       parameters:
         - { name: cursor, in: query, required: true, schema: { type: string }, description: "Any cursor of the factset to close." }
