@@ -522,3 +522,14 @@ func (c *countingExecer) QueryRowContext(ctx context.Context, query string, args
 	c.n++
 	return c.q.QueryRowContext(ctx, query, args...)
 }
+
+// SetLineRollbackForTest replaces how LineEvents ends its read transaction
+// (f must not be nil) and returns the restore.
+func SetLineRollbackForTest(f func(ctx context.Context, conn *sql.Conn) error) (restore func()) {
+	mustBeTest()
+	old := lineRollback
+	if f != nil {
+		lineRollback = f
+	}
+	return func() { lineRollback = old }
+}

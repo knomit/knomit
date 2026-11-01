@@ -139,7 +139,10 @@ func TestFirstParentLine_RederiveNeverCutsALineUnderItsDescendants(t *testing.T)
 		d, deg, ups, ok := fpRow(t, svc, a)
 		require.True(t, ok)
 		require.Equal(t, aDepth, d, "A keeps its depth")
-		require.Equal(t, 1, deg, "A stays degraded = 1, retried by a later :rebuild")
+		// The mark was set by hand over complete content: the kept row's
+		// content refresh (NB1) finds nothing missing and clears it, while
+		// depth and pointers stay.
+		require.Equal(t, 0, deg, "no content is missing: the kept row's mark clears")
 		require.Equal(t, aUps, ups)
 		for _, from := range []string{tip, a, o} {
 			requireReadersAgreeAt(t, svc, "kb/p.md", from)

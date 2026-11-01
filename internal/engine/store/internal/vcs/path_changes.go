@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -345,6 +346,15 @@ func (rh *Repo) deriveCommits(ctx context.Context, d *deriver, order []*commitMe
 			if prepared[j], err = d.prepare(ctx, c); err != nil {
 				return err
 			}
+			// A re-derivation that would cut the line keeps the row's
+			// structure (wouldCutDerivedLine) but still refreshes its
+			// content: read what that needs from git now, outside the
+			// transaction, for every commit that may be kept.
+			if replace && slices.Contains(prepared[j].parentAbsent, true) {
+				if prepared[j].refresh, err = d.prepareContentRefresh(ctx, prepared[j]); err != nil {
+					return err
+				}
+			}
 		}
 		bctx, tx, own, err := sqlite.BeginTxIfNeeded(ctx, rh.db)
 		if err != nil {
@@ -355,8 +365,11 @@ func (rh *Repo) deriveCommits(ctx context.Context, d *deriver, order []*commitMe
 				var keep bool
 				if keep, err = d.wouldCutDerivedLine(bctx, tx, p); err == nil && keep {
 					log.Warn().Str("commit", p.c.Hash.String()).
-						Msg("path changes: re-derivation would cut a line its descendants were derived over; kept as it was")
-					continue
+						Msg("path changes: re-derivation would cut a line its descendants were derived over; depth and pointers kept, content refreshed")
+					err = d.applyContentRefresh(bctx, tx, p)
+					if err == nil {
+						continue
+					}
 				}
 				if err == nil {
 					err = d.clear(bctx, tx, p.c.Hash.String())
@@ -832,10 +845,12 @@ func (d *deriver) commitChanges(c *object.Commit) ([]storegit.CommitLogEntry, er
 // preparedCommit is everything deriving a commit needs from git objects —
 // read before any transaction opens. apply turns it into rows with SQL only.
 type preparedCommit struct {
-	c            *commitMeta
-	parentAbsent []bool // parent i is not in the object store (a boundary)
-	degraded     int
-	paths        []preparedPath
+	c              *commitMeta
+	parentAbsent   []bool // parent i is not in the object store (a boundary)
+	degraded       int
+	paths          []preparedPath
+	treeIncomplete bool            // a tree the first-parent diff needs is missing
+	refresh        *contentRefresh // set by deriveCommits(replace) for a commit that may be kept
 }
 
 type preparedPath struct {
@@ -889,6 +904,7 @@ func (d *deriver) prepare(ctx context.Context, c *commitMeta) (*preparedCommit, 
 		if incomplete {
 			// A tree needed for the diff is missing: take the changed paths
 			// commit_log recorded when git still had it.
+			pc.treeIncomplete = true
 			pc.degraded = max(pc.degraded, degradedContent)
 			rows, err := sqlite.Conn(ctx, d.rh.db).QueryContext(ctx, `SELECT path, action FROM commit_log WHERE commit_hash = ?`, c.Hash.String())
 			if err != nil {
@@ -1006,6 +1022,151 @@ func (d *deriver) clear(ctx context.Context, tx *sql.Tx, hash string) error {
 	return nil
 }
 
+// contentRefresh is what refreshing a kept row's content needs, read from
+// git before the transaction: the stored content_unavailable entry rows
+// whose content can now be read, with their blob and diff.
+type contentRefresh struct {
+	rows []refreshedRow
+}
+
+type refreshedRow struct {
+	path, blob, diff string
+}
+
+// prepareContentRefresh reads, outside any transaction, what refreshing the
+// content of pc's commit needs if the re-derivation keeps its row
+// (wouldCutDerivedLine): for each of its STORED entry rows marked
+// content_unavailable, the path's blob at the commit and, when it can be
+// read, the diff against the row's stored diff base. The rows' structure
+// (entry, resolves_to, links, action, order_at, gen) is the stored one —
+// derived when every parent was present — and is never recomputed here: a
+// parent now missing would make every path look added.
+//
+// The diff base is the row's link with the lowest parent_order (the first
+// parent that has the path, as prepare chooses it): that parent's blob, read
+// from its tree when the parent commit is present, else the link's stored
+// from_blob. A row whose blob, or whose base, still cannot be read stays
+// unavailable.
+func (d *deriver) prepareContentRefresh(ctx context.Context, pc *preparedCommit) (*contentRefresh, error) {
+	q := sqlite.Conn(ctx, d.rh.db)
+	hash := pc.c.Hash.String()
+	rows, err := q.QueryContext(ctx, `SELECT path FROM `+d.t.Changes+` WHERE commit_hash = ? AND entry = 1 AND content_unavailable = 1 ORDER BY path`, hash)
+	if err != nil {
+		return nil, fmt.Errorf("path changes: refresh: %w", err)
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := &contentRefresh{}
+	for _, path := range paths {
+		to, st, err := d.blobAt(pc.c.Tree, path)
+		if err != nil {
+			return nil, err
+		}
+		if st != blobPresent {
+			continue
+		}
+		cur, miss, err := d.parsed(path, to)
+		if err != nil {
+			return nil, err
+		}
+		if miss {
+			continue
+		}
+		var po int
+		var fromBlob string
+		err = q.QueryRowContext(ctx, `SELECT parent_order, from_blob FROM `+d.t.Links+`
+			WHERE path = ? AND commit_hash = ? ORDER BY parent_order LIMIT 1`, path, hash).Scan(&po, &fromBlob)
+		if errors.Is(err, sql.ErrNoRows) {
+			// An addition: nothing to diff; its content is readable now.
+			out.rows = append(out.rows, refreshedRow{path: path, blob: to.String()})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("path changes: refresh link: %w", err)
+		}
+		base := plumbing.ZeroHash
+		if po < len(pc.c.Parents) && !pc.parentAbsent[po] {
+			pcm, err := d.commit(pc.c.Parents[po])
+			if err != nil {
+				return nil, err
+			}
+			b, bst, err := d.blobAt(pcm.Tree, path)
+			if err != nil {
+				return nil, err
+			}
+			if bst == blobPresent {
+				base = b
+			}
+		} else if fromBlob != "" {
+			base = plumbing.NewHash(fromBlob)
+		}
+		if base.IsZero() {
+			continue // the diff base is unknown
+		}
+		prev, missPrev, err := d.parsed(path, base)
+		if err != nil {
+			return nil, err
+		}
+		if missPrev {
+			continue
+		}
+		diff := ""
+		if cur != nil {
+			if rd := revisionDelta(prev, *cur); rd != nil {
+				js, _ := json.Marshal(rd)
+				diff = string(js)
+			}
+		}
+		out.rows = append(out.rows, refreshedRow{path: path, blob: to.String(), diff: diff})
+	}
+	return out, nil
+}
+
+// applyContentRefresh refreshes the content of a row the re-derivation keeps
+// (wouldCutDerivedLine), on tx, SQL only: each prepared row gets its blob and
+// diff and loses content_unavailable; the commit's degraded mark becomes 0
+// when no row is still unavailable and its trees were complete, else stays
+// 1. Depth and jump pointers are not touched. Without a prepared refresh
+// (the row is kept because a parent ROW is structural, which a consistent
+// store does not produce) nothing changes.
+func (d *deriver) applyContentRefresh(ctx context.Context, tx *sql.Tx, pc *preparedCommit) error {
+	d.applying = true
+	defer func() { d.applying = false }()
+	if pc.refresh == nil {
+		return nil
+	}
+	hash := pc.c.Hash.String()
+	for _, r := range pc.refresh.rows {
+		if _, err := tx.ExecContext(ctx, `UPDATE `+d.t.Changes+` SET blob = ?, diff = ?, content_unavailable = 0
+			WHERE path = ? AND commit_hash = ? AND entry = 1 AND content_unavailable = 1`, r.blob, r.diff, r.path, hash); err != nil {
+			return fmt.Errorf("path changes: refresh: %w", err)
+		}
+	}
+	var still int
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM `+d.t.Changes+` WHERE commit_hash = ? AND content_unavailable = 1)`, hash).Scan(&still); err != nil {
+		return fmt.Errorf("path changes: refresh: %w", err)
+	}
+	mark := degradedNone
+	if still == 1 || pc.treeIncomplete {
+		mark = degradedContent
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE `+d.t.FP+` SET degraded = ? WHERE commit_hash = ? AND degraded < ?`, mark, hash, degradedStructural); err != nil {
+		return fmt.Errorf("path changes: refresh: %w", err)
+	}
+	return nil
+}
+
 // wouldCutDerivedLine reports whether re-deriving the commit of pc in place
 // would turn a row with degraded < 2 into a structural boundary (a parent
 // commit now missing from the object store, or a parent row now structural).
@@ -1015,8 +1176,10 @@ func (d *deriver) clear(ctx context.Context, tx *sql.Tx, hash string) error {
 // leave every descendant with depths and pointers that disagree with it,
 // still marked undegraded. The first-parent readers trust undegraded rows
 // (vcs.LineEvents, LiveChange) and would silently skip this commit's writes.
-// The row is kept as it was instead; it stays degraded (1) and a later
-// :rebuild retries it once the objects are back.
+// The row's depth and pointers are kept as they were; its CONTENT is still
+// refreshed (applyContentRefresh), so a blob that is back makes the
+// revision available again, and the row stays degraded (1) only while some
+// content is still missing.
 //
 // INVARIANT this preserves: every commit_fp row's depth and pointers agree
 // with its first-parent ancestors' rows. In-place re-derivation can then only
