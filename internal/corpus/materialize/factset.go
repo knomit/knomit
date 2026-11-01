@@ -213,13 +213,30 @@ type frozenRoot struct {
 
 // factsetFrozen is the ONE row a FactSet writes (factsets.frozen).
 type factsetFrozen struct {
-	V         int                  `json:"v"`
-	Env       FactSetEnv           `json:"env"`
-	Limit     int                  `json:"limit"`
-	WriteRepo string               `json:"write_repo"`
-	Branch    string               `json:"branch"`
-	Tips      map[string]frozenTip `json:"tips,omitempty"`
-	Roots     []frozenRoot         `json:"roots"`
+	V     int        `json:"v"`
+	Env   FactSetEnv `json:"env"`
+	Limit int        `json:"limit"`
+	// HomeRepo is the repo every root lives in (id12), read at Branch as of
+	// Env.Anchor: it keys the fact hashes, the classification of local refs,
+	// the read-ahead and the unavailable roots. The JSON name predates the
+	// home/wire split: for a repo FactSet the home IS the write repo.
+	HomeRepo string `json:"write_repo"`
+	Branch   string `json:"branch"`
+	// WireRepo is the repo whose paths go out bare, when it is not the home
+	// (a lens sub-FactSet over a read member: its paths are kb://<home>/...).
+	// Empty means the home: a repo FactSet never sets it, so its frozen
+	// bytes are unchanged.
+	WireRepo string               `json:"wire_repo,omitempty"`
+	Tips     map[string]frozenTip `json:"tips,omitempty"`
+	Roots    []frozenRoot         `json:"roots"`
+}
+
+// wireID is the repo whose paths go out bare (see WireRepo).
+func (fr *factsetFrozen) wireID() string {
+	if fr.WireRepo != "" {
+		return fr.WireRepo
+	}
+	return fr.HomeRepo
 }
 
 const frozenVersion = 1
@@ -358,7 +375,6 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if err != nil {
 		return FactSetPage{}, c.st, err
 	}
-	wm.anchor = anchor
 	write := req.Binding.Write()
 	env := FactSetEnv{
 		Mode: FactSetMode, Title: FactSetTitle(req.Search, write.OntologyRoot(), write.Name()),
@@ -369,31 +385,97 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if len(hits) == 0 {
 		return FactSetPage{FactSetEnv: env, Facts: []FactSetNode{}}, c.st, nil
 	}
-	fr := &factsetFrozen{V: frozenVersion, Env: env, Limit: req.Limit, WriteRepo: wm.id12, Branch: wm.branch}
-	for _, h := range hits {
-		fr.Roots = append(fr.Roots, frozenRoot{Path: h.path, Commit: h.commit, Blob: h.blob, Title: h.title, Date: h.date})
-	}
+	// The repo path of the seam: home = wire = the write mount.
+	fr := freezePinned(pinnedHome{ID: wm.id12, Branch: wm.branch}, wm.id12, env, req.Limit, hits)
 	if req.Options.CrossKB {
 		if fr.Tips, err = c.freezeTips(); err != nil {
 			return FactSetPage{}, c.st, err
 		}
 	}
-	c.r.tips = fr.Tips
+	if err := c.startPinned(fr, sc.Sessions); err != nil {
+		return FactSetPage{}, c.st, err
+	}
+	page, err := c.createPinned(sc)
+	return page, c.st, err
+}
+
+// ---- the pinned seam -------------------------------------------------------
+//
+// A FactSet over SUPPLIED pinned roots: the second half of FactSetFirstPage,
+// split from the search so a lens facade (F3) can build one sub-FactSet per
+// lens member from that member's slice of the fused lens search, without a
+// search of its own. The repo path is search + anchor (FactSetFirstPage),
+// then freezePinned, startPinned and createPinned with home = wire = the
+// write mount; its frozen bytes and pages are what they were before the
+// split. A sub calls freezePinned and startPinned only: it is not a session
+// row of its own.
+
+// pinnedHome is the repo a FactSet's roots live in and the branch it is read
+// at.
+type pinnedHome struct {
+	ID     string // id12
+	Branch string
+}
+
+// freezePinned is the frozen row of a FactSet over pinned roots: every hit a
+// version of a fact in home, at env.Anchor (the home's settled watermark the
+// hits were read at), in the order given. wireID is the repo whose paths go
+// out bare (the binding's write repo); a home that is not it emits
+// kb://<home>/... paths. Tips are the caller's (cross_kb only); a sub-FactSet
+// has none.
+func freezePinned(home pinnedHome, wireID string, env FactSetEnv, limit int, hits []factsetHit) *factsetFrozen {
+	fr := &factsetFrozen{V: frozenVersion, Env: env, Limit: limit, HomeRepo: home.ID, Branch: home.Branch}
+	if wireID != home.ID {
+		fr.WireRepo = wireID
+	}
+	for _, h := range hits {
+		fr.Roots = append(fr.Roots, frozenRoot{Path: h.path, Commit: h.commit, Blob: h.blob, Title: h.title, Date: h.date})
+	}
+	return fr
+}
+
+// startPinned makes c the call on a NEW FactSet over fr, not yet a session
+// row: it attaches a new cache entry (not yet in the cache, attachPinned)
+// and builds the reservation (the results and reserved tables) in memory. A
+// FactSet with no roots is legal (a lens member whose slice is empty): it
+// starts, reads nothing ahead and has no units.
+func (c *fsCall) startPinned(fr *factsetFrozen, ti *sessions.ToolIndex) error {
+	if err := c.attachPinned(newFSEntry("", ti, fr)); err != nil {
+		return err
+	}
+	return c.ensureState()
+}
+
+// attachPinned makes e the FactSet c works on: its frozen tips become the
+// reader's (an empty map when none: foreign then admits no repo) and its
+// home is registered in the reader, before any read. Every call on a
+// FactSet attaches it: a resume (openFactSet, after the row checks) and a
+// creation (startPinned). A lens facade (F3) attaches each sub-FactSet, which
+// is not a session row, the same way. The caller must have checked the
+// binding identity AND the read set first: the pin does not cover a lens's
+// membership, and registration only refuses a home outside the binding.
+func (c *fsCall) attachPinned(e *fsEntry) error {
+	c.e = e
+	c.r.tips = e.fr.Tips
 	if c.r.tips == nil {
 		c.r.tips = map[string]frozenTip{}
 	}
-	e := newFSEntry("", sc.Sessions, fr)
-	c.e = e
-	if err := c.ensureState(); err != nil {
-		return FactSetPage{}, c.st, err
-	}
-	frozen, err := json.Marshal(fr)
+	return c.registerHome()
+}
+
+// createPinned writes the ONE session row of c's started FactSet (a new
+// FactSet beside any the owner already holds), caches its entry and returns
+// page 1. A failure after the row was written deletes it: the caller never
+// got the cursor.
+func (c *fsCall) createPinned(sc CursorScope) (FactSetPage, error) {
+	ctx, e := c.ctx, c.e
+	frozen, err := json.Marshal(e.fr)
 	if err != nil {
-		return FactSetPage{}, c.st, err
+		return FactSetPage{}, err
 	}
-	id, err := sc.Sessions.CreateFactSet(ctx, factsetTool(req.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, frozen)
+	id, err := sc.Sessions.CreateFactSet(ctx, factsetTool(e.fr.Limit), sc.Branch, sc.Pin, sc.ReadSet, sc.Owner, frozen)
 	if err != nil {
-		return FactSetPage{}, c.st, err
+		return FactSetPage{}, err
 	}
 	e.id = id
 	fsCachePut(e)
@@ -403,9 +485,37 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 		// The caller never got the cursor: nothing may stay behind.
 		fsCacheDrop(id)
 		_ = sc.Sessions.DeleteFactSet(context.WithoutCancel(ctx), id)
-		return FactSetPage{}, c.st, err
+		return FactSetPage{}, err
 	}
-	return page, c.st, nil
+	return page, nil
+}
+
+// registerHome registers the FactSet's home repo in c's reader (see
+// reader.registerHome): every call on a FactSet does it when it opens, before
+// any read. A repo FactSet's home is the write repo, read at the binding's
+// write mount branch exactly as before the split; any other home is read at
+// its frozen branch.
+func (c *fsCall) registerHome() error {
+	fr := c.e.fr
+	branch := fr.Branch
+	if fr.HomeRepo == fact.ID12(c.b.Write().ID()) {
+		branch = c.b.WriteMountBranch()
+	}
+	return c.r.registerHome(fr.HomeRepo, branch, fr.Env.Anchor)
+}
+
+// home is this call's mount of the FactSet's home repo, at its branch, read
+// as of its anchor: the ONE place planning, the reservation and the
+// read-ahead open the repo the roots live in.
+func (c *fsCall) home() (*mount, error) {
+	m, ok, err := c.r.homeMount(c.e.fr.HomeRepo)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("factset: home repo %s not registered for this call", c.e.fr.HomeRepo)
+	}
+	return m, nil
 }
 
 // searchAnchored runs the search between two reads of the write mount's
@@ -654,7 +764,20 @@ var prefetchWindow = 6
 // it.
 const prefetchParallel = 4
 
-// prefetch reads ahead for units u..u+prefetchWindow-1: their roots'
+// windowUnits is the window of units that starts at u: u and the units after
+// it, at most prefetchWindow, all of this FactSet's home; empty when u is past
+// the last unit (a FactSet with no roots has only the empty window).
+func windowUnits(fr *factsetFrozen, u int) []int {
+	hi := min(len(fr.Roots)+1, u+prefetchWindow)
+	units := make([]int, 0, max(0, hi-u))
+	for v := u; v < hi; v++ {
+		units = append(units, v)
+	}
+	return units
+}
+
+// readAhead reads ahead for a window of units (ascending, all of one home
+// repo, the repo lv reads): their roots'
 // metadata, their roots' ref rows, and then, in parallel, the metadata of
 // those rows' local targets (pinned) and the ref rows of those targets (level
 // 1, read speculatively: a target the unit links instead of expanding wastes
@@ -663,12 +786,11 @@ const prefetchParallel = 4
 //
 // It touches no field of c (it may run beside the planner): it returns its
 // window and what it read.
-func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre *prefetch, st Stats, err error) {
-	hi := min(len(fr.Roots)+1, u+prefetchWindow)
-	pre = &prefetch{lo: u, hi: hi, rows: map[string][]index.LevelRow{}, metas: map[index.TargetVersion]index.TargetMeta{}}
+func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, units []int) (pre *prefetch, st Stats, err error) {
+	pre = &prefetch{home: fr.HomeRepo, units: units, rows: map[string][]index.LevelRow{}, metas: map[index.TargetVersion]index.TargetMeta{}}
 	var roots []index.TargetVersion
-	for _, root := range fr.Roots[u-1 : hi-1] {
-		if root.Blob != "" {
+	for _, u := range units {
+		if root := fr.Roots[u-1]; root.Blob != "" {
 			roots = append(roots, index.TargetVersion{Path: root.Path, Blob: root.Blob, Commit: root.Commit})
 		}
 	}
@@ -742,7 +864,7 @@ func (c *fsCall) readAhead(fr *factsetFrozen, lv *index.LevelReader, u int) (pre
 	// in parallel chunks, to the unit's depth and within a node budget of
 	// max_nodes per unit. Pinned only: unpinned and cross-KB versions are
 	// read by LiveAt at plan time.
-	budget := (hi - u) * fr.Env.MaxNodes
+	budget := len(units) * fr.Env.MaxNodes
 	read := len(targets)
 	for dist := 1; ; dist++ {
 		if dist > fr.Env.Depth {
@@ -820,6 +942,7 @@ var backgroundReads atomic.Int64
 
 // pending is a window being read ahead in the background.
 type pending struct {
+	home string
 	lo   int
 	done chan struct{}
 	pre  *prefetch
@@ -827,20 +950,25 @@ type pending struct {
 	err  error
 }
 
-// startReadAhead reads window u in the background.
-func (c *fsCall) startReadAhead(fr *factsetFrozen, lv *index.LevelReader, u int) *pending {
+// startReadAhead reads the window of units in the background. An empty
+// window reads nothing (lo 0 matches no unit).
+func (c *fsCall) startReadAhead(fr *factsetFrozen, lv *index.LevelReader, units []int) *pending {
 	backgroundReads.Add(1)
-	pd := &pending{lo: u, done: make(chan struct{})}
+	pd := &pending{home: fr.HomeRepo, done: make(chan struct{})}
+	if len(units) > 0 {
+		pd.lo = units[0]
+	}
 	go func() {
 		defer close(pd.done)
-		pd.pre, pd.st, pd.err = c.readAhead(fr, lv, u)
+		pd.pre, pd.st, pd.err = c.readAhead(fr, lv, units)
 	}()
 	return pd
 }
 
 // window makes c.pre cover unit u: the window read in the background when it
 // is the one u starts, else read now; then the NEXT window starts reading in
-// the background while u's window is planned (reads overlap planning).
+// the background while u's window is planned (reads overlap planning). m is
+// the home mount: every unit of a FactSet is of its home repo.
 func (c *fsCall) window(fr *factsetFrozen, m *mount, u int) error {
 	if err := c.r.checkReady(c.ctx, m); err != nil {
 		return err
@@ -852,14 +980,14 @@ func (c *fsCall) window(fr *factsetFrozen, m *mount, u int) error {
 	c.pre = nil
 	var pre *prefetch
 	var st Stats
-	if pd := c.next; pd != nil && pd.lo == u {
+	if pd := c.next; pd != nil && pd.home == fr.HomeRepo && pd.lo == u {
 		<-pd.done
 		pre, st, err = pd.pre, pd.st, pd.err
 	} else {
 		if pd != nil {
 			<-pd.done // a window nobody will plan: let it finish
 		}
-		pre, st, err = c.readAhead(fr, lv, u)
+		pre, st, err = c.readAhead(fr, lv, windowUnits(fr, u))
 	}
 	c.next = nil
 	c.st.add(st)
@@ -867,8 +995,8 @@ func (c *fsCall) window(fr *factsetFrozen, m *mount, u int) error {
 		return err
 	}
 	c.pre = pre
-	if pre.hi <= len(fr.Roots) && !c.noPipeline {
-		c.next = c.startReadAhead(fr, lv, pre.hi)
+	if next := pre.last() + 1; next <= len(fr.Roots) && !c.noPipeline {
+		c.next = c.startReadAhead(fr, lv, windowUnits(fr, next))
 	}
 	return nil
 }
@@ -968,11 +1096,12 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 	// mayRead (89b26b07) whenever content of that repo is first read in a
 	// call, and an unreachable repo reads as kb_unavailable, like a missing
 	// target. Units already planned and cached are not re-read.
-	c.r.tips = e.fr.Tips
-	if c.r.tips == nil {
-		c.r.tips = map[string]frozenTip{}
+	// The home is registered before any read: a page served from kept plans
+	// plans nothing, yet reads its bodies and RULE 1 marks from the home.
+	if err := c.attachPinned(e); err != nil {
+		c.done()
+		return nil, err
 	}
-	c.e = e
 	return c, nil
 }
 
@@ -1094,12 +1223,11 @@ func (c *fsCall) ensureState() error {
 	// Unit 1's window does not depend on the reservation: read it while the
 	// reservation is built (not for a call that reads nothing in the
 	// background: the export).
-	if c.next == nil && !c.noPipeline && (c.pre == nil || c.pre.lo != 1) {
-		m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
+	if c.next == nil && !c.noPipeline && (c.pre == nil || !c.pre.covers(e.fr.HomeRepo, 1)) {
+		m, err := c.home()
 		if err != nil {
 			return err
 		}
-		m.anchor = e.fr.Env.Anchor
 		if err := c.r.checkReady(c.ctx, m); err != nil {
 			return err
 		}
@@ -1107,7 +1235,7 @@ func (c *fsCall) ensureState() error {
 		if err != nil {
 			return err
 		}
-		c.next = c.startReadAhead(e.fr, lv, 1)
+		c.next = c.startReadAhead(e.fr, lv, windowUnits(e.fr, 1))
 	}
 	results, reserved, err := c.reserveTables(e.fr)
 	if err != nil {
@@ -1208,17 +1336,16 @@ func (c *fsCall) planUnitOf(u int) (*plannedUnit, error) {
 // planUnit plans unit u over the cross-unit state st (no bodies).
 func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, error) {
 	root := fr.Roots[u-1]
-	m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
+	m, err := c.home()
 	if err != nil {
 		return nil, err
 	}
-	m.anchor = fr.Env.Anchor
-	if c.pre == nil || u < c.pre.lo || u >= c.pre.hi {
+	if c.pre == nil || !c.pre.covers(fr.HomeRepo, u) {
 		if err := c.window(fr, m, u); err != nil {
 			return nil, err
 		}
 	}
-	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), writeID: fr.WriteRepo, fs: st, unit: u, st: &c.st, pre: c.pre}
+	p := &planner{ctx: c.ctx, r: c.r, opts: fr.Env.options(), homeID: fr.HomeRepo, wireID: fr.wireID(), fs: st, unit: u, st: &c.st, pre: c.pre}
 	before := c.st.IndexQueries
 	defer func() { c.st.MaxUnitQueries = max(c.st.MaxUnitQueries, c.st.IndexQueries-before) }()
 	n, err := p.rootNode(m, root.Path, root.Commit, root.Blob, root.Date)
@@ -1227,8 +1354,8 @@ func (c *fsCall) planUnit(fr *factsetFrozen, st *fsState, u int) (*plannedUnit, 
 	}
 	if n == nil {
 		c.st.UnitsPlanned++
-		h := factHash(fr.WriteRepo, root.Path)
-		return &plannedUnit{secs: []section{{h: h, repo: fr.WriteRepo, rel: root.Path, wire: root.Path, title: root.Title,
+		k := key{fr.HomeRepo, root.Path}
+		return &plannedUnit{secs: []section{{h: factHash(k.repo, k.rel), repo: k.repo, rel: k.rel, wire: p.wire(k), title: root.Title,
 			n: 1, number: strconv.Itoa(u), parent: -1, role: RoleRoot, unavailable: true}}}, nil
 	}
 	pu, err := p.planRoot(n)
@@ -1266,9 +1393,9 @@ func (c *fsCall) reserveTables(fr *factsetFrozen) (results, reserved ftab, err e
 	}
 	roots := make([]fentry, len(fr.Roots))
 	for i, root := range fr.Roots {
-		roots[i] = fentry{h: factHash(fr.WriteRepo, root.Path), check: uint32(factCheck(fr.WriteRepo, root.Path)), blob: blob64(root.Blob), unit: uint16(i + 1)}
+		roots[i] = fentry{h: factHash(fr.HomeRepo, root.Path), check: uint32(factCheck(fr.HomeRepo, root.Path)), blob: blob64(root.Blob), unit: uint16(i + 1)}
 	}
-	if results, err = freeze(roots, func(e fentry) (string, string) { return fr.WriteRepo, fr.Roots[int(e.unit)-1].Path }); err != nil {
+	if results, err = freeze(roots, func(e fentry) (string, string) { return fr.HomeRepo, fr.Roots[int(e.unit)-1].Path }); err != nil {
 		return collision(err)
 	}
 	opts := fr.Env.options()
@@ -1279,11 +1406,10 @@ func (c *fsCall) reserveTables(fr *factsetFrozen) (results, reserved ftab, err e
 	// keeps the first unit's (the earliest owner wins). A result is never a
 	// candidate.
 	var cands []fentry
-	m, err := c.r.open(c.b.Write(), c.b.WriteMountBranch())
+	m, err := c.home()
 	if err != nil {
 		return nil, nil, err
 	}
-	m.anchor = fr.Env.Anchor
 	if err := c.r.checkReady(c.ctx, m); err != nil {
 		return nil, nil, err
 	}
@@ -1325,7 +1451,7 @@ func (c *fsCall) reserveTables(fr *factsetFrozen) (results, reserved ftab, err e
 				}
 				seen := map[[2]string]bool{}
 				for ord, raw := range mt.Refs {
-					cr := fact.ClassifyRef(raw, fr.WriteRepo)
+					cr := fact.ClassifyRef(raw, fr.HomeRepo)
 					var t index.RefTarget
 					switch cr.Kind {
 					case fact.RefLocalFact:
@@ -1429,7 +1555,7 @@ func (c *fsCall) reserveTables(fr *factsetFrozen) (results, reserved ftab, err e
 					if t.path == root.Path {
 						continue
 					}
-					repo = fr.WriteRepo
+					repo = fr.HomeRepo
 					blob = t.blob
 					if opts.Unpin {
 						b, live := liveLocal[t.path]
@@ -1592,10 +1718,10 @@ func (c *fsCall) inflate(secs []section, unitOf func(int) int) ([]FactSetNode, e
 	// as unavailable, a heading alone, like a root gone at the anchor. The
 	// planned cache is not re-planned, so numbering and structure hold.
 	secs = slices.Clone(secs)
-	writeID := fact.ID12(c.b.Write().ID())
+	home := c.e.fr.HomeRepo
 	gone := map[string]bool{}
 	for i, s := range secs {
-		if s.unavailable || s.repo == writeID {
+		if s.unavailable || s.repo == home {
 			continue
 		}
 		g, seen := gone[s.repo]
