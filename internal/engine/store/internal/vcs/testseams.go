@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	storegit "knomit/internal/engine/store/git"
+	"knomit/internal/engine/store/internal/sqlite"
 	"knomit/internal/engine/store/model"
 )
 
@@ -467,4 +468,57 @@ func SetGitPathReadHookForTest(f func(name string)) (restore func()) {
 	}
 	old := gitPathReadHook.Swap(p)
 	return func() { gitPathReadHook.Store(old) }
+}
+
+// SetLineEventsAfterDepthHookForTest installs f to run inside LineEvents'
+// commit_fp form after it reads the start commit's depth (nil removes it),
+// and returns the restore.
+func SetLineEventsAfterDepthHookForTest(f func()) (restore func()) {
+	mustBeTest()
+	var p *func()
+	if f != nil {
+		p = &f
+	}
+	old := lineEventsAfterDepthHook.Swap(p)
+	return func() { lineEventsAfterDepthHook.Store(old) }
+}
+
+// LineEventsWalkForTest is LineEvents' fallback (the commit_parents walk)
+// alone, so a test can hold it to the same answers as the commit_fp form.
+func (rh *Repo) LineEventsWalkForTest(ctx context.Context, from string, lq LineQuery) ([]LineEvent, error) {
+	mustBeTest()
+	return lineEventsByWalk(ctx, sqlite.Conn(ctx, rh.db), from, lq)
+}
+
+// LineEventsJumpsCountingForTest is LineEvents' commit_fp form alone,
+// counting the SQL statements it runs, so a test can bound its cost in
+// statements rather than time. complete is false where LineEvents would
+// fall back to the walk.
+func (rh *Repo) LineEventsJumpsCountingForTest(ctx context.Context, from string, lq LineQuery) (evs []LineEvent, complete bool, statements int, err error) {
+	mustBeTest()
+	c := &countingExecer{q: sqlite.Conn(ctx, rh.db)}
+	evs, complete, err = lineEventsByJumps(ctx, c, from, lq)
+	return evs, complete, c.n, err
+}
+
+// countingExecer wraps q (a named field, not an embedding: test/archtest
+// forbids promoting another store package's methods) and counts statements.
+type countingExecer struct {
+	q storegit.CtxExecer
+	n int
+}
+
+func (c *countingExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	c.n++
+	return c.q.ExecContext(ctx, query, args...)
+}
+
+func (c *countingExecer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	c.n++
+	return c.q.QueryContext(ctx, query, args...)
+}
+
+func (c *countingExecer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	c.n++
+	return c.q.QueryRowContext(ctx, query, args...)
 }

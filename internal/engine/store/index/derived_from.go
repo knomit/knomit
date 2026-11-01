@@ -40,12 +40,10 @@ import (
 // the branch (parent ∉ branch_commits(B)). "deleted" rows do not stop
 // the walk — they're stepped over.
 //
-// Performance: each step does one git CommitObject lookup + one indexed
-// SQL query against commit_log. For branches where most refs target
-// frequently-modified facts the walk is O(1) per ref. For long-stable
-// targets it's O(commits-since-last-touch). An in-process cache keyed by
-// (refPath, sourceCommit) per ingest call is a possible optimisation if
-// this becomes hot.
+// Performance: ResolveActiveCommitForPath reads no git object; it examines
+// refPath's own writes nearest first and tests each against sourceCommit's
+// first-parent line with commit_fp jump pointers, O(log depth) statements
+// per write examined — independent of how long ago refPath was last written.
 func (si *Index) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
 	cur := sourceCommit
 	// Self-ref ("this fact derives from the previous version of this path"):
@@ -142,21 +140,17 @@ func (fq *FactQuery) FactLiveAtCommit(ctx context.Context, branch, path, commit 
 		return false, nil
 	}
 
-	var action string
-	err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx, vcs.FirstParentChainCTE+`
-		SELECT cl.action
-		  FROM fpc
-		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
-		 WHERE cl.path = ?
-		 ORDER BY fpc.depth ASC
-		 LIMIT 1
-	`, commit, path).Scan(&action)
-	if err == sql.ErrNoRows {
-		return false, nil // path never written in this ancestry
-	}
+	// The most recent commit_log event of ANY action on commit's
+	// first-parent line (vcs.LineEvents: commit_fp jump pointers, the
+	// commit_parents walk as fallback).
+	evs, err := vcs.LineEvents(ctx, fq.rh.DB(), commit, vcs.LineQuery{Path: path, Limit: 1})
 	if err != nil {
 		return false, fmt.Errorf("FactLiveAtCommit: %w", err)
 	}
+	if len(evs) == 0 {
+		return false, nil // path never written in this ancestry
+	}
+	action := evs[0].Action
 	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
 	return action == "added" || action == "modified", nil
 }

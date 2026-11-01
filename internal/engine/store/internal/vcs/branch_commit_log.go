@@ -353,15 +353,25 @@ func (rh *Repo) RebuildCommitLog(ctx context.Context, branch string) (err error)
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
-	if _, err := rh.rederiveDegraded(ctx); err != nil {
-		return fmt.Errorf("rebuildCommitLog: %w", err)
-	}
 	branchID, err := rh.BranchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("rebuildCommitLog: branch id: %w", err)
 	}
+	// The git walk runs BEFORE anything is written: a branch whose history
+	// git cannot walk (a missing commit object) fails here with every row as
+	// it was, instead of after re-deriving the degraded rows.
 	all, _, err := rh.reachableCommits(ctx, branch, 0)
 	if err != nil {
+		return fmt.Errorf("rebuildCommitLog: %w", err)
+	}
+	// Not one transaction: the re-derivation and the derive below commit in
+	// short batches (PathChangeBatch) so live writers are not starved, and a
+	// later step can still fail. Every batch leaves the derived rows
+	// consistent (each row's depth and pointers agree with its first-parent
+	// ancestors': deriver.wouldCutDerivedLine), so a rebuild that fails part
+	// way leaves a consistent, partly repaired store; the next :rebuild
+	// carries on.
+	if _, err := rh.rederiveDegraded(ctx); err != nil {
 		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
 	// Derive whatever reachable commit is missing its rows (a lookup each
