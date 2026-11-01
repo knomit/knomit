@@ -448,7 +448,8 @@ func TestFactSet_ReachIsEnforced(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	cur := pageCursor(t, body)
 	code, body = restGet(t, confined, alphaFactSet+"?cursor="+url.QueryEscape(cur))
-	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X: %s", body)
+	require.Equal(t, http.StatusOK, code, "no resume-time reach check: %s", body)
+	require.NotContains(t, body, `"X body."`, "the narrower credential is not served X")
 	code, body = restGet(t, wide, alphaFactSet+"?cursor="+url.QueryEscape(cur))
 	require.Equal(t, http.StatusOK, code, "and the refusal consumed nothing: %s", body)
 	require.Contains(t, body, `"X body."`)
@@ -464,7 +465,8 @@ func TestFactSet_ReachIsEnforced(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	require.Contains(t, body, `"link":`, "unit 2 holds X as a link")
 	code, body = restGet(t, confined, alphaFactSet+"?cursor="+url.QueryEscape(cur)+"&unit=2")
-	require.Equal(t, http.StatusNotFound, code, "the narrower credential is not served X's link: %s", body)
+	require.Equal(t, http.StatusOK, code, "no resume-time reach check: %s", body)
+	require.NotContains(t, body, `"link":`, "X's link is read through the narrower credential: unavailable, not a link")
 
 	// A unit the NARROWER credential walks reads only what it reaches: X is
 	// listed as kb_unavailable there (units are walked with the reach of the

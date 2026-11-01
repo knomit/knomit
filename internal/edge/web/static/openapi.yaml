@@ -1328,7 +1328,10 @@ paths:
         writes nothing on the server, and two calls with one cursor both get
         the same page. The last page's cursor points past the end (still good
         for a seek); a plain page from there, or from any position past the
-        factset's extent, is a 400.
+        factset's extent, is a 400. A position inside a unit that has
+        since shrunk (a cited repo became unreachable and the factset was
+        re-planned) continues at the next unit's first section; it is never
+        a 400.
 
         OWNERSHIP, LIFETIME AND BOUNDS: a factset belongs to the caller's
         principal alone, not to this route, plus the binding (its repo pin and
@@ -1348,9 +1351,14 @@ paths:
         backfilled with its repo id unresolved, is a 503 with Retry-After.
         The cache budget (`session.factset_memory_mib`, 64 MiB) evicts the
         least recently used factsets; the next page replays them. Cross-KB
-        refs are followed only into repos the caller reaches; resuming a
-        cursor with a credential that does not reach a repo it froze is the
-        404. A fact-identity collision (two facts on one 64-bit hash) is a
+        refs are followed only into repos the caller reaches. Reach is
+        checked when content of a repo is read, not when a cursor is resumed:
+        a repo that became unreachable after the first call (archived,
+        removed, access revoked, or beyond a narrower credential) does not
+        fail the factset, and content read from it later shows as
+        kb_unavailable, like any missing target. Pages already planned and
+        cached are not re-read, so a re-read may differ from bytes sent
+        earlier. A fact-identity collision (two facts on one 64-bit hash) is a
         500, never a silently dropped subtree.
       operationId: getSearchFactSetPage
       parameters:
