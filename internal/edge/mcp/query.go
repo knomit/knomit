@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"knomit/internal/engine/store/model"
@@ -270,29 +269,54 @@ func QueryHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 	}
 }
 
-// recoverFanout converts a panic inside a fan-out goroutine into the mount's
-// error slot. net/http only recovers panics raised on the REQUEST goroutine, so
-// a panic in one of these bare per-mount goroutines would otherwise crash the
-// WHOLE process — not merely the offending connection (pre-lens, the same store
-// call ran on the request goroutine, so its blast radius was one connection;
-// federation widened it to process death). A concrete source: an
-// archive/shutdown race can leave a mount's svc == nil, so storeIndices returns
-// a zero mcpStore whose index fields are nil interfaces and the first index call
-// panics. Routing the panic into *slot lets it flow through the existing "any
-// mount error fails the whole query" path (RFC §9.1) — a lens must never
-// silently shrink its read set — instead of taking the server down. mount names
-// the offending mount so the failure stays diagnosable.
-func recoverFanout(mount string, slot *error) {
-	if p := recover(); p != nil {
-		*slot = fmt.Errorf("mount %s panicked: %v", mount, p)
-	}
-}
-
 // mountLabel is a human-legible mount identity for fan-out error messages: the
 // mount's repo name and its pinned branch. Name() never touches the store, so it
 // is safe to call even on a mount whose svc is nil.
 func mountLabel(rt repos.ReadTarget) string {
 	return rt.RI.Name() + "@" + rt.Branch
+}
+
+// planFused runs the planning half of the fused lens read for knomit_query —
+// the SAME federate.PlanFused the REST lens /search and /facts handlers call:
+// widen motif terms to the lens's merged clusters over the full read set
+// (mcpMotifClusters), select the fan-out targets from q.Path, and embed the
+// query ONCE for the whole fan-out rather than once per mount (fanoutQueryVec:
+// a failed or empty embedding fails the query here, once; nil with no error —
+// no text, or no embedder handed in — leaves every mount to embed for itself;
+// text search is vector-only, there is no keyword fallback). knomit_query has
+// no repo= narrowing. Any planning error is the tool error, text unchanged.
+func planFused(ctx context.Context, b *repos.Binding, emb model.Embedder, q index.SearchOptions) (*federate.FusedPlan, error) {
+	return federate.PlanFused(ctx, federate.FusedQuery{
+		Binding:  b,
+		Path:     q.Path,
+		Opts:     q,
+		Clusters: mcpMotifClusters,
+		Embed: func(ctx context.Context, text string) ([]float32, error) {
+			return fanoutQueryVec(ctx, emb, text)
+		},
+	})
+}
+
+// mcpSearchLeg reads one mount's relevance list for the fused read, in MCP's
+// own store-acquisition idiom: an unavailable store is a mount-labelled
+// errStoreUnavailable, never a nil-interface panic.
+func mcpSearchLeg(ctx context.Context, t federate.Target, q index.SearchOptions) ([]index.SearchResult, error) {
+	sm, release, err := storeIndices(t.RT.RI)
+	if err != nil {
+		return nil, fmt.Errorf("mount %s: %w", mountLabel(t.RT), err)
+	}
+	defer release()
+	return sm.factQuery.Search(ctx, t.RT.Branch, q)
+}
+
+// mcpRecentLeg is mcpSearchLeg's recency twin (RecentFacts).
+func mcpRecentLeg(ctx context.Context, t federate.Target, q index.SearchOptions) ([]index.RecentFactEntry, int, error) {
+	sm, release, err := storeIndices(t.RT.RI)
+	if err != nil {
+		return nil, 0, fmt.Errorf("mount %s: %w", mountLabel(t.RT), err)
+	}
+	defer release()
+	return sm.factQuery.RecentFacts(ctx, t.RT.Branch, q)
 }
 
 // queryRecent serves the recency-ordered browse (sort=recent). It draws the
@@ -307,106 +331,40 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 	if msg := motifMatchUnavailable(q); msg != "" {
 		return mcpgo.NewToolResultError(msg), nil
 	}
-	// Widen motif terms to the lens's merged clusters BEFORE the fan-out.
-	if err := widenMotifsForLens(ctx, b, &q); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	targets, err := federate.ReadTargetsFor(b, q.Path)
+	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	plan, err := planFused(ctx, b, emb, q)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
-	// Embed the query ONCE for the whole fan-out rather than once per mount —
-	// see fanoutQueryVec. A failed or empty embedding fails the query
-	// here, once; nil with no error (no text, or no embedder handed in) leaves
-	// every mount to embed for itself. Text search is vector-only: there is no
-	// keyword fallback.
-	if q.QueryVec, err = fanoutQueryVec(ctx, emb, q.Text); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
+	q = plan.Opts
 
-	// Fan out in parallel; any mount error fails the whole query — a lens must
-	// never silently shrink its read set (RFC §9.1).
-	lists := make([][]index.RecentFactEntry, len(targets))
-	errs := make([]error, len(targets))
-	diags := make([]index.SearchDiag, len(targets))
-	var wg sync.WaitGroup
-	for i, t := range targets {
-		wg.Add(1)
-		go func(i int, t federate.Target) {
-			defer wg.Done()
-			// A panic here (e.g. nil-svc mount) must become this mount's error, not
-			// crash the process — net/http recovers only the request goroutine.
-			defer recoverFanout(mountLabel(t.RT), &errs[i])
-			mq := q
-			mq.Path = t.Path
-			mq.Diag = &diags[i]
-			sm, release, serr := storeIndices(t.RT.RI)
-			if serr != nil {
-				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
-				return
-			}
-			defer release()
-			lists[i], _, errs[i] = sm.factQuery.RecentFacts(ctx, t.RT.Branch, mq)
-		}(i, t)
-	}
-	wg.Wait()
-	for _, e := range errs {
-		if e != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", e)), nil
-		}
-	}
-
-	returned := make([]int, len(lists))
-	for i, l := range lists {
-		returned[i] = len(l)
-	}
-	logQueryDiag(sortRecent, b, q, targets, diags, returned)
-
+	// Fan out in parallel through the shared fused read (federate.FusedRecent,
+	// the same function the REST /lenses/{lens}/facts listing calls); any mount
+	// error fails the whole query — a lens must never silently shrink its read
+	// set (RFC §9.1) — and the error is the lowest-indexed mount's.
+	//
 	// RecentFacts orders its per-mount list by committed_at DESC WITHOUT a text
 	// query, but by RELEVANCE score WITH one (store.recentFactsSearch — a
 	// deliberate store-level fix pinned by
-	// TestRecentFacts_WithQuery_SortsByRelevanceNotDate). The federated merge
-	// must honour whichever key each mount ordered by: commit timestamps are
-	// directly comparable across mounts (a k-way timestamp merge is correct), but
-	// per-mount relevance ranks are NOT comparable across mounts (RFC §7.1) —
-	// they must be fused by reciprocal rank fusion, exactly as the relevance
-	// path does. federate.FuseRRF's N=1 identity also restores lens-of-one byte-identity,
-	// which a global timestamp re-sort would silently break. So: text query →
-	// RRF; text-less recency → committed_at merge.
-	var order []federate.MountRef
-	if q.Text != "" {
-		order = federate.FuseRRF(listLens(lists))
-	} else {
-		// Text-less recency: each mount's list is already committed_at-DESC
-		// (RecentFacts), the precondition federate.MergeRecent relies on. Merge
-		// the FULL set (totalEntries, not maxResults) so the dedupe below runs on
-		// every candidate before the snapshot cap is applied — exactly as the web
-		// /facts union does.
-		totalEntries := 0
-		for _, l := range lists {
-			totalEntries += len(l)
-		}
-		stamps := make([][]int64, len(targets))
-		for i, list := range lists {
-			stamps[i] = make([]int64, len(list))
-			for j, e := range list {
-				stamps[i][j] = e.CommittedAt
-			}
-		}
-		order = federate.MergeRecent(stamps, totalEntries)
+	// TestRecentFacts_WithQuery_SortsByRelevanceNotDate). The fused read honours
+	// whichever key each mount ordered by: text query → RRF; text-less recency →
+	// committed_at merge over the FULL fetched set. It dedupes by repo-relative
+	// path (write mount wins) and truncates nothing, so a shadowed cross-mount
+	// copy never consumes a snapshot slot and the snapshot agrees with the web
+	// /facts union.
+	res, err := federate.FusedRecent(ctx, plan, mcpRecentLeg, federate.FusedOptions{})
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", err)), nil
 	}
-	// Dedupe by repo-relative path (write mount wins) BEFORE truncating to the
-	// snapshot depth, so a shadowed cross-mount copy never consumes a slot and the
-	// snapshot agrees with the web /facts union.
-	order = keepWinners(order, targets, b.Write(), lists,
-		func(e index.RecentFactEntry) string { return e.Path })
+	logQueryDiag(sortRecent, b, q, plan.Targets, res.Diags, res.ListLens())
+
+	order := res.Hits
 	if len(order) > maxResults {
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
-			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
+			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, res.Diags...)})
 	}
 
 	// Recent mode snapshots ALL merged rows into the session and serves page 1
@@ -418,14 +376,14 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 		return mcpgo.NewToolResultError(fmt.Sprintf("session error: %v", err)), nil
 	}
 	items := make([]model.QueueItem, len(order))
-	for i, ref := range order {
-		e := lists[ref.Mount][ref.Rank]
+	for i, h := range order {
+		e := h.Row
 		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt, AsOf: q.Now.Unix()})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
 		items[i] = model.QueueItem{
-			Path:       wirePath(b, targets[ref.Mount].RT, e.Path),
+			Path:       wirePath(b, h.Target.RT, e.Path),
 			CommitHash: e.CommitHash,
 			Blob:       e.BlobHash,
 			SortKey:    i,
@@ -441,7 +399,18 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 }
 
 // mcpMotifClusters reads one mount's resolved motif vocabulary — the union's
-// per-mount read, in MCP's own store-acquisition idiom.
+// per-mount read, in MCP's own store-acquisition idiom — for the fused read's
+// motif widening (federate.PlanFused → federate.ExpandMotifTerms).
+//
+// The widening replaces each caller-supplied motif term with every spelling in
+// its MERGED cluster, so a lens-bound query asks every mount about the whole
+// shape rather than about one mount's name for it. It is the SAME seam the REST
+// lens reads go through, deliberately not a second implementation: without it a
+// motif-filtered knomit_query against a lens silently drops every mount that
+// spells the shape differently — the store's exact tier is per-branch canonical
+// equality, and a judge merge is per-branch. That makes recall, the most-used
+// motif path, answer from a smaller read set than the lens has, which is
+// precisely what RFC §9.1 forbids. A single-mount binding is skipped.
 //
 // Branch-wide (no path scope): cluster identity is a property of the lens, not
 // of the path filter the caller happened to send.
@@ -452,27 +421,6 @@ func mcpMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCl
 	}
 	defer release()
 	return s.motifs.ClustersUnder(ctx, rt.Branch, "")
-}
-
-// widenMotifsForLens replaces each caller-supplied motif term with every
-// spelling in its MERGED cluster, so a lens-bound query asks every mount about
-// the whole shape rather than about one mount's name for it.
-//
-// The SAME seam the REST lens reads go through (federate.ExpandMotifTerms), and
-// deliberately not a second implementation: without it a motif-filtered
-// knomit_query against a lens silently drops every mount that spells the shape
-// differently — the store's exact tier is per-branch canonical equality, and a
-// judge merge is per-branch. That makes recall, the most-used motif path,
-// answer from a smaller read set than the lens has, which is precisely what
-// RFC §9.1 forbids. A single-mount binding is skipped: with nothing to merge
-// the expansion is provably an identity.
-func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *index.SearchOptions) error {
-	widened, err := federate.ExpandMotifTerms(ctx, b, mcpMotifClusters, q.Motifs)
-	if err != nil {
-		return err
-	}
-	q.Motifs = widened
-	return nil
 }
 
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
@@ -656,71 +604,34 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one filter is required: " + queryFilterList), nil
 	}
-	// Widen motif terms to the lens's merged clusters BEFORE the fan-out. After
-	// hasAnyFilter, so the "no filter supplied" message stays about what the
-	// caller actually sent.
-	if err := widenMotifsForLens(ctx, b, &q); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	targets, err := federate.ReadTargetsFor(b, q.Path)
+	// Plan AFTER hasAnyFilter, so the "no filter supplied" message stays about
+	// what the caller actually sent rather than about widened motif terms.
+	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	plan, err := planFused(ctx, b, emb, q)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
-	// Embed the query ONCE for the whole fan-out rather than once per mount —
-	// see fanoutQueryVec. A failed or empty embedding fails the query
-	// here, once; nil with no error (no text, or no embedder handed in) leaves
-	// every mount to embed for itself. Text search is vector-only: there is no
-	// keyword fallback.
-	if q.QueryVec, err = fanoutQueryVec(ctx, emb, q.Text); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
+	q = plan.Opts
 
-	// Fan out in parallel; any mount error fails the whole query — a lens must
-	// never silently shrink its read set (RFC §9.1).
-	lists := make([][]index.SearchResult, len(targets))
-	errs := make([]error, len(targets))
-	diags := make([]index.SearchDiag, len(targets))
-	var wg sync.WaitGroup
-	for i, t := range targets {
-		wg.Add(1)
-		go func(i int, t federate.Target) {
-			defer wg.Done()
-			// A panic here (e.g. nil-svc mount) must become this mount's error, not
-			// crash the process — net/http recovers only the request goroutine.
-			defer recoverFanout(mountLabel(t.RT), &errs[i])
-			mq := q
-			mq.Path = t.Path
-			mq.Diag = &diags[i]
-			sm, release, serr := storeIndices(t.RT.RI)
-			if serr != nil {
-				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
-				return
-			}
-			defer release()
-			lists[i], errs[i] = sm.factQuery.Search(ctx, t.RT.Branch, mq)
-		}(i, t)
+	// Fan out in parallel through the shared fused read (federate.FusedSearch,
+	// the same function the REST /lenses/{lens}/search handler calls): any mount
+	// error fails the whole query — a lens must never silently shrink its read
+	// set (RFC §9.1) — and the error is the lowest-indexed mount's. The union is
+	// fused by reciprocal rank and deduped by repo-relative path (write mount
+	// wins) with nothing truncated, so a shadowed cross-mount copy never
+	// consumes a result slot and the page agrees with the web /search union.
+	res, err := federate.FusedSearch(ctx, plan, mcpSearchLeg, federate.FusedOptions{})
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
 	}
-	wg.Wait()
-	for _, e := range errs {
-		if e != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", e)), nil
-		}
-	}
-
-	logQueryDiag(sortRelevance, b, q, targets, diags, listLens(lists))
-	order := federate.FuseRRF(listLens(lists))
-	// Dedupe by repo-relative path (write mount wins) BEFORE truncating, so a
-	// shadowed cross-mount copy never consumes a result slot and the page agrees
-	// with the web /search union.
-	order = keepWinners(order, targets, b.Write(), lists,
-		func(r index.SearchResult) string { return r.Path })
+	logQueryDiag(sortRelevance, b, q, plan.Targets, res.Diags, res.ListLens())
+	order := res.Hits
 	if len(order) > maxResults {
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
 		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
-			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
+			Notice: index.CutoffNotice(q.Text != "", q.MinSimilarity, res.Diags...)})
 	}
 
 	// renderRow builds one output row from its fused reference. The displayed
@@ -729,10 +640,9 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	// may be non-monotonic; that is the faithful representation of per-repo
 	// relevance. File is the wire path: bare for the write repo, kb://-qualified
 	// for a foreign mount (RFC §6.2 uniformity).
-	renderRow := func(ref federate.MountRef) factOutput {
-		r := lists[ref.Mount][ref.Rank]
-		out := buildFactOutput(r, includeBody, q.Now)
-		out.File = wirePath(b, targets[ref.Mount].RT, r.Path)
+	renderRow := func(h federate.Hit[index.SearchResult]) factOutput {
+		out := buildFactOutput(h.Row, includeBody, q.Now)
+		out.File = wirePath(b, h.Target.RT, h.Row.Path)
 		return out
 	}
 
@@ -755,8 +665,8 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	}
 	items := make([]model.QueueItem, 0, len(order)-pageSize)
 	for i := pageSize; i < len(order); i++ {
-		ref := order[i]
-		r := lists[ref.Mount][ref.Rank]
+		h := order[i]
+		r := h.Row
 		// Snapshot only what a resumed page can't re-derive: the rank score.
 		// The WIRE path + commit pin the version; title/body/frontmatter are
 		// re-read from the fact on resume, so the snapshot carries no heavy body.
@@ -765,7 +675,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
 		items = append(items, model.QueueItem{
-			Path:       wirePath(b, targets[ref.Mount].RT, r.Path),
+			Path:       wirePath(b, h.Target.RT, r.Path),
 			CommitHash: r.CommitHash,
 			Blob:       r.BlobHash,
 			SortKey:    i,
@@ -782,32 +692,6 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	}
 	cursor := sess.ID
 	return marshalQueryResponse(queryResponse{Facts: page, Cursor: &cursor, HasMore: true})
-}
-
-// keepWinners filters a fused/merged order down to the write-first dedupe
-// winners, dropping a fact's shadowed copy on a non-winning mount. It reuses the
-// SAME federate.WriteFirstWinners the web /facts + /search + /topics unions use,
-// so knomit_query agrees with the web views on a lens whose mounts share fact
-// UUIDs (a fork of a read-mounted upstream) instead of double-listing the fact
-// once bare (write mount) and once kb://-qualified (read mount).
-func keepWinners[T any](order []federate.MountRef, targets []federate.Target, write *repos.RepoInstance, lists [][]T, pathOf func(T) string) []federate.MountRef {
-	winner := federate.WriteFirstWinners(targets, write, lists, pathOf)
-	kept := make([]federate.MountRef, 0, len(order))
-	for _, ref := range order {
-		if winner[pathOf(lists[ref.Mount][ref.Rank])] == ref.Mount {
-			kept = append(kept, ref)
-		}
-	}
-	return kept
-}
-
-// listLens returns each list's length, the shape federate.FuseRRF consumes.
-func listLens[T any](lists [][]T) []int {
-	ns := make([]int, len(lists))
-	for i, l := range lists {
-		ns[i] = len(l)
-	}
-	return ns
 }
 
 // wirePath renders a result path as addressed on the wire: qualified iff the

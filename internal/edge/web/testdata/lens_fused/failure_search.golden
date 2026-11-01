@@ -1,0 +1,6 @@
+== GET /lenses/eng/search?q=x
+status: 500
+{"type":"about:blank","title":"Search failed","status":500,"detail":"mid search down","instance":"/lenses/eng/search"}
+== GET /lenses/eng/search?q=x&repo=alpha&repo=zulu
+status: 500
+{"type":"about:blank","title":"Search failed","status":500,"detail":"zulu search down","instance":"/lenses/eng/search"}

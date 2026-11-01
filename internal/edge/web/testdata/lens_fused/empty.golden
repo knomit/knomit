@@ -1,0 +1,12 @@
+== GET /lenses/eng/search?q=x
+status: 200
+{"results":[],"total":0}
+== GET /lenses/eng/search?type=observation
+status: 200
+{"results":[],"total":0}
+== GET /lenses/eng/facts
+status: 200
+{"facts":[],"total":0}
+== GET /lenses/eng/facts?q=x
+status: 200
+{"facts":[],"total":0}

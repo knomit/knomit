@@ -1,8 +1,6 @@
 package kb
 
 import (
-	"context"
-	"errors"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"net/url"
@@ -138,42 +136,12 @@ func gatherLensMotifs(
 	return u, defsByMount, pooled, true
 }
 
-// expandLensMotifs widens a caller's motif terms through the lens's merged
-// vocabulary before a filtered read fans out. A thin adapter over
-// federate.ExpandMotifTerms — the ONE definition the MCP fan-out shares, so a
-// chip minted anywhere is correct because the seam resolves it, not because
-// the caller remembered to send members. See that function for the semantics
-// this establishes and the failure coupling it accepts.
-//
-// On error it writes the problem response and returns ok=false.
-func expandLensMotifs(
-	w http.ResponseWriter, r *http.Request, bind *repos.Binding,
-	terms []string,
-) ([]string, bool) {
-	if len(terms) == 0 {
-		return terms, true
-	}
-	read := func(ctx context.Context, rt repos.ReadTarget) ([]vocab.MotifCluster, error) {
-		// Branch-wide: identity is not scoped by where the reader stands.
-		return motifClusters(ctx, rt.RI, rt.Branch, "")
-	}
-	out, err := federate.ExpandMotifTerms(r.Context(), bind, read, terms)
-	if err != nil {
-		// The failing mount's branch, not "": httpx.WriteStoreError renders
-		// store.ErrBranchNotFound as `no branch named "<branch>"`, and this is
-		// the fan-out where a mount pinned to a deleted branch actually shows
-		// up. An empty branch there would print the message with the one word
-		// it exists to carry missing.
-		var readErr *federate.MotifReadError
-		branch := ""
-		if errors.As(err, &readErr) {
-			branch = readErr.Branch
-		}
-		httpx.WriteStoreError(w, r, err, "Failed to resolve motif filter", branch)
-		return nil, false
-	}
-	return out, true
-}
+// The motif-FILTER widening of the lens list reads (/search, /facts) is not in
+// this file: it is a step of the fused read (federate.PlanFused calls
+// federate.ExpandMotifTerms with lensMotifClusters), the ONE definition the MCP
+// knomit_query fan-out shares, so a chip minted anywhere is correct because the
+// seam resolves it, not because the caller remembered to send members.
+// planLensRead renders its failure.
 
 // ─── collection ──────────────────────────────────────────────────────────────
 
