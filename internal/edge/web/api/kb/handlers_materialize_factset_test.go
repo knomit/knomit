@@ -661,10 +661,11 @@ func TestFactSet_CrossKBTipIsFrozenAcrossUnits(t *testing.T) {
 // F11 (second half): a registered repo the caller does not reach reads
 // exactly like one that does not exist (kb_unavailable, 89b26b07), and its
 // tip is not frozen; a cursor whose frozen tips include a repo the resuming
-// caller does not reach is the expiry 404.
+// caller does not reach is NOT refused (no resume-time reach check): the
+// content read through the narrow credential is served as unavailable.
 //
 // Sabotage: drop the reach check in reader.target, and the narrow caller is
-// served the wide caller's cursor.
+// served the wide caller's cited body.
 func TestFactSet_F11_UnreachableRepoIsUnavailable(t *testing.T) {
 	m := newMatStoreManager(t, "alpha", "beta")
 	alpha, beta := m.Get("alpha"), m.Get("beta")
@@ -685,8 +686,155 @@ func TestFactSet_F11_UnreachableRepoIsUnavailable(t *testing.T) {
 	wide := asPrincipal("u1", router)
 	code, pw, body := getFactSet(t, wide, factsetBase+"?path=kb/u/&cross_kb=true&limit=1")
 	require.Equal(t, http.StatusOK, code, body)
-	code, _, body = getFactSet(t, narrow, factsetBase+"?cursor="+url.QueryEscape(*pw.Cursor))
-	require.Equal(t, http.StatusNotFound, code, "a narrower credential resuming a wider caller's cursor: %s", body)
+	code, p2, body := getFactSet(t, narrow, factsetBase+"?cursor="+url.QueryEscape(*pw.Cursor))
+	require.Equal(t, http.StatusOK, code, "a narrower credential resuming a wider caller's cursor is served: %s", body)
+	require.NotContains(t, body, "x body.")
+	require.True(t, byUnitPath(p2.Facts)["1 "+x].Unavailable, body)
+}
+
+// factsetGone drives the resume reach semantics: the FactSet is frozen with
+// tips for beta and gamma (cross_kb), cites only beta. Unit 1 (r1) writes
+// beta's x; unit 2 (r2) writes beta's y, unplanned until the second page.
+func factsetGoneFixture(t *testing.T) (m *repos.Manager, h http.Handler, x, y string, reach *map[string]bool) {
+	t.Helper()
+	m = newMatStoreManager(t, "alpha", "beta", "gamma")
+	alpha, beta := m.Get("alpha"), m.Get("beta")
+	const br = "agent/test"
+	b12 := fact.ID12(beta.ID())
+	x, y = "kb://"+b12+"/kb/b/x.md", "kb://"+b12+"/kb/b/y.md"
+	writeMatFact(t, beta, br, "kb/b/x.md", "X", "x body.")
+	writeMatFact(t, beta, br, "kb/b/y.md", "Y", "y body.")
+	writeMatFact(t, m.Get("gamma"), br, "kb/g/g.md", "G", "g body.")
+	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", x)
+	writeMatFact(t, alpha, br, "kb/u/r2.md", "R2", "r2 body.", y)
+	blocked := map[string]bool{}
+	router := newTestRouter(m)
+	h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := auth.WithPrincipal(r.Context(), auth.Principal{Kind: auth.KindHost, ID: "u1", Via: auth.ViaSocket})
+		router.ServeHTTP(w, r.WithContext(auth.WithRepoReach(ctx, func(repo string) bool { return !blocked[repo] })))
+	})
+	return m, h, x, y, &blocked
+}
+
+func factsOf(t *testing.T, h http.Handler, u string) (int, string) {
+	t.Helper()
+	code, p, body := getFactSet(t, h, u)
+	if code != http.StatusOK {
+		return code, body
+	}
+	raw, err := json.Marshal(p.Facts)
+	require.NoError(t, err)
+	return code, string(raw)
+}
+
+// An unrelated repo (gamma: tip frozen, never cited) becoming unreachable
+// does not touch the FactSet: every page's facts are byte-identical to an
+// undisturbed read, with a warm cache and after the cache is dropped.
+//
+// Sabotage: restore the resume-time loop over e.fr.Tips (target() per frozen
+// repo) in openFactSet, and the resume answers 404.
+func TestFactSet_ResumeIgnoresAnUnrelatedUnreachableRepo(t *testing.T) {
+	_, h, _, _, blocked := factsetGoneFixture(t)
+	const first = factsetBase + "?path=kb/u/&cross_kb=true&limit=1"
+	read := func(drop bool, block func()) []string {
+		code, p, body := getFactSet(t, h, first)
+		require.Equal(t, http.StatusOK, code, body)
+		raw, _ := json.Marshal(p.Facts)
+		out := []string{string(raw)}
+		block()
+		if drop {
+			materialize.DropFactSetCacheForTest()
+		}
+		for p.HasMore {
+			code, p, body = getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(*p.Cursor))
+			require.Equal(t, http.StatusOK, code, "resume after the unrelated repo became unreachable: %s", body)
+			raw, _ = json.Marshal(p.Facts)
+			out = append(out, string(raw))
+		}
+		return out
+	}
+	base := read(false, func() {})
+	for _, drop := range []bool{false, true} {
+		*blocked = map[string]bool{}
+		got := read(drop, func() { (*blocked)["gamma"] = true })
+		require.Equal(t, base, got, "drop=%v", drop)
+	}
+}
+
+// A repo the FactSet cites becoming unreachable does not 404 the resume:
+// content already planned (unit 1's x, planned by the first call) and read
+// again now shows as unavailable (a heading alone, numbering kept); content
+// not yet planned (unit 2's y) is planned now, and the unreachable repo reads
+// as kb_unavailable in r2's not_included. Same with a warm cache and after
+// the cache is dropped.
+//
+// Sabotage: drop the unavailable marking in fsCall.inflate and the page is a
+// 500 (repo not available); restore the resume-time Tips loop and it is 404.
+func TestFactSet_ResumeAfterACitedRepoIsGone(t *testing.T) {
+	_, h, x, y, blocked := factsetGoneFixture(t)
+	for _, drop := range []bool{false, true} {
+		*blocked = map[string]bool{}
+		code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&cross_kb=true&limit=1")
+		require.Equal(t, http.StatusOK, code, body)
+		require.Equal(t, "r1 body.", byUnitPath(p1.Facts)["1 kb/u/r1.md"].Body)
+		(*blocked)["beta"] = true
+		if drop {
+			materialize.DropFactSetCacheForTest()
+		}
+		// Seek each unit (after a replay the first call's position can lie
+		// past a re-planned unit's end: re-reads may differ).
+		var nodes []materialize.FactSetNode
+		for u := 1; u <= 2; u++ {
+			p := p1
+			code, p, body = getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(*p1.Cursor)+"&unit="+fmt.Sprint(u))
+			for {
+				require.Equal(t, http.StatusOK, code, "drop=%v unit=%d: %s", drop, u, body)
+				require.NotContains(t, body, "x body.")
+				require.NotContains(t, body, "y body.")
+				nodes = append(nodes, p.Facts...)
+				if !p.HasMore || p.UnitFrom > u {
+					break
+				}
+				code, p, body = getFactSet(t, h, factsetBase+"?cursor="+url.QueryEscape(*p.Cursor))
+			}
+		}
+		at := byUnitPath(nodes)
+		if !drop {
+			nx := at["1 "+x]
+			require.True(t, nx.Unavailable, "planned before, read now through a gone repo")
+			require.False(t, nx.Written)
+		}
+		r2 := at["2 kb/u/r2.md"]
+		require.Equal(t, "r2 body.", r2.Body)
+		require.NotContains(t, at, "2 "+y, "y is not written: its repo is gone")
+		require.Contains(t, r2.NotIncluded, materialize.Omission{Path: y, Reason: materialize.ReasonKBUnavail})
+	}
+}
+
+// Unknown id, another principal and a wrong pin stay the identical 404,
+// whatever the state of the cited repos (no existence oracle).
+//
+// Sabotage: answer another owner's cursor with the page, and it is a 200.
+func TestFactSet_ResumeUnknownAndForeignCursorsStay404(t *testing.T) {
+	m, h, _, _, blocked := factsetGoneFixture(t)
+	code, p1, body := getFactSet(t, h, factsetBase+"?path=kb/u/&cross_kb=true&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	(*blocked)["beta"] = true
+	other := asPrincipal("u2", newTestRouter(m))
+	cur := url.QueryEscape(*p1.Cursor)
+	c1, _, b1 := getMaterialize(t, other, factsetBase+"?cursor="+cur)
+	unknown := "?cursor=" + url.QueryEscape(strings.Replace(*p1.Cursor, mustCursorID(t, *p1.Cursor), "00000000-0000-0000-0000-000000000000", 1))
+	c2, _, b2 := getMaterialize(t, h, factsetBase+unknown)
+	require.Equal(t, http.StatusNotFound, c1, b1)
+	require.Equal(t, http.StatusNotFound, c2, b2)
+	require.Equal(t, b2, b1)
+}
+
+func mustCursorID(t *testing.T, cursor string) string {
+	t.Helper()
+	i := strings.IndexByte(cursor, '.')
+	require.Positive(t, i, cursor)
+	return cursor[:i]
 }
 
 // newEmbFactSet is a store with the cos test embedder (its vectors searched

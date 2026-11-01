@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -969,15 +970,12 @@ func openFactSet(ctx context.Context, sc CursorScope, b *repos.Binding, mgr *rep
 		c.st.CacheMisses++
 		e = fsCachePutIfAbsent(e)
 	}
-	// Every frozen repo must still be this caller's to read: a narrower
-	// credential resuming a wider caller's cursor gets the expiry answer,
-	// naming nothing (89b26b07).
-	for id12 := range e.fr.Tips {
-		if _, _, ok := c.r.target(id12); !ok {
-			c.close()
-			return nil, ErrCursorExpired
-		}
-	}
+	// No up-front reach check of the frozen tips: a repo this caller can no
+	// longer read (archived, removed, access revoked, a narrower credential)
+	// is handled by the read path itself. reader.foreign re-checks target /
+	// mayRead (89b26b07) whenever content of that repo is first read in a
+	// call, and an unreachable repo reads as kb_unavailable, like a missing
+	// target. Units already planned and cached are not re-read.
 	c.r.tips = e.fr.Tips
 	if c.r.tips == nil {
 		c.r.tips = map[string]frozenTip{}
@@ -1554,6 +1552,30 @@ func (c *fsCall) page(from fpos, first bool) (FactSetPage, error) {
 // by blob (one batched object read per repo) and the RULE 1 marks (one
 // batched branch_facts read per repo, against the reading branch NOW).
 func (c *fsCall) inflate(secs []section, unitOf func(int) int) ([]FactSetNode, error) {
+	// A section of a foreign repo this caller can no longer read (archived,
+	// removed, access revoked: reader.target / mayRead, 89b26b07) is served
+	// as unavailable, a heading alone, like a root gone at the anchor. The
+	// planned cache is not re-planned, so numbering and structure hold.
+	secs = slices.Clone(secs)
+	writeID := fact.ID12(c.b.Write().ID())
+	gone := map[string]bool{}
+	for i, s := range secs {
+		if s.unavailable || s.repo == writeID {
+			continue
+		}
+		g, seen := gone[s.repo]
+		if !seen {
+			m, err := c.r.foreign(c.ctx, s.repo)
+			if err != nil {
+				return nil, err
+			}
+			g = m == nil
+			gone[s.repo] = g
+		}
+		if g {
+			secs[i].unavailable = true
+		}
+	}
 	var keys []bodyKey
 	for _, s := range secs {
 		if s.link == nil && !s.unavailable {
