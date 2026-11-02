@@ -9,6 +9,9 @@ import { relativeTime } from './utils';
 import { RetractIcon, NewspaperIcon } from './icons';
 import { MaterializeView } from './MaterializeView';
 import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
+import { FactSetView } from './FactSetView';
+import { factsetView, useFactSetView } from './factsetOptions';
+import { searchKey } from './useFactSetStream';
 import type { MatOptions } from './materializeApi';
 import { FactDiffView } from './FactDiffView';
 import { FactBody } from './FactBody';
@@ -614,6 +617,11 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
     }
   }, [mat]);
 
+  // The FactSet of a search (opened from the results list's header) replaces
+  // the right panel's view, as the single-fact view does (Q-UI14). It holds the
+  // search it was opened with; the list may move on underneath (Q-UI4).
+  const fsv = useFactSetView();
+
   // path → target_commit for the open fact's outgoing DERIVED_FROM edges, so an
   // in-body ref hop lands on the version the referrer reasoned over. See the
   // FactBody onRefClick in renderFact for why this beats fact.commit_hash.
@@ -990,6 +998,20 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   }, [state.rightPanelFocused, dispatch]);
 
   // Diff mode with a selected fact renders FactDiffView in the detail area.
+  if (fsv.search) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <FactSetView
+          key={searchKey(fsv.search)}
+          search={fsv.search}
+          options={fsv.options}
+          onOptionsChange={o => factsetView.setOptions(o)}
+          onBack={() => factsetView.close()}
+        />
+      </div>
+    );
+  }
+
   if (inDiff && state.factPath) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>

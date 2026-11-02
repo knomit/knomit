@@ -1,6 +1,6 @@
 import type { LibrarySort } from './state';
 import type { ComponentType } from 'react';
-import { TreeIcon, StopwatchIcon, TargetIcon, MotifIcon, ChevronLeftIcon } from './icons';
+import { TreeIcon, StopwatchIcon, TargetIcon, MotifIcon, ChevronLeftIcon, NewspaperIcon } from './icons';
 import { OverflowCrumb } from './OverflowCrumb';
 
 interface Props {
@@ -48,6 +48,10 @@ interface Props {
    *  shape. It replaces the location line, because the reader is no longer
    *  anywhere in the ontology — a motif cuts across it. */
   motif?: MotifPivot;
+  /** Present on every search list (not the path tree): the control that opens
+   *  the FactSet of this list, beside the count, the same for repo and lens
+   *  lists (Q-UI1). Disabled in history (Q-UI3). */
+  factset?: { enabled: boolean; onOpen: () => void };
 }
 
 export interface MotifPivot {
@@ -156,7 +160,7 @@ const ROOT_LABEL: Record<LibrarySort, string> = {
 
 export function LibraryHeader({
   count, ancestors, leaf, narrow, sort, searchActive, contentFiltered,
-  onSortChange, onExitSearch, onExitMotif, canBack, onBack, onJumpAncestor, motif,
+  onSortChange, onExitSearch, onExitMotif, canBack, onBack, onJumpAncestor, motif, factset,
 }: Props) {
   // A pivot outranks the sort axis it is being read in. `sort` arrives as the
   // EFFECTIVE axis, which is 'recent' throughout a pivot because the tree
@@ -265,6 +269,27 @@ export function LibraryHeader({
       </div>
       )}
 
+      {factset && (
+        // Beside the count, the same place for repo and lens lists (Q-UI1).
+        <button
+          type="button"
+          data-testid="library-factset"
+          onClick={() => { if (factset.enabled) factset.onOpen(); }}
+          disabled={!factset.enabled}
+          aria-label="Materialize this search" // PLACEHOLDER copy
+          title={factset.enabled
+            ? 'Materialize this search' // PLACEHOLDER copy
+            : 'Not available in history'} // PLACEHOLDER copy
+          style={{
+            background: 'none', border: 'none', outline: 'none', padding: 2, flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            cursor: factset.enabled ? 'pointer' : 'default', opacity: factset.enabled ? 0.75 : 0.3,
+          }}
+        >
+          {/* PLACEHOLDER glyph: the single-fact Materialize button's newspaper. */}
+          <NewspaperIcon color="#888" size={12} />
+        </button>
+      )}
       <span data-testid="library-count" style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>
         {/* ALWAYS the list's own count, a pivot included. This used to render
             the cluster's carrier_count on a pivot, on the grounds that it was
