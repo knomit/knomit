@@ -171,3 +171,14 @@ html[data-mat-focus] [data-testid='library-splitter'] { display: none !important
   .k-mat { --gutter-w: 34px; }
   .k-mat-path { padding-left: calc(14px + var(--gutter-w)); padding-right: 14px; }
 }
+
+/* The FactSet view (FactSetView.tsx): units are separated by their numbered
+   root headings (Q-UI8), each opening with a rule; a lens unit root names its
+   member the way lens search rows do (a dot in the repo hue + the name). */
+.k-fs-unit { border-top: 2px solid #2a3040; margin-top: 18px; }
+.k-fs-unit:first-child { margin-top: 0; }
+.k-fs-repo { display: inline-flex; align-items: center; gap: 5px; color: #8b95a6; }
+.k-fs-repo > span { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.k-fs-rule1 { margin-left: 0; }
+.k-fs-notice { color: #8ab4f8; }
+.k-fs-sub { font-family: var(--k-font-mono); font-size: 10.5px; color: #7f8b9c; min-width: 0; overflow-wrap: anywhere; }
