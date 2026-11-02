@@ -13,6 +13,7 @@ DELETE /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPan
 DELETE /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 DELETE /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 DELETE /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
+DELETE /lenses/{lens}/search/factset | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleCloseFactSet
 DELETE /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware | handlerFunc.ServeHTTP-fm
 DELETE /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware | handlerFunc.ServeHTTP-fm
 DELETE /repo-creates/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALRepoCreateDismiss
@@ -45,6 +46,8 @@ GET /lenses/{lens}/mcp/* | requestID > recoverer > reportPanic > authMiddleware 
 GET /lenses/{lens}/motifs | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensMotifs
 GET /lenses/{lens}/motifs/{key} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensMotifCluster
 GET /lenses/{lens}/search | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensSearch
+GET /lenses/{lens}/search/factset | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleSearchFactSet
+GET /lenses/{lens}/search/factset/export | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleSearchFactSetExport
 GET /lenses/{lens}/stats | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensStats
 GET /lenses/{lens}/topics | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensTopics
 GET /lenses/{lens}/topics/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensTopics

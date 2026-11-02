@@ -23,8 +23,14 @@ import (
 
 // The factset routes: GET /repos/{repo}/branches/{branch}/search/factset pages a
 // search materialized as a factset (materialize.FactSetFirstPage / FactSetNextPage,
-// the same pages knomit_materialize's factset mode returns), and
-// GET …/search/factset/export sends the whole factset as one agent document.
+// the same pages knomit_materialize's factset mode returns),
+// GET …/search/factset/export sends the whole factset as one agent document, and
+// DELETE …/search/factset?cursor= closes it. The lens twins
+// (/lenses/{lens}/search/factset, …/export, DELETE) are the same handlers over
+// the lens binding: a lens is a virtual repo, so its FactSet takes the same
+// parameters and returns the same shapes, plus what the engine adds on a lens
+// (env.anchors, repo_name on unit roots, the lens_repo leaf) and the lens
+// list's repo= narrowing.
 const (
 	factsetRouteSuffix  = "/search/factset"
 	factsetExportSuffix = "/export"
@@ -49,6 +55,33 @@ var factsetOptionParams = map[string]bool{
 // factsetUnitParam is the seek parameter, the only one a cursor call may add.
 const factsetUnitParam = "unit"
 
+// factsetLensRepoParam is the lens list's repo= narrowing (repeatable, a
+// member's repo name), accepted on the lens routes only: named exactly as
+// GET /lenses/{lens}/search names it.
+const factsetLensRepoParam = "repo"
+
+// factsetSurface is what differs between the repo and the lens factset
+// routes: where the binding comes from, and whether the first call reads the
+// lens list's parameters and wiring.
+type factsetSurface struct {
+	// binding resolves the request's binding: the {repo}/{branch} of the URL,
+	// or the {lens} LensMiddleware resolved.
+	binding func(r *http.Request) *repos.Binding
+	// lens: the first call accepts repo= and passes the lens list's motif
+	// cluster reader and query embedding (lensMotifClusters, lensEmbed).
+	lens bool
+}
+
+// repoFactSets is the surface of /repos/{repo}/branches/{branch}/search/factset.
+var repoFactSets = factsetSurface{binding: func(r *http.Request) *repos.Binding {
+	return repos.NewBindingOfRepo(repos.RepoFromContext(r.Context()), httpx.BranchFromContext(r.Context()))
+}}
+
+// lensFactSets is the surface of /lenses/{lens}/search/factset.
+var lensFactSets = factsetSurface{lens: true, binding: func(r *http.Request) *repos.Binding {
+	return repos.BindingFromContext(r.Context())
+}}
+
 // factsetScope pins a factset to the binding (pin and read set) and to the
 // caller's principal ALONE (materialize.FactSetOwner): not to the route, so a
 // factset made over MCP by the same principal with the same binding pages,
@@ -60,12 +93,10 @@ func factsetScope(r *http.Request, b *repos.Binding, ts *sessions.ToolIndex) mat
 	}
 }
 
-// handleSearchFactSet serves GET …/search/factset.
-func handleSearchFactSet(emb model.Embedder, mgr *repos.Manager) http.HandlerFunc {
+// handleSearchFactSet serves GET …/search/factset on surface sf.
+func handleSearchFactSet(sf factsetSurface, emb model.Embedder, mgr *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := repos.RepoFromContext(r.Context())
-		branch := httpx.BranchFromContext(r.Context())
-		b := repos.NewBindingOfRepo(ri, branch)
+		b := sf.binding(r)
 		q := r.URL.Query()
 
 		cursor, isResume := q[materializeCursorParam]
@@ -105,7 +136,7 @@ func handleSearchFactSet(emb model.Embedder, mgr *repos.Manager) http.HandlerFun
 		if isResume {
 			page, err = materialize.FactSetNextPage(ctx, sc, b, mgr, callerMayRead(r), cursor[0], unit)
 		} else {
-			req, ok := factsetRequest(w, r, q, ri, branch, b, mgr, emb)
+			req, ok := factsetRequest(w, r, q, sf, b, mgr, emb)
 			if !ok {
 				return
 			}
@@ -130,10 +161,9 @@ func handleSearchFactSet(emb model.Embedder, mgr *repos.Manager) http.HandlerFun
 // factset of cursor (any of its cursors) and answers 204. Another owner's
 // factset, and one that does not exist, answer the same 404 as a GET with
 // that cursor, and nothing is closed.
-func handleCloseFactSet() http.HandlerFunc {
+func handleCloseFactSet(sf factsetSurface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := repos.RepoFromContext(r.Context())
-		b := repos.NewBindingOfRepo(ri, httpx.BranchFromContext(r.Context()))
+		b := sf.binding(r)
 		q := r.URL.Query()
 		for k := range q {
 			if k != materializeCursorParam {
@@ -163,10 +193,9 @@ func handleCloseFactSet() http.HandlerFunc {
 
 // handleSearchFactSetExport serves GET …/search/factset/export?cursor=…: the whole
 // factset as one agent document, an attachment, streamed a chunk at a time.
-func handleSearchFactSetExport(mgr *repos.Manager) http.HandlerFunc {
+func handleSearchFactSetExport(sf factsetSurface, mgr *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := repos.RepoFromContext(r.Context())
-		b := repos.NewBindingOfRepo(ri, httpx.BranchFromContext(r.Context()))
+		b := sf.binding(r)
 		q := r.URL.Query()
 		for k := range q {
 			if k != materializeCursorParam {
@@ -230,14 +259,14 @@ func (d *deadlineWriter) Write(p []byte) (int, error) {
 }
 
 // factsetRequest parses a first call. On failure it has written the response.
-func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, ri *repos.RepoInstance, branch string,
+func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, sf factsetSurface,
 	b *repos.Binding, mgr *repos.Manager, emb model.Embedder) (materialize.FactSetRequest, bool) {
 	bad := func(detail string) (materialize.FactSetRequest, bool) {
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", detail, r.URL.Path)
 		return materialize.FactSetRequest{}, false
 	}
 	for k := range q {
-		if !factsetSearchParams[k] && !factsetOptionParams[k] {
+		if !factsetSearchParams[k] && !factsetOptionParams[k] && (!sf.lens || k != factsetLensRepoParam) {
 			return bad("unknown parameter " + strconv.Quote(k))
 		}
 	}
@@ -249,6 +278,9 @@ func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, ri *re
 		Origins: splitCSV(q.Get("origin")), Episodes: splitCSV(q.Get("ep")),
 		Motifs: splitCSV(q.Get("motifs")), MotifMatch: q.Get("motif_match"),
 		SinceFork: boolParam(q.Get("since_fork")), Sort: q.Get("sort"),
+	}
+	if sf.lens {
+		s.Repos = q[factsetLensRepoParam]
 	}
 	if s.Sort == "" {
 		s.Sort = materialize.SortRelevance
@@ -269,7 +301,16 @@ func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, ri *re
 		Binding: b, Manager: mgr, MayRead: callerMayRead(r), Search: s,
 		Facts: materialize.DefaultFactSetFacts, Limit: materialize.HumanDefaultLimit,
 	}
-	if emb != nil {
+	switch {
+	case sf.lens && b.IsLens():
+		// The lens list's wiring (GET /lenses/{lens}/search): the query is
+		// embedded ONCE for the whole fan-out and motif terms widen to their
+		// merged cluster over the lens's read set, so the FactSet's roots are
+		// the lens list's.
+		req.Embed, req.Clusters = lensEmbed(emb), lensMotifClusters
+	case emb != nil:
+		// A repository, and a one-member lens (the engine serves it on the
+		// repository path, byte for byte the write repo's FactSet).
 		req.Embed = emb.EmbedQuery
 	}
 	for _, p := range []struct {
@@ -296,7 +337,9 @@ func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, ri *re
 	}
 	req.Options = opts
 	if s.SinceFork {
-		paths, ok := experimentChangedPaths(w, r, ri, branch)
+		// since_fork is the WRITE member's experiment on a lens (ruling Lens
+		// 6); on a repository the write member is the repository.
+		paths, ok := experimentChangedPaths(w, r, b.Write(), b.WriteMountBranch())
 		if !ok {
 			return materialize.FactSetRequest{}, false
 		}
@@ -309,8 +352,16 @@ func boolParam(v string) bool { return v == "true" || v == "1" }
 
 // writeFactSetError maps a factset error to its answer. Internal error text never
 // reaches the caller: a store failure is logged and answered generically.
+//
+// A lens FactSet's repo= naming no member of the lens reaches here as
+// ErrInvalid wrapping *federate.UnknownRepoError; it is answered as the lens
+// list answers it (planLensRead's StageRepos): 422 "Unknown repo" with the
+// error's own text, not the 400 every other ErrInvalid gets.
 func writeFactSetError(w http.ResponseWriter, r *http.Request, err error) {
+	var unknownRepo *federate.UnknownRepoError
 	switch {
+	case errors.As(err, &unknownRepo):
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Unknown repo", unknownRepo.Error(), r.URL.Path)
 	case errors.Is(err, materialize.ErrCursorExpired):
 		hal.WriteProblem(w, http.StatusNotFound, "Cursor not found", errMaterializeCursorExpired, r.URL.Path)
 	case errors.Is(err, materialize.ErrInvalid):
