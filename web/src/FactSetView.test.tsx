@@ -550,3 +550,65 @@ describe('a scroll down never arms the top sentinel (#726 M2)', () => {
     expect(sections()[0].dataset.fsUnit).toBe('3');
   });
 });
+
+// #726 browser re-check: a run lands ONCE per landing request. `land` stays
+// set for the whole run and byUnitN is rebuilt on every page, so a landing
+// effect keyed on it snapped the reader back to the jump target on every
+// append and prepend.
+//
+// Sabotage: re-land on every byUnitN change (drop the landed.current check):
+// the append snaps scrollTop to 0 and the prepend lands on 174, not 350.
+describe('a landing happens once per request (#726 re-check)', () => {
+  it('after a jump, an append does not move scrollTop', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.11.0']);
+    expect(box.scrollTop).toBe(250);
+  });
+
+  it('after a jump, a prepend moves scrollTop by exactly the prepended height', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    userScroll(150); // up: unit 9 (two sections, 200px) is prepended
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    expect(calls).toEqual(['seek 9']);
+    expect(box.scrollTop).toBe(150 + 200);
+  });
+
+  it('a link-click seek, followed by an append, does not re-land', async () => {
+    // Unit 1's second section is a forward stub to unit 4's root.
+    const { api, calls } = pagedView(8, 2, 2, (u, k) => u === 1 && k === 1
+      ? { written: false, body: undefined, title: 'U4 S1', anchor_id: 'f-4-1', link: { anchor_id: 'f-4-1', direction: 'forward', unit: 4, number: '4', cited_blob: 'b' } } : {});
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    fireEvent.click(within(sections()[1]).getByTestId('fs-stub-link'));
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('4'));
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.5.0']);
+    expect(box.scrollTop).toBe(250);
+  });
+});

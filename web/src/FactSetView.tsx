@@ -148,10 +148,15 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   // Land where the stream says once that run is on screen: a clicked link's
   // anchor, or the unit the reader was at before a restart, a seek or a refresh.
   /* eslint-disable react-hooks/set-state-in-effect -- landing is a reaction to the stream's state (following a stub may start a seek) */
+  // Exactly once per landing request: `land` stays set for the whole run while
+  // byUnitN is rebuilt on every append and prepend, so without this every new
+  // page would snap the reader back to the landing target.
+  const landed = useRef<typeof land>(null);
   useEffect(() => {
-    if (!land || land.epoch !== epoch || stale) return;
+    if (!land || land.epoch !== epoch || stale || landed.current === land) return;
     const box = scroller.current;
     if (!box) return;
+    landed.current = land;
     setPending(null);
     // Section n of the unit (a builds-on target): a stub is followed, a
     // written section is the scroll target.
