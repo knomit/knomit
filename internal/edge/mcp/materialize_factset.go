@@ -26,7 +26,8 @@ import (
 // through mcpMotifClusters), one sub-FactSet per member, ONE cursor row in the
 // write repo's session DB. cross_kb=true is refused there (ruling Lens 2) and
 // search.repo narrows to members by name (ruling Lens 6). A one-member lens
-// stays the write repo's FactSet.
+// has the write repo's units but is still a lens: cross_kb=true is refused
+// and its no-filter title is "All in lens <lens>" (user ruling 2026-11-02).
 
 // factsetSearchKeys are the keys of the `search` object.
 var factsetSearchKeys = map[string]any{

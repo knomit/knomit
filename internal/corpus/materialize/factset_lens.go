@@ -183,12 +183,9 @@ func (le *lensEntry) at(g int) (sub, local int) { return le.fr.Order[g-1], le.lo
 // lensFactSetFirstPage is FactSetFirstPage on a lens (Binding.IsLens): the
 // anchored fused search, the partition into one sub per member, the ONE
 // facade row and page 1.
+//
+// cross_kb was refused by FactSetFirstPage, for a lens of any size.
 func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (FactSetPage, Stats, error) {
-	if req.Options.CrossKB {
-		// Ruling Lens 2: refs between the lens's own repos are never
-		// followed, and nothing else is either.
-		return FactSetPage{}, Stats{}, fmt.Errorf("%w: cross_kb is not accepted on a lens factset", ErrInvalid)
-	}
 	b := req.Binding
 	c := &fsCall{ctx: ctx, b: b, mgr: req.Manager, mayRead: req.MayRead,
 		reserve: fsPlanReserve(req.Facts, req.Options.MaxNodes, false)}
@@ -330,7 +327,7 @@ func checkRepoNarrowing(b *repos.Binding, names []string) error {
 	}
 	for _, n := range names {
 		if n != b.Write().Name() {
-			return fmt.Errorf("%w: %v", ErrInvalid, &federate.UnknownRepoError{Name: n, Lens: b.Name()})
+			return fmt.Errorf("%w: %w", ErrInvalid, &federate.UnknownRepoError{Name: n, Lens: b.Name()})
 		}
 	}
 	return nil
@@ -371,7 +368,9 @@ func planLensSearch(ctx context.Context, req FactSetRequest) (*federate.FusedPla
 	if err != nil {
 		var pe *federate.PlanError
 		if errors.As(err, &pe) && (pe.Stage == federate.StageTargets || pe.Stage == federate.StageRepos) {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+			// %w on both: the edge tells an unknown repo (*UnknownRepoError,
+			// REST 422 as the lens list) from the other invalid requests.
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		return nil, err
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 	"knomit/internal/foundation/pki/pkitest"
@@ -250,6 +251,71 @@ func TestFleetRepo_FactSetCloseIsNotRefused(t *testing.T) {
 		require.Equal(t, http.StatusConflict, rec.Code, "%s %s: %s", rt[0], rt[1], rec.Body.String())
 		require.Contains(t, rec.Body.String(), `"code":"fleet_repository"`)
 	}
+	require.Equal(t, before, tip(), "nothing was committed on the fleet repository")
+}
+
+// The lens twin of TestFleetRepo_FactSetCloseIsNotRefused. The fleet gate
+// (httpx.FleetRepoRefused) is mounted on /repos/{repo} only, so the lens
+// FactSet routes never pass through it; a lens may hold the fleet repository
+// as a READ member, and its FactSet over both members opens and closes (204)
+// through the real router exactly as a repository FactSet does, and nothing
+// is committed on the fleet repository. Deleting a fact of the fleet
+// repository is still 409 fleet_repository (control: the gate is on).
+// SABOTAGE: mount httpx.FleetRepoRefused-style refusal on the lens subtree
+// keyed on any fleet member -> the lens close is 409 -> red.
+func TestFleetRepo_LensFactSetCloseIsNotRefused(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	fleetURL, root := seedFleetBare(t, dir)
+	m, key := restFleetManager(t, dir)
+	join := joinOverSocket(t, &Server{Manager: m, Grants: localWriteGrants()}, key, fleetURL, root)
+	require.Equal(t, http.StatusOK, join.Code, join.Body.String())
+	st, err := m.FleetStatus(ctx)
+	require.NoError(t, err)
+	fleet := m.Get(st.FleetRepo)
+	require.NotNil(t, fleet)
+	require.True(t, fleet.IsFleet())
+	_, err = m.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
+	require.NoError(t, err)
+	createLens(t, m, (&Server{Manager: m}).NewAPIRouter(),
+		`{"name":"withfleet","write":"kb","reads":[{"repo":"`+st.FleetRepo+`"}]}`)
+	s := &Server{Manager: m, Grants: localOperatorGrants(), AgentBranch: "agent/rest-fleet", OntologyRoot: "kb"}
+	h := s.NewAPIRouter()
+	send := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, localPeer(httptest.NewRequest(method, path, nil)))
+		return rec
+	}
+	tip := func() string {
+		var c string
+		require.NoError(t, fleet.WithRead(func(svc *store.Service) {
+			c, err = svc.HeadCommit(ctx, fleet.AgentBranch())
+			require.NoError(t, err)
+		}))
+		return c
+	}
+	before := tip()
+	const fs = "/lenses/withfleet/search/factset"
+	open := send(http.MethodGet, fs+"?depth=0&limit=1")
+	require.Equal(t, http.StatusOK, open.Code, open.Body.String())
+	require.Contains(t, open.Body.String(), `"`+fact.ID12(fleet.ID())+`":"`, "the fleet member is searched (its anchor): %s", open.Body.String())
+	var page struct {
+		Units  int     `json:"units"`
+		Cursor *string `json:"cursor"`
+	}
+	require.NoError(t, json.Unmarshal(open.Body.Bytes(), &page))
+	require.Greater(t, page.Units, 0, "the fleet member has facts to materialize: %s", open.Body.String())
+	require.NotNil(t, page.Cursor)
+	cur := url.QueryEscape(*page.Cursor)
+
+	rec := send(http.MethodDelete, fs+"?cursor="+cur)
+	require.Equal(t, http.StatusNoContent, rec.Code, "closing a lens FactSet over the fleet repository: %s", rec.Body.String())
+	rec = send(http.MethodGet, fs+"?cursor="+cur)
+	require.Equal(t, http.StatusNotFound, rec.Code, "the closed FactSet reads as none: %s", rec.Body.String())
+
+	rec = send(http.MethodDelete, "/repos/"+st.FleetRepo+"/branches/"+urlBranch(fleet.AgentBranch())+"/facts/kb/x.md")
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"code":"fleet_repository"`)
 	require.Equal(t, before, tip(), "nothing was committed on the fleet repository")
 }
 
