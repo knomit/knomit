@@ -168,13 +168,7 @@ func (mm *MethodologyMatcher) RelevantMethodologyForFact(
 			if minVec < 0 {
 				minVec = 0
 			}
-			knnRows, qErr := conn(ctx, mm.rh.DB()).QueryContext(ctx,
-				`SELECT f.id, (1.0 - fv.distance) as similarity
-				 FROM facts_vec fv
-				 JOIN facts f ON f.id = fv.rowid
-				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-				 WHERE fv.embedding MATCH ? AND fv.k = ? AND f.type = 'methodology'
-				   AND (1.0 - fv.distance) >= ?`,
+			knnRows, qErr := conn(ctx, mm.rh.DB()).QueryContext(ctx, methodologyKNNSQL,
 				branchID, srcVec, totalFacts, minVec,
 			)
 			if qErr != nil {

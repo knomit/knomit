@@ -972,18 +972,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	// NULL and the outer query returns no rows (caller falls back to filter
 	// search, same as if there were no embedder).
 	if q.QueryByPath != "" && len(q.QueryVec) == 0 {
-		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
-			`SELECT f.path, (1.0 - fv.distance) as similarity
-			 FROM facts_vec fv
-			 JOIN facts f ON f.id = fv.rowid
-			 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-			 WHERE fv.embedding MATCH (
-			     SELECT fv2.embedding
-			     FROM branch_facts bf2
-			     JOIN facts_vec fv2 ON fv2.rowid = bf2.fact_id
-			     WHERE bf2.branch_id = ? AND bf2.path = ?
-			 ) AND fv.k = ?
-			 ORDER BY fv.distance ASC`,
+		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, searchByPathKNNSQL,
 			branchID, branchID, q.QueryByPath, kLimit,
 		)
 		if err != nil {
@@ -1035,15 +1024,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 				return nil, errors.New("search: no query vector available")
 			}
 			vecBlob := float32SliceToBytes(queryVec)
-			rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
-				`SELECT f.path, (1.0 - fv.distance) as similarity
-				 FROM facts_vec fv
-				 JOIN facts f ON f.id = fv.rowid
-				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-				 WHERE fv.embedding MATCH ? AND fv.k = ?
-				 ORDER BY fv.distance ASC`,
-				branchID, vecBlob, kLimit,
-			)
+			rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx, searchKNNSQL, branchID, vecBlob, kLimit)
 			if err != nil {
 				log.Error().Err(err).Msg("search: vec query failed")
 				return nil, fmt.Errorf("search: vector query: %w", err)

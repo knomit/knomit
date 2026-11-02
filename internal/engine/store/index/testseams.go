@@ -520,3 +520,38 @@ func (f *Facade) SetOverridesForTest(o Overrides) (restore func()) {
 		f.MethodologyMatcher.ov.Store(prevM)
 	}
 }
+
+// VecKNNQueryForTest is one vec0 KNN read of this package, for the join-order
+// guard: its exact SQL, the alias of its vec0 table, and its arguments built
+// from KNNArgsForTest in the order the production call binds them.
+type VecKNNQueryForTest struct {
+	Name     string
+	SQL      string
+	VecAlias string
+	Args     func(a KNNArgsForTest) []any
+}
+
+// KNNArgsForTest is every value a vec0 KNN read of this package binds.
+type KNNArgsForTest struct {
+	Vec      []byte // the MATCH operand (a float32 blob)
+	K        int
+	BranchID int64
+	Path     string  // QueryByPath's source path
+	MinVec   float64 // the methodology floor
+}
+
+// VecKNNQueriesForTest lists every vec0 KNN read in this package that joins
+// facts_vec to another table (see vec_knn_sql.go).
+func VecKNNQueriesForTest() []VecKNNQueryForTest {
+	mustBeTest("VecKNNQueriesForTest")
+	return []VecKNNQueryForTest{
+		{"similarity (graphBuildSimilarityEdges, rebuildGraph)", similarityKNNSQL, "fv",
+			func(a KNNArgsForTest) []any { return []any{a.Vec, a.K} }},
+		{"search by path", searchByPathKNNSQL, "fv",
+			func(a KNNArgsForTest) []any { return []any{a.BranchID, a.BranchID, a.Path, a.K} }},
+		{"search by vector", searchKNNSQL, "fv",
+			func(a KNNArgsForTest) []any { return []any{a.BranchID, a.Vec, a.K} }},
+		{"methodology", methodologyKNNSQL, "fv",
+			func(a KNNArgsForTest) []any { return []any{a.BranchID, a.Vec, a.K, a.MinVec} }},
+	}
+}

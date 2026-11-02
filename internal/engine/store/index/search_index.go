@@ -1854,14 +1854,7 @@ func (si *Index) rebuildGraph(ctx context.Context, branch string, progress model
 				continue
 			}
 			vecBlob := float32SliceToBytes(emb)
-			rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx,
-				`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
-				 FROM facts_vec fv
-				 JOIN facts f ON f.id = fv.rowid
-				 WHERE fv.embedding MATCH ? AND fv.k = ?
-				 ORDER BY fv.distance ASC`,
-				vecBlob, knnK+1,
-			)
+			rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, similarityKNNSQL, vecBlob, knnK+1)
 			if err != nil {
 				log.Warn().Err(err).Str("path", rec.Path).Msg("rebuildGraph: knn query failed")
 				continue

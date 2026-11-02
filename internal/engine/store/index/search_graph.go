@@ -349,14 +349,7 @@ func (si *Index) graphBuildSimilarityEdges(ctx context.Context, path, blobHash s
 		blobHash   string
 		similarity float64
 	}
-	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx,
-		`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
-		 FROM facts_vec fv
-		 JOIN facts f ON f.id = fv.rowid
-		 WHERE fv.embedding MATCH ? AND fv.k = ?
-		 ORDER BY fv.distance ASC`,
-		vecBlob, knnK+1,
-	)
+	rows, err := conn(ctx, si.rh.DB()).QueryContext(ctx, similarityKNNSQL, vecBlob, knnK+1)
 	if err != nil {
 		return fmt.Errorf("knn query for %s: %w", path, err)
 	}
