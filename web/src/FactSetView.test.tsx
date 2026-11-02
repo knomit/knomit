@@ -183,16 +183,17 @@ describe('FactSetView (test 5)', () => {
     expect(screen.queryByTestId('fs-export-failed')).toBeNull();
   });
 
-  it('Esc in Focus is taken in the capture phase and never reaches the shell (3fedfce6)', async () => {
+  it('Esc in Focus is taken in the capture phase, never reaches the shell, and closes the view like Back (3fedfce6, #710 M2)', async () => {
     const { api } = makeApi();
     const shell = vi.fn();
+    const back = vi.fn();
     window.addEventListener('keydown', shell);
-    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={back} api={api} />);
     await waitFor(() => expect(sections()).toHaveLength(3));
     expect(document.documentElement.dataset.matFocus).toBe('1');
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(shell).not.toHaveBeenCalled();
-    expect(document.documentElement.dataset.matFocus).toBeUndefined();
+    expect(back).toHaveBeenCalledTimes(1);
     window.removeEventListener('keydown', shell);
   });
 

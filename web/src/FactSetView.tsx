@@ -64,7 +64,13 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   const scroller = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const top = useRef<HTMLDivElement>(null);
-  const [focus, setFocus] = useMatFocus();
+  // The FactSet view exists only in Focus (user ruling 2026-11-02, #710 M2):
+  // leaving Focus by the toggle or by Esc closes it exactly as Back does (the
+  // view unmounts, the stream closes the FactSet with a best-effort DELETE,
+  // the URL flag is cleared). Esc in a text or number field still only leaves
+  // the field (3fedfce6).
+  const close = onBack;
+  useMatFocus(close);
   const [scrolled, setScrolled] = useState(false);
   const [exp, setExp] = useState<ExportState>({ kind: 'idle' });
   const exportCtl = useRef<AbortController | null>(null);
@@ -227,7 +233,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     <div className="k-mat" data-testid="factset-view">
       <div className="k-mat-bar" data-testid="fs-bar">
         <div className="k-mat-row">
-          <button type="button" data-testid="fs-back" onClick={() => { setFocus(false); onBack(); }}
+          <button type="button" data-testid="fs-back" onClick={close}
             title="Back" aria-label="Back" // PLACEHOLDER copy
             style={{
               background: 'none', border: 'none', outline: 'none',
@@ -238,8 +244,11 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
           </button>
           <span className="k-mat-title" data-testid="fs-title" title={env?.title}>{env?.title ?? ''}</span>
           <span className="k-mat-actions" data-testid="fs-actions">
-            <button type="button" className="k-bare k-mat-icon" data-testid="fs-focus" aria-pressed={focus} onClick={() => setFocus(f => !f)}
-              title={focus ? 'Exit focus' : 'Focus'} aria-label={focus ? 'Exit focus' : 'Focus'}>
+            {/* An exit control: Focus is always on while the view is open, so it
+                is always pressed and always reads "Exit focus" (the single-fact
+                view's wording, reused). */}
+            <button type="button" className="k-bare k-mat-icon" data-testid="fs-focus" aria-pressed={true} onClick={close}
+              title="Exit focus" aria-label="Exit focus">
               <FocusIcon color="currentColor" size={15} />
             </button>
             <button type="button" className="k-bare k-mat-icon" data-testid="fs-export" onClick={runExport} disabled={!canExport && !exporting}

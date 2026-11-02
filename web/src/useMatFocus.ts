@@ -2,7 +2,7 @@
 // module of its own: react-refresh/only-export-components keeps hooks out of a
 // component file.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /** Input types in which Esc is a text-editing key (leave the field). A checkbox, radio,
  *  button, range and the like do not hold Esc: it exits Focus right away. */
@@ -26,8 +26,13 @@ function holdsEsc(el: HTMLElement): boolean {
  *  replaces the right-hand panel. Not remembered and not in the URL (it is how
  *  the reader chooses to read, not what is materialized). The toggle, Esc and
  *  Back end it; Back and leaving the view also restore everything. */
-export function useMatFocus(): [boolean, (f: boolean | ((f: boolean) => boolean)) => void] {
+export function useMatFocus(onExit?: () => void): [boolean, (f: boolean | ((f: boolean) => boolean)) => void] {
   const [focus, setFocus] = useState(true);
+  // With onExit (the FactSet view, user ruling 2026-11-02 on #710 M2), leaving
+  // Focus by Esc IS leaving the view: onExit runs instead of Focus turning off.
+  // Without it (the single-fact view) Esc only turns Focus off.
+  const exit = useRef(onExit);
+  useEffect(() => { exit.current = onExit; }, [onExit]);
   useEffect(() => {
     if (!focus) return;
     const root = document.documentElement;
@@ -44,7 +49,8 @@ export function useMatFocus(): [boolean, (f: boolean | ((f: boolean) => boolean)
         a.blur();
         return;
       }
-      setFocus(false);
+      if (exit.current) exit.current();
+      else setFocus(false);
     };
     window.addEventListener('keydown', onKey, true);
     return () => { delete root.dataset.matFocus; window.removeEventListener('keydown', onKey, true); };
