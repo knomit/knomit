@@ -102,7 +102,7 @@ func TestFleetWalk_OldMastersBranchIsAdmittedAfterARejoinAndASwitch(t *testing.T
 		t.Fatalf("charlie hosts the fleet: %d %s", rec.Code, rec.Body.String())
 	}
 	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": charlie.fleetURL()})); rec.Code != http.StatusOK {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(t, map[string]any{"url": charlie.fleetURL()})); rec.Code != http.StatusOK {
 		t.Fatalf("alpha follows charlie: %d %s", rec.Code, rec.Body.String())
 	}
 

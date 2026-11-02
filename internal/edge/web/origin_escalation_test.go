@@ -16,7 +16,6 @@ package web
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -125,17 +124,6 @@ func (f *escFixture) mintTokenAt(t *testing.T, resourcePath, subject string, per
 		require.NoError(t, f.grants.Grant(ctx, oauth.TokenPrincipal(subject), p, "test"))
 	}
 	return out.Access
-}
-
-// escBody encodes a request body. Any body embedding a path or URL must go
-// through it: a Windows temp path (C:\Users\...) concatenated into a JSON
-// string literal is invalid JSON (\U is not an escape).
-func escBody(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
 }
 
 func escDo(h http.Handler, tok, method, path, body string) *httptest.ResponseRecorder {
@@ -284,7 +272,7 @@ func TestOriginEscalation_P2_SelfGitMountIsRefused(t *testing.T) {
 	rec := escDo(oauthH, tok, http.MethodGet, "/api/v1/repos/y/branches/main/facts/kb/secret.md", "")
 	require.Equal(t, http.StatusUnauthorized, rec.Code, "precondition: the X token must not read Y")
 
-	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": plain.URL + "/git/y", "branch": "main"}))
+	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": plain.URL + "/git/y", "branch": "main"}))
 	escProblem(t, rec, http.StatusForbidden, "Permission denied")
 	require.Contains(t, rec.Body.String(), "operator")
 	f.requireNoOrigin(t, riX)
@@ -300,7 +288,7 @@ func TestOriginEscalation_P1_LocalOriginIsRefused(t *testing.T) {
 	url := f.seedForeignKB(t, "other-kb.git")
 	before := escRefs(t, filepath.Join(f.root, "other-kb.git"))
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": url, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": url, "branch": "main"}))
 	escProblem(t, rec, http.StatusForbidden, "Permission denied")
 	f.requireNoOrigin(t, riX)
 	requireXMainLacksSecret(t, oauthH, tok)
@@ -316,7 +304,7 @@ func TestOriginEscalation_P1b_OtherReposOwnOriginIsRefused(t *testing.T) {
 	tok := f.mintRepoToken(t, "x")
 	before := escRefs(t, bare)
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": yURL, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": yURL, "branch": "main"}))
 	escProblem(t, rec, http.StatusForbidden, "Permission denied")
 	f.requireNoOrigin(t, riX)
 	for _, br := range []string{"main", "agent:test"} {
@@ -357,7 +345,7 @@ func TestOriginEscalation_OperatorTokenSetsAnOrigin(t *testing.T) {
 	require.NoError(t, os.MkdirAll(bare, 0o755))
 	gitfixture.InitBare(t, bare, "main")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": bare, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": bare, "branch": "main"}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	o, err := f.m.Origins().Get(riX.UID())
 	require.NoError(t, err)
@@ -383,9 +371,9 @@ func TestOriginEscalation_LocalSocketCallerSetsAnOrigin(t *testing.T) {
 	require.NoError(t, os.MkdirAll(bare, 0o755))
 	gitfixture.InitBare(t, bare, "main")
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/repos/x/origin", strings.NewReader(escBody(map[string]any{"url": bare, "branch": "main"})))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/repos/x/origin", strings.NewReader(mustJSON(t, map[string]any{"url": bare, "branch": "main"})))
 	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "@" // a unix conn has no ip; the peer is what counts
+	req.RemoteAddr = "@" // a unix socket or Windows pipe conn has no ip; the peer is what counts
 	req = req.WithContext(auth.WithPeer(req.Context(), auth.Peer{ID: me.ID, Via: auth.LocalVia}))
 	rec := httptest.NewRecorder()
 	f.s.Handler().ServeHTTP(rec, req)
@@ -415,8 +403,8 @@ func TestOriginEscalation_OperatorRefusedAnotherReposOrigin(t *testing.T) {
 
 	// replace_main never admits another repo's copy.
 	for _, body := range []string{
-		escBody(map[string]any{"url": yURL, "branch": "main"}),
-		escBody(map[string]any{"url": yURL, "branch": "main", "replace_main": true}),
+		mustJSON(t, map[string]any{"url": yURL, "branch": "main"}),
+		mustJSON(t, map[string]any{"url": yURL, "branch": "main", "replace_main": true}),
 	} {
 		rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", body)
 		escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
@@ -435,7 +423,7 @@ func TestOriginEscalation_OperatorRefusedSelfGitMount(t *testing.T) {
 	oauthH := f.s.OAuthHandler()
 	tok := f.mintOperatorToken(t, "x")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": plain.URL + "/git/y", "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": plain.URL + "/git/y", "branch": "main"}))
 	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
 	f.requireNoOrigin(t, riX)
 	requireXMainLacksSecret(t, oauthH, tok)
@@ -467,7 +455,7 @@ func TestOriginEscalation_OperatorRefusedAnotherReposKBByItsRoot(t *testing.T) {
 	riX := f.createX(t)
 	oauthH := f.s.OAuthHandler()
 	tok := f.mintOperatorToken(t, "x")
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": zBare, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": zBare, "branch": "main"}))
 	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
 	f.requireNoOrigin(t, riX)
 }
@@ -486,7 +474,7 @@ func TestOriginEscalation_UnrelatedMainIsRefused(t *testing.T) {
 	tok := f.mintOperatorToken(t, "x")
 	url := f.seedForeignKB(t, "other-kb.git")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": url, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": url, "branch": "main"}))
 	escProblem(t, rec, http.StatusConflict, "Unrelated history")
 	f.requireNoOrigin(t, riX)
 	requireXMainLacksSecret(t, oauthH, tok)
@@ -516,7 +504,7 @@ func TestOriginEscalation_OperatorReplaceAdmitsUnrelatedMain(t *testing.T) {
 	tok := f.mintOperatorToken(t, "x")
 	url := f.seedForeignKB(t, "other-kb.git")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": url, "branch": "main", "replace_main": true}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": url, "branch": "main", "replace_main": true}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	rec = escDo(oauthH, tok, http.MethodGet, "/api/v1/repos/x/branches/main/facts/kb/secret.md", "")
 	require.Equal(t, http.StatusOK, rec.Code, "the replaced main is the origin's: %s", rec.Body.String())
@@ -535,7 +523,7 @@ func TestOriginEscalation_FirstAttachOfAnEmptyRepoNeedsNoReplace(t *testing.T) {
 	tok := f.mintOperatorToken(t, "x")
 	url := f.seedForeignKB(t, "team-kb.git")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": url, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": url, "branch": "main"}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	o, err := f.m.Origins().Get(riX.UID())
 	require.NoError(t, err)
@@ -558,7 +546,7 @@ func TestOriginEscalation_RelatedOriginNeedsNoReplace(t *testing.T) {
 	bare := filepath.Join(f.root, "x.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
 	gitfixture.InitBare(t, bare, "main")
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": bare, "branch": "main"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": bare, "branch": "main"}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NoError(t, riX.OriginRoundForTest(context.Background()))
 	rec = escDo(oauthH, tok, http.MethodDelete, "/api/v1/repos/x/origin", "")
@@ -572,7 +560,7 @@ func TestOriginEscalation_RelatedOriginNeedsNoReplace(t *testing.T) {
 	runGitForTest(t, work, "commit", "-q", "-m", "later")
 	runGitForTest(t, work, "push", "-q", "origin", "HEAD:main")
 
-	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": bare, "branch": "main"}))
+	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": bare, "branch": "main"}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
 
@@ -590,8 +578,8 @@ func TestOriginEscalation_OriginTooLargeToInspectIsRefused(t *testing.T) {
 	url := f.seedForeignKB(t, "big-kb.git")
 
 	for _, body := range []string{
-		escBody(map[string]any{"url": url, "branch": "main"}),
-		escBody(map[string]any{"url": url, "branch": "main", "replace_main": true}),
+		mustJSON(t, map[string]any{"url": url, "branch": "main"}),
+		mustJSON(t, map[string]any{"url": url, "branch": "main", "replace_main": true}),
 	} {
 		rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", body)
 		escProblem(t, rec, http.StatusConflict, "Origin not inspected")
@@ -640,7 +628,7 @@ func TestOriginEscalation_CreateWithAnOriginNeedsTheOperator(t *testing.T) {
 		if preset != "" {
 			body["ontology_preset"] = preset
 		}
-		return escBody(body)
+		return mustJSON(t, body)
 	}
 	for _, c := range cases {
 		body := bodyOf(c.name, c.mode, c.url, c.preset)
@@ -674,7 +662,7 @@ func TestOriginEscalation_ProbesNeedTheOperator(t *testing.T) {
 	writer := f.mintTokenAt(t, "/api/v1", "api-client", auth.Read, auth.Write)
 	op := f.mintTokenAt(t, "/api/v1", "api-operator", auth.Read, auth.Write, auth.Operator)
 	for _, path := range []string{"/api/v1/repos:probe-origin", "/api/v1/repos:probe-initialized"} {
-		body := escBody(map[string]any{"url": url, "branch": "main"})
+		body := mustJSON(t, map[string]any{"url": url, "branch": "main"})
 		rec := escDo(oauthH, writer, http.MethodPost, path, body)
 		escProblem(t, rec, http.StatusForbidden, "Permission denied")
 		rec = escDo(oauthH, op, http.MethodPost, path, body)
@@ -700,7 +688,7 @@ func TestOriginEscalation_HeldTipLayerAloneRefusesAnotherReposOrigin(t *testing.
 	oauthH := f.s.OAuthHandler()
 	tok := f.mintOperatorToken(t, "x")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": yURL, "branch": "no-such-branch"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": yURL, "branch": "no-such-branch"}))
 	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
 	f.requireNoOrigin(t, riX)
 }
@@ -735,7 +723,7 @@ func TestOriginEscalation_ClaimLayerAloneRefusesAnotherReposKB(t *testing.T) {
 	riX := f.createX(t)
 	oauthH := f.s.OAuthHandler()
 	tok := f.mintOperatorToken(t, "x")
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": peerSrv.URL + "/git/ycopy", "branch": "no-such-branch"}))
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": peerSrv.URL + "/git/ycopy", "branch": "no-such-branch"}))
 	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
 	require.Contains(t, rec.Body.String(), `\"y\"`)
 	f.requireNoOrigin(t, riX)
@@ -759,7 +747,7 @@ func (f *escFixture) xAttachedToItsOwnRemote(t *testing.T, h http.Handler, tok s
 	bare := filepath.Join(f.root, "x.git")
 	require.NoError(t, os.MkdirAll(bare, 0o755))
 	gitfixture.InitBare(t, bare, "main")
-	rec := escDo(h, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": bare, "branch": "main"}))
+	rec := escDo(h, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": bare, "branch": "main"}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NoError(t, riX.OriginRoundForTest(context.Background()))
 	// The round pushed X's agent branch; publish it as the remote's main too,
@@ -799,7 +787,7 @@ func TestOriginEscalation_UpstreamToAnotherReposBranchIsRefused(t *testing.T) {
 
 	pushBranch(t, plain.URL+"/git/y", "main", bare, "ybranch")
 
-	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": bare, "branch": "ybranch"}))
+	rec = escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", mustJSON(t, map[string]any{"url": bare, "branch": "ybranch"}))
 	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
 	for _, body := range []string{`{"branch":"ybranch"}`, `{"branch":"ybranch","replace_main":true}`} {
 		rec = escDo(oauthH, tok, http.MethodPatch, "/api/v1/repos/x/origin/upstream", body)

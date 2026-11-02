@@ -47,7 +47,7 @@ func TestProbeInitialized_HTTP_ReportsYes(t *testing.T) {
 
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	rec, got := postProbeInitialized(t, s.NewAPIRouter(),
-		escBody(map[string]any{"url": url, "branch": "main"}))
+		mustJSON(t, map[string]any{"url": url, "branch": "main"}))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -70,7 +70,7 @@ func TestProbeInitialized_HTTP_ReportsNo(t *testing.T) {
 
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	rec, got := postProbeInitialized(t, s.NewAPIRouter(),
-		escBody(map[string]any{"url": url, "branch": "main"}))
+		mustJSON(t, map[string]any{"url": url, "branch": "main"}))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())

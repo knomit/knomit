@@ -315,7 +315,7 @@ func TestPostRepos_CloneOfANonKnowledgeBaseIs409NotAStreamedError(t *testing.T) 
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	body := escBody(map[string]any{"name": "kb", "mode": "clone", "origin": map[string]any{"url": url, "branch": "main"}})
+	body := mustJSON(t, map[string]any{"name": "kb", "mode": "clone", "origin": map[string]any{"url": url, "branch": "main"}})
 	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
@@ -340,7 +340,7 @@ func TestPostRepos_InitializeOfAKnowledgeBaseIs409NotAStreamedError(t *testing.T
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	body := escBody(map[string]any{"name": "kb", "mode": "initialize", "ontology_preset": "default", "origin": map[string]any{"url": url, "branch": "main"}})
+	body := mustJSON(t, map[string]any{"name": "kb", "mode": "initialize", "ontology_preset": "default", "origin": map[string]any{"url": url, "branch": "main"}})
 	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
@@ -555,7 +555,7 @@ func TestPostRepos_OriginURLAuthMismatchIs400WithTheSharedWording(t *testing.T) 
 		s := &Server{Manager: m}
 		r := s.NewAPIRouter()
 		rec := httptest.NewRecorder()
-		body := escBody(map[string]any{"name": "kb", "mode": "subscribe", "origin": map[string]any{"url": tc.url, "auth_method": tc.method, "auth_token": "ghp_x"}})
+		body := mustJSON(t, map[string]any{"name": "kb", "mode": "subscribe", "origin": map[string]any{"url": tc.url, "auth_method": tc.method, "auth_token": "ghp_x"}})
 		r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
 			t.Fatalf("%s + %s: status %d body %s; want 400 naming %q", tc.url, tc.method, rec.Code, rec.Body, tc.want)
