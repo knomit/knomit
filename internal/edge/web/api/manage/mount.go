@@ -226,12 +226,12 @@ func Mount(
 	// otherwise import another knowledge base into it and read it. writeGate
 	// still adds `write`. The local principals (socket, pipe, loopback per
 	// [auth].loopback_default) hold `operator` by default.
-	repo.Get("/origin", handleHALGetOrigin(b))
-	repo.With(operator).Put("/origin", handleHALSetOrigin(b, rm))
+	repo.Get("/origin", handleHALGetOrigin(b, rm, admin))
+	repo.With(operator).Put("/origin", handleHALSetOrigin(b, rm, admin))
 	repo.With(operator).Patch("/origin/upstream", handleHALSetOriginUpstream(b, rm))
 	// The light credential swap: the credential only, no reconnect.
 	repo.With(operator).Put("/origin/credential", handleSetOriginCredential(b, rm, admin))
-	repo.With(operator).Delete("/origin", handleHALDeleteOrigin(b, rm))
+	repo.With(operator).Delete("/origin", handleHALDeleteOrigin(b, rm, admin))
 
 	// Cancels the repo's index job: an ACTION on the repo, a POST on a
 	// colon-suffixed sub-resource like /repo-creates/{id}:cancel. It is
