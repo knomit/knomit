@@ -35,7 +35,8 @@ import (
 // lens facts read with text. When it is nil those handlers do not embed the
 // query themselves and leave it to each repo's store, as before the move.
 // mgr is the server's repo registry: the facts/*/materialize sub-resource
-// follows cross-KB refs into any repo registered in it.
+// follows cross-KB refs into any repo registered in it. The search/factset
+// routes are registered on both subtrees: a lens is a virtual repo.
 func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr *repos.Manager) {
 	b := hal.URLBuilder{Base: httpx.APIBase}
 
@@ -56,9 +57,9 @@ func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr
 	branch.Get("/commits/{sha}/topics/*", handleCommitAnchoredTopicNode())
 
 	branch.Get("/search", handleSearch(b, emb))
-	branch.Get(factsetRouteSuffix, handleSearchFactSet(emb, mgr))
-	branch.Get(factsetRouteSuffix+factsetExportSuffix, handleSearchFactSetExport(mgr))
-	branch.Delete(factsetRouteSuffix, handleCloseFactSet())
+	branch.Get(factsetRouteSuffix, handleSearchFactSet(repoFactSets, emb, mgr))
+	branch.Get(factsetRouteSuffix+factsetExportSuffix, handleSearchFactSetExport(repoFactSets, mgr))
+	branch.Delete(factsetRouteSuffix, handleCloseFactSet(repoFactSets))
 	branch.Get("/activity", handleHALActivity(b))
 	branch.Get("/completions", handleHALCompletions(b))
 	branch.Get("/domains", handleHALDomains(b))
@@ -72,6 +73,9 @@ func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr
 	lens.Get("/facts", handleHALLensFacts(emb))
 	lens.Get("/facts/*", handleHALLensFact(b, mgr))
 	lens.Get("/search", handleHALLensSearch(emb))
+	lens.Get(factsetRouteSuffix, handleSearchFactSet(lensFactSets, emb, mgr))
+	lens.Get(factsetRouteSuffix+factsetExportSuffix, handleSearchFactSetExport(lensFactSets, mgr))
+	lens.Delete(factsetRouteSuffix, handleCloseFactSet(lensFactSets))
 	lens.Get("/completions", handleHALLensCompletions())
 	lens.Get("/motifs", handleHALLensMotifs(b))
 	lens.Get("/motifs/{key}", handleHALLensMotifCluster(b))

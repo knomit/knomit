@@ -294,7 +294,7 @@ func checkRepoNarrowing(b *repos.Binding, names []string) error {
 	}
 	for _, n := range names {
 		if n != b.Write().Name() {
-			return fmt.Errorf("%w: %v", ErrInvalid, &federate.UnknownRepoError{Name: n, Lens: b.Name()})
+			return fmt.Errorf("%w: %w", ErrInvalid, &federate.UnknownRepoError{Name: n, Lens: b.Name()})
 		}
 	}
 	return nil
@@ -335,7 +335,9 @@ func planLensSearch(ctx context.Context, req FactSetRequest) (*federate.FusedPla
 	if err != nil {
 		var pe *federate.PlanError
 		if errors.As(err, &pe) && (pe.Stage == federate.StageTargets || pe.Stage == federate.StageRepos) {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+			// %w on both: the edge tells an unknown repo (*UnknownRepoError,
+			// REST 422 as the lens list) from the other invalid requests.
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		return nil, err
 	}
