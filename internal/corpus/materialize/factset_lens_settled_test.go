@@ -121,6 +121,12 @@ func TestSettledOnce_LegacyStoreRecreatedAndDroppedBranches(t *testing.T) {
 	settled, err = hq.SettledOnce(ctx, "agent/child")
 	require.NoError(t, err)
 	require.True(t, settled, "a created branch inherits the settled state")
+	// The inherited watermark alone would already read settled (SettledOnce
+	// falls back to it); the marker itself is inherited too, so the child stays
+	// settled whatever later clears its watermark.
+	var marked int
+	require.NoError(t, storetest.RawDB(f.svc).QueryRow(`SELECT COUNT(*) FROM meta WHERE key = ?`, index.SettledOnceKey("agent/child")).Scan(&marked))
+	require.Equal(t, 1, marked, "the child carries its own settled-once marker")
 	require.NoError(t, storetest.DropBranch(ctx, f.svc, "agent/child"))
 	settled, err = hq.SettledOnce(ctx, "agent/child")
 	require.NoError(t, err)
