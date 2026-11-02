@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"knomit/internal/platform/version"
 )
 
 // RootCmd builds the top-level cobra command with all subcommands registered.
@@ -20,7 +22,11 @@ func RootCmd() *cobra.Command {
 		// `grants add`. Execute restores the one line of help worth keeping.
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       version.String(),
 	}
+	// The bare build string, the same line `knomit version` prints (and
+	// knomit-desktop --version), not cobra's "knomit version X".
+	root.SetVersionTemplate("{{.Version}}\n")
 	root.AddCommand(serveCmd())
 	root.AddCommand(reloadCmd())
 	root.AddCommand(oauthCmd())
