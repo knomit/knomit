@@ -137,6 +137,13 @@ export interface RepoInfo {
    * (RepoRemoteEvent); the error text is on GET /origin.
    */
   remote?: RepoRemoteHealth;
+  /**
+   * Set only when the repo is linked to a stored secret that needs attention:
+   * 'expiring' (within 14 days) or 'expired'. credential_secret is that
+   * secret's name. Absent otherwise (not linked, no expiry, ok, unreadable).
+   */
+  credential_status?: 'expiring' | 'expired';
+  credential_secret?: string;
 }
 
 // RepoRemoteHealth is RepoInfo.remote: the two halves of a remote fail
@@ -634,6 +641,13 @@ export interface OriginResponse {
   last_push_status: string | null;
   last_push_error: string | null;
   auth_method: string;
+  // The stored secret the origin is linked to, when it is: its name and
+  // expiry status for every reader, its id only for an admin caller.
+  // Never its value.
+  secret_id?: string;
+  secret_name?: string;
+  secret_status?: SecretStatus;
+  secret_expires_at?: string;
   // The origin loop's circuit breakers (F21 S1). Optional so fixtures and
   // older servers without them still type-check.
   fetch_breaker?: SyncBreaker;
@@ -1060,10 +1074,10 @@ function diagStream(level: 'info' | 'error', message: string): void {
   else console.info(message);
 }
 
-export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
+export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string; secret_id?: string }): Promise<SessionCreateResponse> {
   return fetch(`${repoBase(repo)}/origin-sessions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: secretAwareHeaders(opts.secret_id),
     body: JSON.stringify(opts),
   }).then(r => { if (!r.ok) return r.json().then(e => { throw new Error(errorText(e, r.statusText)); }); return r.json(); });
 }
@@ -1263,7 +1277,8 @@ export interface CreateRepoBody {
    * (local) or 'initialize'. `repo` is the source repo's name and is required.
    */
   template?: TemplateRef;
-  origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };
+  /** secret_id links a stored secret instead of a pasted auth_token. */
+  origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string; secret_id?: string };
 }
 
 /**
@@ -1450,7 +1465,7 @@ async function createRepo(
 ): Promise<RepoCreateStatus> {
   const r = await fetch(apiUrl('/api/v1/repos'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: secretAwareHeaders(body.origin?.secret_id),
     body: JSON.stringify(body),
   });
   if (!r.ok) {
@@ -1563,12 +1578,25 @@ async function listArchived(): Promise<ArchivedRepo[]> {
   return data._embedded?.archived ?? [];
 }
 
-async function restoreRepo(id: string, newName?: string): Promise<{ name: string }> {
-  return fetchJSON<{ name: string }>(apiUrl(`/api/v1/archived/${id}/restore`), {
+/**
+ * RestoreCredential is the restored origin's credential, exactly one of: a
+ * stored secret, a pasted credential, or none. The server requires one for
+ * an archived repo that has an origin (archiving unlinked any secret).
+ */
+export type RestoreCredential =
+  | { secret_id: string }
+  | { auth_method: string; token?: string; user?: string; password?: string }
+  | { no_credential: true };
+
+async function restoreRepo(id: string, newName?: string, credential?: RestoreCredential): Promise<{ name: string }> {
+  const secretId = credential && 'secret_id' in credential ? credential.secret_id : undefined;
+  const r = await fetch(apiUrl(`/api/v1/archived/${id}/restore`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(newName ? { new_name: newName } : {}),
+    headers: secretAwareHeaders(secretId),
+    body: JSON.stringify({ ...(newName ? { new_name: newName } : {}), ...(credential ?? {}) }),
   });
+  if (!r.ok) throw await problemError(r);
+  return (await r.json()) as { name: string };
 }
 
 async function purgeRepo(id: string): Promise<void> {
@@ -2209,6 +2237,24 @@ export interface FleetOriginBody {
   url: string;
   auth_method?: string;
   auth_token?: string;
+  /** A stored secret instead of a pasted credential (forge origins only). */
+  secret_id?: string;
+}
+
+/** FleetCredential is a fleet route's credential: a pasted one, or a stored
+ *  secret (forge origins only). */
+export interface FleetCredential {
+  auth_method?: string;
+  auth_token?: string;
+  secret_id?: string;
+}
+
+function fleetCred(c: FleetCredential): FleetCredential {
+  return {
+    ...(c.auth_method ? { auth_method: c.auth_method } : {}),
+    ...(c.auth_token ? { auth_token: c.auth_token } : {}),
+    ...(c.secret_id ? { secret_id: c.secret_id } : {}),
+  };
 }
 
 // FleetRefusal carries the server's machine-readable refusal code
@@ -2282,10 +2328,10 @@ async function listFleetActivity(): Promise<FleetEvent[]> {
 
 const enrollFleetMember = (agent_id: string, public_key: string, address?: string) =>
   fleetCall<FleetEnrollment>('POST', '/enroll', { agent_id, public_key, ...(address ? { address } : {}) });
-const checkFleetJoin = (bundle: string, auth_method?: string, auth_token?: string) =>
-  fleetCall<FleetJoinCheck>('POST', '/join:check', { bundle, ...(auth_method ? { auth_method } : {}), ...(auth_token ? { auth_token } : {}) });
-const joinFleet = (bundle: string, auth_method?: string, auth_token?: string) =>
-  fleetCall<FleetStatus>('POST', '/join', { bundle, ...(auth_method ? { auth_method } : {}), ...(auth_token ? { auth_token } : {}) });
+const checkFleetJoin = (bundle: string, cred: FleetCredential = {}) =>
+  fleetCall<FleetJoinCheck>('POST', '/join:check', { bundle, ...fleetCred(cred) });
+const joinFleet = (bundle: string, cred: FleetCredential = {}) =>
+  fleetCall<FleetStatus>('POST', '/join', { bundle, ...fleetCred(cred) });
 const revokeFleetMember = (agent_id: string, reason?: string) =>
   fleetCall<{ agent_id: string; serial: string; published: boolean; publish_error?: string }>('POST', '/revoke', { agent_id, ...(reason ? { reason } : {}) });
 const leaveFleet = () => fleetCall<FleetStatus & { pushed?: boolean; push_error?: string }>('POST', '/leave', {});
@@ -2302,8 +2348,8 @@ const hostFleetHere = (confirmLoss = false) => fleetCall<FleetStatus>('POST', '/
  *  credential). url '' on a forge copy keeps the stored URL and changes the
  *  credential only. On the master another forge URL moves the fleet there.
  *  change says which ran. */
-const followFleetHost = (url: string, cred: { auth_method?: string; auth_token?: string } = {}) =>
-  fleetCall<FleetStatus & { change?: FleetFollowChange }>('POST', '/follow', { ...(url ? { url } : {}), ...cred });
+const followFleetHost = (url: string, cred: FleetCredential = {}) =>
+  fleetCall<FleetStatus & { change?: FleetFollowChange }>('POST', '/follow', { ...(url ? { url } : {}), ...fleetCred(cred) });
 /** POST /fleet/drop-commit: rebuild this instance's fleet branch on main
  *  without commit (the one GET /fleet last_error_main_held_commit names),
  *  then publish main. */
@@ -2346,7 +2392,152 @@ async function listFleetMembers(): Promise<FleetMember[]> {
   return data.members ?? [];
 }
 
+// --- Stored secrets (Access → Secrets) ---------------------------------------
+//
+// The instance's stored credentials. Every call here, and every call that
+// links or unlinks a repo (a body with secret_id), passes the server's
+// local-or-same-origin admin gate, so it carries the same-origin proof header
+// as the OAuth calls do. Values are write-only: no response ever carries one.
+
+export type SecretType = 'token' | 'basic' | 'ssh_key';
+export type SecretStatus = 'ok' | 'expiring' | 'expired' | 'none';
+
+export interface SecretRepoRef { name: string; uid: string; state: string }
+
+export interface SecretView {
+  id: string;
+  name: string;
+  type: SecretType;
+  hosts: string[];
+  expires_at: string | null;
+  status: SecretStatus;
+  created_at: string;
+  updated_at: string;
+  /** SSH keys: the public key's fingerprint. */
+  fingerprint?: string;
+  linked_repos: number;
+  /** getSecret only: the repos linked to it. */
+  repos?: SecretRepoRef[];
+}
+
+/** The write-only value inputs: value is a token, username and password the
+ *  basic pair, private_key and passphrase an SSH key. */
+export interface SecretValueFields {
+  value?: string;
+  username?: string;
+  password?: string;
+  private_key?: string;
+  passphrase?: string;
+}
+
+export interface SecretCreateBody extends SecretValueFields {
+  name: string;
+  type: SecretType;
+  hosts: string[];
+  expires_at?: string | null;
+}
+
+/** expires_at: absent keeps it, null clears it, a string sets it. hosts is
+ *  the full new list. */
+export interface SecretPatchBody extends SecretValueFields {
+  name?: string;
+  hosts?: string[];
+  expires_at?: string | null;
+}
+
+/** SecretRefusal is a non-2xx answer from a secrets or credential call: the
+ *  server's detail as the message, the status, and the repos (and hosts) a
+ *  409 names. */
+export class SecretRefusal extends Error {
+  status: number;
+  repos: string[];
+  hosts: string[];
+  constructor(message: string, status: number, repos: string[] = [], hosts: string[] = []) {
+    super(message);
+    this.status = status;
+    this.repos = repos;
+    this.hosts = hosts;
+  }
+}
+
+/** The 503 the server answers when the instance key cannot be read. */
+export const SECRETS_UNAVAILABLE = 'Secret storage is unavailable: the instance key cannot be read.';
+
+async function problemError(r: Response): Promise<SecretRefusal> {
+  let detail = r.statusText;
+  let repos: string[] = [];
+  let hosts: string[] = [];
+  try {
+    const b = await r.json();
+    detail = errorText(b, detail);
+    if (Array.isArray(b?.repos)) repos = b.repos.map((x: { name?: string }) => x?.name).filter((n: unknown): n is string => typeof n === 'string');
+    if (Array.isArray(b?.hosts)) hosts = b.hosts.filter((h: unknown): h is string => typeof h === 'string');
+  } catch {
+    // Non-JSON body; keep the statusText.
+  }
+  if (r.status === 503) detail = SECRETS_UNAVAILABLE;
+  return new SecretRefusal(detail, r.status, repos, hosts);
+}
+
+/** secretAwareHeaders: JSON, plus the same-origin proof header when the body
+ *  carries a secret_id (the admin gate). Without one the call stays a simple
+ *  request, so the desktop gains no preflight. */
+function secretAwareHeaders(secretId: string | null | undefined): Record<string, string> {
+  return secretId ? oauthHeaders(true) : { 'Content-Type': 'application/json' };
+}
+
+async function secretsCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await fetch(apiUrl(`/api/v1/secrets${path}`), {
+    method,
+    headers: oauthHeaders(body !== undefined),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!r.ok) throw await problemError(r);
+  if (r.status === 204) return undefined as T;
+  return (await r.json()) as T;
+}
+
+async function listSecrets(): Promise<SecretView[]> {
+  const data = await secretsCall<{ secrets?: SecretView[] }>('GET', '');
+  return data.secrets ?? [];
+}
+const getSecret = (id: string) => secretsCall<SecretView>('GET', `/${encodeURIComponent(id)}`);
+const createSecret = (body: SecretCreateBody) => secretsCall<SecretView>('POST', '', body);
+const patchSecret = (id: string, body: SecretPatchBody) => secretsCall<SecretView>('PATCH', `/${encodeURIComponent(id)}`, body);
+const deleteSecret = (id: string) => secretsCall<void>('DELETE', `/${encodeURIComponent(id)}`);
+
+/**
+ * OriginCredentialBody is PUT /repos/{repo}/origin/credential: a pasted
+ * credential (auth_method with token, or with user and password), a link
+ * ({secret_id}), or an unlink ({secret_id: null}, with the pasted credential
+ * that replaces it, or alone for none). It changes the credential only: no
+ * reconnect.
+ */
+export interface OriginCredentialBody {
+  auth_method?: string;
+  token?: string;
+  user?: string;
+  password?: string;
+  secret_id?: string | null;
+}
+
+async function setOriginCredential(repo: string, body: OriginCredentialBody): Promise<void> {
+  const gated = body.secret_id !== undefined;
+  const r = await fetch(`${repoBase(repo)}/origin/credential`, {
+    method: 'PUT',
+    headers: gated ? oauthHeaders(true) : { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw await problemError(r);
+}
+
 export const api = {
+  listSecrets,
+  getSecret,
+  createSecret,
+  patchSecret,
+  deleteSecret,
+  setOriginCredential,
   listOAuthPending,
   getFleet,
   listFleetMembers,
@@ -2396,11 +2587,11 @@ export const api = {
   // signal is how the wizard's first step stays interactive: the server bounds
   // the probe by its own network timeout, but that budget is measured in
   // minutes and the user should not have to wait it out to correct a typo.
-  probeOrigin: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string },
+  probeOrigin: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string; secret_id?: string },
     signal?: AbortSignal): Promise<ProbeResult> =>
     fetchJSON<ProbeResult>(apiUrl('/api/v1/repos:probe-origin'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: secretAwareHeaders(body.secret_id),
       body: JSON.stringify(body),
       signal,
     }),
@@ -2409,11 +2600,11 @@ export const api = {
   // create mode. Heavier than probeOrigin — a shallow single-branch clone
   // rather than a ref listing — so it takes a signal for the same reason:
   // the step stays interactive while it runs.
-  probeInitialized: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string },
+  probeInitialized: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string; secret_id?: string },
     signal?: AbortSignal): Promise<InitializedResult> =>
     fetchJSON<InitializedResult>(apiUrl('/api/v1/repos:probe-initialized'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: secretAwareHeaders(body.secret_id),
       body: JSON.stringify(body),
       signal,
     }),
@@ -2639,8 +2830,10 @@ export const api = {
 
   // deleteOrigin throws RepoIndexingError for the 409 the server answers while
   // the repo's index job runs, so the caller can offer to cancel it.
+  // A linked repo's detach unlinks it, which needs the admin gate: the call
+  // carries the same-origin proof header.
   deleteOrigin: (repo: string): Promise<void> =>
-    fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
+    fetch(`${repoBase(repo)}/origin`, { method: 'DELETE', headers: oauthHeaders(false) })
       .then(async r => {
         if (r.ok) return;
         let body: unknown = null;

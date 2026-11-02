@@ -73,7 +73,7 @@ export function FleetWizard({ fleet, onDone, onCancel }: {
         const r = await api.probeOrigin({ url: s.forgeUrl.trim(), ...auth });
         if (!r.reachable || r.auth_required) throw new Error(r.detail || 'the remote refused the credential');
       } else {
-        const r = await api.checkFleetJoin(s.bundle, auth.auth_method, auth.auth_token);
+        const r = await api.checkFleetJoin(s.bundle, auth);
         if (r.auth_required) throw new Error(r.detail || 'the forge refused the credential');
       }
       dispatch({ type: 'ACCESS_CHECKED' });
@@ -89,7 +89,7 @@ export function FleetWizard({ fleet, onDone, onCancel }: {
         onDone({ kind: 'created' });
       } else {
         const auth = s.check?.hosting === 'forge' ? fleetAuth(s) : {};
-        const st = await api.joinFleet(s.bundle, auth.auth_method, auth.auth_token);
+        const st = await api.joinFleet(s.bundle, auth);
         onDone({ kind: 'joined', rootFingerprint: st.root_fingerprint ?? s.check?.root_fingerprint ?? '' });
       }
     } catch (e) { setErr(asError(e)); }

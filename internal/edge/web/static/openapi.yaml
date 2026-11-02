@@ -5747,6 +5747,17 @@ components:
           properties:
             sync: { type: string, enum: [ok, error, ""] }
             push: { type: string, enum: [ok, error, ""] }
+        credential_status:
+          type: string
+          enum: [expiring, expired]
+          description: |
+            Set only when the repo is linked to a stored secret that expires
+            within 14 days (`expiring`) or has expired (`expired`). Absent
+            otherwise: not linked, no expiry, not yet expiring, or the secret
+            could not be read. Advisory: sync keeps using the secret.
+        credential_secret:
+          type: string
+          description: The linked secret's name, present with `credential_status`.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:
