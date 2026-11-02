@@ -106,7 +106,7 @@ func TestProbeOrigin_UnreachableIsNotAnError(t *testing.T) {
 // initializeProbeErr's authentication arm rather than its reachability one.
 func TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable(t *testing.T) {
 	// KeyPath "" is the no-key-on-this-machine case; the URL is SSH-style so
-	// ResolveAuth auto-detects ssh and then fails for want of a key.
+	// resolveAuthConfig auto-detects ssh and then fails for want of a key.
 	m := New(context.Background(), Deps{
 		Cfg:     config.Config{Home: t.TempDir()},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test", KeyPath: "", Machine: Options{Synchronous: true, CrashBackoff: testCrashBackoff},

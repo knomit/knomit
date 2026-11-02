@@ -268,6 +268,10 @@ func (m *Manager) fleetCreatePreflight(ctx context.Context, spec FleetCreateSpec
 		if err := refuseFleetOrigin(strings.TrimSpace(o.URL)); err != nil {
 			return CreateSpec{}, err
 		}
+		o.URL = strings.TrimSpace(o.URL)
+		if err := m.fleetSecretFits(&o); err != nil {
+			return CreateSpec{}, err
+		}
 		cs.Mode, cs.Origin = "initialize", &o
 	}
 	// The repo create's own refusals (name, origin in use, reachability, an
@@ -600,7 +604,7 @@ func (m *Manager) retractFleetBranch(ctx context.Context, ri *RepoInstance) erro
 		if remote == nil {
 			return
 		}
-		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		auth, err := m.remoteAuthFn()(remote)
 		if err != nil {
 			rerr = err
 			return
@@ -703,7 +707,7 @@ func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) err
 			return
 		}
 		if remote != nil {
-			auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+			auth, err := m.remoteAuthFn()(remote)
 			if err != nil {
 				perr = err
 				return

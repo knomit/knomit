@@ -79,9 +79,6 @@ var (
 	// ErrInvalidCredential: the credential is malformed or does not fit the
 	// origin URL.
 	ErrInvalidCredential = errors.New("invalid credential")
-	// errLinkNotSupported: linking through ChangeOriginCredential is not
-	// available yet.
-	errLinkNotSupported = errors.New("linking a stored secret is not supported yet")
 )
 
 // beforeCredentialWrite (tests only) runs between the read of the stored
@@ -122,6 +119,14 @@ func checkPastedCredential(url string, c CredentialChange) error {
 // attach lifecycle: no probe, no guard, no git-remote rewrite, no Sync stage
 // restart. The URL, branch and Mode stay exactly as stored.
 //
+// The change is one of: a link to a stored secret (c.SecretID set: the
+// secret must fit the stored URL's host and scheme, control.ErrSecretHostNotAllowed
+// or ErrSecretTypeMismatch; the stored method becomes the secret's
+// transport and the pasted token is cleared); a pasted credential (c
+// AuthMethod plus AuthToken), which on a linked repo needs unlink; or, with
+// unlink and no credential, the explicit none (method "none", anonymous).
+// The caller gates linking and unlinking (admin); this does not.
+//
 // It reads the stored origin and refuses: none (ErrNoOrigin), a fleet peer
 // (ErrPeerCredential: a peer authenticates with this instance's certificate),
 // a pasted credential for a linked repo unless unlink is set (ErrLinkedRepo),
@@ -152,19 +157,30 @@ func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, 
 	if stored.AuthMethod == "cert" {
 		return ErrPeerCredential
 	}
-	if c.SecretID != "" {
-		return errLinkNotSupported
-	}
-	if stored.SecretID != "" && !unlink {
+	switch {
+	case c.SecretID != "":
+		if c.AuthToken != "" {
+			return fmt.Errorf("%w: secret_id takes no pasted credential", ErrInvalidCredential)
+		}
+		method, err := m.CheckSecretForURL(c.SecretID, stored.URL)
+		if err != nil {
+			return err
+		}
+		c.AuthMethod = method
+	case stored.SecretID != "" && !unlink:
 		return ErrLinkedRepo
-	}
-	if err := checkPastedCredential(stored.URL, c); err != nil {
-		return err
+	case unlink && c.AuthMethod == "" && c.AuthToken == "":
+		// The explicit none: the repo is left anonymous.
+		c.AuthMethod = "none"
+	default:
+		if err := checkPastedCredential(stored.URL, c); err != nil {
+			return err
+		}
 	}
 	// What the running store holds now, before the durable write: the
 	// in-memory write below applies only while memory still holds exactly
 	// this. With the store not open, the row an open would inject.
-	expect := remotesync.Origin{URL: stored.URL, Branch: stored.Branch, AuthMethod: stored.AuthMethod, AuthToken: stored.AuthToken}
+	expect := remotesync.Origin{URL: stored.URL, Branch: stored.Branch, AuthMethod: stored.AuthMethod, AuthToken: stored.AuthToken, SecretID: stored.SecretID}
 	_ = ri.WithRead(func(svc *store.Service) {
 		if mem := svc.Remote().InjectedOrigin(); mem != nil {
 			expect = *mem
@@ -198,13 +214,13 @@ func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, 
 	applied := true
 	if werr := ri.WithRead(func(svc *store.Service) {
 		applied = svc.Remote().SetOriginIf(expect, &remotesync.Origin{
-			URL: cur.URL, Branch: cur.Branch, AuthMethod: cur.AuthMethod, AuthToken: cur.AuthToken,
+			URL: cur.URL, Branch: cur.Branch, AuthMethod: cur.AuthMethod, AuthToken: cur.AuthToken, SecretID: cur.SecretID,
 		})
 	}); werr != nil {
 		log.Debug().Err(werr).Str("repo", ri.Name()).Msg("credential changed while the store is not open; it is injected at open")
 	}
 	if !applied {
-		return fmt.Errorf("change credential: %w: the origin was re-pointed or removed while the credential was being replaced", control.ErrOriginChanged)
+		return fmt.Errorf("change credential: %w: the origin was changed concurrently while the credential was being replaced", control.ErrOriginChanged)
 	}
 	ri.credentialChanged()
 	return nil

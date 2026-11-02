@@ -144,12 +144,26 @@ func handleHALArchivedItem(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 
 type restoreRequest struct {
 	NewName string `json:"new_name"`
+	// The restored origin's credential, exactly one of: a stored secret, a
+	// pasted credential, or none. Required when the archived repo has an
+	// origin.
+	SecretID     string `json:"secret_id"`
+	AuthMethod   string `json:"auth_method"`
+	Token        string `json:"token"`
+	User         string `json:"user"`
+	Password     string `json:"password"`
+	NoCredential bool   `json:"no_credential"`
 }
 
 // handleHALArchivedRestore serves POST /api/v1/archived/{id}/restore. The {id}
 // path segment is the repo's uid — ArchiveInfo.ID is now the same uid Create
 // minted, so this is the same string throughout, just named for what it is.
-func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+//
+// An archived repo with an origin is restored with the credential the body
+// chooses (archiving unlinked any stored secret): secret_id (admin, and the
+// secret must fit the origin: 422), a pasted credential (operator), or
+// no_credential. No choice, or more than one, is 400.
+func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager, operator, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid := chi.URLParam(r, "id")
 		var req restoreRequest
@@ -157,8 +171,30 @@ func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager) http.HandlerFu
 		if !httpx.DecodeOptionalJSON(w, r, &req, 0) {
 			return
 		}
-		ri, err := m.Restore(uid, req.NewName)
+		cred := repos.RestoreCredential{
+			SecretID:   req.SecretID,
+			AuthMethod: req.AuthMethod,
+			AuthToken:  httpx.AssembleAuthToken(req.AuthMethod, req.Token, req.User, req.Password),
+			None:       req.NoCredential,
+		}
+		if cred.SecretID != "" && !httpx.Admits(admin, w, r) {
+			return
+		}
+		if (cred.AuthMethod != "" || cred.AuthToken != "") && !httpx.Admits(operator, w, r) {
+			return
+		}
+		ri, err := m.RestoreWith(uid, req.NewName, &cred)
 		if err != nil {
+			switch {
+			case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
+				errors.Is(err, control.ErrSecretNotFound):
+				writeSecretFitError(w, r, err)
+				return
+			case errors.Is(err, repos.ErrCredentialChoiceRequired), errors.Is(err, repos.ErrNoOriginForCredential),
+				errors.Is(err, repos.ErrInvalidCredential), errors.Is(err, repos.ErrPeerCredential):
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid credential choice", err.Error(), r.URL.Path)
+				return
+			}
 			status, title := archiveErrStatus(err)
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return

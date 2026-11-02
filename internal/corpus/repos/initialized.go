@@ -270,7 +270,7 @@ func (m *Manager) beginRemoteProbe(ctx context.Context, o OriginSpec) (*remotePr
 		return p, nil
 	}
 	p.o = o
-	p.gitURL, p.auth, p.authErr = m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	p.gitURL, p.auth, p.authErr = m.resolveSpecAuth(&o)
 	if p.authErr != nil {
 		return p, nil
 	}

@@ -7,6 +7,7 @@ import (
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -185,6 +186,7 @@ func setOriginUpstream(_ context.Context, m *repos.Manager, ri *repos.RepoInstan
 			Branch:     branch,
 			AuthMethod: existing.AuthMethod,
 			AuthToken:  existing.AuthToken,
+			SecretID:   existing.SecretID,
 		})
 	}); aerr != nil {
 		return aerr
@@ -224,6 +226,13 @@ type originView struct {
 	LastPushStatus *string `json:"last_push_status"`
 	LastPushError  *string `json:"last_push_error"`
 	AuthMethod     string  `json:"auth_method,omitempty"`
+	// The stored secret the origin links to, when it does: its name and
+	// expiry status (ok, expiring, expired, none) for every reader, its id
+	// only for a caller that passes the admin gate. Never its value.
+	SecretID        string  `json:"secret_id,omitempty"`
+	SecretName      string  `json:"secret_name,omitempty"`
+	SecretStatus    string  `json:"secret_status,omitempty"`
+	SecretExpiresAt *string `json:"secret_expires_at,omitempty"`
 	// FetchBreaker and PushBreaker are the origin loop's circuit breakers
 	// (F21 S1), in memory and read-only: closed before the loop's first
 	// round. While one is open its step is skipped and writes no status, so
@@ -238,8 +247,10 @@ func originSelfURL(b hal.URLBuilder, repo string) string {
 }
 
 // handleHALGetOrigin serves GET /repos/{repo}/origin.
-// Returns 200 with HAL origin view, or 204 if no origin is configured.
-func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
+// Returns 200 with HAL origin view, or 204 if no origin is configured. A
+// linked origin shows its secret's name and expiry status; the secret's id
+// is shown only to a caller that passes admin.
+func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -280,7 +291,32 @@ func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
 				"repo": {Href: b.Repo(repoName)},
 			},
 		}
+		if remote.SecretID != "" {
+			addSecretView(&view, m, remote.SecretID, httpx.Passes(admin, r))
+		}
 		hal.WriteHAL(w, http.StatusOK, view)
+	}
+}
+
+// addSecretView fills the linked secret's fields of an origin view.
+func addSecretView(view *originView, m *repos.Manager, id string, showID bool) {
+	if showID {
+		view.SecretID = id
+	}
+	s := m.Secrets()
+	if s == nil {
+		return
+	}
+	meta, err := s.Get(id)
+	if err != nil {
+		log.Warn().Err(err).Str("secret_id", id).Msg("origin: the linked secret could not be read")
+		return
+	}
+	view.SecretName = meta.Name
+	view.SecretStatus = control.ExpiryStatus(meta.ExpiresAt, time.Now().UTC())
+	if meta.ExpiresAt != nil {
+		at := meta.ExpiresAt.UTC().Format(time.RFC3339)
+		view.SecretExpiresAt = &at
 	}
 }
 
@@ -294,7 +330,12 @@ func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
 // untouched, a different knowledge base a 409. While the repo is indexing the
 // attach is refused with 409 and a cancel-index link. On success the Sync
 // stage has been restarted on the new origin when this answers 200.
-func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+//
+// On a repo linked to a stored secret the link is carried: credential fields
+// are refused (409, unlink first), and a URL change also needs admin and a
+// URL the secret fits (422 otherwise), so an operator cannot redirect the
+// secret to another host.
+func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
@@ -340,27 +381,30 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid URL", errOriginInvalidURL.Error(), r.URL.Path)
 			return
 		}
-		authMethod := req.AuthMethod
-		// A stored cert is knomit's decision, not an input: the attach
-		// decides again (repos.Manager.ResolveOrigin), so it is not carried.
-		if authMethod == "" && existing != nil && existing.AuthMethod != "cert" {
-			authMethod = existing.AuthMethod
+		var spec repos.OriginSpec
+		if existing != nil && existing.SecretID != "" {
+			var ok bool
+			if spec, ok = linkedOriginSpec(w, r, m, admin, req, existing, u); !ok {
+				return
+			}
+		} else {
+			authMethod := req.AuthMethod
+			// A stored cert is knomit's decision, not an input: the attach
+			// decides again (repos.Manager.ResolveOrigin), so it is not carried.
+			if authMethod == "" && existing != nil && existing.AuthMethod != "cert" {
+				authMethod = existing.AuthMethod
+			}
+			authToken := httpx.AssembleAuthToken(authMethod, req.Token, req.User, req.Password)
+			if authToken == "" && existing != nil {
+				authToken = existing.AuthToken
+			}
+			if verr := httpx.ValidateURLAuth(u, authMethod); verr != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", verr.Error(), r.URL.Path)
+				return
+			}
+			spec = repos.OriginSpec{URL: u, AuthMethod: authMethod, AuthToken: authToken}
 		}
-		authToken := httpx.AssembleAuthToken(authMethod, req.Token, req.User, req.Password)
-		if authToken == "" && existing != nil {
-			authToken = existing.AuthToken
-		}
-		if verr := httpx.ValidateURLAuth(u, authMethod); verr != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", verr.Error(), r.URL.Path)
-			return
-		}
-
-		spec := repos.OriginSpec{
-			URL:        u,
-			Branch:     req.Branch,
-			AuthMethod: authMethod,
-			AuthToken:  authToken,
-		}
+		spec.Branch = req.Branch
 		attach := repos.AttachOrigin
 		if req.ReplaceMain {
 			attach = repos.AttachOriginReplacing
@@ -379,6 +423,46 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			},
 		}
 		hal.WriteHAL(w, http.StatusOK, view)
+	}
+}
+
+// linkedOriginSpec is PUT /origin's spec for a repo linked to a stored
+// secret (existing.SecretID): the link is carried. Credential fields are 409
+// (unlink first); a URL change needs admin and a URL the secret fits (422).
+// It writes the refusal itself and reports false.
+func linkedOriginSpec(w http.ResponseWriter, r *http.Request, m *repos.Manager, admin func(http.Handler) http.Handler,
+	req setOriginRequest, existing *remotesync.Remote, u string) (repos.OriginSpec, bool) {
+	if req.AuthMethod != "" || req.Token != "" || req.User != "" || req.Password != "" {
+		hal.WriteProblem(w, http.StatusConflict, "Linked to a stored secret", repos.ErrLinkedRepo.Error(), r.URL.Path)
+		return repos.OriginSpec{}, false
+	}
+	if u != existing.URL {
+		if !httpx.Admits(admin, w, r) {
+			return repos.OriginSpec{}, false
+		}
+		if _, err := m.CheckSecretForURL(existing.SecretID, u); err != nil {
+			writeSecretFitError(w, r, err)
+			return repos.OriginSpec{}, false
+		}
+	}
+	return repos.OriginSpec{URL: u, AuthMethod: existing.AuthMethod, SecretID: existing.SecretID}, true
+}
+
+// writeSecretFitError answers a stored secret that cannot be used for an
+// origin: missing (404 when named by the caller), a host not on its list or
+// a type that does not fit the URL (422), or no secrets store (503).
+func writeSecretFitError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, control.ErrSecretNotFound):
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret not found", "secret_id names no stored secret: list them with GET /secrets", r.URL.Path)
+	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch):
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret does not fit the origin", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrSecretOnPeer):
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret does not fit the origin", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrManagerStopped):
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Server stopping", err.Error(), r.URL.Path)
+	default:
+		hal.WriteProblem(w, http.StatusInternalServerError, "Failed to check the secret", err.Error(), r.URL.Path)
 	}
 }
 
@@ -415,6 +499,11 @@ func writeAttachRefusal(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 	case errors.Is(err, repos.ErrOriginUnreachable):
 		log.Warn().Err(err).Str("repo", repoName).Msg("origin attach refused by its probe")
 		hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
+	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
+		errors.Is(err, repos.ErrSecretOnPeer), errors.Is(err, control.ErrSecretNotFound):
+		writeSecretFitError(w, r, err)
+	case errors.Is(err, control.ErrOriginLinked):
+		hal.WriteProblem(w, http.StatusConflict, "Linked to a stored secret", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrManagerStopped):
 		hal.WriteProblem(w, http.StatusServiceUnavailable, "Server stopping", err.Error(), r.URL.Path)
 	case httpx.StoreUnavailable(err):
@@ -518,6 +607,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 			Branch:     req.Branch,
 			AuthMethod: authMethod,
 			AuthToken:  existing.AuthToken,
+			SecretID:   existing.SecretID,
 		}, req.ReplaceMain); err != nil {
 			writeAttachRefusal(w, r, b, repoName, err, "Failed to set upstream branch")
 			return
@@ -560,9 +650,22 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 // with the origin-less local loop, so the consensus branch keeps following
 // the agent branch at once. A subscription IS its origin and is refused (409),
 // as is a repo that is indexing (409 with a cancel-index link). Returns 204.
-func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+// Detaching an origin linked to a stored secret unlinks it, so it also
+// needs admin.
+func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		// A stopped manager falls through to the Send, which refuses it.
+		if origins, oerr := originsOf(m); oerr == nil {
+			stored, gerr := origins.Get(ri.UID())
+			if gerr != nil {
+				hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin", gerr.Error(), r.URL.Path)
+				return
+			}
+			if stored != nil && stored.SecretID != "" && !httpx.Admits(admin, w, r) {
+				return
+			}
+		}
 		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())
 		switch {
 		case err == nil:

@@ -376,7 +376,7 @@ func TestRestore_BringsBackAndUnarchives(t *testing.T) {
 	info, err := m.Archive("work")
 	require.NoError(t, err)
 
-	ri, err := m.Restore(info.ID, "")
+	ri, err := m.RestoreWith(info.ID, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "work", ri.Name())
 	require.NotNil(t, m.Get("work"))
@@ -392,10 +392,10 @@ func TestRestore_RenameOnCollision(t *testing.T) {
 	info, _ := m.Archive("work")
 	_, _ = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
 
-	_, err := m.Restore(info.ID, "")
+	_, err := m.RestoreWith(info.ID, "", nil)
 	require.ErrorIs(t, err, control.ErrRepoExists)
 
-	ri, err := m.Restore(info.ID, "work2")
+	ri, err := m.RestoreWith(info.ID, "work2", nil)
 	require.NoError(t, err)
 	require.Equal(t, "work2", ri.Name())
 }
@@ -424,7 +424,7 @@ func TestRestore_UnderNewName(t *testing.T) {
 
 	createRepo(t, m, "core") // the name was released
 
-	restored, err := m.Restore(uid, "core-old")
+	restored, err := m.RestoreWith(uid, "core-old", nil)
 	require.NoError(t, err)
 	require.NotNil(t, restored)
 	require.Equal(t, uid, restored.UID())
@@ -443,7 +443,7 @@ func TestRestore_NameCollisionRejected(t *testing.T) {
 	require.NoError(t, err)
 	createRepo(t, m, "core")
 
-	_, err = m.Restore(uid, "core")
+	_, err = m.RestoreWith(uid, "core", nil)
 	require.ErrorIs(t, err, control.ErrRepoExists)
 
 	rec, _, gerr := m.reg.Get(uid)
@@ -583,7 +583,7 @@ func TestArchiveRestoreArchive_RepeatsClean(t *testing.T) {
 	_, err := m.Archive("core")
 	require.NoError(t, err)
 
-	restored, err := m.Restore(uid, "")
+	restored, err := m.RestoreWith(uid, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, uid, restored.UID())
 
@@ -623,7 +623,7 @@ func TestArchive_LastRepoLeavesZero(t *testing.T) {
 	require.Equal(t, info.ID, archived[0].ID)
 
 	// And it can come back, so zero is a state you can leave as well as reach.
-	ri, err := m.Restore(info.ID, "")
+	ri, err := m.RestoreWith(info.ID, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "work", ri.Name())
 	require.Equal(t, []string{"work"}, m.Names())
@@ -693,7 +693,7 @@ func TestRestore_OriginInUse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, originURL, info.Origin)
 
-	_, err = m.Restore(info.ID, "")
+	_, err = m.RestoreWith(info.ID, "", nil)
 	require.ErrorIs(t, err, ErrOriginInUse)
 }
 
@@ -714,7 +714,7 @@ func TestRestore_HonorsInFlightReservation(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 
-	_, err = m.Restore(info.ID, "")
+	_, err = m.RestoreWith(info.ID, "", nil)
 	require.ErrorIs(t, err, ErrCreateInFlight)
 
 	// The archive must remain intact and recoverable — the refused restore must
@@ -751,7 +751,7 @@ func TestCreateRestore_ConcurrentSameName_NoDoubleRegister(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		_, errRestore = m.Restore(info.ID, "")
+		_, errRestore = m.RestoreWith(info.ID, "", nil)
 	}()
 	close(start)
 	wg.Wait()
@@ -1155,7 +1155,7 @@ func TestLifecycleOpsRefuseAfterClose(t *testing.T) {
 	_, err = m.ListArchived()
 	require.ErrorIs(t, err, ErrManagerStopped)
 
-	_, err = m.Restore(uid, "")
+	_, err = m.RestoreWith(uid, "", nil)
 	require.ErrorIs(t, err, ErrManagerStopped)
 
 	require.ErrorIs(t, m.Purge(uid), ErrManagerStopped)

@@ -16,6 +16,8 @@ type probeInitializedRequest struct {
 	// an answer obtained anonymously is an answer about a different request.
 	AuthMethod string `json:"auth_method"`
 	AuthToken  string `json:"auth_token"`
+	// SecretID probes with a stored secret instead (admin only).
+	SecretID string `json:"secret_id"`
 }
 
 // handleReposProbeInitialized serves POST /api/v1/repos:probe-initialized —
@@ -36,7 +38,7 @@ type probeInitializedRequest struct {
 // so guessing "initialized" discards the ontology the user chose and guessing
 // "not initialized" writes one over a knowledge base that already had its own.
 // Both are unrecoverable. The wizard blocks and offers a retry instead.
-func handleReposProbeInitialized(m *repos.Manager) http.HandlerFunc {
+func handleReposProbeInitialized(m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req probeInitializedRequest
 		// Bounded like the create endpoint's body. This one takes a URL and a
@@ -53,12 +55,15 @@ func handleReposProbeInitialized(m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", "url is required", r.URL.Path)
 			return
 		}
-		res, err := m.ProbeInitialized(r.Context(), repos.OriginSpec{
-			URL:        req.URL,
-			Branch:     req.Branch,
-			AuthMethod: req.AuthMethod,
-			AuthToken:  req.AuthToken,
-		})
+		method, ok := admitSecretID(w, r, m, admin, req.SecretID, req.URL, req.AuthToken != "")
+		if !ok {
+			return
+		}
+		spec := repos.OriginSpec{URL: req.URL, Branch: req.Branch, AuthMethod: req.AuthMethod, AuthToken: req.AuthToken}
+		if method != "" {
+			spec.AuthMethod, spec.SecretID = method, req.SecretID
+		}
+		res, err := m.ProbeInitialized(r.Context(), spec)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Origin rejected", err.Error(), r.URL.Path)
 			return

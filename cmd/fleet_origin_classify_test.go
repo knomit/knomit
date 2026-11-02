@@ -107,7 +107,7 @@ func remount(t *testing.T, mgr *repos.Manager, ri *repos.RepoInstance) *repos.Re
 	if err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	ri, err = mgr.Restore(archived.ID, "")
+	ri, err = mgr.RestoreWith(archived.ID, "", nil)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}

@@ -126,7 +126,7 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 		// happen (#528 N5).
 		return ProbeResult{Branches: []string{}, Detail: reachCause(err).Error()}, nil
 	}
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	gitURL, auth, err := m.resolveSpecAuth(&o)
 	if err != nil {
 		return ProbeResult{
 			Reachable:    true,

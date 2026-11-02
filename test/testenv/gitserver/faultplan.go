@@ -55,6 +55,14 @@ type FaultPlan struct {
 	authPass    string
 	expireAfter int
 	authedCount int
+	attempts    []AuthAttempt
+}
+
+// AuthAttempt is one request's HTTP Basic credential as RequireBasicAuth saw
+// it: Password is "" for a request that carried none.
+type AuthAttempt struct {
+	User, Password string
+	OK             bool
 }
 
 func newFaultPlan() *FaultPlan {
@@ -131,6 +139,15 @@ func (p *FaultPlan) RequireBasicAuth(user, pass string) {
 	p.authOn, p.authUser, p.authPass = true, user, pass
 }
 
+// AuthAttempts returns every credential presented while RequireBasicAuth is
+// on, oldest first, so a test can prove which credential reached the server
+// (and that one never did).
+func (p *FaultPlan) AuthAttempts() []AuthAttempt {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]AuthAttempt(nil), p.attempts...)
+}
+
 // ExpireAfter causes all requests to receive 401 after n allowed requests have
 // been served (models a token going invalid). 0 disables.
 //
@@ -155,7 +172,9 @@ func (p *FaultPlan) checkAuth(user, pass string, hasAuth bool) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.authOn {
-		if !hasAuth || user != p.authUser || pass != p.authPass {
+		ok := hasAuth && user == p.authUser && pass == p.authPass
+		p.attempts = append(p.attempts, AuthAttempt{User: user, Password: pass, OK: ok})
+		if !ok {
 			return http.StatusUnauthorized
 		}
 	}

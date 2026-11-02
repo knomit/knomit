@@ -206,7 +206,7 @@ type Manager struct {
 	fleetOpMu sync.Mutex
 }
 
-// ResolveAuth resolves a transport.AuthMethod for the given config and remote
+// resolveAuthConfig resolves a transport.AuthMethod for the given config and remote
 // URL, using the manager's own key path as the SSH key fallback, and returns
 // the URL go-git is to be handed (pki.GitURL: the internal fleet form for an
 // origin whose method is cert, else url unchanged). It is the clone boundary
@@ -218,7 +218,7 @@ type Manager struct {
 //
 // cfg.AuthMethod must already be decided (ResolveOrigin): this never
 // classifies.
-func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (string, transport.AuthMethod, error) {
+func (m *Manager) resolveAuthConfig(cfg config.RemoteAuthConfig, url string) (string, transport.AuthMethod, error) {
 	if err := m.ValidateLocalOrigin(url); err != nil {
 		return "", nil, err
 	}

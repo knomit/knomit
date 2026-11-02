@@ -127,6 +127,10 @@ type Origin struct {
 	Branch     string
 	AuthMethod string
 	AuthToken  string
+	// SecretID is the stored secret the origin links to ("" for none). The
+	// credential is resolved from it at every operation; AuthToken is then
+	// empty and AuthMethod names the transport.
+	SecretID string
 }
 
 // Remote represents a configured git remote for sync and push.
@@ -144,6 +148,27 @@ type Remote struct {
 	LastPushError  *string `json:"last_push_error"`
 	AuthMethod     string  `json:"auth_method,omitempty"`
 	AuthToken      string  `json:"auth_token,omitempty"`
+	SecretID       string  `json:"secret_id,omitempty"`
+	// GitURL is the URL the git remote "origin" in .git/config holds: the
+	// one go-git dials ("" when no git remote is configured). It equals URL
+	// except for a fleet peer (cert), whose git URL is the internal form.
+	GitURL string `json:"-"`
+}
+
+// GitRemoteURL returns the first URL of the git remote "origin" as
+// .git/config holds it (what fetch and push dial), or "" when there is none.
+func (ri *Index) GitRemoteURL() string {
+	repo := ri.rh.vr.Repository()
+	if repo == nil {
+		return ""
+	}
+	unlock := ri.rh.vr.RLockConfig()
+	defer unlock()
+	rem, err := repo.Remote("origin")
+	if err != nil || len(rem.Config().URLs) == 0 {
+		return ""
+	}
+	return rem.Config().URLs[0]
 }
 
 // DeleteRemote tears down this repo's use of a remote: it removes the git
@@ -191,6 +216,8 @@ func (ri *Index) GetRemote(name string) (*Remote, error) {
 		Branch:     origin.Branch,
 		AuthMethod: origin.AuthMethod,
 		AuthToken:  origin.AuthToken,
+		SecretID:   origin.SecretID,
+		GitURL:     ri.GitRemoteURL(),
 	}
 	// Status is optional: a repo whose origin was just configured has no row
 	// until its first sync, and that is not an error.

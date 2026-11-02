@@ -27,7 +27,10 @@ import (
 // forge credential.
 type FleetJoinSpec struct {
 	AuthMethod, AuthToken string
-	Bundle                []byte
+	// SecretID: a stored secret for a forge-hosted fleet instead of a
+	// pasted credential. A fleet hosted on an instance (a peer) refuses it.
+	SecretID string
+	Bundle   []byte
 }
 
 // JoinFleet joins the fleet at the bundle's URL with the bundle the master's
@@ -50,6 +53,10 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 	if err != nil {
 		return FleetStatus{}, err
 	}
+	o := OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken, SecretID: spec.SecretID}
+	if err := m.fleetSecretFits(&o); err != nil {
+		return FleetStatus{}, err
+	}
 	if _, err := pki.InstallBundle(m.deps.Cfg.TLS.Dir, m.deps.KeyPath, spec.Bundle); err != nil {
 		return FleetStatus{}, fmt.Errorf("fleet join: install the bundle: %w", err)
 	}
@@ -64,7 +71,7 @@ func (m *Manager) JoinFleet(ctx context.Context, spec FleetJoinSpec) (FleetStatu
 	// installed: the hub's listener chains to the bundle's root -> cert; a
 	// forge is not a peer and takes the joiner's own credential.
 	ri, err := m.Create(ctx, CreateSpec{Name: m.freeFleetName(b.FleetURL), Mode: "clone",
-		Origin: &OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken}, fleetDoor: true}, func(Event) {})
+		Origin: &o, fleetDoor: true}, func(Event) {})
 	if errors.Is(err, ErrPeerCredential) {
 		return refuse(nil, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", err.Error()))
 	}
@@ -239,6 +246,10 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 	if spec.AuthMethod == "cert" {
 		return FleetJoinCheck{}, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", ErrCertNotAnInput.Error())
 	}
+	probe := OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken, SecretID: spec.SecretID}
+	if err := m.fleetSecretFits(&probe); err != nil {
+		return FleetJoinCheck{}, err
+	}
 	agent := pki.AgentIDOfEmail(b.Leaf.EmailAddresses[0]) // joinPreflight checked it is this instance's
 	rootID, _ := pki.RootID(b.Root)
 	out := FleetJoinCheck{URL: b.FleetURL, Host: originHost(b.FleetURL), RootFingerprint: rootID, AgentID: agent}
@@ -264,7 +275,7 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 		return FleetJoinCheck{}, joinReachErr(out.Host, err)
 	}
 	if peer {
-		if spec.AuthMethod != "" && spec.AuthMethod != "none" || spec.AuthToken != "" {
+		if spec.AuthMethod != "" && spec.AuthMethod != "none" || spec.AuthToken != "" || spec.SecretID != "" {
 			return FleetJoinCheck{}, fleetErr(http.StatusUnprocessableEntity, "auth_invalid", ErrPeerCredential.Error())
 		}
 		out.Hosting = HostingMaster
@@ -274,7 +285,7 @@ func (m *Manager) CheckFleetJoin(ctx context.Context, spec FleetJoinSpec) (Fleet
 	// Not marked decided: ResolveOrigin judges the joiner's own auth like any
 	// probe's (trust_installed guarantees this instance holds no fleet root,
 	// so it dials nothing here).
-	res, err := m.ProbeOriginRefs(ctx, OriginSpec{URL: b.FleetURL, AuthMethod: spec.AuthMethod, AuthToken: spec.AuthToken})
+	res, err := m.ProbeOriginRefs(ctx, probe)
 	if err != nil {
 		return FleetJoinCheck{}, err
 	}
@@ -375,4 +386,23 @@ func (m *Manager) installedLeafSerial() string {
 		return ""
 	}
 	return st.Cert.Serial.Text(16)
+}
+
+// fleetSecretFits vets a fleet origin spec's stored secret (SecretID) for its
+// URL and sets the auth method it implies: 422 auth_invalid when it is given
+// with a pasted token, names no secret, or does not fit the URL's host or
+// scheme. A spec with no SecretID is left as it is.
+func (m *Manager) fleetSecretFits(o *OriginSpec) error {
+	if o.SecretID == "" {
+		return nil
+	}
+	if o.AuthToken != "" {
+		return fleetErr(http.StatusBadRequest, "auth_invalid", "send either secret_id or a pasted credential (auth_token), not both")
+	}
+	method, err := m.CheckSecretForURL(o.SecretID, o.URL)
+	if err != nil {
+		return fleetErr(http.StatusUnprocessableEntity, "auth_invalid", err.Error())
+	}
+	o.AuthMethod = method
+	return nil
 }

@@ -31,6 +31,9 @@ type createRepoRequest struct {
 		Branch     string `json:"branch"`
 		AuthMethod string `json:"auth_method"`
 		AuthToken  string `json:"auth_token"`
+		// SecretID links the new repo's origin to a stored secret instead
+		// of a pasted credential (admin only).
+		SecretID string `json:"secret_id"`
 	} `json:"origin"`
 }
 
@@ -70,7 +73,10 @@ const maxCreateBodyBytes = 6*maxOntologyBytes + 4*1024
 // PUT /origin does; a create without one needs only `write`. The gate is
 // applied here rather than on the route because only the body tells them
 // apart.
-func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator func(http.Handler) http.Handler) http.HandlerFunc {
+//
+// An origin with a secret_id also passes the admin gate, and the secret must
+// fit the origin URL (422).
+func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ontology_yaml rides in this body for modes "custom" and "initialize", so the
 		// cap maxOntologyBytes names has to be applied here too — :validate
@@ -91,7 +97,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator func(http
 			return
 		}
 		// Local-origin policy is enforced at the clone boundary
-		// (Manager.ResolveAuth, invoked by the clone-mode Create below).
+		// (Manager.resolveAuthConfig, invoked by the clone-mode Create below).
 		spec := repos.CreateSpec{
 			Name:           req.Name,
 			Mode:           req.Mode,
@@ -104,9 +110,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator func(http
 		if req.Origin != nil {
 			// The operator gate writes its own 403 and never calls through
 			// when the caller lacks the permission.
-			admitted := false
-			operator(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { admitted = true })).ServeHTTP(w, r)
-			if !admitted {
+			if !httpx.Admits(operator, w, r) {
 				return
 			}
 			spec.Origin = &repos.OriginSpec{
@@ -114,6 +118,13 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator func(http
 				Branch:     req.Origin.Branch,
 				AuthMethod: req.Origin.AuthMethod,
 				AuthToken:  req.Origin.AuthToken,
+			}
+			method, ok := admitSecretID(w, r, m, admin, req.Origin.SecretID, spec.Origin.URL, req.Origin.AuthToken != "")
+			if !ok {
+				return
+			}
+			if method != "" {
+				spec.Origin.AuthMethod, spec.Origin.SecretID = method, req.Origin.SecretID
 			}
 		}
 		// The same URL/auth compatibility check PUT /origin and the origin

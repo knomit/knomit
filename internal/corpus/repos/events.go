@@ -575,11 +575,17 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 	if stored != nil {
 		mode = stored.Mode
 	}
-	if err := origins.Set(r.uid, control.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
+	if beforeAttachOriginWrite != nil {
+		beforeAttachOriginWrite()
+	}
+	// The spec's SecretID is the link: Set is a full replacement, so an
+	// empty one unlinks. Every caller that rebuilds a spec from the stored
+	// origin carries it (TestCarry_*).
+	if err := origins.SetAttached(r.uid, control.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode, SecretID: o.SecretID}, o.ReplaceLink); err != nil {
 		restoreRemote(svc, r, existing)
 		return err
 	}
-	svc.Remote().SetOrigin(&remotesync.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken})
+	svc.Remote().SetOrigin(&remotesync.Origin{URL: o.URL, Branch: branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, SecretID: o.SecretID})
 	return nil
 }
 
@@ -674,9 +680,9 @@ func applySwap(m *Machine, s SwapSpec) error {
 			mode = stored.Mode
 		}
 		o := s.Origin
-		written = control.Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}
+		written = control.Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode, SecretID: o.SecretID}
 		var err error
-		if replaced, err = origins.Replace(r.uid, written); err != nil {
+		if replaced, err = origins.Replace(r.uid, written, o.ReplaceLink); err != nil {
 			return fmt.Errorf("swap failed: save remote config: %w; nothing changed", err)
 		}
 	}
@@ -697,6 +703,10 @@ func applySwap(m *Machine, s SwapSpec) error {
 	}
 	return nil
 }
+
+// beforeAttachOriginWrite (tests only) runs in applyAttach after the git
+// remote is rewritten, before the origin row is written.
+var beforeAttachOriginWrite func()
 
 // beforeSwapOriginWrite (tests only) runs after the backup, before the swap
 // writes the new origin row.

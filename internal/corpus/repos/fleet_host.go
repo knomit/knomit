@@ -400,7 +400,7 @@ func (m *Manager) publishMarkerChange(ctx context.Context, ri *RepoInstance, con
 			perr = fmt.Errorf("fleet repository has no origin: %v", err)
 			return
 		}
-		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		auth, err := m.remoteAuthFn()(remote)
 		if err != nil {
 			perr = err
 			return

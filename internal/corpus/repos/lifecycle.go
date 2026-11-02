@@ -127,6 +127,17 @@ type OriginSpec struct {
 	Branch     string
 	AuthMethod string
 	AuthToken  string
+	// SecretID links the origin to a stored secret instead of AuthToken:
+	// AuthMethod is the secret's transport and AuthToken is empty. Every
+	// spec-carried git operation resolves it through resolveSpecAuth.
+	SecretID string
+	// ReplaceLink lets an attach or swap whose spec has no SecretID replace
+	// an origin that is linked to a stored secret (which unlinks it). Without
+	// it that write is refused (control.ErrOriginLinked), checked in the
+	// write's own transaction, so a spec built before a concurrent link never
+	// drops it. Set it only after the admin gate (or on the local-only fleet
+	// routes).
+	ReplaceLink bool
 
 	decided bool // ResolveOrigin ran: AuthMethod is the decided one
 }
@@ -736,6 +747,7 @@ func (m *Manager) populate(ctx context.Context, r *RepoInstance, spec MountSpec)
 			AuthMethod: cs.Origin.AuthMethod,
 			AuthToken:  cs.Origin.AuthToken,
 			Mode:       originModeFor(cs.Mode),
+			SecretID:   cs.Origin.SecretID,
 		}); oerr != nil {
 			return fmt.Errorf("persist origin: %w", oerr)
 		}
@@ -1079,7 +1091,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 		return "", err
 	}
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "cloning from " + spec.Origin.URL, Pct: 40})
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.resolveSpecAuth(spec.Origin)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1101,7 +1113,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	svc.SetAcceptList(m.VerifyAccepts().For(uid))
 	svc.SetOwnKeys(m.ownFleetKeys)
 	// No Crypt is wired here: the clone's credential is already resolved above
-	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
+	// (resolveAuthConfig) and its durable copy belongs to control.db's Origins, which
 	// holds the only Crypt. This store never stores a credential of its own.
 
 	// NO seed files. This used to pass fact.DefaultOntology() so that cloning an
@@ -1248,7 +1260,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 		}
 	}
 
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.resolveSpecAuth(spec.Origin)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1414,7 +1426,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 		return "", err
 	}
 	emit(Event{Step: "subscribe", Phase: PhaseTransfer, Indeterminate: true, Message: "subscribing to " + spec.Origin.URL, Pct: 40})
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.resolveSpecAuth(spec.Origin)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1526,7 +1538,7 @@ func initializeProbeErr(probe ProbeResult) error {
 	return nil
 }
 
-// authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.
+// authConfigFromSpec maps an OriginSpec to the config shape resolveAuthConfig expects.
 // For basic auth the token field carries "user:password" (the same convention
 // remoteAuthFromRecord uses when reading a persisted basic remote), so it is
 // split into User/Password here; otherwise the immediate clone would attempt
@@ -1708,12 +1720,23 @@ func (m *Manager) archive(name string, why control.ArchiveReason) (ArchiveInfo, 
 	m.mu.Unlock()
 
 	var origin string
-	if org, oerr := origins.Get(uid); oerr == nil && org != nil {
+	org, oerr := origins.Get(uid)
+	if oerr == nil && org != nil {
 		origin = org.URL
 	}
 
 	if ri != nil {
 		unmount(ri, "archived") // drains every stage and releases the SQLite file handle
+	}
+
+	// An archived repo is linked to no stored secret: archiving unlinks it,
+	// leaving the origin (URL, branch, mode) with no credential, so it never
+	// blocks deleting the secret. A restore asks for the credential again.
+	if org != nil && org.SecretID != "" {
+		if uerr := origins.SetCredential(uid, org.URL, "none", "", ""); uerr != nil {
+			log.Warn().Err(uerr).Str("repo", name).Str("uid", uid).
+				Msg("archive: the repo is archived but still linked to its stored secret; unlink it to delete the secret")
+		}
 	}
 
 	// The session sidecar is ephemeral — drop it so a restore starts clean.
@@ -1837,10 +1860,81 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 	return out, nil
 }
 
-// Restore re-activates an archived repo, optionally under newName to resolve a
-// name collision. The database file was never moved, so this is a state flip
-// plus an open.
-func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
+// RestoreCredential is the credential a restore gives an archived repo's
+// origin: exactly one of a stored secret (SecretID), a pasted credential
+// (AuthMethod plus AuthToken, basic as user:password) or None.
+type RestoreCredential struct {
+	SecretID   string
+	AuthMethod string
+	AuthToken  string
+	None       bool
+}
+
+var (
+	// ErrCredentialChoiceRequired: a restore of a repo with an origin that
+	// does not choose its credential, or chooses more than one.
+	ErrCredentialChoiceRequired = errors.New("choose the restored repository's credential: send exactly one of secret_id, a pasted credential (auth_method with token, or with user and password), or \"no_credential\": true")
+	// ErrNoOriginForCredential: a stored secret or pasted credential for a
+	// restore of a repo with no origin.
+	ErrNoOriginForCredential = errors.New("this archived repository has no origin, so it takes no credential: restore it without one")
+)
+
+// restoreCredentialFor vets c for the archived origin o and returns the
+// credential to store (method, token, secret id). A cert origin (a fleet
+// peer) takes only None, which keeps cert.
+func (m *Manager) restoreCredentialFor(o *control.Origin, c RestoreCredential) (string, string, string, error) {
+	choices := 0
+	if c.SecretID != "" {
+		choices++
+	}
+	if c.AuthMethod != "" || c.AuthToken != "" {
+		choices++
+	}
+	if c.None {
+		choices++
+	}
+	if o == nil {
+		if c.SecretID != "" || c.AuthMethod != "" || c.AuthToken != "" {
+			return "", "", "", ErrNoOriginForCredential
+		}
+		return "", "", "", nil
+	}
+	if choices != 1 {
+		return "", "", "", ErrCredentialChoiceRequired
+	}
+	if o.AuthMethod == "cert" {
+		if !c.None {
+			return "", "", "", ErrPeerCredential
+		}
+		return "cert", "", "", nil
+	}
+	switch {
+	case c.SecretID != "":
+		method, err := m.CheckSecretForURL(c.SecretID, o.URL)
+		if err != nil {
+			return "", "", "", err
+		}
+		return method, "", c.SecretID, nil
+	case c.None:
+		return "none", "", "", nil
+	default:
+		if err := checkPastedCredential(o.URL, CredentialChange{AuthMethod: c.AuthMethod, AuthToken: c.AuthToken}); err != nil {
+			return "", "", "", err
+		}
+		return c.AuthMethod, c.AuthToken, "", nil
+	}
+}
+
+// RestoreWith re-activates an archived repo, optionally under newName to
+// resolve a name collision. The database file was never moved, so this is a
+// state flip plus an open. With a nil cred the credential stored with the
+// origin is kept (tests only: the API always passes one); with a non-nil cred it first
+// stores that credential for the archived repo's origin (restoreCredentialFor: exactly
+// one choice; a stored secret must fit the origin, a pasted credential its
+// scheme), so the repo starts syncing with it. The caller gates a stored
+// secret (admin) and a pasted credential (operator). A failed restore puts
+// the previous credential back.
+func (m *Manager) RestoreWith(uid, newName string, cred *RestoreCredential) (*RepoInstance, error) {
 	reg, origins, err := m.controlHandles()
 	if err != nil {
 		return nil, err
@@ -1867,6 +1961,12 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	}
 	if origin != nil {
 		originURL = origin.URL
+	}
+	var credMethod, credToken, credSecret string
+	if cred != nil {
+		if credMethod, credToken, credSecret, err = m.restoreCredentialFor(origin, *cred); err != nil {
+			return nil, err
+		}
 	}
 
 	// Reserve the target name and the archived origin for the whole check → Add
@@ -1899,6 +1999,32 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 		}
 		return nil, serr // ErrRepoAlreadyRegistered when its identity is taken
 	}
+	// The chosen credential, stored before the mount injects the origin, so
+	// the first round already uses it.
+	undoCredential := func() {}
+	if cred != nil && origin != nil {
+		if cerr := origins.SetCredential(uid, origin.URL, credMethod, credToken, credSecret); cerr != nil {
+			_ = reg.SetState(uid, control.StateArchived, rec.ArchivedAt)
+			if target != rec.Name {
+				_ = reg.Rename(uid, rec.Name)
+			}
+			return nil, fmt.Errorf("restore: store the credential: %w", cerr)
+		}
+		prev := *origin
+		undoCredential = func() {
+			if uerr := origins.SetCredential(uid, prev.URL, prev.AuthMethod, prev.AuthToken, prev.SecretID); uerr != nil {
+				log.Warn().Err(uerr).Str("uid", uid).Msg("restore: the refused restore could not put the previous credential back")
+			}
+		}
+		if origin, oerr = origins.Get(uid); oerr != nil {
+			undoCredential()
+			_ = reg.SetState(uid, control.StateArchived, rec.ArchivedAt)
+			if target != rec.Name {
+				_ = reg.Rename(uid, rec.Name)
+			}
+			return nil, fmt.Errorf("restore: read origin: %w", oerr)
+		}
+	}
 
 	// Mount what is on disk. Identify records which knowledge base this repo
 	// holds (the one RecordRepoID site): an archived repo registered with a
@@ -1910,6 +2036,7 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	// starts during the walk, for an origin-backed repo and a local one alike.
 	ri, merr := m.mountExisting(target, uid, origin, false)
 	if merr != nil {
+		undoCredential()
 		_ = reg.SetState(uid, control.StateArchived, rec.ArchivedAt)
 		if target != rec.Name {
 			_ = reg.Rename(uid, rec.Name)

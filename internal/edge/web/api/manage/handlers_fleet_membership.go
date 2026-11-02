@@ -47,7 +47,7 @@ func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		st, err := m.JoinFleet(r.Context(), repos.FleetJoinSpec{AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, Bundle: []byte(req.Bundle)})
+		st, err := m.JoinFleet(r.Context(), repos.FleetJoinSpec{AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, SecretID: req.SecretID, Bundle: []byte(req.Bundle)})
 		if err != nil {
 			writeFleetError(w, r, err)
 			return
@@ -60,7 +60,10 @@ func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 type joinRequest struct {
 	AuthMethod string `json:"auth_method,omitempty"`
 	AuthToken  string `json:"auth_token,omitempty"`
-	Bundle     string `json:"bundle"`
+	// SecretID: a stored secret for a forge-hosted fleet, instead of a
+	// pasted credential.
+	SecretID string `json:"secret_id,omitempty"`
+	Bundle   string `json:"bundle"`
 }
 
 // decodeJoinRequest reads a join body and runs its edge checks: a bundle is
@@ -75,6 +78,10 @@ func decodeJoinRequest(w http.ResponseWriter, r *http.Request) (joinRequest, boo
 	if req.Bundle == "" {
 		hal.WriteProblemWithExtra(w, http.StatusBadRequest, "Bundle required",
 			"the body must carry a non-empty bundle", r.URL.Path, map[string]any{"code": "bundle_required"})
+		return req, false
+	}
+	if req.SecretID != "" && (req.AuthMethod != "" || req.AuthToken != "") {
+		writeSecretWithPasted(w, r)
 		return req, false
 	}
 	if bundle, err := pki.SplitBundle([]byte(req.Bundle)); err == nil && bundle.FleetURL != "" {
@@ -99,7 +106,7 @@ func handleCheckFleetJoin(m *repos.Manager) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		out, err := m.CheckFleetJoin(r.Context(), repos.FleetJoinSpec{AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, Bundle: []byte(req.Bundle)})
+		out, err := m.CheckFleetJoin(r.Context(), repos.FleetJoinSpec{AuthMethod: req.AuthMethod, AuthToken: req.AuthToken, SecretID: req.SecretID, Bundle: []byte(req.Bundle)})
 		if err != nil {
 			writeFleetError(w, r, err)
 			return
@@ -238,6 +245,17 @@ type followRequest struct {
 	AuthToken  string `json:"auth_token,omitempty"`
 	User       string `json:"user,omitempty"`
 	Password   string `json:"password,omitempty"`
+	// SecretID: a stored secret for the forge instead of a pasted
+	// credential ("Update access" with a stored secret, or a move).
+	SecretID string `json:"secret_id,omitempty"`
+}
+
+// writeSecretWithPasted answers a fleet body that carries secret_id and a
+// pasted credential: 400 auth_invalid.
+func writeSecretWithPasted(w http.ResponseWriter, r *http.Request) {
+	hal.WriteProblemWithExtra(w, http.StatusBadRequest, "Invalid origin auth",
+		"send either secret_id or a pasted credential (auth_method with auth_token), not both", r.URL.Path,
+		map[string]any{"code": "auth_invalid"})
 }
 
 // handleFollowFleet: POST /api/v1/fleet/follow {url}, "Point at the new
@@ -256,13 +274,17 @@ func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		// An empty url is a credential change on a forge copy: the stored URL
 		// stays, and repos refuses it (url_required) on any other copy.
 		token := httpx.AssembleAuthToken(req.AuthMethod, req.AuthToken, req.User, req.Password)
+		if req.SecretID != "" && (req.AuthMethod != "" || token != "") {
+			writeSecretWithPasted(w, r)
+			return
+		}
 		if req.URL != "" {
 			if verr := httpx.ValidateURLAuth(req.URL, req.AuthMethod); verr != nil {
 				hal.WriteProblemWithExtra(w, http.StatusUnprocessableEntity, "Invalid origin", verr.Error(), r.URL.Path, map[string]any{"code": "auth_invalid"})
 				return
 			}
 		}
-		st, err := m.FollowFleetHost(r.Context(), repos.OriginSpec{URL: req.URL, AuthMethod: req.AuthMethod, AuthToken: token})
+		st, err := m.FollowFleetHost(r.Context(), repos.OriginSpec{URL: req.URL, AuthMethod: req.AuthMethod, AuthToken: token, SecretID: req.SecretID})
 		var fe *repos.FleetError
 		switch {
 		case err == nil:

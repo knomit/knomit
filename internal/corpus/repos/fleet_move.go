@@ -255,7 +255,7 @@ func (e *forgeProbeError) Is(target error) bool { return target == ErrOriginUnre
 // restores the previous origin (none for the hub), so this copy is exactly
 // as it was, and is returned.
 func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *control.Origin) error {
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(&decided), decided.URL)
+	gitURL, auth, err := m.resolveSpecAuth(&decided)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOriginUnreachable, err)
 	}
@@ -306,11 +306,12 @@ func (m *Manager) restoreFleetOrigin(ctx context.Context, ri *RepoInstance, prev
 		_, err := m.Send(ctx, ri, DetachOrigin())
 		return err
 	}
-	method, token := prev.AuthMethod, prev.AuthToken
+	method, token, secretID := prev.AuthMethod, prev.AuthToken, prev.SecretID
 	if method == "cert" {
-		method, token = "", ""
+		// A peer never carries a secret: cert is classified again.
+		method, token, secretID = "", "", ""
 	}
-	_, err := m.Send(ctx, ri, AttachOrigin(OriginSpec{URL: prev.URL, Branch: prev.Branch, AuthMethod: method, AuthToken: token}))
+	_, err := m.Send(ctx, ri, AttachOrigin(OriginSpec{URL: prev.URL, Branch: prev.Branch, AuthMethod: method, AuthToken: token, SecretID: secretID, ReplaceLink: true}))
 	return err
 }
 
@@ -591,6 +592,12 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 	if err := refuseFleetOrigin(o.URL); err != nil {
 		return "", err
 	}
+	if err := m.fleetSecretFits(&o); err != nil {
+		return "", err
+	}
+	// The fleet routes are the local listener's only (stricter than the
+	// admin gate): a follow may replace a stored-secret link.
+	o.ReplaceLink = true
 	if forgeCopy && sameFleetURL(prev.URL, o.URL) {
 		return m.changeFleetCredential(ctx, ri, o, prev)
 	}
@@ -615,18 +622,20 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 // stored one. A credential not given keeps the stored one: no method, or
 // the stored method with no token (the page prefills the method and never
 // holds the secret, #529 N-b); auth_method none is the explicit reset to
-// anonymous. The new credential must reach the forge (the probe the attach's
-// guard asks for) before it is stored. Then it is stored, and that is all: on
+// anonymous. A stored secret (o.SecretID, already vetted by fleetSecretFits)
+// links it; a credential not given keeps the stored link too, and a pasted
+// credential or none replaces it. The new credential must reach the forge
+// (the probe the attach's guard asks for) before it is stored. Then it is stored, and that is all: on
 // the master no seed, no host record, no publish (#529 S3, N-a).
 func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o OriginSpec, prev *control.Origin) (string, error) {
 	o.URL = prev.URL
-	if o.AuthToken == "" && (o.AuthMethod == "" || o.AuthMethod == prev.AuthMethod) {
-		o.AuthMethod, o.AuthToken = prev.AuthMethod, prev.AuthToken
+	if o.SecretID == "" && o.AuthToken == "" && (o.AuthMethod == "" || o.AuthMethod == prev.AuthMethod) {
+		o.AuthMethod, o.AuthToken, o.SecretID = prev.AuthMethod, prev.AuthToken, prev.SecretID
 	}
 	if err := refuseMethodForURL(o.URL, o.AuthMethod); err != nil {
 		return "", err
 	}
-	if o.AuthMethod == prev.AuthMethod && o.AuthToken == prev.AuthToken {
+	if o.AuthMethod == prev.AuthMethod && o.AuthToken == prev.AuthToken && o.SecretID == prev.SecretID {
 		return FleetFollowUnchanged, nil
 	}
 	decided, err := m.ResolveOrigin(ctx, o)

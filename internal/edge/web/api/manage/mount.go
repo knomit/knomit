@@ -88,7 +88,7 @@ func Mount(
 	})
 	top.Get("/archived", handleHALArchived(b, rm))
 	top.Get("/archived/{id}", handleHALArchivedItem(b, rm))
-	top.Post("/archived/{id}/restore", handleHALArchivedRestore(b, rm))
+	top.Post("/archived/{id}/restore", handleHALArchivedRestore(b, rm, operator, admin))
 	top.Delete("/archived/{id}", handleHALArchivedPurge(rm))
 
 	// Repo collection. These carry no {repo} segment, so they resolve their
@@ -104,7 +104,7 @@ func Mount(
 	// A create that names an origin chooses one, so it needs the operator
 	// like PUT /origin; the handler applies the gate once it has read the
 	// body (a create without an origin stays a `write`).
-	top.Post("/repos", handleHALReposCreate(b, rm, operator))
+	top.Post("/repos", handleHALReposCreate(b, rm, operator, admin))
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING
 	// collection rather than "/repos/creates/{id}", and the precedent for a
@@ -175,14 +175,14 @@ func Mount(
 	// it runs BEFORE any repo exists. Both probes are the operator's, like the
 	// origin-session wizard: they read a remote the caller names (refs, and
 	// for :probe-initialized a tip and its ontology).
-	top.With(operator).Post("/repos:probe-origin", handleReposProbeOrigin(rm))
+	top.With(operator).Post("/repos:probe-origin", handleReposProbeOrigin(rm, admin))
 
 	// The second, per-BRANCH half of that classification: does the chosen
 	// branch already hold a knomit knowledge base? Separate from probe-origin
 	// because the answer differs per branch and the branch is not known when
 	// that probe runs — and because this one actually transfers a commit
 	// (shallow, single-branch, discarded) rather than only listing refs.
-	top.With(operator).Post("/repos:probe-initialized", handleReposProbeInitialized(rm))
+	top.With(operator).Post("/repos:probe-initialized", handleReposProbeInitialized(rm, admin))
 
 	// Ontology endpoints. Collection-level and repo-independent: the create
 	// wizard calls them BEFORE any repo exists, so they cannot live under
@@ -226,12 +226,12 @@ func Mount(
 	// otherwise import another knowledge base into it and read it. writeGate
 	// still adds `write`. The local principals (socket, pipe, loopback per
 	// [auth].loopback_default) hold `operator` by default.
-	repo.Get("/origin", handleHALGetOrigin(b))
-	repo.With(operator).Put("/origin", handleHALSetOrigin(b, rm))
+	repo.Get("/origin", handleHALGetOrigin(b, rm, admin))
+	repo.With(operator).Put("/origin", handleHALSetOrigin(b, rm, admin))
 	repo.With(operator).Patch("/origin/upstream", handleHALSetOriginUpstream(b, rm))
 	// The light credential swap: the credential only, no reconnect.
 	repo.With(operator).Put("/origin/credential", handleSetOriginCredential(b, rm, admin))
-	repo.With(operator).Delete("/origin", handleHALDeleteOrigin(b, rm))
+	repo.With(operator).Delete("/origin", handleHALDeleteOrigin(b, rm, admin))
 
 	// Cancels the repo's index job: an ACTION on the repo, a POST on a
 	// colon-suffixed sub-resource like /repo-creates/{id}:cancel. It is

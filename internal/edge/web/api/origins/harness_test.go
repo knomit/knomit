@@ -35,7 +35,7 @@ func newTestServer(m *repos.Manager, agentBranch string, sm *sessionManager) *te
 	r := chi.NewRouter()
 	r.Route("/repos/{repo}", func(r chi.Router) {
 		r.Use(repoFromURL(m))
-		r.Route("/origin-sessions", func(r chi.Router) { routes(r, m, agentBranch, sm) })
+		r.Route("/origin-sessions", func(r chi.Router) { routes(r, m, agentBranch, sm, func(h http.Handler) http.Handler { return h }) })
 	})
 	return &testServer{Manager: m, h: r}
 }

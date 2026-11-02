@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"knomit/internal/corpus/repos/control"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,6 +87,15 @@ type stageEnv struct {
 	// onPush observes every push the reconcile loop makes (the fleet state
 	// machine's retry: Manager.fleetPushed).
 	onPush func(repo string, err error)
+}
+
+// secrets is the stored-secrets store the auth resolver reads, or nil (no
+// manager, or before Start).
+func (e *stageEnv) secrets() *control.Secrets {
+	if e == nil || e.m == nil {
+		return nil
+	}
+	return e.m.Secrets()
 }
 
 // RepoInstance holds all runtime state for a single repository.

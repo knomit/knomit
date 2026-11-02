@@ -27,7 +27,7 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 	if method == "" {
 		if cfg.Token != "" {
 			method = "token"
-		} else if cfg.User == "" && cfg.Password == "" && cfg.SSHKey == "" {
+		} else if cfg.User == "" && cfg.Password == "" && cfg.SSHKey == "" && cfg.SSHKeyPEM == "" {
 			return nil, nil
 		}
 	}
@@ -54,12 +54,22 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 		if keyPath == "" {
 			keyPath = defaultKeyPath
 		}
-		if keyPath == "" {
-			return nil, fmt.Errorf("ssh auth requires a key path")
-		}
-		publicKeys, err := gitssh.NewPublicKeysFromFile("git", keyPath, "")
-		if err != nil {
-			return nil, fmt.Errorf("resolve ssh auth: %w", err)
+		var publicKeys *gitssh.PublicKeys
+		var err error
+		if cfg.SSHKeyPEM != "" {
+			// A stored ssh_key secret: the key is in memory, never a file.
+			publicKeys, err = gitssh.NewPublicKeys("git", []byte(cfg.SSHKeyPEM), cfg.SSHKeyPassphrase)
+			if err != nil {
+				return nil, fmt.Errorf("resolve ssh auth: stored key: %w", err)
+			}
+		} else {
+			if keyPath == "" {
+				return nil, fmt.Errorf("ssh auth requires a key path")
+			}
+			publicKeys, err = gitssh.NewPublicKeysFromFile("git", keyPath, "")
+			if err != nil {
+				return nil, fmt.Errorf("resolve ssh auth: %w", err)
+			}
 		}
 		// Host keys are verified against a known_hosts file (TOFU on first
 		// contact, hard reject on a changed key). Falling back to
@@ -68,6 +78,9 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 		// hard error instead.
 		knownHosts := cfg.KnownHosts
 		if knownHosts == "" {
+			if keyPath == "" {
+				return nil, fmt.Errorf("resolve ssh auth: no known_hosts file is configured: set [remote].known_hosts")
+			}
 			// Zero-value config (tests, embedded callers): keep the pins next to
 			// the key they authenticate with.
 			knownHosts = filepath.Join(filepath.Dir(keyPath), "known_hosts")
@@ -191,7 +204,7 @@ func (m *Manager) ResolveOrigin(ctx context.Context, o OriginSpec) (OriginSpec, 
 		return o, fmt.Errorf("%w: %w", ErrOriginUnreachable, err)
 	}
 	if peer {
-		if (o.AuthMethod != "" && o.AuthMethod != "none") || o.AuthToken != "" {
+		if (o.AuthMethod != "" && o.AuthMethod != "none") || o.AuthToken != "" || o.SecretID != "" {
 			return o, ErrPeerCredential
 		}
 		o.AuthMethod = "cert"

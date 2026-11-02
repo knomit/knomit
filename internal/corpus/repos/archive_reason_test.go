@@ -229,7 +229,7 @@ func TestStart_SymlinkedOntologyIsArchivedBySystem(t *testing.T) {
 	require.Contains(t, a.Reason.Reason, OntologyPath+" is a symlink, and knomit does not follow symlinks")
 	require.Equal(t, "unopenable", a.Reason.Condition)
 
-	_, err = m2.Restore(uid, "")
+	_, err = m2.RestoreWith(uid, "", nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), OntologyPath+" is a symlink", "restore refuses with the same reason")
 	require.Nil(t, m2.Get("linked"))
@@ -256,7 +256,7 @@ func TestArchiveReason_UserRestoreAndLegacy(t *testing.T) {
 	require.Equal(t, control.ArchiveReason{Source: control.ArchiveByUser, Note: "done with it"}, *info.Reason,
 		"a live repo records no condition")
 
-	_, err = m.Restore(uid, "")
+	_, err = m.RestoreWith(uid, "", nil)
 	require.NoError(t, err)
 	_, ok, err := m.Repos().ArchiveReasonOf(uid)
 	require.NoError(t, err)
