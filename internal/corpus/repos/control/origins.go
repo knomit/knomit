@@ -213,9 +213,12 @@ func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
 
 // Restore undoes a Replace that wrote `written` over `prev`, in one
 // transaction. With prev nil the row is deleted. Otherwise prev is written
-// back, EXCEPT its credential when the current row's credential (method,
-// token, secret link) no longer equals written's: a credential change landed
-// after the Replace, and it is kept rather than reverted.
+// back whole, with ONE exception: when prev and written have the SAME URL and
+// the current row's credential (method, token, secret link) no longer equals
+// written's, a credential change landed after the Replace and is kept rather
+// than reverted. Across different URLs prev is always restored whole: a
+// credential set after the Replace was vetted against written's URL, and
+// carrying it to prev's URL would send it to another host.
 func (o *Origins) Restore(uid string, written Origin, prev *Origin) error {
 	tx, err := o.db.Begin()
 	if err != nil {
@@ -235,7 +238,7 @@ func (o *Origins) Restore(uid string, written Origin, prev *Origin) error {
 			return err
 		}
 		target := *prev
-		if cur != nil && !sameCredential(*cur, written) {
+		if cur != nil && prev.URL == written.URL && cur.URL == written.URL && !sameCredential(*cur, written) {
 			target.AuthMethod, target.AuthToken, target.SecretID = cur.AuthMethod, cur.AuthToken, cur.SecretID
 		}
 		if err := o.setTx(tx, uid, target); err != nil {

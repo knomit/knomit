@@ -310,11 +310,22 @@ func TestOrigins_ReplaceAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, old, *got)
 
-	// A credential changed after the write is kept on the restored row.
+	// A credential changed after the write was vetted against the WRITTEN
+	// URL: across URLs it is never carried to the previous one.
 	_, err = o.Replace("u1", written)
 	require.NoError(t, err)
 	require.NoError(t, o.SetCredential("u1", written.URL, "basic", "u:p", ""))
 	require.NoError(t, o.Restore("u1", written, prev))
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, old, *got, "another host's credential is never restored onto the previous URL")
+
+	// Same URL (a swap that keeps the origin): the newer credential is kept.
+	sameURL := Origin{URL: old.URL, Branch: "main", AuthMethod: "token", AuthToken: "w", Mode: OriginModeSubscribe}
+	prev, err = o.Replace("u1", sameURL)
+	require.NoError(t, err)
+	require.NoError(t, o.SetCredential("u1", old.URL, "basic", "u:p", ""))
+	require.NoError(t, o.Restore("u1", sameURL, prev))
 	got, err = o.Get("u1")
 	require.NoError(t, err)
 	require.Equal(t, Origin{URL: old.URL, Branch: "main", AuthMethod: "basic", AuthToken: "u:p", Mode: OriginModeSubscribe}, *got)

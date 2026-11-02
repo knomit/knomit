@@ -982,8 +982,9 @@ func TestSwap_CopyFailureKeepsACredentialChangedMeanwhile(t *testing.T) {
 }
 
 // A credential change on the swap's NEW row (after its write, before the copy
-// fails) is kept on the restored origin rather than reverted.
-func TestSwap_CopyFailureKeepsACredentialChangedAfterTheWrite(t *testing.T) {
+// fails) was vetted against the INCOMING URL: the restore puts the previous
+// origin back whole and never carries that credential to the previous host.
+func TestSwap_CopyFailureNeverCarriesTheIncomingCredential(t *testing.T) {
 	f := newMFix(t, StageIndex, "index-job", true)
 	previous := f.remote(t, "previous")
 	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: previous, Branch: "main", AuthMethod: "none"}))
@@ -1002,5 +1003,5 @@ func TestSwap_CopyFailureKeepsACredentialChangedAfterTheWrite(t *testing.T) {
 	o, gerr := f.m.Origins().Get(f.ri.UID())
 	require.NoError(t, gerr)
 	require.Equal(t, previous, o.URL, "the previous origin is restored")
-	require.Equal(t, "ssh", o.AuthMethod, "the credential set after the swap's write is kept")
+	require.Equal(t, "none", o.AuthMethod, "the incoming origin's credential is not carried to the previous URL")
 }

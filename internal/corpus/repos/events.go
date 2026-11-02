@@ -634,7 +634,8 @@ func restoreRemote(svc *store.Service, r *RepoInstance, prev *remotesync.Remote)
 // the current store, persist the new origin (reversible), then copy the new
 // database over the old one. A failure before the copy changes nothing that is
 // not undone here; a copy failure restores both the backup and the origin row
-// the write replaced (Origins.Restore, which keeps a credential changed since).
+// the write replaced (Origins.Restore; a credential changed since is kept
+// only when the swap kept the same URL).
 // Persisting the origin after the copy would let a failed write
 // leave the NEW store under the OLD origin: Open.Enter injects control.db's
 // origin and Sync would push the new store's agent branch to the old remote.
