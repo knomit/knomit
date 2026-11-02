@@ -116,7 +116,8 @@ type FusedQuery struct {
 	// Path is the path filter, bare or kb://-qualified (ReadTargetsFor). Each
 	// leg is handed its target's repo-relative form in Opts.Path.
 	Path string
-	// Repos is the repo= narrowing by mount name; nil or empty narrows nothing.
+	// Repos is the repo= narrowing by mount name (REST repo=, knomit_query
+	// repo, the FactSet's search.repo); nil or empty narrows nothing.
 	Repos []string
 	// Opts is the filter set every mount is asked with. Motifs are replaced by
 	// their widened form and QueryVec by the shared vector; Path and Diag are
@@ -330,8 +331,9 @@ func FusedSearch(ctx context.Context, p *FusedPlan, leg SearchLeg, o FusedOption
 const MaxRecencyDepth = 10000
 
 // FusedRecentDeep is FusedRecent with the merge-horizon DEEPENING of a
-// text-less recency listing, shared by REST /lenses/{lens}/facts and the lens
-// FactSet so their lists cannot drift apart.
+// text-less recency listing, shared by REST /lenses/{lens}/facts, MCP
+// knomit_query sort=recent and the lens FactSet so their lists cannot drift
+// apart.
 //
 // Depth is re-derived, not fixed, because write-first dedupe spends it: a
 // duplicate that loses to the write mount still consumed a row of its own
