@@ -186,11 +186,17 @@ func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
 	}
 	require.Equal(t, true, get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over the local listener")
 	require.Equal(t, false, get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over loopback TCP")
-	spoofed := fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet?local=true", nil))
+	spoofed := fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil))
 	spoofed.Header.Set("X-Knomit-Via", string(auth.LocalVia))
 	spoofed.Header.Set("X-Forwarded-For", "unix")
 	spoofed.Header.Set("Origin", "app://knomit")
 	require.Equal(t, false, get(spoofed)["local"], "nothing the client sends makes it local")
+	// A query cannot either: GET /fleet declares no parameter, so ?local= is
+	// refused outright rather than read or ignored.
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet?local=true", nil)))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `unknown parameter \"local\"`)
 }
 
 // GET /fleet's host.listener (the [tls].addr bind) is shown to a local caller

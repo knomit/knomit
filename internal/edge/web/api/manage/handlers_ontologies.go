@@ -97,6 +97,9 @@ type presetSummary struct {
 // handleOntologyPresets serves GET /api/v1/ontologies/presets.
 func handleOntologyPresets() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !ontologyPresetsParams.RefuseUnknown(w, r) {
+			return
+		}
 		out := make([]presetSummary, 0, len(presetNames))
 		for _, name := range presetNames {
 			o, err := fact.OntologyByPreset(name)
@@ -118,6 +121,9 @@ func handleOntologyPresets() http.HandlerFunc {
 // that create would commit.
 func handleOntologyPresetYAML() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !ontologyPresetParams.RefuseUnknown(w, r) {
+			return
+		}
 		name := chi.URLParam(r, "name")
 		o, err := fact.OntologyByPreset(name)
 		if err != nil {
@@ -139,6 +145,9 @@ func handleOntologyPresetYAML() http.HandlerFunc {
 // description of the ontology shape; see TestOntologySchema_CoversEveryYAMLTag.
 func handleOntologySchema() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !ontologySchemaParams.RefuseUnknown(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"fields": fact.OntologySchema()})
 	}

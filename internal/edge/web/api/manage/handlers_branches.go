@@ -28,6 +28,9 @@ func handleHALBranches(
 	b hal.URLBuilder,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !branchesParams.RefuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		branches, err := listRepoBranches(r.Context(), ri)
@@ -91,6 +94,9 @@ func handleHALBranch(
 	experimentExpiryDays int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !branchParams.RefuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		branch := httpx.BranchFromContext(r.Context())

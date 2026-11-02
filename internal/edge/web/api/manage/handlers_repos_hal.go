@@ -155,6 +155,9 @@ const repoStateActive = "active"
 // its stage.
 func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !reposParams.RefuseUnknown(w, r) {
+			return
+		}
 		names := make([]string, 0)
 		instances := make(map[string]*repos.RepoInstance)
 		m.ForEach(func(name string, ri *repos.RepoInstance) {
@@ -306,6 +309,9 @@ func handleHALRepo(
 	experimentExpiryDays int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !repoParams.RefuseUnknown(w, r) {
+			return
+		}
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		body := repoView(b, r, name, ri)

@@ -89,6 +89,9 @@ func experimentViewOf(b hal.URLBuilder, repoName string, ri *repos.RepoInstance,
 // handleHALExperiments serves GET /repos/{repo}/experiments.
 func handleHALExperiments(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !experimentsParams.RefuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 

@@ -65,6 +65,9 @@ import (
 // small fields and a re-read per event would be a request per progress tick.
 func handleRepoEvents(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !repoEventsParams.RefuseUnknown(w, r) {
+			return
+		}
 		if m == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Repositories unavailable",
 				"the repository manager is not open on this server", r.URL.Path)

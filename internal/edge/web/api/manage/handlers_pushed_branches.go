@@ -48,6 +48,9 @@ func handleHALPushedBranches(
 	b hal.URLBuilder,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !pushedBranchesParams.RefuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		self := b.Repo(repoName) + "/pushed-branches"

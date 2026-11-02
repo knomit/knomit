@@ -157,6 +157,9 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator func(http
 // every route under /repos/{repo}. A sibling collection has no such shadow.
 func handleHALRepoCreateStatus(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !repoCreateParams.RefuseUnknown(w, r) {
+			return
+		}
 		id := chi.URLParam(r, "id")
 		job, ok := m.CreateJobByID(id)
 		if !ok {
@@ -183,6 +186,9 @@ func handleHALRepoCreateStatus(b hal.URLBuilder, m *repos.Manager) http.HandlerF
 // of the incident.
 func handleHALRepoCreates(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !repoCreatesParams.RefuseUnknown(w, r) {
+			return
+		}
 		jobs := m.CreateJobs()
 		items := make([]map[string]any, 0, len(jobs))
 		for _, st := range jobs {

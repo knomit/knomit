@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { api, branchEventsUrl } from './api';
+import { api, branchEventsUrl, subscribeRepoEvents } from './api';
 import { materializeApi } from './materializeApi';
 import type { MatOptions, MatTarget } from './materializeApi';
 import type { ListFilters } from './listSearch';
@@ -174,5 +174,78 @@ describe('the knowledge-base reads send only the parameters their route declares
     const u = new URL(branchEventsUrl('r', 'agent/x'), 'http://x');
     expect(u.pathname).toBe('/api/v1/repos/r/branches/agent:x/events');
     expect(undeclared([...u.searchParams.keys()], specQueryParams(`${B}/events`))).toEqual([]);
+  });
+});
+
+// The management API's GET routes refuse undeclared parameters too (the same
+// rule on internal/edge/web/api/manage). Every web client read of them, against
+// its route's spec list: none sends a parameter today, and none may start to
+// without declaring it.
+//
+// Sabotage: make listFleetActivity ask for `/activity?limit=50` with `limit`
+// dropped from the spec row, or make getRepo append a cache-buster, and that
+// row lists the stray name.
+describe('the management reads send only the parameters their route declares', () => {
+  const cases: { name: string; spec: string; call: () => Promise<unknown> }[] = [
+    { name: 'getFleet → /fleet', spec: '/fleet', call: () => api.getFleet() },
+    { name: 'listFleetMembers → /fleet/members', spec: '/fleet/members', call: () => api.listFleetMembers() },
+    { name: 'listFleetActivity → /fleet/activity', spec: '/fleet/activity', call: () => api.listFleetActivity() },
+    { name: 'exportFleetRoot → /fleet/root', spec: '/fleet/root', call: () => api.exportFleetRoot() },
+    { name: 'listArchived → /archived', spec: '/archived', call: () => api.listArchived() },
+    { name: 'repos → /repos', spec: '/repos', call: () => api.repos() },
+    { name: 'listRepoCreates → /repo-creates', spec: '/repo-creates', call: () => api.listRepoCreates() },
+    { name: 'getRepoCreate → /repo-creates/{id}', spec: '/repo-creates/{id}', call: () => api.getRepoCreate('j1') },
+    { name: 'ontologyPresets → /ontologies/presets', spec: '/ontologies/presets', call: () => api.ontologyPresets() },
+    { name: 'ontologyPresetYAML → /ontologies/presets/{name}', spec: '/ontologies/presets/{name}', call: () => api.ontologyPresetYAML('default') },
+    { name: 'ontologySchema → /ontologies/schema', spec: '/ontologies/schema', call: () => api.ontologySchema() },
+    { name: 'listTemplates → /templates', spec: '/templates', call: () => api.listTemplates() },
+    { name: 'getRepo → /repos/{repo}', spec: '/repos/{repo}', call: () => api.getRepo('r') },
+    { name: 'getOrigin → /repos/{repo}/origin', spec: '/repos/{repo}/origin', call: () => api.getOrigin('r') },
+    { name: 'listBranchNames → /repos/{repo}/branches', spec: '/repos/{repo}/branches', call: () => api.listBranchNames('r') },
+    { name: 'listPushedBranches → /repos/{repo}/pushed-branches', spec: '/repos/{repo}/pushed-branches', call: () => api.listPushedBranches('r') },
+    { name: 'listExperiments → /repos/{repo}/experiments', spec: '/repos/{repo}/experiments', call: () => api.listExperiments('r') },
+    { name: 'listLenses → /lenses', spec: '/lenses', call: () => api.listLenses() },
+    { name: 'getLens → /lenses/{lens}', spec: '/lenses/{lens}', call: () => api.getLens('eng') },
+  ];
+  for (const c of cases) {
+    it(c.name, async () => {
+      const f = mockFetch();
+      await c.call().catch(() => undefined);
+      expect(f).toHaveBeenCalled();
+      const declared = specQueryParams(c.spec);
+      for (let i = 0; i < f.mock.calls.length; i++) {
+        const sent = [...new Set([...new URL(String(f.mock.calls[i][0]), 'http://x').searchParams.keys()])];
+        expect(undeclared(sent, declared)).toEqual([]);
+      }
+    });
+  }
+
+  // subscribeRepoEvents opens an EventSource (no fetch to capture): the URL it
+  // opens is checked against /repo-events directly.
+  it('subscribeRepoEvents → /repo-events', () => {
+    const urls: string[] = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen = null;
+      onmessage = null;
+      onerror = null;
+      url: string;
+      constructor(url: string) { this.url = url; urls.push(url); }
+      addEventListener() {}
+      removeEventListener() {}
+      close() {}
+    }
+    const prev = globalThis.EventSource;
+    globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+    try {
+      subscribeRepoEvents(() => {})();
+    } finally {
+      globalThis.EventSource = prev;
+    }
+    expect(urls).toHaveLength(1);
+    const u = new URL(urls[0], 'http://x');
+    expect(u.pathname).toBe('/api/v1/repo-events');
+    expect(undeclared([...u.searchParams.keys()], specQueryParams('/repo-events'))).toEqual([]);
   });
 });

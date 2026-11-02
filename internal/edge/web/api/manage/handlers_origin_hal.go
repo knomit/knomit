@@ -241,6 +241,9 @@ func originSelfURL(b hal.URLBuilder, repo string) string {
 // Returns 200 with HAL origin view, or 204 if no origin is configured.
 func handleHALGetOrigin(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !originParams.RefuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 

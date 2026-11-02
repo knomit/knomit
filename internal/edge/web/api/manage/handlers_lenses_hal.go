@@ -330,6 +330,9 @@ func lensHasOf(l control.Lens) lensHas {
 // handleHALLenses serves GET /api/v1/lenses.
 func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !lensesParams.RefuseUnknown(w, r) {
+			return
+		}
 		reg := m.LensRegistry()
 		if reg == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
@@ -381,6 +384,9 @@ func handleHALLens(
 	experimentExpiryDays int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !lensParams.RefuseUnknown(w, r) {
+			return
+		}
 		reg := m.LensRegistry()
 		if reg == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Lens registry unavailable",
