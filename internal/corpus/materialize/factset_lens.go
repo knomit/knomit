@@ -183,12 +183,9 @@ func (le *lensEntry) at(g int) (sub, local int) { return le.fr.Order[g-1], le.lo
 // lensFactSetFirstPage is FactSetFirstPage on a lens (Binding.IsLens): the
 // anchored fused search, the partition into one sub per member, the ONE
 // facade row and page 1.
+//
+// cross_kb was refused by FactSetFirstPage, for a lens of any size.
 func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (FactSetPage, Stats, error) {
-	if req.Options.CrossKB {
-		// Ruling Lens 2: refs between the lens's own repos are never
-		// followed, and nothing else is either.
-		return FactSetPage{}, Stats{}, fmt.Errorf("%w: cross_kb is not accepted on a lens factset", ErrInvalid)
-	}
 	b := req.Binding
 	c := &fsCall{ctx: ctx, b: b, mgr: req.Manager, mayRead: req.MayRead,
 		reserve: fsPlanReserve(req.Facts, req.Options.MaxNodes, false)}

@@ -310,7 +310,8 @@ func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, sf fac
 		req.Embed, req.Clusters = lensEmbed(emb), lensMotifClusters
 	case emb != nil:
 		// A repository, and a one-member lens (the engine serves it on the
-		// repository path, byte for byte the write repo's FactSet).
+		// repository path with the write repo's units, but as a lens: no
+		// cross_kb, the lens title).
 		req.Embed = emb.EmbedQuery
 	}
 	for _, p := range []struct {

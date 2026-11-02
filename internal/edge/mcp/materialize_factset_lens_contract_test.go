@@ -238,3 +238,45 @@ func TestFactSet_Contract_OneMemberLensIsTheWriteRepoFactSetWithTheLensPin(t *te
 	require.True(t, backErr, back)
 	require.Equal(t, none, back)
 }
+
+// A one-member lens is a lens (user ruling 2026-11-02, M1), on MCP too:
+// cross_kb=true on the "solo" lens endpoint is the multi-member lens's tool
+// error, text for text, and writes no FactSet row; with no filter its title
+// is "All in lens solo". Controls: the write repo's own endpoint accepts
+// cross_kb and keeps the repo title.
+//
+// Sabotage: check cross_kb only on IsLens in FactSetFirstPage (the solo call
+// is served); or keep FactSetTitle on the repo path for a lens (the solo
+// title is alpha's).
+func TestFactSet_Lens_OneMemberLensIsALens(t *testing.T) {
+	m, alpha, _, _, _, lens := newLensE2E(t)
+	obs(t, alpha, "kb/u/r1.md", "R1")
+	laptop := auth.Principal{Kind: auth.KindHost, ID: "laptop", Via: auth.ViaToken}
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "solo", WriteUID: alpha.UID()})
+	require.NoError(t, err)
+	soloCtx, multiCtx, repoCtx := lensCtxFor(t, m, laptop, "solo"), lensCtxFor(t, m, laptop, lens), repoCtxFor(alpha, laptop)
+
+	cross := map[string]any{"search": map[string]any{"path": "kb/u/"}, "cross_kb": true}
+	res, multi := matCallRaw(t, multiCtx, m, cross)
+	require.True(t, res.IsError, multi)
+	before := factsetWrites(t, alpha)
+	res, solo := matCallRaw(t, soloCtx, m, cross)
+	require.True(t, res.IsError, "cross_kb on a one-member lens is refused: %s", solo)
+	require.Equal(t, multi, solo, "the multi-member lens's refusal")
+	require.Equal(t, before, factsetWrites(t, alpha), "nothing written")
+	res, text := matCallRaw(t, repoCtx, m, cross)
+	require.False(t, res.IsError, "control: the repository accepts cross_kb: %s", text)
+
+	title := func(ctx context.Context) string {
+		t.Helper()
+		res, text := matCallRaw(t, ctx, m, map[string]any{"search": map[string]any{}, "depth": 0, "limit": 1})
+		require.False(t, res.IsError, text)
+		var p materialize.FactSetPage
+		require.NoError(t, json.Unmarshal([]byte(text), &p))
+		return p.Title
+	}
+	none := materialize.FactSetSearch{Sort: materialize.SortRelevance}
+	require.Equal(t, materialize.FactSetLensTitle(none, alpha.OntologyRoot(), "solo"), title(soloCtx))
+	require.Equal(t, materialize.FactSetTitle(none, alpha.OntologyRoot(), alpha.Name()), title(repoCtx), "control: the repository's title")
+	require.NotEqual(t, title(repoCtx), title(soloCtx))
+}

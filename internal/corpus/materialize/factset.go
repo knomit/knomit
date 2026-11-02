@@ -373,10 +373,19 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 	if sc.Pin == "" || sc.Owner == "" {
 		return FactSetPage{}, st, fmt.Errorf("%w: a factset cursor needs an owner and a binding identity", ErrInvalid)
 	}
+	if (req.Binding.IsLens() || req.Binding.FromLens()) && req.Options.CrossKB {
+		// Ruling Lens 2, for a lens of ANY size (user ruling 2026-11-02: a
+		// one-member lens is a lens): refs between the lens's own repos are
+		// never followed, and nothing else is either. Checked before the
+		// IsLens dispatch, so the one-member lens on the repo path below
+		// refuses it too.
+		return FactSetPage{}, st, fmt.Errorf("%w: cross_kb is not accepted on a lens factset", ErrInvalid)
+	}
 	if req.Binding.IsLens() {
 		// A binding that reads more than its write repo is the lens facade
 		// (factset_lens.go). A ONE-member lens is not IsLens and stays here,
-		// on the repo path (ruling Lens 6 / Q-L9).
+		// on the repo path (ruling Lens 6 / Q-L9), but is still a lens to its
+		// caller: no cross_kb (above) and the lens title (below).
 		return lensFactSetFirstPage(ctx, sc, req)
 	}
 	if err := checkRepoNarrowing(req.Binding, req.Search.Repos); err != nil {
@@ -403,8 +412,13 @@ func FactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetRequest) (
 		return FactSetPage{}, c.st, err
 	}
 	write := req.Binding.Write()
+	title := FactSetTitle(req.Search, write.OntologyRoot(), write.Name())
+	if req.Binding.FromLens() {
+		// A one-member lens is a lens: "All in lens <lens>" with no filter.
+		title = FactSetLensTitle(req.Search, write.OntologyRoot(), req.Binding.Name())
+	}
 	env := FactSetEnv{
-		Mode: FactSetMode, Title: FactSetTitle(req.Search, write.OntologyRoot(), write.Name()),
+		Mode: FactSetMode, Title: title,
 		SearchLine: SearchLine(req.Search), Search: req.Search, Anchor: anchor, Audience: AudienceHuman,
 		Unpinned: req.Options.Unpin, CrossKB: req.Options.CrossKB, Depth: req.Options.Depth,
 		MaxNodes: req.Options.MaxNodes, FactsLimit: req.Facts, Units: len(hits), InstructionsVersion: FactSetInstructionsVersion,

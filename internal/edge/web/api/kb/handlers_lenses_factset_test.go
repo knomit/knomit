@@ -393,6 +393,58 @@ func TestLensFactSet_OneMemberLensIsTheWriteRepoFactSet(t *testing.T) {
 	require.Equal(t, listBody, strings.ReplaceAll(body, soloBase, "/lenses/solo/search"))
 }
 
+// A one-member lens is a lens (user ruling 2026-11-02, M1): although the
+// engine serves it on the repository path, cross_kb=true is the lens 400,
+// byte for byte what a multi-member lens answers (instance path aside), and
+// writes nothing; and with no filter its title is "All in lens <lens>", not
+// the write repo's title. Controls: the write repo's own route accepts
+// cross_kb=true and keeps its repo title.
+//
+// Sabotage: check cross_kb only on IsLens in FactSetFirstPage (the solo
+// lens answers 200); or keep FactSetTitle on the repo path for a lens (the
+// solo title is the repo's).
+func TestLensFactSet_OneMemberLensIsALens(t *testing.T) {
+	m := newMatLensManager(t, "w", "r1")
+	createLens(t, m, "solo", "w")
+	createLens(t, m, "duo", "w", "r1")
+	w := m.Get("w")
+	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a1.md", "A1", "a1 body.")
+	h := asPrincipal("u1", newTestRouter(m))
+	repoBase := "/repos/w/branches/" + urlBranch(w.AgentBranch()) + "/search/factset"
+	const soloBase, duoBase = "/lenses/solo/search/factset", "/lenses/duo/search/factset"
+	var code int
+	var body string
+	require.Eventually(t, func() bool {
+		code, _, body = getMaterialize(t, h, "/lenses/solo/facts?path=kb/technology/u/")
+		return code == http.StatusOK && strings.Contains(body, "a1.md")
+	}, 10*time.Second, 50*time.Millisecond, "the lens never listed the fact: %d %s", code, body)
+
+	code, _, duo := getMaterialize(t, h, duoBase+"?path=kb/technology/u/&cross_kb=true")
+	require.Equal(t, http.StatusBadRequest, code, duo)
+	before := 0
+	require.NoError(t, w.WithRead(func(svc *store.Service) { before = int(svc.ToolSession().FactSetWrites()) }))
+	code, _, solo := getMaterialize(t, h, soloBase+"?path=kb/technology/u/&cross_kb=true")
+	require.Equal(t, http.StatusBadRequest, code, solo)
+	require.Equal(t, duo, strings.ReplaceAll(solo, soloBase, duoBase), "the multi-member lens's 400")
+	require.NoError(t, w.WithRead(func(svc *store.Service) {
+		require.Equal(t, before, int(svc.ToolSession().FactSetWrites()), "nothing written")
+	}))
+	code, _, body = getMaterialize(t, h, repoBase+"?path=kb/technology/u/&cross_kb=true")
+	require.Equal(t, http.StatusOK, code, "control: the repository accepts cross_kb: %s", body)
+
+	code, sp, body := getFactSet(t, h, soloBase+"?depth=0&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	none := materialize.FactSetSearch{Sort: materialize.SortRelevance}
+	require.Equal(t, materialize.FactSetLensTitle(none, "kb", "solo"), sp.Title)
+	code, dp, body := getFactSet(t, h, duoBase+"?depth=0&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, strings.Replace(dp.Title, "duo", "solo", 1), sp.Title, "the multi-member lens's title shape")
+	code, rp, body := getFactSet(t, h, repoBase+"?depth=0&limit=1")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, materialize.FactSetTitle(none, "kb", "w"), rp.Title, "control: the repository's own title")
+	require.NotEqual(t, rp.Title, sp.Title)
+}
+
 // since_fork on a lens reads the WRITE member's experiment (ruling Lens 6),
 // and only when the lens pins its write member to an experiment branch:
 //   - lens "explens" pins w at exp/sf (forked from w's agent branch, where

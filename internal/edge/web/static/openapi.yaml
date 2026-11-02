@@ -4368,12 +4368,14 @@ paths:
         is the write member's (write first, as in the lens list); the same
         content at two paths stays two units.
 
-        DIFFERENCES FROM A REPO: `cross_kb=true` is a 400 (references out of
-        a lens factset are never followed). `since_fork` narrows to what the
-        WRITE member's experiment changed since it forked (its branch in the
-        lens must be an experiment, as on a repo); the other members
-        contribute no results. With no filter at all the title is "All in
-        lens <lens>".
+        DIFFERENCES FROM A REPO, for a lens of ANY size (a one-member lens
+        included): `cross_kb=true` is a 400 (references out of a lens
+        factset are never followed), and with no filter at all the title is
+        "All in lens <lens>". `since_fork` narrows to what the WRITE member's
+        experiment changed since it forked, only when the lens pins its
+        write member to an experiment branch (otherwise it is the repo
+        route's 400 "Not an experiment"); the other members contribute no
+        results.
 
         CURSORS: a lens factset is pinned to the lens (its uid and its read
         set), so its cursor answers 404 on the write repo's own factset
@@ -4381,8 +4383,9 @@ paths:
         lens's members since the first call answers 404 like an unknown
         cursor. The same principal pages, seeks, exports and closes it here
         or through `knomit_materialize` on the lens's MCP endpoint, whichever
-        surface made it. A one-member lens is served as its write
-        repository's factset (the same pages), still pinned to the lens.
+        surface made it. A one-member lens has its write repository's units
+        and sections, but it is still a lens: pinned to the lens, `cross_kb`
+        refused, the lens title.
       operationId: getLensSearchFactSetPage
       parameters:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, only `unit` is accepted." }
@@ -4409,7 +4412,7 @@ paths:
         - { name: depth, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 10, default: 4 } }
         - { name: max_nodes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
         - { name: unpin, in: query, required: false, schema: { type: boolean, default: false } }
-        - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false }, description: "true is a 400 on a lens." }
+        - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false }, description: "true is a 400 on a lens of any size." }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 5, default: 3 }, description: "First call only: sections per page, frozen in the cursor." }
       responses:
         "200":
