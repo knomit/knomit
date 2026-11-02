@@ -24,7 +24,8 @@ func specQueryParams(t *testing.T, route string) []string {
 	comps := doc["components"].(map[string]any)["parameters"].(map[string]any)
 	get := doc["paths"].(map[string]any)[route].(map[string]any)["get"].(map[string]any)
 	var out []string
-	for _, p := range get["parameters"].([]any) {
+	ps, _ := get["parameters"].([]any) // a route with no parameters lists none
+	for _, p := range ps {
 		m := p.(map[string]any)
 		if ref, ok := m["$ref"].(string); ok {
 			m = comps[strings.TrimPrefix(ref, "#/components/parameters/")].(map[string]any)

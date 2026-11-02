@@ -28,6 +28,9 @@ func handleCommitAnchoredFact(b hal.URLBuilder, mgr *repos.Manager) http.Handler
 		sha := chi.URLParam(r, "sha")
 		path := chi.URLParam(r, "*")
 
+		if !refuseUnknownFactPath(w, r, path, true) {
+			return
+		}
 		// A file under .knomit/ is readable by its exact path at this commit,
 		// raw (user ruling 2026-10-06).
 		if serveSystemFileRead(w, r, repos.RepoFromContext(r.Context()), branch, sha, path) {

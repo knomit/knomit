@@ -120,6 +120,9 @@ type commitItem struct {
 // handleHALCommitsList serves GET /repos/{repo}/branches/{branch}/commits.
 func handleHALCommitsList(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !commitsParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
@@ -185,6 +188,9 @@ func handleHALCommitsList(b hal.URLBuilder, ontologyRoot string) http.HandlerFun
 // handleHALCommitDetail serves GET /repos/{repo}/branches/{branch}/commits/{sha}.
 func handleHALCommitDetail(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !commitDetailParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 

@@ -18,6 +18,9 @@ import (
 // SSE stream for branch task progress and head-commit status updates.
 func handleHALEvents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !eventsParams.refuseUnknown(w, r) {
+			return
+		}
 		ri := repos.RepoFromContext(r.Context())
 		branch := httpx.BranchFromContext(r.Context())
 

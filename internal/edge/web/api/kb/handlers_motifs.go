@@ -359,6 +359,9 @@ func renderMotifCollection(
 // per-repo motif vocabulary, one entry per cluster, df-desc by default.
 func handleHALMotifs(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !motifsParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		branch := httpx.BranchFromContext(r.Context())
@@ -481,6 +484,9 @@ type motifDetailView struct {
 // (C1). 404 only when the resolved key matches no cluster in the vocabulary.
 func handleHALMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !motifClusterParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		branch := httpx.BranchFromContext(r.Context())

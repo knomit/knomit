@@ -75,6 +75,10 @@ var changesAllowedCalls = map[string][]string{
 		"b.Branch", "httpx.SelfWithQuery", "hal.WriteHAL", "hal.WriteProblem", "writeChangesError", "httpx.WriteStoreError",
 		// the store-unavailable 503: a fixed problem document, no store call
 		"httpx.WriteStoreUnavailable",
+		// the undeclared-parameter refusal (user ruling 2026-11-02): parses
+		// the query string against the route's declared set, no store and no
+		// clock.
+		"changesParams.refuseUnknown",
 		"err.Error", "errors.Is", "len",
 		// the repo's id for cursor and bookmark scope (a git read, cached)
 		"ri.ID", "federate.ID12", "model.ParseChangesSince", "strconv.Quote",
