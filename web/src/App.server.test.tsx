@@ -25,7 +25,7 @@ vi.mock('./api', async (importOriginal) => {
     fetchVersion: vi.fn(),
     api: {
       listClientSessions: vi.fn(),
-      listOAuthPending: vi.fn(),
+      listOAuthPending: vi.fn(), listSecrets: vi.fn(),
       getFleet: vi.fn(), listFleetMembers: vi.fn(),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), updateLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
@@ -75,6 +75,7 @@ async function primeApi({ readOnly = false, oauth = [] as OAuthPending[] | null 
   m.listPushedBranches.mockResolvedValue([]);
   m.listClientSessions.mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
   m.listOAuthPending.mockResolvedValue(oauth);
+  m.listSecrets.mockResolvedValue([]);
   m.getFleet.mockResolvedValue({ state: 'standalone', agent_id: 'agent-7f3a' });
   m.listFleetMembers.mockResolvedValue([]);
   m.ontologyPresets.mockResolvedValue([{ name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] }]);
@@ -115,7 +116,7 @@ afterEach(() => {
 });
 
 describe('the gear opens the server pages', () => {
-  it('reads the bar as knomit │ the server tabs (no target crumb), and has Logs and Authorizations when there is an issuer', async () => {
+  it('reads the bar as knomit │ the server tabs (no target crumb), and has Logs and Access', async () => {
     await primeApi({ oauth: [] });
     await mountApp();
     // Control: on a target the label names it.
@@ -127,7 +128,7 @@ describe('the gear opens the server pages', () => {
     expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('Server');
     expect(screen.getByTestId('bar-brand')).toHaveTextContent(/^knomit$/);
     expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('localhost');
-    await waitFor(() => expect(tabNames()).toEqual(['Logs', 'Authorizations']));
+    await waitFor(() => expect(tabNames()).toEqual(['Logs', 'Access']));
     expect(screen.getByRole('tablist', { name: 'Server pages' })).toBeInTheDocument();
     expect(screen.queryByTestId('facet-tabs')).toBeNull();
     expect(screen.getByTestId('server-tab-logs')).toHaveAttribute('aria-selected', 'true');
@@ -149,38 +150,48 @@ describe('the gear opens the server pages', () => {
     expect(m.listOAuthPending).not.toHaveBeenCalled();
   });
 
-  it('has no Authorizations tab on a server with no OAuth issuer', async () => {
+  it('Access has only Secrets on a server with no OAuth issuer', async () => {
     const m = await primeApi({ oauth: null });
     await mountApp();
     await openServer();
     await waitFor(() => expect(m.listOAuthPending).toHaveBeenCalled());
     await act(async () => { await Promise.resolve(); });
-    expect(tabNames()).toEqual(['Logs']);
+    expect(tabNames()).toEqual(['Logs', 'Access']);
+    fireEvent.click(screen.getByTestId('server-tab-access'));
+    expect(await screen.findByTestId('secrets-tab')).toBeInTheDocument();
+    expect(screen.getByTestId('access-tab-secrets')).toBeInTheDocument();
+    expect(screen.queryByTestId('access-tab-auth')).toBeNull();
   });
 
-  it('badges Authorizations with the waiting count, and shows no badge at zero', async () => {
+  it('badges Access with the waiting authorizations, and shows no badge at zero', async () => {
     const m = await primeApi({ oauth: [pending('p1', 'alpha'), pending('p2', 'beta')] });
     await mountApp();
     await openServer();
-    expect(await screen.findByTestId('server-tab-auth-badge')).toHaveTextContent(/^2$/);
+    expect(await screen.findByTestId('server-tab-access-badge')).toHaveTextContent(/^2$/);
+    fireEvent.click(screen.getByTestId('server-tab-access'));
+    expect(await screen.findByTestId('access-tab-auth-badge')).toHaveTextContent(/^2$/);
 
     // Zero waiting: the tab stays, the badge goes.
     cleanup();
     m.listOAuthPending.mockResolvedValue([]);
     await mountApp();
     await openServer();
-    expect(await screen.findByTestId('server-tab-auth')).toBeInTheDocument();
-    expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
+    expect(await screen.findByTestId('server-tab-access')).toBeInTheDocument();
+    await waitFor(() => expect(m.listOAuthPending).toHaveBeenCalled());
+    expect(screen.queryByTestId('server-tab-access-badge')).toBeNull();
   });
 
-  it('opens each page in the body: Logs with its toolbar, Authorizations as an indexed page', async () => {
+  it('opens each page in the body: Logs with its toolbar, Access on Secrets, then Authorizations as an indexed page', async () => {
     await primeApi({ oauth: [pending('p1', 'alpha')] });
     await mountApp();
     await openServer();
     expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
     expect(screen.getByTestId('facet-toolbar')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('server-tab-auth'));
+    fireEvent.click(screen.getByTestId('server-tab-access'));
+    const secrets = await screen.findByTestId('secrets-tab');
+    expect(within(secrets).getByTestId('settings-index-heading')).toHaveTextContent('Secrets');
+    fireEvent.click(await screen.findByTestId('access-tab-auth'));
     const auth = await screen.findByTestId('auth-page');
     expect(within(auth).getByTestId('settings-index-heading')).toHaveTextContent('Authorizations');
     expect(await within(auth).findByTestId('toc-request-p1')).toHaveTextContent('alpha');

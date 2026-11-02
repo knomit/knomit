@@ -53,7 +53,7 @@ export interface ServerBar {
   /** serverPagesFor's list, the only tabs drawn. */
   pages: ServerPage[];
   onPage: (p: ServerPage) => void;
-  /** Requests waiting, badged on Authorizations when above zero. */
+  /** Authorization requests waiting, badged on Access when above zero. */
   authCount: number | null;
 }
 
@@ -158,7 +158,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   };
   // Where the gear returns to from the server pages: the target under them,
   // named in its tooltip so the destination is one hover away.
-  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: logs and authorizations';
+  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: logs and access';
   const tabStyle = (on: boolean, disabled: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
@@ -276,8 +276,8 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
                   {...tabHover(on, false)}
                 >
                   <span>{SERVER_LABEL[p]}</span>
-                  {p === 'auth' && server.authCount !== null && server.authCount > 0 && (
-                    <span data-testid="server-tab-auth-badge" aria-label={`${server.authCount} waiting`} style={tabBadge}>{server.authCount}</span>
+                  {p === 'access' && server.authCount !== null && server.authCount > 0 && (
+                    <span data-testid="server-tab-access-badge" aria-label={`${server.authCount} waiting`} style={tabBadge}>{server.authCount}</span>
                   )}
                 </button>
               );
@@ -357,9 +357,9 @@ const RAIL_FOCUS = 'Repositories, lenses and fleet are unavailable while reading
 const RAIL_HIDDEN = 'Repositories, lenses and fleet are hidden over the server pages';
 
 const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings', members: 'Members' };
-const SERVER_LABEL: Record<ServerPage, string> = { logs: 'Logs', auth: 'Authorizations' };
+const SERVER_LABEL: Record<ServerPage, string> = { logs: 'Logs', access: 'Access' };
 
-// The Authorizations tab's waiting count: the green badge it carried in Manage.
+// The Access tab's waiting authorizations: the green badge it carried in Manage.
 const tabBadge: CSSProperties = {
   fontSize: 10, padding: '0 5px', borderRadius: 8, lineHeight: 1.6,
   background: '#1d2a22', color: '#4ade80', fontVariantNumeric: 'tabular-nums',

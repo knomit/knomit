@@ -41,7 +41,7 @@ export interface Section {
 
 /** The index heading names the kind of target, never "On this page" — or,
  *  on a server page behind the gear, the page itself. */
-const HEADINGS = { repo: 'Repository', lens: 'Lens', fleet: 'Fleet', auth: 'Authorizations' } as const;
+const HEADINGS = { repo: 'Repository', lens: 'Lens', fleet: 'Fleet', auth: 'Authorizations', secrets: 'Secrets' } as const;
 
 export function SettingsPage({ kind, sections, focus, onFocused, testid }: {
   kind: keyof typeof HEADINGS;

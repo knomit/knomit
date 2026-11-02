@@ -352,7 +352,7 @@ describe('the server pages', () => {
 
   it('a tab click moves between pages', () => {
     const open = viewReducer(onActivity, { type: 'TOGGLE_SERVER' });
-    expect(viewReducer(open, { type: 'SET_SERVER_PAGE', page: 'auth' }).server).toBe('auth');
+    expect(viewReducer(open, { type: 'SET_SERVER_PAGE', page: 'access' }).server).toBe('access');
   });
 
   it('every way of picking a target leaves them', () => {
@@ -369,7 +369,7 @@ describe('the server pages', () => {
   });
 
   it('picking the target that is already under them keeps its facet', () => {
-    const on: ViewState = { ...onActivity, server: 'auth' };
+    const on: ViewState = { ...onActivity, server: 'access' };
     const back = viewReducer(on, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
     expect(back).toEqual({ ...onActivity, server: null });
   });
@@ -401,11 +401,9 @@ describe('the server pages', () => {
 
   // The Fleet server page left the gear (Q1): the fleet is a rail target.
   // SABOTAGE: put 'fleet' back in serverPagesFor -> red.
-  it('serverPagesFor is Logs and Authorizations (with an issuer), never Fleet, and nothing on a read-only server', () => {
-    expect(serverPagesFor(false, true)).toEqual(['logs', 'auth']);
-    expect(serverPagesFor(false, false)).toEqual(['logs']);
-    expect(serverPagesFor(true, true)).toEqual([]);
-    expect(serverPagesFor(true, false)).toEqual([]);
+  it('serverPagesFor is Logs and Access, never Fleet, and nothing on a read-only server', () => {
+    expect(serverPagesFor(false)).toEqual(['logs', 'access']);
+    expect(serverPagesFor(true)).toEqual([]);
   });
 });
 

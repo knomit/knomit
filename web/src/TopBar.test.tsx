@@ -155,11 +155,11 @@ describe('TopBar — the target label', () => {
     expect(screen.getByTestId('target-label')).toHaveTextContent('alpha');
     expect(screen.getByTestId('crumb-sep')).toBeInTheDocument();
     unmount();
-    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: null } }));
     expect(screen.queryByTestId('target-label')).toBeNull();
     expect(screen.queryByTestId('crumb-sep')).toBeNull();
     const row = screen.getByTestId('toknomitr-bar');
-    expect(row.textContent).toBe('knomitLogsAuthorizations');
+    expect(row.textContent).toBe('knomitLogsAccess');
     expect(row.textContent).not.toContain('localhost');
     const order = ['bar-brand', 'bar-divider', 'server-tabs'].map(i => screen.getByTestId(i));
     for (let i = 1; i < order.length; i++) {
@@ -206,7 +206,7 @@ describe('TopBar — the rail toggle', () => {
     const { unmount } = render(bar({ railOpen: true }));
     expect(screen.getByTestId('rail-toggle')).toBeEnabled();
     unmount();
-    render(bar({ railOpen: false, server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ railOpen: false, server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: null } }));
     const t = screen.getByTestId('rail-toggle');
     expect(t).toBeDisabled();
     expect(t).toHaveAttribute('title', 'Repositories, lenses and fleet are hidden over the server pages');
@@ -291,10 +291,10 @@ describe('TopBar — the gear', () => {
     const plain = screen.getByTestId('server-toggle');
     expect(plain).toHaveAttribute('aria-pressed', 'false');
     expect(plain).not.toHaveStyle({ background: '#1a231d' });
-    expect(plain.getAttribute('title')).toBe('Server: logs and authorizations');
+    expect(plain.getAttribute('title')).toBe('Server: logs and access');
     const glyph = plain.innerHTML;
     unmount();
-    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: null } }));
     const lit = screen.getByTestId('server-toggle');
     expect(lit).toHaveAttribute('aria-pressed', 'true');
     expect(lit).toHaveStyle({ color: '#dfe9e2', background: '#1a231d', width: '26px', height: '26px' });
@@ -366,9 +366,9 @@ describe('TopBar — facet tabs', () => {
     const { unmount } = render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
     expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Browse', 'Activity', 'Settings']);
     unmount();
-    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: null } }));
+    render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse', server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: null } }));
     expect(screen.queryByTestId('facet-tabs')).toBeNull();
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Logs', 'Authorizations']);
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Logs', 'Access']);
     expect(screen.getByTestId('server-tab-logs')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('server-tab-logs')).toHaveStyle({ boxShadow: 'inset 0 -2px 0 #7c9', color: '#eee' });
   });
@@ -376,23 +376,23 @@ describe('TopBar — facet tabs', () => {
   it('draws exactly the server pages it is given', () => {
     render(bar({ server: { page: 'logs', pages: ['logs'], onPage: vi.fn(), authCount: 3 } }));
     expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Logs']);
-    expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
+    expect(screen.queryByTestId('server-tab-access-badge')).toBeNull();
   });
 
   it('a server tab click asks for that page', () => {
     const onPage = vi.fn();
-    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage, authCount: null } }));
-    fireEvent.click(screen.getByTestId('server-tab-auth'));
-    expect(onPage).toHaveBeenCalledWith('auth');
+    render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage, authCount: null } }));
+    fireEvent.click(screen.getByTestId('server-tab-access'));
+    expect(onPage).toHaveBeenCalledWith('access');
   });
 
   it('badges Authorizations with the waiting count above zero only', () => {
-    const { unmount } = render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: 2 } }));
-    expect(screen.getByTestId('server-tab-auth-badge')).toHaveTextContent(/^2$/);
+    const { unmount } = render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: 2 } }));
+    expect(screen.getByTestId('server-tab-access-badge')).toHaveTextContent(/^2$/);
     unmount();
-    render(bar({ server: { page: 'logs', pages: ['logs', 'auth'], onPage: vi.fn(), authCount: 0 } }));
-    expect(screen.getByTestId('server-tab-auth')).toBeInTheDocument();
-    expect(screen.queryByTestId('server-tab-auth-badge')).toBeNull();
+    render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: 0 } }));
+    expect(screen.getByTestId('server-tab-access')).toBeInTheDocument();
+    expect(screen.queryByTestId('server-tab-access-badge')).toBeNull();
   });
 });
 
