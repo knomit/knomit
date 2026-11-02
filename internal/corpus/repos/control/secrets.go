@@ -239,24 +239,12 @@ func (s *Secrets) Get(id string) (SecretMeta, error) {
 
 // Rename changes the friendly name. Links follow the ID, so they are untouched.
 func (s *Secrets) Rename(id, name string, now time.Time) error {
-	name, err := validateName(name)
-	if err != nil {
-		return err
-	}
-	res, err := s.db.Exec(`UPDATE secrets SET name = ?, updated_at = ? WHERE id = ?`, name, now.Unix(), id)
-	if err != nil {
-		return mapWriteErr("secrets rename", err)
-	}
-	return requireSecretRow(res)
+	return s.Update(id, SecretUpdate{Name: &name}, now)
 }
 
 // SetExpiry sets (or, with nil, clears) the advisory expiry date.
 func (s *Secrets) SetExpiry(id string, at *time.Time, now time.Time) error {
-	res, err := s.db.Exec(`UPDATE secrets SET expires_at = ?, updated_at = ? WHERE id = ?`, unixOrNil(at), now.Unix(), id)
-	if err != nil {
-		return fmt.Errorf("secrets set expiry: %w", err)
-	}
-	return requireSecretRow(res)
+	return s.Update(id, SecretUpdate{SetExpiry: true, ExpiresAt: at}, now)
 }
 
 // ReplaceValue stores a new value, validated against the secret's stored type.
@@ -287,13 +275,39 @@ func (s *Secrets) ReplaceValue(id string, v SecretValue, now time.Time) error {
 // allowed by the current list and would not be by the new one: the error is a
 // *HostInUseError naming the removed hosts that repo used and the repos.
 func (s *Secrets) SetHosts(id string, hosts []string, now time.Time) error {
-	norm, err := NormalizeHosts(hosts)
-	if err != nil {
-		return err
+	return s.Update(id, SecretUpdate{Hosts: &hosts}, now)
+}
+
+// SecretUpdate is the metadata Update changes; a nil field (or SetExpiry
+// false) is left as stored.
+type SecretUpdate struct {
+	Name      *string
+	Hosts     *[]string
+	SetExpiry bool
+	ExpiresAt *time.Time // with SetExpiry: nil clears the expiry
+}
+
+// Update changes a secret's name, hosts and expiry in ONE transaction: every
+// refusal (invalid input, a host in use as SetHosts describes, a taken name)
+// writes nothing at all.
+func (s *Secrets) Update(id string, u SecretUpdate, now time.Time) error {
+	var name string
+	if u.Name != nil {
+		var err error
+		if name, err = validateName(*u.Name); err != nil {
+			return err
+		}
+	}
+	var norm []string
+	if u.Hosts != nil {
+		var err error
+		if norm, err = NormalizeHosts(*u.Hosts); err != nil {
+			return err
+		}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("secrets set hosts: begin: %w", err)
+		return fmt.Errorf("secrets update: begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
@@ -303,8 +317,39 @@ func (s *Secrets) SetHosts(id string, hosts []string, now time.Time) error {
 		return ErrSecretNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("secrets set hosts: %w", err)
+		return fmt.Errorf("secrets update: %w", err)
 	}
+	if u.Hosts != nil {
+		if err := checkHostsKeepLinks(tx, id, oldJSON, norm); err != nil {
+			return err
+		}
+		hostsJSON, _ := json.Marshal(norm)
+		if _, err := tx.Exec(`UPDATE secrets SET hosts = ? WHERE id = ?`, string(hostsJSON), id); err != nil {
+			return fmt.Errorf("secrets update hosts: %w", err)
+		}
+	}
+	if u.Name != nil {
+		if _, err := tx.Exec(`UPDATE secrets SET name = ? WHERE id = ?`, name, id); err != nil {
+			return mapWriteErr("secrets rename", err)
+		}
+	}
+	if u.SetExpiry {
+		if _, err := tx.Exec(`UPDATE secrets SET expires_at = ? WHERE id = ?`, unixOrNil(u.ExpiresAt), id); err != nil {
+			return fmt.Errorf("secrets update expiry: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE secrets SET updated_at = ? WHERE id = ?`, now.Unix(), id); err != nil {
+		return fmt.Errorf("secrets update: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("secrets update: commit: %w", err)
+	}
+	return nil
+}
+
+// checkHostsKeepLinks refuses a new host list that would stop a linked repo
+// matching (see SetHosts).
+func checkHostsKeepLinks(tx *sql.Tx, id, oldJSON string, norm []string) error {
 	var old []string
 	if err := json.Unmarshal([]byte(oldJSON), &old); err != nil {
 		return fmt.Errorf("secrets set hosts: hosts column: %w", err)
@@ -327,22 +372,15 @@ func (s *Secrets) SetHosts(id string, hosts []string, now time.Time) error {
 			}
 		}
 	}
-	if len(stranded) > 0 {
-		e := &HostInUseError{Repos: stranded}
-		for h := range usedRemoved {
-			e.Hosts = append(e.Hosts, h)
-		}
-		sort.Strings(e.Hosts)
-		return e
+	if len(stranded) == 0 {
+		return nil
 	}
-	hostsJSON, _ := json.Marshal(norm)
-	if _, err := tx.Exec(`UPDATE secrets SET hosts = ?, updated_at = ? WHERE id = ?`, string(hostsJSON), now.Unix(), id); err != nil {
-		return fmt.Errorf("secrets set hosts: %w", err)
+	e := &HostInUseError{Repos: stranded}
+	for h := range usedRemoved {
+		e.Hosts = append(e.Hosts, h)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("secrets set hosts: commit: %w", err)
-	}
-	return nil
+	sort.Strings(e.Hosts)
+	return e
 }
 
 // Delete removes a secret. While any repo links to it the answer is an

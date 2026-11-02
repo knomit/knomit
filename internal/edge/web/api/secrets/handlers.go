@@ -245,10 +245,10 @@ func handleCreateSecret(rm *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// handlePatchSecret applies, in this order, hosts, name, expiry and value.
-// Each input is validated before anything is written, so a malformed field
-// changes nothing; a refusal that depends on stored state (a host in use, a
-// name taken) stops at that step.
+// handlePatchSecret validates every input before writing anything, then
+// applies name, hosts and expiry in ONE transaction (Secrets.Update), so any
+// refusal, a host in use or a taken name included, changes nothing. The
+// value, already validated, is replaced last.
 func handlePatchSecret(rm *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s := store(w, r, rm)
@@ -303,24 +303,12 @@ func handlePatchSecret(rm *repos.Manager) http.HandlerFunc {
 			}
 		}
 
-		now := time.Now().UTC()
-		if body.Hosts != nil {
-			if err := s.SetHosts(id, *body.Hosts, now); err != nil {
-				writeError(w, r, err)
-				return
-			}
-		}
-		if body.Name != nil {
-			if err := s.Rename(id, *body.Name, now); err != nil {
-				writeError(w, r, err)
-				return
-			}
-		}
-		if setExpiry {
-			if err := s.SetExpiry(id, exp, now); err != nil {
-				writeError(w, r, err)
-				return
-			}
+		// Name, hosts and expiry in one transaction: any refusal writes none.
+		if err := s.Update(id, control.SecretUpdate{
+			Name: body.Name, Hosts: body.Hosts, SetExpiry: setExpiry, ExpiresAt: exp,
+		}, time.Now().UTC()); err != nil {
+			writeError(w, r, err)
+			return
 		}
 		if body.present() {
 			if err := rm.ReplaceSecretValue(id, body.secretValue()); err != nil {

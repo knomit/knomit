@@ -330,3 +330,20 @@ func TestSecretsAPI_ReplaceValueWakesLinked(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, before+1, ri.BreakerResetGenForTest())
 }
+
+// A PATCH is all or nothing: a name collision refuses the whole request,
+// so the hosts and expiry sent with it are not applied either.
+func TestSecretsAPI_PatchIsAtomic(t *testing.T) {
+	f := newSecretsFixture(t, true)
+	require.Equal(t, http.StatusCreated, f.do(t, "POST", "/api/v1/secrets", `{"name":"taken","type":"token","hosts":["github.com"],"value":"x"}`).Code)
+	rec := f.do(t, "POST", "/api/v1/secrets", `{"name":"mine","type":"token","hosts":["github.com"],"value":"x"}`)
+	id := decodeMap(t, rec)["id"].(string)
+
+	rec = f.do(t, "PATCH", "/api/v1/secrets/"+id, `{"hosts":["gitlab.com"],"name":"taken","expires_at":"2030-01-01T00:00:00Z"}`)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	got, err := f.m.Secrets().Get(id)
+	require.NoError(t, err)
+	require.Equal(t, "mine", got.Name)
+	require.Equal(t, []string{"github.com"}, got.Hosts, "hosts unchanged after the refused PATCH")
+	require.Nil(t, got.ExpiresAt, "expiry unchanged after the refused PATCH")
+}
