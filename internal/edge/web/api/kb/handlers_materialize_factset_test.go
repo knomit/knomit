@@ -197,7 +197,8 @@ func TestFactSet_SeededVisitedSetAndLinks(t *testing.T) {
 	require.Equal(t, r2.AnchorID, fwd.AnchorID)
 	require.Equal(t, "2", fwd.Number)
 	require.Equal(t, materialize.LinkBack, back.Direction)
-	require.Zero(t, back.Unit, "a back link carries the anchor only")
+	require.Equal(t, 1, back.Unit, "a back link names the unit that first wrote S")
+	require.Empty(t, back.Number, "a back link carries no number")
 	require.Equal(t, s.AnchorID, back.AnchorID)
 
 	// Builds-on anchors point where the fact is written.

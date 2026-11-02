@@ -218,7 +218,14 @@ func (s *fsState) reservedOf(h uint64) (unit, k int, ok bool) {
 
 // plink says where a link node's fact is written.
 type plink struct {
-	unit   int // 0: a back link (the renderer resolves the anchor)
+	// unit is where the fact is written: for a forward link its reserved
+	// unit, for a back link the unit that FIRST wrote it (recorded in the
+	// prefix, so it costs nothing).
+	unit int
+	// number is the target's number, forward links only: a back link's
+	// target may sit at a tree position ("w.x.y") that only its unit's plan
+	// knows, so a back link carries none (user ruling 2026-11-02: links show
+	// the target's title, not a number).
 	number string
 	back   bool
 	blob   uint64 // the written version (blob64); 0 when unknown
@@ -236,7 +243,7 @@ func (s *fsState) lookup(h, check uint64, repo, rel string, unit int) (*plink, e
 			return nil, errHashCollision{repo, rel}
 		}
 		if int(e.unit) < unit {
-			return &plink{back: true, blob: e.blob}, nil
+			return &plink{unit: int(e.unit), back: true, blob: e.blob}, nil
 		}
 	}
 	ri := s.results.find(h)
@@ -249,23 +256,32 @@ func (s *fsState) lookup(h, check uint64, repo, rel string, unit int) (*plink, e
 	}
 	switch {
 	case ri >= 0 && s.wRoot.writtenBefore(ri, unit):
-		return &plink{back: true, blob: s.results[ri].blob}, nil
+		return &plink{unit: int(s.wRoot[ri]), back: true, blob: s.results[ri].blob}, nil
 	case vi >= 0 && s.wRes.writtenBefore(vi, unit):
-		return &plink{back: true, blob: s.reserved[vi].blob}, nil
+		return &plink{unit: int(s.wRes[vi]), back: true, blob: s.reserved[vi].blob}, nil
 	case ri >= 0:
 		r := s.results[ri]
 		if int(r.unit) == unit {
 			return nil, nil
 		}
-		return &plink{unit: int(r.unit), number: strconv.Itoa(int(r.unit)), back: int(r.unit) < unit, blob: r.blob}, nil
+		return linkTo(int(r.unit), strconv.Itoa(int(r.unit)), unit, r.blob), nil
 	case vi >= 0:
 		r := s.reserved[vi]
 		if int(r.unit) == unit {
 			return nil, nil
 		}
-		return &plink{unit: int(r.unit), number: fmt.Sprintf("%d.%d", r.unit, r.k), back: int(r.unit) < unit, blob: r.blob}, nil
+		return linkTo(int(r.unit), fmt.Sprintf("%d.%d", r.unit, r.k), unit, r.blob), nil
 	}
 	return nil, nil
+}
+
+// linkTo is the link from unit to a fact written in unit target at number:
+// forward when the target comes later, else back (unit only, no number).
+func linkTo(target int, number string, unit int, blob uint64) *plink {
+	if target < unit {
+		return &plink{unit: target, back: true, blob: blob}
+	}
+	return &plink{unit: target, number: number, blob: blob}
 }
 
 // markWritten records one fact first written by unit (the caller holds mu):

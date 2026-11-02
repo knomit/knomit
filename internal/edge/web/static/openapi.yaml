@@ -5736,10 +5736,10 @@ components:
             repo_name:  { type: string, description: "Lens factsets only: on every unit root, the name of the member it comes from (as at the first call)." }
             link:
               type: object
-              description: Where this fact is written. A back link carries only the anchor.
+              description: Where this fact is written. A back link carries the anchor and the unit that first wrote the fact, never a number.
               required: [anchor_id, direction, cited_blob]
               properties:
-                unit:              { type: integer, description: "Forward links only: the unit where the fact is written." }
+                unit:              { type: integer, description: "The unit where the fact is written: a forward link's target unit, or the unit that first wrote a back link's target." }
                 number:            { type: string, description: "Forward links only: its number there (\"7\" for a result, \"7.3\" for a reserved direct reference)." }
                 anchor_id:         { type: string, description: "f-<16 hex>: the written section's anchor." }
                 direction:         { type: string, enum: [forward, back] }

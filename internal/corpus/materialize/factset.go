@@ -193,10 +193,12 @@ type FactSetNode struct {
 }
 
 // FactSetLink says where a heading-only appearance's fact is written: its
-// anchor always; for a forward link also the unit and the number there ("7"
+// anchor and its unit always; for a forward link also the number there ("7"
 // for a result, "7.3" for a reserved direct reference). A back link carries
-// the anchor only: the reader has already seen the target (links are anchors
-// the renderer resolves). CitedBlob is the version cited here;
+// the anchor and the unit that first wrote the target, never a number (the
+// target may sit at a tree position only that unit's plan knows): the reader
+// has already seen it, and a reader that sought past it can seek to the unit
+// (links are anchors the renderer resolves). CitedBlob is the version cited here;
 // DifferentVersion says it is not the version written (ruling Q3: blob
 // identity, so ANY change).
 type FactSetLink struct {
