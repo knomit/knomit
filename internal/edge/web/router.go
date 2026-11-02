@@ -184,7 +184,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	operator := requireOperator(g, s.authDisabled)
 	manage.Mount(r, repoOuter, repo, branch, lens,
 		s.Manager, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays,
-		operator)
+		operator, s.requireLocalOrSameOriginAdmin)
 
 	// The connect-a-remote wizard (api/origins). Inside the
 	// RepoMiddleware group: its handlers read the repo from context. Every

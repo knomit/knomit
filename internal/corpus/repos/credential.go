@@ -1,12 +1,17 @@
 package repos
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos/control"
+	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // credentialChanged is what every credential change ends with: a stored
@@ -57,3 +62,119 @@ func (m *Manager) ReplaceSecretValue(id string, v control.SecretValue) error {
 	return nil
 }
 
+// CredentialChange is a new credential for a repo's origin: a pasted one
+// (AuthMethod plus AuthToken, basic as user:password) or a link to a stored
+// secret (SecretID).
+type CredentialChange struct {
+	AuthMethod string
+	AuthToken  string
+	SecretID   string
+}
+
+var (
+	// ErrNoOrigin: a credential change on a repo that has no origin.
+	ErrNoOrigin = errors.New("this repository has no origin: attach one with PUT /repos/{repo}/origin")
+	// ErrLinkedRepo: a pasted credential for a repo linked to a stored secret.
+	ErrLinkedRepo = errors.New("this repository uses a stored secret: unlink it first (PUT /repos/{repo}/origin/credential with \"secret_id\": null)")
+	// ErrInvalidCredential: the credential is malformed or does not fit the
+	// origin URL.
+	ErrInvalidCredential = errors.New("invalid credential")
+	// errLinkNotSupported: linking through ChangeOriginCredential is not
+	// available yet.
+	errLinkNotSupported = errors.New("linking a stored secret is not supported yet")
+)
+
+// beforeCredentialWrite (tests only) runs between the read of the stored
+// origin and the compare-and-set that writes the new credential.
+var beforeCredentialWrite func()
+
+// checkPastedCredential validates a pasted credential against the stored url.
+func checkPastedCredential(url string, c CredentialChange) error {
+	switch c.AuthMethod {
+	case "token":
+		if c.AuthToken == "" {
+			return fmt.Errorf("%w: auth_method token needs a token", ErrInvalidCredential)
+		}
+	case "basic":
+		if user, _, ok := strings.Cut(c.AuthToken, ":"); !ok || user == "" {
+			return fmt.Errorf("%w: auth_method basic needs a user and a password", ErrInvalidCredential)
+		}
+	case "ssh", "none":
+		if c.AuthToken != "" {
+			return fmt.Errorf("%w: auth_method %s takes no token", ErrInvalidCredential, c.AuthMethod)
+		}
+	case "cert":
+		return fmt.Errorf("%w: %w", ErrInvalidCredential, ErrCertNotAnInput)
+	default:
+		return fmt.Errorf("%w: auth_method must be token, basic, ssh or none", ErrInvalidCredential)
+	}
+	if err := MethodMismatch(url, c.AuthMethod); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidCredential, err.Error())
+	}
+	return nil
+}
+
+// ChangeOriginCredential replaces the credential of ri's origin WITHOUT the
+// attach lifecycle: no probe, no guard, no git-remote rewrite, no Sync stage
+// restart. The URL, branch and Mode stay exactly as stored.
+//
+// It reads the stored origin and refuses: none (ErrNoOrigin), a fleet peer
+// (ErrPeerCredential: a peer authenticates with this instance's certificate),
+// a pasted credential for a linked repo unless unlink is set (ErrLinkedRepo),
+// and a credential that is malformed or does not fit the URL
+// (ErrInvalidCredential). It then writes with Origins.SetCredential, a
+// compare-and-set on the stored URL, so an attach that re-points the origin
+// in between wins and this answers control.ErrOriginChanged with nothing
+// written. On success it re-reads the row, injects it into the running store
+// (svc.Remote().SetOrigin, the same branch) and signals a credential change,
+// which resets the breakers and wakes the sync loop.
+func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, c CredentialChange, unlink bool) error {
+	origins := m.Origins()
+	if origins == nil {
+		return ErrManagerStopped
+	}
+	uid := ri.UID()
+	stored, err := origins.Get(uid)
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		return ErrNoOrigin
+	}
+	if stored.AuthMethod == "cert" {
+		return ErrPeerCredential
+	}
+	if c.SecretID != "" {
+		return errLinkNotSupported
+	}
+	if stored.SecretID != "" && !unlink {
+		return ErrLinkedRepo
+	}
+	if err := checkPastedCredential(stored.URL, c); err != nil {
+		return err
+	}
+	if beforeCredentialWrite != nil {
+		beforeCredentialWrite()
+	}
+	if err := origins.SetCredential(uid, stored.URL, c.AuthMethod, c.AuthToken, c.SecretID); err != nil {
+		return err
+	}
+	cur, err := origins.Get(uid)
+	if err != nil {
+		return err
+	}
+	if cur == nil {
+		return fmt.Errorf("change credential: %w: the origin was removed", control.ErrOriginChanged)
+	}
+	// The running store's copy. A store that is not open needs none: opening
+	// injects the control.db row.
+	if werr := ri.WithRead(func(svc *store.Service) {
+		svc.Remote().SetOrigin(&remotesync.Origin{
+			URL: cur.URL, Branch: cur.Branch, AuthMethod: cur.AuthMethod, AuthToken: cur.AuthToken,
+		})
+	}); werr != nil {
+		log.Debug().Err(werr).Str("repo", ri.Name()).Msg("credential changed while the store is not open; it is injected at open")
+	}
+	ri.credentialChanged()
+	return nil
+}

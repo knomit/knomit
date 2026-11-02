@@ -2495,6 +2495,50 @@ paths:
         "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/origin/credential:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    put:
+      tags: [origin]
+      summary: Replace the origin's credential without reconnecting
+      description: |
+        Replaces only the pasted credential of the configured origin: the URL,
+        branch and mode are unchanged, nothing is probed and sync is not
+        restarted. The sync back-off is reset and sync runs at once with the
+        new credential. Requires the `operator` permission (403 otherwise).
+
+        `auth_method` is token (with `token`), basic (with `user` and
+        `password`, or `token` as user:password), ssh or none. 400 "Invalid
+        credential" for a malformed credential or one that does not fit the
+        URL's scheme, 400 for `secret_id` (not accepted by this endpoint), 400
+        "Invalid origin" for a fleet peer origin (it authenticates with this
+        instance's certificate). 409 "Linked to a stored secret" when the
+        repository uses a stored secret, 409 "No origin", and 409 "Origin
+        changed" when the origin was re-pointed while the credential was being
+        replaced (nothing changed: read the origin and retry).
+      operationId: setOriginCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginCredentialRequest" }
+      responses:
+        "200":
+          description: Credential replaced
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  _links: { type: object }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/origin-sessions:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -5163,6 +5207,15 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    OriginCredentialRequest:
+      type: object
+      required: [auth_method]
+      properties:
+        auth_method: { type: string, enum: [token, basic, ssh, none] }
+        token: { type: string, writeOnly: true }
+        user: { type: string }
+        password: { type: string, writeOnly: true }
+
     Secret:
       type: object
       description: A stored secret's metadata. The value is never returned.
