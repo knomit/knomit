@@ -283,8 +283,17 @@ export class FactSetStream {
   retry = (): void => {
     const s = this.state;
     if (s.phase === 'error') { this.recoveries = 0; this.start({ clear: true }); return; }
-    if (s.tail === 'failed') { this.commit({ tail: 'idle', tailError: null }); this.loadMore(); return; }
-    if (s.head === 'failed') { this.commit({ head: 'idle', headError: null }); this.loadBefore(); }
+    // Retry is the reader's own act, so an expired FactSet may be re-created
+    // again (it cannot loop): without this a second expiry before any cursor
+    // call succeeded would leave Retry asking the same dead cursor forever.
+    if (s.tail === 'failed') {
+      if (s.tailError?.kind === 'expired') this.recoveries = 0;
+      this.commit({ tail: 'idle', tailError: null }); this.loadMore(); return;
+    }
+    if (s.head === 'failed') {
+      if (s.headError?.kind === 'expired') this.recoveries = 0;
+      this.commit({ head: 'idle', headError: null }); this.loadBefore();
+    }
   };
 
   /** Re-creates an expired FactSet: the same search and options, back to the

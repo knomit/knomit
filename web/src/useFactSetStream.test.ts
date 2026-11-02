@@ -389,3 +389,35 @@ describe('FactSetStream recovery bound with a healthy first call (R1)', () => {
     expect(s.getState().notice).toBe('refreshed');
   });
 });
+
+// L (quick verify): a second expiry before any cursor call succeeded is shown;
+// the reader's Retry may re-create the FactSet once more.
+//
+// Sabotage: drop the reset in retry(): Retry asks the dead cursor again and
+// the FactSet stays failed (no third first call).
+describe('FactSetStream Retry after a second expiry', () => {
+  it('recover once, expire again, Retry: exactly one more first call, ready, with the notice', async () => {
+    // `dead`: the FactSet the cursors belong to has expired; a first call makes a new, live one.
+    let dead = false;
+    const { api, calls } = pagedApi(9, 2, 2, op => {
+      if (op === 'first') { dead = false; return null; }
+      return dead ? new FsError('Cursor not found', 404) : null;
+    });
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    dead = true;
+    s.loadMore(); await settle();   // 404 -> recovery (first #2)
+    dead = true;                    // expires again (an idle tab) before any cursor call succeeded
+    s.loadMore(); await settle();   // 404 past the bound -> shown
+    expect(calls.filter(c => c === 'first')).toHaveLength(2);
+    expect(s.getState().tail).toBe('failed');
+    expect(s.getState().tailError?.kind).toBe('expired');
+    s.clearNotice();
+    s.retry(); await settle();      // the dead cursor 404s -> one more re-creation (first #3)
+    expect(calls.filter(c => c === 'first')).toHaveLength(3);
+    expect(s.getState().phase).toBe('ready');
+    expect(s.getState().tail).toBe('idle');
+    expect(s.getState().notice).toBe('refreshed');
+  });
+});
