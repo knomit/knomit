@@ -1,56 +1,105 @@
-import { describe, it, expect } from 'vitest';
-import { listSearchParams, lensListSearchParams } from './listSearch';
+import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { api } from './api';
 import type { ListFilters } from './listSearch';
 
 // The four REST list routes answer 400 to a query parameter they do not
-// declare (internal/edge/web/api/kb/params_declared.go, pinned there against
-// openapi.yaml). These are those declared sets; every parameter the results
-// lists' builders can send, with every option set, must be in its route's set,
-// or a chip click becomes a 400.
-const DECLARED = {
-  repoSearch: ['q', 'entities', 'domain', 'domain_exact', 'path', 'min_confidence', 'min_similarity', 'limit',
-    'type', 'exclude_type', 'kind', 'exclude_kind', 'origin', 'ep', 'motifs', 'motif_match',
-    'expired', 'expires_before', 'expires_after', 'since_fork'],
-  repoFacts: ['limit', 'offset', 'path', 'topic', 'q', 'domain', 'entity', 'entities',
-    'type', 'exclude_type', 'kind', 'exclude_kind', 'origin', 'ep', 'motifs', 'motif_match',
-    'expired', 'expires_before', 'expires_after', 'min_confidence', 'since_fork', 'sort'],
-  lensSearch: ['q', 'limit', 'path', 'repo', 'entity', 'entities', 'domain', 'domain_exact', 'applies_to',
-    'type', 'exclude_type', 'kind', 'exclude_kind', 'origin', 'ep', 'min_confidence', 'min_similarity',
-    'motifs', 'motif_match', 'expired', 'expires_before', 'expires_after'],
-  lensFacts: ['limit', 'offset', 'query', 'q', 'path', 'topic', 'repo', 'domain', 'domain_exact', 'applies_to',
-    'entity', 'entities', 'type', 'exclude_type', 'kind', 'exclude_kind', 'origin', 'ep',
-    'min_confidence', 'min_similarity', 'motifs', 'motif_match', 'expired', 'expires_before', 'expires_after'],
-};
+// declare. Their declared sets are their openapi.yaml parameter lists (the Go
+// test TestListRouteParams_MatchOpenAPI pins those to the handlers), so this
+// reads the spec, and checks the REAL requests the results lists send —
+// captured from api.search, api.recent, lensSearch and listLensFacts with
+// every option set — against them. A chip that sends a name the route does
+// not declare would be a 400 in the UI.
 
-const EVERY: ListFilters & { path?: string } = {
+const SPEC = readFileSync(resolve(__dirname, '../../internal/edge/web/static/openapi.yaml'), 'utf8');
+
+/** The query parameter names openapi.yaml declares on route's GET ($refs to
+ *  components/parameters resolved). A small reader for this file's own shape:
+ *  inline `- { name: x, in: query, … }` rows and `- $ref:` rows. */
+function specQueryParams(route: string): string[] {
+  const lines = SPEC.split('\n');
+  const start = lines.indexOf(`  ${route}:`);
+  if (start < 0) throw new Error(`openapi.yaml has no ${route}`);
+  let end = lines.findIndex((l, i) => i > start && /^ {2}\S/.test(l));
+  if (end < 0) end = lines.length;
+  const block = lines.slice(start, end);
+  const getAt = block.findIndex(l => l === '    get:');
+  const names: string[] = [];
+  for (const l of block.slice(getAt)) {
+    if (/^ {4}\S/.test(l) && l !== '    get:') break; // the next method
+    const inline = l.match(/^\s+- \{ name: ([^,\s]+),\s+in: query/);
+    if (inline) { names.push(inline[1]); continue; }
+    const ref = l.match(/^\s+- \$ref: "#\/components\/parameters\/(\w+)"/);
+    if (ref) {
+      const at = lines.indexOf(`    ${ref[1]}:`);
+      const name = lines[at + 1]?.match(/^\s+name: (\S+)/);
+      const where = lines[at + 2]?.match(/^\s+in: (\S+)/);
+      if (name && where?.[1] === 'query') names.push(name[1]);
+    }
+  }
+  return names;
+}
+
+function mockFetch() {
+  const f = vi.fn().mockResolvedValue({
+    ok: true, status: 200,
+    json: async () => ({ count: 0, _embedded: { facts: [], results: [] }, facts: [], results: [], total: 0 }),
+  });
+  globalThis.fetch = f as unknown as typeof fetch;
+  return f;
+}
+
+const sentNames = (f: ReturnType<typeof vi.fn>) =>
+  [...new Set([...new URL(String(f.mock.calls[0][0]), 'http://x').searchParams.keys()])].sort();
+
+const undeclared = (sent: string[], declared: string[]) => sent.filter(k => !declared.includes(k));
+
+const EVERY: ListFilters = {
   types: ['observation'], excludeType: 'policy', kinds: ['epistemic'], excludeKinds: ['pragmatic'],
   origins: ['authored'], eps: ['learn'], domains: ['d'], entities: ['E'],
-  motifs: ['a-b'], motifMatch: 'stem', sinceFork: true, path: 'kb/x/',
+  motifs: ['a-b'], motifMatch: 'stem', sinceFork: true,
 };
 
-const keys = (p: URLSearchParams) => [...new Set([...p.keys()])].sort();
+// Sabotage: drop a name the lists send (e.g. `ep`) from a route's spec list,
+// or make api.recent send a parameter the spec does not declare, and the
+// matching row lists the stray name.
+describe('the results lists send only the parameters their route declares', () => {
+  it('reads each route’s declared set from openapi.yaml', () => {
+    expect(specQueryParams('/repos/{repo}/branches/{branch}/facts')).toContain('offset');
+    expect(specQueryParams('/lenses/{lens}/search')).toContain('repo');
+    expect(specQueryParams('/repos/{repo}/branches/{branch}/search')).not.toContain('offset');
+  });
 
-// Sabotage: make a builder send a name no route declares (rename `ep` to
-// `eps` in listSearchParams) and its rows list the stray name.
-describe('the results lists send only declared parameters', () => {
-  it('repo /search (relevance list)', () => {
-    const p = listSearchParams('relevance', 'text domain:x entity:y', 'kb/x/', 0.5, EVERY);
-    p.set('limit', '50');
-    expect(keys(p).filter(k => !DECLARED.repoSearch.includes(k))).toEqual([]);
-    expect(keys(p)).toContain('since_fork');
+  it('api.search → repo /search', async () => {
+    const f = mockFetch();
+    await api.search('r', 'b', 'text domain:x entity:y', 'kb/x/', 0.5, EVERY);
+    const sent = sentNames(f);
+    expect(sent).toContain('since_fork');
+    expect(undeclared(sent, specQueryParams('/repos/{repo}/branches/{branch}/search'))).toEqual([]);
   });
-  it('repo /facts (recent list)', () => {
-    const p = listSearchParams('recent', 'text', 'kb/x/', 0, EVERY);
-    p.set('sort', 'recent'); p.set('offset', '0'); p.set('limit', '50'); // api.recent's paging
-    expect(keys(p).filter(k => !DECLARED.repoFacts.includes(k))).toEqual([]);
-    expect(keys(p)).toContain('exclude_type');
+
+  it('api.recent → repo /facts', async () => {
+    const f = mockFetch();
+    await api.recent('r', 'b', 'kb/x/', 'text', 50, 10, EVERY);
+    const sent = sentNames(f);
+    expect(sent).toEqual(expect.arrayContaining(['exclude_type', 'limit', 'offset']));
+    expect(undeclared(sent, specQueryParams('/repos/{repo}/branches/{branch}/facts'))).toEqual([]);
   });
-  it('lens /search and /facts', () => {
-    const s = lensListSearchParams('relevance', 'text', ['alpha'], EVERY);
-    expect(keys(s).filter(k => !DECLARED.lensSearch.includes(k))).toEqual([]);
-    const f = lensListSearchParams('recent', 'text', ['alpha'], EVERY);
-    f.set('offset', '0'); f.set('limit', '50');
-    expect(keys(f).filter(k => !DECLARED.lensFacts.includes(k))).toEqual([]);
-    expect(keys(f)).toContain('repo');
+
+  it('lensSearch → lens /search', async () => {
+    const f = mockFetch();
+    await api.lensSearch('eng', 'text', ['alpha'], { ...EVERY, path: 'kb/x/' });
+    const sent = sentNames(f);
+    expect(sent).toContain('repo');
+    expect(undeclared(sent, specQueryParams('/lenses/{lens}/search'))).toEqual([]);
+  });
+
+  it('listLensFacts → lens /facts', async () => {
+    const f = mockFetch();
+    await api.listLensFacts('eng', { ...EVERY, path: 'kb/x/', query: 'text', limit: 50, offset: 10, repos: ['alpha'] });
+    const sent = sentNames(f);
+    expect(sent).toEqual(expect.arrayContaining(['repo', 'limit', 'offset']));
+    expect(undeclared(sent, specQueryParams('/lenses/{lens}/facts'))).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@ package kb
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,9 +50,16 @@ func (d declaredParams) has(k string) bool {
 
 // refuseUnknown answers 400 "Invalid parameter" for the first (in name order)
 // query parameter d does not declare, with the FactSet routes' own detail
-// text (factsetRequest), and reports whether the request may proceed.
+// text (factsetRequest), and reports whether the request may proceed. A query
+// string that does not parse (a bad %-escape, a `;` separator) is a 400 too:
+// r.URL.Query() drops such a pair without a word, which would let it through
+// as if it had never been sent.
 func (d declaredParams) refuseUnknown(w http.ResponseWriter, r *http.Request) bool {
-	q := r.URL.Query()
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", "malformed query string: "+err.Error(), r.URL.Path)
+		return false
+	}
 	keys := make([]string, 0, len(q))
 	for k := range q {
 		keys = append(keys, k)

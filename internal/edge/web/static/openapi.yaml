@@ -840,8 +840,8 @@ paths:
         - $ref: "#/components/parameters/ExpiresAfter"
         - $ref: "#/components/parameters/ContextFilter"
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
-        - { name: since_fork,     in: query, description: "true or 1: only what this experiment changed since its fork (a branch that is not an experiment is 400).", schema: { type: boolean } }
-        - { name: sort,           in: query, description: "Only `recent`, the one order this collection has (newest first); any other value is 400.", schema: { type: string, enum: [recent] } }
+        - { name: since_fork,     in: query, description: "`true` or `1`: only what this experiment changed since its fork (a branch that is not an experiment is 400). Any other value leaves the list unnarrowed.", schema: { type: string, enum: ["true", "1"] } }
+        - { name: sort,           in: query, description: "Only `recent`: newest first; with `q`, ranked by relevance, recency breaking ties. Any other value is 400.", schema: { type: string, enum: [recent] } }
       responses:
         "200":
           description: Collection of facts
@@ -1508,7 +1508,7 @@ paths:
         - $ref: "#/components/parameters/ExpiresBefore"
         - $ref: "#/components/parameters/ExpiresAfter"
         - $ref: "#/components/parameters/ContextFilter"
-        - { name: since_fork,     in: query, description: "true or 1: only what this experiment changed since its fork (a branch that is not an experiment is 400).", schema: { type: boolean } }
+        - { name: since_fork,     in: query, description: "`true` or `1`: only what this experiment changed since its fork (a branch that is not an experiment is 400). Any other value leaves the list unnarrowed.", schema: { type: string, enum: ["true", "1"] } }
       responses:
         "200":
           description: Collection of search results

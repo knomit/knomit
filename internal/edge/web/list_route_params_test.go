@@ -91,6 +91,18 @@ func TestListRoutes_UnknownParamIs400_DeclaredParamsAccepted(t *testing.T) {
 			require.Equal(t, "Invalid parameter", title, body)
 			require.Equal(t, `unknown parameter "`+bogus+`"`, detail, body)
 		}
+		// a pair url.Query() would drop silently is refused, not ignored
+		for raw, want := range map[string]string{
+			"%zz=1":     `malformed query string: invalid URL escape "%zz"`,
+			"bogus;x=1": "malformed query string: invalid semicolon separator in query",
+			"q=x&%zz=1": `malformed query string: invalid URL escape "%zz"`,
+		} {
+			code, body := restGet(t, h, rt.url+"?"+raw)
+			require.Equal(t, http.StatusBadRequest, code, "%s ?%s: %s", rt.url, raw, body)
+			title, detail := problem(body)
+			require.Equal(t, "Invalid parameter", title, body)
+			require.Equal(t, want, detail, body)
+		}
 		// a declared one beside an unknown one is still refused
 		code, body := restGet(t, h, rt.url+"?q=x&zzz=1")
 		require.Equal(t, http.StatusBadRequest, code, body)

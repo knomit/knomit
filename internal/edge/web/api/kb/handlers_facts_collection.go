@@ -75,9 +75,10 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 			return
 		}
 		qp := r.URL.Query()
-		// sort names the one order this collection has (newest first): only
-		// "recent" is accepted, so a caller asking for another order is told
-		// rather than silently given this one.
+		// sort names this collection's order: newest first, and with `q`
+		// ranked by relevance, recency breaking ties (recentFactsSearch).
+		// Only "recent" is accepted, so a caller asking for another order is
+		// told rather than silently given this one.
 		if s := qp.Get("sort"); s != "" && s != "recent" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", `sort must be "recent"`, r.URL.Path)
 			return
