@@ -14,7 +14,7 @@
 // same shape; the branch rides only a repo context, because the lens lists
 // read the union and take no branch.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
 import type { RepoInfo, Status } from './api';
@@ -174,6 +174,9 @@ export function useListUrl(state: AppState, dispatch: Dispatch<Action>, repos: R
   const [phase, setPhase] = useState<Phase>(boot.ctx ? 'pending' : 'done');
   const adopted = useRef('');
   const branchAsked = useRef(false);
+  // The phase and context as of the last commit, for async callbacks.
+  const live = useRef({ phase, context: state.context });
+  useLayoutEffect(() => { live.current = { phase, context: state.context }; }, [phase, state.context]);
 
   const abandon = useCallback(() => {
     factsetView.dropPending();
@@ -192,15 +195,25 @@ export function useListUrl(state: AppState, dispatch: Dispatch<Action>, repos: R
     if (phase !== 'resolving' || !boot.ctx) return;
     const ctx = boot.ctx;
     const name = adopted.current;
+    // No context set yet (the initial { repo: '' }) is not "a different
+    // context": it is the boot still on its way there. Wait, never abandon.
+    if (state.context.kind === 'repo' && !state.context.repo) return;
     if (ctx.kind === 'repo') {
       if (state.context.kind !== 'repo' || state.context.repo !== name) { abandon(); return; }
       if (!state.branch) return; // the status bootstrap is still running
       if (ctx.branch && state.branch !== ctx.branch) {
         if (branchAsked.current) return;
         branchAsked.current = true;
+        // Lands only if this restore is still the one in progress: a user who
+        // picked another repo meanwhile has abandoned it, and SET_STATUS has
+        // no repo guard, so a late answer would put this branch on that repo.
+        const stillMine = () => {
+          const c = live.current;
+          return c.phase === 'resolving' && c.context.kind === 'repo' && c.context.repo === name;
+        };
         api.status(name, ctx.branch)
-          .then(s => { if (s.branch === ctx.branch) onStatus(s); else abandon(); })
-          .catch(() => abandon());
+          .then(s => { if (!stillMine()) return; if (s.branch === ctx.branch) onStatus(s); else abandon(); })
+          .catch(() => { if (stillMine()) abandon(); });
         return;
       }
     } else {

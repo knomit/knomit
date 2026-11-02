@@ -546,7 +546,6 @@ export default function App() {
         }
         const next = urlRepo ? urlRepo.name : pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
         if (!next) return;
-        if (urlRepo) listUrl.adopt(next);
         dispatchBoot({ type: 'PHASE', phase: 'opening', target: next });
         // Hand the speculative response to the bootstrap ONLY when the list
         // confirmed the same repo.
@@ -555,6 +554,10 @@ export default function App() {
           if (cancelled) return;
           if (details) speculativeRef.current = { repo: next, details };
         }
+        // Adopted in the SAME tick as SET_CONTEXT, never before the await
+        // above: a 'resolving' phase that sees the context still unset would
+        // read it as "the user went elsewhere" and abandon the URL (#713 H1).
+        if (urlRepo) listUrl.adopt(next);
         dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
@@ -1310,8 +1313,11 @@ export default function App() {
   const enterBranch = useCallback((branch: string) => {
     if (!branch) return;
     dispatchView({ type: 'SET_FACET', facet: 'browse' });
-    api.status(stateRef.current.repo, branch)
-      .then(s => dispatch(statusAction(s)))
+    const repo = stateRef.current.repo;
+    api.status(repo, branch)
+      // A late answer for a repo the user has since left must not land:
+      // SET_STATUS has no repo guard, so it would put this branch on the other.
+      .then(s => { if (stateRef.current.repo === repo) dispatch(statusAction(s)); })
       .catch(() => { /* the status poll re-reads; a failed switch leaves the old branch shown */ });
   }, [dispatchView]);
 

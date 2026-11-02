@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { factsetView } from './factsetOptions';
@@ -38,7 +38,7 @@ vi.mock('./api', async (importOriginal) => {
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
-      lensSearch: vi.fn(), listLensFacts: vi.fn(), lensBrowse: vi.fn(),
+      lensSearch: vi.fn(), listLensFacts: vi.fn(), lensBrowse: vi.fn(), listExperiments: vi.fn(),
     },
   };
 });
@@ -79,7 +79,30 @@ async function primeApi() {
   api.activity.mockResolvedValue({ last_commit: '', total: 0, changes_7d: 0, changes_30d: 0, changes_90d: 0 });
   api.completions.mockResolvedValue({});
   api.listBranchNames.mockResolvedValue(['machine/test']);
+  api.listExperiments.mockResolvedValue({ experiments: [{ name: 'try', branch: 'exp/try', parent: 'machine/test', fork_commit: 'f0rk', writable: true }] });
   return api;
+}
+
+// Holds every call of `fn` open until release(); returns the release.
+function gate(fn: ReturnType<typeof vi.fn>, value: (...a: unknown[]) => unknown) {
+  const held: (() => void)[] = [];
+  fn.mockImplementation((...a: unknown[]) => new Promise(res => { held.push(() => res(value(...a))); }));
+  return async () => { await act(async () => { held.splice(0).forEach(r => r()); }); };
+}
+const flush = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
+
+// Phase 1 of a reload test: a bare URL, a typed search, the FactSet opened.
+// Returns its first call; the URL now carries the list and factset=1.
+async function openFactSetAt(ctxKey: 'ctx_repo' | 'ctx_lens', ctxVal: string) {
+  render(<App />);
+  await waitFor(() => expect(query().get(ctxKey)).toBe(ctxVal));
+  await typeSearch('goroutine');
+  await waitFor(() => expect(query().get('l_q')).toBe('goroutine'));
+  fireEvent.click(await screen.findByTestId('library-factset'));
+  const before = firstCall();
+  expect(before).toContain('q=goroutine');
+  cleanup();
+  return before;
 }
 
 const remember = (ctx: object) => localStorage.setItem('knomit.context', JSON.stringify(ctx));
@@ -226,5 +249,75 @@ describe('the list search in the URL', () => {
     await waitFor(() => expect(firstCall()).not.toBeNull());
     expect(firstCall()).toBe(before);
     expect(api.listLenses).toHaveBeenCalled();
+  });
+
+  // #713 review H1: the commonest reload, the same tab, where the URL repo IS
+  // the remembered one, so the boot awaits the speculative getRepo before
+  // SET_CONTEXT. Held past the repo list, that await used to leave a
+  // 'resolving' phase looking at an unset context, which abandoned the URL.
+  //
+  // Sabotage: adopt before the await (the old order) and drop the wait on an
+  // unset context: l_q and factset=1 are wiped.
+  it('same-tab repo reload, getRepo slower than the list: the list and the FactSet come back', async () => {
+    const api = await primeApi();
+    remember({ kind: 'repo', repo: 'alpha' });
+    const before = await openFactSetAt('ctx_repo', 'u-a');
+
+    api.repos.mockClear();
+    const release = gate(api.getRepo, (name) => ({ name, read_branch: 'machine/test', branch: EMBEDDED }));
+    render(<App />);
+    await waitFor(() => expect(api.repos).toHaveBeenCalled());
+    await flush(); // the list has resolved; getRepo has not
+    expect(query().get('l_q')).toBe('goroutine');
+    expect(query().get('factset')).toBe('1');
+    await release();
+
+    await waitFor(() => expect(firstCall()).not.toBeNull());
+    expect(firstCall()).toBe(before);
+    expect(api.search.mock.calls.some(c => c[0] === 'alpha' && c[2] === 'goroutine')).toBe(true);
+    expect(query().get('l_q')).toBe('goroutine');
+  });
+
+  // The lens boot has no await between adopt and SET_CONTEXT, but its doc
+  // arrives late (getLens), and 'resolving' must wait for it, not give up.
+  it('same-tab lens reload, getLens slower than the list: the list and the FactSet come back', async () => {
+    const api = await primeApi();
+    remember({ kind: 'lens', name: 'eng' });
+    const before = await openFactSetAt('ctx_lens', 'L1');
+
+    const release = gate(api.getLens, () => LENS);
+    render(<App />);
+    await waitFor(() => expect(api.getLens).toHaveBeenCalled());
+    await flush();
+    expect(query().get('l_q')).toBe('goroutine');
+    expect(query().get('factset')).toBe('1');
+    await release();
+
+    await waitFor(() => expect(firstCall()).not.toBeNull());
+    expect(firstCall()).toBe(before);
+  });
+
+  // #713 review L2, the enterBranch half: a late branch status must not land
+  // on a repo the user switched to meanwhile (SET_STATUS has no repo guard).
+  //
+  // Sabotage: drop the repo check in enterBranch's .then: beta shows exp/try.
+  it('enterBranch: a late status for the repo the user left does not land on the new one', async () => {
+    const api = await primeApi();
+    remember({ kind: 'repo', repo: 'alpha' });
+    render(<App />);
+    await waitFor(() => expect(query().get('ctx_branch')).toBe('machine/test'));
+    const release = gate(api.status, (_r, branch) => (branch === 'exp/try' ? EXP_STATUS : EMBEDDED));
+
+    fireEvent.click(await screen.findByTestId('toknomitr-branch'));
+    fireEvent.click(await screen.findByTestId('toknomitr-branch-option-try'));
+    await waitFor(() => expect(api.status).toHaveBeenCalledWith('alpha', 'exp/try'));
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    await act(async () => { fireEvent.click(screen.getByTestId('rail-repo-beta')); });
+    await waitFor(() => expect(query().get('ctx_repo')).toBe('u-b'));
+    await release();
+    await flush();
+
+    expect(query().get('ctx_repo')).toBe('u-b');
+    expect(query().get('ctx_branch')).toBe('machine/test');
   });
 });
