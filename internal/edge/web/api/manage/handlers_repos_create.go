@@ -97,7 +97,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator, admin fu
 			return
 		}
 		// Local-origin policy is enforced at the clone boundary
-		// (Manager.ResolveAuth, invoked by the clone-mode Create below).
+		// (Manager.resolveAuthConfig, invoked by the clone-mode Create below).
 		spec := repos.CreateSpec{
 			Name:           req.Name,
 			Mode:           req.Mode,

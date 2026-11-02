@@ -128,7 +128,7 @@ func TestFleetReserved_RestoreRefused(t *testing.T) {
 	// fleet repository from an older build ends up archived.
 	info, err := m.archive("fleet", control.ArchiveReason{Source: control.ArchiveBySystem, Reason: "test"})
 	require.NoError(t, err)
-	_, err = m.Restore(info.ID, "")
+	_, err = m.RestoreWith(info.ID, "", nil)
 	require.ErrorIs(t, err, ErrFleetOntologyReserved)
 	require.Nil(t, m.Get("fleet"), "not mounted")
 	got, err := m.GetArchived(info.ID)
@@ -525,7 +525,7 @@ func TestFleetReserved_RefusedRestoreOnTheMasterWritesNothing(t *testing.T) {
 	require.Equal(t, stale, before, "fixture: the archived store holds the stale ontology")
 	require.True(t, master, "reached: a restore would run on this fleet's master")
 
-	_, err = m.Restore(info.ID, "")
+	_, err = m.RestoreWith(info.ID, "", nil)
 	require.ErrorIs(t, err, ErrFleetOntologyReserved)
 	after, _ := archived()
 	require.Equal(t, before, after, "the archived store's ontology is byte for byte what it was")

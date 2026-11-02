@@ -104,7 +104,7 @@ func resolveLinkedAuth(secrets *control.Secrets, secretID, url, knownHosts strin
 // only caller of authConfigFromSpec (TestAuthConfigFromSpecHasOneCaller).
 func (m *Manager) resolveSpecAuth(o *OriginSpec) (string, transport.AuthMethod, error) {
 	if o.SecretID == "" {
-		return m.ResolveAuth(authConfigFromSpec(o), o.URL)
+		return m.resolveAuthConfig(authConfigFromSpec(o), o.URL)
 	}
 	if o.AuthMethod == "cert" {
 		return "", nil, ErrSecretOnPeer
@@ -113,7 +113,7 @@ func (m *Manager) resolveSpecAuth(o *OriginSpec) (string, transport.AuthMethod, 
 	if err != nil {
 		return "", nil, err
 	}
-	return m.ResolveAuth(cfg, o.URL)
+	return m.resolveAuthConfig(cfg, o.URL)
 }
 
 // ResolveSpecAuth is resolveSpecAuth for the REST edge (origin sessions).

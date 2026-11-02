@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 )
 
@@ -85,4 +86,31 @@ func TestCarry_AttachToAnotherHostIsRefused(t *testing.T) {
 	require.Error(t, err)
 	requireLinked(t, f, ri, id)
 	require.Equal(t, f.url, injected(t, ri).URL)
+}
+
+// An attach whose spec was built before a concurrent link (an operator's
+// PUT /origin read the unlinked origin, then an admin linked a secret) is
+// refused in the write's own transaction: the link stands, and so does the
+// git remote and memory.
+func TestCarry_AttachRacingALinkIsRefused(t *testing.T) {
+	f := newSecretsFixture(t)
+	ri := f.pastedRepo(t)
+	id := f.tokenSecret(t, "gh-pat", linkedToken)
+	beforeAttachOriginWrite = func() {
+		beforeAttachOriginWrite = nil
+		require.NoError(t, f.m.Origins().SetCredential(ri.UID(), f.url, "token", "", id))
+	}
+	t.Cleanup(func() { beforeAttachOriginWrite = nil })
+	_, err := f.m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: f.url, Branch: "main", AuthMethod: "token", AuthToken: linkedToken}))
+	require.ErrorIs(t, err, control.ErrOriginLinked)
+	o, err := f.m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, id, o.SecretID, "the concurrent link stands")
+
+	// With ReplaceLink (an admin-gated caller) the same attach unlinks.
+	_, err = f.m.Send(context.Background(), ri, AttachOrigin(OriginSpec{URL: f.url, Branch: "main", AuthMethod: "token", AuthToken: linkedToken, ReplaceLink: true}))
+	require.NoError(t, err)
+	o, err = f.m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Empty(t, o.SecretID)
 }

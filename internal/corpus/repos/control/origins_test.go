@@ -290,7 +290,7 @@ func TestOrigins_ReplaceAndRestore(t *testing.T) {
 
 	// No previous row: Replace reports nil and Restore deletes.
 	written := Origin{URL: "https://example.test/new.git", Branch: "main", AuthMethod: "token", AuthToken: "w"}
-	prev, err := o.Replace("u1", written)
+	prev, err := o.Replace("u1", written, true)
 	require.NoError(t, err)
 	require.Nil(t, prev)
 	require.NoError(t, o.Restore("u1", written, prev))
@@ -300,7 +300,7 @@ func TestOrigins_ReplaceAndRestore(t *testing.T) {
 
 	old := Origin{URL: "https://example.test/old.git", Branch: "main", AuthMethod: "token", AuthToken: "o", Mode: OriginModeSubscribe}
 	require.NoError(t, o.Set("u1", old))
-	prev, err = o.Replace("u1", written)
+	prev, err = o.Replace("u1", written, true)
 	require.NoError(t, err)
 	require.Equal(t, old, *prev)
 
@@ -312,7 +312,7 @@ func TestOrigins_ReplaceAndRestore(t *testing.T) {
 
 	// A credential changed after the write was vetted against the WRITTEN
 	// URL: across URLs it is never carried to the previous one.
-	_, err = o.Replace("u1", written)
+	_, err = o.Replace("u1", written, true)
 	require.NoError(t, err)
 	require.NoError(t, o.SetCredential("u1", written.URL, "basic", "u:p", ""))
 	require.NoError(t, o.Restore("u1", written, prev))
@@ -322,7 +322,7 @@ func TestOrigins_ReplaceAndRestore(t *testing.T) {
 
 	// Same URL (a swap that keeps the origin): the newer credential is kept.
 	sameURL := Origin{URL: old.URL, Branch: "main", AuthMethod: "token", AuthToken: "w", Mode: OriginModeSubscribe}
-	prev, err = o.Replace("u1", sameURL)
+	prev, err = o.Replace("u1", sameURL, true)
 	require.NoError(t, err)
 	require.NoError(t, o.SetCredential("u1", old.URL, "basic", "u:p", ""))
 	require.NoError(t, o.Restore("u1", sameURL, prev))
@@ -351,7 +351,7 @@ func TestOrigins_LinkRefusesAHostNotOnTheList(t *testing.T) {
 	require.NoError(t, gerr)
 	require.Empty(t, got.SecretID)
 
-	prev, err := o.Replace("u1", Origin{URL: "https://gitlab.com/a/b.git", Branch: "main", AuthMethod: "token", SecretID: meta.ID})
+	prev, err := o.Replace("u1", Origin{URL: "https://gitlab.com/a/b.git", Branch: "main", AuthMethod: "token", SecretID: meta.ID}, false)
 	require.ErrorIs(t, err, ErrSecretHostNotAllowed)
 	require.Nil(t, prev)
 }
@@ -390,4 +390,29 @@ func TestOrigins_LinkAndHostRemovalNeverStrand(t *testing.T) {
 			require.True(t, HostAllowed(got.Hosts, "gitlab.com"), "a linked repo's host was removed: %v", got.Hosts)
 		}
 	}
+}
+
+// An attach whose spec has no link over a linked row is refused in the same
+// transaction, unless the caller passed replaceLink.
+func TestOrigins_SetAttachedRefusesAnUnseenUnlink(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	id := newLinkableSecret(t, s, "pat")
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", SecretID: id}))
+
+	plain := Origin{URL: "https://example.test/kb.git", Branch: "dev", AuthMethod: "token", AuthToken: "x"}
+	require.ErrorIs(t, o.SetAttached("u1", plain, false), ErrOriginLinked)
+	_, err := o.Replace("u1", plain, false)
+	require.ErrorIs(t, err, ErrOriginLinked)
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, id, got.SecretID, "nothing written")
+	require.Equal(t, "main", got.Branch)
+
+	linked := Origin{URL: "https://example.test/kb.git", Branch: "dev", AuthMethod: "token", SecretID: id}
+	require.NoError(t, o.SetAttached("u1", linked, false), "a spec that carries the link is fine")
+	require.NoError(t, o.SetAttached("u1", plain, true), "replaceLink unlinks")
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.Empty(t, got.SecretID)
 }

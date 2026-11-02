@@ -15,7 +15,6 @@ import (
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
@@ -26,7 +25,6 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
-	"knomit/internal/foundation/config"
 )
 
 // createSessionRequest is the expected JSON body for POST /origin/session.
@@ -257,19 +255,9 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("origin refused: %v", err)})
 			return
 		}
-		// A stored secret is resolved like every other git operation's.
-		var gitURL string
-		var auth transport.AuthMethod
-		if sess.Auth.SecretID != "" {
-			gitURL, auth, err = rm.ResolveSpecAuth(decided)
-		} else {
-			gitURL, auth, err = rm.ResolveAuth(config.RemoteAuthConfig{
-				AuthMethod: decided.AuthMethod,
-				Token:      sess.Auth.Token,
-				User:       sess.Auth.User,
-				Password:   sess.Auth.Password,
-			}, sess.URL)
-		}
+		// One resolution path, as every spec-carried git operation's: the
+		// session's stored secret or its pasted credential.
+		gitURL, auth, err := rm.ResolveSpecAuth(decided)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -952,10 +940,12 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 		ri := repos.RepoFromContext(r.Context())
 		b := hal.URLBuilder{Base: httpx.APIBase}
 
+		replaceLink := false
 		if authCfg.SecretID != "" || repoLinked(rm, ri) {
 			if !httpx.Admits(admin, w, r) {
 				return
 			}
+			replaceLink = true
 		}
 
 		// Exclusive with indexing, checked before the session's clone is
@@ -973,6 +963,10 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 			upstreamMain = testResult.DefaultBranch
 		}
 		origin := sessionOriginSpec(remoteURL, upstreamMain, authCfg)
+		// Past the admin gate this commit may replace a linked origin; any
+		// other commit that finds the origin linked by then is refused
+		// (control.ErrOriginLinked) in the write's own transaction.
+		origin.ReplaceLink = replaceLink
 
 		var e repos.MachineEvent
 		attach := true // false: the shared-history commit has no branch to record

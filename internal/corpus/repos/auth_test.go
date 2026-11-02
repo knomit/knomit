@@ -60,7 +60,7 @@ func writeTestKey(t *testing.T, path string) {
 	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(block), 0600))
 }
 
-// TestManager_ResolveAuth_SSHUsesManagerKeyPath verifies that ResolveAuth uses
+// TestManager_ResolveAuth_SSHUsesManagerKeyPath verifies that resolveAuthConfig uses
 // the manager's own key path for SSH, so callers never need to supply it.
 func TestManager_ResolveAuth_SSHUsesManagerKeyPath(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
@@ -72,7 +72,7 @@ func TestManager_ResolveAuth_SSHUsesManagerKeyPath(t *testing.T) {
 		KeyPath: keyPath,
 	})
 
-	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
+	_, auth, err := m.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
@@ -89,7 +89,7 @@ func TestManager_ResolveAuth_SSHAutoDetectedFromURL(t *testing.T) {
 		KeyPath: keyPath,
 	})
 
-	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{}, "git@github.com:user/repo.git")
+	_, auth, err := m.resolveAuthConfig(config.RemoteAuthConfig{}, "git@github.com:user/repo.git")
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
@@ -103,7 +103,7 @@ func TestManager_ResolveAuth_SSHNoKeyFails(t *testing.T) {
 		KeyPath: "",
 	})
 
-	_, _, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
+	_, _, err := m.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "ssh"}, "git@github.com:user/repo.git")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key path")
 }
@@ -116,7 +116,7 @@ func TestManager_ResolveAuth_TokenNoKey(t *testing.T) {
 		KeyPath: "",
 	})
 
-	_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_abc"}, "https://github.com/user/repo.git")
+	_, auth, err := m.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "token", Token: "ghp_abc"}, "https://github.com/user/repo.git")
 	require.NoError(t, err)
 	require.NotNil(t, auth)
 }
@@ -124,7 +124,7 @@ func TestManager_ResolveAuth_TokenNoKey(t *testing.T) {
 // TestManager_ResolveAuth_NoneIsAnonymous verifies the explicit "none" auth
 // method resolves to nil (anonymous) regardless of URL — even an SSH-style URL
 // must NOT auto-promote to SSH when the user explicitly chose none. The local
-// URLs require a permissive LocalOriginRoot, since ResolveAuth is also the gate
+// URLs require a permissive LocalOriginRoot, since resolveAuthConfig is also the gate
 // that rejects local origins outside the configured root.
 func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
@@ -143,29 +143,29 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 		fileuri.New(hostAbs(t, "/srv/kb")),
 		hostAbs(t, "/srv/kb"),
 	} {
-		_, auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, url)
+		_, auth, err := m.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "none"}, url)
 		require.NoError(t, err, url)
 		require.Nil(t, auth, url)
 	}
 }
 
-// TestManager_ResolveAuth_GatesLocalOrigin verifies ResolveAuth is the clone
+// TestManager_ResolveAuth_GatesLocalOrigin verifies resolveAuthConfig is the clone
 // boundary that enforces the local-origin policy: a local path outside the
 // configured root (or with no root set) is rejected before any auth/clone,
 // while network origins are never gated.
 func TestManager_ResolveAuth_GatesLocalOrigin(t *testing.T) {
 	// No root configured: local origins are disabled, network origins pass.
 	off := New(context.Background(), Deps{Cfg: config.Config{}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
-	_, _, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/srv/kb"))
+	_, _, err := off.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/srv/kb"))
 	require.Error(t, err)
-	_, _, err = off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
+	_, _, err = off.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
 	require.NoError(t, err)
 
 	// Root configured: in-root local origin passes, out-of-root is rejected.
 	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")}, AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test"})
-	_, _, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, filepath.Join(hostAbs(t, "/srv/kb"), "work"))
+	_, _, err = on.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "none"}, filepath.Join(hostAbs(t, "/srv/kb"), "work"))
 	require.NoError(t, err)
-	_, _, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/etc/passwd"))
+	_, _, err = on.resolveAuthConfig(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/etc/passwd"))
 	require.Error(t, err)
 }
 

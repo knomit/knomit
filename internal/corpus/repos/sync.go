@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"knomit/internal/corpus/repos/control"
 	"sync"
 	"time"
@@ -169,12 +170,24 @@ func remoteAuthConfig(remote *remotesync.Remote, fallbackAuth config.RemoteAuthC
 	if remote.AuthMethod == "cert" {
 		return config.RemoteAuthConfig{}, ErrSecretOnPeer
 	}
+	// The host is checked against the stored URL, but go-git dials the git
+	// remote in .git/config: the secret is resolved only while the two are
+	// the same URL, so it is never sent to a host its list was not checked
+	// against.
+	if remote.GitURL != "" && remote.GitURL != remote.URL {
+		return config.RemoteAuthConfig{}, fmt.Errorf("%w: the git remote dials %s but the stored origin is %s: re-attach the origin (PUT /repos/{repo}/origin)",
+			errGitRemoteDiffers, credentialFree(remote.GitURL), credentialFree(remote.URL))
+	}
 	var s *control.Secrets
 	if secrets != nil {
 		s = secrets()
 	}
 	return resolveLinkedAuth(s, remote.SecretID, remote.URL, fallbackAuth.KnownHosts)
 }
+
+// errGitRemoteDiffers: a linked origin whose git remote URL is not its
+// stored URL; its secret is not resolved.
+var errGitRemoteDiffers = errors.New("the stored secret is not used")
 
 // remoteAuthFn is the Manager's remoteAuthFn: [remote] config, the instance
 // key and the secrets store.

@@ -312,6 +312,7 @@ func TestLoop_HostOffTheListNeverSendsTheSecret(t *testing.T) {
 	// Point memory at "localhost" (same server, another host name).
 	moved := strings.Replace(f.url, "127.0.0.1", "localhost", 1)
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.NoError(t, ConfigureGitRemote(svc, moved, "token", "main", ri.AgentBranch()))
 		o := svc.Remote().InjectedOrigin()
 		o.URL = moved
 		svc.Remote().SetOrigin(o)
@@ -336,8 +337,11 @@ func TestResolveOrigin_PeerWithSecretRefused(t *testing.T) {
 	require.ErrorIs(t, err, ErrSecretOnPeer)
 }
 
-// authConfigFromSpec is called only inside resolveSpecAuth: every
-// spec-carried operation resolves a linked secret.
+// authConfigFromSpec and Manager.resolveAuthConfig are called only inside
+// resolveSpecAuth: every spec-carried operation (the origin-session test
+// included, through the exported ResolveSpecAuth) resolves a linked secret
+// on one path. resolveAuthConfig is unexported, so no other package can
+// bypass it.
 func TestAuthConfigFromSpecHasOneCaller(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
@@ -355,13 +359,19 @@ func TestAuthConfigFromSpecHasOneCaller(t *testing.T) {
 						if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "authConfigFromSpec" {
 							callers = append(callers, fd.Name.Name)
 						}
+						if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "resolveAuthConfig" {
+							callers = append(callers, fd.Name.Name)
+						}
 					}
 					return true
 				})
 			}
 		}
 	}
-	require.Equal(t, []string{"resolveSpecAuth"}, callers)
+	for _, c := range callers {
+		require.Equal(t, "resolveSpecAuth", c)
+	}
+	require.Len(t, callers, 3, "authConfigFromSpec once, resolveAuthConfig twice")
 }
 
 func derefStr(p *string) string {
@@ -369,4 +379,25 @@ func derefStr(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// go-git dials the git remote in .git/config, not the stored URL. A linked
+// repo whose git remote points elsewhere (another host here) is a sync error
+// and the secret is never sent.
+func TestLoop_GitRemoteElsewhereNeverSendsTheSecret(t *testing.T) {
+	f := newSecretsFixture(t)
+	ri, _ := f.linkedRepo(t)
+	moved := strings.Replace(f.url, "127.0.0.1", "localhost", 1)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.NoError(t, ConfigureGitRemote(svc, moved, "token", "main", ri.AgentBranch()))
+	}))
+	before := accepted(f.srv)
+	require.NoError(t, ri.OriginRoundForTest(context.Background()))
+	r := injected(t, ri)
+	require.Equal(t, "error", derefStr(r.LastStatus))
+	require.Contains(t, derefStr(r.LastError), "the git remote dials")
+	require.Equal(t, before, accepted(f.srv))
+	for _, p := range refused(f.srv) {
+		require.NotEqual(t, linkedToken, p)
+	}
 }

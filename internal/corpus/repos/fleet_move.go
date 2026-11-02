@@ -311,7 +311,7 @@ func (m *Manager) restoreFleetOrigin(ctx context.Context, ri *RepoInstance, prev
 		// A peer never carries a secret: cert is classified again.
 		method, token, secretID = "", "", ""
 	}
-	_, err := m.Send(ctx, ri, AttachOrigin(OriginSpec{URL: prev.URL, Branch: prev.Branch, AuthMethod: method, AuthToken: token, SecretID: secretID}))
+	_, err := m.Send(ctx, ri, AttachOrigin(OriginSpec{URL: prev.URL, Branch: prev.Branch, AuthMethod: method, AuthToken: token, SecretID: secretID, ReplaceLink: true}))
 	return err
 }
 
@@ -595,6 +595,9 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 	if err := m.fleetSecretFits(&o); err != nil {
 		return "", err
 	}
+	// The fleet routes are the local listener's only (stricter than the
+	// admin gate): a follow may replace a stored-secret link.
+	o.ReplaceLink = true
 	if forgeCopy && sameFleetURL(prev.URL, o.URL) {
 		return m.changeFleetCredential(ctx, ri, o, prev)
 	}

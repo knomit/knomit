@@ -436,7 +436,7 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverTheFleetTransport(t *testing
 	if err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	riA, err = aMgr.Restore(archived.ID, "")
+	riA, err = aMgr.RestoreWith(archived.ID, "", nil)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}

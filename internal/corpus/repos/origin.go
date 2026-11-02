@@ -151,7 +151,7 @@ func resolveSymlinks(p string) string {
 // this manager's local-origin policy (config.LocalOriginRoot). Network origins
 // always pass; local-filesystem origins are gated. It is the single enforcement
 // point the web layer calls before persisting an origin whose clone is deferred
-// to the sync loop; the immediate-clone paths are gated inside ResolveAuth.
+// to the sync loop; the immediate-clone paths are gated inside resolveAuthConfig.
 func (m *Manager) ValidateLocalOrigin(originURL string) error {
 	return validateLocalOrigin(originURL, m.deps.Cfg.LocalOriginRoot)
 }

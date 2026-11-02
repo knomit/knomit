@@ -131,6 +131,13 @@ type OriginSpec struct {
 	// AuthMethod is the secret's transport and AuthToken is empty. Every
 	// spec-carried git operation resolves it through resolveSpecAuth.
 	SecretID string
+	// ReplaceLink lets an attach or swap whose spec has no SecretID replace
+	// an origin that is linked to a stored secret (which unlinks it). Without
+	// it that write is refused (control.ErrOriginLinked), checked in the
+	// write's own transaction, so a spec built before a concurrent link never
+	// drops it. Set it only after the admin gate (or on the local-only fleet
+	// routes).
+	ReplaceLink bool
 
 	decided bool // ResolveOrigin ran: AuthMethod is the decided one
 }
@@ -1106,7 +1113,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	svc.SetAcceptList(m.VerifyAccepts().For(uid))
 	svc.SetOwnKeys(m.ownFleetKeys)
 	// No Crypt is wired here: the clone's credential is already resolved above
-	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
+	// (resolveAuthConfig) and its durable copy belongs to control.db's Origins, which
 	// holds the only Crypt. This store never stores a credential of its own.
 
 	// NO seed files. This used to pass fact.DefaultOntology() so that cloning an
@@ -1531,7 +1538,7 @@ func initializeProbeErr(probe ProbeResult) error {
 	return nil
 }
 
-// authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.
+// authConfigFromSpec maps an OriginSpec to the config shape resolveAuthConfig expects.
 // For basic auth the token field carries "user:password" (the same convention
 // remoteAuthFromRecord uses when reading a persisted basic remote), so it is
 // split into User/Password here; otherwise the immediate clone would attempt
@@ -1853,13 +1860,6 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 	return out, nil
 }
 
-// Restore re-activates an archived repo, optionally under newName to resolve a
-// name collision, keeping the credential stored with its origin. The database
-// file was never moved, so this is a state flip plus an open.
-func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
-	return m.RestoreWith(uid, newName, nil)
-}
-
 // RestoreCredential is the credential a restore gives an archived repo's
 // origin: exactly one of a stored secret (SecretID), a pasted credential
 // (AuthMethod plus AuthToken, basic as user:password) or None.
@@ -1925,8 +1925,11 @@ func (m *Manager) restoreCredentialFor(o *control.Origin, c RestoreCredential) (
 	}
 }
 
-// RestoreWith is Restore that, with a non-nil cred, first stores that
-// credential for the archived repo's origin (restoreCredentialFor: exactly
+// RestoreWith re-activates an archived repo, optionally under newName to
+// resolve a name collision. The database file was never moved, so this is a
+// state flip plus an open. With a nil cred the credential stored with the
+// origin is kept (tests only: the API always passes one); with a non-nil cred it first
+// stores that credential for the archived repo's origin (restoreCredentialFor: exactly
 // one choice; a stored secret must fit the origin, a pasted credential its
 // scheme), so the repo starts syncing with it. The caller gates a stored
 // secret (admin) and a pasted credential (operator). A failed restore puts

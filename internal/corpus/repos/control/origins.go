@@ -139,6 +139,47 @@ func (o *Origins) Set(uid string, org Origin) error {
 	return immediateTx(o.db, "origins set", func(tx dbTx) error { return o.setTx(tx, uid, org) })
 }
 
+// ErrOriginLinked refuses a write that would drop a stored-secret link the
+// caller did not see: the stored origin is linked, the new origin is not, and
+// the caller did not pass replaceLink (it did not go through a gate that may
+// unlink).
+var ErrOriginLinked = errors.New("this repository's origin is linked to a stored secret, and this change would unlink it: unlink it first with PUT /repos/{repo}/origin/credential (\"secret_id\": null), then retry")
+
+// SetAttached is Set for an attach: in the SAME transaction it refuses
+// (ErrOriginLinked, nothing written) when the stored origin is linked to a
+// stored secret and org is not, unless replaceLink. A spec built from a read
+// taken before a concurrent link therefore never drops that link.
+func (o *Origins) SetAttached(uid string, org Origin, replaceLink bool) error {
+	if uid == "" {
+		return fmt.Errorf("origins set: uid required")
+	}
+	if org.Branch == "" {
+		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
+	}
+	return immediateTx(o.db, "origins set", func(tx dbTx) error {
+		if err := refuseUnseenUnlink(tx, uid, org, replaceLink); err != nil {
+			return err
+		}
+		return o.setTx(tx, uid, org)
+	})
+}
+
+// refuseUnseenUnlink is SetAttached's and Replace's guard inside tx.
+func refuseUnseenUnlink(tx dbTx, uid string, org Origin, replaceLink bool) error {
+	if replaceLink || org.SecretID != "" {
+		return nil
+	}
+	var linked string
+	err := tx.QueryRow(`SELECT secret_id FROM repo_origin_secrets WHERE repo_uid = ?`, uid).Scan(&linked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("origins set: read secret link: %w", err)
+	}
+	return ErrOriginLinked
+}
+
 // setTx is Set's writes inside tx.
 func (o *Origins) setTx(tx dbTx, uid string, org Origin) error {
 	if org.Branch == "" {
@@ -178,11 +219,13 @@ func (o *Origins) setTx(tx dbTx, uid string, org Origin) error {
 	return setLink(tx, uid, org.SecretID)
 }
 
-// Replace is Set that also returns the row it replaced (nil when there was
-// none), read in the SAME transaction as the write. A caller that may have to
-// undo its write (applySwap) restores exactly what it replaced, not a copy it
-// read earlier that a credential change may have overtaken.
-func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
+// Replace is SetAttached that also returns the row it replaced (nil when
+// there was none), read in the SAME transaction as the write. A caller that
+// may have to undo its write (applySwap) restores exactly what it replaced,
+// not a copy it read earlier that a credential change may have overtaken.
+// Like SetAttached it refuses to drop an unseen secret link (ErrOriginLinked)
+// unless replaceLink.
+func (o *Origins) Replace(uid string, org Origin, replaceLink bool) (*Origin, error) {
 	if uid == "" {
 		return nil, fmt.Errorf("origins set: uid required")
 	}
@@ -191,6 +234,9 @@ func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
 		var gerr error
 		if prev, gerr = o.get(tx, uid); gerr != nil {
 			return gerr
+		}
+		if err := refuseUnseenUnlink(tx, uid, org, replaceLink); err != nil {
+			return err
 		}
 		return o.setTx(tx, uid, org)
 	})

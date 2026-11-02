@@ -34,15 +34,19 @@ func (t immediateConn) QueryRow(q string, args ...any) *sql.Row {
 }
 
 // immediateTx runs fn inside BEGIN IMMEDIATE and commits when fn returns nil
-// (rolls back otherwise). IMMEDIATE takes control.db's write lock before the
-// first read, so a read-check-write (a secret's host list against its linked
-// repos, a link against the secret's host list) cannot interleave with
-// another writer's: the two serialise, and the second one reads what the
-// first committed. Every write that adds a secret link, and every change to
-// a secret's host list, runs in one of these.
+// (rolls back otherwise). Every write that adds a secret link, and every
+// change to a secret's host list, runs in one, with its read-check-write
+// (a secret's host list against its linked repos, a link against the
+// secret's host list) inside the same transaction.
 //
-// fn must use only tx: a call on the *sql.DB inside fn waits for the
-// connection this transaction holds.
+// Within one process the registry's pool is already serialising: control.db
+// is opened with SetMaxOpenConns(1) (OpenRegistryNoSchema), so two
+// transactions never overlap. IMMEDIATE is defence in depth: it takes the
+// write lock before the first read, so the check stays correct if the pool
+// ever allows more connections or another process writes control.db.
+//
+// fn must use only tx: a call on the *sql.DB inside fn waits for the one
+// connection this transaction holds, and deadlocks.
 func immediateTx(db *sql.DB, op string, fn func(tx dbTx) error) error {
 	ctx := context.Background()
 	c, err := db.Conn(ctx)

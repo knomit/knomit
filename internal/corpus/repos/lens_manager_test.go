@@ -388,7 +388,7 @@ func TestRestore_RejectsNameTakenByLens(t *testing.T) {
 	require.NoError(t, err)
 
 	// Restoring "work" back to active must refuse the now-taken name.
-	_, err = m.Restore(info.ID, "")
+	_, err = m.RestoreWith(info.ID, "", nil)
 	require.ErrorIs(t, err, ErrRepoNameConflictsLens)
 
 	// The archive must remain intact so the repo stays recoverable.

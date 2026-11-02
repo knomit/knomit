@@ -200,7 +200,7 @@ func TestStart_ArchivedRepoFileIsNotAnOrphan(t *testing.T) {
 			"invites deleting the file a restore needs")
 
 	// And it is still restorable from that file.
-	restored, err := m2.Restore(uid, "")
+	restored, err := m2.RestoreWith(uid, "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, restored)
 	require.Equal(t, []string{"core"}, m2.Names())

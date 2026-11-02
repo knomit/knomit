@@ -502,6 +502,8 @@ func writeAttachRefusal(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
 		errors.Is(err, repos.ErrSecretOnPeer), errors.Is(err, control.ErrSecretNotFound):
 		writeSecretFitError(w, r, err)
+	case errors.Is(err, control.ErrOriginLinked):
+		hal.WriteProblem(w, http.StatusConflict, "Linked to a stored secret", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrManagerStopped):
 		hal.WriteProblem(w, http.StatusServiceUnavailable, "Server stopping", err.Error(), r.URL.Path)
 	case httpx.StoreUnavailable(err):
