@@ -51,7 +51,7 @@ describe('RemoteConnectWizard', () => {
     await waitFor(() => expect(url.value).toBe('https://bravo.tail:8443/git/kb'));
     const select = screen.getByLabelText('Auth method') as HTMLSelectElement;
     expect(select.value).toBe('');
-    expect(Array.from(select.options).map(o => o.value)).toEqual(['', 'none', 'ssh', 'token', 'basic']);
+    expect(Array.from(select.options).map(o => o.value)).toEqual(['', 'none', 'ssh', 'token', 'basic', 'secret']);
   });
 
   it('advances Connect→Review on a successful test and hides the strategy picker for shared history', async () => {

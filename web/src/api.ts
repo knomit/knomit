@@ -1115,10 +1115,15 @@ export async function streamApply(repo: string, sessionId: string, strategy: str
 //
 // cancelIndexing is the way through the indexing refusal: the server cancels
 // the repo's index job first, streaming "cancelling-index" before the swap.
-export async function streamCommit(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void, opts?: { cancelIndexing?: boolean }): Promise<void> {
-  const init: RequestInit = opts?.cancelIndexing
-    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel_indexing: true }) }
-    : { method: 'POST' };
+// gated: the commit links a stored secret, or replaces an origin that is
+// linked to one, which needs the admin gate: the call carries the same-origin
+// proof (the header and a JSON body).
+export async function streamCommit(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void, opts?: { cancelIndexing?: boolean; gated?: boolean }): Promise<void> {
+  const init: RequestInit = opts?.gated
+    ? { method: 'POST', headers: oauthHeaders(true), body: JSON.stringify(opts.cancelIndexing ? { cancel_indexing: true } : {}) }
+    : opts?.cancelIndexing
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel_indexing: true }) }
+      : { method: 'POST' };
   const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, init);
   await readSSEStream(res, onEvent);
 }

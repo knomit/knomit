@@ -798,3 +798,17 @@ describe('stepSummary', () => {
     expect(stepSummary(s({}), 'review')).toBe('');
   });
 });
+
+describe('authFor: stored secret', () => {
+  it('sends secret_id and no pasted credential, whatever was typed before', () => {
+    const s = { ...initialWizardState, url: 'https://github.com/a/b', authMethod: 'secret', secretId: 's1', authToken: 'leftover', authUser: 'u' };
+    expect(authFor(s)).toEqual({ auth_method: '', auth_token: '', secret_id: 's1' });
+  });
+
+  it('SET_SECRET records the choice and forgets the branch check, like a credential change', () => {
+    const s = { ...initialWizardState, initialized: 'yes' as const };
+    const next = wizardReducer(s, { type: 'SET_SECRET', id: 's2' });
+    expect(next.secretId).toBe('s2');
+    expect(next.initialized).toBe('');
+  });
+});
