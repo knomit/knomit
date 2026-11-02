@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -341,4 +342,55 @@ func TestLensFactSet_CursorsDoNotCrossRepoAndLensRoutes(t *testing.T) {
 		code, _, body := getMaterialize(t, e.h, base+"?cursor="+url.QueryEscape(c)+"&unit=1")
 		require.Equal(t, http.StatusOK, code, "each still pages on its own route: %s", body)
 	}
+}
+
+// A one-member lens (ruling Lens 6 / Q-L9) is served on the repository path:
+// the lens route's page is the write repo's own FactSet page, byte for byte
+// but the cursor id; repo= accepts exactly the write repo's name (narrowing
+// nothing), and any other name is the lens list's 422 "Unknown repo".
+//
+// Sabotage: wrap checkRepoNarrowing's UnknownRepoError with %v (the 422 is
+// the generic 400).
+func TestLensFactSet_OneMemberLensIsTheWriteRepoFactSet(t *testing.T) {
+	m := newMatLensManager(t, "w")
+	createLens(t, m, "solo", "w")
+	w := m.Get("w")
+	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a1.md", "A1", "a1 body.")
+	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a2.md", "A2", "a2 body.", "kb/technology/u/a1.md")
+	h := asPrincipal("u1", newTestRouter(m))
+	repoBase := "/repos/w/branches/" + urlBranch(w.AgentBranch()) + "/search/factset"
+	const soloBase = "/lenses/solo/search/factset"
+	var code int
+	var body string
+	require.Eventually(t, func() bool {
+		code, _, body = getMaterialize(t, h, "/lenses/solo/facts?path=kb/technology/u/")
+		return code == http.StatusOK && strings.Contains(body, "a1.md") && strings.Contains(body, "a2.md")
+	}, 10*time.Second, 50*time.Millisecond, "the lens never listed the facts: %d %s", code, body)
+
+	norm := func(raw string) string {
+		var p struct {
+			Cursor *string `json:"cursor"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(raw), &p), raw)
+		require.NotNil(t, p.Cursor, raw)
+		return strings.ReplaceAll(raw, mustCursorID(t, *p.Cursor), "ID")
+	}
+	code, _, repoPage := getMaterialize(t, h, repoBase+"?path=kb/technology/u/&depth=1&limit=2")
+	require.Equal(t, http.StatusOK, code, repoPage)
+	code, _, lensPage := getMaterialize(t, h, soloBase+"?path=kb/technology/u/&depth=1&limit=2")
+	require.Equal(t, http.StatusOK, code, lensPage)
+	require.Equal(t, norm(repoPage), norm(lensPage), "the write repo's FactSet page")
+	// repo=w narrows nothing: the same units and sections (the search echoes it).
+	code, rp, body := getFactSet(t, h, repoBase+"?path=kb/technology/u/&depth=1&limit=2")
+	require.Equal(t, http.StatusOK, code, body)
+	code, np, body := getFactSet(t, h, soloBase+"?path=kb/technology/u/&depth=1&limit=2&repo=w")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, []string{"w"}, np.Search.Repos)
+	require.Equal(t, rp.Units, np.Units)
+	require.Equal(t, rp.Facts, np.Facts)
+	code, _, listBody := getMaterialize(t, h, "/lenses/solo/search?repo=nope")
+	require.Equal(t, http.StatusUnprocessableEntity, code, listBody)
+	code, _, body = getMaterialize(t, h, soloBase+"?repo=nope")
+	require.Equal(t, http.StatusUnprocessableEntity, code, body)
+	require.Equal(t, listBody, strings.ReplaceAll(body, soloBase, "/lenses/solo/search"))
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -237,4 +238,57 @@ func TestOpenAPI_FleetDeclared(t *testing.T) {
 		require.Contains(t, text, "bundle_refused", p)
 		require.Contains(t, text, "unreachable", p)
 	}
+}
+
+// TestOpenAPI_LensFactSetDeclared (F4): every factset route the router serves,
+// repo and lens, is declared for its method; the lens GET takes every
+// parameter the repo GET takes plus the lens list's `repo` narrowing (the same
+// component GET /lenses/{lens}/search uses) and declares its 422; and the
+// lens-only fields the engine adds are in the schemas: `anchors` on
+// FactSetPage, `repo_name` on FactSetNode, and reason `lens_repo` with
+// `repo_name` in not_included.
+func TestOpenAPI_LensFactSetDeclared(t *testing.T) {
+	doc := servedOpenAPI(t)
+	paths := doc["paths"].(map[string]any)
+	r, ok := (&Server{Manager: newTestManagerWithRepos(t)}).NewAPIRouter().(chi.Routes)
+	require.True(t, ok)
+	served := 0
+	require.NoError(t, chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !strings.Contains(route, "/search/factset") {
+			return nil
+		}
+		served++
+		op, ok := paths[route].(map[string]any)
+		require.True(t, ok, "%s must be declared", route)
+		require.Contains(t, op, strings.ToLower(method), "%s %s must be declared", method, route)
+		return nil
+	}))
+	require.Equal(t, 6, served, "three repo factset routes and three lens factset routes")
+
+	params := func(path string) map[string]bool {
+		out := map[string]bool{}
+		for _, p := range paths[path].(map[string]any)["get"].(map[string]any)["parameters"].([]any) {
+			pm := p.(map[string]any)
+			if ref, ok := pm["$ref"].(string); ok {
+				out[ref] = true
+				continue
+			}
+			out[pm["name"].(string)] = true
+		}
+		return out
+	}
+	repoGet, lensGet := params("/repos/{repo}/branches/{branch}/search/factset"), params("/lenses/{lens}/search/factset")
+	for p := range repoGet {
+		require.True(t, lensGet[p], "the lens GET takes the repo GET's %q", p)
+	}
+	require.True(t, lensGet["#/components/parameters/LensRepoNarrow"], "repo= named as the lens list names it")
+	require.True(t, params("/lenses/{lens}/search")["#/components/parameters/LensRepoNarrow"])
+	require.Contains(t, paths["/lenses/{lens}/search/factset"].(map[string]any)["get"].(map[string]any)["responses"], "422")
+
+	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	require.Contains(t, schemas["FactSetPage"].(map[string]any)["properties"], "anchors")
+	require.Contains(t, fmt.Sprint(schemas["FactSetNode"]), "repo_name")
+	ni := fmt.Sprint(schemas["MaterializeNode"].(map[string]any)["properties"].(map[string]any)["not_included"])
+	require.Contains(t, ni, "lens_repo")
+	require.Contains(t, ni, "repo_name")
 }
