@@ -130,14 +130,14 @@ func TestSearchLine_LensNarrowing(t *testing.T) {
 }
 
 // The never-synced predicate does not catch a member that WAS settled and is
-// now rebuilding: Index.Rebuild bumps the rebuild generation before it clears
-// the watermark, so mid-rebuild gamma reads (watermark "", generation set,
-// unsettled). Called from inside the rebuild (its progress callback), the
-// lens FactSet still WAITS for gamma and answers ErrIndexMoved, and
-// neverSynced says false; after the rebuild it answers.
+// now rebuilding: mid-rebuild gamma reads (watermark "", generation set,
+// unsettled), but its settled-once marker (set when its watermark was first
+// set) survives the Rebuild. Called from inside the rebuild (its progress
+// callback), the lens FactSet still WAITS for gamma and answers
+// ErrIndexMoved, and neverSynced says false; after the rebuild it answers.
 //
-// Sabotage (neverSynced on the watermark alone, ignoring the generation):
-// mid-rebuild gamma is treated as empty and the call is served.
+// Sabotage (neverSynced on the watermark alone): mid-rebuild gamma is treated
+// as empty and the call is served.
 func TestLensFactSet_RebuildingMemberIsNotNeverSynced(t *testing.T) {
 	isolateFactSetGlobals(t)
 	lt := newLensTrio(t)

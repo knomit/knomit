@@ -297,24 +297,23 @@ func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetReques
 	return page, c.st, err
 }
 
-// neverSynced reports whether lens member m's index has NEVER reached a
-// settled state on its branch: HistoryQuery.SettledWatermark answers an empty
-// watermark AND an empty rebuild generation. The watermark is set by the
-// first sync to finish and only Index.Rebuild clears it again, and Rebuild
-// bumps the generation BEFORE clearing it, so a member that was settled once
-// and is now rebuilding (empty watermark, generation set) or syncing (the
-// watermark set, a pending marker naming another head) is NOT never-synced:
-// it waits in the sandwich as before. A first sync still in flight (no
-// watermark yet, no generation) is never-synced: it has no settled state to
-// read. Lens members only; a repo FactSet on a never-synced repo keeps the
-// repo path's wait.
+// neverSynced reports whether lens member m's index has NEVER had a settled
+// watermark on its branch: !HistoryQuery.SettledOnce, i.e. neither the
+// index's settled-once marker (meta settled_once:<branch>, written whenever
+// the watermark is set to a commit and kept across a Rebuild) nor a
+// non-empty watermark is present. A first build in flight or failed (an
+// incremental first sync or an initial Index.Rebuild alike), a wiped index
+// and a dropped branch are never-synced; a member settled once and now
+// syncing or rebuilding is not, and waits in the sandwich as before. Lens
+// members only; a repo FactSet on a never-synced repo keeps the repo path's
+// wait.
 func (c *fsCall) neverSynced(m *mount) (bool, error) {
-	w, gen, _, err := m.svc.HistoryQuery().SettledWatermark(c.ctx, m.branch)
+	once, err := m.svc.HistoryQuery().SettledOnce(c.ctx, m.branch)
 	if err != nil {
 		return false, err
 	}
 	c.st.IndexQueries++
-	return w == "" && gen == "", nil
+	return !once, nil
 }
 
 // checkRepoNarrowing validates a repo= narrowing on the REPO path. A

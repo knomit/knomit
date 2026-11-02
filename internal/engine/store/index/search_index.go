@@ -223,7 +223,10 @@ func (si *Index) casLastCommit(ctx context.Context, branch, prev, next string) (
 			return false, err
 		}
 		n, _ := result.RowsAffected()
-		return n > 0, nil
+		if n > 0 {
+			return true, si.markSettledOnce(ctx, branch, next)
+		}
+		return false, nil
 	}
 
 	result, err := db.ExecContext(ctx,
@@ -232,7 +235,10 @@ func (si *Index) casLastCommit(ctx context.Context, branch, prev, next string) (
 		return false, err
 	}
 	n, _ := result.RowsAffected()
-	return n > 0, nil
+	if n > 0 {
+		return true, si.markSettledOnce(ctx, branch, next)
+	}
+	return false, nil
 }
 
 // SyncPendingKey is the meta key of a branch's in-flight sync marker: the
@@ -245,6 +251,27 @@ func SyncPendingKey(branch string) string { return "sync_pending:" + branch }
 // that ran to completion at the same head between two of its reads (the
 // watermark reads the same before and after; review R3-2).
 func RebuildGenKey(branch string) string { return "rebuild_gen:" + branch }
+
+// SettledOnceKey is the meta key that records that a branch's index watermark
+// has been set at least once: written ('1') whenever the watermark is set to a
+// commit (casLastCommit, setLastCommit), and by Index.Rebuild for a branch
+// that already had a watermark before it clears it (a store indexed before
+// the key existed). Nothing but dropping the branch removes it; a branch
+// created from another inherits it with the watermark. Absent means the
+// branch has NEVER had a settled watermark: a first build in flight, a first
+// build that failed, a store whose index was wiped, or no such branch
+// (HistoryQuery.SettledOnce).
+func SettledOnceKey(branch string) string { return "settled_once:" + branch }
+
+// markSettledOnce records SettledOnceKey once a watermark is set to a commit.
+func (si *Index) markSettledOnce(ctx context.Context, branch, hash string) error {
+	if hash == "" {
+		return nil
+	}
+	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`INSERT OR IGNORE INTO meta(key, value) VALUES (?, '1')`, SettledOnceKey(branch))
+	return err
+}
 
 func (si *Index) setSyncPending(ctx context.Context, branch, head string) error {
 	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
@@ -272,11 +299,13 @@ func (si *Index) clearSyncPending(ctx context.Context, branch, head string) erro
 // scoped to the given branch.
 func (si *Index) setLastCommit(ctx context.Context, branch, hash string) error {
 	key := "last_commit:" + branch
-	_, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
 		key, hash,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	return si.markSettledOnce(ctx, branch, hash)
 }
 
 // SyncWatermark returns the last processed commit hash for the given branch,
@@ -579,6 +608,14 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 		`INSERT INTO meta(key, value) VALUES (?, '1')
 		 ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`, RebuildGenKey(branch)); err != nil {
 		return fmt.Errorf("rebuild: bump generation: %w", err)
+	}
+	// A branch that had a watermark before this Rebuild has been settled: keep
+	// that fact across the cleared watermark (a store indexed before
+	// SettledOnceKey existed gets it here, before its watermark is cleared).
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`INSERT OR IGNORE INTO meta(key, value) SELECT ?, '1' FROM meta WHERE key = ? AND value != ''`,
+		SettledOnceKey(branch), "last_commit:"+branch); err != nil {
+		return fmt.Errorf("rebuild: keep settled marker: %w", err)
 	}
 	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
