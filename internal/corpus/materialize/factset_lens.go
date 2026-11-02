@@ -207,9 +207,17 @@ func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetReques
 	// by the path filter's topic is not one), and under since_fork the write
 	// member alone. A member not searched has no roots and needs no anchor, so
 	// an unsettled one (never synced, mid-sync) cannot make this call busy.
+	//
+	// A member whose index has NEVER synced is EMPTY (user ruling,
+	// 2026-11-01): it is dropped from the searched targets before the
+	// fan-out, so no leg reads its unsettled index, the sandwich does not wait
+	// on it and it has no anchor; it stays an empty sub (its name still labels
+	// refs into it). See neverSynced for the predicate. A member that has been
+	// settled once and is mid-sync still waits.
 	reads := b.Reads()
 	mounts := make([]*mount, len(reads)) // by Reads() index; nil: not searched
 	if !req.NoResults {
+		searched := make([]federate.Target, 0, len(plan.Targets))
 		for _, t := range plan.Targets {
 			if req.Search.SinceFork && fact.ID12(t.RT.RI.ID()) != writeID {
 				continue
@@ -218,11 +226,20 @@ func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetReques
 			if err != nil {
 				return FactSetPage{}, c.st, err
 			}
+			empty, err := c.neverSynced(m)
+			if err != nil {
+				return FactSetPage{}, c.st, err
+			}
+			if empty {
+				continue
+			}
 			if err := c.r.checkReady(ctx, m); err != nil {
 				return FactSetPage{}, c.st, err
 			}
 			mounts[t.Mount] = m
+			searched = append(searched, t)
 		}
+		plan.Targets = searched
 	}
 	anchors, per, order, err := c.lensSearchAnchored(mounts, plan, req)
 	c.st.Search = time.Since(searchStart)
@@ -280,6 +297,26 @@ func lensFactSetFirstPage(ctx context.Context, sc CursorScope, req FactSetReques
 	return page, c.st, err
 }
 
+// neverSynced reports whether lens member m's index has NEVER reached a
+// settled state on its branch: HistoryQuery.SettledWatermark answers an empty
+// watermark AND an empty rebuild generation. The watermark is set by the
+// first sync to finish and only Index.Rebuild clears it again, and Rebuild
+// bumps the generation BEFORE clearing it, so a member that was settled once
+// and is now rebuilding (empty watermark, generation set) or syncing (the
+// watermark set, a pending marker naming another head) is NOT never-synced:
+// it waits in the sandwich as before. A first sync still in flight (no
+// watermark yet, no generation) is never-synced: it has no settled state to
+// read. Lens members only; a repo FactSet on a never-synced repo keeps the
+// repo path's wait.
+func (c *fsCall) neverSynced(m *mount) (bool, error) {
+	w, gen, _, err := m.svc.HistoryQuery().SettledWatermark(c.ctx, m.branch)
+	if err != nil {
+		return false, err
+	}
+	c.st.IndexQueries++
+	return w == "" && gen == "", nil
+}
+
 // checkRepoNarrowing validates a repo= narrowing on the REPO path. A
 // one-member lens is still a lens to its caller: its only member is the write
 // repo, and the lens list accepts exactly that name (narrowing nothing) and
@@ -290,7 +327,7 @@ func checkRepoNarrowing(b *repos.Binding, names []string) error {
 		return nil
 	}
 	if !b.FromLens() {
-		return fmt.Errorf("%w: repo narrows a lens factset to some of its repos; this binding is one repository", ErrInvalid)
+		return fmt.Errorf("%w: repo is only accepted on a lens", ErrInvalid)
 	}
 	for _, n := range names {
 		if n != b.Write().Name() {

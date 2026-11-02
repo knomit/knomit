@@ -305,7 +305,7 @@ func SearchLine(s FactSetSearch) string {
 	if s.Path != "" {
 		parts = append(parts, "path "+s.Path)
 	}
-	add("repo", s.Repos)
+	add("in", s.Repos)
 	add("type", s.Types)
 	add("not type", s.ExcludeTypes)
 	add("kind", s.Kinds)
