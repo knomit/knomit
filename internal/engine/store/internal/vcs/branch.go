@@ -331,7 +331,8 @@ func (rh *Repo) DropBranchLocked(ctx context.Context, name string, id int64) err
 	}
 	// 2c. Delete the branch's index watermark, in-flight sync marker and
 	// rebuild generation (meta last_commit:<name>, sync_pending:<name>,
-	// rebuild_gen:<name>). Left behind, the
+	// rebuild_gen:<name>) and its settled-once marker (settled_once:<name>: a
+	// recreated branch must not read as once settled). Left behind, the
 	// watermark would mark a dropped branch as maintained (fsck's
 	// indexedBranches) and, since CreateBranch inherits the parent's
 	// watermark with INSERT OR IGNORE, a branch recreated under the name
@@ -339,7 +340,7 @@ func (rh *Repo) DropBranchLocked(ctx context.Context, name string, id int64) err
 	// keep the recreated branch unsettled (review R2-1). The keys are spelled
 	// as the index spells them.
 	if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx,
-		`DELETE FROM meta WHERE key IN (?, ?, ?)`, "last_commit:"+name, "sync_pending:"+name, "rebuild_gen:"+name); err != nil {
+		`DELETE FROM meta WHERE key IN (?, ?, ?, ?)`, "last_commit:"+name, "sync_pending:"+name, "rebuild_gen:"+name, "settled_once:"+name); err != nil {
 		return fmt.Errorf("drop branch meta: %w", err)
 	}
 	// 3. Delete the branches row. This cascades into branch_commits via
@@ -439,6 +440,14 @@ func (rh *Repo) CreateBranch(ctx context.Context, branch, fromBranch string) err
 			"last_commit:"+branch, parentWatermark,
 		); err != nil {
 			return fmt.Errorf("CreateBranch: inherit watermark: %w", err)
+		}
+		// The inherited watermark is a settled state: the child is once
+		// settled too (the index's settled_once:<branch>, spelled as it
+		// spells it).
+		if _, err := sqlite.Conn(ctx, rh.db).ExecContext(ctx,
+			`INSERT OR IGNORE INTO meta(key, value) VALUES (?, '1')`, "settled_once:"+branch,
+		); err != nil {
+			return fmt.Errorf("CreateBranch: inherit settled marker: %w", err)
 		}
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")

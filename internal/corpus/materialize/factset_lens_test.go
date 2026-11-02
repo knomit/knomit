@@ -485,6 +485,11 @@ func TestLensFactSet_RefIntoAnotherMemberIsANotFollowedLeaf(t *testing.T) {
 	}
 	raw := mustJSON(t, root)
 	require.Contains(t, raw, `{"path":"`+wireOf(lt.lens, lt.r1.ri, "kb/z/x.md")+`","reason":"lens_repo","repo_name":"beta"}`, "the leaf's wire shape")
+	// S2 (wording ruling): the export labels the leaf with the repo name and
+	// the fact path, nothing else.
+	var buf bytes.Buffer
+	require.NoError(t, FactSetExport(context.Background(), lt.scope(), lt.lens, nil, nil, *p.Cursor, func(FactSetEnv) io.Writer { return &buf }))
+	require.Contains(t, buf.String(), "\nRelated, not included: beta `kb/z/x.md`; `"+outside+"` (other knowledge base; cross-KB references not requested)\n")
 
 	before := lt.w.svc.ToolSession().FactSetWrites()
 	req.Options.CrossKB = true
@@ -859,7 +864,7 @@ func TestLensFactSet_TitleNarrowingAndSinceFork(t *testing.T) {
 	p = lt.first(t, req)
 	require.Equal(t, []string{wireOf(lt.lens, lt.r1.ri, "kb/u/a1.md"), wireOf(lt.lens, lt.r1.ri, "kb/u/a2.md")},
 		paths(unitRoots(allPages(t, lt.scope(), lt.lens, p)...)))
-	require.Contains(t, p.SearchLine, "repo beta")
+	require.Contains(t, p.SearchLine, "path kb/u/ · in beta ·", "S5: the narrowing reads \"in <names>\"")
 	req.Search.Repos = []string{"nope"}
 	_, _, err := FactSetFirstPage(ctx, lt.scope(), req)
 	require.ErrorIs(t, err, ErrInvalid)
@@ -887,7 +892,7 @@ func TestFactSet_RepoNarrowingOnTheRepoPath(t *testing.T) {
 	req.Search.Repos = []string{"alpha"}
 	_, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
 	require.ErrorIs(t, err, ErrInvalid)
-	require.EqualError(t, err, "invalid materialize request: repo narrows a lens factset to some of its repos; this binding is one repository")
+	require.EqualError(t, err, "invalid materialize request: repo is only accepted on a lens")
 }
 
 // lensEntry.remap's number rule, alone: the first component only, a frame
