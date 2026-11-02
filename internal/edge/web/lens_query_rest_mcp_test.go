@@ -248,11 +248,11 @@ func TestLensQuery_EmptyRepoNameIsUnknown(t *testing.T) {
 }
 
 // On a repository endpoint a call carrying ONLY repo is refused for the repo
-// (ruling S4), not for "at least one filter is required": the repo check runs
-// before the filter check.
+// (ruling S4). No filter is required (ruling 2026-11-02), so without repo the
+// same call answers.
 //
-// Sabotage: check repo after hasAnyFilter in queryFirstCall (the answer is
-// the no-filter error).
+// Sabotage: drop the parseQueryRepo call from queryFirstCall (repo is
+// ignored: the repo-only call answers with alpha's row).
 func TestLensQuery_RepoOnlyOnARepoNamesTheRepo(t *testing.T) {
 	e := newLensRESTEnv(t, "alpha")
 	writeFactsInOneCommit(t, e.m.Get("alpha"), factSpec{path: "kb/a/1.md", title: "alpha one"})
@@ -263,10 +263,10 @@ func TestLensQuery_RepoOnlyOnARepoNamesTheRepo(t *testing.T) {
 		require.True(t, isErr, "%s: %s", args, text)
 		require.Equal(t, "repo is only accepted on a lens", text, args)
 	}
-	// Control: with no repo either, it is the filter error.
+	// Control: with no repo, the filterless call answers.
 	text, isErr := repoEP.query(`{}`)
-	require.True(t, isErr, text)
-	require.Contains(t, text, "at least one filter is required")
+	require.False(t, isErr, text)
+	require.Equal(t, []string{"kb/a/1.md"}, mcpQueryFiles(t, text))
 }
 
 // A repo-narrowed result pages past its cursor: every page stays narrowed and

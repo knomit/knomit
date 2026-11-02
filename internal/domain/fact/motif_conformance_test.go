@@ -340,7 +340,7 @@ var mechanicsPaths = map[string][]string{
 	// surface would have shipped empty with a green suite.
 	//
 	// What stays banned in this file is the deciding: newFactFilter's
-	// WHERE-clause construction, filterByEpisodeOps, and the KNN/rerank scoring
+	// WHERE-clause construction, episodeOpsClause, and the KNN/rerank scoring
 	// inside Search must not consult motifs. Search appears here because its
 	// text-less branch owns a column list, NOT because its ranking may read
 	// them — if a motif term ever reaches the scoring arithmetic, that is an

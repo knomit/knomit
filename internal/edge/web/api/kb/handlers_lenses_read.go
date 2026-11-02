@@ -26,15 +26,11 @@ import (
 )
 
 // maxLensSearchCandidates bounds per-mount RETRIEVAL DEPTH for a RELEVANCE
-// query — /search, and /facts when a text query is present.
-//
-// It is a depth, not a window, and the difference is the whole reason this is
-// its own constant. Per-mount relevance ranks are not comparable across mounts
-// (RFC §7.1), which is why the union fuses by reciprocal rank instead of
-// merging on a shared key: there is no "next globally-ranked row" to walk
-// toward, so asking a mount for more than its best N buys nothing. Bounding
-// here costs only the tail of each mount's ranking.
-const maxLensSearchCandidates = 500
+// query — /search, and /facts when a text query is present. It is
+// federate.MaxSearchCandidates, the one depth MCP knomit_query asks too, so
+// both surfaces fuse the same per-mount lists (see there for why it is a
+// depth, not a window).
+const maxLensSearchCandidates = federate.MaxSearchCandidates
 
 // maxLensRecencyDepth is a backstop for the RECENCY path, where the bound is
 // not a design choice — it exists solely so one absurd offset cannot ask every
@@ -49,27 +45,18 @@ const maxLensSearchCandidates = 500
 // reached at any offset, on a surface whose entire job is browsing the corpus.
 const maxLensRecencyDepth = federate.MaxRecencyDepth
 
-// lensFanoutDepth is how many rows to ask each mount for.
+// lensFanoutDepth is how many rows to ask each mount for: federate.FanoutDepth
+// for a page that must be right through offset+limit, the function MCP
+// knomit_query sort=recent calls with max_results.
 //
 // Recency: offset+limit, because that is provably enough — the global page
 // cannot contain a row that sits deeper than that in its own mount's list.
-// Relevance: the retrieval cap, because ranks do not merge.
+// Relevance: the retrieval cap, because ranks do not merge. offset is any
+// non-negative int the client sends, so offset+limit can wrap negative;
+// FanoutDepth clamps that to the backstop instead of letting it reach the
+// store as LIMIT -1 (no limit at all).
 func lensFanoutDepth(text string, offset, limit int) int {
-	if text != "" {
-		return maxLensSearchCandidates
-	}
-	// `depth < 0` is the overflow case, and it is the one this backstop exists
-	// for: offset is any non-negative int the client sends, so offset+limit can
-	// wrap. A negative depth passes a `> max` test, and reaches the store as
-	// `LIMIT -1` — which SQLite reads as NO limit, so every mount materialises
-	// its whole corpus. Exactly the absurd-offset case the constant above
-	// promises to prevent, arrived at by clearing the guard rather than
-	// tripping it.
-	depth := offset + limit
-	if depth < 0 || depth > maxLensRecencyDepth {
-		return maxLensRecencyDepth
-	}
-	return depth
+	return federate.FanoutDepth(text, offset+limit)
 }
 
 // lensFactSource identifies which mount a union row came from.
@@ -231,6 +218,7 @@ func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 			// `entity=` filter (wrong data, not merely wrong order).
 			Entities:       append(splitCSV(qp.Get("entity")), splitCSV(qp.Get("entities"))...),
 			Domain:         splitCSV(qp.Get("domain")),
+			DomainAncestor: splitCSV(qp.Get("applies_to")),
 			DomainExact:    qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1",
 			IncludeTypes:   splitCSV(qp.Get("type")),
 			ExcludeTypes:   splitCSV(qp.Get("exclude_type")),
@@ -854,8 +842,13 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 		// Depth is the per-mount candidate cap; the fused union is truncated to
 		// `limit` last.
 		base := index.SearchOptions{
-			Text:           qp.Get("q"),
-			Entities:       splitCSV(qp.Get("entities")),
+			Text: qp.Get("q"),
+			// `entity` (singular, the canonical name) and `entities` (the alias)
+			// merge, exactly as /lenses/{lens}/facts and the repo facts
+			// collection do: a parameter a route declares is honoured, never
+			// silently dropped.
+			Entities:       append(splitCSV(qp.Get("entity")), splitCSV(qp.Get("entities"))...),
+			DomainAncestor: splitCSV(qp.Get("applies_to")),
 			Domain:         splitCSV(qp.Get("domain")),
 			DomainExact:    qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1",
 			IncludeTypes:   splitCSV(qp.Get("type")),

@@ -330,6 +330,37 @@ func FusedSearch(ctx context.Context, p *FusedPlan, leg SearchLeg, o FusedOption
 // best-effort answer rather than an unbounded fan-out.
 const MaxRecencyDepth = 10000
 
+// MaxSearchCandidates is how many rows a RELEVANCE-ranked lens read asks every
+// mount for: REST /lenses/{lens}/search, /facts with a text query, and MCP
+// knomit_query (relevance, and sort=recent with text) alike, so the two
+// surfaces fuse the same per-mount lists. It is a depth, not a window:
+// per-mount relevance ranks do not merge (RFC 7.1), so there is no "next
+// globally-ranked row" to walk toward and asking for more than a mount's best
+// N buys nothing. A surface's own page or snapshot size (REST limit, MCP
+// max_results) caps the FUSED list, never this depth: a smaller per-mount
+// depth would drop a write-mount copy ranked below it, and its foreign twin
+// would then survive the write-first dedupe.
+const MaxSearchCandidates = 500
+
+// FanoutDepth is the per-mount depth a lens recency listing starts at, for a
+// listing that must be correct through its first need merged rows (REST:
+// offset+limit; MCP: max_results). With text the listing is relevance-ranked
+// and asks MaxSearchCandidates. Without text, need itself: commit timestamps
+// merge, so a row among the first need merged rows sits within its own
+// mount's first need rows before dedupe (FusedRecentDeep deepens for the
+// rows dedupe spends). need is clamped to MaxRecencyDepth, and so is an
+// overflowed (negative) need: a negative depth would reach the store as
+// LIMIT -1, which SQLite reads as no limit at all.
+func FanoutDepth(text string, need int) int {
+	if text != "" {
+		return MaxSearchCandidates
+	}
+	if need < 0 || need > MaxRecencyDepth {
+		return MaxRecencyDepth
+	}
+	return need
+}
+
 // FusedRecentDeep is FusedRecent with the merge-horizon DEEPENING of a
 // text-less recency listing, shared by REST /lenses/{lens}/facts, MCP
 // knomit_query sort=recent and the lens FactSet so their lists cannot drift

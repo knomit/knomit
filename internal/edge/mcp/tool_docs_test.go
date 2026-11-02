@@ -139,33 +139,3 @@ func TestEveryTool_RefusesAnUndeclaredArgument(t *testing.T) {
 		})
 	}
 }
-
-// queryFilterList is what the knomit_query description and its no-filter
-// error tell a caller counts as a filter. Each named argument, given alone,
-// must satisfy hasAnyFilter — or the text promises a call the handler refuses.
-func TestQueryFilterList_EveryNameIsAFilter(t *testing.T) {
-	values := map[string]any{
-		"text": "x", "entities": []any{"x"}, "domain": []any{"x"}, "applies_to": []any{"x"},
-		"path": "kb/x", "type": []any{"observation"}, "origin": "authored", "motifs": []any{"x-y"},
-		"context": map[string]any{"task": "t-1"}, "min_confidence": 0.5, "expired": true,
-		"expires_before": "2026-01-01T00:00:00Z", "expires_after": "2026-01-01T00:00:00Z",
-	}
-	names := strings.FieldsFunc(queryFilterList, func(r rune) bool { return r == ',' || r == ' ' })
-	var checked int
-	for _, n := range names {
-		if n == "or" {
-			continue
-		}
-		checked++
-		v, ok := values[n]
-		require.True(t, ok, "queryFilterList names %q, which this test has no value for", n)
-		_, declared := queryTool().InputSchema.Properties[n]
-		require.True(t, declared, "queryFilterList names %q, which knomit_query does not declare", n)
-		var req mcpgo.CallToolRequest
-		req.Params.Arguments = map[string]any{n: v}
-		q, err := parseQueryFilters(req)
-		require.NoError(t, err, n)
-		require.True(t, hasAnyFilter(q), "%q alone is listed as a filter but hasAnyFilter rejects it", n)
-	}
-	require.Equal(t, len(values), checked, "every filter in values must be named in queryFilterList")
-}
