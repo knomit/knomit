@@ -1,7 +1,6 @@
 package kb
 
 import (
-	"knomit/internal/edge/web/httpx"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"knomit/internal/edge/web/httpx"
 )
 
 // openAPIQueryParams is the query parameter names openapi.yaml declares on the

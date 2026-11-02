@@ -20,6 +20,14 @@ info:
     `/lenses/{lens}/`. The materialize and factset routes refuse an unlisted
     parameter too, each with its own detail.
 
+    The management GET routes answer the same two 400s: `/repos`,
+    `/repos/{repo}` and its templates, origin, branches, pushed-branches and
+    experiments, the branch root `/repos/{repo}/branches/{branch}`,
+    `/lenses` and `/lenses/{lens}`, `/archived[/{id}]`,
+    `/repo-creates[/{id}]`, `/fleet` and its members, activity and root,
+    `/ontologies/presets[/{name}]`, `/ontologies/schema`, `/templates` and
+    the `/repo-events` stream.
+
 servers:
   - url: /api/v1
     description: v1
@@ -242,8 +250,12 @@ paths:
       description: |
         Every create job still retained: running ones and finished ones
         inside their retention window. A client that lost the id `POST /repos`
-        answered with finds its create here. A `cancelled` job is omitted.
-        Each row is the same snapshot `GET /repo-creates/{id}` returns.
+        answered with finds its create here. Two kinds of job are omitted
+        from the list, though each stays readable at `GET /repo-creates/{id}`
+        until its retention window ends: a `cancelled` job, and a `done` job
+        whose repo is no longer registered (archived or deleted after the
+        create finished). Each row is the same snapshot
+        `GET /repo-creates/{id}` returns.
       operationId: listRepoCreates
       responses:
         "200":
@@ -793,7 +805,8 @@ paths:
       description: |
         Every open experiment of the repo: an isolated `exp/<name>` branch
         forked from the agent branch. `expires_at` is present when the
-        instance expires idle experiments (`expiry_days` above 0).
+        instance expires idle experiments (`expiry_days` above 0). Answers
+        503 when the repo's store cannot be opened for reading.
       operationId: listExperiments
       responses:
         "200":
@@ -829,6 +842,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/merge:
     parameters:

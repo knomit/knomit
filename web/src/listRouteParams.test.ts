@@ -184,7 +184,8 @@ describe('the knowledge-base reads send only the parameters their route declares
 //
 // Sabotage: make listFleetActivity ask for `/activity?limit=50` with `limit`
 // dropped from the spec row, or make getRepo append a cache-buster, and that
-// row lists the stray name.
+// row lists the stray name; point a function at another route (listTemplates
+// at /ontologies/presets) and its row's path check fails.
 describe('the management reads send only the parameters their route declares', () => {
   const cases: { name: string; spec: string; call: () => Promise<unknown> }[] = [
     { name: 'getFleet → /fleet', spec: '/fleet', call: () => api.getFleet() },
@@ -206,7 +207,13 @@ describe('the management reads send only the parameters their route declares', (
     { name: 'listExperiments → /repos/{repo}/experiments', spec: '/repos/{repo}/experiments', call: () => api.listExperiments('r') },
     { name: 'listLenses → /lenses', spec: '/lenses', call: () => api.listLenses() },
     { name: 'getLens → /lenses/{lens}', spec: '/lenses/{lens}', call: () => api.getLens('eng') },
+    { name: 'status → /repos/{repo}/branches/{branch}', spec: '/repos/{repo}/branches/{branch}', call: () => api.status('r', 'agent/x') },
   ];
+  // The spec route as a full-path pattern under /api/v1: each {param} is one
+  // non-empty segment. A row whose call hits another route fails here, so the
+  // query check below is made against the route actually requested.
+  const routePattern = (spec: string) =>
+    new RegExp('^/api/v1' + spec.split(/\{[^}]+\}/).map(s => s.replace(/[.*+?^$()|[\]\\]/g, '\\$&')).join('[^/]+') + '$');
   for (const c of cases) {
     it(c.name, async () => {
       const f = mockFetch();
@@ -214,7 +221,9 @@ describe('the management reads send only the parameters their route declares', (
       expect(f).toHaveBeenCalled();
       const declared = specQueryParams(c.spec);
       for (let i = 0; i < f.mock.calls.length; i++) {
-        const sent = [...new Set([...new URL(String(f.mock.calls[i][0]), 'http://x').searchParams.keys()])];
+        const u = new URL(String(f.mock.calls[i][0]), 'http://x');
+        expect(u.pathname).toMatch(routePattern(c.spec));
+        const sent = [...new Set([...u.searchParams.keys()])];
         expect(undeclared(sent, declared)).toEqual([]);
       }
     });

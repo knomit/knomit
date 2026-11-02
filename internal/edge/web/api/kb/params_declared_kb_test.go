@@ -1,12 +1,13 @@
 package kb
 
 import (
-	"knomit/internal/edge/web/httpx"
 	"maps"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/edge/web/httpx"
 )
 
 // Every other knowledge-base GET route's declared set IS its openapi.yaml

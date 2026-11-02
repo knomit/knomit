@@ -57,9 +57,9 @@ func TestManageRoutes_UnknownAndMalformedAre400_DeclaredAccepted(t *testing.T) {
 	}{
 		{"GET /repo-events", "/repo-events", "/repo-events", false}, // a stream: only refusals are read
 		{"GET /fleet", "/fleet", "/fleet", true},
-		{"GET /fleet/members", "/fleet/members", "/fleet/members", false},   // not in a fleet
+		{"GET /fleet/members", "/fleet/members", "/fleet/members", false},    // not in a fleet
 		{"GET /fleet/activity", "/fleet/activity", "/fleet/activity", false}, // not in a fleet
-		{"GET /fleet/root", "/fleet/root", "/fleet/root", false},            // no root held
+		{"GET /fleet/root", "/fleet/root", "/fleet/root", false},             // no root held
 		{"GET /archived", "/archived", "/archived", true},
 		{"GET /archived/{id}", "/archived/{id}", "/archived/" + archived.ID, true},
 		{"GET /repos", "/repos", "/repos", true},
