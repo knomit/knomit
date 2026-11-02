@@ -88,6 +88,10 @@ var (
 // origin and the compare-and-set that writes the new credential.
 var beforeCredentialWrite func()
 
+// afterCredentialReread (tests only) runs between the re-read of the written
+// row and the in-memory write.
+var afterCredentialReread func()
+
 // checkPastedCredential validates a pasted credential against the stored url.
 func checkPastedCredential(url string, c CredentialChange) error {
 	switch c.AuthMethod {
@@ -96,7 +100,7 @@ func checkPastedCredential(url string, c CredentialChange) error {
 			return fmt.Errorf("%w: auth_method token needs a token", ErrInvalidCredential)
 		}
 	case "basic":
-		if user, _, ok := strings.Cut(c.AuthToken, ":"); !ok || user == "" {
+		if user, pass, ok := strings.Cut(c.AuthToken, ":"); !ok || user == "" || pass == "" {
 			return fmt.Errorf("%w: auth_method basic needs a user and a password", ErrInvalidCredential)
 		}
 	case "ssh", "none":
@@ -125,9 +129,12 @@ func checkPastedCredential(url string, c CredentialChange) error {
 // (ErrInvalidCredential). It then writes with Origins.SetCredential, a
 // compare-and-set on the stored URL, so an attach that re-points the origin
 // in between wins and this answers control.ErrOriginChanged with nothing
-// written. On success it re-reads the row, injects it into the running store
-// (svc.Remote().SetOrigin, the same branch) and signals a credential change,
-// which resets the breakers and wakes the sync loop.
+// written. On success it re-reads the row and injects it into the running
+// store with svc.Remote().SetOriginIfURL, a second compare-and-set on the
+// injected URL: an attach or detach that lands after the durable write keeps
+// memory (and the durable row it wrote), and this answers
+// control.ErrOriginChanged without signalling anything. Otherwise it signals
+// a credential change, which resets the breakers and wakes the sync loop.
 func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, c CredentialChange, unlink bool) error {
 	origins := m.Origins()
 	if origins == nil {
@@ -166,14 +173,27 @@ func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, 
 	if cur == nil {
 		return fmt.Errorf("change credential: %w: the origin was removed", control.ErrOriginChanged)
 	}
-	// The running store's copy. A store that is not open needs none: opening
+	if afterCredentialReread != nil {
+		afterCredentialReread()
+	}
+	// The running store's copy, as a compare-and-set on the injected URL.
+	// An attach or detach can land between the re-read and this write: it
+	// writes control.db, the git remote and memory, and this must never put
+	// cur back over it. The reconcile loop builds auth from memory while
+	// go-git dials the git remote's URL, so an unconditional write here would
+	// send the old origin's credential to the attached host, or resurrect a
+	// detached origin. A store that is not open needs no write: opening
 	// injects the control.db row.
+	applied := true
 	if werr := ri.WithRead(func(svc *store.Service) {
-		svc.Remote().SetOrigin(&remotesync.Origin{
+		applied = svc.Remote().SetOriginIfURL(cur.URL, &remotesync.Origin{
 			URL: cur.URL, Branch: cur.Branch, AuthMethod: cur.AuthMethod, AuthToken: cur.AuthToken,
 		})
 	}); werr != nil {
 		log.Debug().Err(werr).Str("repo", ri.Name()).Msg("credential changed while the store is not open; it is injected at open")
+	}
+	if !applied {
+		return fmt.Errorf("change credential: %w: the origin was re-pointed or removed while the credential was being replaced", control.ErrOriginChanged)
 	}
 	ri.credentialChanged()
 	return nil

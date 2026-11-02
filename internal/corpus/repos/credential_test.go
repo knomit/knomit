@@ -158,3 +158,56 @@ func TestChangeOriginCredential_Refusals(t *testing.T) {
 	err = m.ChangeOriginCredential(ctx, ri, CredentialChange{AuthMethod: "token", AuthToken: "x"}, false)
 	require.ErrorIs(t, err, ErrNoOrigin)
 }
+
+// An attach that lands between the swap's re-read and its in-memory write
+// wins in memory too: the swap must never put the old origin's credential
+// back over the attached URL (go-git would send it to the new host).
+func TestChangeOriginCredential_AttachAfterRereadWins(t *testing.T) {
+	m, ri := newCredentialRepo(t)
+	other := seedBareRemote(t, filepath.Join(t.TempDir(), "other.git"))
+	afterCredentialReread = func() {
+		require.NoError(t, applyAttach(ri, OriginSpec{URL: other, Branch: "main", AuthMethod: "none"}))
+	}
+	t.Cleanup(func() { afterCredentialReread = nil })
+	gen := ri.BreakerResetGenForTest()
+
+	err := m.ChangeOriginCredential(context.Background(), ri, CredentialChange{AuthMethod: "token", AuthToken: "tok-new"}, false)
+	require.ErrorIs(t, err, control.ErrOriginChanged)
+	mem := injected(t, ri)
+	require.Equal(t, other, mem.URL)
+	require.Equal(t, "none", mem.AuthMethod)
+	require.Empty(t, mem.AuthToken, "the old origin's new token never reached the attached URL")
+	row, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, other, row.URL)
+	require.Empty(t, row.AuthToken)
+	require.Equal(t, gen, ri.BreakerResetGenForTest(), "no credential change was signalled")
+}
+
+// A detach in the same window: the swap must not resurrect the removed origin
+// in memory.
+func TestChangeOriginCredential_DetachAfterRereadWins(t *testing.T) {
+	m, ri := newCredentialRepo(t)
+	afterCredentialReread = func() { require.NoError(t, applyDetach(ri)) }
+	t.Cleanup(func() { afterCredentialReread = nil })
+
+	err := m.ChangeOriginCredential(context.Background(), ri, CredentialChange{AuthMethod: "token", AuthToken: "tok-new"}, false)
+	require.ErrorIs(t, err, control.ErrOriginChanged)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		r, gerr := svc.Remote().GetRemote("origin")
+		require.NoError(t, gerr)
+		require.Nil(t, r, "the detached origin stays gone in memory")
+	}))
+	row, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Nil(t, row)
+}
+
+func TestChangeOriginCredential_BasicNeedsPassword(t *testing.T) {
+	m, ri := newCredentialRepo(t)
+	err := m.ChangeOriginCredential(context.Background(), ri, CredentialChange{AuthMethod: "basic", AuthToken: "bob:"}, false)
+	require.ErrorIs(t, err, ErrInvalidCredential)
+	o, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotEqual(t, "bob:", o.AuthToken)
+}
