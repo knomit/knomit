@@ -30,9 +30,9 @@ func listenLocal(path string) (net.Listener, func(), error) {
 	if err != nil {
 		return nil, noop, err
 	}
-	// go-winio MUST be at microsoft/go-winio#388 (7e8af9b09c) or later, which
-	// no tagged release contains yet — move to the first one that does. In
-	// v0.6.2 a Close that raced a client connecting and hanging up could lose
+	// go-winio MUST be at microsoft/go-winio#388 (7e8af9b09c) or later, i.e.
+	// v0.6.3 (the first tagged release that contains it) or newer; never
+	// v0.6.2 or any tag that predates #388. In v0.6.2 a Close that raced a client connecting and hanging up could lose
 	// its one close signal and block forever (knomit#344): the listener's
 	// routine consumed it, got back an errno other than ErrFileClosed
 	// (ERROR_OPERATION_ABORTED, measured) and went on listening. That is
