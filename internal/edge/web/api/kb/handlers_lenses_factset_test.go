@@ -108,14 +108,12 @@ func TestLensFactSet_RESTRoutesMirrorTheRepoRoutes(t *testing.T) {
 		require.NotEmpty(t, p1.Anchors[id], id)
 	}
 	roots := map[string]string{}
-	var leaves []materialize.FactSetNode
 	for _, p := range pages {
 		for _, n := range p.Facts {
 			if n.Number == strconv.Itoa(n.Unit) {
 				roots[n.Path] = n.RepoName
 			}
 		}
-		leaves = append(leaves, p.Facts...)
 	}
 	require.Equal(t, map[string]string{
 		"kb/technology/u/a1.md":                       "w",
