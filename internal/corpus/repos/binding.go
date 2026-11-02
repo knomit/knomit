@@ -240,9 +240,21 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 // one-member lens included). Tests only; production code must use
 // NewBindingOfLens.
 func NewLensBindingForTest(lens, uid string, write *RepoInstance, reads ...ReadTarget) *Binding {
-	b := NewBindingForTest(write, reads...)
-	b.name, b.pinID = lens, pinOf("lens:", uid)
-	return b
+	writeBranch := ""
+	for _, rt := range reads {
+		if rt.RI == write {
+			writeBranch = experimentPin(write, rt.Branch)
+			break
+		}
+	}
+	return &Binding{
+		write:       write,
+		writeOK:     true,
+		writeBranch: writeBranch,
+		name:        lens,
+		pinID:       pinOf("lens:", uid),
+		reads:       reads,
+	}
 }
 
 // NewBindingOfLens resolves a persisted lens definition against the manager's
