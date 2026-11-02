@@ -86,6 +86,9 @@ type createFleetRequest struct {
 		Branch     string `json:"branch,omitempty"`
 		AuthMethod string `json:"auth_method,omitempty"`
 		AuthToken  string `json:"auth_token,omitempty"`
+		// SecretID hosts the fleet on the forge with a stored secret
+		// instead of a pasted credential.
+		SecretID string `json:"secret_id,omitempty"`
 	} `json:"origin,omitempty"`
 }
 
@@ -113,7 +116,12 @@ func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		spec := repos.FleetCreateSpec{Name: req.Name}
 		if req.Origin != nil {
-			spec.Origin = &repos.OriginSpec{URL: req.Origin.URL, Branch: req.Origin.Branch, AuthMethod: req.Origin.AuthMethod, AuthToken: req.Origin.AuthToken}
+			if req.Origin.SecretID != "" && (req.Origin.AuthMethod != "" || req.Origin.AuthToken != "") {
+				writeSecretWithPasted(w, r)
+				return
+			}
+			spec.Origin = &repos.OriginSpec{URL: req.Origin.URL, Branch: req.Origin.Branch, AuthMethod: req.Origin.AuthMethod,
+				AuthToken: req.Origin.AuthToken, SecretID: req.Origin.SecretID}
 		}
 		st, err := m.CreateFleet(r.Context(), spec)
 		if err != nil {

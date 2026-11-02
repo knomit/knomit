@@ -592,6 +592,9 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 	if err := refuseFleetOrigin(o.URL); err != nil {
 		return "", err
 	}
+	if err := m.fleetSecretFits(&o); err != nil {
+		return "", err
+	}
 	if forgeCopy && sameFleetURL(prev.URL, o.URL) {
 		return m.changeFleetCredential(ctx, ri, o, prev)
 	}
@@ -616,18 +619,20 @@ func (m *Manager) followFleetHost(ctx context.Context, o OriginSpec) (string, er
 // stored one. A credential not given keeps the stored one: no method, or
 // the stored method with no token (the page prefills the method and never
 // holds the secret, #529 N-b); auth_method none is the explicit reset to
-// anonymous. The new credential must reach the forge (the probe the attach's
-// guard asks for) before it is stored. Then it is stored, and that is all: on
+// anonymous. A stored secret (o.SecretID, already vetted by fleetSecretFits)
+// links it; a credential not given keeps the stored link too, and a pasted
+// credential or none replaces it. The new credential must reach the forge
+// (the probe the attach's guard asks for) before it is stored. Then it is stored, and that is all: on
 // the master no seed, no host record, no publish (#529 S3, N-a).
 func (m *Manager) changeFleetCredential(ctx context.Context, ri *RepoInstance, o OriginSpec, prev *control.Origin) (string, error) {
 	o.URL = prev.URL
-	if o.AuthToken == "" && (o.AuthMethod == "" || o.AuthMethod == prev.AuthMethod) {
-		o.AuthMethod, o.AuthToken = prev.AuthMethod, prev.AuthToken
+	if o.SecretID == "" && o.AuthToken == "" && (o.AuthMethod == "" || o.AuthMethod == prev.AuthMethod) {
+		o.AuthMethod, o.AuthToken, o.SecretID = prev.AuthMethod, prev.AuthToken, prev.SecretID
 	}
 	if err := refuseMethodForURL(o.URL, o.AuthMethod); err != nil {
 		return "", err
 	}
-	if o.AuthMethod == prev.AuthMethod && o.AuthToken == prev.AuthToken {
+	if o.AuthMethod == prev.AuthMethod && o.AuthToken == prev.AuthToken && o.SecretID == prev.SecretID {
 		return FleetFollowUnchanged, nil
 	}
 	decided, err := m.ResolveOrigin(ctx, o)

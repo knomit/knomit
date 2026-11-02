@@ -19,6 +19,22 @@ type Server struct {
 // New starts a server exporting bare repos under projectRoot.
 func New(t testing.TB, projectRoot string) *Server {
 	t.Helper()
+	return start(t, projectRoot, httptest.NewServer)
+}
+
+// NewTLS is New over https, with httptest's self-signed certificate: a
+// client trusts it through Client() (go-git: install
+// githttp.NewClient(srv.Client()) for "https" for the test's duration).
+func NewTLS(t testing.TB, projectRoot string) *Server {
+	t.Helper()
+	return start(t, projectRoot, httptest.NewTLSServer)
+}
+
+// Client is an *http.Client that trusts this server's certificate.
+func (s *Server) Client() *http.Client { return s.http.Client() }
+
+func start(t testing.TB, projectRoot string, listen func(http.Handler) *httptest.Server) *Server {
+	t.Helper()
 	plan := newFaultPlan()
 	closed := make(chan struct{})
 	cgiH := newCGIHandler(t, projectRoot)
@@ -51,7 +67,7 @@ func New(t testing.TB, projectRoot string) *Server {
 		}
 		cgiH.ServeHTTP(w, r)
 	})
-	ts := httptest.NewServer(mw)
+	ts := listen(mw)
 	return &Server{URL: ts.URL, http: ts, plan: plan, closed: closed}
 }
 

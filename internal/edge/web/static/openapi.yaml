@@ -2872,6 +2872,7 @@ paths:
                     branch: { type: string }
                     auth_method: { type: string }
                     auth_token: { type: string }
+                    secret_id: { type: string, description: "A stored secret (GET /secrets) for a forge-hosted fleet instead of a pasted credential: not with auth_method/auth_token (400 auth_invalid); its hosts list must allow the URL's host and its type fit the scheme (422 auth_invalid); refused for a fleet hosted on an instance (422 auth_invalid)" }
       responses:
         "201": { description: Created; local main holds the active record, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
         "202": { description: Created; main does not hold the record yet (a publish is pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
@@ -3032,6 +3033,7 @@ paths:
                 bundle: { type: string, description: "The bundle document POST /fleet/enroll returned; it names the fleet repository URL" }
                 auth_method: { type: string, description: "The joiner's own credential for a forge-hosted fleet only" }
                 auth_token: { type: string }
+                secret_id: { type: string, description: "A stored secret (GET /secrets) for a forge-hosted fleet instead of a pasted credential: not with auth_method/auth_token (400 auth_invalid); its hosts list must allow the URL's host and its type fit the scheme (422 auth_invalid); refused for a fleet hosted on an instance (422 auth_invalid)" }
       responses:
         "200":
           description: Joined; root_fingerprint is the root the bundle installed
@@ -3080,6 +3082,7 @@ paths:
                 bundle: { type: string, description: "The bundle document POST /fleet/enroll returned" }
                 auth_method: { type: string, description: "The joiner's own credential for a forge-hosted fleet only" }
                 auth_token: { type: string }
+                secret_id: { type: string, description: "A stored secret (GET /secrets) for a forge-hosted fleet instead of a pasted credential: not with auth_method/auth_token (400 auth_invalid); its hosts list must allow the URL's host and its type fit the scheme (422 auth_invalid); refused for a fleet hosted on an instance (422 auth_invalid)" }
       responses:
         "200":
           description: Checked
@@ -3467,6 +3470,7 @@ paths:
                 auth_token: { type: string, description: "The token (auth_method token)" }
                 user: { type: string, description: "With password, for auth_method basic (stored as user:password, as PUT origin does)" }
                 password: { type: string }
+                secret_id: { type: string, description: "A stored secret for the forge instead of a pasted credential (Update access, or a move onto a new forge): not with a pasted credential (400 auth_invalid); it must fit the URL (422 auth_invalid). A follow with no credential keeps a stored link; a pasted credential or auth_method none replaces it." }
       responses:
         "200":
           description: "The new state (GET /fleet's), and `change`: followed, moved, credential or unchanged"
