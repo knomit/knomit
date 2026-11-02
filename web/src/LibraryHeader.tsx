@@ -276,9 +276,9 @@ export function LibraryHeader({
           data-testid="library-factset"
           onClick={() => { if (factset.enabled) factset.onOpen(); }}
           disabled={!factset.enabled}
-          aria-label="Materialize this search" // PLACEHOLDER copy
+          aria-label="Materialize results"
           title={factset.enabled
-            ? 'Materialize this search' // PLACEHOLDER copy
+            ? 'Materialize results'
             : 'Not available in history'} // PLACEHOLDER copy
           style={{
             background: 'none', border: 'none', outline: 'none', padding: 2, flexShrink: 0,

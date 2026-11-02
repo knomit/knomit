@@ -14,6 +14,7 @@ import { BootScreen } from './BootScreen';
 import { openEventStream, streamErrorSuffix } from './eventStream';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
+import { useListUrl } from './listUrl';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
 import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
@@ -353,6 +354,10 @@ export default function App() {
   // repo list. Set only once the list CONFIRMS that repo, and consumed once by
   // the bootstrap — a later context switch must ask the server again.
   const speculativeRef = useRef<{ repo: string; details: RepoDetails } | null>(null);
+  // The list's search and its context in the URL (listUrl.ts): the boot asks
+  // it before localStorage, and it writes the URL back from then on.
+  const onUrlStatus = useCallback((s: Status) => dispatch(statusAction(s)), []);
+  const listUrl = useListUrl(state, dispatch, repos, onUrlStatus);
   // The boot response for the current repo. `mode` on it is what the read-only
   // effect reads instead of issuing its own GET during boot.
   const [bootDetails, setBootDetails] = useState<{ repo: string; details: RepoDetails } | null>(null);
@@ -511,16 +516,35 @@ export default function App() {
         if (cancelled) return;
         setRepos(list);
         setReposLoaded(true);
+        // The URL's context beats the remembered one: localStorage is shared
+        // by every tab (last writer wins), the URL is this tab's own. Named by
+        // stable uid, so a rename keeps it; one that no longer exists (or is
+        // not browsable) falls back to the remembered context below.
+        const urlCtx = listUrl.ctx;
+        if (urlCtx?.kind === 'lens') {
+          const all = await api.listLenses().catch(() => [] as Lens[]);
+          if (cancelled) return;
+          const hit = all.find(l => l.uid === urlCtx.uid);
+          if (hit) {
+            listUrl.adopt(hit.name);
+            dispatchBoot({ type: 'PHASE', phase: 'opening', target: hit.name });
+            dispatch({ type: 'SET_CONTEXT', context: { kind: 'lens', name: hit.name } });
+            return;
+          }
+          listUrl.abandon();
+        }
+        const urlRepo = urlCtx?.kind === 'repo' ? list.find(r => r.uid === urlCtx.uid && browsableRepo(r)) : undefined;
+        if (urlCtx?.kind === 'repo' && !urlRepo) listUrl.abandon();
         // Restore the last browse context. A persisted lens is entered
         // immediately, then resolved (falling back to a repo if it's gone). A
         // repo (or no) context picks a repo from the live list as before.
-        if (last?.kind === 'lens') {
+        if (!urlRepo && last?.kind === 'lens') {
           // Resolution is owned by the lensResolutionPending effect below.
           dispatchBoot({ type: 'PHASE', phase: 'opening', target: last.name });
           dispatch({ type: 'SET_CONTEXT', context: last });
           return;
         }
-        const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
+        const next = urlRepo ? urlRepo.name : pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
         if (!next) return;
         dispatchBoot({ type: 'PHASE', phase: 'opening', target: next });
         // Hand the speculative response to the bootstrap ONLY when the list
@@ -530,6 +554,10 @@ export default function App() {
           if (cancelled) return;
           if (details) speculativeRef.current = { repo: next, details };
         }
+        // Adopted in the SAME tick as SET_CONTEXT, never before the await
+        // above: a 'resolving' phase that sees the context still unset would
+        // read it as "the user went elsewhere" and abandon the URL (#713 H1).
+        if (urlRepo) listUrl.adopt(next);
         dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
@@ -1285,8 +1313,11 @@ export default function App() {
   const enterBranch = useCallback((branch: string) => {
     if (!branch) return;
     dispatchView({ type: 'SET_FACET', facet: 'browse' });
-    api.status(stateRef.current.repo, branch)
-      .then(s => dispatch(statusAction(s)))
+    const repo = stateRef.current.repo;
+    api.status(repo, branch)
+      // A late answer for a repo the user has since left must not land:
+      // SET_STATUS has no repo guard, so it would put this branch on the other.
+      .then(s => { if (stateRef.current.repo === repo) dispatch(statusAction(s)); })
       .catch(() => { /* the status poll re-reads; a failed switch leaves the old branch shown */ });
   }, [dispatchView]);
 
