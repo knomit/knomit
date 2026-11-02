@@ -440,6 +440,49 @@ func TestLensFactSet_OneMemberLensHasTheMultiMemberShape(t *testing.T) {
 	require.Equal(t, listBody, strings.ReplaceAll(body, soloBase, "/lenses/solo/search"))
 }
 
+// A path filter whose first segment is not an ontology topic selects no lens
+// member (federate.ReadTargetsFor, the lens list's rule), so on a one-member
+// lens the FactSet has no units (no cursor, no anchor) AND the lens list for
+// the same path is empty: the two agree. Control: the write repo's own route
+// matches the same path by prefix and has the fact.
+//
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (the solo FactSet takes
+// the repo path, matches by prefix and has 1 unit while the list is empty).
+func TestLensFactSet_OneMemberLensNonTopicPathAgreesWithTheLensList(t *testing.T) {
+	m := newMatLensManager(t, "w")
+	createLens(t, m, "solo", "w")
+	w := m.Get("w")
+	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a1.md", "A1", "a1 body.")
+	writeMatFact(t, w, w.AgentBranch(), "kb/u/x.md", "X", "x body.")
+	h := asPrincipal("u1", newTestRouter(m))
+	repoBase := "/repos/w/branches/" + urlBranch(w.AgentBranch()) + "/search/factset"
+	var code int
+	var body string
+	require.Eventually(t, func() bool {
+		code, _, body = getMaterialize(t, h, "/lenses/solo/facts?path=kb/technology/u/")
+		return code == http.StatusOK && strings.Contains(body, "a1.md")
+	}, 10*time.Second, 50*time.Millisecond, "the lens never listed the fact: %d %s", code, body)
+
+	code, rp, body := getFactSet(t, h, repoBase+"?path=kb/u/&depth=0")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, 1, rp.Units, "control: the repository matches kb/u/ by prefix: %s", body)
+
+	code, sp, body := getFactSet(t, h, "/lenses/solo/search/factset?path=kb/u/&depth=0")
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, [4]any{0, "", 0, true}, [4]any{sp.Units, sp.Anchor, len(sp.Anchors), sp.Cursor == nil},
+		"no units, no anchor, no cursor: %s", body)
+	code, _, list := getMaterialize(t, h, "/lenses/solo/search?path=kb/u/")
+	require.Equal(t, http.StatusOK, code, list)
+	var lp struct {
+		Results []json.RawMessage `json:"results"`
+		Total   int               `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(list), &lp), list)
+	require.Contains(t, list, `"results":`)
+	require.Empty(t, lp.Results, "the lens list for the same path is empty too: %s", list)
+	require.NotContains(t, list, "x.md")
+}
+
 // A one-member lens is a lens (user ruling 2026-11-02, M1): cross_kb=true is
 // the lens 400, byte for byte what a multi-member lens answers (instance path
 // aside), and writes nothing; and with no filter its title is "All in lens

@@ -4608,6 +4608,12 @@ paths:
         (`anchors`, `repo_name` on every unit root, the lens list's results
         for the same search, the lens title, `cross_kb` refused, the lens's
         cursor pin).
+
+        PATH FILTER: as on the lens list, a `path` of the form
+        `kb/<segment>/…` whose `<segment>` is not a topic of a member's
+        ontology selects no results from that member; when no member has
+        it, the factset has no units (no cursor, no anchor), whatever the
+        lens's size. A repository's own factset matches `path` by prefix.
       operationId: getLensSearchFactSetPage
       parameters:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, only `unit` is accepted." }
