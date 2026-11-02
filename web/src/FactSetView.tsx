@@ -182,16 +182,36 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     return () => cancelAnimationFrame(id);
   }, [epoch, stale, phase, land]);
 
-  // Prepending a unit must not move what the reader is looking at.
-  const prevHeight = useRef<{ first: string; height: number } | null>(null);
+  // Prepending a unit must not move what the reader is looking at, and
+  // neither must the head skeleton shown above the run while it loads. This
+  // is the ONLY place-keeping: native scroll anchoring is off on this
+  // scroller (.k-fs-scroll in materialize.css), or the two would add up.
+  // - the skeleton appears (head -> loading, same first section): scrollTop
+  //   grows by its height, so it mounts above the view;
+  // - the unit is prepended (the skeleton goes with it): scrollTop grows by
+  //   the net height change, so the reader ends at scrollTop + the prepended
+  //   height;
+  // - the skeleton goes with nothing prepended (a failure): its height is
+  //   given back, so the head error at the top is where the reader was.
+  const prevHeight = useRef<{ first: string; height: number; head: string } | null>(null);
+  const skelH = useRef(0);
   const firstKey = nodes[0] ? `${nodes[0].unit}.${nodes[0].n}` : '';
   useLayoutEffect(() => {
     const box = scroller.current;
     const p = prevHeight.current;
-    if (box && p && p.first !== firstKey && nodes.some(n => `${n.unit}.${n.n}` === p.first) && head !== 'loading') {
-      setScrollTop(box, box.scrollTop + box.scrollHeight - p.height);
+    if (box && p) {
+      if (p.first !== firstKey && nodes.some(n => `${n.unit}.${n.n}` === p.first) && head !== 'loading') {
+        setScrollTop(box, box.scrollTop + box.scrollHeight - p.height);
+        skelH.current = 0;
+      } else if (p.first === firstKey && head === 'loading' && p.head !== 'loading') {
+        skelH.current = box.scrollHeight - p.height;
+        if (skelH.current > 0) setScrollTop(box, box.scrollTop + skelH.current);
+      } else if (p.first === firstKey && p.head === 'loading' && head !== 'loading' && skelH.current > 0) {
+        setScrollTop(box, box.scrollTop - skelH.current);
+        skelH.current = 0;
+      }
     }
-    prevHeight.current = box ? { first: firstKey, height: box.scrollHeight } : null;
+    prevHeight.current = box ? { first: firstKey, height: box.scrollHeight, head } : null;
   }, [firstKey, nodes, head, setScrollTop]);
 
   // Infinite scroll down (the next page) and up (the previous unit, Q-UI9).
@@ -359,7 +379,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
         {exp.kind === 'done' && <div className="k-mat-status" data-testid="fs-export-done" role="status">{exp.line}</div>}
       </div>
 
-      <div className="k-mat-scroll" ref={scroller} data-testid="fs-scroll"
+      <div className="k-mat-scroll k-fs-scroll" ref={scroller} data-testid="fs-scroll"
         onScroll={e => { setScrolled(e.currentTarget.scrollTop > FS_NEAR_PX); trackTop(); onScroll(e.currentTarget); }}
         onWheel={e => { if (e.deltaY < 0) atTopUp(e.currentTarget); }}
         onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }}

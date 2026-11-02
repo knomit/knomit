@@ -6,6 +6,7 @@ import { DEFAULT_OPTIONS } from './materializeApi';
 import { FsError } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FactSetPage, FsSearch } from './factsetApi';
 import type { SaveOutcome } from './saveFile';
+import materializeCss from './materialize.css?raw';
 
 class MockIO {
   static all: MockIO[] = [];
@@ -610,5 +611,66 @@ describe('a landing happens once per request (#726 re-check)', () => {
     await waitFor(() => expect(sections()).toHaveLength(4));
     expect(calls).toEqual(['next F.5.0']);
     expect(box.scrollTop).toBe(250);
+  });
+});
+
+// #726 browser re-check (point 1): a prepend at scrollTop > 0 shifted the view
+// twice, because native scroll anchoring kept the place AND the view added
+// the height again; and the head skeleton pushed the run down while loading.
+// The view's place-keeping is the only one: overflow-anchor is off on this
+// scroller, and the skeleton's height is part of the place-keeping.
+//
+// jsdom runs no native anchoring, so the rule is asserted as CSS, and the
+// manual math with mocked heights: section i sits at 10 + skeleton + 100 i -
+// scrollTop, the skeleton (while mounted) is 80px above the run.
+//
+// Sabotage: (a) drop the skeleton branch of the place-keeping: the anchor
+// moves 80px down while the unit above loads; (b) delete the .k-fs-scroll
+// rule: the CSS assertion fails.
+describe('a prepend keeps the reader\'s anchor steady (#726 point 1)', () => {
+  it('the FactSet scroller turns native scroll anchoring off', async () => {
+    const { api } = makeApi();
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(3));
+    expect(screen.getByTestId('fs-scroll').classList.contains('k-fs-scroll')).toBe(true);
+    expect(materializeCss.replace(/\s+/g, ' ')).toContain('.k-fs-scroll { overflow-anchor: none; }');
+  });
+
+  it('at scrollTop > 0 the anchor keeps its offset while the skeleton shows and after the unit is prepended', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = scrollPane(box);
+    const SKEL = 80;
+    const secs = () => Array.from(document.querySelectorAll('[data-testid="mat-section"]'));
+    const skel = () => (document.querySelector('[data-testid="fs-head-loading"]') ? SKEL : 0);
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => skel() + 100 * secs().length });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const i = secs().indexOf(this);
+      const top = i >= 0 ? 10 + skel() + 100 * i - box.scrollTop : (this as HTMLElement).dataset?.testid === 'fs-top-sentinel' ? 9 - box.scrollTop : 0;
+      return { top, bottom: top + (i >= 0 ? 100 : 1), left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON() {} } as DOMRect;
+    });
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    let release!: () => void;
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async (t, c, u, sig) => {
+      await new Promise<void>(r => { release = r; });
+      return realSeek(t, c, u, sig);
+    });
+    const anchor = () => document.querySelector('[data-fs-unit="10"][data-mat-n="1"]')!.getBoundingClientRect().top;
+    userScroll(150); // up: the unit above starts loading
+    const before = anchor();
+    await waitFor(() => expect(screen.getByTestId('fs-head-loading')).toBeTruthy());
+    expect(Math.abs(anchor() - before)).toBeLessThanOrEqual(1);
+    calls.length = 0;
+    await act(async () => { release(); });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    expect(screen.queryByTestId('fs-head-loading')).toBeNull();
+    expect(Math.abs(anchor() - before)).toBeLessThanOrEqual(1);
+    expect(box.scrollTop).toBe(150 + 200); // scrollTop + the prepended height
   });
 });

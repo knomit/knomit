@@ -155,6 +155,10 @@ export default defineConfig(({ command }) => {
     test: {
       environment: 'jsdom',
       setupFiles: ['./src/test-setup.ts'],
+      // A stylesheet imported ?raw is read as text (a test asserting a rule,
+      // e.g. FactSetView's overflow-anchor); plain stylesheet imports stay
+      // unprocessed in tests.
+      css: { include: [/\.css\?raw$/] },
     },
   }
 })
