@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { api, type ArchivedRepo } from './api';
+import { api, type ArchivedRepo, type RestoreCredential } from './api';
 import { formatBytes } from './utils';
-import { btn, confirmBox, confirmInput } from './manageStyles';
+import { btn, confirmBox, confirmInput, segGroup, segment, segDot, wizardErr } from './manageStyles';
+import { SecretPicker } from './SecretPicker';
+import { PastedCredentialFields } from './PastedCredentialFields';
+import { emptyPasted, pastedBody, pastedReady, type PastedCredential } from './secrets';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
 
@@ -29,22 +32,47 @@ export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored
   const [confirming, setConfirming] = useState<'restore' | 'purge' | null>(null);
   const [renameTo, setRenameTo] = useState('');
   const [purgeText, setPurgeText] = useState('');
+  // The restored origin's credential. Archiving unlinked any stored secret,
+  // so a repo with an origin is restored only once the reader has chosen:
+  // nothing is preselected, so it is never restored anonymous by accident.
+  const [credChoice, setCredChoice] = useState<'' | 'secret' | 'pasted' | 'none'>('');
+  const [secretId, setSecretId] = useState('');
+  const [pasted, setPasted] = useState<PastedCredential>(() => emptyPasted(info.origin));
+  const [restoreErr, setRestoreErr] = useState('');
 
   const nameTaken = activeNames.has(info.name);
+  const hasOrigin = !!info.origin;
   const size = formatBytes(info.sizeBytes);
   const off = serverReadOnly || busy;
 
+  const credential = (): RestoreCredential | undefined => {
+    if (!hasOrigin) return undefined;
+    if (credChoice === 'secret') return { secret_id: secretId };
+    if (credChoice === 'none') return { no_credential: true };
+    return pastedBody(pasted) as RestoreCredential;
+  };
+  const credReady = !hasOrigin || credChoice === 'none'
+    || (credChoice === 'secret' && secretId !== '')
+    || (credChoice === 'pasted' && pastedReady(pasted));
+  const restoreReady = credReady && (!nameTaken || renameTo !== '');
+
   const beginRestore = () => {
-    if (nameTaken) { setRenameTo(''); setConfirming('restore'); return; }
-    void doRestore('');
+    if (!nameTaken && !hasOrigin) { void doRestore(''); return; }
+    setRenameTo(''); setCredChoice(''); setSecretId(''); setPasted(emptyPasted(info.origin)); setRestoreErr('');
+    setConfirming('restore');
   };
   const doRestore = async (newName: string) => {
-    onError(''); setBusy(true);
+    onError(''); setRestoreErr(''); setBusy(true);
     try {
-      const res = await api.restoreRepo(info.id, newName);
+      const res = await api.restoreRepo(info.id, newName, credential());
+      setConfirming(null);
       onRestored(res.name);
-    } catch (e) { onError(`restore failed: ${String(e)}`); }
-    finally { setBusy(false); setConfirming(null); }
+    } catch (e) {
+      // In the prompt, the refusal stays beside the choice it is about (a
+      // secret that does not fit this origin), so the reader can change it.
+      if (confirming === 'restore') setRestoreErr(e instanceof Error ? e.message : String(e));
+      else onError(`restore failed: ${String(e)}`);
+    } finally { setBusy(false); }
   };
   const doPurge = async () => {
     onError(''); setBusy(true);
@@ -78,12 +106,39 @@ export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored
           </dl>
           <ArchiveReasonLine info={info} />
           {confirming === 'restore' ? (
-            <div style={confirmBox}>
-              <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
-              <input autoFocus data-testid={`restore-name-input-${info.id}`} style={confirmInput} value={renameTo} placeholder="new repo name"
-                onChange={e => setRenameTo(e.target.value)} />
+            <div style={confirmBox} data-testid={`restore-prompt-${info.id}`}>
+              {nameTaken && (
+                <>
+                  <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
+                  <input autoFocus data-testid={`restore-name-input-${info.id}`} style={confirmInput} value={renameTo} placeholder="new repo name"
+                    onChange={e => setRenameTo(e.target.value)} />
+                </>
+              )}
+              {hasOrigin && (
+                <div data-testid={`restore-credential-${info.id}`} style={{ marginTop: nameTaken ? 14 : 0 }}>
+                  <div style={{ fontSize: 13, marginBottom: 8 }}>Which credential should it use for {info.origin}?</div>
+                  <div role="radiogroup" aria-label="Credential" style={segGroup}>
+                    {([['secret', 'Stored secret'], ['pasted', 'Pasted credential'], ['none', 'No credential']] as const).map(([v, l]) => (
+                      <button key={v} type="button" role="radio" aria-checked={credChoice === v} data-testid={`restore-choice-${v}`}
+                        style={segment(credChoice === v, v === 'none' ? 'neutral' : 'remote')} onClick={() => setCredChoice(v)}>
+                        <span style={segDot(credChoice === v, v === 'none' ? 'neutral' : 'remote')} />
+                        <span>{l}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {credChoice === 'secret' && (
+                    <div style={{ marginTop: 10 }}>
+                      <SecretPicker url={info.origin} value={secretId} onChange={id => setSecretId(id)} allowCreate testid="restore-secret-picker" />
+                    </div>
+                  )}
+                  {credChoice === 'pasted' && (
+                    <PastedCredentialFields url={info.origin} value={pasted} onChange={setPasted} testid="restore-pasted" />
+                  )}
+                </div>
+              )}
+              {restoreErr && <div role="alert" data-testid={`restore-error-${info.id}`} style={wizardErr}>{restoreErr}</div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button type="button" data-testid={`restore-confirm-${info.id}`} style={btn(busy || !renameTo, 'primary')} disabled={busy || !renameTo} onClick={() => doRestore(renameTo)}>Restore</button>
+                <button type="button" data-testid={`restore-confirm-${info.id}`} style={btn(busy || !restoreReady, 'primary')} disabled={busy || !restoreReady} onClick={() => doRestore(nameTaken ? renameTo : '')}>Restore</button>
                 <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
               </div>
             </div>
