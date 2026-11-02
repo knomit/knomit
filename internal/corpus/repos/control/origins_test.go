@@ -188,3 +188,98 @@ func TestOrigins_CascadesOnRepoDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
+
+func newLinkableSecret(t *testing.T, s *Secrets, name string) string {
+	t.Helper()
+	meta, err := s.Create(SecretInput{Name: name, Type: SecretTypeToken, Hosts: []string{"example.test"},
+		Value: SecretValue{Token: "t"}}, testNow)
+	require.NoError(t, err)
+	return meta.ID
+}
+
+func TestOrigins_SecretIDRoundTrips(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	id := newLinkableSecret(t, s, "pat")
+
+	want := Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", Mode: OriginModeSync, SecretID: id}
+	require.NoError(t, o.Set("u1", want))
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, want, *got)
+}
+
+func TestOrigins_SetWithoutSecretIDUnlinks(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	id := newLinkableSecret(t, s, "pat")
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", SecretID: id}))
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token"}))
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Empty(t, got.SecretID)
+	linked, err := s.LinkedRepos(id)
+	require.NoError(t, err)
+	require.Empty(t, linked)
+}
+
+func TestOrigins_SetCredentialKeepsModeAndBranch(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	url := "https://example.test/kb.git"
+	require.NoError(t, o.Set("u1", Origin{URL: url, Branch: "trunk", AuthMethod: "token", AuthToken: "old", Mode: OriginModeSubscribe}))
+
+	id := newLinkableSecret(t, s, "pat")
+	require.NoError(t, o.SetCredential("u1", url, "token", "", id))
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, Origin{URL: url, Branch: "trunk", AuthMethod: "token", Mode: OriginModeSubscribe, SecretID: id}, *got)
+
+	require.NoError(t, o.SetCredential("u1", url, "basic", "u:p", ""))
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, Origin{URL: url, Branch: "trunk", AuthMethod: "basic", AuthToken: "u:p", Mode: OriginModeSubscribe}, *got)
+
+	var raw string
+	require.NoError(t, r.DB().QueryRow(`SELECT auth_token FROM repo_origins WHERE repo_uid = 'u1'`).Scan(&raw))
+	require.NotEqual(t, "u:p", raw, "encrypted at rest")
+
+	_, o2, _ := openTestSecrets(t, nil)
+	require.Error(t, o2.SetCredential("u1", url, "token", "x", ""), "no crypt, no stored token")
+}
+
+func TestOrigins_SetCredentialCASRefusesChangedURL(t *testing.T) {
+	r, o, _ := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/new.git", Branch: "main", AuthMethod: "token", AuthToken: "keep"}))
+
+	err := o.SetCredential("u1", "https://example.test/old.git", "token", "new", "")
+	require.ErrorIs(t, err, ErrOriginChanged)
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, "keep", got.AuthToken, "nothing written")
+	require.ErrorIs(t, o.SetCredential("missing", "https://x/y", "token", "", ""), ErrOriginChanged)
+}
+
+func TestOrigins_DeleteDropsLink(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	id := newLinkableSecret(t, s, "pat")
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", SecretID: id}))
+	require.NoError(t, o.Delete("u1"))
+	require.NoError(t, s.Delete(id), "the link went with the origin")
+}
+
+func TestOrigins_LinkToMissingSecretFails(t *testing.T) {
+	r, o, _ := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	err := o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", SecretID: "nope"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "FOREIGN KEY")
+	got, gerr := o.Get("u1")
+	require.NoError(t, gerr)
+	require.Nil(t, got, "the whole Set rolled back")
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token"}))
+	err = o.SetCredential("u1", "https://example.test/kb.git", "token", "", "nope")
+	require.Error(t, err)
+}
