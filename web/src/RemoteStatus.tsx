@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { api, type OriginResponse } from './api';
 import type { RemoteState } from './useRemote';
 import { GlobeIcon, PencilIcon, UnlinkIcon } from './icons';
-import { btn, card, cardIconBtn, cardLabel, confirmBox, linkBtn } from './manageStyles';
+import { btn, card, cardIconBtn, cardLabel, confirmBox, linkBtn, warnBox } from './manageStyles';
+import { RemoteCredential } from './RemoteCredential';
 
 interface Props {
   repo: string;
@@ -147,6 +148,9 @@ export function RemoteCard({ repo, agentBranch, readOnly, lockOrigin = false, st
             </div>
           )}
 
+          <RemoteCredential repo={repo} origin={origin} readOnly={readOnly}
+            onChanged={() => { reload(); onChanged(); }} />
+
           <SyncLine o={origin} />
           <PushLine o={origin} />
         </div>
@@ -201,4 +205,3 @@ function PushLine({ o }: { o: OriginResponse }) {
 }
 
 const muted: React.CSSProperties = { fontSize: 13, color: '#888', marginBottom: 10 };
-const warnBox: React.CSSProperties = { marginTop: 8, padding: 10, background: '#2a210e', border: '1px solid #5c4a1a', borderRadius: 6, fontSize: 12, color: '#e8c98a', lineHeight: 1.5 };

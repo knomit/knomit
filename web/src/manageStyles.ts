@@ -80,6 +80,10 @@ export const fieldHint: React.CSSProperties = { fontSize: 12, color: '#666', mar
 export const fieldInput: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
 export const fieldCaveat: React.CSSProperties = { marginTop: 10, padding: '8px 10px', borderRadius: 5, background: '#131313', border: '1px solid #242424', fontSize: 11.5, lineHeight: 1.55, color: '#666' };
 
+/** warnBox is the Remote card's amber warning: a state the reader should act
+ *  on that does not stop sync (a push-only upstream, an expiring secret). */
+export const warnBox: React.CSSProperties = { marginTop: 8, padding: 10, background: '#2a210e', border: '1px solid #5c4a1a', borderRadius: 6, fontSize: 12, color: '#e8c98a', lineHeight: 1.5 };
+
 export const confirmBox: React.CSSProperties = {
   marginTop: 14, padding: 14,
   background: '#111', border: '1px solid #333', borderRadius: 6,

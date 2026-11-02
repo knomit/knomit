@@ -464,7 +464,10 @@ export function RepoSettings({ name, lenses, focus, onFocused, canArchive, serve
       hint: subscribed ? 'pulls from an origin; never pushes' : 'pull and push against an origin',
       // The failing half of the origin marks the index item, so a rejected
       // push is visible from the top of the page.
-      problem: remote.origin?.last_status === 'error' || remote.origin?.last_push_status === 'error',
+      problem: remote.origin?.last_status === 'error' || remote.origin?.last_push_status === 'error'
+        // A linked secret that expires soon or has expired: sync still runs,
+        // but the reader should replace it before the forge refuses it.
+        || remote.origin?.secret_status === 'expiring' || remote.origin?.secret_status === 'expired',
       body: connected ? (
         <>
           {/* agentBranch here means "this machine's agent branch", which drives

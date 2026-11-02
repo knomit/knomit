@@ -74,3 +74,32 @@ export function parseHosts(text: string): string[] {
 export function methodForSecretType(t: SecretType): string {
   return t === 'ssh_key' ? 'ssh' : t;
 }
+
+/** PastedCredential is a typed-in credential: a token, a username and
+ *  password, or (SSH remotes) this server's own SSH key. */
+export interface PastedCredential {
+  auth_method: 'token' | 'basic' | 'ssh';
+  token: string;
+  user: string;
+  password: string;
+}
+
+/** emptyPasted: the pasted credential form's start for url. */
+export function emptyPasted(url: string): PastedCredential {
+  return { auth_method: typesForURL(url).includes('ssh_key') ? 'ssh' : 'token', token: '', user: '', password: '' };
+}
+
+/** pastedReady: every field the method needs is filled. */
+export function pastedReady(p: PastedCredential): boolean {
+  if (p.auth_method === 'token') return p.token !== '';
+  if (p.auth_method === 'basic') return p.user !== '' && p.password !== '';
+  return true;
+}
+
+/** pastedBody: the wire fields of a pasted credential (auth_method plus
+ *  token, or user and password). */
+export function pastedBody(p: PastedCredential): { auth_method: string; token?: string; user?: string; password?: string } {
+  if (p.auth_method === 'token') return { auth_method: 'token', token: p.token };
+  if (p.auth_method === 'basic') return { auth_method: 'basic', user: p.user, password: p.password };
+  return { auth_method: 'ssh' };
+}
