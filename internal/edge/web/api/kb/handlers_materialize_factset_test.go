@@ -706,8 +706,12 @@ func factsetGoneFixture(t *testing.T) (m *repos.Manager, h http.Handler, x, y st
 	writeMatFact(t, beta, br, "kb/b/x.md", "X", "x body.")
 	writeMatFact(t, beta, br, "kb/b/y.md", "Y", "y body.")
 	writeMatFact(t, m.Get("gamma"), br, "kb/g/g.md", "G", "g body.")
-	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", x)
+	// The search lists by whole-second commit time, newest first, then by
+	// path, and these two writes may straddle a second boundary. r2 is written
+	// BEFORE r1 so r1 is newer or tied either way: r1 is unit 1 and r2 unit 2
+	// whether or not the seconds differ (gotcha 4417245c, #707's F4 flake).
 	writeMatFact(t, alpha, br, "kb/u/r2.md", "R2", "r2 body.", y)
+	writeMatFact(t, alpha, br, "kb/u/r1.md", "R1", "r1 body.", x)
 	blocked := map[string]bool{}
 	router := newTestRouter(m)
 	h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
