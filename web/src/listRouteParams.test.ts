@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { api } from './api';
+import { api, branchEventsUrl } from './api';
+import { materializeApi } from './materializeApi';
+import type { MatOptions, MatTarget } from './materializeApi';
 import type { ListFilters } from './listSearch';
+
+const MAT: MatTarget = { repo: 'r', branch: 'b', path: 'kb/x.md' };
+const MAT_OPTS: MatOptions = { depth: 2, references: 9, crossKb: true, unpin: true };
 
 // The four REST list routes answer 400 to a query parameter they do not
 // declare. Their declared sets are their openapi.yaml parameter lists (the Go
@@ -143,6 +148,11 @@ describe('the knowledge-base reads send only the parameters their route declares
     { name: 'lensMotifCluster → lens /motifs/{key}', spec: '/lenses/{lens}/motifs/{key}', call: () => api.lensMotifCluster('eng', 'k') },
     { name: 'getLensStats → lens /stats', spec: '/lenses/{lens}/stats', call: () => api.getLensStats('eng', 'kb', 'impact', ['alpha']), sends: ['path', 'axis', 'repo'] },
     { name: 'lensBrowse → lens /topics/{path}', spec: '/lenses/{lens}/topics/{path}', call: () => api.lensBrowse('eng', 'kb/x', 'kb', ['alpha']), sends: ['repo'] },
+    { name: 'factDiff → /commits/{sha}/facts/{path} (both sides)', spec: `${B}/commits/{sha}/facts/{path}`, call: () => api.factDiff('r', 'b', 'kb/x.md', 'abc', 'def') },
+    { name: 'materializeApi.page first call → /facts/{path}/materialize/pages', spec: `${B}/facts/{path}/materialize/pages`, call: () => materializeApi.page(MAT, MAT_OPTS, null), sends: ['depth', 'max_nodes', 'unpin', 'cross_kb', 'limit'] },
+    { name: 'materializeApi.page cursor call → /facts/{path}/materialize/pages', spec: `${B}/facts/{path}/materialize/pages`, call: () => materializeApi.page(MAT, MAT_OPTS, 'c1'), sends: ['cursor'] },
+    { name: 'materializeApi.page at a commit → the same parameters', spec: `${B}/facts/{path}/materialize/pages`, call: () => materializeApi.page({ ...MAT, commit: 'abc' }, MAT_OPTS, null), sends: ['depth', 'limit'] },
+    { name: 'materializeApi.exportMarkdown → /facts/{path}/materialize', spec: `${B}/facts/{path}/materialize`, call: () => materializeApi.exportMarkdown(MAT, MAT_OPTS), sends: ['depth', 'max_nodes', 'unpin', 'cross_kb'] },
   ];
   for (const c of cases) {
     it(c.name, async () => {
@@ -157,4 +167,12 @@ describe('the knowledge-base reads send only the parameters their route declares
       if (c.sends) expect(sentNames(f)).toEqual(expect.arrayContaining(c.sends));
     });
   }
+
+  // App.tsx opens the branch stream at branchEventsUrl (an EventSource, so no
+  // fetch to capture): its URL is checked against /events directly.
+  it('App’s branch stream → /events', () => {
+    const u = new URL(branchEventsUrl('r', 'agent/x'), 'http://x');
+    expect(u.pathname).toBe('/api/v1/repos/r/branches/agent:x/events');
+    expect(undeclared([...u.searchParams.keys()], specQueryParams(`${B}/events`))).toEqual([]);
+  });
 });

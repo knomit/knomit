@@ -87,7 +87,7 @@ func TestValidSSEPath(t *testing.T) {
 	good := []string{
 		"/api/v1/repo-events",
 		"/api/v1/logs/events",
-		"/api/v1/repos/a/branches/main/events?since=3",
+		"/api/v1/repos/a/branches/main/events",
 		"/api/v1/sessions/events",
 	}
 	bad := []string{

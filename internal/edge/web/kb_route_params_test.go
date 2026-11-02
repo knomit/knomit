@@ -139,3 +139,36 @@ func TestKBRoutes_UnknownAndMalformedAre400_DeclaredAccepted(t *testing.T) {
 		}
 	}
 }
+
+// A raw system file is read as a file whatever its last segment is, so a
+// .knomit/ path ending in /materialize or /commits takes the fact read's
+// (empty) declared set, not the sub-resource's — on the repo, commit-anchored
+// and lens fact routes alike.
+//
+// Sabotage: test the sub-resource suffix before the system-file decision in
+// refuseUnknownFactPath (materialize's bogus reaches the file read, a 404;
+// commits' limit is accepted, a 404).
+func TestKBRoutes_SystemFilePathTakesTheFactReadSet(t *testing.T) {
+	e := newLensRESTEnv(t, "alpha")
+	alpha := e.m.Get("alpha")
+	writeFactsInOneCommit(t, alpha, factSpec{path: "kb/a/1.md", title: "alpha one"})
+	var sha string
+	require.NoError(t, alpha.WithRead(func(svc *store.Service) {
+		var err error
+		sha, err = svc.HeadCommit(context.Background(), alpha.AgentBranch())
+		require.NoError(t, err)
+	}))
+	h := e.as(t, "reader")
+	br := "/api/v1/repos/alpha/branches/" + urlBranch(alpha.AgentBranch())
+	for _, base := range []string{br + "/facts", br + "/commits/" + sha + "/facts", "/api/v1/lenses/eng/facts"} {
+		for path, q := range map[string]string{".knomit/x/materialize": "bogus=1", ".knomit/x/commits": "limit=5"} {
+			u := base + "/" + path + "?" + q
+			code, body := restGet(t, h, u)
+			require.Equal(t, http.StatusBadRequest, code, "%s: %s", u, body)
+			var p struct{ Title, Detail string }
+			require.NoError(t, json.Unmarshal([]byte(body), &p), body)
+			require.Equal(t, "Invalid parameter", p.Title, body)
+			require.Equal(t, `unknown parameter "`+strings.SplitN(q, "=", 2)[0]+`"`, p.Detail, u)
+		}
+	}
+}

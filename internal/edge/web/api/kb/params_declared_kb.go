@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"knomit/internal/corpus/federate"
+	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 )
 
@@ -79,6 +81,13 @@ var (
 // fact read with its /incoming and /outgoing sub-resources is factReadParams
 // (commitFactParams at a commit, which also takes fallback).
 func refuseUnknownFactPath(w http.ResponseWriter, r *http.Request, path string, commitAnchored bool) bool {
+	// A raw system file (.knomit/…, bare or kb://-qualified on the lens) is
+	// read as a file, never as a sub-resource, whatever its last segment is:
+	// `.knomit/x/commits` is a file named commits. Decide that FIRST, exactly
+	// as the routes do (serveSystemFileRead runs before any dispatch).
+	if isSystemFileRequest(path) {
+		return factReadParams.refuseUnknown(w, r)
+	}
 	if _, ok := splitMaterializePages(path); ok {
 		return refuseMalformed(w, r)
 	}
@@ -92,4 +101,14 @@ func refuseUnknownFactPath(w http.ResponseWriter, r *http.Request, path string, 
 		return factCommitsParams.refuseUnknown(w, r)
 	}
 	return factReadParams.refuseUnknown(w, r)
+}
+
+// isSystemFileRequest reports whether a fact-route path names a raw system
+// file: the test serveSystemFileRead and serveLensSystemFileRead apply (a
+// kb://<id12>/ qualifier, which only the lens route can carry, is stripped).
+func isSystemFileRequest(path string) bool {
+	if _, rel, _, err := federate.ParseQualifiedPath(path); err == nil && fact.IsSystemFilePath(rel) {
+		return true
+	}
+	return fact.IsSystemFilePath(path)
 }

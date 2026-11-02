@@ -67,6 +67,12 @@ export function branchBase(repo: string, branch: string): string {
   return `${repoBase(repo)}/branches/${encodeBranch(branch)}`;
 }
 
+/** The branch's task and status SSE stream. It takes no query parameter: the
+ *  route refuses any it does not declare. */
+export function branchEventsUrl(repo: string, branch: string): string {
+  return `${branchBase(repo, branch)}/events`;
+}
+
 // `id` is the repo's 12-hex stable identity — the root commit of its KB store,
 // the same value a kb://<id>/<path> ref carries. Optional because an older
 // server omits it, and because a repo whose store has not opened cannot resolve
