@@ -4066,6 +4066,16 @@ paths:
         not follow symlinks, and refuses such a repo), and 422 "Fleet
         ontology reserved" for a fleet repository (never restored); the repo
         then stays archived, so it can still be purged.
+
+        Archiving unlinks a repository from its stored secret, so restoring
+        one that has an origin requires choosing its credential: exactly one
+        of `secret_id` (needs the local-or-same-origin admin gate, 403
+        otherwise; the secret must fit the origin, 422 otherwise), a pasted
+        credential (`auth_method` with `token`, or with `user` and
+        `password`; needs `operator`, 403 otherwise), or `no_credential:
+        true`. No choice, or more than one, is 400; so is a stored secret or
+        pasted credential for a repository with no origin. A refused restore
+        leaves the repository archived.
       operationId: restoreArchivedRepo
       requestBody:
         required: false
@@ -4078,6 +4088,8 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Repo" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
@@ -7201,6 +7213,16 @@ components:
         new_name:
           type: string
           description: Optional new name for the restored repo (defaults to original name).
+        secret_id:
+          type: string
+          description: Restore with this stored secret linked (admin). One of the three credential choices.
+        auth_method: { type: string, enum: [token, basic, ssh, none], description: "With token, or user and password: restore with a pasted credential (operator). One of the three credential choices." }
+        token: { type: string, writeOnly: true }
+        user: { type: string }
+        password: { type: string, writeOnly: true }
+        no_credential:
+          type: boolean
+          description: Restore with no credential (anonymous). One of the three credential choices.
 
     RenameRequest:
       type: object

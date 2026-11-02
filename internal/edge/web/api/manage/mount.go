@@ -88,7 +88,7 @@ func Mount(
 	})
 	top.Get("/archived", handleHALArchived(b, rm))
 	top.Get("/archived/{id}", handleHALArchivedItem(b, rm))
-	top.Post("/archived/{id}/restore", handleHALArchivedRestore(b, rm))
+	top.Post("/archived/{id}/restore", handleHALArchivedRestore(b, rm, operator, admin))
 	top.Delete("/archived/{id}", handleHALArchivedPurge(rm))
 
 	// Repo collection. These carry no {repo} segment, so they resolve their
