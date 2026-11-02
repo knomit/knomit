@@ -139,8 +139,23 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("How strictly `motifs` must match, loosest last: exact (default; the same motif, however it is spelled), stem, token-2, token-1 (noisiest), soft (not yet available). Only meaningful alongside `motifs`."),
 			mcpgo.Enum(motifMatchEnum()...),
 		),
+		// The same narrowing, and the same visible text, as knomit_materialize's
+		// search.repo (ruling S6): the lens list's repo= filter.
+		mcpgo.WithArray("repo",
+			mcpgo.Description(repoParamDescription),
+			mcpgo.WithStringItems(),
+		),
 	)
 }
+
+// repoParamDescription is the knomit_query `repo` argument's description,
+// word for word knomit_materialize's search.repo (ruling S6).
+const repoParamDescription = "Lens endpoints only: search only these member repos, by name (the lens list's repo filter)."
+
+// errRepoNotLens is knomit_query's answer to a repo narrowing on a binding
+// that is not a lens: word for word the FactSet's (ruling S4), so the two
+// tools refuse it alike.
+const errRepoNotLens = "repo is only accepted on a lens"
 
 // factOutput is one result row. It is also the unit stored (JSON-encoded) in a
 // session snapshot, so it must round-trip cleanly — hence Frontmatter is a
@@ -283,18 +298,57 @@ func mountLabel(rt repos.ReadTarget) string {
 // query ONCE for the whole fan-out rather than once per mount (fanoutQueryVec:
 // a failed or empty embedding fails the query here, once; nil with no error —
 // no text, or no embedder handed in — leaves every mount to embed for itself;
-// text search is vector-only, there is no keyword fallback). knomit_query has
-// no repo= narrowing. Any planning error is the tool error, text unchanged.
-func planFused(ctx context.Context, b *repos.Binding, emb model.Embedder, q index.SearchOptions) (*federate.FusedPlan, error) {
+// text search is vector-only, there is no keyword fallback).
+//
+// repo (from parseQueryRepo) narrows to the named lens members exactly as the
+// REST lens reads' repo= does (federate.NarrowByRepo; an unknown name is its
+// *UnknownRepoError text, which REST serves as 422 "Unknown repo"). Any
+// planning error is the tool error, text unchanged.
+func planFused(ctx context.Context, b *repos.Binding, emb model.Embedder, q index.SearchOptions, repo []string) (*federate.FusedPlan, error) {
 	return federate.PlanFused(ctx, federate.FusedQuery{
 		Binding:  b,
 		Path:     q.Path,
+		Repos:    repo,
 		Opts:     q,
 		Clusters: mcpMotifClusters,
 		Embed: func(ctx context.Context, text string) ([]float32, error) {
 			return fanoutQueryVec(ctx, emb, text)
 		},
 	})
+}
+
+// parseQueryRepo reads knomit_query's `repo` argument as REST reads repo=:
+// every name the caller sent, an explicit empty one included (REST
+// `?repo=` is the 422 `no mount named ""`, so "" is an unknown name here
+// too, never "no narrowing"); a single string is one name. On a binding
+// that is not a lens any repo is refused (ruling S4). Callers check it
+// BEFORE the filter check, so a repository endpoint names the real reason: a
+// repository has no members to narrow to. FromLens, not IsLens, so a
+// one-member lens still accepts its one member's name, as REST does.
+func parseQueryRepo(req mcpgo.CallToolRequest, b *repos.Binding) ([]string, error) {
+	raw, ok := req.GetArguments()["repo"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	var names []string
+	switch v := raw.(type) {
+	case string:
+		names = []string{v}
+	case []any:
+		for _, e := range v {
+			s, isStr := e.(string)
+			if !isStr {
+				return nil, errors.New("repo must be a list of repo names")
+			}
+			names = append(names, s)
+		}
+	default:
+		return nil, errors.New("repo must be a list of repo names")
+	}
+	if len(names) > 0 && !b.FromLens() {
+		return nil, errors.New(errRepoNotLens)
+	}
+	return names, nil
 }
 
 // mcpSearchLeg reads one mount's relevance list for the fused read, in MCP's
@@ -331,14 +385,17 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 	if msg := motifMatchUnavailable(q); msg != "" {
 		return mcpgo.NewToolResultError(msg), nil
 	}
-	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
-	plan, err := planFused(ctx, b, emb, q)
+	repo, err := parseQueryRepo(req, b)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	q = plan.Opts
+	q.Limit = maxResults // per-mount starting depth (RFC §7.1: no overscan factor)
+	plan, err := planFused(ctx, b, emb, q, repo)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 
-	// Fan out in parallel through the shared fused read (federate.FusedRecent,
+	// Fan out in parallel through the shared fused read (federate.FusedRecentDeep,
 	// the same function the REST /lenses/{lens}/facts listing calls); any mount
 	// error fails the whole query — a lens must never silently shrink its read
 	// set (RFC §9.1) — and the error is the lowest-indexed mount's.
@@ -352,10 +409,20 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 	// path (write mount wins) and truncates nothing, so a shadowed cross-mount
 	// copy never consumes a snapshot slot and the snapshot agrees with the web
 	// /facts union.
-	res, err := federate.FusedRecent(ctx, plan, mcpRecentLeg, federate.FusedOptions{})
+	//
+	// DEPTH IS RE-DERIVED exactly as on REST /facts: a text-less listing starts
+	// every mount at max_results (the snapshot is the REST page offset=0,
+	// limit=max_results) and doubles while fewer than max_results merged rows
+	// lie at or above the horizon of a truncated mount, up to
+	// federate.MaxRecencyDepth. Write-first dedupe spends depth, so one round
+	// at max_results would hide a fork's own newest facts behind copies of its
+	// upstream's. A query with text runs once.
+	res, _, err := federate.FusedRecentDeep(ctx, plan, mcpRecentLeg, federate.FusedOptions{},
+		maxResults, maxResults, federate.MaxRecencyDepth)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", err)), nil
 	}
+	q = plan.Opts
 	logQueryDiag(sortRecent, b, q, plan.Targets, res.Diags, res.ListLens())
 
 	order := res.Hits
@@ -601,13 +668,19 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	if msg := motifMatchUnavailable(q); msg != "" {
 		return mcpgo.NewToolResultError(msg), nil
 	}
+	// repo BEFORE hasAnyFilter: on a repository endpoint a repo-only call is
+	// refused for the repo, not for "no filter".
+	repo, err := parseQueryRepo(req, b)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one filter is required: " + queryFilterList), nil
 	}
 	// Plan AFTER hasAnyFilter, so the "no filter supplied" message stays about
 	// what the caller actually sent rather than about widened motif terms.
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
-	plan, err := planFused(ctx, b, emb, q)
+	plan, err := planFused(ctx, b, emb, q, repo)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}

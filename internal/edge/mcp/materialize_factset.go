@@ -50,7 +50,7 @@ var factsetSearchKeys = map[string]any{
 	"min_confidence": map[string]any{"type": "number"},
 	"min_similarity": map[string]any{"type": "number"},
 	"repo": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
-		"description": "Lens endpoints only: search only these member repos, by name (the lens list's repo filter)."},
+		"description": repoParamDescription},
 	"sort": map[string]any{"type": "string", "enum": []string{materialize.SortRelevance, materialize.SortRecent},
 		"description": "relevance (default): the search list; recent: newest first."},
 }

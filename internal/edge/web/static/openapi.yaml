@@ -4117,8 +4117,14 @@ paths:
         repo-relative path (the write mount's copy wins), and orders the union:
         by `committed_at` descending without a text query, by reciprocal-rank
         fusion with one. `total` is the post-dedupe union size and
-        `limit`/`offset` page WITHIN it. Each mount contributes at most 500
-        candidate rows to the merged set.
+        `limit`/`offset` page WITHIN it. With a text query each mount
+        contributes at most 500 candidate rows. Without one each mount is
+        first asked for `offset`+`limit` rows, and the depth doubles (up to
+        10000) while dedupe has left fewer than `offset`+`limit` rows that no
+        unfetched row could outrank. Without a text query, `knomit_query`
+        with `sort=recent` on the lens's MCP endpoint lists the same union the
+        same way, deepening from `max_results`, so its first `max_results` rows
+        are this listing's `offset=0&limit=<max_results>`.
 
         Any mount error fails the whole request — a lens never silently shrinks
         its read set.
@@ -5008,7 +5014,11 @@ components:
       in: query
       description: |
         Repeatable. Narrows the fan-out to the named mounts. A name that is not
-        a mount of this lens is a 422.
+        a mount of this lens is a 422. `knomit_query` on the lens's MCP
+        endpoint takes the same narrowing as its `repo` argument, through the
+        same planning: an unknown name is the same `detail` text as a tool
+        error, and on an endpoint bound to a repository rather than a lens
+        `repo` is refused with "repo is only accepted on a lens".
       schema: { type: array, items: { type: string } }
       style: form
       explode: true
