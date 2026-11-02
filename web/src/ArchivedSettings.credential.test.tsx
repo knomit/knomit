@@ -87,3 +87,18 @@ describe('Restore asks for the credential', () => {
     expect(p.onRestored).not.toHaveBeenCalled();
   });
 });
+
+describe('Restore prompt Cancel', () => {
+  it('forgets the typed credential and the choice', () => {
+    renderPage();
+    open();
+    fireEvent.click(screen.getByTestId('restore-choice-pasted'));
+    fireEvent.change(screen.getByTestId('restore-pasted-token'), { target: { value: 'TYPED-SECRET' } });
+    fireEvent.click(screen.getByTestId('restore-cancel-u1'));
+    open();
+    expect(screen.getByTestId('restore-choice-pasted')).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(screen.getByTestId('restore-choice-pasted'));
+    expect(screen.getByTestId('restore-pasted-token')).toHaveValue('');
+    expect(document.body.innerHTML).not.toContain('TYPED-SECRET');
+  });
+});

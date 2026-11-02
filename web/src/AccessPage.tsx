@@ -20,7 +20,7 @@ export function AccessPage({ tab, onTab, oauthAvailable, authCount, onAuthCount 
   oauthAvailable: boolean;
   /** Authorization requests waiting, badged on the tab when above zero. */
   authCount: number | null;
-  onAuthCount: (n: number) => void;
+  onAuthCount: (n: number | null) => void;
 }) {
   const tabs = accessTabsFor(oauthAvailable);
   const shown: AccessTab = tabs.includes(tab) ? tab : 'secrets';

@@ -16,7 +16,7 @@ import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
 import { useListUrl } from './listUrl';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
-import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown, FLEET_FACETS } from './facets';
+import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, accessTabsFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
 import { isMatFocus } from './matFocus';
@@ -1127,6 +1127,9 @@ export default function App() {
     enabled: serverOpen && !state.serverReadOnly,
     pageOpen: view.server === 'access' && accessTab === 'auth',
   });
+  // A tab that is gone (the OAuth issuer went away) is forgotten, not kept
+  // for later: the reader lands on Secrets and stays there if it returns.
+  if (!accessTabsFor(oauth.available).includes(accessTab)) setAccessTab('secrets');
   const serverPages = useMemo(() => serverPagesFor(state.serverReadOnly), [state.serverReadOnly]);
   const serverPage: ServerPage | null = view.server === null ? null : serverPages.includes(view.server) ? view.server : (serverPages[0] ?? null);
   const onServerPage = useCallback((p: ServerPage) => dispatchView({ type: 'SET_SERVER_PAGE', page: p }), [dispatchView]);

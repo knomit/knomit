@@ -38,12 +38,15 @@ export function RemoteCredential({ repo, origin, readOnly, onChanged }: {
   const [err, setErr] = useState('');
 
   const url = origin.url;
-  const linked = !!(origin.secret_name || origin.secret_id);
+  const linked = !!(origin.secret_linked || origin.secret_name || origin.secret_id);
   // A fleet peer authenticates with this instance's certificate; a local
   // path has no credential at all. Neither has anything to change here.
   const remoteKind = isHTTPURL(url) ? 'http' : isSSHURL(url) ? 'ssh' : null;
   if (origin.auth_method === 'cert' || remoteKind === null) return null;
 
+  // Closing a form forgets what was typed: a credential never lingers in
+  // state behind a cancelled form.
+  const close = () => { setMode(null); setPasted(emptyPasted(url)); setSecretId(''); setReplacement(''); setErr(''); };
   const open = (m: Mode) => {
     setMode(m); setErr(''); setSecretId(''); setReplacement(''); setPasted(emptyPasted(url));
   };
@@ -76,7 +79,9 @@ export function RemoteCredential({ repo, origin, readOnly, onChanged }: {
         {!readOnly && mode === null && (
           <>
             {!linked && remoteKind === 'http' && (
-              <button type="button" data-testid="credential-replace" style={linkBtn} onClick={() => open('replace')}>Replace token…</button>
+              <button type="button" data-testid="credential-replace" style={linkBtn} onClick={() => open('replace')}>
+                {origin.auth_method === 'none' || origin.auth_method === '' ? 'Add token…' : 'Replace token…'}
+              </button>
             )}
             <button type="button" data-testid="credential-link" style={linkBtn} onClick={() => open('link')}>
               {linked ? 'Use another secret…' : 'Use a stored secret…'}
@@ -100,7 +105,7 @@ export function RemoteCredential({ repo, origin, readOnly, onChanged }: {
         <div style={confirmBox} data-testid="credential-replace-box">
           <div style={{ fontSize: 13, marginBottom: 4 }}>New credential for this remote. Sync uses it right away; nothing reconnects.</div>
           <PastedCredentialFields url={url} value={pasted} onChange={setPasted} testid="credential-pasted" />
-          <Actions busy={busy} ready={pastedReady(pasted)} label="Save" onCancel={() => setMode(null)}
+          <Actions busy={busy} ready={pastedReady(pasted)} label="Save" onCancel={close}
             onConfirm={() => send(pastedBody(pasted))} testid="credential-replace-save" />
         </div>
       )}
@@ -111,7 +116,7 @@ export function RemoteCredential({ repo, origin, readOnly, onChanged }: {
             {linked ? 'Switch to another stored secret.' : 'Use a stored secret instead of the pasted credential. The pasted credential is removed.'}
           </div>
           <SecretPicker url={url} value={secretId} onChange={id => setSecretId(id)} allowCreate testid="credential-picker" />
-          <Actions busy={busy} ready={secretId !== ''} label="Use this secret" onCancel={() => setMode(null)}
+          <Actions busy={busy} ready={secretId !== ''} label="Use this secret" onCancel={close}
             onConfirm={() => send({ secret_id: secretId })} testid="credential-link-save" />
         </div>
       )}
@@ -134,7 +139,7 @@ export function RemoteCredential({ repo, origin, readOnly, onChanged }: {
           {replacement === 'pasted' && remoteKind === 'http' && (
             <PastedCredentialFields url={url} value={pasted} onChange={setPasted} testid="unlink-pasted" />
           )}
-          <Actions busy={busy} ready={unlinkReady} label="Unlink" danger onCancel={() => setMode(null)}
+          <Actions busy={busy} ready={unlinkReady} label="Unlink" danger onCancel={close}
             onConfirm={() => send(replacement === 'none' ? { secret_id: null } : { secret_id: null, ...pastedBody(pasted) })}
             testid="credential-unlink-confirm" />
         </div>

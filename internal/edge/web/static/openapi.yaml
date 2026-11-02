@@ -7333,6 +7333,9 @@ components:
         secret_id:
           type: string
           description: "The stored secret this origin links to. Only for a caller that passes the local-or-same-origin admin gate."
+        secret_linked:
+          type: boolean
+          description: "true when the origin is linked to a stored secret, for every reader, even when the secret's name cannot be read (then secret_name is absent)."
         secret_name:   { type: string, description: "The linked stored secret's name." }
         secret_status:
           type: string

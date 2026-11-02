@@ -73,7 +73,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         if (!live) return;
         // A forge origin linked to a stored secret: its method is 'secret'
         // in the flows, and the Access row names the secret.
-        const linked = !!(o?.secret_name || o?.secret_id);
+        const linked = !!(o?.secret_linked || o?.secret_name || o?.secret_id);
         setPeerRead({
           key: originKey, peer: o ? o.auth_method === 'cert' : null, method: linked ? 'secret' : o?.auth_method ?? '',
           ...(linked ? { secret: { name: o?.secret_name ?? '', status: o?.secret_status } } : {}),

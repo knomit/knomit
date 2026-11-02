@@ -137,7 +137,7 @@ function PendingRow({ p, onDone, onApproved }: { p: OAuthPending; onDone: () => 
 
 // AuthPage is the Authorizations server page: one block per waiting request,
 // titled by the client as it names itself, or a single "Nothing waiting".
-export function AuthPage({ onCount }: { onCount?: (n: number) => void }) {
+export function AuthPage({ onCount }: { onCount?: (n: number | null) => void }) {
   const [rows, setRows] = useState<OAuthPending[] | null>(null);
   const [err, setErr] = useState('');
   // The last approval that left a known subject's grants alone: the row is
@@ -149,7 +149,8 @@ export function AuthPage({ onCount }: { onCount?: (n: number) => void }) {
       .then(list => {
         setErr('');
         setRows(list ?? []);
-        onCount?.(list?.length ?? 0);
+        // null: no issuer here any more (404); the caller drops the tab.
+        onCount?.(list === null ? null : list.length);
       })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)));
   }, [onCount]);

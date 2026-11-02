@@ -198,6 +198,22 @@ describe('the gear opens the server pages', () => {
   });
 });
 
+describe('Access forgets a tab that is gone', () => {
+  it('lands on Secrets when the Authorizations page finds no issuer, and keeps it there', async () => {
+    const m = await primeApi({ oauth: [pending('p1', 'alpha')] });
+    // The gear's probe sees the issuer; the Authorizations page's own poll
+    // then finds it gone (404 -> null).
+    m.listOAuthPending.mockResolvedValueOnce([pending('p1', 'alpha')]).mockResolvedValue(null);
+    await mountApp();
+    await openServer();
+    fireEvent.click(screen.getByTestId('server-tab-access'));
+    fireEvent.click(await screen.findByTestId('access-tab-auth'));
+    expect(await screen.findByTestId('secrets-tab')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('access-tab-auth')).toBeNull());
+    expect(screen.getByTestId('access-tab-secrets')).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
 describe('the gear is lit while they show, and takes you back', () => {
   it('returns to the previous target AND facet', async () => {
     await primeApi();

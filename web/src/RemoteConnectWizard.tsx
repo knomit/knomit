@@ -124,7 +124,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
       // A stored 'cert' is the server's decision, never an input: it maps to
       // Auto-detect, so a re-submit is decided again.
       const m = o.auth_method;
-      if (o.secret_name || o.secret_id) {
+      if (o.secret_linked || o.secret_name || o.secret_id) {
         setWasLinked(true);
         setAuthMethod('secret');
         if (o.secret_id) setSecretId(o.secret_id);

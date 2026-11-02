@@ -17,7 +17,7 @@ export function ServerPages({ page, accessTab, onAccessTab, oauthAvailable, auth
   oauthAvailable: boolean;
   authCount: number | null;
   /** The Authorizations tab reports its own count while it polls. */
-  onAuthCount: (n: number) => void;
+  onAuthCount: (n: number | null) => void;
 }) {
   return (
     <div data-testid="server-pages" style={body}>

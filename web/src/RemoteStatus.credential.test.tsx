@@ -133,3 +133,37 @@ describe('RemoteCard credential row', () => {
     expect(screen.getByTestId('credential-link-box')).toBeInTheDocument();
   });
 });
+
+describe('RemoteCard credential row: link flag and form state', () => {
+  it('a linked repo whose secret name cannot be read still shows as linked, named (unreadable), with no token replace', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue({ ...base, secret_linked: true, secret_status: undefined });
+    render(<Harness />);
+    expect(await screen.findByTestId('credential-secret-name')).toHaveTextContent('(unreadable)');
+    expect(screen.queryByTestId('credential-replace')).toBeNull();
+    expect(screen.getByTestId('credential-unlink')).toBeInTheDocument();
+  });
+
+  it('offers "Add token…" on a repo with no credential, "Replace token…" on a pasted one', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue({ ...base, auth_method: 'none' });
+    render(<Harness />);
+    expect(await screen.findByTestId('credential-replace')).toHaveTextContent('Add token…');
+    cleanup();
+    api.getOrigin.mockResolvedValue(base);
+    render(<Harness />);
+    expect(await screen.findByTestId('credential-replace')).toHaveTextContent('Replace token…');
+  });
+
+  it('Cancel forgets a typed token', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue(base);
+    render(<Harness />);
+    fireEvent.click(await screen.findByTestId('credential-replace'));
+    fireEvent.change(screen.getByTestId('credential-pasted-token'), { target: { value: 'TYPED-SECRET' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByTestId('credential-replace'));
+    expect(screen.getByTestId('credential-pasted-token')).toHaveValue('');
+    expect(document.body.innerHTML).not.toContain('TYPED-SECRET');
+  });
+});

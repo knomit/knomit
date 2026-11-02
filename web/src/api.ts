@@ -644,6 +644,10 @@ export interface OriginResponse {
   // The stored secret the origin is linked to, when it is: its name and
   // expiry status for every reader, its id only for an admin caller.
   // Never its value.
+  /** true when the origin is linked to a stored secret, for every reader,
+   *  even when the name cannot be read. Key "linked" on this, never on the
+   *  name or the id (the id is admin-only). */
+  secret_linked?: boolean;
   secret_id?: string;
   secret_name?: string;
   secret_status?: SecretStatus;

@@ -56,6 +56,10 @@ export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored
     || (credChoice === 'pasted' && pastedReady(pasted));
   const restoreReady = credReady && (!nameTaken || renameTo !== '');
 
+  // Closing the prompt forgets the typed credential and the choice.
+  const closeRestore = () => {
+    setConfirming(null); setCredChoice(''); setSecretId(''); setPasted(emptyPasted(info.origin)); setRestoreErr('');
+  };
   const beginRestore = () => {
     if (!nameTaken && !hasOrigin) { void doRestore(''); return; }
     setRenameTo(''); setCredChoice(''); setSecretId(''); setPasted(emptyPasted(info.origin)); setRestoreErr('');
@@ -65,7 +69,7 @@ export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored
     onError(''); setRestoreErr(''); setBusy(true);
     try {
       const res = await api.restoreRepo(info.id, newName, credential());
-      setConfirming(null);
+      closeRestore();
       onRestored(res.name);
     } catch (e) {
       // In the prompt, the refusal stays beside the choice it is about (a
@@ -139,7 +143,7 @@ export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored
               {restoreErr && <div role="alert" data-testid={`restore-error-${info.id}`} style={wizardErr}>{restoreErr}</div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button type="button" data-testid={`restore-confirm-${info.id}`} style={btn(busy || !restoreReady, 'primary')} disabled={busy || !restoreReady} onClick={() => doRestore(nameTaken ? renameTo : '')}>Restore</button>
-                <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+                <button type="button" data-testid={`restore-cancel-${info.id}`} style={btn(busy)} disabled={busy} onClick={closeRestore}>Cancel</button>
               </div>
             </div>
           ) : (

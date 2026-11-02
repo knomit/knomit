@@ -229,6 +229,9 @@ type originView struct {
 	// The stored secret the origin links to, when it does: its name and
 	// expiry status (ok, expiring, expired, none) for every reader, its id
 	// only for a caller that passes the admin gate. Never its value.
+	// SecretLinked says the origin is linked to a stored secret, for every
+	// reader, even when the secret's name cannot be read.
+	SecretLinked    bool    `json:"secret_linked"`
 	SecretID        string  `json:"secret_id,omitempty"`
 	SecretName      string  `json:"secret_name,omitempty"`
 	SecretStatus    string  `json:"secret_status,omitempty"`
@@ -300,6 +303,7 @@ func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, admin func(http.Hand
 
 // addSecretView fills the linked secret's fields of an origin view.
 func addSecretView(view *originView, m *repos.Manager, id string, showID bool) {
+	view.SecretLinked = true
 	if showID {
 		view.SecretID = id
 	}
