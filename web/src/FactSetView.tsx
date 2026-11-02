@@ -85,11 +85,24 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   const [anchors] = useState(() => new FactSetAnchors());
   useEffect(() => { for (const n of nodes) anchors.register(n); }, [nodes, anchors]);
 
+  // The top sentinel is armed per run: a run that landed (a seek, a restart,
+  // a refresh) can put the sentinel in view at once, and asking for the unit
+  // above then is a call nobody asked for. It is armed by the reader's own
+  // scroll in this run (armedEpoch === epoch); a scroll the view makes itself
+  // (landing, keeping the place on a prepend) does not arm it.
+  const armedEpoch = useRef(-1);
+  const viewScroll = useRef<number | null>(null);
+  const lastTop = useRef(0);
+  const setScrollTop = useCallback((box: HTMLElement, v: number) => {
+    box.scrollTop = v;
+    viewScroll.current = box.scrollTop;
+  }, []);
+
   const scrollToEl = useCallback((el: HTMLElement) => {
     const box = scroller.current;
     if (!box) return;
-    box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - PATH_H - 8;
-  }, []);
+    setScrollTop(box, box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top - PATH_H - 8);
+  }, [setScrollTop]);
   const findAnchor = useCallback((anchor: string) =>
     scroller.current?.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(anchor)}"]`) ?? null, []);
 
@@ -154,10 +167,10 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     const box = scroller.current;
     const p = prevHeight.current;
     if (box && p && p.first !== firstKey && nodes.some(n => `${n.unit}.${n.n}` === p.first) && head !== 'loading') {
-      box.scrollTop += box.scrollHeight - p.height;
+      setScrollTop(box, box.scrollTop + box.scrollHeight - p.height);
     }
     prevHeight.current = box ? { first: firstKey, height: box.scrollHeight } : null;
-  }, [firstKey, nodes, head]);
+  }, [firstKey, nodes, head, setScrollTop]);
 
   // Infinite scroll down (the next page) and up (the previous unit, Q-UI9).
   useEffect(() => {
@@ -167,13 +180,27 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
       for (const e of entries) {
         if (!e.isIntersecting) continue;
         if (e.target === bottom.current) loadMore();
-        if (e.target === top.current) loadBefore();
+        if (e.target === top.current && armedEpoch.current === epoch) loadBefore();
       }
     }, { root: box, rootMargin: `${FS_NEAR_PX}px 0px ${FS_NEAR_PX}px 0px` });
     if (bottom.current && tail === 'idle') io.observe(bottom.current);
     if (top.current && head === 'idle') io.observe(top.current);
     return () => io.disconnect();
-  }, [tail, head, stale, phase, nodes.length, loadMore, loadBefore]);
+  }, [tail, head, stale, phase, nodes.length, epoch, loadMore, loadBefore]);
+
+  // A scroll event: the reader's own (arms the top sentinel, and scrolling up
+  // with the sentinel already in range asks for the unit above, since the
+  // observer reports only changes) or one the view made (ignored).
+  const onScroll = useCallback((box: HTMLElement) => {
+    const st = box.scrollTop;
+    const up = st < lastTop.current;
+    lastTop.current = st;
+    if (viewScroll.current !== null && Math.abs(st - viewScroll.current) < 2) { viewScroll.current = null; return; }
+    viewScroll.current = null;
+    armedEpoch.current = epoch;
+    const t = top.current;
+    if (up && t && t.getBoundingClientRect().bottom >= box.getBoundingClientRect().top - FS_NEAR_PX) loadBefore();
+  }, [epoch, loadBefore]);
 
   // The unit at the top of the pane, for the stream (restart / refresh land
   // there) and the unit control.
@@ -283,7 +310,9 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
         <div className="k-mat-meta2">
           {env && <span className="k-fs-sub" data-testid="fs-search-line">{env.search_line}</span>}
           <span className="k-mat-progress" data-testid="fs-progress" role="status">
-            {env && units > 0 ? `unit ${env.unit_to} of ${units}` /* PLACEHOLDER copy */ : ''}
+            {/* The unit the reader is on (the one at the top of the pane, as the Unit
+                control shows), not the last one loaded. */}
+            {env && units > 0 ? `unit ${topUnit} of ${units}` /* PLACEHOLDER copy */ : ''}
           </span>
           {s.notice === 'refreshed' && <span className="k-fs-notice" data-testid="fs-notice" role="status">{NOTICE_REFRESHED}</span>}
         </div>
@@ -297,7 +326,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
       </div>
 
       <div className="k-mat-scroll" ref={scroller} data-testid="fs-scroll"
-        onScroll={e => { setScrolled(e.currentTarget.scrollTop > FS_NEAR_PX); trackTop(); }}>
+        onScroll={e => { setScrolled(e.currentTarget.scrollTop > FS_NEAR_PX); trackTop(); onScroll(e.currentTarget); }}>
         <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'} data-pending={pending ?? undefined}>
           <div ref={top} data-testid="fs-top-sentinel" style={{ height: 1 }} />
           {head === 'loading' && <div className="k-mat-skel" data-testid="fs-head-loading"><i style={{ width: '55%', height: 18 }} /><i /></div>}

@@ -421,3 +421,39 @@ describe('FactSetStream Retry after a second expiry', () => {
     expect(s.getState().notice).toBe('refreshed');
   });
 });
+
+// QA 3: a FactSet whose cursor answered 404 is gone on the server, so the
+// re-creation must not send DELETE for it (that DELETE only 404s again). Every
+// other close stays: Back (dispose) still closes the live FactSet.
+//
+// Sabotage: drop the gone check in closeCurrent: close is called with the dead
+// F1 cursor.
+describe('FactSetStream never closes an expired FactSet (QA 3)', () => {
+  it('a 404 re-creation sends no DELETE for the dead cursor; Back then closes the new FactSet', async () => {
+    let expired = false;
+    const { api, calls } = fakeApi(async (c, id) => {
+      if (c.op === 'next' && !expired) { expired = true; throw new FsError('Cursor not found', 404); }
+      return c.op === 'first' ? pageAt(`F${id}`, 1, 9) : pageAt(`F${id}`, nextUnit(String(c.arg)), 9);
+    });
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await flush();
+    s.loadMore();
+    for (let i = 0; i < 4; i++) await flush();
+    expect(calls.map(c => c.op)).toEqual(['first', 'next', 'first']);
+    expect(s.getState().cursor).toBe('F2.2.0');
+    expect(api.close).not.toHaveBeenCalled();
+    s.dispose(); // Back
+    expect(api.close).toHaveBeenCalledTimes(1);
+    expect(api.close).toHaveBeenCalledWith(SEARCH.target, 'F2.2.0');
+  });
+
+  it('control: Back on a live FactSet sends its DELETE', async () => {
+    const { api } = fakeApi(async (_c, id) => pageAt(`F${id}`, 1, 9));
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await flush();
+    s.dispose();
+    expect(api.close).toHaveBeenCalledWith(SEARCH.target, 'F1.2.0');
+  });
+});

@@ -106,7 +106,6 @@ describe('FactSetView (test 5)', () => {
     expect(shared.dataset.lv).toBe('2');
     expect(screen.getByTestId('fs-title').textContent).toBe('Observations about x');
     expect(screen.getByTestId('fs-search-line').textContent).toBe('text "x" · sorted by relevance');
-    expect(screen.getByTestId('fs-progress').textContent).toBe('unit 2 of 3');
   });
 
   it('link stubs show "see" and a short title, no number, no body; only the written section is a scroll target', async () => {
@@ -334,6 +333,8 @@ describe('a failure reading the unit above the run (L2)', () => {
     fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: '3' } });
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async () => { throw new FsError('boom', 500); });
+    // The reader's own scroll arms the top sentinel after a seek (QA 2).
+    scrollPane(screen.getByTestId('fs-scroll'))(200);
     act(() => {
       for (const o of MockIO.all.filter(x => x.live)) {
         const t = o.watched.find(e => (e as HTMLElement).dataset.testid === 'fs-top-sentinel');
@@ -344,5 +345,132 @@ describe('a failure reading the unit above the run (L2)', () => {
     expect(err.textContent).toContain('boom');
     expect(err.compareDocumentPosition(sections()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByTestId('fs-tail-error')).toBeNull();
+  });
+});
+
+/** Makes the pane scrollable in jsdom: its scrollTop is kept (clamped at 0),
+ *  and the returned function is the READER's scroll to a position (it fires
+ *  the scroll event a real scroll would). */
+function scrollPane(box: HTMLElement) {
+  let v = 0;
+  Object.defineProperty(box, 'scrollTop', { configurable: true, get: () => v, set: (x: number) => { v = Math.max(0, x); } });
+  return (to: number) => { act(() => { v = to; fireEvent.scroll(box); }); };
+}
+
+/** A laid-out pane: section i sits at 10 + 100 i - scrollTop below the pane
+ *  top, the top sentinel just above section 0, and the pane is as tall as its
+ *  sections (so keeping the place on a prepend moves scrollTop). */
+function liveLayout(box: HTMLElement) {
+  const userScroll = scrollPane(box);
+  const secs = () => Array.from(document.querySelectorAll('[data-testid="mat-section"]'));
+  Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => 100 * secs().length });
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const i = secs().indexOf(this);
+    const st = box.scrollTop;
+    const top = i >= 0 ? 10 + 100 * i - st : (this as HTMLElement).dataset?.testid === 'fs-top-sentinel' ? 9 - st : 0;
+    return { top, bottom: top + (i >= 0 ? 100 : 1), left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON() {} } as DOMRect;
+  });
+  return userScroll;
+}
+
+const fireTop = () => act(() => {
+  for (const o of MockIO.all.filter(x => x.live)) {
+    const t = o.watched.find(e => (e as HTMLElement).dataset.testid === 'fs-top-sentinel');
+    if (t) o.cb([{ isIntersecting: true, target: t } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
+  }
+});
+const seekUnit = (u: number) => {
+  fireEvent.change(screen.getByTestId('fs-unit'), { target: { value: String(u) } });
+  fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: String(u) } });
+};
+
+// QA 1: the "Related, not included" entries. A lens FactSet's not-followed
+// leaf reads "<repo name> `<path>`" (ruling S2, as the export writes it); every
+// other reason renders as before.
+//
+// Sabotage: render the lens leaf through the old "title || id || path
+// (reason)" line: it reads "kb://eaa1900d37f1/kb/... (lens_repo)".
+describe('not-included entries (QA 1)', () => {
+  const rel = (sec: HTMLElement) => Array.from(sec.querySelectorAll<HTMLElement>('.k-mat-rel .k-mat-src')).map(e => e.textContent);
+
+  it('a lens_repo leaf reads the repo name, then the fact path without kb://<id12>/, no reason code', async () => {
+    const page: FactSetPage = { ...P1, has_more: false, facts: [n(1, 1, 'Alpha', {
+      repo_name: 'alpha',
+      not_included: [{ path: 'kb://eaa1900d37f1/kb/architecture/network/n1.md', reason: 'lens_repo', repo_name: 'beta' }],
+    })] };
+    const { api } = makeApi({ first: vi.fn(async () => page) });
+    render(<FactSetView search={LENS} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(1));
+    expect(rel(sections()[0])).toEqual(['beta kb/architecture/network/n1.md']);
+    expect(sections()[0].querySelector('.k-mat-rel .k-mat-src code')?.textContent).toBe('kb/architecture/network/n1.md');
+  });
+
+  it('control: cross_kb_off on a repo FactSet keeps its rendering', async () => {
+    const page: FactSetPage = { ...P1, has_more: false, facts: [n(1, 1, 'Alpha', {
+      not_included: [
+        { path: 'kb://0123456789ab/kb/x/t.md', title: 'Titled', id: 't', reason: 'cross_kb_off' },
+        { path: 'kb://0123456789ab/kb/x/u.md', reason: 'cross_kb_off' },
+      ],
+    })] };
+    const { api } = makeApi({ first: vi.fn(async () => page) });
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(1));
+    expect(rel(sections()[0])).toEqual(['Titled (cross_kb_off)', 'kb://0123456789ab/kb/x/u.md (cross_kb_off)']);
+  });
+});
+
+// QA 2: a seek lands with the top sentinel in view; the unit above must not be
+// asked for until the reader scrolls. Scrolling up then prepends it (Q-UI9).
+//
+// Sabotage: drop the armedEpoch check in the observer: the sentinel's first
+// intersection after landing calls seek 2.
+describe('no eager prepend after a seek (QA 2)', () => {
+  it('no loadBefore at landing; the reader\'s scroll up prepends the unit above', async () => {
+    const { api, calls } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const userScroll = scrollPane(screen.getByTestId('fs-scroll'));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    calls.length = 0;
+    fireTop(); // the sentinel is in view at landing
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(calls).toEqual([]);
+    expect(sections()[0].dataset.fsUnit).toBe('3');
+    userScroll(300);
+    userScroll(100); // up
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    expect(calls[0]).toBe('seek 2');
+  });
+});
+
+// QA 4: the progress line names the unit the reader is on (the one at the top
+// of the pane, as the Unit control shows), not the last unit loaded.
+//
+// Sabotage: render env.unit_to again: it reads "unit 5 of 20" on open.
+describe('progress names the unit the reader is on (QA 4)', () => {
+  it('open, scroll, seek, and scroll up into a prepended unit', async () => {
+    const { api } = pagedView(20, 2, 10); // 5 units on page 1
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const userScroll = liveLayout(screen.getByTestId('fs-scroll'));
+    await waitFor(() => expect(sections()).toHaveLength(10));
+    const progress = () => screen.getByTestId('fs-progress').textContent;
+    const stepper = () => (screen.getByTestId('fs-unit') as HTMLInputElement).value;
+    await waitFor(() => expect(progress()).toBe('unit 1 of 20'));
+    expect(stepper()).toBe('1');
+    userScroll(400); // unit 3's root (section 4) at the top
+    expect(progress()).toBe('unit 3 of 20');
+    expect(stepper()).toBe('3');
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await waitFor(() => expect(progress()).toBe('unit 10 of 20'));
+    expect(stepper()).toBe('10');
+    userScroll(50);
+    userScroll(0); // up: unit 9 is prepended, the place is kept on unit 10
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    await waitFor(() => expect(progress()).toBe('unit 10 of 20'));
+    userScroll(0); // into unit 9
+    expect(progress()).toBe('unit 9 of 20');
+    expect(stepper()).toBe('9');
   });
 });

@@ -11,7 +11,9 @@
 import { apiUrl } from './api';
 
 /** Why a fact was left out: a ref that was not written, with the reason. */
-export interface MatOmission { title?: string; id?: string; path: string; reason: string }
+/** repo_name: a lens FactSet's not-followed leaf (reason lens_repo) names
+ *  the lens member the ref points into (ruling Lens 1). */
+export interface MatOmission { title?: string; id?: string; path: string; reason: string; repo_name?: string }
 /** A non-fact ref: an external URL or a source-code ref. */
 export interface MatSource { label: string; url?: string }
 /** A ref to a fact written in the same document. different_version: the

@@ -9,7 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { ChevronDownIcon } from './icons';
 import { MARK_LATEST_OTHER_KB } from './materializeApi';
-import type { MatLink, MatNode } from './materializeApi';
+import type { MatLink, MatNode, MatOmission } from './materializeApi';
 import { headingLevel } from './materializeOptions';
 import { isHttpUrl, repoHue } from './utils';
 import type { FactSetLink } from './factsetApi';
@@ -138,6 +138,18 @@ export interface FsSectionExtra {
 }
 
 /** The number as a heading prefix: "1." for a top-level section, "1.1" below it. */
+/** A "Related, not included" entry. A lens FactSet's not-followed leaf
+ *  (reason lens_repo) reads "<repo name> `<path>`", the fact path without its
+ *  kb://<id12>/ prefix and no reason code, as the server's export writes it
+ *  (render_agent.go omissionText, wording S2). Every other reason reads as it
+ *  always has. */
+function omissionLabel(o: MatOmission) {
+  if (o.reason === 'lens_repo') {
+    return <>{o.repo_name} <code>{o.path.replace(/^kb:\/\/[^/]+\//, '')}</code></>;
+  }
+  return `${o.title || o.id || o.path} (${o.reason})`;
+}
+
 function numberPrefix(num: string): string {
   return num.includes('.') ? num : `${num}.`;
 }
@@ -268,7 +280,7 @@ export const Section = memo(function Section({ node, group, num, td, onGoto, fs,
         {node.not_included && node.not_included.length > 0 && (
           <div className="k-mat-rel">
             <span className="k-mat-label">Related, not included</span>
-            {node.not_included.map(o => <span key={o.path} className="k-mat-src">{o.title || o.id || o.path} ({o.reason})</span>)}
+            {node.not_included.map(o => <span key={o.path} className="k-mat-src">{omissionLabel(o)}</span>)}
           </div>
         )}
         </div>

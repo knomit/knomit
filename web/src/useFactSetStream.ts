@@ -21,7 +21,8 @@
 // idle, a server restart, a close) restarts the SAME search with the same
 // options, seeks back to the reader's unit and raises the "FactSet refreshed"
 // notice; a 400 is shown, never retried; a 500 or a network error is shown
-// with Retry and the loaded sections stay.
+// with Retry and the loaded sections stay. A FactSet known to be gone (a 404)
+// is never closed: Back, a restart or a re-creation after it sends no DELETE.
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { FsError } from './factsetApi';
@@ -97,6 +98,12 @@ export function cursorUnit(c: string): number {
   return parts.length >= 3 ? Number(parts[parts.length - 2]) : 0;
 }
 
+/** The FactSet a cursor "<id>.<unit>.<section>" belongs to. */
+function factSetOf(c: string): string {
+  const parts = c.split('.');
+  return parts.length >= 3 ? parts.slice(0, -2).join('.') : c;
+}
+
 /** Whether nodes hold the target: its written section (by anchor) or section n. */
 function has(nodes: FactSetNode[], t: Target): boolean {
   return nodes.some(x => x.unit === t.unit && (
@@ -131,6 +138,9 @@ export class FactSetStream {
    *  404s (another server without sticky routing, an owner mismatch) would
    *  otherwise be re-created on every sentinel tick. */
   private recoveries = 0;
+  /** The FactSet a cursor call answered 404 for: already gone on the server,
+   *  so it is never closed (a DELETE would only 404 again). */
+  private gone: string | null = null;
 
   private sleep: (ms: number) => Promise<void>;
 
@@ -306,12 +316,19 @@ export class FactSetStream {
     // the error it answered, not in a loop.
     if (this.recoveries >= 1) return;
     this.recoveries++;
+    this.markGone();
     this.start({ seekTo: this.topUnit, notice: 'refreshed' });
   };
 
+  /** The FactSet on screen answered 404: it is gone, do not close it. */
+  private markGone(): void {
+    const c = this.state.cursor;
+    if (c) this.gone = factSetOf(c);
+  }
+
   private closeCurrent(): void {
     const c = this.state.cursor;
-    if (c && this.inputs) void this.inputs.api.close(this.inputs.search.target, c);
+    if (c && this.inputs && factSetOf(c) !== this.gone) void this.inputs.api.close(this.inputs.search.target, c);
   }
 
   private start(o: { clear?: boolean; seekTo?: number; notice?: 'refreshed' }): void {
@@ -398,6 +415,7 @@ export class FactSetStream {
       if (this.gen === gen) this.busy = false;
       if (e === STALE || this.gen !== gen) return;
       const f = fault(e);
+      if (f.kind === 'expired') this.markGone();
       // An expired cursor on a FactSet already read from: re-create it. A
       // first call (or the seek right after it) answered 404 is shown:
       // re-creating it would only ask the same route again.
