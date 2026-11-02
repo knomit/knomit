@@ -1,4 +1,4 @@
-import type { FleetJoinCheck, ProbeResult } from './api';
+import type { FleetCredential, FleetJoinCheck, ProbeResult } from './api';
 import { hostOf, transportFor } from './wizardState';
 
 // The New fleet wizard's state: Create (Start · Hosting · [Access] · Review)
@@ -10,7 +10,9 @@ import { hostOf, transportFor } from './wizardState';
 export type FleetStepId = 'start' | 'hosting' | 'access' | 'bundle' | 'review';
 export type FleetChoice = 'create' | 'join';
 export type FleetHosting = 'here' | 'forge';
-export type FleetAuthMethod = '' | 'none' | 'token' | 'basic' | 'ssh';
+/** 'secret': a stored secret (Access → Secrets), sent as secret_id with no
+ *  pasted credential; forge origins only. */
+export type FleetAuthMethod = '' | 'none' | 'token' | 'basic' | 'ssh' | 'secret';
 
 export interface FleetWizardState {
   step: FleetStepId;
@@ -31,6 +33,8 @@ export interface FleetWizardState {
   authMethod: FleetAuthMethod;
   authUser: string;
   authToken: string;
+  /** The stored secret chosen when authMethod is 'secret'. */
+  secretId: string;
   /** A check WITH the credential above got in. Cleared when it changes. */
   accessChecked: boolean;
 }
@@ -38,7 +42,7 @@ export interface FleetWizardState {
 export const initialFleetWizardState: FleetWizardState = {
   step: 'start', choice: 'create', hosting: 'here', forgeUrl: '', probe: null,
   bundle: '', bundleSource: '', check: null,
-  authMethod: '', authUser: '', authToken: '', accessChecked: false,
+  authMethod: '', authUser: '', authToken: '', secretId: '', accessChecked: false,
 };
 
 export type FleetWizardAction =
@@ -51,6 +55,7 @@ export type FleetWizardAction =
   | { type: 'SET_AUTH_METHOD'; method: FleetAuthMethod }
   | { type: 'SET_AUTH_USER'; user: string }
   | { type: 'SET_TOKEN'; token: string }
+  | { type: 'SET_SECRET'; id: string }
   | { type: 'ACCESS_CHECKED' }
   | { type: 'GOTO'; step: FleetStepId }
   | { type: 'NEXT' }
@@ -85,6 +90,8 @@ export function fleetWizardReducer(s: FleetWizardState, a: FleetWizardAction): F
       return { ...s, authUser: a.user, accessChecked: false };
     case 'SET_TOKEN':
       return { ...s, authToken: a.token, accessChecked: false };
+    case 'SET_SECRET':
+      return { ...s, secretId: a.id, accessChecked: false };
     case 'ACCESS_CHECKED':
       return { ...s, accessChecked: true };
     case 'GOTO':
@@ -147,16 +154,18 @@ export function accessRequired(s: FleetWizardState): boolean {
   return asked && !s.accessChecked;
 }
 
-/** The credential as the fleet routes take it (auth_method, auth_token), as
- *  the repo wizard's authFor assembles it: a token typed under auto-detect is
- *  token auth (not on an SSH URL), basic carries "user:password". */
-export function fleetAuth(s: FleetWizardState): { auth_method?: string; auth_token?: string } {
-  return credentialFor(accessURL(s), s.authMethod, s.authUser, s.authToken);
+/** The credential as the fleet routes take it (auth_method, auth_token, or
+ *  secret_id), as the repo wizard's authFor assembles it: a token typed under
+ *  auto-detect is token auth (not on an SSH URL), basic carries
+ *  "user:password", a stored secret is secret_id alone. */
+export function fleetAuth(s: FleetWizardState): FleetCredential {
+  return credentialFor(accessURL(s), s.authMethod, s.authUser, s.authToken, s.secretId);
 }
 
 /** credentialFor is fleetAuth's rule for any URL and fields: the Fleet
  *  Settings' Point at / Update access / Move flows send the same shape. */
-export function credentialFor(url: string, authMethod: FleetAuthMethod, user: string, secret: string): { auth_method?: string; auth_token?: string } {
+export function credentialFor(url: string, authMethod: FleetAuthMethod, user: string, secret: string, secretId = ''): FleetCredential {
+  if (authMethod === 'secret') return secretId ? { secret_id: secretId } : {};
   const method = authMethod === '' && secret.trim() !== '' && transportFor(url) !== 'ssh' ? 'token' : authMethod;
   const token = method === 'basic' ? `${user}:${secret}` : method === 'token' ? secret : '';
   return { ...(method ? { auth_method: method } : {}), ...(token ? { auth_token: token } : {}) };

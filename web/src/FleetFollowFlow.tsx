@@ -77,6 +77,7 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
   const [method, setMethod] = useState<FleetAuthMethod>(initialMethod);
   const [user, setUser] = useState('');
   const [secret, setSecret] = useState('');
+  const [secretId, setSecretId] = useState('');
   const [checked, setChecked] = useState(false);
   const [checkErr, setCheckErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -94,11 +95,13 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
   const trimmed = url.trim();
   const host = hostPortOf(trimmed);
   const peer = !access && probe?.fleet_peer === true;
-  const cred = peer ? {} : credentialFor(trimmed, method, user, secret);
+  const cred = peer ? {} : credentialFor(trimmed, method, user, secret, secretId);
   const steps: Step[] = access ? ['access', 'review'] : peer ? ['origin', 'review'] : ['origin', 'access', 'review'];
   // Update access with the stored method and no new secret changes nothing:
   // it sends nothing (the server would answer `unchanged`).
-  const unchanged = access && method === initialMethod && !secret.trim() && !user.trim();
+  const unchanged = access && method === initialMethod && !secret.trim() && !user.trim() && !secretId;
+  // A stored secret must be picked before there is anything to send.
+  const secretMissing = method === 'secret' && !secretId;
   // Moving to the forge the fleet is on is no move (the server answers
   // `unchanged` after submit): say so before Review, by the server's own
   // comparison (sameFleetURL), and offer Update access instead.
@@ -230,18 +233,19 @@ export function FleetFollowFlow({ fleetRepo, mode = 'follow', initialUrl = '', i
                   <OutcomeCard tone="bad" testid="fleet-follow-access-refused" headline={`${host || 'The forge'} refused those credentials`} url={trimmed} detail={checkErr} />
                 </div>
               )}
-              <CredentialFields url={trimmed} method={method} user={user} token={secret} idPrefix="fleet-follow" disabled={testing}
+              <CredentialFields url={trimmed} method={method} user={user} token={secret} secretId={secretId} idPrefix="fleet-follow" disabled={testing}
                 onMethod={m => { setMethod(m); setChecked(false); }} onUser={u => { setUser(u); setChecked(false); }} onToken={t => { setSecret(t); setChecked(false); }}
+                onSecretId={id => { setSecretId(id); setChecked(false); }}
                 hint={access && initialMethod
-                  ? `Stored now: ${initialMethod}. A new token replaces it; "none" makes this copy anonymous.`
+                  ? `Stored now: ${initialMethod === 'secret' ? 'a stored secret' : initialMethod}. A new token or secret replaces it; "none" makes this copy anonymous.`
                   : "The credential is this instance's own and stays in its credential store."} />
               {unchanged && (
                 <div data-testid="fleet-follow-unchanged" style={hintText}>The stored method, and no new token: there is nothing to change yet.</div>
               )}
               <div style={actions}>
-                <button type="button" data-testid="fleet-follow-check" style={btn(testing || unchanged)} disabled={testing || unchanged}
+                <button type="button" data-testid="fleet-follow-check" style={btn(testing || unchanged || secretMissing)} disabled={testing || unchanged || secretMissing}
                   onClick={() => { void checkAccess(); }}>{testing ? 'Checking…' : 'Check access'}</button>
-                <button type="button" data-testid="fleet-follow-next" style={btn(testing || unchanged || (asked && !checked), 'primary')} disabled={testing || unchanged || (asked && !checked)}
+                <button type="button" data-testid="fleet-follow-next" style={btn(testing || unchanged || secretMissing || (asked && !checked), 'primary')} disabled={testing || unchanged || secretMissing || (asked && !checked)}
                   onClick={() => setStep('review')}>Next →</button>
                 <button type="button" style={btn(testing)} disabled={testing} onClick={() => (access ? onCancel() : setStep('origin'))}>{access ? 'Cancel' : 'Back'}</button>
               </div>

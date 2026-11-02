@@ -5,6 +5,7 @@ import { OutcomeCard } from './OutcomeCard';
 import { FleetFollowFlow, type FleetFollowMode } from './FleetFollowFlow';
 import type { FleetAuthMethod } from './fleetWizardState';
 import { Chip, CopyValue, Kv, Refusal } from './fleetParts';
+import { CredentialChip } from './CredentialChip';
 import { HOST_HERE_COPY, ONE_MASTER, hostPortOf, intervalText, listenerNotRunning, readTextFile, refusalText } from './fleetText';
 import { saveTextFile, saveOutcomeLine, type SaveOutcome } from './saveFile';
 import { btn, confirmBox, confirmInput, fieldHint, fieldLabel } from './manageStyles';
@@ -63,12 +64,21 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // the notice, and the outcome must still be seen (#533 review N1).
   const [dropped, setDropped] = useState<{ short: string; result: FleetDropResult } | null>(null);
   const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
-  const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string }>({ key: '', peer: null, method: '' });
+  const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string; secret?: { name: string; status?: string } }>({ key: '', peer: null, method: '' });
   useEffect(() => {
     if (!originKey || !fleet.fleet_repo) return;
     let live = true;
     api.getOrigin(fleet.fleet_repo)
-      .then(o => { if (live) setPeerRead({ key: originKey, peer: o ? o.auth_method === 'cert' : null, method: o?.auth_method ?? '' }); })
+      .then(o => {
+        if (!live) return;
+        // A forge origin linked to a stored secret: its method is 'secret'
+        // in the flows, and the Access row names the secret.
+        const linked = !!(o?.secret_name || o?.secret_id);
+        setPeerRead({
+          key: originKey, peer: o ? o.auth_method === 'cert' : null, method: linked ? 'secret' : o?.auth_method ?? '',
+          ...(linked ? { secret: { name: o?.secret_name ?? '', status: o?.secret_status } } : {}),
+        });
+      })
       .catch(() => { if (live) setPeerRead({ key: originKey, peer: null, method: '' }); });
     return () => { live = false; };
   }, [originKey, originRev, fleet.fleet_repo]);
@@ -87,7 +97,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
         <FleetFollowFlow key={flow} fleetRepo={fleet.fleet_repo} mode={flow} onCancel={back}
           onUpdateAccess={() => { setHandedOff(true); setFlow('access'); }} focusFirstField={flow === 'access' && handedOff}
           initialUrl={flow === 'access' ? fleet.hosting ?? '' : flow === 'move' ? moveUrl : flow === 'follow' && stale ? (fleet.host_record ?? [])[0] ?? '' : ''}
-          initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
+          initialMethod={flow === 'access' && ['none', 'token', 'basic', 'ssh', 'secret'].includes(storedMethod) ? storedMethod as FleetAuthMethod : ''}
           fromForge={flow === 'move' && forge && !interrupted ? fleet.hosting : undefined}
           membersUnaffected={flow === 'move' && !!interrupted}
           hostRecord={stale ? fleet.host_record : undefined}
@@ -232,7 +242,10 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
             : <span style={dim}>none</span>],
           ['This copy syncs from', hub ? <span style={dim}>nowhere — it is the host</span> : <span style={mono}>{fleet.hosting}</span>],
           ['Access', forge
-            ? <span key="m" data-testid="fleet-origin-access" style={mono}>{storedMethod || 'auto-detect'}</span>
+            ? <span key="m" data-testid="fleet-origin-access" style={{ ...mono, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                {storedMethod === 'secret' ? `stored secret: ${peerRead.secret?.name || '(unreadable)'}` : storedMethod || 'auto-detect'}
+                {storedMethod === 'secret' && <CredentialChip status={peerRead.secret?.status} name={peerRead.secret?.name} testid="fleet-origin-secret-chip" />}
+              </span>
             : null],
           ['Root fingerprint', fleet.root_fingerprint ? <span style={mono}>{fleet.root_fingerprint}</span> : <span style={dim}>none</span>],
           ['Root directory', master ? <span style={mono}>{fleet.root_dir}</span> : null],

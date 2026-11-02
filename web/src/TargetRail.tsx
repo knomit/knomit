@@ -6,6 +6,7 @@ import type { RepoInfo, Lens, ArchivedRepo, RepoCreateStatus, FleetStatus } from
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { RepoOntologyChip } from './RepoOntologyChip';
+import { CredentialChip } from './CredentialChip';
 import { RepoDot } from './settingsParts';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, activeCreateByRepo, createFlag, pendingCreates } from './useRepoCreates';
@@ -236,6 +237,10 @@ export function TargetRail({
                       : <>
                           <RepoOntologyChip repo={r} compact />
                           <RepoIndexChip repo={r} compact />
+                          {/* A linked secret expiring or expired: sync still
+                              runs, so a chip, not the failing dot. */}
+                          <CredentialChip status={r.credential_status} name={r.credential_secret} compact
+                            testid={`rail-credential-${r.name}`} />
                         </>}
                   {failing && (
                     <span
