@@ -66,7 +66,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one filter is required ("+queryFilterList+"), except with sort=recent or when paging with cursor. Set sort=recent to browse most-recently-committed facts, optionally filtered; with text, sort=recent ranks by relevance instead (recency breaks ties)."),
+		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. Set sort=recent to browse most-recently-committed facts, optionally filtered; with text, sort=recent ranks by relevance instead (recency breaks ties)."),
 		bindingArg(true),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
@@ -109,6 +109,24 @@ func queryTool() mcpgo.Tool {
 		),
 		mcpgo.WithArray("type",
 			mcpgo.Description("Filter to these fact types, of either kind (e.g. observation, hypothesis, policy, heuristic)."),
+			mcpgo.WithStringItems(),
+		),
+		// PLACEHOLDER copy (#711 follow-up): the four filters below are the
+		// REST lens reads' exclude_type, kind, exclude_kind and ep.
+		mcpgo.WithArray("exclude_type",
+			mcpgo.Description("Leave out facts of these types (e.g. observation, hypothesis)."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("kind",
+			mcpgo.Description("Only facts of these kinds: epistemic or pragmatic."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("exclude_kind",
+			mcpgo.Description("Leave out facts of these kinds: epistemic or pragmatic."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("ep",
+			mcpgo.Description("Only facts whose current version was written by one of these operations (e.g. learn, update)."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithBoolean("domain_exact",
@@ -389,7 +407,6 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	q.Limit = maxResults // per-mount starting depth (RFC §7.1: no overscan factor)
 	plan, err := planFused(ctx, b, emb, q, repo)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -410,15 +427,17 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb mod
 	// copy never consumes a snapshot slot and the snapshot agrees with the web
 	// /facts union.
 	//
-	// DEPTH IS RE-DERIVED exactly as on REST /facts: a text-less listing starts
-	// every mount at max_results (the snapshot is the REST page offset=0,
-	// limit=max_results) and doubles while fewer than max_results merged rows
-	// lie at or above the horizon of a truncated mount, up to
-	// federate.MaxRecencyDepth. Write-first dedupe spends depth, so one round
-	// at max_results would hide a fork's own newest facts behind copies of its
-	// upstream's. A query with text runs once.
+	// DEPTH IS RE-DERIVED exactly as on REST /facts, through the same
+	// federate.FanoutDepth: the snapshot is the REST page offset=0,
+	// limit=max_results. A text-less listing starts every mount at max_results
+	// and doubles while fewer than max_results merged rows lie at or above the
+	// horizon of a truncated mount, up to federate.MaxRecencyDepth (write-first
+	// dedupe spends depth, so one round would hide a fork's own newest facts
+	// behind copies of its upstream's). A query with text is relevance-ranked:
+	// it runs once at federate.MaxSearchCandidates, as REST does, and
+	// max_results caps only the fused snapshot.
 	res, _, err := federate.FusedRecentDeep(ctx, plan, mcpRecentLeg, federate.FusedOptions{},
-		maxResults, maxResults, federate.MaxRecencyDepth)
+		federate.FanoutDepth(q.Text, maxResults), maxResults, federate.MaxRecencyDepth)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", err)), nil
 	}
@@ -540,6 +559,10 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (index.SearchOptions, error) {
 		MinConfidence:  req.GetFloat("min_confidence", 0),
 		MinSimilarity:  minSim,
 		IncludeTypes:   req.GetStringSlice("type", nil),
+		ExcludeTypes:   stringOrSlice(req, "exclude_type"),
+		IncludeKinds:   stringOrSlice(req, "kind"),
+		ExcludeKinds:   stringOrSlice(req, "exclude_kind"),
+		EpisodeOps:     stringOrSlice(req, "ep"),
 		IncludeOrigins: stringOrSlice(req, "origin"),
 		DomainExact:    req.GetBool("domain_exact", false),
 		Motifs:         stringOrSlice(req, "motifs"),
@@ -556,26 +579,6 @@ func stringOrSlice(req mcpgo.CallToolRequest, key string) []string {
 		return []string{v}
 	}
 	return req.GetStringSlice(key, nil)
-}
-
-// queryFilterList names every argument hasAnyFilter counts, for the tool
-// description and the no-filter error alike — two hand-kept lists had each
-// drifted from the check (motifs, context and the expiry filters).
-const queryFilterList = "text, entities, domain, applies_to, path, type, origin, motifs, context, min_confidence, expired, expires_before or expires_after"
-
-// hasAnyFilter reports whether any selecting filter was supplied.
-func hasAnyFilter(q index.SearchOptions) bool {
-	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
-		len(q.DomainAncestor) > 0 || q.Path != "" || q.MinConfidence > 0 ||
-		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0 ||
-		// A motif-only query is a legitimate query: "what else instantiates
-		// this mechanism?" is the question the axis exists to answer, and
-		// omitting it here would reject that as "no filter supplied".
-		len(q.Motifs) > 0 ||
-		// So is an expiry-only one: "every expired fact" is the review list.
-		q.Expired != nil || !q.ExpiresBefore.IsZero() || !q.ExpiresAfter.IsZero() ||
-		// And a context-only one (F22): "every verdict for task t-17".
-		len(q.Context) > 0
 }
 
 // contextParamDescription is knomit_query's `context` filter (F22).
@@ -668,18 +671,19 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	if msg := motifMatchUnavailable(q); msg != "" {
 		return mcpgo.NewToolResultError(msg), nil
 	}
-	// repo BEFORE hasAnyFilter: on a repository endpoint a repo-only call is
-	// refused for the repo, not for "no filter".
+	// No filter is required (user ruling 2026-11-02): a filterless call reads
+	// the whole read set, and the snippet page (defaultPageSize rows of
+	// ~400-rune snippets unless include_body) bounds what one call returns.
 	repo, err := parseQueryRepo(req, b)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	if !hasAnyFilter(q) {
-		return mcpgo.NewToolResultError("at least one filter is required: " + queryFilterList), nil
-	}
-	// Plan AFTER hasAnyFilter, so the "no filter supplied" message stays about
-	// what the caller actually sent rather than about widened motif terms.
-	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	// Every mount is asked for the SAME depth REST /lenses/{lens}/search asks
+	// (federate.MaxSearchCandidates); max_results caps only the fused snapshot
+	// below. A per-mount depth of max_results would drop a write-mount copy
+	// ranked below it, and its foreign twin would then survive write-first
+	// dedupe: a different list from REST's.
+	q.Limit = federate.MaxSearchCandidates
 	plan, err := planFused(ctx, b, emb, q, repo)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil

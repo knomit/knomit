@@ -267,19 +267,6 @@ func TestQuery_SortRecent_WithTypeFilter(t *testing.T) {
 	require.Contains(t, text, policyPath, "type=policy + sort=recent must surface the policy fact")
 }
 
-// TestQuery_NoFilterNoSort_Errors guards the relaxed validator: a relevance
-// query with no filter is still an error (nothing to rank against).
-func TestQuery_NoFilterNoSort_Errors(t *testing.T) {
-	ri := newLearnTestRepo(t, fact.CodeOntology())
-	ctx := repos.WithRepoInstance(context.Background(), ri)
-
-	var req mcpgo.CallToolRequest
-	req.Params.Arguments = map[string]any{}
-	result, err := QueryHandler()(ctx, req)
-	require.NoError(t, err)
-	require.True(t, result.IsError, "no filter and no sort=recent must error")
-}
-
 // TestQuery_InvalidSort_Errors rejects unknown sort values.
 func TestQuery_InvalidSort_Errors(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())

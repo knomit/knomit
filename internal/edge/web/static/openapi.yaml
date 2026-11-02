@@ -4121,10 +4121,12 @@ paths:
         contributes at most 500 candidate rows. Without one each mount is
         first asked for `offset`+`limit` rows, and the depth doubles (up to
         10000) while dedupe has left fewer than `offset`+`limit` rows that no
-        unfetched row could outrank. Without a text query, `knomit_query`
-        with `sort=recent` on the lens's MCP endpoint lists the same union the
-        same way, deepening from `max_results`, so its first `max_results` rows
-        are this listing's `offset=0&limit=<max_results>`.
+        unfetched row could outrank. `knomit_query` with `sort=recent` on the
+        lens's MCP endpoint lists the same union the same way, with or without
+        text: every mount is asked the same depth (500 with text; deepening
+        from `max_results` without), and `max_results` caps only the merged
+        list, so its first `max_results` rows are this listing's
+        `offset=0&limit=<max_results>`.
 
         Any mount error fails the whole request — a lens never silently shrinks
         its read set.
@@ -4168,6 +4170,7 @@ paths:
         - $ref: "#/components/parameters/LensRepoNarrow"
         - { name: domain,         in: query, description: CSV, schema: { type: string } }
         - { name: domain_exact,   in: query, schema: { type: boolean, default: false } }
+        - { name: applies_to,     in: query, description: "CSV. Ancestor-or-equal domain match: `store/resolver` also finds facts scoped to `store`.", schema: { type: string } }
         - { name: entity,         in: query, description: "CSV. Canonical name; merges with the `entities` alias.", schema: { type: string } }
         - { name: entities,       in: query, description: "CSV. Back-compat alias for `entity`; values merge.", schema: { type: string } }
         - { name: type,           in: query, description: CSV, schema: { type: string } }
@@ -4268,7 +4271,10 @@ paths:
         which are not comparable across mounts. After fusion, rows are deduped
         by repo-relative path with the write mount's copy winning, even when a
         shadowed copy ranks higher. Read-mount paths are qualified as
-        `kb://<id12>/…`.
+        `kb://<id12>/…`. Every mount is asked for its best 500 rows; `limit`
+        caps the fused list. `knomit_query` on the lens's MCP endpoint asks
+        the same depth, and its `max_results` caps only the fused list, so its
+        first `max_results` rows are this route's `limit=<max_results>`.
 
         MOTIF FILTERS ARE WIDENED TO THE LENS'S MERGED CLUSTERS before the
         fan-out. A motif term resolves through ONE branch's alias table, and a
@@ -4304,9 +4310,11 @@ paths:
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
         - $ref: "#/components/parameters/LensPathFilter"
         - $ref: "#/components/parameters/LensRepoNarrow"
-        - { name: entities,       in: query, description: CSV, schema: { type: string } }
+        - { name: entity,         in: query, description: "CSV. Canonical name; merges with the `entities` alias.", schema: { type: string } }
+        - { name: entities,       in: query, description: "CSV. Alias for `entity`; values merge.", schema: { type: string } }
         - { name: domain,         in: query, description: CSV, schema: { type: string } }
         - { name: domain_exact,   in: query, schema: { type: boolean, default: false } }
+        - { name: applies_to,     in: query, description: "CSV. Ancestor-or-equal domain match: `store/resolver` also finds facts scoped to `store`.", schema: { type: string } }
         - { name: type,           in: query, description: CSV, schema: { type: string } }
         - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
         - { name: kind,           in: query, description: CSV, schema: { type: string } }

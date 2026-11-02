@@ -64,14 +64,6 @@ func TestMotifMatch_EveryTierParses(t *testing.T) {
 	}
 }
 
-// A motif-only query is a legitimate query: "what else instantiates this
-// mechanism?" is the question the axis exists to answer.
-func TestMotifQuery_MotifAloneCountsAsAFilter(t *testing.T) {
-	require.True(t, hasAnyFilter(index.SearchOptions{Motifs: []string{"silent-fallback"}}))
-	require.False(t, hasAnyFilter(index.SearchOptions{}),
-		"...but an empty query is still an empty query")
-}
-
 // looseTierRefusers are the functions permitted to NAME a loose tier, with the
 // reason each needs to.
 //
