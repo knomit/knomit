@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -218,4 +219,101 @@ func TestLensQuery_RepoOnAOneMemberLensAndOnARepo(t *testing.T) {
 	text, isErr = repoEP.query(`{"sort":"recent"}`)
 	require.False(t, isErr, text)
 	require.Equal(t, rest, mcpQueryFiles(t, text))
+}
+
+// An explicit empty repo name is an unknown repo on both surfaces: REST
+// `?repo=` is the 422 `no mount named ""`, and knomit_query `"repo": ""` (or
+// `[""]`) is the same text, never "no narrowing".
+//
+// Sabotage: drop empty names in parseQueryRepo (MCP lists every member's
+// rows instead of the error).
+func TestLensQuery_EmptyRepoNameIsUnknown(t *testing.T) {
+	e := newLensRESTEnv(t, "alpha", "beta", "gamma")
+	seedThreeMembers(t, e.m)
+	h := e.as(t, "reader")
+	mcp := newMCPSession(t, h, engMCP)
+
+	want := `no mount named "" in lens "eng"`
+	require.Equal(t, want, restProblemDetail(t, h, engFacts+"?repo=", http.StatusUnprocessableEntity))
+	require.Equal(t, want, restProblemDetail(t, h, engSearch+"?q=x&repo=", http.StatusUnprocessableEntity))
+	for _, args := range []string{`{"sort":"recent","repo":""}`, `{"text":"x","repo":[""]}`, `{"text":"x","repo":["beta",""]}`} {
+		text, isErr := mcp.query(args)
+		require.True(t, isErr, "%s: %s", args, text)
+		require.Equal(t, want, text, args)
+	}
+	// Positive control: an empty LIST narrows nothing, as REST with no repo=.
+	text, isErr := mcp.query(`{"sort":"recent","repo":[]}`)
+	require.False(t, isErr, text)
+	require.Equal(t, restListPaths(t, h, engFacts), mcpQueryFiles(t, text))
+}
+
+// On a repository endpoint a call carrying ONLY repo is refused for the repo
+// (ruling S4), not for "at least one filter is required": the repo check runs
+// before the filter check.
+//
+// Sabotage: check repo after hasAnyFilter in queryFirstCall (the answer is
+// the no-filter error).
+func TestLensQuery_RepoOnlyOnARepoNamesTheRepo(t *testing.T) {
+	e := newLensRESTEnv(t, "alpha")
+	writeFactsInOneCommit(t, e.m.Get("alpha"), factSpec{path: "kb/a/1.md", title: "alpha one"})
+	h := e.as(t, "reader")
+	repoEP := newMCPSession(t, h, "/api/v1/repos/alpha/branches/"+urlBranch(e.m.Get("alpha").AgentBranch())+"/mcp")
+	for _, args := range []string{`{"repo":"alpha"}`, `{"repo":["beta"]}`} {
+		text, isErr := repoEP.query(args)
+		require.True(t, isErr, "%s: %s", args, text)
+		require.Equal(t, "repo is only accepted on a lens", text, args)
+	}
+	// Control: with no repo either, it is the filter error.
+	text, isErr := repoEP.query(`{}`)
+	require.True(t, isErr, text)
+	require.Contains(t, text, "at least one filter is required")
+}
+
+// A repo-narrowed result pages past its cursor: every page stays narrowed and
+// continues the one before, so the pages joined are REST's narrowed list, in
+// order, with nothing repeated or skipped (relevance and recency).
+//
+// Sabotage: snapshot the remainder from one row past the first page in
+// queryFirstCall (page 2 skips a row: the join is short of REST's list).
+func TestLensQuery_RepoNarrowingPagesPastTheCursor(t *testing.T) {
+	e := newLensRESTEnv(t, "alpha", "beta", "gamma")
+	seedThreeMembers(t, e.m)
+	h := e.as(t, "reader")
+	mcp := newMCPSession(t, h, engMCP)
+	beta12 := fact.ID12(e.m.Get("beta").ID())
+	gamma12 := fact.ID12(e.m.Get("gamma").ID())
+
+	pages := func(first string) [][]string {
+		var out [][]string
+		args := first
+		for {
+			text, isErr := mcp.query(args)
+			require.False(t, isErr, text)
+			out = append(out, mcpQueryFiles(t, text))
+			c := pageCursor(t, text)
+			if c == "" {
+				return out
+			}
+			args = `{"cursor":"` + c + `","limit":2}`
+			require.Less(t, len(out), 10)
+		}
+	}
+	for _, tc := range []struct{ mcpArgs, restURL string }{
+		{`{"text":"x","repo":["beta","gamma"],"limit":2}`, engSearch + "?q=x&repo=beta&repo=gamma"},
+		{`{"sort":"recent","repo":["beta","gamma"],"limit":2}`, engFacts + "?repo=beta&repo=gamma"},
+	} {
+		rest := restListPaths(t, h, tc.restURL)
+		require.Len(t, rest, 5, tc.restURL)
+		got := pages(tc.mcpArgs)
+		require.Len(t, got, 3, "%s: 2 + 2 + 1 rows over three pages", tc.mcpArgs)
+		var joined []string
+		for _, p := range got {
+			for _, f := range p {
+				require.True(t, strings.HasPrefix(f, "kb://"+beta12+"/") || strings.HasPrefix(f, "kb://"+gamma12+"/"),
+					"%s: %s is outside the narrowing", tc.mcpArgs, f)
+			}
+			joined = append(joined, p...)
+		}
+		require.Equal(t, rest, joined, tc.mcpArgs)
+	}
 }
