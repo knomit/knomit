@@ -99,7 +99,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Return full fact bodies instead of snippets. Page size is capped low (default 3, max 5). For a single fact's full body, prefer knomit_explain."),
 		),
 		mcpgo.WithString("sort",
-			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed — but combined with text it is ranked by relevance, recency breaking ties. sort=recent may be called with no filter to browse the whole base, most-recent-first."),
+			mcpgo.Description("Result ordering: \"relevance\" (default) ranks by match score; \"recent\" orders by most-recently-committed — but combined with text it is ranked by relevance, recency breaking ties."),
 		),
 		mcpgo.WithString("cursor",
 			mcpgo.Description("Opaque page token from a previous response's `cursor`. When set, all filter arguments are ignored (the result set is frozen); only `limit` and `include_body` still apply."),

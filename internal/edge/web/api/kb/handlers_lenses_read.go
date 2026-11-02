@@ -142,6 +142,9 @@ func lensQueryVec(ctx context.Context, emb model.Embedder, text string) ([]float
 func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
+		if !lensFactsParams.refuseUnknown(w, r) {
+			return
+		}
 		qp := r.URL.Query()
 
 		limit, ok := limitParam(w, r)
@@ -801,6 +804,9 @@ func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float6
 func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
+		if !lensSearchParams.refuseUnknown(w, r) {
+			return
+		}
 		qp := r.URL.Query()
 
 		// Numeric params mirror the repo /search handler, including its 400s.

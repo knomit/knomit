@@ -169,7 +169,7 @@ func branchRootBody(
 			"facts":          {Href: branchURL + "/facts{?path,q,topic,domain,entity,type,exclude_type,kind,exclude_kind,ep,min_confidence,limit,offset}", Templated: true},
 			"topics":         {Href: branchURL + "/topics"},
 			"commits":        {Href: branchURL + "/commits"},
-			"search":         {Href: branchURL + "/search{?q,limit,cursor}", Templated: true},
+			"search":         {Href: branchURL + "/search{?q,limit}", Templated: true},
 			"domains":        {Href: branchURL + "/domains"},
 			"stats":          {Href: branchURL + "/stats"},
 			"events":         {Href: branchURL + "/events"},

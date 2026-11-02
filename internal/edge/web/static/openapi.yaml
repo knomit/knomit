@@ -816,6 +816,7 @@ paths:
     get:
       tags: [facts]
       summary: List facts (recent, filtered, paginated)
+      description: 'Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.'
       operationId: listFacts
       parameters:
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -839,6 +840,8 @@ paths:
         - $ref: "#/components/parameters/ExpiresAfter"
         - $ref: "#/components/parameters/ContextFilter"
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - { name: since_fork,     in: query, description: "true or 1: only what this experiment changed since its fork (a branch that is not an experiment is 400).", schema: { type: boolean } }
+        - { name: sort,           in: query, description: "Only `recent`, the one order this collection has (newest first); any other value is 400.", schema: { type: string, enum: [recent] } }
       responses:
         "200":
           description: Collection of facts
@@ -1482,6 +1485,7 @@ paths:
     get:
       tags: [search]
       summary: Full-text / semantic search
+      description: 'Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.'
       operationId: search
       parameters:
         - { name: q,              in: query, schema: { type: string } }
@@ -1504,6 +1508,7 @@ paths:
         - $ref: "#/components/parameters/ExpiresBefore"
         - $ref: "#/components/parameters/ExpiresAfter"
         - $ref: "#/components/parameters/ContextFilter"
+        - { name: since_fork,     in: query, description: "true or 1: only what this experiment changed since its fork (a branch that is not an experiment is 400).", schema: { type: boolean } }
       responses:
         "200":
           description: Collection of search results
@@ -4159,6 +4164,8 @@ paths:
         that a single unrebuilt repo's exact tier would not, because the union
         groups mechanically-equal spellings the per-branch canonicals keep
         apart; that is the shared vocabulary, not a leak in the tier.
+
+        Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.
       operationId: listLensFacts
       parameters:
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -4304,6 +4311,8 @@ paths:
         that a single unrebuilt repo's exact tier would not, because the union
         groups mechanically-equal spellings the per-branch canonicals keep
         apart; that is the shared vocabulary, not a leak in the tier.
+
+        Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.
       operationId: searchLens
       parameters:
         - { name: q,              in: query, schema: { type: string } }

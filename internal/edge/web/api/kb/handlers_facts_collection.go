@@ -71,7 +71,17 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 
 		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
+		if !repoFactsParams.refuseUnknown(w, r) {
+			return
+		}
 		qp := r.URL.Query()
+		// sort names the one order this collection has (newest first): only
+		// "recent" is accepted, so a caller asking for another order is told
+		// rather than silently given this one.
+		if s := qp.Get("sort"); s != "" && s != "recent" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", `sort must be "recent"`, r.URL.Path)
+			return
+		}
 
 		limit, ok := listLimitParam(w, r)
 		if !ok {
