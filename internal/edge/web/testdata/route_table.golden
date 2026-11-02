@@ -27,6 +27,7 @@ DELETE /repos/{repo}/branches/{branch}/synthesis-runs/{id} | requestID > recover
 DELETE /repos/{repo}/experiments/{name}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware | handleExperimentAction
 DELETE /repos/{repo}/origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleHALDeleteOrigin
 DELETE /repos/{repo}/origin-sessions/{sessionID} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleDeleteSession
+DELETE /secrets/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > (*Server).requireLocalOrSameOriginAdmin-fm | handleDeleteSecret
 GET / | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleAPIRoot
 GET /archived | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchived
 GET /archived/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchivedItem
@@ -103,6 +104,8 @@ GET /repos/{repo}/origin-sessions/{sessionID}/preview | requestID > recoverer > 
 GET /repos/{repo}/origin-sessions/{sessionID}/test | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleTestConnectivity
 GET /repos/{repo}/pushed-branches | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware | handleHALPushedBranches
 GET /repos/{repo}/templates | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware | handleRepoTemplates
+GET /secrets/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > (*Server).requireLocalOrSameOriginAdmin-fm | handleListSecrets
+GET /secrets/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > (*Server).requireLocalOrSameOriginAdmin-fm | handleGetSecret
 GET /sessions | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALClientSessions
 GET /sessions/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALClientSessionEvents
 GET /templates | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleTemplates
@@ -134,6 +137,7 @@ PATCH /repos/{repo}/ | requestID > recoverer > reportPanic > authMiddleware > me
 PATCH /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 PATCH /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 PATCH /repos/{repo}/origin/upstream | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleHALSetOriginUpstream
+PATCH /secrets/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > (*Server).requireLocalOrSameOriginAdmin-fm | handlePatchSecret
 POST /archived/{id}/restore | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchivedRestore
 POST /fleet/create | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleCreateFleet
 POST /fleet/decommission | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleDecommissionFleet
@@ -174,6 +178,7 @@ POST /repos/{repo}/origin-sessions/{sessionID}/commit | requestID > recoverer > 
 POST /repos/{repo}/rename | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware | handleHALRepoRename
 POST /repos:probe-initialized | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > require | handleReposProbeInitialized
 POST /repos:probe-origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > require | handleReposProbeOrigin
+POST /secrets/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > (*Server).requireLocalOrSameOriginAdmin-fm | handleCreateSecret
 PUT /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handlePutFleetRoot
 PUT /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 PUT /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
@@ -185,6 +190,7 @@ PUT /repos/{repo}/branches/{branch}/facts/* | requestID > recoverer > reportPani
 PUT /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 PUT /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 PUT /repos/{repo}/origin | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleHALSetOrigin
+PUT /repos/{repo}/origin/credential | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleSetOriginCredential
 TRACE /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 TRACE /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 TRACE /lenses/{lens}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm

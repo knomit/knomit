@@ -55,6 +55,10 @@ tags:
   - name: commits
   - name: jobs
   - name: origin
+  - name: secrets
+    description: |
+      The instance's stored credentials (token, basic, ssh_key) that repository
+      origins link to. Values are write-only.
   - name: events
   - name: mcp
   - name: sessions
@@ -2496,6 +2500,50 @@ paths:
         "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/origin/credential:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    put:
+      tags: [origin]
+      summary: Replace the origin's credential without reconnecting
+      description: |
+        Replaces only the pasted credential of the configured origin: the URL,
+        branch and mode are unchanged, nothing is probed and sync is not
+        restarted. The sync back-off is reset and sync runs at once with the
+        new credential. Requires the `operator` permission (403 otherwise).
+
+        `auth_method` is token (with `token`), basic (with `user` and
+        `password`, or `token` as user:password), ssh or none. 400 "Invalid
+        credential" for a malformed credential or one that does not fit the
+        URL's scheme, 400 for `secret_id` (not accepted by this endpoint), 400
+        "Invalid origin" for a fleet peer origin (it authenticates with this
+        instance's certificate). 409 "Linked to a stored secret" when the
+        repository uses a stored secret, 409 "No origin", and 409 "Origin
+        changed" when the origin was re-pointed while the credential was being
+        replaced (nothing changed: read the origin and retry).
+      operationId: setOriginCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginCredentialRequest" }
+      responses:
+        "200":
+          description: Credential replaced
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  _links: { type: object }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/origin-sessions:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -3852,6 +3900,114 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /secrets:
+    get:
+      tags: [secrets]
+      summary: List stored secrets
+      description: |
+        Every stored secret's metadata with its computed expiry status and the
+        number of repositories linked to it. Values are write-only and never
+        returned. Available over the local listener (unix socket or named
+        pipe), or from the web UI on this listener (anonymous loopback holding
+        `admin` plus the `X-Knomit-Client: web` header); every other caller is
+        refused 403. Not served on the OAuth listener.
+      operationId: listSecrets
+      responses:
+        "200":
+          description: The secrets
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/SecretList" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [secrets]
+      summary: Store a secret
+      description: |
+        Validates and stores a secret, encrypted with the instance key. The
+        value fields depend on `type`: `value` for token, `username` and
+        `password` for basic, `private_key` (OpenSSH or PEM) and an optional
+        `passphrase` for ssh_key. 400 names the invalid field, 409 when the
+        name is taken, 503 "Secret storage is unavailable: the instance key
+        cannot be read." Same gate as GET.
+      operationId: createSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretCreateRequest" }
+      responses:
+        "201":
+          description: Stored; Location is the secret
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /secrets/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [secrets]
+      summary: Get one secret
+      description: The secret's metadata plus the repositories linked to it. Same gate as GET /secrets.
+      operationId: getSecret
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [secrets]
+      summary: Change a secret
+      description: |
+        Changes any of: `name`; `expires_at` (absent keeps it, null clears
+        it); `hosts` (the full new list, at least one); the value (the same
+        fields as create, for the stored type). Every field is validated
+        before anything is written. Replacing the value resets the sync
+        back-off of every active linked repository and syncs it at once, with
+        no reconnect. Removing a host that a linked repository's remote uses
+        is 409 with `hosts` and `repos`; a taken name is 409. Same gate as
+        GET /secrets.
+      operationId: patchSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretPatchRequest" }
+      responses:
+        "200":
+          description: The changed secret
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [secrets]
+      summary: Delete a secret
+      description: |
+        Refused 409 with `repos` while any repository links to the secret:
+        "Unlink these repositories first: a, b". Same gate as GET /secrets.
+      operationId: deleteSecret
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /archived:
     get:
       tags: [archive]
@@ -5078,6 +5234,89 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    OriginCredentialRequest:
+      type: object
+      required: [auth_method]
+      properties:
+        auth_method: { type: string, enum: [token, basic, ssh, none] }
+        token: { type: string, writeOnly: true }
+        user: { type: string }
+        password: { type: string, writeOnly: true }
+
+    Secret:
+      type: object
+      description: A stored secret's metadata. The value is never returned.
+      required: [id, name, type, hosts, expires_at, status, created_at, updated_at, linked_repos, _links]
+      properties:
+        id: { type: string, description: "Stable id that repositories link to" }
+        name: { type: string, description: "Friendly name, unique, renameable" }
+        type: { type: string, enum: [token, basic, ssh_key] }
+        hosts:
+          type: array
+          items: { type: string }
+          description: "Hosts the secret may be sent to (host or host:port, lowercased)"
+        expires_at: { type: string, format: date-time, nullable: true }
+        status:
+          type: string
+          enum: [ok, expiring, expired, none]
+          description: "expiring = within 14 days. Advisory: sync keeps using an expired secret."
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        fingerprint: { type: string, description: "ssh_key only: SHA256 fingerprint of the public key" }
+        linked_repos: { type: integer }
+        repos:
+          type: array
+          description: "GET /secrets/{id} only: the linked repositories"
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              uid: { type: string }
+              state: { type: string }
+        _links: { type: object }
+
+    SecretList:
+      type: object
+      required: [secrets, _links]
+      properties:
+        secrets:
+          type: array
+          items: { $ref: "#/components/schemas/Secret" }
+        _links: { type: object }
+
+    SecretCreateRequest:
+      type: object
+      required: [name, type, hosts]
+      properties:
+        name: { type: string, maxLength: 128 }
+        type: { type: string, enum: [token, basic, ssh_key] }
+        hosts:
+          type: array
+          minItems: 1
+          items: { type: string }
+        expires_at: { type: string, format: date-time, nullable: true }
+        value: { type: string, description: "token: the token", writeOnly: true }
+        username: { type: string, description: "basic: the user name (no ':')", writeOnly: true }
+        password: { type: string, description: "basic: the password", writeOnly: true }
+        private_key: { type: string, description: "ssh_key: OpenSSH or PEM private key", writeOnly: true }
+        passphrase: { type: string, description: "ssh_key: the key's passphrase, if encrypted", writeOnly: true }
+
+    SecretPatchRequest:
+      type: object
+      properties:
+        name: { type: string, maxLength: 128 }
+        expires_at: { type: string, format: date-time, nullable: true, description: "null clears the expiry" }
+        hosts:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: "The full new list"
+        value: { type: string, writeOnly: true }
+        username: { type: string, writeOnly: true }
+        password: { type: string, writeOnly: true }
+        private_key: { type: string, writeOnly: true }
+        passphrase: { type: string, writeOnly: true }
+
     FleetLostCommit:
       type: object
       description: "One commit the drop's confirmed fallback leaves (or left) out"

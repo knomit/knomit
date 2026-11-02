@@ -174,6 +174,10 @@ var webKnownTypes = map[string]map[string]string{
 		"sessionManager":       "session_manager.go",
 		"createSessionRequest": "handlers.go",
 	},
+	// api/secrets: the secret view; mount.go declares no type.
+	webPkg + "/api/secrets": {
+		"secretView": "handlers.go",
+	},
 }
 
 // isWebFamily reports whether an import path is internal/edge/web or a

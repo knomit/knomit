@@ -303,6 +303,8 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, pub *events.TaskP
 	// fresh attempt at once, which a changed origin or credential deserves.
 	var fetchBrk, pushBrk breaker
 	breakers.publish(fetchBrk, pushBrk)
+	// The credential-change generation this loop has acted on (breaker.go).
+	seenReset := breakers.resetGen()
 
 	logFailure := func(count int) *zerolog.Event {
 		if count >= reconcileFailureEscalateThreshold {
@@ -339,6 +341,15 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, pub *events.TaskP
 		// including a round whose steps are all skipped by open breakers.
 		if kick != nil {
 			defer kick()
+		}
+		// A credential change since the last round: the one thing that closes
+		// the breakers early (breaker.go). Before anything can skip the round.
+		if g := breakers.resetGen(); g != seenReset {
+			seenReset = g
+			fetchBrk, pushBrk = breaker{}, breaker{}
+			syncFails, pushFails = 0, 0
+			breakers.publish(fetchBrk, pushBrk)
+			lg.Info().Msg("reconcile: breakers reset by a credential change")
 		}
 		if h := currentSyncHooks().tick; h != nil {
 			h(ctx, repo)

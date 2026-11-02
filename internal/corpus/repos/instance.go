@@ -836,6 +836,8 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		discoveryConfidenceThreshold:  0.5,
 		discoveryBlastRadiusThreshold: 1,
 		hub:                           cfg.Hub,
+		syncWake:                      make(chan struct{}, 1),
+		breakers:                      &syncBreakers{},
 	}
 	ri.setReadBranch(read)
 	ri.ident.Store(&identity{ontology: cfg.Ontology})

@@ -129,6 +129,9 @@ type Manager struct {
 	// handle). Opened by Start, closed with reg — Origins has no Close of its
 	// own, it borrows reg's *sql.DB; nil before Start.
 	origins *control.Origins
+	// secrets holds the instance's stored credentials (control.db tenant,
+	// sharing reg's handle and the origins' Crypt); nil before Start.
+	secrets *control.Secrets
 	accepts *control.VerifyAccepts
 
 	// clientSessions records every MCP client session (fourth control.db
@@ -572,6 +575,13 @@ func (m *Manager) Origins() *control.Origins {
 	return m.origins
 }
 
+// Secrets returns the stored-credential store, or nil before Start.
+func (m *Manager) Secrets() *control.Secrets {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.secrets
+}
+
 // Repos returns the repo registry, or nil before Start.
 func (m *Manager) Repos() *control.Registry {
 	m.mu.RLock()
@@ -830,6 +840,7 @@ func (m *Manager) Close() error {
 	repoReg := m.reg
 	m.reg = nil
 	m.origins = nil
+	m.secrets = nil
 	// Borrows repoReg's handle; dropping the pointer is the whole teardown.
 	m.clientSessions = nil
 	m.mu.Unlock()
@@ -1086,6 +1097,9 @@ func (m *Manager) Start() error {
 	origins := control.OpenOrigins(repoReg.DB(), crypt)
 	m.mu.Lock()
 	m.origins = origins
+	// Stored secrets share the origins' Crypt: one instance key encrypts every
+	// credential. Opened after migrate.Control, like Origins.
+	m.secrets = control.OpenSecrets(repoReg.DB(), crypt)
 	// F09's accept list, another control.db tenant (control migration 000013).
 	m.accepts = control.OpenVerifyAccepts(repoReg.DB())
 	m.mu.Unlock()

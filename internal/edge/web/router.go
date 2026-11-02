@@ -15,6 +15,7 @@ import (
 	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/api/manage"
 	"knomit/internal/edge/web/api/origins"
+	"knomit/internal/edge/web/api/secrets"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
@@ -40,6 +41,14 @@ func (s *Server) NewAPIRouter() chi.Router {
 	if s.OAuthIssuer != nil {
 		s.mountOAuthPending(r)
 	}
+	// The instance's stored credentials (api/secrets). Like the approval
+	// endpoints: THIS router only, never the OAuth listener's, and behind the
+	// local-or-same-origin admin gate, because a secret is what a remote
+	// principal holding operator must never be able to redirect or read.
+	r.Route("/secrets", func(r chi.Router) {
+		r.Use(s.requireLocalOrSameOriginAdmin)
+		secrets.Mount(r, s.Manager)
+	})
 	return r
 }
 
@@ -175,7 +184,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	operator := requireOperator(g, s.authDisabled)
 	manage.Mount(r, repoOuter, repo, branch, lens,
 		s.Manager, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays,
-		operator)
+		operator, s.requireLocalOrSameOriginAdmin)
 
 	// The connect-a-remote wizard (api/origins). Inside the
 	// RepoMiddleware group: its handlers read the repo from context. Every

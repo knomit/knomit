@@ -89,6 +89,7 @@ var paramClass = map[string]struct {
 
 	"/ontologies/presets": {false, "{name}: OUR shipped preset names — the product defines this set, no user adds to it"},
 	"/archived":           {false, "{id}: a server-minted identifier"},
+	"/secrets":            {false, "{id}: a server-minted secret id (a UUID); the user-chosen name is never a path segment"},
 	"/repo-creates":       {false, "{id}: a server-minted job id"},
 	"/repos/{repo}/branches/{branch}/commits":        {false, "{sha}: a commit hash"},
 	"/repos/{repo}/branches/{branch}/index-rebuilds": {false, "{id}: a server-minted job id"},

@@ -77,6 +77,37 @@ func (ri *Index) SetOrigin(o *Origin) {
 	}
 }
 
+// SetOriginIf is SetOrigin as a compare-and-set on the WHOLE injected
+// origin: it replaces the origin with o only while an origin is injected AND
+// it equals expect (URL, branch, method and token), and reports whether it
+// did. With no origin injected (a detach cleared it), another URL (an attach
+// re-pointed it), or the same URL with another credential (a re-attach),
+// nothing changes. A credential-only change uses it so it can never resurrect
+// a removed origin or overwrite what an attach just injected.
+func (ri *Index) SetOriginIf(expect Origin, o *Origin) bool {
+	ri.originMu.Lock()
+	if ri.origin == nil || *ri.origin != expect {
+		ri.originMu.Unlock()
+		return false
+	}
+	ri.origin = o
+	ri.originMu.Unlock()
+	if o != nil && o.Branch != "" {
+		ri.RecordConsensusBranch(o.Branch)
+	}
+	return true
+}
+
+// InjectedOrigin returns a copy of the injected origin, or nil when none is.
+func (ri *Index) InjectedOrigin() *Origin {
+	o := ri.getOrigin()
+	if o == nil {
+		return nil
+	}
+	c := *o
+	return &c
+}
+
 // getOrigin reads the injected origin under a read lock. See originMu.
 func (ri *Index) getOrigin() *Origin {
 	ri.originMu.RLock()

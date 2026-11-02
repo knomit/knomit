@@ -507,3 +507,43 @@ func TestControl_OAuthUpDown(t *testing.T) {
 		require.True(t, objectExists(t, db, name), "up again must recreate %q", name)
 	}
 }
+
+func TestControl_SecretsUpDown(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+	objs := []string{"secrets", "secrets_name", "repo_origin_secrets", "repo_origin_secrets_secret"}
+	for _, name := range objs {
+		require.True(t, objectExists(t, db, name), "expected %q", name)
+	}
+
+	_, err := db.Exec(`INSERT INTO repos (uid, name, state, created_at) VALUES ('u1', 'r1', 'active', 1)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO repo_origins (repo_uid, url, branch, auth_method, auth_token)
+		VALUES ('u1', 'https://github.com/a/b', 'main', 'token', '')`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO secrets (id, name, type, hosts, value_enc, created_at, updated_at)
+		VALUES ('s1', 'pat', 'token', '["github.com"]', 'x', 1, 1)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO repo_origin_secrets (repo_uid, secret_id) VALUES ('u1', 's1')`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`DELETE FROM secrets WHERE id = 's1'`)
+	require.Error(t, err, "a linked secret must not be deletable")
+	require.Contains(t, err.Error(), "FOREIGN KEY")
+
+	_, err = db.Exec(`DELETE FROM repo_origins WHERE repo_uid = 'u1'`)
+	require.NoError(t, err)
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM repo_origin_secrets`).Scan(&n))
+	require.Zero(t, n, "deleting the origin must cascade to its link")
+	_, err = db.Exec(`DELETE FROM secrets WHERE id = 's1'`)
+	require.NoError(t, err)
+
+	m, err := newMigrator(db, controlFS, "control")
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(18), "000019 must roll back")
+	for _, name := range objs {
+		require.False(t, objectExists(t, db, name), "down must drop %q", name)
+	}
+	require.True(t, objectExists(t, db, "repo_origins"), "repo_origins must survive the rollback")
+}

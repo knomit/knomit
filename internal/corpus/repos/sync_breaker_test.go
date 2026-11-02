@@ -465,3 +465,72 @@ func TestSyncBreaker_AuthFailureWhileFetchOpenIsNotAPushFailure(t *testing.T) {
 	require.NotNil(t, rem.LastPushStatus)
 	require.Equal(t, "ok", *rem.LastPushStatus)
 }
+
+// openBothBreakers drives the loop until the push breaker (refused pushes)
+// and then the fetch breaker (auth failures) are both open.
+func openBothBreakers(t *testing.T, ri *RepoInstance, l *brkLoop) {
+	t.Helper()
+	l.round(t, ri)
+	l.round(t, ri)
+	_, push := ri.SyncBreakers()
+	require.Equal(t, breakerOpen, push.State)
+	l.authFail.Store(true)
+	for i := 0; i < 3; i++ {
+		l.round(t, ri)
+	}
+	fetch, push := ri.SyncBreakers()
+	require.Equal(t, breakerOpen, fetch.State)
+	require.Equal(t, breakerOpen, push.State)
+}
+
+// A credential change (the one scoped exception to "nothing else resets the
+// breakers") closes both breakers and runs a full round at once, without
+// waiting for openUntil. Sabotage: credentialChanged only wakes → the round
+// skips both steps → red.
+func TestSyncBreaker_CredentialChangeResetsAndRunsAtOnce(t *testing.T) {
+	ri, _, root := newOriginTriggerRepo(t)
+	l := startBreakerLoop(t, ri, root, func(l *brkLoop) { l.refuse.Store(true) })
+	openBothBreakers(t, ri, l)
+	fetches, pushes := l.fetches.Load(), l.pushes.Load()
+	gen := ri.breakers.resetGen()
+
+	l.authFail.Store(false)
+	l.refuse.Store(false)
+	n := l.rounds.Load()
+	ri.credentialChanged()
+	require.Equal(t, gen+1, ri.breakers.resetGen())
+	l.waitRounds(t, n+1)
+	require.Equal(t, fetches+1, l.fetches.Load(), "the fetch was attempted at once")
+	require.Equal(t, pushes+1, l.pushes.Load(), "the push was attempted at once")
+	fetch, push := ri.SyncBreakers()
+	require.Equal(t, breakerClosed, fetch.State)
+	require.Equal(t, breakerClosed, push.State)
+	require.Zero(t, fetch.ConsecutiveFailures)
+	require.Zero(t, push.ConsecutiveFailures)
+}
+
+// Guards "nothing else resets the breakers": a plain wake with both open
+// attempts nothing and leaves them open.
+func TestSyncBreaker_PlainWakeDoesNotReset(t *testing.T) {
+	ri, _, root := newOriginTriggerRepo(t)
+	l := startBreakerLoop(t, ri, root, func(l *brkLoop) { l.refuse.Store(true) })
+	openBothBreakers(t, ri, l)
+	fetches, pushes := l.fetches.Load(), l.pushes.Load()
+
+	l.authFail.Store(false)
+	l.refuse.Store(false)
+	l.round(t, ri)
+	require.Equal(t, fetches, l.fetches.Load(), "no fetch while open")
+	require.Equal(t, pushes, l.pushes.Load(), "no push while open")
+	fetch, push := ri.SyncBreakers()
+	require.Equal(t, breakerOpen, fetch.State)
+	require.Equal(t, breakerOpen, push.State)
+}
+
+func TestSyncBreakers_RequestResetNilSafe(t *testing.T) {
+	var s *syncBreakers
+	s.requestReset()
+	require.Zero(t, s.resetGen())
+	var ri *RepoInstance
+	ri.credentialChanged()
+}

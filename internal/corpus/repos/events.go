@@ -633,8 +633,10 @@ func restoreRemote(svc *store.Service, r *RepoInstance, prev *remotesync.Remote)
 // The irreversible step is LAST. In order: read the stored origin row, back up
 // the current store, persist the new origin (reversible), then copy the new
 // database over the old one. A failure before the copy changes nothing that is
-// not undone here; a copy failure restores both the backup and the previous
-// origin row. Persisting the origin after the copy would let a failed write
+// not undone here; a copy failure restores both the backup and the origin row
+// the write replaced (Origins.Restore; a credential changed since is kept
+// only when the swap kept the same URL).
+// Persisting the origin after the copy would let a failed write
 // leave the NEW store under the OLD origin: Open.Enter injects control.db's
 // origin and Sync would push the new store's agent branch to the old remote.
 //
@@ -658,13 +660,23 @@ func applySwap(m *Machine, s SwapSpec) error {
 		return fmt.Errorf("swap failed: back up the current store: %w; nothing changed", err)
 	}
 	m.pendingBak = backup
+	if beforeSwapOriginWrite != nil {
+		beforeSwapOriginWrite()
+	}
+	// The row to restore on a copy failure is the one this write REPLACES,
+	// read in its transaction: a credential change (the light swap) can land
+	// after `stored` was read, and restoring `stored` would revert it.
+	var written control.Origin
+	var replaced *control.Origin
 	if s.Origin.URL != "" {
 		mode := control.OriginModeSync
 		if stored != nil {
 			mode = stored.Mode
 		}
 		o := s.Origin
-		if err := origins.Set(r.uid, control.Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}); err != nil {
+		written = control.Origin{URL: o.URL, Branch: o.Branch, AuthMethod: o.AuthMethod, AuthToken: o.AuthToken, Mode: mode}
+		var err error
+		if replaced, err = origins.Replace(r.uid, written); err != nil {
 			return fmt.Errorf("swap failed: save remote config: %w; nothing changed", err)
 		}
 	}
@@ -674,7 +686,7 @@ func applySwap(m *Machine, s SwapSpec) error {
 			msgs = append(msgs, fmt.Sprintf("restoring the previous store also failed: %v", rerr))
 		}
 		if s.Origin.URL != "" {
-			if oerr := restoreOrigin(origins, r.uid, stored); oerr != nil {
+			if oerr := origins.Restore(r.uid, written, replaced); oerr != nil {
 				msgs = append(msgs, fmt.Sprintf("restoring the previous remote config also failed: %v", oerr))
 			}
 		}
@@ -686,18 +698,13 @@ func applySwap(m *Machine, s SwapSpec) error {
 	return nil
 }
 
+// beforeSwapOriginWrite (tests only) runs after the backup, before the swap
+// writes the new origin row.
+var beforeSwapOriginWrite func()
+
 // swapCopy is the swap's install copy; a test replaces it to fail the one
 // irreversible step.
 var swapCopy = copyFile
-
-// restoreOrigin puts uid's origin row back to stored: Set it again, or Delete
-// the row when there was none.
-func restoreOrigin(origins *control.Origins, uid string, stored *control.Origin) error {
-	if stored == nil {
-		return origins.Delete(uid)
-	}
-	return origins.Set(uid, *stored)
-}
 
 // copyFile copies src to dst, creating dst if needed.
 func copyFile(src, dst string) error {

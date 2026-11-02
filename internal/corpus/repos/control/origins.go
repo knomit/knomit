@@ -39,6 +39,10 @@ type Origin struct {
 	AuthToken  string
 	// Mode is OriginModeSync or OriginModeSubscribe. Empty is read as sync.
 	Mode string
+	// SecretID is the stored secret this origin links to (a row in
+	// repo_origin_secrets), or "" when it uses its own AuthToken or none.
+	// A linked origin keeps AuthMethod as the transport and no AuthToken.
+	SecretID string
 }
 
 // Origins persists per-repo remote connection config in control.db.
@@ -65,14 +69,24 @@ func OpenOrigins(db *sql.DB, crypt *model.Crypt) *Origins {
 // origin is an ordinary state, not an error — the same contract
 // store.GetRemote has always had.
 func (o *Origins) Get(uid string) (*Origin, error) {
+	return o.get(o.db, uid)
+}
+
+type rowQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func (o *Origins) get(q rowQuerier, uid string) (*Origin, error) {
 	var org Origin
-	err := o.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT o.url, o.branch, o.auth_method, o.auth_token,
-		        CASE WHEN s.repo_uid IS NULL THEN ? ELSE ? END
+		        CASE WHEN s.repo_uid IS NULL THEN ? ELSE ? END,
+		        COALESCE(l.secret_id, '')
 		   FROM repo_origins o
 		   LEFT JOIN repo_subscriptions s ON s.repo_uid = o.repo_uid
+		   LEFT JOIN repo_origin_secrets l ON l.repo_uid = o.repo_uid
 		  WHERE o.repo_uid = ?`, OriginModeSync, OriginModeSubscribe, uid,
-	).Scan(&org.URL, &org.Branch, &org.AuthMethod, &org.AuthToken, &org.Mode)
+	).Scan(&org.URL, &org.Branch, &org.AuthMethod, &org.AuthToken, &org.Mode, &org.SecretID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -99,14 +113,17 @@ func (o *Origins) Get(uid string) (*Origin, error) {
 // AuthToken. Without a Crypt it REFUSES to store a credential — credentials are
 // never written in plaintext.
 //
-// It writes Mode too, and an Origin with an EMPTY Mode DELETES any subscription
-// row for uid — empty means sync, and Set is a full replacement, not a patch.
-// So a read-modify-write caller must carry Mode through from Get: constructing
-// a fresh Origin{URL, Branch, AuthMethod, AuthToken} to change a credential or
-// a URL silently demotes a subscribed repo to sync. There is no error and no
-// log, because at this layer an explicit "sync" and an unset Mode are the same
-// request. The mode half and the repo_origins upsert share one transaction, so
-// a rejected Mode leaves neither behind.
+// It writes Mode and SecretID too: Set is a full replacement, not a patch. An
+// Origin with an EMPTY Mode DELETES any subscription row for uid (empty means
+// sync), and one with an EMPTY SecretID DELETES any secret link (empty means
+// not linked). So a read-modify-write caller must carry BOTH Mode and
+// SecretID through from Get: constructing a fresh Origin{URL, Branch,
+// AuthMethod, AuthToken} to change a credential or a URL silently demotes a
+// subscribed repo to sync and silently unlinks a linked one. There is no error
+// and no log, because at this layer an explicit value and an unset one are the
+// same request. To change only the credential use SetCredential. The mode
+// half, the link half and the repo_origins upsert share one transaction, so a
+// rejected Mode or an unknown SecretID leaves none of them behind.
 func (o *Origins) Set(uid string, org Origin) error {
 	if uid == "" {
 		return fmt.Errorf("origins set: uid required")
@@ -118,23 +135,29 @@ func (o *Origins) Set(uid string, org Origin) error {
 	if org.Branch == "" {
 		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
 	}
-	stored := org.AuthToken
-	if org.AuthToken != "" {
-		if o.crypt == nil {
-			return fmt.Errorf("refusing to store credential for repo %q: encryption unavailable (agent key unreadable); credentials are never stored in plaintext", uid)
-		}
-		enc, err := o.crypt.Encrypt(org.AuthToken)
-		if err != nil {
-			return fmt.Errorf("origins encrypt token: %w", err)
-		}
-		stored = enc
-	}
 	tx, err := o.db.Begin()
 	if err != nil {
 		return fmt.Errorf("origins set: begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	if err := o.setTx(tx, uid, org); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("origins set: commit: %w", err)
+	}
+	return nil
+}
 
+// setTx is Set's writes inside tx.
+func (o *Origins) setTx(tx *sql.Tx, uid string, org Origin) error {
+	if org.Branch == "" {
+		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
+	}
+	stored, err := o.sealToken(uid, org.AuthToken)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(
 		`INSERT INTO repo_origins (repo_uid, url, branch, auth_method, auth_token)
 		 VALUES (?, ?, ?, ?, ?)
@@ -159,9 +182,142 @@ func (o *Origins) Set(uid string, org Origin) error {
 	if err != nil {
 		return fmt.Errorf("origins set mode: %w", err)
 	}
+	return setLink(tx, uid, org.SecretID)
+}
 
+// Replace is Set that also returns the row it replaced (nil when there was
+// none), read in the SAME transaction as the write. A caller that may have to
+// undo its write (applySwap) restores exactly what it replaced, not a copy it
+// read earlier that a credential change may have overtaken.
+func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
+	if uid == "" {
+		return nil, fmt.Errorf("origins set: uid required")
+	}
+	tx, err := o.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("origins replace: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	prev, err := o.get(tx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.setTx(tx, uid, org); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("origins set: commit: %w", err)
+		return nil, fmt.Errorf("origins replace: commit: %w", err)
+	}
+	return prev, nil
+}
+
+// Restore undoes a Replace that wrote `written` over `prev`, in one
+// transaction. With prev nil the row is deleted. Otherwise prev is written
+// back whole, with ONE exception: when prev and written have the SAME URL and
+// the current row's credential (method, token, secret link) no longer equals
+// written's, a credential change landed after the Replace and is kept rather
+// than reverted. Across different URLs prev is always restored whole: a
+// credential set after the Replace was vetted against written's URL, and
+// carrying it to prev's URL would send it to another host.
+func (o *Origins) Restore(uid string, written Origin, prev *Origin) error {
+	tx, err := o.db.Begin()
+	if err != nil {
+		return fmt.Errorf("origins restore: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	if prev == nil {
+		if _, err := tx.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins restore: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins restore: %w", err)
+		}
+	} else {
+		cur, err := o.get(tx, uid)
+		if err != nil {
+			return err
+		}
+		target := *prev
+		if cur != nil && prev.URL == written.URL && cur.URL == written.URL && !sameCredential(*cur, written) {
+			target.AuthMethod, target.AuthToken, target.SecretID = cur.AuthMethod, cur.AuthToken, cur.SecretID
+		}
+		if err := o.setTx(tx, uid, target); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("origins restore: commit: %w", err)
+	}
+	return nil
+}
+
+func sameCredential(a, b Origin) bool {
+	return a.AuthMethod == b.AuthMethod && a.AuthToken == b.AuthToken && a.SecretID == b.SecretID
+}
+
+// sealToken encrypts a non-empty token, refusing without a Crypt.
+func (o *Origins) sealToken(uid, token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	if o.crypt == nil {
+		return "", fmt.Errorf("refusing to store credential for repo %q: encryption unavailable (agent key unreadable); credentials are never stored in plaintext", uid)
+	}
+	enc, err := o.crypt.Encrypt(token)
+	if err != nil {
+		return "", fmt.Errorf("origins encrypt token: %w", err)
+	}
+	return enc, nil
+}
+
+// setLink writes (secretID != "") or removes (secretID == "") uid's secret
+// link inside tx. A secretID with no secrets row fails on the foreign key.
+func setLink(tx *sql.Tx, uid, secretID string) error {
+	var err error
+	if secretID != "" {
+		_, err = tx.Exec(`INSERT OR REPLACE INTO repo_origin_secrets (repo_uid, secret_id) VALUES (?, ?)`, uid, secretID)
+	} else {
+		_, err = tx.Exec(`DELETE FROM repo_origin_secrets WHERE repo_uid = ?`, uid)
+	}
+	if err != nil {
+		return fmt.Errorf("origins set secret link: %w", err)
+	}
+	return nil
+}
+
+// SetCredential changes ONLY the credential of uid's origin: auth_method,
+// auth_token and the secret link, in one transaction, and only while the
+// stored url is still url (the caller's vetted url). Otherwise it is
+// ErrOriginChanged and nothing is written. URL, branch and Mode are untouched,
+// which is what lets a credential change skip the attach lifecycle.
+func (o *Origins) SetCredential(uid, url, authMethod, authToken, secretID string) error {
+	stored, err := o.sealToken(uid, authToken)
+	if err != nil {
+		return err
+	}
+	tx, err := o.db.Begin()
+	if err != nil {
+		return fmt.Errorf("origins set credential: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
+	res, err := tx.Exec(`UPDATE repo_origins SET auth_method = ?, auth_token = ? WHERE repo_uid = ? AND url = ?`,
+		authMethod, stored, uid, url)
+	if err != nil {
+		return fmt.Errorf("origins set credential: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("origins set credential: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("origins set credential: %w: no origin with the checked url is configured for %q", ErrOriginChanged, uid)
+	}
+	if err := setLink(tx, uid, secretID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("origins set credential: commit: %w", err)
 	}
 	return nil
 }

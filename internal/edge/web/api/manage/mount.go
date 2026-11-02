@@ -42,6 +42,8 @@ import (
 // report them. operator is the gate that admits the host's operator only,
 // which the pushed-branch merge and the origin writes sit behind; the caller
 // builds it from its grants so this package does not know the auth model.
+// admin is the local-or-same-origin admin gate (the secrets API's), for the
+// origin changes that involve a stored secret.
 func Mount(
 	top, repoOuter, repo, branch, lens chi.Router,
 	rm *repos.Manager,
@@ -49,6 +51,7 @@ func Mount(
 	embeddingsEnabled bool,
 	expiryDays int,
 	operator func(http.Handler) http.Handler,
+	admin func(http.Handler) http.Handler,
 ) {
 	b := hal.URLBuilder{Base: httpx.APIBase}
 
@@ -226,6 +229,8 @@ func Mount(
 	repo.Get("/origin", handleHALGetOrigin(b))
 	repo.With(operator).Put("/origin", handleHALSetOrigin(b, rm))
 	repo.With(operator).Patch("/origin/upstream", handleHALSetOriginUpstream(b, rm))
+	// The light credential swap: the credential only, no reconnect.
+	repo.With(operator).Put("/origin/credential", handleSetOriginCredential(b, rm, admin))
 	repo.With(operator).Delete("/origin", handleHALDeleteOrigin(b, rm))
 
 	// Cancels the repo's index job: an ACTION on the repo, a POST on a

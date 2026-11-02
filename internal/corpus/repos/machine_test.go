@@ -951,3 +951,57 @@ func TestDispatcher_DueSweepGatedOnIndexReady(t *testing.T) {
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		20*time.Second, 10*time.Millisecond, "the index job's success kicks the dispatcher, and the sweep fires")
 }
+
+// A credential change that lands while a swap is in flight (after the swap
+// started, before it writes the new origin) survives a copy failure: the
+// restore puts back the origin the swap REPLACED, not a copy read earlier.
+// Sabotage: restore the row read at the start of applySwap → the method
+// changed by the light swap is reverted → red.
+func TestSwap_CopyFailureKeepsACredentialChangedMeanwhile(t *testing.T) {
+	f := newMFix(t, StageIndex, "index-job", true)
+	previous := f.remote(t, "previous")
+	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: previous, Branch: "main", AuthMethod: "none"}))
+	require.NoError(t, err)
+	incoming := f.remote(t, "incoming")
+	tmp := f.copyOfOwnDB(t)
+
+	beforeSwapOriginWrite = func() {
+		require.NoError(t, f.m.Origins().SetCredential(f.ri.UID(), previous, "ssh", "", ""))
+	}
+	t.Cleanup(func() { beforeSwapOriginWrite = nil })
+	prev := swapCopy
+	swapCopy = func(src, dst string) error { return errors.New("disk full") }
+	t.Cleanup(func() { swapCopy = prev })
+
+	_, err = send(f.m, f.ri, SwapStore(SwapSpec{TempDB: tmp, Origin: OriginSpec{URL: incoming, Branch: "main", AuthMethod: "none"}}))
+	require.ErrorContains(t, err, "disk full")
+	o, gerr := f.m.Origins().Get(f.ri.UID())
+	require.NoError(t, gerr)
+	require.Equal(t, previous, o.URL)
+	require.Equal(t, "ssh", o.AuthMethod, "the credential changed meanwhile is kept")
+}
+
+// A credential change on the swap's NEW row (after its write, before the copy
+// fails) was vetted against the INCOMING URL: the restore puts the previous
+// origin back whole and never carries that credential to the previous host.
+func TestSwap_CopyFailureNeverCarriesTheIncomingCredential(t *testing.T) {
+	f := newMFix(t, StageIndex, "index-job", true)
+	previous := f.remote(t, "previous")
+	_, err := send(f.m, f.ri, AttachOrigin(OriginSpec{URL: previous, Branch: "main", AuthMethod: "none"}))
+	require.NoError(t, err)
+	incoming := f.remote(t, "incoming")
+	tmp := f.copyOfOwnDB(t)
+	prev := swapCopy
+	swapCopy = func(src, dst string) error {
+		require.NoError(t, f.m.Origins().SetCredential(f.ri.UID(), incoming, "ssh", "", ""))
+		return errors.New("disk full")
+	}
+	t.Cleanup(func() { swapCopy = prev })
+
+	_, err = send(f.m, f.ri, SwapStore(SwapSpec{TempDB: tmp, Origin: OriginSpec{URL: incoming, Branch: "main", AuthMethod: "none"}}))
+	require.ErrorContains(t, err, "disk full")
+	o, gerr := f.m.Origins().Get(f.ri.UID())
+	require.NoError(t, gerr)
+	require.Equal(t, previous, o.URL, "the previous origin is restored")
+	require.Equal(t, "none", o.AuthMethod, "the incoming origin's credential is not carried to the previous URL")
+}
