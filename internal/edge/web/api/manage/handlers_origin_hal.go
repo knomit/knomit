@@ -455,7 +455,7 @@ func writeSecretFitError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, control.ErrSecretNotFound):
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret not found", "secret_id names no stored secret: list them with GET /secrets", r.URL.Path)
-	case errors.Is(err, repos.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch):
+	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch):
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret does not fit the origin", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrSecretOnPeer):
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret does not fit the origin", err.Error(), r.URL.Path)
@@ -499,7 +499,7 @@ func writeAttachRefusal(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 	case errors.Is(err, repos.ErrOriginUnreachable):
 		log.Warn().Err(err).Str("repo", repoName).Msg("origin attach refused by its probe")
 		hal.WriteProblem(w, http.StatusBadGateway, "Origin not attached", err.Error(), r.URL.Path)
-	case errors.Is(err, repos.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
+	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
 		errors.Is(err, repos.ErrSecretOnPeer), errors.Is(err, control.ErrSecretNotFound):
 		writeSecretFitError(w, r, err)
 	case errors.Is(err, repos.ErrManagerStopped):

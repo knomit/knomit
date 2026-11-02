@@ -1245,7 +1245,7 @@ func writeSecretRefusal(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, control.ErrSecretNotFound):
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret not found",
 			"secret_id names no stored secret: list them with GET /secrets", r.URL.Path)
-	case errors.Is(err, repos.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch):
+	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch):
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret does not fit the origin", err.Error(), r.URL.Path)
 	default:
 		hal.WriteProblem(w, http.StatusInternalServerError, "Failed to check the secret", err.Error(), r.URL.Path)

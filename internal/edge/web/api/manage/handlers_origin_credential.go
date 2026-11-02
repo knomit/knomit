@@ -104,7 +104,7 @@ func writeCredentialError(w http.ResponseWriter, r *http.Request, err error) {
 		hal.WriteProblem(w, http.StatusConflict, "Origin changed",
 			"the origin was changed concurrently: read it with GET /repos/{repo}/origin, then retry the credential change",
 			r.URL.Path)
-	case errors.Is(err, repos.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
+	case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
 		errors.Is(err, control.ErrSecretNotFound):
 		writeSecretFitError(w, r, err)
 	case errors.Is(err, repos.ErrNoOrigin):

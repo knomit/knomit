@@ -69,7 +69,7 @@ func TestLink_HostNotOnListRefused(t *testing.T) {
 		Hosts: []string{"github.com"}, Value: control.SecretValue{Token: "t"}}, time.Now())
 	require.NoError(t, err)
 	err = link(f.m, ri, meta.ID)
-	require.ErrorIs(t, err, ErrSecretHostNotAllowed)
+	require.ErrorIs(t, err, control.ErrSecretHostNotAllowed)
 	require.Contains(t, err.Error(), "gh-pat")
 	o, err := f.m.Origins().Get(ri.UID())
 	require.NoError(t, err)

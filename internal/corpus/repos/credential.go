@@ -120,7 +120,7 @@ func checkPastedCredential(url string, c CredentialChange) error {
 // restart. The URL, branch and Mode stay exactly as stored.
 //
 // The change is one of: a link to a stored secret (c.SecretID set: the
-// secret must fit the stored URL's host and scheme, ErrSecretHostNotAllowed
+// secret must fit the stored URL's host and scheme, control.ErrSecretHostNotAllowed
 // or ErrSecretTypeMismatch; the stored method becomes the secret's
 // transport and the pasted token is cleared); a pasted credential (c
 // AuthMethod plus AuthToken), which on a linked repo needs unlink; or, with

@@ -184,7 +184,7 @@ func TestResolveLinkedAuth_HostNotAllowed(t *testing.T) {
 		Value: control.SecretValue{Token: "never-sent-value"}}, time.Now())
 	require.NoError(t, err)
 	_, err = resolveLinkedAuth(s, meta.ID, "https://gitlab.com/a/b.git", "")
-	require.ErrorIs(t, err, ErrSecretHostNotAllowed)
+	require.ErrorIs(t, err, control.ErrSecretHostNotAllowed)
 	require.Contains(t, err.Error(), "gh-pat")
 	require.NotContains(t, err.Error(), "never-sent-value")
 }

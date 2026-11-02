@@ -20,10 +20,8 @@ import (
 // undecryptable, wrong type, host not on the list) is an error naming the
 // secret by name.
 
+// A host off the secret's list is control.ErrSecretHostNotAllowed.
 var (
-	// ErrSecretHostNotAllowed: the remote's host is not on the secret's
-	// hosts list.
-	ErrSecretHostNotAllowed = control.ErrSecretHostNotAllowed
 	// ErrSecretTypeMismatch: the secret's type does not fit the remote URL.
 	ErrSecretTypeMismatch = errors.New("the stored secret's type does not fit the remote URL: a token or basic secret needs an http(s) URL, an ssh_key secret an ssh URL")
 	// ErrSecretOnPeer: a stored secret on a fleet peer origin.
@@ -64,15 +62,15 @@ func isSSHURL(u string) bool {
 }
 
 // checkSecretFits refuses a secret for url when the url's host is not on its
-// hosts list (ErrSecretHostNotAllowed) or its type does not fit the url's
+// hosts list (control.ErrSecretHostNotAllowed) or its type does not fit the url's
 // scheme (ErrSecretTypeMismatch). Errors name the secret, never its value.
 func checkSecretFits(meta control.SecretMeta, url string) error {
 	host, err := control.RemoteHost(url)
 	if err != nil {
-		return fmt.Errorf("stored secret %q: %w (%v)", meta.Name, ErrSecretHostNotAllowed, err)
+		return fmt.Errorf("stored secret %q: %w (%v)", meta.Name, control.ErrSecretHostNotAllowed, err)
 	}
 	if !control.HostAllowed(meta.Hosts, host) {
-		return fmt.Errorf("stored secret %q is not allowed for host %s: %w", meta.Name, host, ErrSecretHostNotAllowed)
+		return fmt.Errorf("stored secret %q is not allowed for host %s: %w", meta.Name, host, control.ErrSecretHostNotAllowed)
 	}
 	method := methodForSecretType(meta.Type)
 	fits := false
@@ -142,7 +140,7 @@ func (m *Manager) ResolveSpecAuth(o OriginSpec) (string, transport.AuthMethod, e
 
 // CheckSecretForURL reports whether secret secretID may be linked to an
 // origin at url: the secret exists (control.ErrSecretNotFound) and fits the
-// url's host and scheme (ErrSecretHostNotAllowed, ErrSecretTypeMismatch). It
+// url's host and scheme (control.ErrSecretHostNotAllowed, ErrSecretTypeMismatch). It
 // returns the auth method the link stores.
 func (m *Manager) CheckSecretForURL(secretID, url string) (string, error) {
 	s := m.Secrets()

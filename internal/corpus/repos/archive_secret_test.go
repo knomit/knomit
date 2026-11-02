@@ -68,7 +68,7 @@ func TestRestore_WithSecretID(t *testing.T) {
 		Hosts: []string{"gitlab.com"}, Value: control.SecretValue{Token: "t"}}, time.Now())
 	require.NoError(t, err)
 	_, err = f.m.RestoreWith(uid, "", &RestoreCredential{SecretID: off.ID})
-	require.ErrorIs(t, err, ErrSecretHostNotAllowed)
+	require.ErrorIs(t, err, control.ErrSecretHostNotAllowed)
 	require.Nil(t, f.m.GetByUID(uid), "a refused restore leaves the repo archived")
 
 	ri, err := f.m.RestoreWith(uid, "", &RestoreCredential{SecretID: id})

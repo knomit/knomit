@@ -186,7 +186,7 @@ func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager, operator, admi
 		ri, err := m.RestoreWith(uid, req.NewName, &cred)
 		if err != nil {
 			switch {
-			case errors.Is(err, repos.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
+			case errors.Is(err, control.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch),
 				errors.Is(err, control.ErrSecretNotFound):
 				writeSecretFitError(w, r, err)
 				return
