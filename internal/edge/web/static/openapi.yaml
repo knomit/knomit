@@ -4330,6 +4330,155 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /lenses/{lens}/search/factset:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, search, facts]
+      summary: Page a lens search materialized as a factset (server-side cursor)
+      description: |
+        The lens twin of `GET /repos/{repo}/branches/{branch}/search/factset`:
+        a lens is a virtual repo, so this route takes the same parameters
+        (plus `repo`) and returns the same pages, with the same cursor, seek,
+        reservation, write-once, now marks, ownership, lifetime, budget and
+        errors (see that route). Each response is BYTE FOR BYTE the page
+        `knomit_materialize` returns in factset mode on the lens's MCP
+        endpoint for the same input.
+
+        ROOTS: the search is the lens list's (`GET /lenses/{lens}/search`
+        for relevance, `GET /lenses/{lens}/facts` for `sort=recent`): one
+        fused fan-out over the members, motif terms widened to the lens's
+        merged clusters, the text query embedded once; the first 50 units
+        are that list. `repo` (repeatable, a member's repo name) narrows the
+        fan-out exactly as it narrows the lens list; a name that is not a
+        member of this lens is the lens list's 422 "Unknown repo".
+
+        ANCHORS: every searched member is anchored at its own index
+        watermark, read before and after the one fan-out. `anchors` maps
+        each searched member's repo id (12 hex) to its anchor; `anchor` is
+        the write member's. A move or a sync on any searched member makes
+        the first call wait, then answer 503 with Retry-After, as on a repo.
+
+        UNITS: every unit root carries `repo_name`, and a read member's paths
+        are `kb://<id12>/…`. A unit walks its own member only: a reference
+        into ANOTHER member of the lens is never followed, and nothing of it
+        is read; it is listed in `not_included` with reason `lens_repo`, its
+        `kb://<id12>/…` path and the member's `repo_name`. A reference to a
+        repo outside the lens is `cross_kb_off`. The same path in two members
+        is the write member's (write first, as in the lens list); the same
+        content at two paths stays two units.
+
+        DIFFERENCES FROM A REPO: `cross_kb=true` is a 400 (references out of
+        a lens factset are never followed). `since_fork` narrows to what the
+        WRITE member's experiment changed since it forked (its branch in the
+        lens must be an experiment, as on a repo); the other members
+        contribute no results. With no filter at all the title is "All in
+        lens <lens>".
+
+        CURSORS: a lens factset is pinned to the lens (its uid and its read
+        set), so its cursor answers 404 on the write repo's own factset
+        route, a repository's cursor answers 404 here, and a change to the
+        lens's members since the first call answers 404 like an unknown
+        cursor. The same principal pages, seeks, exports and closes it here
+        or through `knomit_materialize` on the lens's MCP endpoint, whichever
+        surface made it. A one-member lens is served as its write
+        repository's factset (the same pages), still pinned to the lens.
+      operationId: getLensSearchFactSetPage
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, only `unit` is accepted." }
+        - { name: unit, in: query, required: false, schema: { type: integer, minimum: 1 }, description: "With `cursor` only: continue from this unit's first section." }
+        - { name: q, in: query, required: false, schema: { type: string } }
+        - $ref: "#/components/parameters/LensRepoNarrow"
+        - { name: entities, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: domain, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: domain_exact, in: query, required: false, schema: { type: boolean } }
+        - { name: path, in: query, required: false, schema: { type: string } }
+        - { name: type, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: exclude_type, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: kind, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: exclude_kind, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: origin, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: ep, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: motifs, in: query, required: false, schema: { type: string }, description: CSV }
+        - { name: motif_match, in: query, required: false, schema: { type: string, enum: [exact, stem, token-2] } }
+        - { name: min_confidence, in: query, required: false, schema: { type: number } }
+        - { name: min_similarity, in: query, required: false, schema: { type: number } }
+        - { name: since_fork, in: query, required: false, schema: { type: boolean }, description: "The write member's experiment only." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [relevance, recent], default: relevance } }
+        - { name: facts, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 500 } }
+        - { name: depth, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 10, default: 4 } }
+        - { name: max_nodes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+        - { name: unpin, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false }, description: "true is a 400 on a lens." }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 5, default: 3 }, description: "First call only: sections per page, frozen in the cursor." }
+      responses:
+        "200":
+          description: One page of the lens factset
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FactSetPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+    delete:
+      tags: [lenses, search, facts]
+      summary: Close a lens factset
+      description: |
+        The lens twin of `DELETE /repos/{repo}/branches/{branch}/search/factset`:
+        closes the lens factset `cursor` belongs to (any of its cursors) and
+        answers 204; every cursor of it then answers 404, here, on the export
+        and on `knomit_materialize`. `cursor` is the only parameter. Another
+        principal's factset, another binding's, an unknown and an already
+        closed one all answer the same 404, and nothing is closed. Closing
+        needs only read: it is not gated as a write, nor refused on a
+        read-only instance (the fleet repository's gate covers
+        `/repos/{repo}` routes only, never this one).
+      operationId: deleteLensSearchFactSet
+      parameters:
+        - { name: cursor, in: query, required: true, schema: { type: string }, description: "Any cursor of the factset to close." }
+      responses:
+        "204": { description: The factset is closed }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/search/factset/export:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, search, facts]
+      summary: Export a whole lens factset as one agent document
+      description: |
+        The lens twin of `GET /repos/{repo}/branches/{branch}/search/factset/export`:
+        the whole lens factset of `cursor` (its only parameter) as one
+        markdown agent document, an attachment named as on a repo, unit
+        numbers running across the members in the factset's order. A
+        reference into another member of the lens is shown as not followed,
+        with that member's repo name and the path. Owned, streamed, bounded
+        and refused exactly as the repo export.
+      operationId: exportLensSearchFactSet
+      parameters:
+        - { name: cursor, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The lens factset as markdown
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            text/markdown: { schema: { type: string } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /lenses/{lens}/completions:
     parameters:
       - $ref: "#/components/parameters/Lens"
@@ -5539,6 +5688,10 @@ components:
         search_line: { type: string, description: "The whole search spelled out, the filters the title leaves out included." }
         search:      { type: object, description: "The frozen search as data (text, entities, domains, path, types, ..., sort)." }
         anchor:      { type: string, description: "The write mount's index watermark the factset is anchored at (the commit the index reflected at the first call)." }
+        anchors:
+          type: object
+          additionalProperties: { type: string }
+          description: "Lens factsets only (absent on a repo's): each searched member's repo id (12 hex) -> the index watermark its roots were read at. `anchor` is then the write member's."
         audience:    { type: string, enum: [human] }
         unpinned:    { type: boolean }
         cross_kb:    { type: boolean }
@@ -5577,6 +5730,7 @@ components:
             parent:     { type: integer, description: "n of the tree parent in the unit; absent for the root and ancestors." }
             written:    { type: boolean }
             unavailable: { type: boolean, description: "A unit root whose search result is gone at the factset's anchor: a heading alone, under the title the search listed, \"(no longer available)\"; written is false and there is no link." }
+            repo_name:  { type: string, description: "Lens factsets only: on every unit root, the name of the member it comes from (as at the first call)." }
             link:
               type: object
               description: Where this fact is written. A back link carries only the anchor.
@@ -5630,7 +5784,8 @@ components:
               title:  { type: string }
               id:     { type: string }
               path:   { type: string }
-              reason: { type: string, enum: [depth, size, no_version, cross_kb_off, kb_unavailable, not_in_that_kb, system_file] }
+              reason: { type: string, enum: [depth, size, no_version, cross_kb_off, kb_unavailable, not_in_that_kb, system_file, lens_repo], description: "lens_repo (lens factsets only): a reference into another member of the lens, never followed." }
+              repo_name: { type: string, description: "With reason lens_repo: the member's repo name." }
         sources:
           type: array
           items:

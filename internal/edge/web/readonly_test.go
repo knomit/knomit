@@ -58,6 +58,15 @@ func TestIsMutatingRequest(t *testing.T) {
 		{"DELETE", "/api/v1/repos/core/branches/main/search/factset/export", true},
 		{"DELETE", "/api/v1/repos/core/branches/main/facts/x/search/factset", true},
 		{"DELETE", "/api/v1/repos/core/branches/main/search/factsetx", true},
+		// The lens twin: DELETE /lenses/{lens}/search/factset closes the
+		// caller's lens factset. The lens itself, the export and the
+		// look-alikes stay gated.
+		{"DELETE", "/api/v1/lenses/eng/search/factset", false},
+		{"POST", "/api/v1/lenses/eng/search/factset", true},
+		{"DELETE", "/api/v1/lenses/eng/search/factset/export", true},
+		{"DELETE", "/api/v1/lenses/eng/search/factsetx", true},
+		{"DELETE", "/api/v1/lenses/eng/facts/search/factset", true},
+		{"DELETE", "/api/v1/lenses//search/factset", true},
 	}
 	for _, c := range cases {
 		if got := isMutatingRequest(c.method, c.path); got != c.want {

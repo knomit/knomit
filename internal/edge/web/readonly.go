@@ -36,12 +36,13 @@ var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
 	`(?:/repos/[^/]+/branches/[^/]+/mcp|/lenses/[^/]+/mcp|/mcp)(/|$)`)
 
 // factsetClosePattern matches the REST factset resource, whose DELETE closes
-// the caller's own factset. Closing frees a read session the caller made by
-// reading (a GET); it changes nothing in any knowledge base, so it is not
-// gated as a write, exactly as knomit_materialize's `close` is a read tool's
-// option. Anchored on both ends: only the factset resource itself.
+// the caller's own factset: a repo branch's and a lens's alike (a lens is a
+// virtual repo). Closing frees a read session the caller made by reading (a
+// GET); it changes nothing in any knowledge base, so it is not gated as a
+// write, exactly as knomit_materialize's `close` is a read tool's option.
+// Anchored on both ends: only the factset resource itself.
 var factsetClosePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
-	`/repos/[^/]+/branches/[^/]+/search/factset$`)
+	`(?:/repos/[^/]+/branches/[^/]+|/lenses/[^/]+)/search/factset$`)
 
 // isMutatingRequest reports whether a request would mutate state and therefore
 // must be rejected in read-only mode. Mutating HTTP methods are gated unless

@@ -77,7 +77,10 @@ func fleetRepoMutation(m *repos.Manager, r *http.Request) bool {
 // caller's own FactSet: that deletes transient session data (a row of the
 // session DB and a cache entry), never repository data, so the fleet gate lets
 // it through (user ruling 2026-11-01). Matched on the whole shape: the export
-// below it, and a fact path that ends in search/factset, are not it.
+// below it, and a fact path that ends in search/factset, are not it. The lens
+// twin (/lenses/{lens}/search/factset) needs no arm here: this gate is mounted
+// on /repos/{repo} only, and a lens holds the fleet repository as a read
+// member at most.
 func isRepoFactSetResource(escaped, name string) bool {
 	marker := "/repos/" + url.PathEscape(name) + "/branches/"
 	i := strings.Index(escaped, marker)
