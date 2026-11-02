@@ -571,6 +571,25 @@ func (hq *HistoryQuery) SettledWatermark(ctx context.Context, branch string) (wm
 	return wm, generation, wm != "" && (pending == "" || pending == wm), nil
 }
 
+// SettledOnce reports whether branch's index watermark has EVER been set to a
+// commit (SettledOnceKey present), or is set now (a store indexed before the
+// key existed reads as settled through its watermark). False for a branch
+// whose first build is in flight or failed, whose index was wiped, or that
+// does not exist. A branch that was settled once and is now syncing or
+// rebuilding stays true. One statement.
+func (hq *HistoryQuery) SettledOnce(ctx context.Context, branch string) (bool, error) {
+	if err := hq.probe("SettledOnce"); err != nil {
+		return false, err
+	}
+	var n int
+	if err := conn(ctx, hq.rh.DB()).QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM meta WHERE (key = ? AND value != '') OR (key = ? AND value != '')`,
+		SettledOnceKey(branch), "last_commit:"+branch).Scan(&n); err != nil {
+		return false, fmt.Errorf("SettledOnce: %w", err)
+	}
+	return n > 0, nil
+}
+
 // ErrRefEdgesNotReady: ref_edges is not backfilled yet (the reads derive rows
 // from the edges) AND this repo's id is unresolved, so a kb://<self>/ ref can
 // only be told from a foreign one by learning it from the data. A FactSet

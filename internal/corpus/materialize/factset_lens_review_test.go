@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,31 +15,31 @@ import (
 	"knomit/internal/corpus/repos"
 )
 
-// A member the search does not read is not waited on (review M1). gamma's
-// index has NEVER synced, so its watermark never reads settled:
-//   - the plain lens FactSet searches gamma and is busy (the control: the
-//     member really is unsettled);
+// A member the search does not read is not waited on (review M1). gamma has
+// synced once, and a sync lands on it during EVERY fan-out (the search hook
+// writes to it), so whenever gamma is sandwiched the call is busy:
+//   - the plain lens FactSet searches gamma and is busy (the control);
 //   - narrowed by repo= to alpha and beta, the call answers, and env.anchors
 //     holds alpha and beta only (a member not searched has no anchor);
 //   - under since_fork only the write member is searched: it answers, anchors
-//     alpha alone.
+//     alpha alone, and gamma stays an empty sub with no anchor.
 //
 // Sabotage (sandwich all members: open every Reads() mount into the sandwich
 // whatever the plan searches): the narrowed calls are busy.
-func TestLensFactSet_UnsearchedUnsyncedMemberIsNotWaitedOn(t *testing.T) {
+func TestLensFactSet_UnsearchedUnsettledMemberIsNotWaitedOn(t *testing.T) {
 	isolateFactSetGlobals(t)
-	lt := &lensTrio{w: newLensMember(t, "alpha"), r1: newLensMember(t, "beta"), r2: newUnsyncedLensMember(t, "gamma")}
-	lt.lens = repos.NewBindingForTest(lt.w.ri,
-		repos.ReadTarget{RI: lt.w.ri, Branch: "agent/test"},
-		repos.ReadTarget{RI: lt.r1.ri, Branch: "agent/test"},
-		repos.ReadTarget{RI: lt.r2.ri, Branch: "agent/test"})
+	lt := newLensTrio(t)
 	lt.w.write(t, "kb/u/w1.md", "W1", cosBody(0.95, "w1."))
 	lt.r1.write(t, "kb/u/a1.md", "A1", cosBody(0.9, "a1."))
 	defer SetFactSetAnchorWaitForTest(200 * time.Millisecond)()
+	var n atomic.Int64
+	defer SetFactSetSearchHookForTest(func() {
+		lt.r2.write(t, "kb/v/s"+strconv.FormatInt(n.Add(1), 10)+".md", "S", "a sync on gamma.")
+	})()
 	ctx := context.Background()
 
 	_, _, err := FactSetFirstPage(ctx, lt.scope(), lt.request("anything", "kb/u/"))
-	require.ErrorIs(t, err, ErrIndexMoved, "control: gamma is searched and never settles")
+	require.ErrorIs(t, err, ErrIndexMoved, "control: gamma is searched and keeps moving")
 
 	req := lt.request("anything", "kb/u/")
 	req.Search.Repos = []string{"alpha", "beta"}
@@ -52,14 +54,128 @@ func TestLensFactSet_UnsearchedUnsyncedMemberIsNotWaitedOn(t *testing.T) {
 	require.NoError(t, err, "under since_fork only the write member is searched")
 	require.Equal(t, 1, p.Units)
 	require.Equal(t, []string{lt.w.id12()}, sortedKeys(p.Anchors))
-	// The unsearched members are still subs (their names label refs into
-	// them), with no anchor.
 	lf := lensFrozenOf(t, lt.scope(), *p.Cursor)
 	require.Len(t, lf.Subs, 3)
 	require.Empty(t, lf.Subs[2].Anchor)
 	require.Empty(t, lf.Subs[2].Roots)
 	_, err = FactSetNextPage(ctx, lt.scope(), lt.lens, nil, nil, *p.Cursor, 1)
 	require.NoError(t, err, "it pages")
+}
+
+// A lens member whose index has NEVER synced is EMPTY (user ruling,
+// 2026-11-01): gamma was initialised but never synced (empty watermark, no
+// rebuild generation). The plain no-filter lens FactSet ("All in lens")
+// answers at once (no wait), with:
+//   - no root from gamma, and gamma's search leg never run (it is dropped
+//     from the targets before the fan-out);
+//   - gamma absent from env.anchors and an empty sub in the row;
+//   - a ref into gamma still a not-followed leaf with gamma's name.
+//
+// A member that WAS settled and then syncs during the fan-out still makes the
+// call busy: TestLensFactSet_SyncOnR2DuringTheFanOutIsBusy and the control of
+// TestLensFactSet_UnsearchedUnsettledMemberIsNotWaitedOn.
+//
+// Sabotage (neverSynced always false: gamma is searched and waited on): the
+// call is ErrIndexMoved.
+func TestLensFactSet_NeverSyncedMemberIsEmpty(t *testing.T) {
+	isolateFactSetGlobals(t)
+	lt := &lensTrio{w: newLensMember(t, "alpha"), r1: newLensMember(t, "beta"), r2: newUnsyncedLensMember(t, "gamma")}
+	lt.lens = repos.NewBindingForTest(lt.w.ri,
+		repos.ReadTarget{RI: lt.w.ri, Branch: "agent/test"},
+		repos.ReadTarget{RI: lt.r1.ri, Branch: "agent/test"},
+		repos.ReadTarget{RI: lt.r2.ri, Branch: "agent/test"})
+	w, gen, settled, err := lt.r2.svc.HistoryQuery().SettledWatermark(context.Background(), "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, [3]any{"", "", false}, [3]any{w, gen, settled}, "the fixture: gamma has never synced")
+	gammaX := wireOf(lt.lens, lt.r2.ri, "kb/z/x.md")
+	lt.w.write(t, "kb/u/w1.md", "W1", "w1.", gammaX)
+	lt.r1.write(t, "kb/u/a1.md", "A1", "a1.")
+	defer SetFactSetAnchorWaitForTest(200 * time.Millisecond)()
+
+	req := lt.request("", "")
+	req.Search.Sort = SortRecent
+	start := time.Now()
+	p, _, err := FactSetFirstPage(context.Background(), lt.scope(), req)
+	require.NoError(t, err, "a never-synced member is empty, not waited on")
+	require.Less(t, time.Since(start), 200*time.Millisecond, "no wait for gamma")
+	require.Equal(t, "All in lens alpha", p.Title)
+	roots := unitRoots(allPages(t, lt.scope(), lt.lens, p)...)
+	for _, n := range roots {
+		require.NotEqual(t, lt.r2.id12(), n.Repo, "gamma contributes no root: %s", n.Path)
+	}
+	require.ElementsMatch(t, []string{"kb/u/w1.md", "kb/seed/alpha.md", wireOf(lt.lens, lt.r1.ri, "kb/u/a1.md"), wireOf(lt.lens, lt.r1.ri, "kb/seed/beta.md")}, paths(roots))
+	require.ElementsMatch(t, []string{lt.w.id12(), lt.r1.id12()}, sortedKeys(p.Anchors), "gamma has no anchor")
+	lf := lensFrozenOf(t, lt.scope(), *p.Cursor)
+	require.Equal(t, "gamma", lf.Subs[2].Name)
+	require.Empty(t, lf.Subs[2].Anchor)
+	require.Empty(t, lf.Subs[2].Roots)
+	var leaf *Omission
+	for _, n := range roots {
+		if n.Path == "kb/u/w1.md" {
+			for i, o := range n.NotIncluded {
+				if o.Path == gammaX {
+					leaf = &n.NotIncluded[i]
+				}
+			}
+		}
+	}
+	require.NotNil(t, leaf, "the ref into gamma is still listed")
+	require.Equal(t, Omission{Path: gammaX, Reason: ReasonLensRepo, RepoName: "gamma"}, *leaf)
+}
+
+// S5 (wording ruling): the search line spells a lens's narrowing "in <names>",
+// comma-separated.
+func TestSearchLine_LensNarrowing(t *testing.T) {
+	require.Equal(t, "in alpha, beta · sorted by recent", SearchLine(FactSetSearch{Repos: []string{"alpha", "beta"}, Sort: SortRecent}))
+}
+
+// The never-synced predicate does not catch a member that WAS settled and is
+// now rebuilding: mid-rebuild gamma reads (watermark "", generation set,
+// unsettled), but its settled-once marker (set when its watermark was first
+// set) survives the Rebuild. Called from inside the rebuild (its progress
+// callback), the lens FactSet still WAITS for gamma and answers
+// ErrIndexMoved, and neverSynced says false; after the rebuild it answers.
+//
+// Sabotage (neverSynced on the watermark alone): mid-rebuild gamma is treated
+// as empty and the call is served.
+func TestLensFactSet_RebuildingMemberIsNotNeverSynced(t *testing.T) {
+	isolateFactSetGlobals(t)
+	lt := newLensTrio(t)
+	lt.seedAlternating(t)
+	defer SetFactSetAnchorWaitForTest(150 * time.Millisecond)()
+	ctx := context.Background()
+	var (
+		once     sync.Once
+		w, gen   string
+		empty    bool
+		callErr  error
+		checkErr error
+	)
+	require.NoError(t, lt.r2.svc.IndexManager().Rebuild(ctx, "agent/test", func(string, int, int) {
+		once.Do(func() {
+			w, gen, _, checkErr = lt.r2.svc.HistoryQuery().SettledWatermark(ctx, "agent/test")
+			c := &fsCall{ctx: ctx, b: lt.lens}
+			c.r = newReader(lt.lens, nil, nil, &c.st)
+			defer c.close()
+			m, err := c.r.open(lt.r2.ri, "agent/test")
+			if err != nil {
+				checkErr = err
+				return
+			}
+			if empty, err = c.neverSynced(m); err != nil {
+				checkErr = err
+				return
+			}
+			_, _, callErr = FactSetFirstPage(ctx, lt.scope(), lt.request("anything", "kb/u/"))
+		})
+	}))
+	require.NoError(t, checkErr)
+	require.Empty(t, w, "mid-rebuild the watermark is cleared")
+	require.NotEmpty(t, gen, "the rebuild generation was bumped first")
+	require.False(t, empty, "a rebuilding member is not never-synced")
+	require.ErrorIs(t, callErr, ErrIndexMoved, "it is waited on, as before the ruling")
+	_, _, err := FactSetFirstPage(ctx, lt.scope(), lt.request("anything", "kb/u/"))
+	require.NoError(t, err, "after the rebuild it answers")
 }
 
 func sortedKeys(m map[string]string) []string {
