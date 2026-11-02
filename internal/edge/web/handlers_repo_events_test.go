@@ -47,7 +47,7 @@ func attachAlphaOrigin(t *testing.T, r http.Handler, url, branch string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
-		strings.NewReader(`{"url":"`+url+`","branch":"`+branch+`"}`)))
+		strings.NewReader(escBody(map[string]any{"url": url, "branch": branch}))))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

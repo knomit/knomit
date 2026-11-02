@@ -58,7 +58,7 @@ func TestFleetHubMovesToAForge(t *testing.T) {
 
 	// The move.
 	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+forge+`"}`); rec.Code != http.StatusOK {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": forge})); rec.Code != http.StatusOK {
 		t.Fatalf("the hub moves the fleet onto the forge: %d %s", rec.Code, rec.Body.String())
 	}
 	ast, err := alpha.mgr.FleetStatus(ctx)
@@ -108,7 +108,7 @@ func TestFleetHubMovesToAForge(t *testing.T) {
 
 	// Bravo follows the forge with its own credential (none, for file://).
 	bravo.asClient(t)
-	if rec := bravo.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+forge+`","auth_method":"none"}`); rec.Code != http.StatusOK {
+	if rec := bravo.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": forge, "auth_method": "none"})); rec.Code != http.StatusOK {
 		t.Fatalf("bravo points at the forge: %d %s", rec.Code, rec.Body.String())
 	}
 	bst, err = bravo.mgr.FleetStatus(ctx)

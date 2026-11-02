@@ -101,7 +101,7 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 	}
 
 	// alpha and charlie point at the new host.
-	follow := `{"url":"` + bravo.fleetURL() + `"}`
+	follow := fleetBody(map[string]any{"url": bravo.fleetURL()})
 	alpha.asClient(t)
 	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", follow); rec.Code != http.StatusOK {
 		t.Fatalf("alpha points at bravo: %d %s", rec.Code, rec.Body.String())
@@ -156,7 +156,7 @@ func TestFleetMasterSwitch_StandDownFirst(t *testing.T) {
 	if !strings.Contains(readAt(t, alpha.fleet(t), "main", recordPath("charlie")), "charlie.three.example") {
 		t.Fatal("alpha's main lacks the change bravo merged before it stood down")
 	}
-	back := `{"url":"` + alpha.fleetURL() + `"}`
+	back := fleetBody(map[string]any{"url": alpha.fleetURL()})
 	for _, n := range []*fleetNode{bravo, charlie} {
 		n.asClient(t)
 		if rec := n.localAPI(http.MethodPost, "/fleet/follow", back); rec.Code != http.StatusOK {
@@ -204,7 +204,7 @@ func TestFleetMasterSwitch_DeadMasterFallback(t *testing.T) {
 	}
 
 	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+bravo.fleetURL()+`"}`); rec.Code != http.StatusOK {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": bravo.fleetURL()})); rec.Code != http.StatusOK {
 		t.Fatalf("alpha points at bravo: %d %s", rec.Code, rec.Body.String())
 	}
 	alpha.round(t)
@@ -248,7 +248,7 @@ func TestFleetMasterSwitch_FallbackStandDownBeforePointingIsDropped(t *testing.T
 		t.Fatal(err)
 	}
 	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+bravo.fleetURL()+`"}`); rec.Code != http.StatusOK {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": bravo.fleetURL()})); rec.Code != http.StatusOK {
 		t.Fatalf("alpha points at bravo: %d %s", rec.Code, rec.Body.String())
 	}
 	alpha.round(t)
@@ -279,7 +279,7 @@ func TestFleetMasterSwitch_FallbackHostRecordRewriteIsRefusedForGood(t *testing.
 		t.Fatalf("setup: alpha's round did not re-assert its host record: %q", got)
 	}
 	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+bravo.fleetURL()+`"}`); rec.Code != http.StatusOK {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": bravo.fleetURL()})); rec.Code != http.StatusOK {
 		t.Fatalf("alpha points at bravo: %d %s", rec.Code, rec.Body.String())
 	}
 	alpha.round(t)
@@ -331,7 +331,7 @@ func TestFleetMasterSwitch_LegacyReturnedMasterIsDemotedCleanly(t *testing.T) {
 		t.Fatalf("setup: the returning legacy root holder did not claim on its own main: %q", got)
 	}
 	alpha.asClient(t)
-	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", `{"url":"`+bravo.fleetURL()+`"}`); rec.Code != http.StatusOK {
+	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", fleetBody(map[string]any{"url": bravo.fleetURL()})); rec.Code != http.StatusOK {
 		t.Fatalf("alpha points at bravo: %d %s", rec.Code, rec.Body.String())
 	}
 	alpha.round(t)

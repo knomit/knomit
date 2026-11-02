@@ -162,7 +162,7 @@ func TestPutOrigin_NoBranchTracksTheRecordedConsensusBranch(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/mission/origin",
-		strings.NewReader(`{"url":"`+url+`","auth_method":"none"}`)))
+		strings.NewReader(escBody(map[string]any{"url": url, "auth_method": "none"}))))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	if rec.Code < 200 || rec.Code >= 300 {

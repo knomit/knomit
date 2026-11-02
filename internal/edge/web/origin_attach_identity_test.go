@@ -49,7 +49,7 @@ func TestOriginEscalation_ReplaceMainReidentifiesAtOnce(t *testing.T) {
 	teamRoot := strings.TrimSpace(out)
 	require.NotEqual(t, oldRoot, teamRoot, "precondition: unrelated histories")
 
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+url+`","branch":"main","replace_main":true}`)
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": url, "branch": "main", "replace_main": true}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	reg, ok, err := f.m.Repos().Get(riX.UID())
@@ -118,7 +118,7 @@ func TestOriginEscalation_ReplaceMainOntoAnotherReposRootIsRefused(t *testing.T)
 	require.True(t, ok)
 	oauthH := f.s.OAuthHandler()
 	tok := f.mintOperatorToken(t, "x")
-	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", `{"url":"`+zBare+`","branch":"main","replace_main":true}`)
+	rec := escDo(oauthH, tok, http.MethodPut, "/api/v1/repos/x/origin", escBody(map[string]any{"url": zBare, "branch": "main", "replace_main": true}))
 	escProblem(t, rec, http.StatusConflict, "Knowledge base already local")
 	f.requireNoOrigin(t, riX)
 	after, _, err := f.m.Repos().Get(riX.UID())
