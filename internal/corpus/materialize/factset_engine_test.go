@@ -124,15 +124,25 @@ func TestFactSet_F4_FrameAncestors(t *testing.T) {
 	seed := func(t *testing.T, other string) *factsetFixture {
 		f := newFactSetFixture(t)
 		f.writeOn(t, "agent/test", "kb/f/a.md", "A", "a frame.", 0.7, fact.Frame)
+		// The other result cites a directly: a is reserved for its unit. The
+		// search lists by commit time, newest first, then by path. Commit
+		// times are whole seconds and the writes may straddle a second
+		// boundary, so the write ORDER must give the wanted listing whether
+		// or not they do: n (after f by path) is written BEFORE f, so f is
+		// newer or tied (f before n either way); e (before f by path) is
+		// written AFTER f, so e is newer or tied (e before f either way).
+		if other == "kb/u/n.md" {
+			f.write(t, other, "N", "n body.", "kb/f/a.md")
+		}
 		f.writeOn(t, "agent/test", "kb/f/b.md", "B", "b frame.", 0.7, fact.Frame, "kb/f/a.md")
 		f.writeOn(t, "agent/test", "kb/f/m.md", "M", "m frame.", 0.7, fact.Frame)
 		f.writeOn(t, "agent/test", "kb/u/f.md", "F", "f frame.", 0.7, fact.Frame, "kb/f/b.md", "kb/f/m.md")
 		// M cites F back (the mutual pair), rewritten after F so F pins it.
 		f.writeOn(t, "agent/test", "kb/f/m.md", "M", "m frame.", 0.7, fact.Frame, "kb/u/f.md")
 		f.writeOn(t, "agent/test", "kb/u/f.md", "F", "f frame.", 0.7, fact.Frame, "kb/f/b.md", "kb/f/m.md")
-		// The other result cites a directly: a is reserved for its unit. All
-		// in one second, so the search lists by path (e before f before n).
-		f.write(t, other, "N", "n body.", "kb/f/a.md")
+		if other == "kb/u/e.md" {
+			f.write(t, other, "N", "n body.", "kb/f/a.md")
+		}
 		return f
 	}
 	check := func(t *testing.T, f *factsetFixture, want []row, frameUnit int32) {
