@@ -129,6 +129,55 @@ func TestSearchLine_LensNarrowing(t *testing.T) {
 	require.Equal(t, "in alpha, beta · sorted by recent", SearchLine(FactSetSearch{Repos: []string{"alpha", "beta"}, Sort: SortRecent}))
 }
 
+// The never-synced predicate does not catch a member that WAS settled and is
+// now rebuilding: Index.Rebuild bumps the rebuild generation before it clears
+// the watermark, so mid-rebuild gamma reads (watermark "", generation set,
+// unsettled). Called from inside the rebuild (its progress callback), the
+// lens FactSet still WAITS for gamma and answers ErrIndexMoved, and
+// neverSynced says false; after the rebuild it answers.
+//
+// Sabotage (neverSynced on the watermark alone, ignoring the generation):
+// mid-rebuild gamma is treated as empty and the call is served.
+func TestLensFactSet_RebuildingMemberIsNotNeverSynced(t *testing.T) {
+	isolateFactSetGlobals(t)
+	lt := newLensTrio(t)
+	lt.seedAlternating(t)
+	defer SetFactSetAnchorWaitForTest(150 * time.Millisecond)()
+	ctx := context.Background()
+	var (
+		once     sync.Once
+		w, gen   string
+		empty    bool
+		callErr  error
+		checkErr error
+	)
+	require.NoError(t, lt.r2.svc.IndexManager().Rebuild(ctx, "agent/test", func(string, int, int) {
+		once.Do(func() {
+			w, gen, _, checkErr = lt.r2.svc.HistoryQuery().SettledWatermark(ctx, "agent/test")
+			c := &fsCall{ctx: ctx, b: lt.lens}
+			c.r = newReader(lt.lens, nil, nil, &c.st)
+			defer c.close()
+			m, err := c.r.open(lt.r2.ri, "agent/test")
+			if err != nil {
+				checkErr = err
+				return
+			}
+			if empty, err = c.neverSynced(m); err != nil {
+				checkErr = err
+				return
+			}
+			_, _, callErr = FactSetFirstPage(ctx, lt.scope(), lt.request("anything", "kb/u/"))
+		})
+	}))
+	require.NoError(t, checkErr)
+	require.Empty(t, w, "mid-rebuild the watermark is cleared")
+	require.NotEmpty(t, gen, "the rebuild generation was bumped first")
+	require.False(t, empty, "a rebuilding member is not never-synced")
+	require.ErrorIs(t, callErr, ErrIndexMoved, "it is waited on, as before the ruling")
+	_, _, err := FactSetFirstPage(ctx, lt.scope(), lt.request("anything", "kb/u/"))
+	require.NoError(t, err, "after the rebuild it answers")
+}
+
 func sortedKeys(m map[string]string) []string {
 	var out []string
 	for k := range m {
