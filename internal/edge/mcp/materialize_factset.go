@@ -20,14 +20,13 @@ import (
 // it (materialize.FactSetNextPage). The pages are byte for byte the REST
 // GET …/search/factset pages for the same input: one shared builder.
 //
-// On a LENS endpoint (a binding that reads more than its write repo) the same
-// calls materialize the lens's own list: the engine's lens facade runs the
-// fused lens search (the one knomit_query runs on a lens, motif widening
-// through mcpMotifClusters), one sub-FactSet per member, ONE cursor row in the
-// write repo's session DB. cross_kb=true is refused there (ruling Lens 2) and
-// search.repo narrows to members by name (ruling Lens 6). A one-member lens
-// has the write repo's units but is still a lens: cross_kb=true is refused
-// and its no-filter title is "All in lens <lens>" (user ruling 2026-11-02).
+// On a LENS endpoint of ANY size (materialize.LensFactSet: a one-member lens
+// included, user ruling 2026-11-02) the same calls materialize the lens's own
+// list: the engine's lens facade runs the fused lens search (the one
+// knomit_query runs on a lens, motif widening through mcpMotifClusters), one
+// sub-FactSet per member, ONE cursor row in the write repo's session DB.
+// cross_kb=true is refused there (ruling Lens 2) and search.repo narrows to
+// members by name (ruling Lens 6).
 
 // factsetSearchKeys are the keys of the `search` object.
 var factsetSearchKeys = map[string]any{
@@ -99,18 +98,8 @@ func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *
 	breq := materialize.FactSetRequest{
 		Binding: b, Manager: mgr, MayRead: callerMayRead(ctx), Search: search, Options: opts,
 		Facts: materialize.DefaultFactSetFacts, Limit: materialize.HumanDefaultLimit,
-		// A lens FactSet widens motif terms exactly as knomit_query on the
-		// lens does; a repo FactSet never reads it.
-		Clusters: mcpMotifClusters,
 	}
-	if b.IsLens() {
-		// The lens list's single query vector (knomit_query on the lens embeds
-		// through fanoutQueryVec): one inference for the whole fan-out. A repo
-		// FactSet leaves embedding to its store, as before.
-		breq.Embed = func(ctx context.Context, text string) ([]float32, error) {
-			return fanoutQueryVec(ctx, emb, text)
-		}
-	}
+	factsetSearchWiring(&breq, emb)
 	for _, a := range []struct {
 		name string
 		dst  *int
@@ -131,6 +120,20 @@ func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *
 		return factsetToolError(err), nil
 	}
 	return marshalFactSetPage(page)
+}
+
+// factsetSearchWiring sets how the first call's search reads: motif terms
+// widen exactly as knomit_query on the lens does (a repo FactSet never reads
+// Clusters), and on a lens of ANY size (materialize.LensFactSet) the query is
+// embedded once for the whole fan-out through fanoutQueryVec, the lens list's
+// single query vector. A repo FactSet leaves embedding to its store.
+func factsetSearchWiring(breq *materialize.FactSetRequest, emb model.Embedder) {
+	breq.Clusters = mcpMotifClusters
+	if materialize.LensFactSet(breq.Binding) {
+		breq.Embed = func(ctx context.Context, text string) ([]float32, error) {
+			return fanoutQueryVec(ctx, emb, text)
+		}
+	}
 }
 
 // materializeFactSetResume serves the next page of a factset cursor, or seeks to

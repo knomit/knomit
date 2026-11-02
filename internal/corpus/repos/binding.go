@@ -235,6 +235,28 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 	}
 }
 
+// NewLensBindingForTest is NewBindingForTest as a LENS binding: named lens,
+// pinned lens:<uid>, so FromLens reports true whatever its member count (a
+// one-member lens included). Tests only; production code must use
+// NewBindingOfLens.
+func NewLensBindingForTest(lens, uid string, write *RepoInstance, reads ...ReadTarget) *Binding {
+	writeBranch := ""
+	for _, rt := range reads {
+		if rt.RI == write {
+			writeBranch = experimentPin(write, rt.Branch)
+			break
+		}
+	}
+	return &Binding{
+		write:       write,
+		writeOK:     true,
+		writeBranch: writeBranch,
+		name:        lens,
+		pinID:       pinOf("lens:", uid),
+		reads:       reads,
+	}
+}
+
 // NewBindingOfLens resolves a persisted lens definition against the manager's
 // active repos. Members are named by registry uid, so resolution goes through
 // m.GetByUID — a registered-but-unopened repo (missing/unopenable file) has a

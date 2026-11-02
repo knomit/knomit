@@ -179,6 +179,94 @@ func TestLensFactSet_RESTIsTheMCPFactSetAndTheEngineExport(t *testing.T) {
 	require.Equal(t, export, mexport)
 }
 
+// REST == MCP, byte for byte, on a ONE-member lens, and its pages and export
+// have the multi-member lens's shape (user ruling 2026-11-02: "lens HAS TO BE
+// consistent, no matter how many repos are in it"). Lens "solo" is alpha
+// alone; lens "eng" is alpha + beta. For the same search:
+//   - solo's REST pages equal knomit_materialize's on solo's MCP endpoint,
+//     page for page, a seek page included, and its REST export is the
+//     engine's FactSetExport of the same cursor;
+//   - solo's pages and export equal eng's narrowed to alpha (repo=alpha /
+//     search.repo), byte for byte but the cursor id, on REST and on MCP: the
+//     same env.anchors ({alpha: anchor}), repo_name "alpha" on every unit
+//     root, the same export lines.
+//
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (solo's pages lose
+// anchors and repo_name, and differ from eng's).
+func TestLensFactSet_OneMemberLensRESTIsTheMCPFactSetInTheMultiMemberShape(t *testing.T) {
+	e := newLensRESTEnv(t, "alpha", "beta")
+	createLens(t, e.m, (&Server{Manager: e.m}).NewAPIRouter(), `{"name":"solo","write":"alpha","reads":[]}`)
+	refs := func(rs ...string) func(*fact.Fact) { return func(f *fact.Fact) { f.Refs = rs } }
+	writeCosFact(t, e.m.Get("alpha"), "kb/a/a1.md", "A1", 0.80, nil)
+	writeCosFact(t, e.m.Get("alpha"), "kb/a/a2.md", "A2", 0.70, refs("kb/a/a1.md"))
+	writeCosFact(t, e.m.Get("alpha"), "kb/a/a0.md", "A0", 0.95, refs("kb/a/a1.md", "kb/a/a2.md"))
+	writeCosFact(t, e.m.Get("alpha"), "kb/a/a3.md", "A3", 0.60, refs("kb/a/a0.md"))
+	writeCosFact(t, e.m.Get("beta"), "kb/b/b0.md", "B0", 0.94, nil)
+	h := e.as(t, "laptop")
+	const soloFactSet, soloMCP = "/api/v1/lenses/solo/search/factset", "/api/v1/lenses/solo/mcp"
+	solo, eng := newMCPSession(t, h, soloMCP), newMCPSession(t, h, engMCP)
+	restOK := func(u string) string {
+		t.Helper()
+		code, body := restGet(t, h, u)
+		require.Equal(t, http.StatusOK, code, "%s: %s", u, body)
+		return body
+	}
+	restPages := func(base, q string) ([]string, string) {
+		first := restOK(base + "?" + q)
+		return factsetPages(t, first, func(c string) string { return restOK(base + "?cursor=" + url.QueryEscape(c)) }), pageCursor(t, first)
+	}
+	mcpPages := func(s mcpSession, args string) ([]string, string) {
+		first := s.ok(args)
+		return factsetPages(t, first, func(c string) string { return s.ok(`{"cursor":"` + c + `"}`) }), pageCursor(t, first)
+	}
+
+	// REST == MCP on the one-member lens.
+	soloREST, soloRC := restPages(soloFactSet, "q=x&depth=2&limit=2")
+	soloMCPPages, soloMC := mcpPages(solo, `{"search":{"text":"x"},"depth":2,"limit":2}`)
+	require.Greater(t, len(soloREST), 2)
+	require.Equal(t, soloMCPPages, soloREST, "page for page, byte for byte")
+	ms := strings.ReplaceAll(solo.ok(`{"cursor":"`+soloMC+`","unit":3}`), factsetID(soloMC), "ID")
+	rs := strings.ReplaceAll(restOK(soloFactSet+"?cursor="+url.QueryEscape(soloRC)+"&unit=3"), factsetID(soloRC), "ID")
+	require.Equal(t, ms, rs, "the seek page")
+	require.Contains(t, rs, `"unit_from":3`)
+
+	// The lens fields, on every page.
+	alpha12 := fact.ID12(e.m.Get("alpha").ID())
+	all := strings.Join(soloREST, "")
+	require.Contains(t, soloREST[0], `"units":4`)
+	require.Contains(t, soloREST[0], `"anchors":{"`+alpha12+`":"`)
+	require.Equal(t, 4, strings.Count(all, `"repo_name":"alpha"`), "repo_name on each of the 4 unit roots: %s", all)
+
+	// The multi-member lens narrowed to alpha: the same bytes, REST and MCP.
+	soloNarrowREST, soloNarrowRC := restPages(soloFactSet, "q=x&depth=2&limit=2&repo=alpha")
+	engNarrowREST, engNarrowRC := restPages(engFactSet, "q=x&depth=2&limit=2&repo=alpha")
+	require.Equal(t, engNarrowREST, soloNarrowREST, "REST: the multi-member lens's pages")
+	soloNarrowMCP, _ := mcpPages(solo, `{"search":{"text":"x","repo":["alpha"]},"depth":2,"limit":2}`)
+	engNarrowMCP, _ := mcpPages(eng, `{"search":{"text":"x","repo":["alpha"]},"depth":2,"limit":2}`)
+	require.Equal(t, engNarrowMCP, soloNarrowMCP, "MCP: the multi-member lens's pages")
+	require.Equal(t, soloNarrowREST, soloNarrowMCP)
+
+	// The export: the engine's, and the multi-member lens's lines.
+	code, export := restGet(t, h, soloFactSet+"/export?cursor="+url.QueryEscape(soloRC))
+	require.Equal(t, http.StatusOK, code, export)
+	require.Equal(t, 4, strings.Count(export, "\n## "), "every unit: %s", export)
+	ctx, err := repos.ResolveLensBinding(auth.WithRepoReach(auth.WithPrincipal(context.Background(), oauth.TokenPrincipal("laptop")), auth.AllRepos), e.m, "solo")
+	require.NoError(t, err)
+	b := repos.BindingFromContext(ctx)
+	var engine bytes.Buffer
+	require.NoError(t, b.Write().WithRead(func(svc *store.Service) {
+		sc := materialize.CursorScope{Sessions: svc.ToolSession(), Branch: b.WriteMountBranch(), Pin: b.PinID(),
+			ReadSet: federate.ReadSetFingerprint(b), Owner: materialize.FactSetOwner(ctx)}
+		require.NoError(t, materialize.FactSetExport(ctx, sc, b, e.m, nil, soloRC, func(materialize.FactSetEnv) io.Writer { return &engine }))
+	}))
+	require.Equal(t, engine.String(), export, "the REST export is the engine's")
+	code, soloNarrowExport := restGet(t, h, soloFactSet+"/export?cursor="+url.QueryEscape(soloNarrowRC))
+	require.Equal(t, http.StatusOK, code, soloNarrowExport)
+	code, engNarrowExport := restGet(t, h, engFactSet+"/export?cursor="+url.QueryEscape(engNarrowRC))
+	require.Equal(t, http.StatusOK, code, engNarrowExport)
+	require.Equal(t, engNarrowExport, soloNarrowExport, "the multi-member lens's export, line for line")
+}
+
 // Motif widening: the REST lens FactSet widens a motif term to its merged
 // cluster over the lens's read set, exactly as the lens list (and MCP) do.
 // beta spells the shape `config-drifts`, which shares alpha's cluster key;

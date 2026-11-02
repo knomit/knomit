@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/federate"
 	"knomit/internal/corpus/repos"
 )
 
@@ -121,6 +122,38 @@ func TestLensFactSet_NeverSyncedMemberIsEmpty(t *testing.T) {
 	}
 	require.NotNil(t, leaf, "the ref into gamma is still listed")
 	require.Equal(t, Omission{Path: gammaX, Reason: ReasonLensRepo, RepoName: "gamma"}, *leaf)
+}
+
+// A one-member lens whose write member has NEVER synced answers units 0 at
+// once, exactly as a multi-member lens of never-synced members does (the
+// lens rule, user rulings 2026-11-01 and 2026-11-02), with no anchor and no
+// cursor; it is not waited on as the repo path waits.
+//
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (the solo lens takes
+// the repo path, waits for alpha to settle, and is ErrIndexMoved).
+func TestLensFactSet_OneMemberNeverSyncedWriteIsEmptyAsAMultiMemberLens(t *testing.T) {
+	isolateFactSetGlobals(t)
+	defer SetFactSetAnchorWaitForTest(200 * time.Millisecond)()
+	alpha, gamma := newUnsyncedLensMember(t, "alpha"), newUnsyncedLensMember(t, "gamma")
+	for _, c := range []struct {
+		name string
+		b    *repos.Binding
+	}{
+		{"solo", repos.NewLensBindingForTest("solo", "uid-solo", alpha.ri, repos.ReadTarget{RI: alpha.ri, Branch: "agent/test"})},
+		{"duo", repos.NewLensBindingForTest("duo", "uid-duo", alpha.ri,
+			repos.ReadTarget{RI: alpha.ri, Branch: "agent/test"}, repos.ReadTarget{RI: gamma.ri, Branch: "agent/test"})},
+	} {
+		sc := CursorScope{Sessions: alpha.svc.ToolSession(), Branch: "agent/test", Pin: c.b.PinID(),
+			ReadSet: federate.ReadSetFingerprint(c.b), Owner: "o"}
+		req := FactSetRequest{Binding: c.b, Search: FactSetSearch{Sort: SortRecent}, Facts: DefaultFactSetFacts,
+			Options: DefaultOptions(), Limit: HumanMaxLimit}
+		start := time.Now()
+		p, _, err := FactSetFirstPage(context.Background(), sc, req)
+		require.NoError(t, err, "%s: a never-synced member is empty, not waited on", c.name)
+		require.Less(t, time.Since(start), 200*time.Millisecond, c.name)
+		require.Equal(t, [4]any{0, "", 0, true}, [4]any{p.Units, p.Anchor, len(p.Anchors), p.Cursor == nil}, c.name)
+		require.Equal(t, "All in lens "+c.name, p.Title)
+	}
 }
 
 // S5 (wording ruling): the search line spells a lens's narrowing "in <names>",
