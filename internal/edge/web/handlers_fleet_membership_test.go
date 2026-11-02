@@ -174,7 +174,7 @@ func TestFleetREST_HostAndFollowOnAMember(t *testing.T) {
 	otherDir := filepath.Join(dir, "other")
 	require.NoError(t, os.MkdirAll(otherDir, 0o755))
 	otherURL, _ := seedFleetBare(t, otherDir)
-	rec = send("/fleet/follow", `{"url":"`+otherURL+`"}`, true)
+	rec = send("/fleet/follow", escBody(map[string]any{"url": otherURL}), true)
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"code":"not_this_fleet"`)
 	require.Equal(t, url, origin())
