@@ -213,6 +213,8 @@ describe('article marks', () => {
     // n=5 cites n=4 at a different version: the mark sits on its builds-on link
     fireEvent.click(within(secs[4]).getByTestId('mat-builds-toggle'));
     expect(within(secs[4]).getByTestId('mat-changed')).toHaveTextContent('changed since cited');
+    // The user's different_version tooltip (Q-UI12), verbatim; the old "different body" one is gone.
+    expect(within(secs[4]).getByTestId('mat-changed')).toHaveAttribute('title', 'the cited version differs from the one shown here');
     expect(within(secs[3]).queryByTestId('mat-changed')).toBeNull();
     // the meta line carries path, confidence and the pinned commit
     expect(within(secs[3]).getByTestId('mat-meta')).toHaveTextContent(/kb\/decisions\/fixture\/.*\.md.*confidence 0\.90.*@e25e/);

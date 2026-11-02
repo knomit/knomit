@@ -4,6 +4,10 @@ import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
+import { lensListSearchParams, listSearchParams } from './listSearch';
+import type { ListFilters } from './listSearch';
+import type { FsSearch } from './factsetApi';
+import { factsetView } from './factsetOptions';
 import type { AppState, Action } from './state';
 import { currentPath, isLive, isLensContext, canGoBack } from './state';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath, rowPath, clampTitle } from './utils';
@@ -407,6 +411,23 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // looser, so `exact` is the server's default and we send no override.
   const motifOpts = useMemo(() => (motifs.length ? { motifs } : {}), [motifs]);
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
+  // The ONE filters object every list call sends, and the FactSet of the list
+  // too (listSearchParams / lensListSearchParams build both): the FactSet's
+  // first 50 units are the list by construction. The lens builders ignore
+  // since_fork, which the lens lists never sent.
+  const listFilters = useMemo<ListFilters>(() => ({
+    types: types.length ? types : undefined,
+    kinds: kinds.length ? kinds : undefined,
+    origins: origins.length ? origins : undefined,
+    eps: eps.length ? eps : undefined,
+    domains: domains.length ? domains : undefined,
+    entities: entities.length ? entities : undefined,
+    // The reducer will not hold sinceFork outside an experiment, so this
+    // reads the one flag rather than re-checking state.experiment here —
+    // two guards on the same condition is how they drift apart.
+    sinceFork: state.sinceFork || undefined,
+    ...motifOpts,
+  }), [types, kinds, origins, eps, domains, entities, state.sinceFork, motifOpts]);
 
   // THE PIVOT HEADING. One motif chip and no free text means this list IS that
   // motif's carriers, so the header stops reporting a location — a motif cuts
@@ -440,19 +461,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     setLoading(true);
     setFacts([]);
     setTotal(0);
-    api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, 0, {
-      types: types.length ? types : undefined,
-      kinds: kinds.length ? kinds : undefined,
-      origins: origins.length ? origins : undefined,
-      domains: domains.length ? domains : undefined,
-      entities: entities.length ? entities : undefined,
-      eps: eps.length ? eps : undefined,
-      // The reducer will not hold sinceFork outside an experiment, so this
-      // reads the one flag rather than re-checking state.experiment here —
-      // two guards on the same condition is how they drift apart.
-      sinceFork: state.sinceFork || undefined,
-      ...motifOpts,
-    }).then(r => {
+    api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, 0, listFilters).then(r => {
       if (stale()) return;
       setFacts(r.facts || []);
       setTotal(r.total);
@@ -484,16 +493,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       return;
     }
     dispatch({ type: 'SET_SEARCHING', value: true });
-    api.search(state.repo, state.branch, state.freeText, path, 0, {
-      types: types.length ? types : undefined,
-      kinds: kinds.length ? kinds : undefined,
-      origins: origins.length ? origins : undefined,
-      eps: eps.length ? eps : undefined,
-      domains: domains.length ? domains : undefined,
-      entities: entities.length ? entities : undefined,
-      sinceFork: state.sinceFork || undefined,
-      ...motifOpts,
-    }).then(r => {
+    api.search(state.repo, state.branch, state.freeText, path, 0, listFilters).then(r => {
       if (stale()) return;
       dispatch({ type: 'SET_SEARCHING', value: false });
       const items: DirChild[] = (r.results || []).map(sr => ({
@@ -611,16 +611,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       dispatch({ type: 'SET_SEARCHING', value: true });
       // The lens search handler accepts the full content-filter set the repo
       // /search does (the facts handler does not) — forward path scope + chips.
-      api.lensSearch(lensName, state.freeText, repos, {
-        path,
-        types: types.length ? types : undefined,
-        kinds: kinds.length ? kinds : undefined,
-        origins: origins.length ? origins : undefined,
-        eps: eps.length ? eps : undefined,
-        domains: domains.length ? domains : undefined,
-        entities: entities.length ? entities : undefined,
-        ...motifOpts,
-      }).then(results => {
+      api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }).then(results => {
         if (stale()) return;
         dispatch({ type: 'SET_SEARCHING', value: false });
         const rows = results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source }));
@@ -644,14 +635,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     dispatch({ type: 'SET_SEARCHING', value: false });
     api.listLensFacts(lensName, {
-      path, query: state.freeText || undefined, limit: PAGE_SIZE, offset: 0, repos,
-        types: types.length ? types : undefined,
-        kinds: kinds.length ? kinds : undefined,
-        origins: origins.length ? origins : undefined,
-        eps: eps.length ? eps : undefined,
-        domains: domains.length ? domains : undefined,
-        entities: entities.length ? entities : undefined,
-        ...motifOpts,
+      ...listFilters, path, query: state.freeText || undefined, limit: PAGE_SIZE, offset: 0, repos,
     }).then(r => {
       if (stale()) return;
       const rows = (r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }));
@@ -711,14 +695,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       // union has been reset to a new scope and these rows are stale.
       const gen = lensGenRef.current;
       api.listLensFacts(lensName, {
-        path, query: state.freeText || undefined, limit: PAGE_SIZE, offset: lensRows.length, repos: reposParam,
-        types: types.length ? types : undefined,
-        kinds: kinds.length ? kinds : undefined,
-        origins: origins.length ? origins : undefined,
-        eps: eps.length ? eps : undefined,
-        domains: domains.length ? domains : undefined,
-        entities: entities.length ? entities : undefined,
-        ...motifOpts,
+        ...listFilters, path, query: state.freeText || undefined, limit: PAGE_SIZE, offset: lensRows.length, repos: reposParam,
       })
         .then(r => {
           if (gen !== lensGenRef.current) return;
@@ -743,21 +720,12 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     // scope was reset belongs to the old scope and must neither append rows nor
     // clear the new scope's loading flag.
     const gen = recentGenRef.current;
-    api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, {
-      types: types.length ? types : undefined,
-      kinds: kinds.length ? kinds : undefined,
-      origins: origins.length ? origins : undefined,
-      domains: domains.length ? domains : undefined,
-      entities: entities.length ? entities : undefined,
-      eps: eps.length ? eps : undefined,
-      sinceFork: state.sinceFork || undefined,
-      ...motifOpts,
-    }).then(r => {
+    api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, listFilters).then(r => {
       if (gen !== recentGenRef.current) return;
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => { if (gen === recentGenRef.current) setLoading(false); });
-  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, types, kinds, origins, domains, entities, eps, state.sinceFork]);
+  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, listFilters]);
 
   // The observer calls loadMore through a ref, and depends only on `paged`.
   // Depending on `loadMore` itself re-created the observer on every input to its
@@ -941,6 +909,29 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   }, [dispatch, path]);
   const goBack = useCallback(() => dispatch({ type: 'NAV_BACK' }), [dispatch]);
 
+  // ── The FactSet of this list (Q-UI1/Q-UI2): every search list, repo or lens,
+  // relevance or recent (a chip-driven list included), built from the SAME
+  // parameters the list sends. The path tree is not a search: no control. A
+  // lens list of any size uses the lens route. Frozen when opened (Q-UI4). ──
+  const factsetSearch = useMemo<FsSearch | null>(() => {
+    if (effectiveSort === 'path') return null;
+    const sort = effectiveSort === 'relevance' ? 'relevance' : 'recent';
+    if (isLens) {
+      if (emptyScope || !lensName) return null;
+      return { target: { kind: 'lens', lens: lensName }, sort,
+        params: lensListSearchParams(sort, state.freeText, reposParam, { ...listFilters, path }).toString() };
+    }
+    return { target: { kind: 'repo', repo: state.repo, branch: state.branch }, sort,
+      params: listSearchParams(sort, state.freeText, path, 0, listFilters).toString() };
+    // reposParam is keyed by reposKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSort, isLens, emptyScope, lensName, state.freeText, reposKey, listFilters, path, state.repo, state.branch]);
+  // History (time travel) cannot materialize: the server refuses `commit` (Q-UI3).
+  const live = isLive(state);
+  const openFactSet = useCallback(() => {
+    if (factsetSearch && live) factsetView.open(factsetSearch);
+  }, [factsetSearch, live]);
+
   // Whole names or none, ordered by how many rows carry each — the same grammar
   // the fact header's motif cells follow, so the two surfaces cannot drift.
   const pivotSubjects = useMemo(() => {
@@ -984,6 +975,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         canBack={canGoBack(state)}
         onBack={goBack}
         onJumpAncestor={jumpAncestor}
+        factset={factsetSearch ? { enabled: live, onOpen: openFactSet } : undefined}
         motif={pivotMotif ? {
           // canonical, never the spelling this fact happened to use and never
           // the cluster_key — the corpus reads by one name.

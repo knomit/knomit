@@ -591,6 +591,8 @@ describe('api lens read surface', () => {
     return calls;
   }
 
+  // The text goes as q (the lens /facts reads query or q), the name a FactSet
+  // of the list takes: one builder (lensListSearchParams) for both.
   it('listLensFacts builds the union facts URL with path, query, paging, and repeated repo=', async () => {
     const calls = mockJSON({
       facts: [{ path: 'kb/a.md', title: 'A', committed_at: 10, score: 0.5,
@@ -601,7 +603,7 @@ describe('api lens read surface', () => {
       path: 'kb/tech', query: 'goroutine', limit: 20, offset: 40, repos: ['core', 'beta'],
     });
     expect(calls[0]).toBe(
-      '/api/v1/lenses/dev/facts?path=kb%2Ftech&query=goroutine&limit=20&offset=40&repo=core&repo=beta');
+      '/api/v1/lenses/dev/facts?path=kb%2Ftech&q=goroutine&repo=core&repo=beta&limit=20&offset=40');
     expect(res.total).toBe(1);
     expect(res.facts[0].source).toEqual({ repo: 'core', id: 'abc123def456', branch: 'main' });
   });

@@ -1,5 +1,8 @@
 import { createOutageLog } from './streamOutage';
 import { openEventStream, streamErrorSuffix } from './eventStream';
+import { lensListSearchParams, listSearchParams } from './listSearch';
+export { lensListSearchParams, listSearchParams, parseSearchQuery } from './listSearch';
+export type { ListFilters, ListKind } from './listSearch';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
 // build (UI and API are same-origin, so URLs stay relative). The desktop build
 // serves the UI from the Wails asset handler and sets window.__KNOMIT_API_BASE__
@@ -60,7 +63,7 @@ function repoBase(repo: string): string {
   return apiUrl(`/api/v1/repos/${repo}`);
 }
 
-function branchBase(repo: string, branch: string): string {
+export function branchBase(repo: string, branch: string): string {
   return `${repoBase(repo)}/branches/${encodeBranch(branch)}`;
 }
 
@@ -655,31 +658,6 @@ import { track } from './telemetry';
 // quoted strings (e.g. entity:"Composer 2") are extracted as filter values;
 // bare quoted strings are extracted as similarity text;
 // the remaining words are treated as free text for embeddings.
-export function parseSearchQuery(raw: string): { text: string; domains: string[]; entities: string[] } {
-  const domains: string[] = [];
-  const entities: string[] = [];
-  const textTokens: string[] = [];
-
-  // Extract prefix:"quoted value" patterns first (e.g. entity:"Composer 2").
-  const quoted: string[] = [];
-  const stripped = raw.replace(/(domain|entity):"([^"]+)"/g, (_m, prefix, value) => {
-    if (prefix === 'domain') domains.push(value);
-    else entities.push(value);
-    return '';
-  }).replace(/"([^"]+)"/g, (_m, g) => { quoted.push(g); return ''; });
-
-  for (const token of stripped.trim().split(/\s+/)) {
-    if (!token) continue;
-    if (token.startsWith('domain:')) { const v = token.slice(7); if (v) domains.push(v); }
-    else if (token.startsWith('entity:')) { const v = token.slice(7); if (v) entities.push(v); }
-    else textTokens.push(token);
-  }
-
-  // Combine quoted phrases and remaining free text
-  const allText = [...quoted, ...textTokens].join(' ').trim();
-  return { text: allText, domains, entities };
-}
-
 const SHORT_SHA = /^[0-9a-f]{7}$/i;
 
 function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () => string): AsOf | undefined {
@@ -1678,7 +1656,7 @@ async function createLens(body: { name: string; write: LensMemberRef; reads: Len
 }
 
 // lensBase builds the base URL for a single lens's sub-resources.
-function lensBase(name: string): string {
+export function lensBase(name: string): string {
   return apiUrl(`/api/v1/lenses/${name}`);
 }
 
@@ -1703,12 +1681,6 @@ export type MotifMatch = 'exact' | 'stem' | 'token-2';
  *
  *  A tier without motifs is meaningless, so both are gated on the CSV existing.
  */
-function setMotifParams(p: URLSearchParams, opts?: { motifs?: string[]; motifMatch?: MotifMatch }): void {
-  if (!opts?.motifs?.length) return;
-  p.set('motifs', opts.motifs.join(','));
-  if (opts.motifMatch && opts.motifMatch !== 'exact') p.set('motif_match', opts.motifMatch);
-}
-
 /** One cluster in the /motifs collection. `cluster_key` is the STABLE identity
  *  (URLs key on it); `canonical` is the most-used spelling and is what a reader
  *  is shown — keys look like stemmed token strings ("drift-config") and read as
@@ -1845,23 +1817,13 @@ async function listLensFacts(lens: string, opts: {
   types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
   motifs?: string[]; motifMatch?: MotifMatch;
 }): Promise<{ facts: LensFactEntry[]; total: number }> {
-  const p = new URLSearchParams();
-  if (opts.path) p.set('path', opts.path);
-  if (opts.query) p.set('query', opts.query);
-  if (opts.limit !== undefined) p.set('limit', String(opts.limit));
-  if (opts.offset !== undefined) p.set('offset', String(opts.offset));
   // The content filters, in the same names /search uses. The handler forwards
   // every selecting filter to each mount, so a filtered union list is paged and
   // counted like an unfiltered one — which is what makes a facet click a browse
   // rather than a search.
-  if (opts.types?.length) p.set('type', opts.types.join(','));
-  if (opts.kinds?.length) p.set('kind', opts.kinds.join(','));
-  if (opts.origins?.length) p.set('origin', opts.origins.join(','));
-  if (opts.eps?.length) p.set('ep', opts.eps.join(','));
-  if (opts.domains?.length) p.set('domain', opts.domains.join(','));
-  if (opts.entities?.length) p.set('entities', opts.entities.join(','));
-  setMotifParams(p, opts);
-  for (const repo of opts.repos ?? []) p.append('repo', repo);
+  const p = lensListSearchParams('recent', opts.query ?? '', opts.repos, opts);
+  if (opts.limit !== undefined) p.set('limit', String(opts.limit));
+  if (opts.offset !== undefined) p.set('offset', String(opts.offset));
   const qs = p.toString();
   return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
 }
@@ -1878,17 +1840,7 @@ async function lensSearch(
   opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
            motifs?: string[]; motifMatch?: MotifMatch },
 ): Promise<(SearchResult & { source: LensSource })[]> {
-  const p = new URLSearchParams();
-  if (q) p.set('q', q);
-  if (opts?.path) p.set('path', opts.path);
-  if (opts?.types?.length) p.set('type', opts.types.join(','));
-  if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
-  if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
-  if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
-  if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
-  if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
-  setMotifParams(p, opts);
-  for (const repo of repos ?? []) p.append('repo', repo);
+  const p = lensListSearchParams('relevance', q, repos, opts);
   const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
   return data.results ?? [];
 }
@@ -2564,28 +2516,10 @@ export const api = {
     opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
              motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean }
   ): Promise<{ results: SearchResult[] }> => {
-    const { text, domains, entities } = parseSearchQuery(q);
-    const allDomains = [...domains, ...(opts?.domains || [])];
-    const allEntities = [...entities, ...(opts?.entities || [])];
     // No limit: the server's default is the results list's length
     // (materialize.UIListLimit), the one place it is written, so a FactSet
     // of this search starts with exactly this list.
-    const p = new URLSearchParams();
-    if (text) p.set('q', text);
-    if (allDomains.length) p.set('domain', allDomains.join(','));
-    if (allEntities.length) p.set('entities', allEntities.join(','));
-    if (path) p.set('path', path);
-    if (minConfidence) p.set('min_confidence', String(minConfidence));
-    if (opts?.types?.length) p.set('type', opts.types.join(','));
-    if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
-    if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
-    if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
-    if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
-    // since_fork is only ever sent from inside an experiment. The server
-    // answers 400 off one rather than ignoring it, so this must not be set
-    // speculatively — the caller's own state decides, not this function.
-    if (opts?.sinceFork) p.set('since_fork', '1');
-    setMotifParams(p, opts);
+    const p = listSearchParams('relevance', q, path, minConfidence, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
       const results: SearchResult[] = data._embedded?.results || data.results || [];
@@ -2672,24 +2606,10 @@ export const api = {
   ): Promise<RecentResponse> => {
     // Without a limit the server's default is the results list's length
     // (materialize.UIListLimit).
-    const p = new URLSearchParams({ sort: 'recent', path, offset: String(offset) });
+    const p = listSearchParams('recent', query, path, 0, opts);
+    p.set('sort', 'recent');
+    p.set('offset', String(offset));
     if (limit !== undefined) p.set('limit', String(limit));
-    if (query) p.set('q', query);
-    // CSV, like every other multi-value facet here: `type` is OR-combined
-    // server-side (splitCSV → SearchOptions.IncludeTypes), so a second type chip
-    // must widen the match, not be dropped. This took a single `typeFilter`
-    // string until the chips stopped routing through /search, at which point two
-    // chips collapsed to undefined and silently removed all type filtering.
-    if (opts?.types?.length) p.set('type', opts.types.join(','));
-    if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
-    if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
-    if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
-    if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
-    if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
-    if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
-    if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
-    if (opts?.sinceFork) p.set('since_fork', '1');
-    setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/facts?${p}`).then(data => ({
       // HAL CollectionView: count = total, _embedded.facts = items
       facts: data._embedded?.facts || data.facts || [],

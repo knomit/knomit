@@ -808,9 +808,9 @@ func remapNumber(num string, globalOf []int) string {
 // remap turns a node of sub s, as the sub emitted it (local units), into the
 // facade's node: EXACTLY four fields change, FactSetNode.Unit, the first
 // component of FactSetNode.Number, FactSetLink.Unit and the first component
-// of FactSetLink.Number (a forward link's target is always in the same sub,
-// so the same map applies; a back link carries the anchor only). Then a unit
-// root carries its repo's name (ruling Lens 7).
+// of FactSetLink.Number (a link's target, forward or back, is always in the
+// same sub, so the same map applies; a back link has a unit and no number).
+// Then a unit root carries its repo's name (ruling Lens 7).
 func (le *lensEntry) remap(s int, n *FactSetNode) {
 	g := le.globalOf[s]
 	n.Unit = g[n.Unit-1]

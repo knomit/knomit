@@ -97,6 +97,9 @@ func TestFactSet_RESTIsTheMCPFactSetPage(t *testing.T) {
 	require.Equal(t, mcpPages, restPages)
 	require.Contains(t, restPages[0], `"search_line":"path kb/u/ · type observation · sorted by relevance"`)
 	require.Contains(t, strings.Join(restPages, ""), `"latest_other_kb"`, "cross-KB is followed in a unit")
+	// Back links carry the unit that first wrote their target (no number) on
+	// both surfaces: the equality above covers them only if one is there.
+	require.Regexp(t, `"link":\{"unit":[1-9][0-9]*,"anchor_id":"f-[0-9a-f]{16}","direction":"back"`, strings.Join(restPages, ""))
 
 	// The defaults (no limit, no depth, every result) are the same too.
 	md := mcpCall(`{"search":{"path":"kb/u/"}}`)

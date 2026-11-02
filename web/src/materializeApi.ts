@@ -15,7 +15,8 @@ export interface MatOmission { title?: string; id?: string; path: string; reason
 /** A non-fact ref: an external URL or a source-code ref. */
 export interface MatSource { label: string; url?: string }
 /** A ref to a fact written in the same document. different_version: the
- *  citing fact cited a version whose BODY differs from the one written. */
+ *  citing fact cited another version (blob) than the one written: ANY change,
+ *  not only the body (ruling Q3, blob identity). */
 export interface MatLink { n: number; title: string; id: string; anchor_id: string; different_version?: boolean }
 
 /** The roles a node plays in reading order (walk.go Role*). */
@@ -176,30 +177,37 @@ export const materializeApi: MaterializeApi = {
     const url = `${factUrl(target)}/materialize?${optionParams(options)}`;
     const r = await fetch(url, { signal });
     if (!r.ok) throw await failure(r, url);
-    const serverName = dispositionName(r.headers.get('Content-Disposition'));
-    let text: string;
-    if (r.body && typeof r.body.getReader === 'function') {
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let got = 0;
-      text = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        got += value.byteLength;
-        text += dec.decode(value, { stream: true });
-        onProgress?.(got);
-      }
-      text += dec.decode();
-      // Content-Length counts the bytes ON THE WIRE; when the body is compressed
-      // (Content-Encoding) fetch hands us the decoded bytes, so the two differ
-      // and only an uncompressed body can be checked this way. A truncated
-      // compressed body fails the read itself.
-      const want = r.headers.get('Content-Encoding') ? 0 : Number(r.headers.get('Content-Length'));
-      if (want > 0 && got !== want) throw new MatError(`the document ended early (${got} of ${want} bytes)`);
-    } else {
-      text = await r.text();
-    }
-    return { text, serverName };
+    return readDocument(r, onProgress);
   },
 };
+
+/** Reads a whole exported document from an OK response, telling onProgress the
+ *  bytes so far; rejects (never resolves with part of it) when the body ends
+ *  short of its Content-Length. The FactSet export reads through this too. */
+export async function readDocument(r: Response, onProgress?: (bytes: number) => void): Promise<MatExport> {
+  const serverName = dispositionName(r.headers.get('Content-Disposition'));
+  let text: string;
+  if (r.body && typeof r.body.getReader === 'function') {
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let got = 0;
+    text = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.byteLength;
+      text += dec.decode(value, { stream: true });
+      onProgress?.(got);
+    }
+    text += dec.decode();
+    // Content-Length counts the bytes ON THE WIRE; when the body is compressed
+    // (Content-Encoding) fetch hands us the decoded bytes, so the two differ
+    // and only an uncompressed body can be checked this way. A truncated
+    // compressed body fails the read itself.
+    const want = r.headers.get('Content-Encoding') ? 0 : Number(r.headers.get('Content-Length'));
+    if (want > 0 && got !== want) throw new MatError(`the document ended early (${got} of ${want} bytes)`);
+  } else {
+    text = await r.text();
+  }
+  return { text, serverName };
+}

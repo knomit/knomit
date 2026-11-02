@@ -133,8 +133,15 @@ func rowsOf(nodes []FactSetNode) []row {
 // 2.2. Every number, direction and target is asserted, and every link's
 // anchor is the written appearance's, which is FactHash of the fact.
 //
+// A back link carries the unit that FIRST wrote its target and no number
+// (user ruling 2026-11-02): 2.1 Y and 3.2 X (reserved facts, marked in the
+// reserved table) and 2.2.1 P, 3.1.1 Q, 3.1.2 R (the extra written set) all
+// name unit 1.
+//
 // Sabotage: reserve by the LAST unit (overwrite a taken reservation), and X is
 // reserved as 3.2: unit 1 links forward to it instead of writing it.
+// Sabotage: build the extra set's back link without its unit (fsState.lookup),
+// and 2.2.1 P's link unit is 0.
 func TestFactSet_F1_TwoLevelReservationExample(t *testing.T) {
 	f := newFactSetFixture(t)
 	seedABC(t, f)
@@ -187,8 +194,9 @@ func TestFactSet_F1_TwoLevelReservationExample(t *testing.T) {
 			require.Equal(t, w.Number, n.Link.Number)
 			require.Equal(t, w.Unit, n.Link.Unit)
 		} else {
-			require.Zero(t, n.Link.Unit, "a back link carries the anchor only")
-			require.Empty(t, n.Link.Number)
+			require.Equal(t, w.Unit, n.Link.Unit, "%s %s: a back link names the unit that first wrote it", n.Number, n.Path)
+			require.Equal(t, 1, n.Link.Unit, "%s %s: every target here was first written in unit 1", n.Number, n.Path)
+			require.Empty(t, n.Link.Number, "a back link carries no number")
 		}
 		require.Equal(t, n.Blob, n.Link.CitedBlob)
 	}
@@ -239,4 +247,35 @@ func cachedEntry(t testing.TB, cursor string) *fsEntry {
 	e, ok := fsCache.byID[id]
 	require.True(t, ok, "the FactSet is cached")
 	return e
+}
+
+// A RESULT written in its own unit and reached from a later unit is a back
+// link naming that unit (the results table's first-writer record), no number.
+// A is the newest (unit 1); B (unit 2) cites A; A was rewritten after B, so B
+// cites an older version of A: the link also says different_version.
+//
+// Sabotage: build the results table's back link without its unit
+// (fsState.lookup, the wRoot case), and B's link to A names unit 0.
+func TestFactSet_BackLinkToAResultNamesItsUnit(t *testing.T) {
+	f := newFactSetFixture(t)
+	f.write(t, "kb/u/a.md", "A", "a body v1.")
+	f.write(t, "kb/u/b.md", "B", "b body.", "kb/u/a.md")
+	f.write(t, "kb/u/a.md", "A", "a body v2.")
+	req := f.request("kb/u/")
+	req.Limit = 5
+	p, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
+	require.NoError(t, err)
+	require.Equal(t, 2, p.Units)
+	nodes := readAll(t, f, "o", p)
+	var link *FactSetLink
+	for _, n := range nodes {
+		if n.Unit == 2 && n.Path == "kb/u/a.md" {
+			link = n.Link
+		}
+	}
+	require.NotNil(t, link, "unit 2 reaches A as a link: %v", rowsOf(nodes))
+	require.Equal(t, LinkBack, link.Direction)
+	require.Equal(t, 1, link.Unit, "A was first written by unit 1")
+	require.Empty(t, link.Number)
+	require.True(t, link.DifferentVersion, "B cites A's first version, unit 1 wrote the second")
 }

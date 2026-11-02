@@ -426,6 +426,7 @@ func TestLensFactSet_RemapsTheFourNumberFields(t *testing.T) {
 	require.Equal(t, 4, yWritten.Unit)
 	require.Equal(t, "4.1", yWritten.Number)
 	require.Equal(t, y.AnchorID, yWritten.AnchorID)
+
 }
 
 // The export renders global numbers: "## 2. A", "### 2.1 X", the forward
@@ -901,5 +902,56 @@ func TestLensFactSet_RemapNumber(t *testing.T) {
 	g := []int{2, 4, 9}
 	for in, want := range map[string]string{"1": "2", "2.1": "4.1", "3.1.2": "9.1.2", "": ""} {
 		require.Equal(t, want, remapNumber(in, g), in)
+	}
+}
+
+// A lens back link names the GLOBAL unit that first wrote its target. The
+// seedRemap layout, except that B (R1's local unit 2, global 4) also cites X,
+// which A (R1's local unit 1, global 2) wrote: B's X is a back link to unit 2.
+//
+// Sabotage: lensEntry.remap remaps a link's unit only for forward links, and
+// B's back link to X names R1's local unit 1.
+func TestLensFactSet_BackLinkNamesTheGlobalUnit(t *testing.T) {
+	isolateFactSetGlobals(t)
+	lt := newLensTrio(t)
+	for _, f := range []*factsetFixture{lt.w, lt.r1} {
+		tag := f.ri.Name()
+		f.write(t, "kb/z/y.md", "Y", "y body in "+tag+".")
+		f.write(t, "kb/z/x.md", "X", "x body in "+tag+".", "kb/z/y.md")
+	}
+	lt.w.write(t, "kb/u/w1.md", "W1", cosBody(0.95, "w1."))
+	lt.w.write(t, "kb/u/w2.md", "W2", cosBody(0.7, "w2."))
+	lt.r1.write(t, "kb/u/a.md", "A", cosBody(0.9, "a."), "kb/z/x.md")
+	lt.r1.write(t, "kb/u/b.md", "B", cosBody(0.6, "b."), "kb/z/y.md", "kb/z/x.md")
+	req := lt.request("anything", "kb/u/")
+	req.Options.Depth = 3
+	p := lt.first(t, req)
+	require.Equal(t, 4, p.Units)
+	pages := allPages(t, lt.scope(), lt.lens, p)
+	writtenIn := map[string]int{}
+	var backs []FactSetNode
+	for _, pg := range pages {
+		for _, n := range pg.Facts {
+			switch {
+			case n.Written:
+				writtenIn[n.AnchorID] = n.Unit
+			case n.Link != nil && n.Link.Direction == LinkBack:
+				backs = append(backs, n)
+			}
+		}
+	}
+	x := wireOf(lt.lens, lt.r1.ri, "kb/z/x.md")
+	var bx *FactSetNode
+	for i, n := range backs {
+		if n.Unit == 4 && n.Path == x {
+			bx = &backs[i]
+		}
+	}
+	require.NotNil(t, bx, "B's unit (global 4) reaches X as a back link")
+	require.Equal(t, 2, writtenIn[bx.Link.AnchorID], "A's unit (global 2) wrote X")
+	require.Equal(t, 2, bx.Link.Unit, "the back link names the GLOBAL unit, not R1's local 1")
+	for _, n := range backs {
+		require.Equal(t, writtenIn[n.Link.AnchorID], n.Link.Unit, "%s in unit %d", n.Path, n.Unit)
+		require.Empty(t, n.Link.Number)
 	}
 }

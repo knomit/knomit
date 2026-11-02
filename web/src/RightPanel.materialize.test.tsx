@@ -128,3 +128,22 @@ describe('the Materialize action in the fact header', () => {
     expect(screen.getByTestId('materialize-view')).toBeInTheDocument();
   });
 });
+
+// The ruling that leaving Focus closes the view is the FactSet's only (#710
+// M2): in the single-fact view Esc turns Focus off and the materialized view
+// stays open.
+//
+// Sabotage: pass onBack to useMatFocus in MaterializeView (Esc closes it).
+describe('Esc in the single-fact view only leaves Focus', () => {
+  it('keeps the materialized view open', async () => {
+    render(<RightPanel state={state} dispatch={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('materialize-btn'));
+    await waitFor(() => expect(screen.getAllByTestId('mat-section')).toHaveLength(4));
+    expect(document.documentElement.dataset.matFocus).toBe('1');
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(document.documentElement.dataset.matFocus).toBeUndefined();
+    expect(screen.getByTestId('materialize-view')).toBeInTheDocument();
+    expect(window.location.search).toBe('?materialize=1');
+  });
+});
