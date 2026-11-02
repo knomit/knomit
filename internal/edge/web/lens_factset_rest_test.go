@@ -19,6 +19,8 @@ import (
 	"knomit/internal/edge/oauth"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // The lens FactSet REST routes (F4) against knomit_materialize on the lens's
@@ -41,7 +43,21 @@ type lensRESTEnv struct {
 func newLensRESTEnv(t *testing.T, write string, reads ...string) lensRESTEnv {
 	t.Helper()
 	emb := &cosEmbedder{}
-	m, _ := newTestLensManagerWith(t, emb, append([]string{write}, reads...)...)
+	// OntologyRoot "kb", as in production (gotcha 319d58cf: a Manager repo of
+	// newTestLensManagerWith has none, and single-fact materialize cannot
+	// read its facts).
+	m := repos.New(context.Background(), repos.Deps{
+		Embedder: emb,
+		Cfg:      config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		AgentID:  testsigner.FixtureAgentID("machine/test"), AgentBranch: "machine/test",
+		Machine: repos.Options{Synchronous: true},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	for _, name := range append([]string{write}, reads...) {
+		_, err := m.Create(context.Background(), repos.CreateSpec{Name: name, Mode: "preset", OntologyPreset: "default"}, nil)
+		require.NoError(t, err)
+	}
 	rs := make([]string, 0, len(reads))
 	for _, n := range reads {
 		rs = append(rs, `{"repo":"`+n+`"}`)
@@ -308,4 +324,70 @@ func TestLensFactSet_CloseOnAReadOnlyServer(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rec.Code, "control: the gate is on: %s", rec.Body.String())
 	rec = send(http.MethodDelete, engFactSet+"/export?cursor=x")
 	require.Equal(t, http.StatusForbidden, rec.Code, "only the factset resource itself is exempt: %s", rec.Body.String())
+}
+
+// A lens-confined token (audience /api/v1/lenses/eng) materializes the lens:
+// a lens reads its members through the binding (b.Reads()), not through the
+// caller's repo reach, which for a lens token names no repository. Its
+// FactSet pages are byte for byte the pages a token over the whole API gets
+// (same principal; the cursor id normalized), on REST and on the lens's MCP
+// endpoint alike, and a member's ref into delta (a repo outside the lens) is
+// the cross_kb_off leaf on both. Cross-KB REACH is denied as on MCP: the
+// lens's own single-fact materialize with cross_kb=true follows a3's ref into
+// delta for the wide token (D0 is written) and, for the confined token, lists
+// it as kb_unavailable on REST and on MCP alike (delta is outside its reach).
+//
+// Sabotage: gate the lens FactSet's member reads on the caller's reach (the
+// confined FactSet is refused); or widen a lens token's repo reach
+// (tokenRepoReach answers true for a lens audience: delta is followed for the
+// confined token).
+func TestLensFactSet_LensConfinedTokenReadsTheLensOnly(t *testing.T) {
+	e := newLensRESTEnv(t, "alpha", "beta", "gamma")
+	_, err := e.m.Create(context.Background(), repos.CreateSpec{Name: "delta", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+	seedThreeMembers(t, e.m)
+	delta12 := fact.ID12(e.m.Get("delta").ID())
+	d0 := "kb://" + delta12 + "/kb/d/d0.md"
+	writeCosFact(t, e.m.Get("delta"), "kb/d/d0.md", "D0", 0.9, nil)
+	writeCosFact(t, e.m.Get("alpha"), "kb/a/a3.md", "A3", 0.6, func(f *fact.Fact) { f.Refs = []string{d0} })
+
+	wide := e.as(t, "laptop")
+	ctok := e.f.mint(t, "laptop", testIssuer+"/api/v1/lenses/eng", []string{"read"}, auth.Read)
+	confined := withAuthorization(e.f.s.OAuthHandler(), "Bearer "+ctok)
+	okAs := func(h http.Handler) func(string) string {
+		return func(u string) string {
+			t.Helper()
+			code, body := restGet(t, h, u)
+			require.Equal(t, http.StatusOK, code, "%s: %s", u, body)
+			return body
+		}
+	}
+	pagesAs := func(h http.Handler) []string {
+		get := okAs(h)
+		return factsetPages(t, get(engFactSet+"?q=x&depth=2&limit=3"), func(c string) string {
+			return get(engFactSet + "?cursor=" + url.QueryEscape(c))
+		})
+	}
+	want := pagesAs(wide)
+	require.Contains(t, want[0], `"units":9`)
+	got := pagesAs(confined)
+	require.Equal(t, want, got, "a lens token reads the whole lens")
+	all := strings.Join(got, "")
+	require.Contains(t, all, `"repo_name":"beta"`)
+	require.Contains(t, all, `"repo_name":"gamma"`)
+	require.Contains(t, all, `"path":"`+d0+`","reason":"cross_kb_off"`, "the outside repo is not followed")
+	mcp := newMCPSession(t, confined, engMCP)
+	mpages := factsetPages(t, mcp.ok(`{"search":{"text":"x"},"depth":2,"limit":3}`), func(c string) string { return mcp.ok(`{"cursor":"` + c + `"}`) })
+	require.Equal(t, got, mpages, "and the lens's MCP endpoint, with the same token")
+
+	// Cross-KB reach: the lens's single-fact materialize, cross_kb=true.
+	const single = "/api/v1/lenses/eng/facts/kb/a/a3.md/materialize?cross_kb=true"
+	open := okAs(wide)(single)
+	shut := okAs(confined)(single)
+	require.Contains(t, open, "\n### D0\n", "control: the wide token follows a3 into delta")
+	require.NotContains(t, shut, "\n### D0\n")
+	require.Contains(t, shut, "Related, not included: `"+d0+"` (other knowledge base not available)", "delta is outside the lens token's reach")
+	text := mcp.ok(`{"file":"kb/a/a3.md","audience":"human","cross_kb":true}`)
+	require.NotContains(t, text, `"title":"D0"`)
+	require.Contains(t, text, `"path":"`+d0+`","reason":"kb_unavailable"`, "as on MCP")
 }

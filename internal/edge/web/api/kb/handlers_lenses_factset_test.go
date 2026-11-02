@@ -392,3 +392,64 @@ func TestLensFactSet_OneMemberLensIsTheWriteRepoFactSet(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, code, body)
 	require.Equal(t, listBody, strings.ReplaceAll(body, soloBase, "/lenses/solo/search"))
 }
+
+// since_fork on a lens reads the WRITE member's experiment (ruling Lens 6),
+// and only when the lens pins its write member to an experiment branch:
+//   - lens "explens" pins w at exp/sf (forked from w's agent branch, where
+//     parent.md lives; the experiment adds mine.md) and reads r1: since_fork
+//     materializes exactly mine.md (r1 contributes nothing, parent.md is not
+//     a change), while the same search without it has all three facts;
+//   - lens "eng" (w at its agent branch) answers since_fork with the repo
+//     route's 400 "Not an experiment", byte for byte (the instance path
+//     aside).
+//
+// Sabotage: pass b.Write().AgentBranch() instead of b.WriteMountBranch() to
+// experimentChangedPaths (explens is "Not an experiment" too).
+func TestLensFactSet_SinceForkReadsTheWriteMembersExperiment(t *testing.T) {
+	m := newMatLensManager(t, "w", "r1")
+	w, r1 := m.Get("w"), m.Get("r1")
+	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/parent.md", "Parent", "parent body.")
+	writeMatFact(t, r1, r1.AgentBranch(), "kb/technology/u/b1.md", "B1", "b1 body.")
+	require.NoError(t, w.WithRead(func(svc *store.Service) {
+		_, err := svc.Merge().OpenExperiment(context.Background(), "sf", "", w.AgentBranch())
+		require.NoError(t, err)
+	}))
+	writeMatFact(t, w, "exp/sf", "kb/technology/u/mine.md", "Mine", "mine body.")
+	_, err := m.CreateLens(context.Background(), control.Lens{Name: "explens", WriteUID: w.UID(),
+		Reads: []control.LensRead{{RepoUID: w.UID(), Branch: "exp/sf"}, {RepoUID: r1.UID()}}})
+	require.NoError(t, err)
+	createLens(t, m, "eng", "w", "r1")
+	h := asPrincipal("u1", newTestRouter(m))
+	const expBase = "/lenses/explens/search/factset"
+	var code int
+	var body string
+	require.Eventually(t, func() bool {
+		code, _, body = getMaterialize(t, h, "/lenses/explens/facts?path=kb/technology/u/")
+		return code == http.StatusOK && strings.Contains(body, "mine.md") && strings.Contains(body, "parent.md") && strings.Contains(body, "b1.md")
+	}, 10*time.Second, 50*time.Millisecond, "the lens never listed the facts: %d %s", code, body)
+
+	roots := func(u string) []string {
+		t.Helper()
+		var out []string
+		for _, p := range lensPages(t, h, expBase, u) {
+			for _, n := range p.Facts {
+				if n.Number == strconv.Itoa(n.Unit) {
+					out = append(out, n.Path)
+				}
+			}
+		}
+		return out
+	}
+	all := roots(expBase + "?path=kb/technology/u/&depth=0&limit=5")
+	require.Len(t, all, 3, "control: without since_fork, every member's facts: %v", all)
+	require.Equal(t, []string{"kb/technology/u/mine.md"}, roots(expBase+"?path=kb/technology/u/&depth=0&limit=5&since_fork=true"),
+		"since_fork is the write member's experiment alone")
+
+	repoBase := "/repos/w/branches/" + urlBranch(w.AgentBranch()) + "/search/factset"
+	code, _, repoBody := getMaterialize(t, h, repoBase+"?since_fork=true")
+	require.Equal(t, http.StatusBadRequest, code, repoBody)
+	require.Contains(t, repoBody, `"title":"Not an experiment"`)
+	code, _, lensBody := getMaterialize(t, h, lensFactSetBase+"?since_fork=true")
+	require.Equal(t, http.StatusBadRequest, code, lensBody)
+	require.Equal(t, repoBody, strings.ReplaceAll(lensBody, lensFactSetBase, repoBase), "a plain lens: the repo route's 400")
+}
