@@ -252,6 +252,9 @@ func originSelfURL(b hal.URLBuilder, repo string) string {
 // is shown only to a caller that passes admin.
 func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !originParams.RefuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 

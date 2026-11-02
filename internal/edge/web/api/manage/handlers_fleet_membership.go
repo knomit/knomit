@@ -171,6 +171,9 @@ func handleDecommissionFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFun
 // root key among them.
 func handleGetFleetRoot(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !fleetRootParams.RefuseUnknown(w, r) {
+			return
+		}
 		out, err := m.FleetRootFiles()
 		if err != nil {
 			writeFleetError(w, r, err)

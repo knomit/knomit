@@ -91,7 +91,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
-		if !repoSearchParams.refuseUnknown(w, r) {
+		if !repoSearchParams.RefuseUnknown(w, r) {
 			return
 		}
 		qp := r.URL.Query()

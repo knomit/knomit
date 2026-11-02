@@ -71,7 +71,7 @@ func handleHALFactsCollection(b hal.URLBuilder) http.HandlerFunc {
 
 		branch := httpx.BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
-		if !repoFactsParams.refuseUnknown(w, r) {
+		if !repoFactsParams.RefuseUnknown(w, r) {
 			return
 		}
 		qp := r.URL.Query()

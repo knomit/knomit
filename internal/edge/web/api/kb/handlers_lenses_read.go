@@ -142,7 +142,7 @@ func lensQueryVec(ctx context.Context, emb model.Embedder, text string) ([]float
 func handleHALLensFacts(emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
-		if !lensFactsParams.refuseUnknown(w, r) {
+		if !lensFactsParams.RefuseUnknown(w, r) {
 			return
 		}
 		qp := r.URL.Query()
@@ -807,7 +807,7 @@ func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float6
 func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
-		if !lensSearchParams.refuseUnknown(w, r) {
+		if !lensSearchParams.RefuseUnknown(w, r) {
 			return
 		}
 		qp := r.URL.Query()
@@ -995,7 +995,7 @@ type lensCompletionsResponse struct {
 // entirely from the Binding without touching the store.
 func handleHALLensCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !lensCompletionsParams.refuseUnknown(w, r) {
+		if !lensCompletionsParams.RefuseUnknown(w, r) {
 			return
 		}
 		b := repos.BindingFromContext(r.Context())

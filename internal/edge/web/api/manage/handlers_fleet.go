@@ -70,6 +70,9 @@ func writeFleetError(w http.ResponseWriter, r *http.Request, err error) {
 // handleGetFleet: GET /api/v1/fleet, the membership state machine.
 func handleGetFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !fleetParams.RefuseUnknown(w, r) {
+			return
+		}
 		st, err := m.FleetStatus(r.Context())
 		if err != nil {
 			writeFleetError(w, r, err)
@@ -195,6 +198,9 @@ func fleetMemberRows(ms []repos.FleetMemberRow, refused map[string]repos.PeerRef
 // page polls it.
 func handleFleetActivity(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !fleetActivityParams.RefuseUnknown(w, r) {
+			return
+		}
 		limit := repos.MaxFleetActivity
 		if s := r.URL.Query().Get("limit"); s != "" {
 			n, err := strconv.Atoi(s)
@@ -223,6 +229,9 @@ func handleFleetActivity(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // fleet repository's main.
 func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !fleetMembersParams.RefuseUnknown(w, r) {
+			return
+		}
 		ms, err := m.FleetMembers(r.Context())
 		if err != nil {
 			writeFleetError(w, r, err)

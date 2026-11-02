@@ -2,23 +2,11 @@ package kb
 
 import (
 	"net/http"
-	"net/url"
 
 	"knomit/internal/corpus/federate"
 	"knomit/internal/domain/fact"
-	"knomit/internal/edge/web/hal"
+	"knomit/internal/edge/web/httpx"
 )
-
-// refuseMalformed answers a query string that does not parse with the same
-// 400 refuseUnknown gives it, for a route that refuses unknown names itself
-// (the materialize sub-resources, with their own text).
-func refuseMalformed(w http.ResponseWriter, r *http.Request) bool {
-	if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
-		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", "malformed query string: "+err.Error(), r.URL.Path)
-		return false
-	}
-	return true
-}
 
 // The other knowledge-base GET routes' declared parameters (user ruling
 // 2026-11-02: #718's rule on every KB read route), exactly as openapi.yaml
@@ -26,52 +14,52 @@ func refuseMalformed(w http.ResponseWriter, r *http.Request) bool {
 var (
 	// GET /repos/{repo}/branches/{branch}/topics and /topics/{path} (with its
 	// /facts and /stats sub-resources)
-	topicsParams = declare()
+	topicsParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/changes
-	changesParams = declare("prefix", "since", "cursor", "limit")
+	changesParams = httpx.DeclareParams("prefix", "since", "cursor", "limit")
 	// GET /repos/{repo}/branches/{branch}/commits
-	commitsParams = declare("limit", "after", "from", "before")
+	commitsParams = httpx.DeclareParams("limit", "after", "from", "before")
 	// GET /repos/{repo}/branches/{branch}/commits/{sha}
-	commitDetailParams = declare()
+	commitDetailParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/{path} (and its
 	// /incoming and /outgoing sub-resources)
-	commitFactParams = declare("fallback")
+	commitFactParams = httpx.DeclareParams("fallback")
 	// GET /repos/{repo}/branches/{branch}/commits/{sha}/topics[/{path}]
-	commitTopicsParams = declare()
+	commitTopicsParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/activity
-	activityParams = declare("path")
+	activityParams = httpx.DeclareParams("path")
 	// GET /repos/{repo}/branches/{branch}/completions
-	completionsParams = declare("category", "prefix")
+	completionsParams = httpx.DeclareParams("category", "prefix")
 	// GET /repos/{repo}/branches/{branch}/domains
-	domainsParams = declare()
+	domainsParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/domains/{name}
-	domainFactsParams = declare()
+	domainFactsParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/motifs
-	motifsParams = declare("path", "q", "sort", "limit", "offset")
+	motifsParams = httpx.DeclareParams("path", "q", "sort", "limit", "offset")
 	// GET /repos/{repo}/branches/{branch}/motifs/{key}
-	motifClusterParams = declare("limit")
+	motifClusterParams = httpx.DeclareParams("limit")
 	// GET /repos/{repo}/branches/{branch}/stats
-	statsParams = declare("path", "axis")
+	statsParams = httpx.DeclareParams("path", "axis")
 	// GET /repos/{repo}/branches/{branch}/events
-	eventsParams = declare()
+	eventsParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/triggers
-	triggersParams = declare("log", "run")
+	triggersParams = httpx.DeclareParams("log", "run")
 	// GET /repos/{repo}/branches/{branch}/facts/{path} (and its /incoming
 	// and /outgoing sub-resources); GET /lenses/{lens}/facts/{path} too
-	factReadParams = declare()
+	factReadParams = httpx.DeclareParams()
 	// GET /repos/{repo}/branches/{branch}/facts/{path}/commits (the lens
 	// route serves the same sub-resource)
-	factCommitsParams = declare("limit", "after", "from", "before")
+	factCommitsParams = httpx.DeclareParams("limit", "after", "from", "before")
 	// GET /lenses/{lens}/completions
-	lensCompletionsParams = declare("category", "prefix")
+	lensCompletionsParams = httpx.DeclareParams("category", "prefix")
 	// GET /lenses/{lens}/motifs
-	lensMotifsParams = declare("path", "repo", "q", "sort", "limit", "offset")
+	lensMotifsParams = httpx.DeclareParams("path", "repo", "q", "sort", "limit", "offset")
 	// GET /lenses/{lens}/motifs/{key}
-	lensMotifClusterParams = declare("limit")
+	lensMotifClusterParams = httpx.DeclareParams("limit")
 	// GET /lenses/{lens}/stats
-	lensStatsParams = declare("path", "repo", "axis")
+	lensStatsParams = httpx.DeclareParams("path", "repo", "axis")
 	// GET /lenses/{lens}/topics[/{path}]
-	lensTopicsParams = declare("repo")
+	lensTopicsParams = httpx.DeclareParams("repo")
 )
 
 // refuseUnknownFactPath applies the declared set of a GET /facts/* request
@@ -86,21 +74,21 @@ func refuseUnknownFactPath(w http.ResponseWriter, r *http.Request, path string, 
 	// `.knomit/x/commits` is a file named commits. Decide that FIRST, exactly
 	// as the routes do (serveSystemFileRead runs before any dispatch).
 	if isSystemFileRequest(path) {
-		return factReadParams.refuseUnknown(w, r)
+		return factReadParams.RefuseUnknown(w, r)
 	}
 	if _, ok := splitMaterializePages(path); ok {
-		return refuseMalformed(w, r)
+		return httpx.RefuseMalformed(w, r)
 	}
 	if _, ok := splitMaterialize(path); ok {
-		return refuseMalformed(w, r)
+		return httpx.RefuseMalformed(w, r)
 	}
 	if commitAnchored {
-		return commitFactParams.refuseUnknown(w, r)
+		return commitFactParams.RefuseUnknown(w, r)
 	}
 	if _, sub := splitFactSubResource(path); sub == "commits" {
-		return factCommitsParams.refuseUnknown(w, r)
+		return factCommitsParams.RefuseUnknown(w, r)
 	}
-	return factReadParams.refuseUnknown(w, r)
+	return factReadParams.RefuseUnknown(w, r)
 }
 
 // isSystemFileRequest reports whether a fact-route path names a raw system

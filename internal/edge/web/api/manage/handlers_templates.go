@@ -17,6 +17,9 @@ import (
 // picker, and one broken mount must not empty it.
 func handleTemplates(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !templatesParams.RefuseUnknown(w, r) {
+			return
+		}
 		out, err := m.ListTemplates(r.Context(), "")
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Templates unavailable", err.Error(), r.URL.Path)
@@ -32,6 +35,9 @@ func handleTemplates(m *repos.Manager) http.HandlerFunc {
 // registered repo with no store; a repo still populating is 503 here.
 func handleRepoTemplates(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !repoTemplatesParams.RefuseUnknown(w, r) {
+			return
+		}
 		ri := repos.RepoFromContext(r.Context())
 		out, err := m.ListTemplates(r.Context(), ri.Name())
 		if err != nil {

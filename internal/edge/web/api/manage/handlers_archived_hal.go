@@ -111,6 +111,9 @@ func handleHALRepoArchive(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // handleHALArchived serves GET /api/v1/archived.
 func handleHALArchived(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !archivedParams.RefuseUnknown(w, r) {
+			return
+		}
 		list, err := m.ListArchived()
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "List failed", err.Error(), r.URL.Path)
@@ -132,6 +135,9 @@ func handleHALArchived(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // the target of every archived item's self link.
 func handleHALArchivedItem(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !archivedItemParams.RefuseUnknown(w, r) {
+			return
+		}
 		info, err := m.GetArchived(chi.URLParam(r, "id"))
 		if err != nil {
 			status, title := archiveErrStatus(err)

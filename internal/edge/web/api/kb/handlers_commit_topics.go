@@ -19,7 +19,7 @@ import (
 // unknown repo still reports "not found" rather than "not implemented".
 func handleCommitAnchoredTopicNode() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !commitTopicsParams.refuseUnknown(w, r) {
+		if !commitTopicsParams.RefuseUnknown(w, r) {
 			return
 		}
 		hal.WriteProblem(w, http.StatusNotImplemented, "Not Implemented",

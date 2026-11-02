@@ -50,7 +50,7 @@ type triggerRunView struct {
 // whichever branch is in the URL; `branch` in the body names the observed one.
 func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !triggersParams.refuseUnknown(w, r) {
+		if !triggersParams.RefuseUnknown(w, r) {
 			return
 		}
 		repoName := chi.URLParam(r, "repo")

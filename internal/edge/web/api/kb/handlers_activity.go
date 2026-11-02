@@ -43,7 +43,7 @@ type activityView struct {
 // handleHALActivity serves GET /repos/{repo}/branches/{branch}/activity.
 func handleHALActivity(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !activityParams.refuseUnknown(w, r) {
+		if !activityParams.RefuseUnknown(w, r) {
 			return
 		}
 		repoName := chi.URLParam(r, "repo")
