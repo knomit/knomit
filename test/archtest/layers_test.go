@@ -245,6 +245,10 @@ var sameLayerEdges = map[string]bool{
 	// helpers (APIBase, StartSSE, RefuseUnwritableBranch, ...) through httpx.
 	"edge/web/api/jobs -> edge/web/hal":   true,
 	"edge/web/api/jobs -> edge/web/httpx": true,
+	// api/secrets is the same: problems and HAL through hal, APIBase and
+	// DecodeJSON through httpx.
+	"edge/web/api/secrets -> edge/web/hal":   true,
+	"edge/web/api/secrets -> edge/web/httpx": true,
 	// api/manage (12e) is the same: problems and HAL through hal, the shared
 	// helpers (APIBase, DecodeJSON, WriteLifecycleProblem, ...) through httpx.
 	"edge/web/api/manage -> edge/web/hal":   true,

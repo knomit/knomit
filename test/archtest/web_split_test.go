@@ -178,6 +178,7 @@ var webAPIExportAllowlist = map[string]map[string]string{
 	"api/manage":  {},
 	"api/jobs":    {},
 	"api/origins": {},
+	"api/secrets": {},
 }
 
 // webFamilyLayout lists the non-api packages the web family may contain, keyed
