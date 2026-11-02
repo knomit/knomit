@@ -36,6 +36,16 @@ import (
 // remotes seeded this way genuinely disjoint knowledge bases.
 func seedKnomitRemoteForTest(t *testing.T, bare, factBody string) string {
 	t.Helper()
+	return seedKnomitRemoteFilesForTest(t, bare, factBody, nil)
+}
+
+// seedKnomitRemoteFilesForTest is seedKnomitRemoteForTest plus extra files
+// (repo-relative path -> full file content) committed alongside kb/seed.md in
+// the same root commit. It exists so a test can plant a fact at a path the
+// local side also holds, with different content, without a second helper that
+// re-implements the bare-repo and ontology setup.
+func seedKnomitRemoteFilesForTest(t *testing.T, bare, factBody string, extra map[string]string) string {
+	t.Helper()
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatalf("mkdir bare: %v", err)
 	}
@@ -48,6 +58,15 @@ func seedKnomitRemoteForTest(t *testing.T, bare, factBody string) string {
 	factFile := "---\ntitle: seed\n---\n\n" + factBody + "\n"
 	if err := os.WriteFile(filepath.Join(work, "kb", "seed.md"), []byte(factFile), 0o644); err != nil {
 		t.Fatalf("write seed fact: %v", err)
+	}
+	for rel, content := range extra {
+		full := filepath.Join(work, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
 	}
 	// The ONTOLOGY is what makes this a knomit remote — the name of this helper
 	// was true of its intent and not of its output until this was added. A

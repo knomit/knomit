@@ -1,17 +1,18 @@
 /**
- * E2E journey: migrate a local knomit to a remote repo.
+ * E2E journey: origin-connect session lifecycle between two knomit instances.
  *
- * Starts TWO knomit instances:
- *   - "remote" instance: seeded with facts, serves as the git remote
- *   - "local" instance: has its own facts, connects to the remote
+ * Starts TWO knomit instances ("remote" and "local") and checks that a
+ * connect session can be created, tested and cancelled.
  *
- * Tests the full session workflow: create → test → preview → apply → commit,
- * then verifies the local instance has both its own and the remote's facts.
+ * The apply/commit half of the wizard (including conflict strategies) is
+ * covered by Go tests, because this harness cannot seed a remote instance's
+ * published main: see TestConnect_ConflictStrategyReachesTheReplay in
+ * internal/edge/web/origin_wizard_conflict_strategy_test.go.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import getPort from 'get-port';
 import { onnxEnv, requireBuild } from '../../helpers/binary.js';
@@ -138,22 +139,6 @@ async function readSSE(res: Response): Promise<any[]> {
   return parseSSE(text);
 }
 
-/** Poll facts collection until we see at least `min` results (index sync is async). */
-async function waitForFactCount(inst: KnomitInstance, min: number, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const res = await inst.api.get(
-      `${inst.baseURL}/api/v1/repos/knomit/branches/${inst.branch}/facts?limit=500`,
-    );
-    if (res.ok()) {
-      const { count } = await res.json();
-      if (count >= min) return;
-    }
-    await new Promise(r => setTimeout(r, 500));
-  }
-  throw new Error(`Timed out waiting for ${min} facts on ${inst.baseURL}`);
-}
-
 // ── Test suite ──────────────────────────────────────
 
 const test = base.extend<{ remoteMigration: { local: KnomitInstance; remote: KnomitInstance } }>({
@@ -174,225 +159,7 @@ const test = base.extend<{ remoteMigration: { local: KnomitInstance; remote: Kno
   },
 });
 
-const SEED_SKIP =
-  'The test-connectivity step counts the facts on the remote\'s published main. Facts written through the ' +
-  'remote\'s HTTP API land on its agent branch and never reach main (no merge endpoint; a git push needs an ' +
-  'enrolled instance certificate), so the harness cannot seed the remote. Needs a bare-repo remote via ' +
-  'KNOMIT_LOCAL_ORIGIN_ROOT or a promote step; see the e2e harness cleanup report.';
-
 test.describe('Remote Migration Journey', () => {
-
-  test.describe('with a seeded remote', () => {
-  test.skip(true, SEED_SKIP);
-
-  test('migrate local facts to a remote knomit instance', async ({ remoteMigration }) => {
-    const { local, remote } = remoteMigration;
-
-    // ── Seed remote with facts ──────────────────────
-    await seedFact(remote.api, remote.baseURL, remote.branch, 'kb/networking/tcp.md',
-      makeFact('TCP Protocol', 'networking', 'TCP is a reliable transport protocol.'));
-    await seedFact(remote.api, remote.baseURL, remote.branch, 'kb/networking/udp.md',
-      makeFact('UDP Protocol', 'networking', 'UDP is an unreliable transport protocol.'));
-    await seedFact(remote.api, remote.baseURL, remote.branch, 'kb/databases/acid.md',
-      makeFact('ACID Properties', 'databases', 'ACID ensures reliable transactions.'));
-
-    // ── Seed local with facts ───────────────────────
-    await seedFact(local.api, local.baseURL, local.branch, 'kb/security/tls.md',
-      makeFact('TLS', 'security', 'TLS encrypts data in transit.'));
-    await seedFact(local.api, local.baseURL, local.branch, 'kb/security/oauth.md',
-      makeFact('OAuth 2.0', 'security', 'OAuth is an authorization framework.'));
-
-    // Wait for index sync to catch up on both sides
-    await waitForFactCount(local, 2);
-    await waitForFactCount(remote, 3);
-
-    // ── Step 1: Create session ──────────────────────
-    // The remote knomit exposes a smart HTTP git endpoint at /git/knomit
-    const remoteGitURL = `${remote.baseURL}/git/knomit`;
-
-    const sessionRes = await local.api.post(`${local.baseURL}/api/v1/repos/knomit/origin-sessions`, {
-      data: { url: remoteGitURL, auth_method: '' },
-    });
-    expect(sessionRes.ok(), `create session: ${sessionRes.status()}`).toBeTruthy();
-    const { session_id } = await sessionRes.json();
-    expect(session_id).toBeTruthy();
-
-    // ── Step 2: Test connectivity ───────────────────
-    const testRes = await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/test`);
-    expect(testRes.ok, `test connectivity: ${testRes.status}`).toBeTruthy();
-    const testEvents = await readSSE(testRes);
-
-    // Check for error events first for better diagnostics.
-    const testError = testEvents.find(e => e.phase === 'error');
-    expect(testError, `test connectivity error: ${JSON.stringify(testError)}`).toBeFalsy();
-
-    const testDone = testEvents.find(e => e.phase === 'done');
-    expect(testDone, `test should have done event. Events: ${JSON.stringify(testEvents)}`).toBeTruthy();
-    // History may be "shared" if both instances initialized within the same second
-    // (identical root commits). Both paths are valid for migration.
-    expect(['disjoint', 'shared']).toContain(testDone.result.history);
-    expect(testDone.result.remote_fact_count).toBeGreaterThanOrEqual(3);
-    expect(testDone.result.local_fact_count).toBeGreaterThanOrEqual(2);
-    expect(testDone.result.default_branch).toBeTruthy();
-
-    // ── Step 3: Preview ─────────────────────────────
-    const previewRes = await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/preview`);
-    expect(previewRes.ok).toBeTruthy();
-    const previewEvents = await readSSE(previewRes);
-    const previewDone = previewEvents.find(e => e.phase === 'done');
-    expect(previewDone).toBeTruthy();
-    if (testDone.result.history === 'disjoint') {
-      expect(previewDone.result.local_only).toBeGreaterThanOrEqual(2);
-      expect(previewDone.result.remote_only).toBeGreaterThanOrEqual(3);
-    }
-
-    // ── Step 4: Apply with local_wins ───────────────
-    const applyRes = await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/apply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conflict_strategy: 'local_wins', branch: testDone.result.default_branch }),
-    });
-    expect(applyRes.ok).toBeTruthy();
-    const applyEvents = await readSSE(applyRes);
-    const applyDone = applyEvents.find(e => e.phase === 'done');
-    expect(applyDone).toBeTruthy();
-    if (testDone.result.history === 'disjoint') {
-      expect(applyDone.result.total_facts).toBeGreaterThanOrEqual(5);
-      expect(applyDone.result.from_local).toBeGreaterThanOrEqual(2);
-      expect(applyDone.result.from_remote).toBeGreaterThanOrEqual(3);
-    }
-
-    // ── Step 5: Commit ──────────────────────────────
-    const commitRes = await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/commit`, {
-      method: 'POST',
-    });
-    expect(commitRes.ok).toBeTruthy();
-    const commitEvents = await readSSE(commitRes);
-    const commitDone = commitEvents.find(e => e.phase === 'done');
-    expect(commitDone, 'commit should complete').toBeTruthy();
-
-    // Verify: swapping, configuring, rebuilding phases occurred
-    expect(commitEvents.some(e => e.phase === 'swapping')).toBeTruthy();
-    expect(commitEvents.some(e => e.phase === 'configuring')).toBeTruthy();
-    expect(commitEvents.some(e => e.phase === 'rebuilding')).toBeTruthy();
-
-    // ── Step 6: Verify post-migration state ─────────
-
-    // Session should be cleaned up
-    const sessionCheck = await local.api.get(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}`);
-    expect(sessionCheck.status()).toBe(404);
-
-    // Remote config should be saved
-    const originRes = await local.api.get(`${local.baseURL}/api/v1/repos/knomit/origin`);
-    expect(originRes.ok()).toBeTruthy();
-    const originData = await originRes.json();
-    expect(originData.url).toBe(remoteGitURL);
-    expect(originData.branch).toBe(testDone.result.default_branch);
-
-    // Verify facts are present (only reliable when disjoint replay ran)
-    if (testDone.result.history === 'disjoint') {
-      // Re-discover branch after migration (branch may have changed)
-      const migratedBranch = await discoverAgentBranch(local.baseURL);
-      const recentRes = await local.api.get(
-        `${local.baseURL}/api/v1/repos/knomit/branches/${migratedBranch}/facts?limit=100`,
-      );
-      expect(recentRes.ok()).toBeTruthy();
-      const recent = await recentRes.json();
-      const paths = recent._embedded.facts.map((f: any) => f.path);
-      // Remote facts
-      expect(paths).toContain('kb/networking/tcp.md');
-      expect(paths).toContain('kb/networking/udp.md');
-      expect(paths).toContain('kb/databases/acid.md');
-      // Local facts
-      expect(paths).toContain('kb/security/tls.md');
-      expect(paths).toContain('kb/security/oauth.md');
-
-      // Verify individual fact content
-      const tcpRes = await local.api.get(
-        `${local.baseURL}/api/v1/repos/knomit/branches/${migratedBranch}/facts/kb/networking/tcp.md`,
-      );
-      expect(tcpRes.ok()).toBeTruthy();
-      const tcpData = await tcpRes.json();
-      expect(tcpData.body).toContain('reliable transport protocol');
-    }
-  });
-
-  test('remote_wins strategy preserves remote content on shared paths', async ({ remoteMigration }) => {
-    const { local, remote } = remoteMigration;
-
-    const sharedPath = 'kb/shared/protocol.md';
-
-    // Both instances have the same path with different content
-    await seedFact(remote.api, remote.baseURL, remote.branch, sharedPath,
-      makeFact('Remote Protocol', 'networking', 'Remote version of the protocol.'));
-    await seedFact(local.api, local.baseURL, local.branch, sharedPath,
-      makeFact('Local Protocol', 'networking', 'Local version of the protocol.'));
-
-    // Also seed unique facts on each side
-    await seedFact(remote.api, remote.baseURL, remote.branch, 'kb/remote-only/data.md',
-      makeFact('Remote Data', 'databases', 'Only on remote.'));
-    await seedFact(local.api, local.baseURL, local.branch, 'kb/local-only/data.md',
-      makeFact('Local Data', 'security', 'Only on local.'));
-
-    await waitForFactCount(local, 2);
-    await waitForFactCount(remote, 2);
-
-    const remoteGitURL = `${remote.baseURL}/git/knomit`;
-
-    // Create session → test → preview
-    const sessRes = await local.api.post(`${local.baseURL}/api/v1/repos/knomit/origin-sessions`, {
-      data: { url: remoteGitURL, auth_method: '' },
-    });
-    const { session_id } = await sessRes.json();
-
-    const testEvents2 = await readSSE(await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/test`));
-    const testDone2 = testEvents2.find(e => e.phase === 'done');
-    expect(testDone2, `test events: ${JSON.stringify(testEvents2)}`).toBeTruthy();
-
-    await readSSE(await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/preview`));
-
-    // Apply with remote_wins
-    const applyRes = await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/apply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conflict_strategy: 'remote_wins' }),
-    });
-    const applyEvents = await readSSE(applyRes);
-    const applyDone = applyEvents.find(e => e.phase === 'done');
-    expect(applyDone, `no done in apply events: ${JSON.stringify(applyEvents)}`).toBeTruthy();
-
-    // Commit
-    const commitEvents = await readSSE(await fetch(`${local.baseURL}/api/v1/repos/knomit/origin-sessions/${session_id}/commit`, { method: 'POST' }));
-    const commitError = commitEvents.find(e => e.phase === 'error');
-    expect(commitError, `commit error: ${JSON.stringify(commitError)}`).toBeFalsy();
-
-    // After commit, the remote config should be saved
-    const originRes = await local.api.get(`${local.baseURL}/api/v1/repos/knomit/origin`);
-    expect(originRes.ok()).toBeTruthy();
-    const originData = await originRes.json();
-    expect(originData.url).toBe(remoteGitURL);
-
-    // If disjoint history (replay path), verify fact content
-    if (testDone2.result.history === 'disjoint') {
-      // Re-discover branch after migration
-      const migratedBranch = await discoverAgentBranch(local.baseURL);
-      // Shared path should have REMOTE content with remote_wins
-      const factRes = await local.api.get(
-        `${local.baseURL}/api/v1/repos/knomit/branches/${migratedBranch}/facts/${sharedPath}`,
-      );
-      expect(factRes.ok(), `shared fact: ${factRes.status()}`).toBeTruthy();
-      const factData = await factRes.json();
-      expect(factData.body).toContain('Remote version');
-
-      // Local-only fact should still exist
-      const localOnlyRes = await local.api.get(
-        `${local.baseURL}/api/v1/repos/knomit/branches/${migratedBranch}/facts/kb/local-only/data.md`,
-      );
-      expect(localOnlyRes.ok()).toBeTruthy();
-    }
-  });
-
-  });
 
   test('cancel mid-workflow cleans up session', async ({ remoteMigration }) => {
     const { local, remote } = remoteMigration;
