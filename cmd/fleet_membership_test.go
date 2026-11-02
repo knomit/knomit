@@ -575,7 +575,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	for _, rt := range [][3]string{
 		{http.MethodDelete, "/repos/fleet/origin", ""},
 		{http.MethodPatch, "/repos/fleet/origin/upstream", `{"branch":"trunk"}`},
-		{http.MethodPut, "/repos/fleet/origin", fleetBody(map[string]any{"url": alpha.fleetURL()})},
+		{http.MethodPut, "/repos/fleet/origin", fleetBody(t, map[string]any{"url": alpha.fleetURL()})},
 	} {
 		if rec := charlie.localAPI(rt[0], rt[1], rt[2]); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "fleet_repository") {
 			t.Fatalf("%s %s on the fleet repository: %d %s", rt[0], rt[1], rec.Code, rec.Body.String())
@@ -615,7 +615,7 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	}
 
 	alpha.asClient(t)
-	body := fleetBody(map[string]any{"url": bravo.fleetURL()})
+	body := fleetBody(t, map[string]any{"url": bravo.fleetURL()})
 	if rec := alpha.localAPI(http.MethodPost, "/fleet/follow", body); rec.Code != http.StatusOK {
 		t.Fatalf("the old master re-points at the new one: %d %s", rec.Code, rec.Body.String())
 	}
@@ -675,12 +675,14 @@ func TestFleetMasterSwitch_KnomitHosted(t *testing.T) {
 	}
 }
 
-// fleetBody encodes a request body for the fleet routes; a URL or path
-// concatenated into a JSON literal breaks on Windows (\U is not an escape).
-func fleetBody(v map[string]any) string {
+// fleetBody JSON-encodes a request body for the fleet routes. Those URLs are
+// https and file:/// forms, so this is hardening against hand-built JSON
+// literals (a quote or backslash in a value), not a Windows fix.
+func fleetBody(t *testing.T, v map[string]any) string {
+	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
-		panic(err)
+		t.Fatalf("marshal: %v", err)
 	}
 	return string(b)
 }

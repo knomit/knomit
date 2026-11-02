@@ -29,7 +29,7 @@ func TestProbeOrigin_ReportsEmptyRemote(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos:probe-origin",
-		strings.NewReader(escBody(map[string]any{"url": dir}))))
+		strings.NewReader(mustJSON(t, map[string]any{"url": dir}))))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

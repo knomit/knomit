@@ -166,7 +166,7 @@ func TestHandleHALSetOrigin_Returns200(t *testing.T) {
 	r := s.NewAPIRouter()
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 
-	rec := putOrigin(t, r, "alpha", escBody(map[string]any{"url": url, "branch": "main", "auth_method": "none"}))
+	rec := putOrigin(t, r, "alpha", mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "none"}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -223,7 +223,7 @@ func TestHandleHALSetOrigin_PartialUpdateKeepsTheStoredOrigin(t *testing.T) {
 	r := s.NewAPIRouter()
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 
-	rec := putOrigin(t, r, "alpha", escBody(map[string]any{"url": url, "branch": "main", "auth_method": "token", "token": "tok-stored"}))
+	rec := putOrigin(t, r, "alpha", mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "token", "token": "tok-stored"}))
 	require.Equal(t, http.StatusOK, rec.Code, "first PUT: body=%s", rec.Body.String())
 
 	rec = putOrigin(t, r, "alpha", `{"branch":"main"}`)
@@ -246,7 +246,7 @@ func TestHandleHALSetOrigin_AttachesOnTheRequestedBranch(t *testing.T) {
 	runGitForTest(t, bare, "branch", "trunk", "main")
 	require.NotEqual(t, "trunk", ri.AgentBranch(), "precondition")
 
-	rec := putOrigin(t, s.NewAPIRouter(), "alpha", escBody(map[string]any{"url": url, "branch": "trunk", "auth_method": "none"}))
+	rec := putOrigin(t, s.NewAPIRouter(), "alpha", mustJSON(t, map[string]any{"url": url, "branch": "trunk", "auth_method": "none"}))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	o, err := m.Origins().Get(ri.UID())
 	require.NoError(t, err)
@@ -302,7 +302,7 @@ func TestHandleHALSetOrigin_FailedPersistIs500(t *testing.T) {
 	r := s.NewAPIRouter()
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 
-	rec := putOrigin(t, r, "alpha", escBody(map[string]any{"url": url, "branch": "main", "auth_method": "token", "token": "tok"}))
+	rec := putOrigin(t, r, "alpha", mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "token", "token": "tok"}))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
@@ -325,7 +325,7 @@ func TestHandleHALSetOrigin_UnreachableIs502AndPersistsNothing(t *testing.T) {
 	syncGen := ri.Status()
 
 	nowhere := fileuri.New(filepath.Join(originsRoot, "nowhere.git"))
-	rec := putOrigin(t, r, "alpha", escBody(map[string]any{"url": nowhere, "branch": "main", "auth_method": "none"}))
+	rec := putOrigin(t, r, "alpha", mustJSON(t, map[string]any{"url": nowhere, "branch": "main", "auth_method": "none"}))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status: got %d, want 502; body=%s", rec.Code, rec.Body.String())
 	}
@@ -652,7 +652,7 @@ func TestPutOrigin_PersistsToControlDB(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	wantURL := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	body := escBody(map[string]any{"url": wantURL, "branch": "main", "auth_method": "token", "token": "tok-secret"})
+	body := mustJSON(t, map[string]any{"url": wantURL, "branch": "main", "auth_method": "token", "token": "tok-secret"})
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
@@ -765,7 +765,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	putBody := escBody(map[string]any{"url": url, "branch": "main", "auth_method": "none"})
+	putBody := mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "none"})
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody)))
 	req.Header.Set("Content-Type", "application/json")
@@ -835,7 +835,7 @@ func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	putBody := escBody(map[string]any{"url": url, "branch": "main", "auth_method": "none"})
+	putBody := mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "none"})
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody)))
 	req.Header.Set("Content-Type", "application/json")
@@ -881,7 +881,7 @@ func TestDeleteOrigin_UnmountedRepoKeepsTheDurableRecord(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	wantURL := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
-	rec := putOrigin(t, r, "alpha", escBody(map[string]any{"url": wantURL, "branch": "main", "auth_method": "token", "token": "tok-secret"}))
+	rec := putOrigin(t, r, "alpha", mustJSON(t, map[string]any{"url": wantURL, "branch": "main", "auth_method": "token", "token": "tok-secret"}))
 	if rec.Code < 200 || rec.Code >= 300 {
 		t.Fatalf("PUT status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -1020,7 +1020,7 @@ func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
 	url := seedKnomitRemoteForTest(t, filepath.Join(root, "remote.git"), "seed")
 
 	rec = httptest.NewRecorder()
-	body := escBody(map[string]any{"url": url, "branch": "main"})
+	body := mustJSON(t, map[string]any{"url": url, "branch": "main"})
 	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
@@ -1054,7 +1054,7 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 	url := seedPlainRemoteForTest(t, filepath.Join(root, "remote.git"))
 
 	rec = httptest.NewRecorder()
-	body := escBody(map[string]any{"url": url, "branch": "main"})
+	body := mustJSON(t, map[string]any{"url": url, "branch": "main"})
 	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
 
 	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
@@ -1140,7 +1140,7 @@ func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/sub/origin",
-		strings.NewReader(escBody(map[string]any{"url": url, "auth_method": "token", "token": "s3cret"}))))
+		strings.NewReader(mustJSON(t, map[string]any{"url": url, "auth_method": "token", "token": "s3cret"}))))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code < 200 || rec.Code >= 300 {
