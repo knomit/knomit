@@ -655,21 +655,30 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager) http.Handler
 func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		// A stopped manager falls through to the Send, which refuses it.
+		// A linked origin needs the admin gate. This read only picks the
+		// gate: the delete re-checks the link in its own transaction, so a
+		// link written after this read is refused (409), never dropped. A
+		// stopped manager falls through to the Send, which refuses it.
+		ev := repos.DetachOrigin()
 		if origins, oerr := originsOf(m); oerr == nil {
 			stored, gerr := origins.Get(ri.UID())
 			if gerr != nil {
 				hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin", gerr.Error(), r.URL.Path)
 				return
 			}
-			if stored != nil && stored.SecretID != "" && !httpx.Admits(admin, w, r) {
-				return
+			if stored != nil && stored.SecretID != "" {
+				if !httpx.Admits(admin, w, r) {
+					return
+				}
+				ev = repos.DetachOriginUnlinking()
 			}
 		}
-		_, err := m.Send(r.Context(), ri, repos.DetachOrigin())
+		_, err := m.Send(r.Context(), ri, ev)
 		switch {
 		case err == nil:
 			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, control.ErrOriginLinked):
+			hal.WriteProblem(w, http.StatusConflict, "Linked to a stored secret", err.Error(), r.URL.Path)
 		case errors.Is(err, repos.ErrSubscriptionOrigin):
 			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
 				"this repo follows its origin read-only and has no content of its own; archive it instead of detaching the origin",

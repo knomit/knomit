@@ -303,7 +303,8 @@ func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decide
 func (m *Manager) restoreFleetOrigin(ctx context.Context, ri *RepoInstance, prev *control.Origin) error {
 	ctx = context.WithoutCancel(ctx)
 	if prev == nil {
-		_, err := m.Send(ctx, ri, DetachOrigin())
+		// The failed move may have linked the forge origin: drop it with it.
+		_, err := m.Send(ctx, ri, DetachOriginUnlinking())
 		return err
 	}
 	method, token, secretID := prev.AuthMethod, prev.AuthToken, prev.SecretID
@@ -496,7 +497,7 @@ func (m *Manager) hostFleetHere(ctx context.Context, spec FleetHostSpec) error {
 			return err
 		}
 	}
-	if _, err := m.Send(ctx, ri, DetachOrigin()); err != nil {
+	if _, err := m.Send(ctx, ri, DetachOriginUnlinking()); err != nil {
 		return err
 	}
 	// This instance is the acting master now (fact.FleetMasterPath), the

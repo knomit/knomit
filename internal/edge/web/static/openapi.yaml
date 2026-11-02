@@ -2487,7 +2487,9 @@ paths:
             read-only has no content of its own; archive it instead. Or "Repo
             is indexing", carrying `_links.cancel-index` {href, method: POST}.
             On the fleet repository: `fleet_repository` (POST /fleet/host
-            hosts the fleet here).
+            hosts the fleet here). Or "Linked to a stored secret": the repo
+            was linked after the request checked it; retry, which then needs
+            the admin gate.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
