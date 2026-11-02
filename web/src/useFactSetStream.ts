@@ -308,21 +308,24 @@ export class FactSetStream {
 
   /** Re-creates an expired FactSet: the same search and options, back to the
    *  reader's unit, with the "FactSet refreshed" notice. The export calls this
-   *  on a 404 too. */
-  recover = (): void => {
+   *  on a 404 too, passing the cursor it used. */
+  recover = (dead?: string): void => {
     // Once in a row: while a re-creation has not yet brought a page, another
     // 404 (the export's, say) does not start a second one; and the re-creating
     // first call is not itself recoverable, so a gone repo or lens ends in
     // the error it answered, not in a loop.
+    // The FactSet is gone whether or not it is re-created here: mark it first,
+    // so Back never DELETEs it.
+    this.markGone(dead);
     if (this.recoveries >= 1) return;
     this.recoveries++;
-    this.markGone();
     this.start({ seekTo: this.topUnit, notice: 'refreshed' });
   };
 
-  /** The FactSet on screen answered 404: it is gone, do not close it. */
-  private markGone(): void {
-    const c = this.state.cursor;
+  /** A cursor answered 404 (`dead`, else the one on screen): its FactSet is
+   *  gone, do not close it. */
+  private markGone(dead?: string): void {
+    const c = dead ?? this.state.cursor;
     if (c) this.gone = factSetOf(c);
   }
 

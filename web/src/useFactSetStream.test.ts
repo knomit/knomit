@@ -456,4 +456,25 @@ describe('FactSetStream never closes an expired FactSet (QA 3)', () => {
     s.dispose();
     expect(api.close).toHaveBeenCalledWith(SEARCH.target, 'F1.2.0');
   });
+
+  // #726 review L1. Sabotage: mark gone after the bound check in recover():
+  // Back DELETEs F2.2.0.
+  it('an export 404 past the recovery bound still marks the FactSet gone: no re-creation, and Back sends no DELETE', async () => {
+    let expired = false;
+    const { api, calls } = fakeApi(async (c, id) => {
+      if (c.op === 'next' && !expired) { expired = true; throw new FsError('Cursor not found', 404); }
+      return c.op === 'first' ? pageAt(`F${id}`, 1, 9) : pageAt(`F${id}`, nextUnit(String(c.arg)), 9);
+    });
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await flush();
+    s.loadMore(); // 404 -> one re-creation; no cursor call has succeeded since
+    for (let i = 0; i < 4; i++) await flush();
+    expect(s.getState().cursor).toBe('F2.2.0');
+    s.recover('F2.2.0'); // the export of F2 answered 404, past the bound
+    await flush();
+    expect(calls.map(c => c.op)).toEqual(['first', 'next', 'first']);
+    s.dispose(); // Back
+    expect(api.close).not.toHaveBeenCalled();
+  });
 });

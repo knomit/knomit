@@ -94,9 +94,12 @@ describe('FactSetView (test 5)', () => {
   it('units: numbered root headings with their own rule; server numbers; tree-depth ladder', async () => {
     const { api } = makeApi();
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    liveLayout(screen.getByTestId('fs-scroll'));
     await waitFor(() => expect(sections()).toHaveLength(3));
     nearBottom();
     await waitFor(() => expect(sections()).toHaveLength(5));
+    // The reader is on unit 1 (at the top of the pane), though unit 2 is loaded (unit_to 2).
+    expect(screen.getByTestId('fs-progress').textContent).toBe('unit 1 of 3');
     const roots = sections().filter(s => s.classList.contains('k-fs-unit'));
     expect(roots.map(s => s.dataset.fsUnit)).toEqual(['1', '2']);
     expect(roots.map(s => within(s).getByTestId('mat-num').textContent?.trim())).toEqual(['1.', '2.']);
@@ -333,8 +336,11 @@ describe('a failure reading the unit above the run (L2)', () => {
     fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: '3' } });
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async () => { throw new FsError('boom', 500); });
-    // The reader's own scroll arms the top sentinel after a seek (QA 2).
-    scrollPane(screen.getByTestId('fs-scroll'))(200);
+    // Only the reader's own scroll UP arms the top sentinel after a seek (QA 2).
+    const userScroll = scrollPane(screen.getByTestId('fs-scroll'));
+    await settle();
+    userScroll(200);
+    userScroll(100);
     act(() => {
       for (const o of MockIO.all.filter(x => x.live)) {
         const t = o.watched.find(e => (e as HTMLElement).dataset.testid === 'fs-top-sentinel');
@@ -379,6 +385,8 @@ const fireTop = () => act(() => {
     if (t) o.cb([{ isIntersecting: true, target: t } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
   }
 });
+/** Waits for the run to settle (one frame after it landed). */
+const settle = () => act(async () => { await new Promise<void>(r => requestAnimationFrame(() => r())); });
 const seekUnit = (u: number) => {
   fireEvent.change(screen.getByTestId('fs-unit'), { target: { value: String(u) } });
   fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: String(u) } });
@@ -437,6 +445,7 @@ describe('no eager prepend after a seek (QA 2)', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     expect(calls).toEqual([]);
     expect(sections()[0].dataset.fsUnit).toBe('3');
+    await settle();
     userScroll(300);
     userScroll(100); // up
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
@@ -465,6 +474,7 @@ describe('progress names the unit the reader is on (QA 4)', () => {
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
     await waitFor(() => expect(progress()).toBe('unit 10 of 20'));
     expect(stepper()).toBe('10');
+    await settle();
     userScroll(50);
     userScroll(0); // up: unit 9 is prepended, the place is kept on unit 10
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
@@ -472,5 +482,71 @@ describe('progress names the unit the reader is on (QA 4)', () => {
     userScroll(0); // into unit 9
     expect(progress()).toBe('unit 9 of 20');
     expect(stepper()).toBe('9');
+  });
+});
+
+// #726 review M1: a seek to a unit root lands at scrollTop 0 (the root sits
+// above PATH_H + 8), where a wheel or swipe up scrolls nothing and fires no
+// scroll event. That move is the reader's move up all the same.
+//
+// Sabotage: drop the onWheel handler: no call is made.
+describe('a wheel up at the very top after a seek (#726 M1)', () => {
+  it('lands at scrollTop 0; one wheel up prepends the unit above with exactly one loadBefore, no scroll down first', async () => {
+    const { api, calls } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const box = screen.getByTestId('fs-scroll');
+    scrollPane(box);
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    expect(box.scrollTop).toBe(0);
+    calls.length = 0;
+    fireEvent.wheel(box, { deltaY: -120 });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    expect(calls).toEqual(['seek 2']);
+  });
+
+  it('control: a wheel down at the top asks for nothing', async () => {
+    const { api, calls } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const box = screen.getByTestId('fs-scroll');
+    scrollPane(box);
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    calls.length = 0;
+    fireEvent.wheel(box, { deltaY: 120 });
+    fireTop();
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(calls).toEqual([]);
+  });
+});
+
+// #726 review M2: only a move UP arms the top sentinel. Scrolling down and
+// then loading the next page rebuilds the observer, whose first entry for the
+// in-range sentinel must not prepend while the reader reads down.
+//
+// Sabotage: arm on any reader scroll (drop the `up` test in onScroll): the
+// rebuilt observer's entry calls seek 2.
+describe('a scroll down never arms the top sentinel (#726 M2)', () => {
+  it('land, scroll down 100px, finish a loadMore: no loadBefore', async () => {
+    const { api, calls } = pagedView(6, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const userScroll = scrollPane(screen.getByTestId('fs-scroll'));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    calls.length = 0;
+    userScroll(100); // down
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.4.0']);
+    fireTop(); // the rebuilt observer reports the sentinel in range
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(calls).toEqual(['next F.4.0']);
+    expect(sections()[0].dataset.fsUnit).toBe('3');
   });
 });

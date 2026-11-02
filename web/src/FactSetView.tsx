@@ -87,10 +87,17 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
 
   // The top sentinel is armed per run: a run that landed (a seek, a restart,
   // a refresh) can put the sentinel in view at once, and asking for the unit
-  // above then is a call nobody asked for. It is armed by the reader's own
-  // scroll in this run (armedEpoch === epoch); a scroll the view makes itself
-  // (landing, keeping the place on a prepend) does not arm it.
+  // above then is a call nobody asked for. It is armed only by the reader's
+  // own move UP in this run (armedEpoch === epoch): an upward scroll, or a
+  // wheel or swipe up at the very top, where no scroll event fires. A scroll
+  // down never arms it, and neither does a scroll the view makes itself
+  // (landing, keeping the place on a prepend) nor the browser's clamp when a
+  // run is swapped: scroll events are ignored until the run has settled
+  // (settledEpoch === epoch, set one frame after the landing effect, so the
+  // scroll events of the swap and the landing have been dispatched).
   const armedEpoch = useRef(-1);
+  const settledEpoch = useRef(-1);
+  const touchY = useRef<number | null>(null);
   const viewScroll = useRef<number | null>(null);
   const lastTop = useRef(0);
   const setScrollTop = useCallback((box: HTMLElement, v: number) => {
@@ -160,6 +167,16 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   }, [land, epoch, stale, findAnchor, scrollToEl, byUnitN, onLink]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // The run is settled one frame after it (and its landing) is on screen.
+  useEffect(() => {
+    if (stale || phase !== 'ready') return;
+    const id = requestAnimationFrame(() => {
+      settledEpoch.current = epoch;
+      if (scroller.current) lastTop.current = scroller.current.scrollTop;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [epoch, stale, phase, land]);
+
   // Prepending a unit must not move what the reader is looking at.
   const prevHeight = useRef<{ first: string; height: number } | null>(null);
   const firstKey = nodes[0] ? `${nodes[0].unit}.${nodes[0].n}` : '';
@@ -188,19 +205,31 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     return () => io.disconnect();
   }, [tail, head, stale, phase, nodes.length, epoch, loadMore, loadBefore]);
 
-  // A scroll event: the reader's own (arms the top sentinel, and scrolling up
-  // with the sentinel already in range asks for the unit above, since the
-  // observer reports only changes) or one the view made (ignored).
+  // The reader moved up: arm the top sentinel and, when it is already in
+  // range (the observer reports only changes), ask for the unit above.
+  const readerUp = useCallback((box: HTMLElement) => {
+    armedEpoch.current = epoch;
+    const t = top.current;
+    if (t && t.getBoundingClientRect().bottom >= box.getBoundingClientRect().top - FS_NEAR_PX) loadBefore();
+  }, [epoch, loadBefore]);
+
+  // A scroll event: the reader's own scroll up arms (readerUp); a scroll down,
+  // one the view made, or any before the run settled does not.
   const onScroll = useCallback((box: HTMLElement) => {
     const st = box.scrollTop;
     const up = st < lastTop.current;
     lastTop.current = st;
-    if (viewScroll.current !== null && Math.abs(st - viewScroll.current) < 2) { viewScroll.current = null; return; }
+    const mine = viewScroll.current !== null && Math.abs(st - viewScroll.current) < 2;
     viewScroll.current = null;
-    armedEpoch.current = epoch;
-    const t = top.current;
-    if (up && t && t.getBoundingClientRect().bottom >= box.getBoundingClientRect().top - FS_NEAR_PX) loadBefore();
-  }, [epoch, loadBefore]);
+    if (mine || settledEpoch.current !== epoch) return;
+    if (up) readerUp(box);
+  }, [epoch, readerUp]);
+
+  // A wheel or swipe up at the very top scrolls nothing, so no scroll event
+  // fires: it is the reader's move up all the same.
+  const atTopUp = useCallback((box: HTMLElement) => {
+    if (settledEpoch.current === epoch && box.scrollTop <= 0) readerUp(box);
+  }, [epoch, readerUp]);
 
   // The unit at the top of the pane, for the stream (restart / refresh land
   // there) and the unit control.
@@ -246,7 +275,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
       else setExp({ kind: 'done', line: out.kind === 'saved' ? `Saved ${out.where}` : saveOutcomeLine(out) });
     } catch (e) {
       if (ctl.signal.aborted) { setExp({ kind: 'idle' }); return; }
-      if (e instanceof FsError && e.kind === 'expired') { setExp({ kind: 'idle' }); recover(); return; }
+      if (e instanceof FsError && e.kind === 'expired') { setExp({ kind: 'idle' }); recover(cursor); return; }
       setExp({ kind: 'failed', message: e instanceof Error ? e.message : String(e) });
     }
   }, [api, cursor, exp.kind, recover, save, search.target]);
@@ -326,7 +355,16 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
       </div>
 
       <div className="k-mat-scroll" ref={scroller} data-testid="fs-scroll"
-        onScroll={e => { setScrolled(e.currentTarget.scrollTop > FS_NEAR_PX); trackTop(); onScroll(e.currentTarget); }}>
+        onScroll={e => { setScrolled(e.currentTarget.scrollTop > FS_NEAR_PX); trackTop(); onScroll(e.currentTarget); }}
+        onWheel={e => { if (e.deltaY < 0) atTopUp(e.currentTarget); }}
+        onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }}
+        onTouchMove={e => {
+          const y = e.touches[0]?.clientY;
+          if (y === undefined || touchY.current === null) return;
+          // A finger moving down the screen scrolls the content up.
+          if (y > touchY.current) atTopUp(e.currentTarget);
+          touchY.current = y;
+        }}>
         <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'} data-pending={pending ?? undefined}>
           <div ref={top} data-testid="fs-top-sentinel" style={{ height: 1 }} />
           {head === 'loading' && <div className="k-mat-skel" data-testid="fs-head-loading"><i style={{ width: '55%', height: 18 }} /><i /></div>}
