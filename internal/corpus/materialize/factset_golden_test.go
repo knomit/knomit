@@ -110,8 +110,11 @@ func TestFactSet_RepoUnpinnedReplayGolden(t *testing.T) {
 	f.write(t, "kb/z/t.md", "T", "t body.", "kb/z/s.md")
 	f.write(t, "kb/z/a.md", "A", "a body.", "kb/z/s.md")
 	f.write(t, "kb/z/b.md", "B", "b body.")
-	f.write(t, "kb/u/u.md", "U", "u body.", "kb/z/t.md", "kb/z/a.md", "kb/z/b.md")
+	// The search lists newest commit first, then by path, and commit times are
+	// whole seconds: v is written BEFORE u so u (the path-first one) is newer
+	// or tied, and u lists first whether or not the writes straddle a second.
 	f.write(t, "kb/u/v.md", "V", "v body.", "kb/z/a.md", "kb/z/s.md")
+	f.write(t, "kb/u/u.md", "U", "u body.", "kb/z/t.md", "kb/z/a.md", "kb/z/b.md")
 	_, err := f.svc.Facts().DeleteFact(ctx, "agent/test", "kb/z/t.md", "retract t")
 	require.NoError(t, err)
 	req := f.request("kb/u/")
