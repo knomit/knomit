@@ -126,7 +126,10 @@ export class FactSetStream {
   private tailCursor: string | null = null;
   /** The unit at the top of the reader's pane (the view reports it). */
   private topUnit = 1;
-  /** Re-creations since a page last arrived: at most one in a row. */
+  /** Re-creations since a CURSOR call last succeeded: at most one in a row. A
+   *  first call's own page never resets it: a FactSet whose every cursor call
+   *  404s (another server without sticky routing, an owner mismatch) would
+   *  otherwise be re-created on every sentinel tick. */
   private recoveries = 0;
 
   private sleep: (ms: number) => Promise<void>;
@@ -230,6 +233,7 @@ export class FactSetStream {
     void this.chain(gen, async signal => {
       const page = await this.call(gen, sig => this.inputs!.api.seek(this.inputs!.search.target, cursor, unit, sig), signal);
       const r = await this.readOn(gen, signal, page.facts, page, { unit, anchor, n });
+      this.recoveries = 0;
       this.showRun(r.nodes, r.page, { unit, anchor, n });
     }, f => this.commit({ stale: false, tail: 'failed', tailError: f }), true);
   };
@@ -329,6 +333,7 @@ export class FactSetStream {
         this.commit({ cursor: first.cursor, env: envOf(first) });
         const c = first.cursor;
         const page = await this.call(gen, sig => this.inputs!.api.seek(search.target, c, to, sig), signal);
+        this.recoveries = 0; // the seek is a cursor call
         this.showRun(page.facts, page, { unit: to });
         return;
       }
@@ -341,7 +346,6 @@ export class FactSetStream {
   private showRun(nodes: FactSetNode[], page: FactSetPage, land?: Target): void {
     const epoch = this.state.epoch + 1;
     this.tailCursor = page.cursor;
-    this.recoveries = 0;
     const from = nodes[0]?.unit ?? 1;
     this.commit({
       nodes: dedupe(nodes), env: envOf(page), phase: 'ready', error: null, stale: false,
@@ -388,7 +392,8 @@ export class FactSetStream {
       // An expired cursor on a FactSet already read from: re-create it. A
       // first call (or the seek right after it) answered 404 is shown:
       // re-creating it would only ask the same route again.
-      if (f.kind === 'expired' && recoverable) { this.recover(); return; }
+      // Past the bound the 404 is shown where it happened (tail, head, seek).
+      if (f.kind === 'expired' && recoverable && this.recoveries < 1) { this.recover(); return; }
       onFail(f);
     }
   }

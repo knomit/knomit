@@ -341,3 +341,51 @@ describe('FactSetStream Retry-After clamp (L4)', () => {
     expect(s.getState().phase).toBe('ready');
   });
 });
+
+// R1: the bound holds when the re-created FactSet's first call succeeds but
+// its cursor calls keep failing: only a CURSOR call's success resets it.
+//
+// Sabotage: reset the counter in showRun again (any page, the first call's
+// own included): loadMore/reach re-create on every call.
+describe('FactSetStream recovery bound with a healthy first call (R1)', () => {
+  const always404 = (op: string) => op === 'first' ? null : new FsError('Cursor not found', 404);
+
+  it('loadMore: first OK, every cursor call 404 -> exactly two first calls, then the error', async () => {
+    const { api, calls } = pagedApi(9, 2, 2, always404);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    for (let i = 0; i < 5; i++) { s.loadMore(); await settle(); }
+    expect(calls.filter(c => c === 'first')).toHaveLength(2);
+    expect(calls).toEqual(['first', 'next F.2.0', 'first', 'next F.2.0']);
+    expect(s.getState().tail).toBe('failed');
+    expect(s.getState().tailError).toEqual({ kind: 'expired', detail: 'Cursor not found' });
+  });
+
+  it('reach: first OK, every cursor call 404 -> exactly two first calls, then the error', async () => {
+    const { api, calls } = pagedApi(9, 6, 2, always404);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    for (let i = 0; i < 5; i++) { s.reach({ unit: 1, n: 5 }); await settle(); }
+    expect(calls.filter(c => c === 'first')).toHaveLength(2);
+    expect(s.getState().tail).toBe('failed');
+    expect(s.getState().tailError?.kind).toBe('expired');
+  });
+
+  it('control: a recovery followed by a successful cursor page may recover once more later', async () => {
+    let fails = 0;
+    const { api, calls } = pagedApi(9, 2, 2, op => (op === 'next' && fails-- > 0) ? new FsError('Cursor not found', 404) : null);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    fails = 1;
+    s.loadMore(); await settle();   // 404 -> recovery 1
+    s.loadMore(); await settle();   // a cursor page succeeds: the bound resets
+    fails = 1;
+    s.loadMore(); await settle();   // a later expiry -> recovery 2
+    expect(calls.filter(c => c === 'first')).toHaveLength(3);
+    expect(s.getState().phase).toBe('ready');
+    expect(s.getState().notice).toBe('refreshed');
+  });
+});
