@@ -44,3 +44,22 @@ func refuseMethodForURL(u, method string) error {
 	}
 	return nil
 }
+
+// isHTTPURL and isSSHURL classify a remote URL's transport for a stored
+// secret's type (checkSecretFits): token and basic secrets need http(s), an
+// ssh_key secret an ssh URL (ssh:// or scp-like [user@]host:path). Like
+// MethodMismatch they classify a remote URL, not a fact reference.
+func isHTTPURL(u string) bool {
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+}
+
+func isSSHURL(u string) bool {
+	if strings.HasPrefix(u, "ssh://") {
+		return true
+	}
+	if strings.Contains(u, "://") {
+		return false
+	}
+	colon := strings.Index(u, ":")
+	return colon > 0 && !strings.Contains(u[:colon], "/")
+}

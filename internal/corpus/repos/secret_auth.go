@@ -3,7 +3,6 @@ package repos
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
@@ -44,22 +43,6 @@ func methodForSecretType(t string) string {
 
 // MethodForSecretType is methodForSecretType for the REST edge.
 func MethodForSecretType(t string) string { return methodForSecretType(t) }
-
-func isHTTPURL(u string) bool {
-	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
-}
-
-func isSSHURL(u string) bool {
-	if strings.HasPrefix(u, "ssh://") {
-		return true
-	}
-	if strings.Contains(u, "://") {
-		return false
-	}
-	// scp-like [user@]host:path
-	colon := strings.Index(u, ":")
-	return colon > 0 && !strings.Contains(u[:colon], "/")
-}
 
 // checkSecretFits refuses a secret for url when the url's host is not on its
 // hosts list (control.ErrSecretHostNotAllowed) or its type does not fit the url's
