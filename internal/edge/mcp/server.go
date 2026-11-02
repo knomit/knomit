@@ -194,7 +194,7 @@ func toolRegistrationsWith(skills *skillSource, mgr *repos.Manager, embedders ..
 		{explainTool(), ExplainHandler(), false, gateRequired},
 		// A pure read: one fact and the facts it stands on, in reading
 		// order. mgr reaches every registered repo, for cross_kb.
-		{materializeTool(), MaterializeHandler(mgr), false, gateRequired},
+		{materializeTool(), MaterializeHandler(mgr, embedders...), false, gateRequired},
 		// A pure read of two trees of the upstream: no write path at all.
 		{changesTool(), ChangesHandler(), false, gateRequired},
 		// A pure read of the consensus branch's .knomit/skills: gated like

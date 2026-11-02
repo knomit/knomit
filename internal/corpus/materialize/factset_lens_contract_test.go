@@ -11,18 +11,20 @@ import (
 	"knomit/internal/engine/store"
 )
 
-// B1 (engine half). FactSetFirstPage refuses a binding that reads more than
-// its write repo with ErrInvalid, before any search, planning slot or session
-// row. SUPERSEDED by the lens facade tests (F3), which lift this refusal.
+// B1 (engine half), as the lens facade (F3) rules it. This test replaced PR
+// A's refusal test ("a factset materializes one repository's search; this
+// binding is a lens"): a binding that reads more than its write repo is now
+// served by the facade, with ONE session row in the write repo's session DB
+// and none in the read member's; its roots carry v2's per-member layout. The
+// control binding has the same write repo and ONE mount: it stays on the repo
+// path (a v1 row, no anchors map), so the dispatch is the IsLens guard and not
+// the fixture.
 //
-// The control binding has the same write repo and the same data but ONE
-// mount; it is served, so the refusal is the multi-member guard and not the
-// fixture.
-//
-// Sabotage: delete the req.Binding.IsLens() refusal in FactSetFirstPage; the
-// multi-member call is served (a page, a session row) and the ErrInvalid and
-// write-count assertions fail.
-func TestFactSet_Contract_MultiMemberBindingIsRefusedBeforeAnyWork(t *testing.T) {
+// Sabotage: route the IsLens binding to the repo path (drop the dispatch in
+// FactSetFirstPage): the lens call writes a v1 row and serves only the write
+// repo's root, and the v2 / roots assertions fail.
+func TestFactSet_Contract_MultiMemberBindingIsTheLensFacade(t *testing.T) {
+	isolateFactSetGlobals(t)
 	f := newFactSetFixture(t)
 	f.write(t, "kb/u/a.md", "A", "a body.")
 
@@ -33,6 +35,8 @@ func TestFactSet_Contract_MultiMemberBindingIsRefusedBeforeAnyWork(t *testing.T)
 	beta := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "beta", UID: "uid-beta", AgentBranch: "agent/test", Svc: svc2, OntologyRoot: "kb",
 	})
+	bf := &factsetFixture{ri: beta, svc: svc2, b: repos.NewBindingOfRepo(beta, "agent/test")}
+	bf.write(t, "kb/u/b.md", "B", "b body.")
 
 	lens := repos.NewBindingForTest(f.ri,
 		repos.ReadTarget{RI: f.ri, Branch: "agent/test"},
@@ -40,21 +44,28 @@ func TestFactSet_Contract_MultiMemberBindingIsRefusedBeforeAnyWork(t *testing.T)
 	require.True(t, lens.IsLens(), "two distinct mounts: a lens")
 
 	ti := f.svc.ToolSession()
-	before := ti.FactSetWrites()
+	before, beforeBeta := ti.FactSetWrites(), svc2.ToolSession().FactSetWrites()
 	req := f.request("kb/u/")
 	req.Binding = lens
-	_, _, err = FactSetFirstPage(context.Background(), f.scope("o"), req)
-	require.ErrorIs(t, err, ErrInvalid)
-	require.EqualError(t, err, "invalid materialize request: a factset materializes one repository's search; this binding is a lens")
-	require.Equal(t, before, ti.FactSetWrites(), "refused before the session row is written")
+	p, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
+	require.NoError(t, err)
+	require.Equal(t, 2, p.Units, "both members' results")
+	require.ElementsMatch(t, []string{"kb/u/a.md", "kb://" + bf.id12() + "/kb/u/b.md"}, paths(unitRoots(allPages(t, f.scope("o"), lens, p)...)))
+	require.Len(t, p.Anchors, 2)
+	require.Equal(t, before+1, ti.FactSetWrites(), "ONE row, in the write repo's session DB")
+	require.Equal(t, beforeBeta, svc2.ToolSession().FactSetWrites(), "no row in the read member's")
+	require.Equal(t, frozenVersionLens, lensFrozenOf(t, f.scope("o"), *p.Cursor).V)
 
-	// Control: one mount over the same write repo is served.
+	// Control: one mount over the same write repo is the repo path.
 	one := repos.NewBindingForTest(f.ri, repos.ReadTarget{RI: f.ri, Branch: "agent/test"})
 	require.False(t, one.IsLens())
 	req.Binding = one
-	p, _, err := FactSetFirstPage(context.Background(), f.scope("o"), req)
+	p, _, err = FactSetFirstPage(context.Background(), f.scope("o"), req)
 	require.NoError(t, err)
 	require.Equal(t, 1, p.Units)
 	require.Equal(t, "kb/u/a.md", p.Facts[0].Path)
-	require.Equal(t, before+1, ti.FactSetWrites(), "the served call wrote its one row")
+	require.Nil(t, p.Anchors, "a repo page has no anchors map")
+	_, fr := frozenOf(t, f.scope("o"), *p.Cursor)
+	require.Equal(t, frozenVersion, fr.V)
+	require.Equal(t, before+2, ti.FactSetWrites())
 }

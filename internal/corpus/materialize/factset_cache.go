@@ -56,6 +56,15 @@ type fsEntry struct {
 	size  int64
 	elem  *list.Element
 	users int
+
+	// A lens facade's ONE cache entry (factset_lens.go) has lens set and fr
+	// nil: it holds the N sub-FactSet entries, which are never cached on
+	// their own (no id, no LRU element) and point back at it with parent, so
+	// a sub growing is charged to the facade (fsCacheAccount). The facade's
+	// accounted size is the sum of its subs'; it is evicted, dropped and
+	// closed whole.
+	lens   *lensEntry
+	parent *fsEntry
 }
 
 func newFSEntry(id string, ti *sessions.ToolIndex, fr *factsetFrozen) *fsEntry {
@@ -109,6 +118,13 @@ const (
 )
 
 func (e *fsEntry) accountedSize() int64 {
+	if e.lens != nil {
+		var n int64
+		for _, sub := range e.lens.subs {
+			n += sub.accountedSize()
+		}
+		return n
+	}
 	n := e.st.bytes()
 	if e.fr != nil {
 		n += int64(len(e.fr.Roots)) * bytesPerRoot
@@ -291,6 +307,9 @@ func fsCacheDropStore(ti *sessions.ToolIndex) {
 // fsCacheAccount re-measures e and evicts least recently used idle entries
 // past the budget.
 func fsCacheAccount(e *fsEntry) {
+	if e.parent != nil {
+		e = e.parent // a lens sub: its growth is the facade entry's
+	}
 	size := e.accountedSize()
 	c := fsCache
 	c.mu.Lock()

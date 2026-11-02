@@ -324,6 +324,66 @@ func FusedSearch(ctx context.Context, p *FusedPlan, leg SearchLeg, o FusedOption
 		func(r index.SearchResult) int64 { return r.CommittedAt })
 }
 
+// MaxRecencyDepth is the deepest a text-less recency listing asks any mount
+// for (FusedRecentDeep's backstop): past it a pathological overlap gets a
+// best-effort answer rather than an unbounded fan-out.
+const MaxRecencyDepth = 10000
+
+// FusedRecentDeep is FusedRecent with the merge-horizon DEEPENING of a
+// text-less recency listing, shared by REST /lenses/{lens}/facts and the lens
+// FactSet so their lists cannot drift apart.
+//
+// Depth is re-derived, not fixed, because write-first dedupe spends it: a
+// duplicate that loses to the write mount still consumed a row of its own
+// mount's depth, so a re-rooted fork beside its upstream can spend the whole
+// budget on copies while its own newest facts sit just past the depth. The
+// bound is the k-way merge horizon: a TRUNCATED mount (fewer rows fetched than
+// its own total) hides only rows older than the last row it returned, so every
+// merged row at or above the newest such cutoff is correct and complete. While
+// fewer than need merged rows are that safe, the listing runs again with the
+// depth doubled, until nothing is truncated, the need is met, or maxDepth.
+//
+// A query WITH text runs once: per-mount relevance ranks do not merge, so
+// there is no horizon and no deeper row to fetch. It returns the last round
+// and whether any mount was truncated in it (which decides whether the union
+// length or the summed per-mount totals is the honest count).
+func FusedRecentDeep(ctx context.Context, p *FusedPlan, leg RecentLeg, o FusedOptions, depth, need, maxDepth int) (*Fused[index.RecentFactEntry], bool, error) {
+	for {
+		p.Opts.Limit = depth
+		res, err := FusedRecent(ctx, p, leg, o)
+		if err != nil {
+			return nil, false, err
+		}
+		truncated := false
+		// The newest commit timestamp below which some truncated mount may
+		// still hide a row; zero while nothing is truncated (every row safe).
+		horizon := int64(0)
+		for i, entries := range res.Lists {
+			if len(entries) < res.Totals[i] {
+				truncated = true
+				if last := entries[len(entries)-1].CommittedAt; last > horizon {
+					horizon = last
+				}
+			}
+		}
+		if p.Opts.Text != "" || !truncated || depth >= maxDepth {
+			return res, truncated, nil
+		}
+		// The leading run of merged rows no unfetched row could outrank.
+		safe := 0
+		for _, h := range res.Hits {
+			if h.Row.CommittedAt < horizon {
+				break
+			}
+			safe++
+		}
+		if safe >= need {
+			return res, truncated, nil
+		}
+		depth = min(depth*2, maxDepth)
+	}
+}
+
 // FusedRecent is the recency listing: a text-less query merges the legs' lists
 // by committed_at (MergeRecent over every fetched row); a query WITH text fuses
 // them by reciprocal rank, because RecentFacts then ranks by relevance and
