@@ -8,7 +8,8 @@ import { clampDepth, clampReferences, exportFilename, id8, optionChange } from '
 import { useMaterializeStream } from './useMaterializeStream';
 import { treeInfo } from './materializeNumbering';
 import type { TreeInfo } from './materializeNumbering';
-import { NESTING, PATH_H, Section, Stepper, Switch, useMatFocus } from './materializeParts';
+import { NESTING, PATH_H, Section, Stepper, Switch } from './materializeParts';
+import { useMatFocus } from './useMatFocus';
 import './materialize.css';
 
 export { NESTING, PATH_H };

@@ -31,8 +31,14 @@ import { sameOptions } from './materializeOptions';
 
 /** How many times a 503 is retried before it is shown. */
 export const MAX_BUSY_RETRIES = 3;
+/** The longest a Retry-After is honoured, in seconds (the server sends 1; a
+ *  first call can already have waited factset_anchor_wait before answering). */
+export const MAX_RETRY_AFTER_S = 10;
 
 export type FsEnv = Omit<FactSetPage, 'facts'>;
+export interface Land { unit: number; anchor?: string; n?: number; epoch: number }
+/** What a reach looks for in a unit: a written section's anchor, or section n. */
+export interface Target { unit: number; anchor?: string; n?: number }
 export interface FsFault { kind: FsErrorKind; detail: string }
 
 export interface FsStreamState {
@@ -49,20 +55,22 @@ export interface FsStreamState {
   tailError: FsFault | null;
   /** Before the run's first unit: more (idle), loading, failed, or done. */
   head: 'idle' | 'loading' | 'failed' | 'done';
+  headError: FsFault | null;
   /** Set after an expired FactSet was re-created; the view shows its notice. */
   notice: 'refreshed' | null;
   /** Counts the times a new run replaced the text. */
   epoch: number;
   /** Where the view should scroll once the run of epoch `land.epoch` is on
-   *  screen: a unit (its root) or an anchor in it. */
-  land: { unit: number; anchor?: string; epoch: number } | null;
+   *  screen: a unit (its root), an anchor in it, or the section n of the unit
+   *  (a builds-on target, which may be a stub to follow). */
+  land: Land | null;
   /** The latest live cursor (any of the FactSet's works for a seek or the export). */
   cursor: string | null;
 }
 
 const INITIAL: FsStreamState = {
   nodes: [], env: null, phase: 'loading', error: null, stale: false,
-  tail: 'idle', tailError: null, head: 'done', notice: null, epoch: 0, land: null, cursor: null,
+  tail: 'idle', tailError: null, head: 'done', headError: null, notice: null, epoch: 0, land: null, cursor: null,
 };
 
 interface Inputs { api: FactSetApi; search: FsSearch; options: MatOptions }
@@ -89,6 +97,19 @@ export function cursorUnit(c: string): number {
   return parts.length >= 3 ? Number(parts[parts.length - 2]) : 0;
 }
 
+/** Whether nodes hold the target: its written section (by anchor) or section n. */
+function has(nodes: FactSetNode[], t: Target): boolean {
+  return nodes.some(x => x.unit === t.unit && (
+    (t.anchor !== undefined && x.anchor_id === t.anchor && (x.written || !!x.unavailable))
+    || (t.n !== undefined && x.n === t.n)));
+}
+
+/** Nodes with each (unit, n) once, in the order first seen. */
+function dedupe(nodes: FactSetNode[]): FactSetNode[] {
+  const seen = new Set<string>();
+  return nodes.filter(x => { const k = `${x.unit}.${x.n}`; if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
 /** Thrown inside a call chain whose generation has moved on. */
 const STALE = Symbol('stale');
 
@@ -105,6 +126,8 @@ export class FactSetStream {
   private tailCursor: string | null = null;
   /** The unit at the top of the reader's pane (the view reports it). */
   private topUnit = 1;
+  /** Re-creations since a page last arrived: at most one in a row. */
+  private recoveries = 0;
 
   private sleep: (ms: number) => Promise<void>;
 
@@ -159,11 +182,12 @@ export class FactSetStream {
       const have = new Set(this.state.nodes.map(n => `${n.unit}.${n.n}`));
       const add = page.facts.filter(n => !have.has(`${n.unit}.${n.n}`));
       this.tailCursor = page.cursor;
+      this.recoveries = 0;
       this.commit({
         nodes: [...this.state.nodes, ...add], env: envOf(page), cursor: page.cursor ?? this.state.cursor,
         tail: page.has_more ? 'idle' : 'done',
       });
-    }, f => this.commit({ tail: 'failed', tailError: f }));
+    }, f => this.commit({ tail: 'failed', tailError: f }), true);
   };
 
   /** Prepends the whole unit before the run (Q-UI9). */
@@ -171,7 +195,7 @@ export class FactSetStream {
     const s = this.state;
     const from = s.nodes[0]?.unit ?? 0;
     if (this.busy || s.phase !== 'ready' || s.stale || s.head !== 'idle' || from <= 1 || !s.cursor) return;
-    this.commit({ head: 'loading' });
+    this.commit({ head: 'loading', headError: null });
     const gen = this.gen;
     const u = from - 1;
     void this.chain(gen, async signal => {
@@ -185,13 +209,15 @@ export class FactSetStream {
         const c = page.cursor;
         page = await this.call(gen, sig => this.inputs!.api.next(target, c, sig), signal);
       }
+      this.recoveries = 0;
       this.commit({ nodes: [...got, ...this.state.nodes], head: u > 1 ? 'idle' : 'done', cursor: page.cursor ?? this.state.cursor });
-    }, f => this.commit({ head: 'failed', tailError: f }));
+    }, f => this.commit({ head: 'failed', headError: f }), true);
   };
 
-  /** Replaces the run with one starting at unit, then lands on anchor (or the
+  /** Replaces the run with one starting at unit, reading on inside that unit
+   *  until the anchor (or section n) has arrived, then lands on it (or the
    *  unit's root). */
-  seek = (unit: number, anchor?: string): void => {
+  seek = (unit: number, anchor?: string, n?: number): void => {
     const s = this.state;
     const units = s.env?.units ?? 0;
     if (s.phase !== 'ready' || !s.cursor || unit < 1 || unit > units) return;
@@ -203,22 +229,72 @@ export class FactSetStream {
     this.commit({ stale: true });
     void this.chain(gen, async signal => {
       const page = await this.call(gen, sig => this.inputs!.api.seek(this.inputs!.search.target, cursor, unit, sig), signal);
-      this.showRun(page, { unit, anchor });
-    }, f => this.commit({ stale: false, tail: 'failed', tailError: f }));
+      const r = await this.readOn(gen, signal, page.facts, page, { unit, anchor, n });
+      this.showRun(r.nodes, r.page, { unit, anchor, n });
+    }, f => this.commit({ stale: false, tail: 'failed', tailError: f }), true);
   };
+
+  /** Brings a section of a unit on screen: when the unit is in the run, reads
+   *  on from the run's tail until the target has arrived (or the cursor has
+   *  passed the unit) and lands on it; otherwise seeks to the unit. */
+  reach = (t: Target): void => {
+    const s = this.state;
+    const inRun = s.nodes.some(x => x.unit === t.unit);
+    if (!inRun) { this.seek(t.unit, t.anchor, t.n); return; }
+    if (has(s.nodes, t)) { this.commit({ land: { ...t, epoch: s.epoch } }); return; }
+    if (this.busy || s.phase !== 'ready' || s.stale || s.tail !== 'idle' || !this.tailCursor) return;
+    this.commit({ tail: 'loading', tailError: null });
+    const gen = this.gen;
+    const cursor = this.tailCursor;
+    void this.chain(gen, async signal => {
+      const target = this.inputs!.search.target;
+      const page = await this.call(gen, sig => this.inputs!.api.next(target, cursor, sig), signal);
+      const r = await this.readOn(gen, signal, [...this.state.nodes, ...page.facts], page, t);
+      this.tailCursor = r.page.cursor;
+      this.recoveries = 0;
+      this.commit({
+        nodes: dedupe(r.nodes), env: envOf(r.page), cursor: r.page.cursor ?? this.state.cursor,
+        tail: r.page.has_more ? 'idle' : 'done', land: { ...t, epoch: this.state.epoch },
+      });
+    }, f => this.commit({ tail: 'failed', tailError: f }), true);
+  };
+
+  /** Reads next pages after `page` while the target is not in `nodes` and the
+   *  cursor is still inside the target's unit (loadBefore's stop rule). */
+  private async readOn(gen: number, signal: AbortSignal, nodes: FactSetNode[], page: FactSetPage, t: Target): Promise<{ nodes: FactSetNode[]; page: FactSetPage }> {
+    if (t.anchor === undefined && t.n === undefined) return { nodes, page };
+    const target = this.inputs!.search.target;
+    let all = nodes;
+    while (!has(all, t) && page.has_more && page.cursor && cursorUnit(page.cursor) <= t.unit) {
+      const last = page.facts[page.facts.length - 1];
+      if (last && last.unit > t.unit) break;
+      const c = page.cursor;
+      page = await this.call(gen, sig => this.inputs!.api.next(target, c, sig), signal);
+      all = [...all, ...page.facts];
+    }
+    return { nodes: all, page };
+  }
 
   /** Retry what failed: the first page, the tail, or the head. */
   retry = (): void => {
     const s = this.state;
-    if (s.phase === 'error') { this.start({ clear: true }); return; }
+    if (s.phase === 'error') { this.recoveries = 0; this.start({ clear: true }); return; }
     if (s.tail === 'failed') { this.commit({ tail: 'idle', tailError: null }); this.loadMore(); return; }
-    if (s.head === 'failed') { this.commit({ head: 'idle', tailError: null }); this.loadBefore(); }
+    if (s.head === 'failed') { this.commit({ head: 'idle', headError: null }); this.loadBefore(); }
   };
 
   /** Re-creates an expired FactSet: the same search and options, back to the
    *  reader's unit, with the "FactSet refreshed" notice. The export calls this
    *  on a 404 too. */
-  recover = (): void => { this.start({ seekTo: this.topUnit, notice: 'refreshed' }); };
+  recover = (): void => {
+    // Once in a row: while a re-creation has not yet brought a page, another
+    // 404 (the export's, say) does not start a second one; and the re-creating
+    // first call is not itself recoverable, so a gone repo or lens ends in
+    // the error it answered, not in a loop.
+    if (this.recoveries >= 1) return;
+    this.recoveries++;
+    this.start({ seekTo: this.topUnit, notice: 'refreshed' });
+  };
 
   private closeCurrent(): void {
     const c = this.state.cursor;
@@ -253,23 +329,23 @@ export class FactSetStream {
         this.commit({ cursor: first.cursor, env: envOf(first) });
         const c = first.cursor;
         const page = await this.call(gen, sig => this.inputs!.api.seek(search.target, c, to, sig), signal);
-        this.showRun(page, { unit: to });
+        this.showRun(page.facts, page, { unit: to });
         return;
       }
-      this.showRun(first, keep ? { unit: 1 } : undefined);
-    }, f => {
-      if (keep) this.commit({ stale: false, tail: 'failed', tailError: f });
-      else this.commit({ phase: 'error', error: f });
-    });
+      this.showRun(first.facts, first, keep ? { unit: 1 } : undefined);
+    }, f => this.commit({ stale: false, phase: 'error', error: f }), false);
   }
 
-  private showRun(page: FactSetPage, land?: { unit: number; anchor?: string }): void {
+  /** Shows nodes as the new run; `page` is the last page read (its cursor
+   *  continues the run). */
+  private showRun(nodes: FactSetNode[], page: FactSetPage, land?: Target): void {
     const epoch = this.state.epoch + 1;
     this.tailCursor = page.cursor;
-    const from = page.facts[0]?.unit ?? 1;
+    this.recoveries = 0;
+    const from = nodes[0]?.unit ?? 1;
     this.commit({
-      nodes: page.facts, env: envOf(page), phase: 'ready', error: null, stale: false,
-      tail: page.has_more ? 'idle' : 'done', tailError: null, head: from > 1 ? 'idle' : 'done',
+      nodes: dedupe(nodes), env: envOf(page), phase: 'ready', error: null, stale: false,
+      tail: page.has_more ? 'idle' : 'done', tailError: null, head: from > 1 ? 'idle' : 'done', headError: null,
       epoch, land: land ? { ...land, epoch } : null, cursor: page.cursor ?? this.state.cursor,
     });
   }
@@ -285,7 +361,7 @@ export class FactSetStream {
       } catch (e) {
         if (e === STALE || gen !== this.gen || signal.aborted) throw STALE;
         if (e instanceof FsError && e.kind === 'busy' && attempt < MAX_BUSY_RETRIES) {
-          await this.sleep((e.retryAfter ?? 1) * 1000);
+          await this.sleep(Math.min(MAX_RETRY_AFTER_S, Math.max(1, e.retryAfter ?? 1)) * 1000);
           if (gen !== this.gen) throw STALE;
           continue;
         }
@@ -294,9 +370,11 @@ export class FactSetStream {
     }
   }
 
-  /** Runs one chain of calls as THE call in flight; a 404 recovers, any other
-   *  failure goes to onFail. Nothing of an older generation lands. */
-  private async chain(gen: number, body: (signal: AbortSignal) => Promise<void>, onFail: (f: FsFault) => void): Promise<void> {
+  /** Runs one chain of calls as THE call in flight. A 404 on a cursor call of
+   *  a FactSet already read from (`recoverable`) re-creates it; any other
+   *  failure, a 404 on a first call included, goes to onFail. Nothing of an
+   *  older generation lands. */
+  private async chain(gen: number, body: (signal: AbortSignal) => Promise<void>, onFail: (f: FsFault) => void, recoverable: boolean): Promise<void> {
     const ctl = new AbortController();
     this.abort = ctl;
     this.busy = true;
@@ -307,9 +385,10 @@ export class FactSetStream {
       if (this.gen === gen) this.busy = false;
       if (e === STALE || this.gen !== gen) return;
       const f = fault(e);
-      // An expired cursor on a FactSet we already read from: re-create it. A
-      // failing first call is shown (re-creating it would loop).
-      if (f.kind === 'expired' && this.state.env) { this.recover(); return; }
+      // An expired cursor on a FactSet already read from: re-create it. A
+      // first call (or the seek right after it) answered 404 is shown:
+      // re-creating it would only ask the same route again.
+      if (f.kind === 'expired' && recoverable) { this.recover(); return; }
       onFail(f);
     }
   }
@@ -329,7 +408,7 @@ export function useFactSetStream(api: FactSetApi, search: FsSearch, options: Mat
   useEffect(() => () => stream.dispose(), [stream]);
   return {
     ...state,
-    loadMore: stream.loadMore, loadBefore: stream.loadBefore, seek: stream.seek, retry: stream.retry,
+    loadMore: stream.loadMore, loadBefore: stream.loadBefore, seek: stream.seek, reach: stream.reach, retry: stream.retry,
     recover: stream.recover, reportTop: stream.reportTop, clearNotice: stream.clearNotice,
   };
 }

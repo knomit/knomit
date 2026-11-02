@@ -5,7 +5,8 @@ import type { SaveOutcome } from './saveFile';
 import { MAX_DEPTH, MAX_REFERENCES } from './materializeApi';
 import type { MatLink, MatOptions } from './materializeApi';
 import { clampDepth, clampReferences } from './materializeOptions';
-import { PATH_H, Section, Stepper, Switch, useMatFocus } from './materializeParts';
+import { PATH_H, Section, Stepper, Switch } from './materializeParts';
+import { useMatFocus } from './useMatFocus';
 import type { FsSectionExtra } from './materializeParts';
 import { FsError, factsetApi } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FsSearch } from './factsetApi';
@@ -71,7 +72,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   const [topUnit, setTopUnit] = useState(1);
   const lens = search.target.kind === 'lens';
 
-  const { nodes, env, phase, tail, head, stale, epoch, land, loadMore, loadBefore, seek, reportTop } = s;
+  const { nodes, env, phase, tail, head, stale, epoch, land, loadMore, loadBefore, seek, reach, reportTop } = s;
 
   // Every written section ever loaded: anchor -> unit (outlives the run). The
   // view is mounted once per search (RightPanel keys it), so one map per FactSet.
@@ -87,7 +88,8 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     scroller.current?.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(anchor)}"]`) ?? null, []);
 
   // A link's click: scroll to the written section when it is on screen, else
-  // seek to the link's unit and scroll there once the new run arrives.
+  // seek to the link's unit (the stream reads on inside it until the anchor
+  // has arrived) and scroll there once the new run is in.
   const onLink = useCallback((l: FactSetLink) => {
     const move = anchors.resolve(l, a => !!findAnchor(a));
     if (move.kind === 'scroll') { const el = findAnchor(move.anchor); if (el) scrollToEl(el); return; }
@@ -95,14 +97,17 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   }, [anchors, findAnchor, scrollToEl, seek]);
 
   // A builds-on link points inside its unit: to the written section when it is
-  // on screen, else through the unit's own appearance of it (a stub's link).
+  // on screen, else through the unit's own appearance of it (a stub's link),
+  // and when that section has not been read yet, the stream reads on to it.
   const byUnitN = useMemo(() => new Map(nodes.map(n => [`${n.unit}.${n.n}`, n])), [nodes]);
   const onGoto = useCallback((l: MatLink, unit?: number) => {
     const el = findAnchor(l.anchor_id);
     if (el) { scrollToEl(el); return; }
-    const target = unit ? byUnitN.get(`${unit}.${l.n}`) : undefined;
-    if (target?.link) onLink(target.link);
-  }, [byUnitN, findAnchor, scrollToEl, onLink]);
+    if (!unit) return;
+    const target = byUnitN.get(`${unit}.${l.n}`);
+    if (target?.link) { onLink(target.link); return; }
+    if (!target) { setPending(l.anchor_id); reach({ unit, n: l.n }); }
+  }, [byUnitN, findAnchor, scrollToEl, onLink, reach]);
 
   // The extras of each FactSet section, stable per node object so the memoized
   // Section re-renders only when its node changed.
@@ -116,15 +121,25 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
 
   // Land where the stream says once that run is on screen: a clicked link's
   // anchor, or the unit the reader was at before a restart, a seek or a refresh.
+  /* eslint-disable react-hooks/set-state-in-effect -- landing is a reaction to the stream's state (following a stub may start a seek) */
   useEffect(() => {
     if (!land || land.epoch !== epoch || stale) return;
     const box = scroller.current;
     if (!box) return;
+    setPending(null);
+    // Section n of the unit (a builds-on target): a stub is followed, a
+    // written section is the scroll target.
+    if (land.n !== undefined) {
+      const t = byUnitN.get(`${land.unit}.${land.n}`);
+      if (t?.link) { onLink(t.link); return; }
+      const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"][data-mat-n="${land.n}"]`);
+      if (sec) { scrollToEl(sec); return; }
+    }
     const el = (land.anchor && findAnchor(land.anchor))
       || box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
     if (el) scrollToEl(el);
-    setPending(null);
-  }, [land, epoch, stale, findAnchor, scrollToEl]);
+  }, [land, epoch, stale, findAnchor, scrollToEl, byUnitN, onLink]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Prepending a unit must not move what the reader is looking at.
   const prevHeight = useRef<{ first: string; height: number } | null>(null);
@@ -277,6 +292,15 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
         <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'} data-pending={pending ?? undefined}>
           <div ref={top} data-testid="fs-top-sentinel" style={{ height: 1 }} />
           {head === 'loading' && <div className="k-mat-skel" data-testid="fs-head-loading"><i style={{ width: '55%', height: 18 }} /><i /></div>}
+          {head === 'failed' && s.headError && (
+            // Where it happened: reading the unit above the run.
+            <div className="k-mat-fail" data-testid="fs-head-error" role="alert">
+              {faultLine(s.headError)}
+              {s.headError.kind !== 'invalid' && (
+                <button type="button" className="k-mat-btn" data-testid="fs-head-retry" onClick={s.retry}>Retry{/* PLACEHOLDER copy */}</button>
+              )}
+            </div>
+          )}
           {phase === 'loading' && nodes.length === 0 && (
             <div data-testid="fs-loading" aria-label="Loading" // PLACEHOLDER copy
             >
@@ -305,7 +329,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
             {tail === 'loading' && phase === 'ready' && nodes.length > 0 && (
               <div className="k-mat-skel" data-testid="fs-skeleton"><i style={{ width: '55%', height: 18 }} /><i /><i style={{ width: '88%' }} /></div>
             )}
-            {(tail === 'failed' || head === 'failed') && s.tailError && (
+            {tail === 'failed' && s.tailError && (
               <div className="k-mat-fail" data-testid="fs-tail-error" role="alert">
                 {faultLine(s.tailError)}
                 {s.tailError.kind !== 'invalid' && (

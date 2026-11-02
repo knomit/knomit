@@ -70,9 +70,14 @@ class FactSetViewStore {
 
   constructor() {
     const url = parseFactSetParams(typeof window !== 'undefined' ? window.location.search : '');
-    // A reload has no list search to re-create the FactSet from (the list's
-    // state is not in the URL), so a stale open flag is cleared on first write.
     this.view = { search: null, options: url.options };
+    // A reload has no list search to re-create the FactSet from (the list's
+    // state is not in the URL), so a stale open flag is cleared at once; the
+    // options stay with it, written again only when a FactSet opens.
+    if (url.open && typeof window !== 'undefined') {
+      const q = writeFactSetParams(window.location.search, { open: false, options: url.options });
+      window.history.replaceState(window.history.state, '', window.location.pathname + q + window.location.hash);
+    }
   }
 
   subscribe = (l: Listener): (() => void) => {

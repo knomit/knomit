@@ -214,3 +214,134 @@ describe('FactSetView (test 5)', () => {
     expect((screen.getByTestId('fs-export') as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+// ── Where a click lands (M1, L2, L3) ────────────────────────────────────────
+//
+// jsdom lays nothing out, so every section reports a top of 100 x its index in
+// the article and the scroller records what it is scrolled to: the section a
+// scroll lands on is the one whose top the pane moved to.
+
+function layOut() {
+  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const all = Array.from(document.querySelectorAll('[data-testid="mat-section"]'));
+    const i = all.indexOf(this);
+    const top = i >= 0 ? 1000 + 100 * i : 0;
+    return { top, bottom: top + 50, left: 0, right: 0, width: 0, height: 50, x: 0, y: top, toJSON() {} } as DOMRect;
+  });
+  const landed: string[] = [];
+  const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')!;
+  Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+    configurable: true,
+    get() { return 0; },
+    set(v: number) {
+      // The pane moves by (section top - pane top - PATH_H - 8): the section at top v + 36.
+      const all = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="mat-section"]'));
+      const sec = all[(v + 36 - 1000) / 100];
+      if (sec) landed.push(sec.dataset.anchor ?? `stub:${sec.dataset.fsUnit}.${sec.dataset.matN}`);
+    },
+  });
+  return { landed, restore: () => { rect.mockRestore(); Object.defineProperty(HTMLElement.prototype, 'scrollTop', desc); } };
+}
+
+/** A paged FactSet: `per` sections per unit, `size` per page (crossing units). */
+function pagedView(units: number, per: number, size: number, shape: (u: number, k: number) => Partial<FactSetNode> = () => ({})) {
+  const calls: string[] = [];
+  const sec = (u: number, k: number): FactSetNode =>
+    n(u, k + 1, `U${u} S${k + 1}`, { anchor_id: `f-${u}-${k + 1}`, number: k === 0 ? String(u) : `${u}.${k}`, ...shape(u, k) });
+  const from = (u: number, k: number): FactSetPage => {
+    const facts: FactSetNode[] = [];
+    let cu = u, ck = k;
+    while (facts.length < size && cu <= units) { facts.push(sec(cu, ck)); ck++; if (ck >= per) { cu++; ck = 0; } }
+    return { ...env(units, facts[facts.length - 1].unit, `F.${cu}.${ck}`, cu <= units), facts };
+  };
+  const api: FactSetApi = {
+    first: vi.fn(async () => { calls.push('first'); return from(1, 0); }),
+    next: vi.fn(async (_t, c) => { calls.push(`next ${c}`); const [, u, k] = c.split('.'); return from(Number(u), Number(k)); }),
+    seek: vi.fn(async (_t, _c, u) => { calls.push(`seek ${u}`); return from(u, 0); }),
+    exportMarkdown: vi.fn(), close: vi.fn(async () => {}),
+  };
+  return { api, calls };
+}
+
+// Sabotage (M1): drop readOn from the stream's seek: the run ends at section 5
+// and the scroll lands on the unit root (f-2-1 / f-4-1), not the target.
+describe('a link to a section past the first page of its unit (M1)', () => {
+  it('a back link to a descendant past section 5 seeks, reads on, and scrolls to THAT anchor', async () => {
+    // Unit 3's first section is a back stub to f-2-7 (section 7 of unit 2).
+    const { api, calls } = pagedView(4, 8, 5, (u, k) => u === 3 && k === 1
+      ? { written: false, body: undefined, title: 'U2 S7', anchor_id: 'f-2-7', link: { anchor_id: 'f-2-7', direction: 'back', unit: 2, cited_blob: 'b' } } : {});
+    const lay = layOut();
+    try {
+      render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+      await waitFor(() => expect(sections()).toHaveLength(5));
+      act(() => { (api.seek as ReturnType<typeof vi.fn>).mockClear(); });
+      // Get unit 3 on screen first (the unit control seeks).
+      fireEvent.change(screen.getByTestId('fs-unit'), { target: { value: '3' } });
+      fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: '3' } });
+      await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+      calls.length = 0;
+      lay.landed.length = 0;
+      fireEvent.click(within(sections()[1]).getByTestId('fs-stub-link'));
+      await waitFor(() => expect(lay.landed).toContain('f-2-7'));
+      expect(calls).toEqual(['seek 2', 'next F.2.5']);
+      expect(lay.landed[lay.landed.length - 1]).toBe('f-2-7');
+    } finally { lay.restore(); }
+  });
+
+  it('a forward link to N.k past the first page seeks to unit N, reads on, and scrolls to it', async () => {
+    // Unit 1's second section is a forward stub to f-3-7 ("3.6").
+    const { api, calls } = pagedView(3, 8, 5, (u, k) => u === 1 && k === 1
+      ? { written: false, body: undefined, title: 'U3 S7', anchor_id: 'f-3-7', link: { anchor_id: 'f-3-7', direction: 'forward', unit: 3, number: '3.6', cited_blob: 'b' } } : {});
+    const lay = layOut();
+    try {
+      render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+      await waitFor(() => expect(sections()).toHaveLength(5));
+      fireEvent.click(within(sections()[1]).getByTestId('fs-stub-link'));
+      await waitFor(() => expect(lay.landed).toContain('f-3-7'));
+      expect(calls).toEqual(['first', 'seek 3', 'next F.3.5']);
+      expect(lay.landed[lay.landed.length - 1]).toBe('f-3-7');
+    } finally { lay.restore(); }
+  });
+});
+
+// Sabotage (L3): drop the reach() branch of onGoto: the click makes no call
+// and nothing lands.
+describe('a builds-on link to a section of the unit not read yet (L3)', () => {
+  it('reads on from the tail to section 8 of unit 1 and scrolls to it', async () => {
+    const { api, calls } = pagedView(2, 9, 5, (u, k) => u === 1 && k === 0
+      ? { builds_on: [{ n: 8, title: 'U1 S8', id: 'u1s8', anchor_id: 'f-1-8' }] } : {});
+    const lay = layOut();
+    try {
+      render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+      await waitFor(() => expect(sections()).toHaveLength(5));
+      fireEvent.click(within(sections()[0]).getByTestId('mat-builds-toggle'));
+      fireEvent.click(within(sections()[0]).getByTestId('mat-builds-link'));
+      await waitFor(() => expect(lay.landed).toContain('f-1-8'));
+      expect(calls).toEqual(['first', 'next F.1.5']);
+    } finally { lay.restore(); }
+  });
+});
+
+// Sabotage (L2): render the head error in the tail block again: fs-head-error
+// is missing and the error sits below the sections.
+describe('a failure reading the unit above the run (L2)', () => {
+  it('is shown at the top, above the first section, not at the tail', async () => {
+    const { api } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    fireEvent.change(screen.getByTestId('fs-unit'), { target: { value: '3' } });
+    fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: '3' } });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async () => { throw new FsError('boom', 500); });
+    act(() => {
+      for (const o of MockIO.all.filter(x => x.live)) {
+        const t = o.watched.find(e => (e as HTMLElement).dataset.testid === 'fs-top-sentinel');
+        if (t) o.cb([{ isIntersecting: true, target: t } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
+      }
+    });
+    const err = await screen.findByTestId('fs-head-error');
+    expect(err.textContent).toContain('boom');
+    expect(err.compareDocumentPosition(sections()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('fs-tail-error')).toBeNull();
+  });
+});

@@ -10,7 +10,7 @@ afterEach(() => vi.unstubAllGlobals());
 const page = { facts: [], cursor: null, has_more: false, units: 0 };
 
 function stubFetch(res: () => Response) {
-  const f = vi.fn(async (_url: string, _init?: RequestInit) => res());
+  const f = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => res());
   vi.stubGlobal('fetch', f);
   return f;
 }

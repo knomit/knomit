@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FactSetStream, MAX_BUSY_RETRIES } from './useFactSetStream';
+import { FactSetStream, MAX_BUSY_RETRIES, MAX_RETRY_AFTER_S } from './useFactSetStream';
 import { FsError } from './factsetApi';
 import type { FactSetApi, FactSetNode, FactSetPage, FsSearch } from './factsetApi';
 import { DEFAULT_OPTIONS } from './materializeApi';
@@ -176,22 +176,168 @@ describe('FactSetStream (test 4)', () => {
     await flush();
     expect(s.getState().nodes.map(n => n.number)).toEqual(['7', '7.1']);
   });
+});
 
-  it('loadBefore prepends the whole previous unit across pages', async () => {
-    const { api, calls } = fakeApi(async (c, id) => {
-      if (c.op === 'seek') return pageAt(`F${id}`, Number(c.arg), 9);
-      if (c.op === 'next') return pageAt(`F${id}`, nextUnit(String(c.arg)), 9);
-      return pageAt(`F${id}`, 1, 9);
-    });
+/** A FactSet of `units` units of `per` sections each, paged `size` sections at
+ *  a time ACROSS unit boundaries, as the server pages (buildPage): cursors are
+ *  "<id>.<unit>.<section>" (0-based section), each call recorded. */
+function pagedApi(units: number, per: number, size: number, fail: (op: string, arg: string | number) => FsError | null = () => null) {
+  const calls: string[] = [];
+  const sec = (u: number, k: number): FactSetNode => ({
+    ...node(u, k + 1), anchor_id: `f-${u}-${k + 1}`, number: k === 0 ? String(u) : `${u}.${k}`, tree_depth: k === 0 ? 0 : 1,
+  });
+  const from = (u: number, k: number): FactSetPage => {
+    const facts: FactSetNode[] = [];
+    let cu = u, ck = k;
+    while (facts.length < size && cu <= units) {
+      facts.push(sec(cu, ck));
+      ck++;
+      if (ck >= per) { cu++; ck = 0; }
+    }
+    return { ...pageAt('F', u, units), facts, unit_from: u, unit_to: facts[facts.length - 1].unit,
+      cursor: `F.${cu}.${ck}`, has_more: cu <= units };
+  };
+  const api: FactSetApi = {
+    first: async () => { calls.push('first'); const e = fail('first', ''); if (e) throw e; return from(1, 0); },
+    next: async (_t, c) => {
+      calls.push(`next ${c}`); const e = fail('next', c); if (e) throw e;
+      const [, u, k] = c.split('.'); return from(Number(u), Number(k));
+    },
+    seek: async (_t, _c, u) => { calls.push(`seek ${u}`); const e = fail('seek', u); if (e) throw e; return from(u, 0); },
+    exportMarkdown: vi.fn(), close: vi.fn(async () => {}),
+  };
+  return { api, calls };
+}
+const settle = async () => { for (let i = 0; i < 6; i++) await flush(); };
+
+// H1: a 404 is recovered only on a cursor call, at most once in a row. A first
+// call answered 404 (the repo or lens is gone) is an error, and a re-creation
+// that is answered 404 ends there: the number of first calls is exact.
+//
+// Sabotage: let the re-creating first call recover too (chain(..., true) in
+// start): the second case asks first() again and again.
+describe('FactSetStream 404 recovery is bounded (H1)', () => {
+  it('a 404 on the first call is shown, with no re-creation', async () => {
+    const { api, calls } = pagedApi(3, 2, 2, op => op === 'first' ? new FsError('Not found', 404) : null);
     const s = new FactSetStream(async () => {});
     s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
-    await flush();
-    s.seek(6);
-    await flush();
+    await settle();
+    expect(calls).toEqual(['first']);
+    expect(s.getState().phase).toBe('error');
+    expect(s.getState().error).toEqual({ kind: 'expired', detail: 'Not found' });
+    expect(s.getState().notice).toBeNull();
+  });
+
+  it('the route gone after page 1: one re-creation, then the error; exactly two first calls', async () => {
+    let gone = false;
+    const { api, calls } = pagedApi(3, 2, 2, () => gone ? new FsError('Lens not found', 404) : null);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    gone = true;
+    s.loadMore();
+    await settle();
+    expect(calls).toEqual(['first', 'next F.2.0', 'first']);
+    expect(s.getState().phase).toBe('error');
+    expect(s.getState().error).toEqual({ kind: 'expired', detail: 'Lens not found' });
+  });
+});
+
+// M1: a seek reads on inside its unit until the anchor has arrived (and no
+// further), so a link to a section past the first page lands on it.
+//
+// Sabotage: drop readOn from seek: the run holds sections 1-5 of unit 3 only
+// and the land anchor is not on screen.
+describe('FactSetStream seek reads on to its target (M1)', () => {
+  it('a back link to section 7 of unit 3 (pages of 5): seek, one next, stop; lands on that anchor', async () => {
+    const { api, calls } = pagedApi(5, 9, 5);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    s.seek(3, 'f-3-7');
+    await settle();
+    expect(calls).toEqual(['first', 'seek 3', 'next F.3.5']);
+    const st = s.getState();
+    expect(st.nodes.some(n => n.anchor_id === 'f-3-7' && n.written)).toBe(true);
+    expect(st.land).toEqual({ unit: 3, anchor: 'f-3-7', n: undefined, epoch: st.epoch });
+    expect(st.nodes[0].anchor_id).toBe('f-3-1');
+  });
+
+  it('a target that is not in the unit stops at the unit end, never reads the next unit', async () => {
+    const { api, calls } = pagedApi(5, 6, 5);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    s.seek(2, 'f-nowhere');
+    await settle();
+    // seek 2 -> 2.0..2.4 (cursor F.2.5), next -> 2.5, 3.0..3.3 (cursor F.3.4): past unit 2, stop.
+    expect(calls).toEqual(['first', 'seek 2', 'next F.2.5']);
+  });
+
+  it('reach: section n of a unit already in the run is read on to from the tail (L3)', async () => {
+    const { api, calls } = pagedApi(3, 9, 5);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    s.reach({ unit: 1, n: 8 });
+    await settle();
+    expect(calls).toEqual(['first', 'next F.1.5']);
+    const st = s.getState();
+    expect(st.nodes.some(n => n.unit === 1 && n.n === 8)).toBe(true);
+    expect(st.land).toMatchObject({ unit: 1, n: 8 });
+  });
+});
+
+// L1: loadBefore reads the previous unit over SEVERAL pages and stops on the
+// cursor's unit, never fetching the page after it.
+//
+// Sabotage: drop the cursorUnit(page.cursor) > u stop: an extra next call
+// (the one that starts at unit 3's first section) is made.
+describe('FactSetStream loadBefore across pages (L1)', () => {
+  it('prepends the whole of unit 2 read in two pages, then stops', async () => {
+    const { api, calls } = pagedApi(4, 4, 2);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    s.seek(3);
+    await settle();
+    calls.length = 0;
     s.loadBefore();
-    await flush();
-    expect(calls.slice(1).map(c => c.op + (c.arg ?? ''))).toEqual(['seek6', 'seek5']);
-    expect(s.getState().nodes.map(n => n.number)).toEqual(['5', '5.1', '6', '6.1']);
+    await settle();
+    expect(calls).toEqual(['seek 2', 'next F.2.2']);
+    expect(s.getState().nodes.map(n => n.number)).toEqual(['2', '2.1', '2.2', '2.3', '3', '3.1']);
     expect(s.getState().head).toBe('idle');
+  });
+
+  it('a loadBefore failure is a head error, not a tail error (L2)', async () => {
+    let fail = false;
+    const { api } = pagedApi(4, 2, 2, op => fail && op === 'seek' ? new FsError('boom', 500) : null);
+    const s = new FactSetStream(async () => {});
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    s.seek(3);
+    await settle();
+    fail = true;
+    s.loadBefore();
+    await settle();
+    expect(s.getState().head).toBe('failed');
+    expect(s.getState().headError).toEqual({ kind: 'failed', detail: 'boom' });
+    expect(s.getState().tailError).toBeNull();
+  });
+});
+
+// L4: Retry-After is honoured up to MAX_RETRY_AFTER_S.
+// Sabotage: drop the clamp: the wait is 3600000 ms.
+describe('FactSetStream Retry-After clamp (L4)', () => {
+  it('a Retry-After of an hour waits MAX_RETRY_AFTER_S seconds', async () => {
+    const waits: number[] = [];
+    let n = 0;
+    const { api } = fakeApi(async (_c, id) => { if (n++ === 0) throw new FsError('busy', 503, 3600); return pageAt(`F${id}`, 1, 1); });
+    const s = new FactSetStream(async ms => { waits.push(ms); });
+    s.sync({ api, search: SEARCH, options: DEFAULT_OPTIONS });
+    await settle();
+    expect(MAX_RETRY_AFTER_S).toBe(10);
+    expect(waits).toEqual([10000]);
+    expect(s.getState().phase).toBe('ready');
   });
 });

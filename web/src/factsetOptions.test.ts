@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { factsetView, parseFactSetParams, writeFactSetParams } from './factsetOptions';
 import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
 import { DEFAULT_OPTIONS } from './materializeApi';
@@ -36,5 +36,28 @@ describe('factset URL state', () => {
     factsetView.close();
     expect(window.location.search).toBe(''); // closed: no fs_* key at all
     expect(window.history.length).toBe(before);
+  });
+});
+
+// L5: after a reload nothing can re-create the FactSet (the list's search is
+// not in the URL), so a stale factset=1 is cleared when the store loads; the
+// options are kept in memory for the next FactSet.
+//
+// Sabotage: drop the clearing in the store's constructor: the URL keeps
+// factset=1&fs_depth=7.
+describe('a stale open flag after a reload (L5)', () => {
+  it('is cleared on load, other keys kept, options remembered', async () => {
+    window.history.replaceState(null, '', '/?x=1&factset=1&fs_depth=7');
+    vi.resetModules();
+    const mod = await import('./factsetOptions');
+    expect(window.location.search).toBe('?x=1');
+    expect(mod.factsetView.get()).toEqual({ search: null, options: { ...DEFAULT_OPTIONS, depth: 7 } });
+  });
+
+  it('leaves a URL without the flag alone', async () => {
+    window.history.replaceState(null, '', '/?x=1&fs_depth=7');
+    vi.resetModules();
+    await import('./factsetOptions');
+    expect(window.location.search).toBe('?x=1&fs_depth=7');
   });
 });
