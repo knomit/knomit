@@ -118,7 +118,7 @@ func TestLensFactSet_RESTRoutesMirrorTheRepoRoutes(t *testing.T) {
 		leaves = append(leaves, p.Facts...)
 	}
 	require.Equal(t, map[string]string{
-		"kb/technology/u/a1.md":                         "w",
+		"kb/technology/u/a1.md":                       "w",
 		"kb://" + e.r1ID12 + "/kb/technology/u/b1.md": "r1",
 		"kb://" + e.r1ID12 + "/kb/technology/u/b2.md": "r1",
 		"kb://" + e.r2ID12 + "/kb/technology/u/c1.md": "r2",
