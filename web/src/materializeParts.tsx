@@ -263,8 +263,7 @@ export const Section = memo(function Section({ node, group, num, td, onGoto, fs,
                   ↪ {l.title} <span className="k-mat-n">{l.id.slice(0, 8)}</span>
                 </button>
                 {l.different_version && (
-                  <span className="k-mat-changed" data-testid="mat-changed"
-                    title="The version cited here has a different body from the one written in this document">changed since cited</span>
+                  <span className="k-mat-changed" data-testid="mat-changed" title={TIP_DIFFERENT_VERSION}>{CHANGED_SINCE_CITED}</span>
                 )}
               </span>
             ))}

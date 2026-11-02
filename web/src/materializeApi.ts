@@ -15,7 +15,8 @@ export interface MatOmission { title?: string; id?: string; path: string; reason
 /** A non-fact ref: an external URL or a source-code ref. */
 export interface MatSource { label: string; url?: string }
 /** A ref to a fact written in the same document. different_version: the
- *  citing fact cited a version whose BODY differs from the one written. */
+ *  citing fact cited another version (blob) than the one written: ANY change,
+ *  not only the body (ruling Q3, blob identity). */
 export interface MatLink { n: number; title: string; id: string; anchor_id: string; different_version?: boolean }
 
 /** The roles a node plays in reading order (walk.go Role*). */
