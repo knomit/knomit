@@ -27,7 +27,7 @@ import (
 
 // DefaultFactSetCacheMiB is the cache budget when session.factset_memory_mib
 // is 0 or unset.
-const DefaultFactSetCacheMiB = 64
+const DefaultFactSetCacheMiB = 128
 
 // keptPlans is how many unit plans an entry keeps (most recently used): a
 // page spans at most HumanMaxLimit units, so two readers at two places of one

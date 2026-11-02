@@ -278,7 +278,7 @@ type SessionConfig struct {
 	// SOFT: one plan is always admitted when no other plan is in flight, so
 	// the process may exceed it by one plan's reservation plus the FactSets
 	// in use (never evicted while a call holds them). 0 or unset is the
-	// default (64).
+	// default (128).
 	FactSetMemoryMiB int `toml:"factset_memory_mib"`
 	// FactSetAnchorWait is how long a FactSet's first call waits for its
 	// branch's index to settle (no sync rewriting rows past the watermark,

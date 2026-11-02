@@ -396,3 +396,25 @@ func TestFactSet_PrefixGrowthIsChargedWhileHeld(t *testing.T) {
 	require.Positive(t, during[0], "the tables and unit 1 are charged before unit 2")
 	require.Greater(t, during[len(during)-1], during[0], "the prefix's growth is charged as it grows")
 }
+
+// TestFactSet_DefaultBudgetIs128MiB: session.factset_memory_mib unset (0, as
+// internal/app passes it) or negative leaves the FactSet memory budget at
+// 128 MiB. The want is a literal,
+// not DefaultFactSetCacheMiB, so changing the constant fails here.
+//
+// Sabotage: DefaultFactSetCacheMiB = 64 (the old default) fails every case.
+func TestFactSet_DefaultBudgetIs128MiB(t *testing.T) {
+	isolateFactSetGlobals(t)
+	const want = int64(128) << 20
+	readBudget := func() int64 {
+		fsCache.mu.Lock()
+		defer fsCache.mu.Unlock()
+		return fsCache.budget
+	}
+	for _, in := range []int64{0, -1} {
+		SetFactSetCacheBudget(1) // move it off the default first
+		require.Equal(t, int64(1), readBudget())
+		SetFactSetCacheBudget(in)
+		require.Equal(t, want, readBudget(), "SetFactSetCacheBudget(%d)", in)
+	}
+}
