@@ -20,14 +20,13 @@ import (
 // it (materialize.FactSetNextPage). The pages are byte for byte the REST
 // GET …/search/factset pages for the same input: one shared builder.
 //
-// On a LENS endpoint (a binding that reads more than its write repo) the same
-// calls materialize the lens's own list: the engine's lens facade runs the
-// fused lens search (the one knomit_query runs on a lens, motif widening
-// through mcpMotifClusters), one sub-FactSet per member, ONE cursor row in the
-// write repo's session DB. cross_kb=true is refused there (ruling Lens 2) and
-// search.repo narrows to members by name (ruling Lens 6). A one-member lens
-// has the write repo's units but is still a lens: cross_kb=true is refused
-// and its no-filter title is "All in lens <lens>" (user ruling 2026-11-02).
+// On a LENS endpoint of ANY size (materialize.LensFactSet: a one-member lens
+// included, user ruling 2026-11-02) the same calls materialize the lens's own
+// list: the engine's lens facade runs the fused lens search (the one
+// knomit_query runs on a lens, motif widening through mcpMotifClusters), one
+// sub-FactSet per member, ONE cursor row in the write repo's session DB.
+// cross_kb=true is refused there (ruling Lens 2) and search.repo narrows to
+// members by name (ruling Lens 6).
 
 // factsetSearchKeys are the keys of the `search` object.
 var factsetSearchKeys = map[string]any{
@@ -103,10 +102,10 @@ func materializeFactSetFirst(ctx context.Context, req mcpgo.CallToolRequest, b *
 		// lens does; a repo FactSet never reads it.
 		Clusters: mcpMotifClusters,
 	}
-	if b.IsLens() {
+	if materialize.LensFactSet(b) {
 		// The lens list's single query vector (knomit_query on the lens embeds
-		// through fanoutQueryVec): one inference for the whole fan-out. A repo
-		// FactSet leaves embedding to its store, as before.
+		// through fanoutQueryVec): one inference for the whole fan-out, on a
+		// lens of any size. A repo FactSet leaves embedding to its store.
 		breq.Embed = func(ctx context.Context, text string) ([]float32, error) {
 			return fanoutQueryVec(ctx, emb, text)
 		}

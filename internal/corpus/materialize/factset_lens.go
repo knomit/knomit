@@ -11,15 +11,16 @@ import (
 	"time"
 
 	"knomit/internal/corpus/federate"
-	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/sessions"
 )
 
 // THE LENS FACADE (F3 of the lens FactSet plan, design section 7 and the
-// rulings of section 8). A FactSet on a binding that reads more than its
-// write repo (Binding.IsLens) materializes the LENS's own result list:
+// rulings of section 8). A FactSet on a lens of ANY size (LensFactSet: a
+// binding that came through a lens or reads more than its write repo; a
+// one-member lens is a facade over a single sub, user ruling 2026-11-02)
+// materializes the LENS's own result list:
 //
 //   - ONE fused lens search (federate.PlanFused + FusedSearch/FusedRecent,
 //     the function REST /lenses/{lens}/search and MCP knomit_query call),
@@ -180,7 +181,7 @@ func (le *lensEntry) at(g int) (sub, local int) { return le.fr.Order[g-1], le.lo
 
 // ---- creation -------------------------------------------------------------------
 
-// lensFactSetFirstPage is FactSetFirstPage on a lens (Binding.IsLens): the
+// lensFactSetFirstPage is FactSetFirstPage on a lens (LensFactSet): the
 // anchored fused search, the partition into one sub per member, the ONE
 // facade row and page 1.
 //
@@ -311,26 +312,6 @@ func (c *fsCall) neverSynced(m *mount) (bool, error) {
 	}
 	c.st.IndexQueries++
 	return !once, nil
-}
-
-// checkRepoNarrowing validates a repo= narrowing on the REPO path. A
-// one-member lens is still a lens to its caller: its only member is the write
-// repo, and the lens list accepts exactly that name (narrowing nothing) and
-// refuses any other with the lens list's own text. A repository's own
-// FactSet has no members to narrow to.
-func checkRepoNarrowing(b *repos.Binding, names []string) error {
-	if len(names) == 0 {
-		return nil
-	}
-	if !b.FromLens() {
-		return fmt.Errorf("%w: repo is only accepted on a lens", ErrInvalid)
-	}
-	for _, n := range names {
-		if n != b.Write().Name() {
-			return fmt.Errorf("%w: %w", ErrInvalid, &federate.UnknownRepoError{Name: n, Lens: b.Name()})
-		}
-	}
-	return nil
 }
 
 // planLensSearch plans the fused lens search of req exactly as the lens list

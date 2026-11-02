@@ -19,8 +19,8 @@ import (
 
 // Lens FactSet CONTRACT tests. PR A pinned what a FactSet did through a lens
 // endpoint; the lens facade (F3) replaced its multi-member refusal with the
-// facade test below, and the one-member path stays a contract (ruling Lens 6:
-// a one-member lens stays on the repo path).
+// facade test below, and since the user's 2026-11-02 ruling a one-member lens
+// is the lens facade over a single sub, with a multi-member lens's shape.
 
 func factsetWrites(t *testing.T, ri *repos.RepoInstance) int64 {
 	t.Helper()
@@ -157,24 +157,28 @@ func TestFactSet_Lens_MCPServesTheLensFactSet(t *testing.T) {
 	require.Equal(t, `invalid materialize request: no mount named "nope" in lens "eng"`, text)
 }
 
-// B3 (MCP half, Q-L9 ruling: keep allowing it, make it a contract). A lens
-// whose only member is the write repo passes the IsLens guard (it federates
-// across nothing) and behaves as the write repo's FactSet:
-//   - the same roots, in the same order, the same units and the same bytes as
-//     the repo endpoint's first page, except the cursor id;
-//   - but its cursor is pinned lens:<uid>, so the repo endpoint (pin repo:<uid>)
+// B3 (MCP half), as the user ruled on 2026-11-02 ("lens HAS TO BE
+// consistent, no matter how many repos are in it"). A lens whose only member
+// is the write repo is not IsLens (it federates across nothing) but IS a lens
+// FactSet (materialize.LensFactSet), served by the lens facade over a single
+// sub:
+//   - its page is the multi-member lens's page for the same search narrowed
+//     to the same member (search.repo = ["alpha"] on "eng" = alpha + beta),
+//     byte for byte except the cursor id;
+//   - against the write repo's own page it has the same roots, in the same
+//     order, and differs ONLY by the lens fields: env.anchors (the one
+//     member's anchor) and repo_name on every unit root, nowhere else;
+//   - its cursor is pinned lens:<uid>, so the repo endpoint (pin repo:<uid>)
 //     cannot page it: it reads exactly like an unknown id.
 //
-// Partly superseded by the facade (F3), which may rule on the one-member lens.
-//
-// Sabotage: make IsLens true for a one-member lens (the lens call is refused,
-// the page comparison fails); or give the lens the repo pin (the repo call
-// pages the lens cursor and the refusal assertion fails).
-func TestFactSet_Contract_OneMemberLensIsTheWriteRepoFactSetWithTheLensPin(t *testing.T) {
-	m, alpha, _, _, _, _ := newLensE2E(t)
-	obs(t, alpha, "kb/u/r1.md", "R1")
-	obs(t, alpha, "kb/u/r2.md", "R2", "kb/u/r1.md")
-	obs(t, alpha, "kb/u/r3.md", "R3")
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (the solo page has no
+// anchors and no repo_name: the "eng" comparison fails); or give the lens
+// the repo pin (the repo call pages the lens cursor).
+func TestFactSet_Contract_OneMemberLensIsTheLensFacadeWithTheLensPin(t *testing.T) {
+	m, alpha, _, _, _, lens := newLensE2E(t)
+	obs(t, alpha, "kb/architecture/u/r1.md", "R1")
+	obs(t, alpha, "kb/architecture/u/r2.md", "R2", "kb/architecture/u/r1.md")
+	obs(t, alpha, "kb/architecture/u/r3.md", "R3")
 	laptop := auth.Principal{Kind: auth.KindHost, ID: "laptop", Via: auth.ViaToken}
 	_, err := m.CreateLens(context.Background(), control.Lens{Name: "solo", WriteUID: alpha.UID()})
 	require.NoError(t, err)
@@ -183,12 +187,14 @@ func TestFactSet_Contract_OneMemberLensIsTheWriteRepoFactSetWithTheLensPin(t *te
 	lensCtx := lensCtxFor(t, m, laptop, "solo")
 	lb, _ := repos.BindingFromContextOpt(lensCtx)
 	rb, _ := repos.BindingFromContextOpt(repoCtx)
-	require.False(t, lb.IsLens(), "a one-member lens passes the IsLens guard")
+	require.False(t, lb.IsLens(), "a one-member lens is not IsLens (breadth)")
 	require.True(t, lb.FromLens())
+	require.True(t, materialize.LensFactSet(lb), "but it is a lens FactSet")
+	require.False(t, materialize.LensFactSet(rb))
 	require.True(t, strings.HasPrefix(lb.PinID(), "lens:"), lb.PinID())
 	require.True(t, strings.HasPrefix(rb.PinID(), "repo:"), rb.PinID())
 
-	args := map[string]any{"search": map[string]any{"path": "kb/u/"}, "depth": 0, "limit": 5}
+	args := map[string]any{"search": map[string]any{"path": "kb/architecture/u/"}, "depth": 1, "limit": 5}
 	call := func(ctx context.Context, a map[string]any) (string, bool) {
 		res, text := matCallRaw(t, ctx, m, a)
 		return text, res.IsError
@@ -202,7 +208,7 @@ func TestFactSet_Contract_OneMemberLensIsTheWriteRepoFactSetWithTheLensPin(t *te
 	require.NoError(t, json.Unmarshal([]byte(repoText), &rp))
 	require.NoError(t, json.Unmarshal([]byte(lensText), &lp))
 	require.NotNil(t, rp.Cursor)
-	require.NotNil(t, lp.Cursor)
+	require.NotNil(t, lp.Cursor, lensText)
 	roots := func(p materialize.FactSetPage) (out []string) {
 		for _, n := range p.Facts {
 			if n.TreeDepth == 0 && n.Unit > 0 {
@@ -211,16 +217,40 @@ func TestFactSet_Contract_OneMemberLensIsTheWriteRepoFactSetWithTheLensPin(t *te
 		}
 		return out
 	}
-	require.ElementsMatch(t, []string{"kb/u/r1.md", "kb/u/r2.md", "kb/u/r3.md"}, roots(rp), "the repo FactSet has these three roots")
+	require.ElementsMatch(t, []string{"kb/architecture/u/r1.md", "kb/architecture/u/r2.md", "kb/architecture/u/r3.md"}, roots(rp), "the repo FactSet has these three roots")
 	require.Equal(t, roots(rp), roots(lp), "same roots, same order")
 	require.Equal(t, 3, lp.Units)
 	id := func(c string) string { return c[:strings.IndexByte(c, '.')] }
 	require.NotEqual(t, id(*rp.Cursor), id(*lp.Cursor), "two FactSets, two ids")
-	norm := func(s string) string {
-		s = strings.ReplaceAll(s, id(*rp.Cursor), "ID")
-		return strings.ReplaceAll(s, id(*lp.Cursor), "ID")
+
+	// The multi-member lens narrowed to alpha: the same page, byte for byte.
+	narrowed := map[string]any{"search": map[string]any{"path": "kb/architecture/u/", "repo": []any{"alpha"}}, "depth": 1, "limit": 5}
+	multiText, isErr := call(lensCtxFor(t, m, laptop, lens), narrowed)
+	require.False(t, isErr, multiText)
+	soloText, isErr := call(lensCtx, narrowed)
+	require.False(t, isErr, soloText)
+	require.Equal(t, withoutCursorID(t, multiText), withoutCursorID(t, soloText), "the multi-member lens's page shape")
+
+	// Against the repo page: the lens fields and nothing else.
+	alpha12 := fact.ID12(alpha.ID())
+	require.Equal(t, map[string]string{alpha12: lp.Anchor}, lp.Anchors, "env.anchors: the one member's anchor")
+	require.NotEmpty(t, lp.Anchor)
+	require.Nil(t, rp.Anchors, "control: a repository page has no anchors")
+	unitRoots := 0
+	for _, n := range lp.Facts {
+		if n.Number == strconv.Itoa(n.Unit) {
+			unitRoots++
+			require.Equal(t, "alpha", n.RepoName, "repo_name on unit root %s", n.Number)
+		} else {
+			require.Empty(t, n.RepoName, "repo_name on unit roots only: %s", n.Number)
+		}
 	}
-	require.Equal(t, norm(repoText), norm(lensText), "byte-equal pages except the cursor id")
+	require.Equal(t, 3, unitRoots)
+	for _, n := range rp.Facts {
+		require.Empty(t, n.RepoName, "control: a repository page has no repo_name")
+	}
+	require.Equal(t, withoutLensFields(t, withoutCursorID(t, repoText)), withoutLensFields(t, withoutCursorID(t, lensText)),
+		"the repo page plus env.anchors and repo_name, nothing else")
 
 	// The lens cursor carries the lens pin: its own endpoint pages it, the
 	// repo endpoint (same principal, same read set, same session store) does
@@ -245,9 +275,8 @@ func TestFactSet_Contract_OneMemberLensIsTheWriteRepoFactSetWithTheLensPin(t *te
 // is "All in lens solo". Controls: the write repo's own endpoint accepts
 // cross_kb and keeps the repo title.
 //
-// Sabotage: check cross_kb only on IsLens in FactSetFirstPage (the solo call
-// is served); or keep FactSetTitle on the repo path for a lens (the solo
-// title is alpha's).
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (the solo call is
+// served on the repo path: cross_kb accepted, alpha's title).
 func TestFactSet_Lens_OneMemberLensIsALens(t *testing.T) {
 	m, alpha, _, _, _, lens := newLensE2E(t)
 	obs(t, alpha, "kb/u/r1.md", "R1")
@@ -279,4 +308,32 @@ func TestFactSet_Lens_OneMemberLensIsALens(t *testing.T) {
 	require.Equal(t, materialize.FactSetLensTitle(none, alpha.OntologyRoot(), "solo"), title(soloCtx))
 	require.Equal(t, materialize.FactSetTitle(none, alpha.OntologyRoot(), alpha.Name()), title(repoCtx), "control: the repository's title")
 	require.NotEqual(t, title(repoCtx), title(soloCtx))
+}
+
+// withoutCursorID is a FactSet page with its cursor's FactSet id replaced by
+// "ID" (each first call mints its own id).
+func withoutCursorID(t *testing.T, page string) string {
+	t.Helper()
+	var p materialize.FactSetPage
+	require.NoError(t, json.Unmarshal([]byte(page), &p), page)
+	if p.Cursor == nil {
+		return page
+	}
+	return strings.ReplaceAll(page, (*p.Cursor)[:strings.IndexByte(*p.Cursor, '.')], "ID")
+}
+
+// withoutLensFields is a FactSet page with the lens-only wire fields removed:
+// env.anchors and every node's repo_name.
+func withoutLensFields(t *testing.T, page string) string {
+	t.Helper()
+	var p map[string]any
+	require.NoError(t, json.Unmarshal([]byte(page), &p), page)
+	delete(p, "anchors")
+	facts, _ := p["facts"].([]any)
+	for _, f := range facts {
+		delete(f.(map[string]any), "repo_name")
+	}
+	out, err := json.Marshal(p)
+	require.NoError(t, err)
+	return string(out)
 }

@@ -302,16 +302,14 @@ func factsetRequest(w http.ResponseWriter, r *http.Request, q url.Values, sf fac
 		Facts: materialize.DefaultFactSetFacts, Limit: materialize.HumanDefaultLimit,
 	}
 	switch {
-	case sf.lens && b.IsLens():
-		// The lens list's wiring (GET /lenses/{lens}/search): the query is
-		// embedded ONCE for the whole fan-out and motif terms widen to their
-		// merged cluster over the lens's read set, so the FactSet's roots are
-		// the lens list's.
+	case materialize.LensFactSet(b):
+		// The lens list's wiring (GET /lenses/{lens}/search), on a lens of
+		// any size: the query is embedded ONCE for the whole fan-out and motif
+		// terms widen to their merged cluster over the lens's read set, so the
+		// FactSet's roots are the lens list's.
 		req.Embed, req.Clusters = lensEmbed(emb), lensMotifClusters
 	case emb != nil:
-		// A repository, and a one-member lens (the engine serves it on the
-		// repository path with the write repo's units, but as a lens: no
-		// cross_kb, the lens title).
+		// A repository.
 		req.Embed = emb.EmbedQuery
 	}
 	for _, p := range []struct {

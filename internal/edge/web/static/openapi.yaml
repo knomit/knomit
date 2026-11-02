@@ -4601,9 +4601,13 @@ paths:
         lens's members since the first call answers 404 like an unknown
         cursor. The same principal pages, seeks, exports and closes it here
         or through `knomit_materialize` on the lens's MCP endpoint, whichever
-        surface made it. A one-member lens has its write repository's units
-        and sections, but it is still a lens: pinned to the lens, `cross_kb`
-        refused, the lens title.
+        surface made it.
+
+        A lens factset has the SAME shape whatever the lens's size: a
+        one-member lens answers exactly as a lens of several members does
+        (`anchors`, `repo_name` on every unit root, the lens list's results
+        for the same search, the lens title, `cross_kb` refused, the lens's
+        cursor pin).
       operationId: getLensSearchFactSetPage
       parameters:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: "The previous page's cursor; with it, only `unit` is accepted." }

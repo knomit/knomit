@@ -342,50 +342,97 @@ func TestLensFactSet_CursorsDoNotCrossRepoAndLensRoutes(t *testing.T) {
 	}
 }
 
-// A one-member lens (ruling Lens 6 / Q-L9) is served on the repository path:
-// the lens route's page is the write repo's own FactSet page, byte for byte
-// but the cursor id; repo= accepts exactly the write repo's name (narrowing
-// nothing), and any other name is the lens list's 422 "Unknown repo".
+// A one-member lens has a multi-member lens's shape (user ruling 2026-11-02:
+// "lens HAS TO BE consistent, no matter how many repos are in it"): the
+// engine serves it through the lens facade over a single sub.
+//   - Its pages, cursor pages and export are the multi-member lens "duo"
+//     (w + r1) narrowed to w (repo=w), byte for byte but the cursor id; so
+//     env.anchors, repo_name on unit roots and the export lines match field
+//     by field.
+//   - Against the write repo's own page it has the same units and sections
+//     and differs ONLY by env.anchors ({w: anchor}) and repo_name "w" on every
+//     unit root.
+//   - repo= accepts the write repo's name (narrowing nothing) and any other
+//     name is the lens list's 422 "Unknown repo", byte for byte.
 //
-// Sabotage: wrap checkRepoNarrowing's UnknownRepoError with %v (the 422 is
-// the generic 400).
-func TestLensFactSet_OneMemberLensIsTheWriteRepoFactSet(t *testing.T) {
-	m := newMatLensManager(t, "w")
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (the solo page has no
+// anchors and no repo_name).
+func TestLensFactSet_OneMemberLensHasTheMultiMemberShape(t *testing.T) {
+	m := newMatLensManager(t, "w", "r1")
 	createLens(t, m, "solo", "w")
-	w := m.Get("w")
+	createLens(t, m, "duo", "w", "r1")
+	w, r1 := m.Get("w"), m.Get("r1")
 	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a1.md", "A1", "a1 body.")
 	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a2.md", "A2", "a2 body.", "kb/technology/u/a1.md")
+	writeMatFact(t, w, w.AgentBranch(), "kb/technology/u/a3.md", "A3", "a3 body.", "kb/technology/u/a2.md")
+	writeMatFact(t, r1, r1.AgentBranch(), "kb/technology/u/b1.md", "B1", "b1 body.")
 	h := asPrincipal("u1", newTestRouter(m))
 	repoBase := "/repos/w/branches/" + urlBranch(w.AgentBranch()) + "/search/factset"
-	const soloBase = "/lenses/solo/search/factset"
+	const soloBase, duoBase = "/lenses/solo/search/factset", "/lenses/duo/search/factset"
 	var code int
 	var body string
 	require.Eventually(t, func() bool {
-		code, _, body = getMaterialize(t, h, "/lenses/solo/facts?path=kb/technology/u/")
-		return code == http.StatusOK && strings.Contains(body, "a1.md") && strings.Contains(body, "a2.md")
+		code, _, body = getMaterialize(t, h, "/lenses/duo/facts?path=kb/technology/u/")
+		return code == http.StatusOK && strings.Contains(body, "a3.md") && strings.Contains(body, "b1.md")
 	}, 10*time.Second, 50*time.Millisecond, "the lens never listed the facts: %d %s", code, body)
 
-	norm := func(raw string) string {
+	// cursorOf is the page's cursor and whether more pages follow.
+	cursorOf := func(raw string) (string, bool) {
 		var p struct {
-			Cursor *string `json:"cursor"`
+			Cursor  *string `json:"cursor"`
+			HasMore bool    `json:"has_more"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(raw), &p), raw)
 		require.NotNil(t, p.Cursor, raw)
-		return strings.ReplaceAll(raw, mustCursorID(t, *p.Cursor), "ID")
+		return *p.Cursor, p.HasMore
 	}
-	code, _, repoPage := getMaterialize(t, h, repoBase+"?path=kb/technology/u/&depth=1&limit=2")
-	require.Equal(t, http.StatusOK, code, repoPage)
-	code, _, lensPage := getMaterialize(t, h, soloBase+"?path=kb/technology/u/&depth=1&limit=2")
-	require.Equal(t, http.StatusOK, code, lensPage)
-	require.Equal(t, norm(repoPage), norm(lensPage), "the write repo's FactSet page")
-	// repo=w narrows nothing: the same units and sections (the search echoes it).
-	code, rp, body := getFactSet(t, h, repoBase+"?path=kb/technology/u/&depth=1&limit=2")
+	pages := func(base, q string) (out []string, cursor string) {
+		code, _, p := getMaterialize(t, h, base+"?"+q)
+		require.Equal(t, http.StatusOK, code, p)
+		cursor, more := cursorOf(p)
+		id := mustCursorID(t, cursor)
+		out = append(out, strings.ReplaceAll(p, id, "ID"))
+		for c := cursor; more; {
+			code, _, p = getMaterialize(t, h, base+"?cursor="+url.QueryEscape(c))
+			require.Equal(t, http.StatusOK, code, p)
+			out = append(out, strings.ReplaceAll(p, id, "ID"))
+			c, more = cursorOf(p)
+		}
+		return out, cursor
+	}
+	const q = "path=kb/technology/u/&depth=2&limit=2&repo=w"
+	soloPages, soloCursor := pages(soloBase, q)
+	duoPages, duoCursor := pages(duoBase, q)
+	require.Greater(t, len(soloPages), 1, "several pages")
+	require.Equal(t, duoPages, soloPages, "page for page, the multi-member lens's bytes")
+
+	// The export lines: byte for byte the multi-member lens's.
+	code, _, soloExport := getMaterialize(t, h, soloBase+"/export?cursor="+url.QueryEscape(soloCursor))
+	require.Equal(t, http.StatusOK, code, soloExport)
+	code, _, duoExport := getMaterialize(t, h, duoBase+"/export?cursor="+url.QueryEscape(duoCursor))
+	require.Equal(t, http.StatusOK, code, duoExport)
+	require.Equal(t, 3, strings.Count(soloExport, "\n## "), soloExport)
+	require.Equal(t, duoExport, soloExport)
+
+	// Field by field against the write repo's own page.
+	code, rp, body := getFactSet(t, h, repoBase+"?path=kb/technology/u/&depth=1&limit=5")
 	require.Equal(t, http.StatusOK, code, body)
-	code, np, body := getFactSet(t, h, soloBase+"?path=kb/technology/u/&depth=1&limit=2&repo=w")
+	code, sp, body := getFactSet(t, h, soloBase+"?path=kb/technology/u/&depth=1&limit=5")
 	require.Equal(t, http.StatusOK, code, body)
-	require.Equal(t, []string{"w"}, np.Search.Repos)
-	require.Equal(t, rp.Units, np.Units)
-	require.Equal(t, rp.Facts, np.Facts)
+	require.Equal(t, rp.Units, sp.Units)
+	require.Equal(t, 3, sp.Units)
+	require.Nil(t, rp.Anchors, "control: a repository page has no anchors")
+	require.Equal(t, map[string]string{fact.ID12(w.ID()): sp.Anchor}, sp.Anchors, "env.anchors: the one member's anchor")
+	require.Equal(t, rp.Anchor, sp.Anchor)
+	require.Len(t, sp.Facts, len(rp.Facts))
+	for i, n := range sp.Facts {
+		want := rp.Facts[i]
+		require.Empty(t, want.RepoName, "control: a repository page has no repo_name")
+		if n.Number == strconv.Itoa(n.Unit) {
+			want.RepoName = "w"
+		}
+		require.Equal(t, want, n, "node %d: the repo node plus repo_name on unit roots, nothing else", i)
+	}
 	code, _, listBody := getMaterialize(t, h, "/lenses/solo/search?repo=nope")
 	require.Equal(t, http.StatusUnprocessableEntity, code, listBody)
 	code, _, body = getMaterialize(t, h, soloBase+"?repo=nope")
@@ -393,16 +440,14 @@ func TestLensFactSet_OneMemberLensIsTheWriteRepoFactSet(t *testing.T) {
 	require.Equal(t, listBody, strings.ReplaceAll(body, soloBase, "/lenses/solo/search"))
 }
 
-// A one-member lens is a lens (user ruling 2026-11-02, M1): although the
-// engine serves it on the repository path, cross_kb=true is the lens 400,
-// byte for byte what a multi-member lens answers (instance path aside), and
-// writes nothing; and with no filter its title is "All in lens <lens>", not
-// the write repo's title. Controls: the write repo's own route accepts
-// cross_kb=true and keeps its repo title.
+// A one-member lens is a lens (user ruling 2026-11-02, M1): cross_kb=true is
+// the lens 400, byte for byte what a multi-member lens answers (instance path
+// aside), and writes nothing; and with no filter its title is "All in lens
+// <lens>", not the write repo's title. Controls: the write repo's own route
+// accepts cross_kb=true and keeps its repo title.
 //
-// Sabotage: check cross_kb only on IsLens in FactSetFirstPage (the solo
-// lens answers 200); or keep FactSetTitle on the repo path for a lens (the
-// solo title is the repo's).
+// Sabotage: dispatch FactSetFirstPage on IsLens alone (the solo lens is
+// served on the repo path: cross_kb answers 200).
 func TestLensFactSet_OneMemberLensIsALens(t *testing.T) {
 	m := newMatLensManager(t, "w", "r1")
 	createLens(t, m, "solo", "w")
