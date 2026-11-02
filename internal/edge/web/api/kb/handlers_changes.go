@@ -38,6 +38,9 @@ type changesView struct {
 // the MCP tool's `<repo12>:<commit40>` bookmark when it names this repo.
 func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !changesParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		branch := httpx.BranchFromContext(r.Context())

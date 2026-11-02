@@ -159,6 +159,9 @@ func gatherLensMotifs(
 // and this is its definition.
 func handleHALLensMotifs(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !lensMotifsParams.refuseUnknown(w, r) {
+			return
+		}
 		bind := repos.BindingFromContext(r.Context())
 		lensName := chi.URLParam(r, "lens")
 
@@ -228,6 +231,9 @@ func handleHALLensMotifs(b hal.URLBuilder) http.HandlerFunc {
 // passes "" for the same reason.
 func handleHALLensMotifCluster(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !lensMotifClusterParams.refuseUnknown(w, r) {
+			return
+		}
 		bind := repos.BindingFromContext(r.Context())
 		lensName := chi.URLParam(r, "lens")
 		rawKey := chi.URLParam(r, "key")

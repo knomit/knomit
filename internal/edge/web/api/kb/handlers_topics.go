@@ -65,7 +65,13 @@ type topicEntry struct {
 // handleTopics serves GET /repos/{repo}/branches/{branch}/topics.
 // It lists the ontology root directory and returns a HAL collection.
 func handleTopics(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
-	return topicHandler(b, ontologyRoot, false)
+	list := topicHandler(b, ontologyRoot, false)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !topicsParams.refuseUnknown(w, r) {
+			return
+		}
+		list(w, r)
+	}
 }
 
 // handleTopicNode serves GET /repos/{repo}/branches/{branch}/topics/*.
@@ -73,6 +79,9 @@ func handleTopics(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 // sub-resources when the wildcard path ends with those suffixes.
 func handleTopicNode(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !topicsParams.refuseUnknown(w, r) {
+			return
+		}
 		nodePath := chi.URLParam(r, "*")
 		if strings.HasSuffix(nodePath, "/facts") {
 			topicPath := strings.TrimSuffix(nodePath, "/facts")

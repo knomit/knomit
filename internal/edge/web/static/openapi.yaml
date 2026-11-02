@@ -10,6 +10,16 @@ info:
     `count`, `_links`, and `_embedded.<rel>`. All error responses are
     RFC 9457 `application/problem+json`.
 
+    The knowledge-base read routes answer 400 "Invalid parameter" to a query
+    parameter they do not list, with detail `unknown parameter "<name>"`,
+    and to a query string that does not parse, with detail
+    `malformed query string: <parse error>`. They are the GET routes facts,
+    search, topics, commits, changes, activity, completions, domains,
+    motifs, stats, events and triggers under `/repos/{repo}/branches/{branch}/`,
+    and facts, search, completions, motifs, stats and topics under
+    `/lenses/{lens}/`. The materialize and factset routes refuse an unlisted
+    parameter too, each with its own detail.
+
 servers:
   - url: /api/v1
     description: v1
@@ -1017,6 +1027,35 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/facts/{path}/materialize:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/FactPath"
+    get:
+      tags: [facts]
+      summary: Export a fact's agent document (the whole materialization)
+      description: |
+        The `/materialize` terminal of `GET /repos/{repo}/branches/{branch}/facts/{path}`,
+        listed here so its query parameters are declared: see that route's
+        description for the document, its rules and its 400s. Any other
+        parameter is a 400. The commit-anchored and lens routes serve the same
+        terminal with the same parameters.
+      operationId: getMaterializeExport
+      parameters:
+        - { name: depth, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 10, default: 4 } }
+        - { name: max_nodes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+        - { name: unpin, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: cross_kb, in: query, required: false, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: The agent document
+          content:
+            text/markdown:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/facts/{path}/materialize/pages:
     parameters:

@@ -171,6 +171,11 @@ func handleHALFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 
 		ri := repos.RepoFromContext(r.Context())
 
+		// The declared parameters of what the path addresses (a raw system
+		// file and the fact read take none) — before anything is read.
+		if !refuseUnknownFactPath(w, r, chi.URLParam(r, "*"), false) {
+			return
+		}
 		// A file under .knomit/ is readable by its exact path, raw (user
 		// ruling 2026-10-06); PUT/DELETE of it stay refused.
 		if serveSystemFileRead(w, r, ri, branch, "", chi.URLParam(r, "*")) {

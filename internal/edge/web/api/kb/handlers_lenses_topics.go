@@ -63,6 +63,9 @@ type lensTopicsResponse struct {
 // recognizes kb/<topic>/… filters.)
 func handleHALLensTopics(ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !lensTopicsParams.refuseUnknown(w, r) {
+			return
+		}
 		b := repos.BindingFromContext(r.Context())
 
 		// nodePath is "" on the root route (no wildcard param).

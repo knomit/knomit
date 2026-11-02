@@ -75,6 +75,9 @@ type factSummaryItem struct {
 // handleHALDomains serves GET /repos/{repo}/branches/{branch}/domains.
 func handleHALDomains(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !domainsParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
@@ -124,6 +127,9 @@ func handleHALDomains(b hal.URLBuilder) http.HandlerFunc {
 // handleHALDomainFacts serves GET /repos/{repo}/branches/{branch}/domains/{name}.
 func handleHALDomainFacts(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !domainFactsParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 

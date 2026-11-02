@@ -457,6 +457,9 @@ func handleHALLensFact(b hal.URLBuilder, mgr *repos.Manager) http.HandlerFunc {
 				"fact path is required", r.URL.Path)
 			return
 		}
+		if !refuseUnknownFactPath(w, r, requested, false) {
+			return
+		}
 		// A file under .knomit/ is readable by its exact path on any mount,
 		// raw (user ruling 2026-10-06: one read rule across REST).
 		if serveLensSystemFileRead(w, r, bind, requested) {
@@ -992,6 +995,9 @@ type lensCompletionsResponse struct {
 // entirely from the Binding without touching the store.
 func handleHALLensCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !lensCompletionsParams.refuseUnknown(w, r) {
+			return
+		}
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
 		category := qp.Get("category")

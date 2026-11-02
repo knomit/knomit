@@ -19,6 +19,9 @@ import (
 // unknown repo still reports "not found" rather than "not implemented".
 func handleCommitAnchoredTopicNode() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !commitTopicsParams.refuseUnknown(w, r) {
+			return
+		}
 		hal.WriteProblem(w, http.StatusNotImplemented, "Not Implemented",
 			"commit-anchored topic browsing is not yet supported", r.URL.Path)
 	}

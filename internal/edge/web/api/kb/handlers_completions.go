@@ -37,6 +37,9 @@ type completionsView struct {
 // handleHALCompletions serves GET /repos/{repo}/branches/{branch}/completions.
 func handleHALCompletions(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !completionsParams.refuseUnknown(w, r) {
+			return
+		}
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 

@@ -370,12 +370,16 @@ func TestLensMotifCluster_MountErrorFailsTheWholeRequest(t *testing.T) {
 
 // The detail is addressed by IDENTITY, so it is branch-wide on every mount: no
 // path scope reaches the fan-out, exactly as the repo detail passes "". Scoped
-// to kb/technology/ the cluster would count 3; branch-wide it counts 7.
+// to kb/technology/ the cluster would count 3; branch-wide it counts 7. The
+// route declares no `path`, so one is refused (400) rather than ignored.
 func TestLensMotifCluster_IsBranchWideOnEveryMount(t *testing.T) {
 	env := lensVocabulary(t)
-	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift?path=kb/technology/"))
+	body := decodeMotifDetail(t, env.get(t, "/lenses/eng/motifs/config-drift"))
 	require.Equal(t, [2]int{7, 7}, [2]int{body.DF, body.DFTotal})
 	require.Equal(t, 7, body.CarrierCount)
+	rec := env.get(t, "/lenses/eng/motifs/config-drift?path=kb/technology/")
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `unknown parameter \"path\"`)
 }
 
 // ─── the pivot the vocabulary promises ───────────────────────────────────────
