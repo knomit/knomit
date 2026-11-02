@@ -31,9 +31,13 @@ func originFactDoc(title, body string) string {
 // strategy. The local_wins row is the contrast: the SAME fixture must yield the
 // LOCAL body on the shared path, which proves the parameter decides it.
 //
+// It also ports the e2e spec's post-commit checks: the session is gone (404)
+// and the origin config is persisted with the remote's URL and branch.
+//
 // SABOTAGE: force strategy = merge.StrategyLocalWins in handleApply
-// (api/origins/handlers.go) regardless of req.ConflictStrategy -> the
-// remote_wins row sees the local body -> red.
+// (internal/edge/web/api/origins/handlers.go, the `Strategy: strategy` line of
+// the ReplayConfig) regardless of req.ConflictStrategy -> the remote_wins row
+// sees the local body -> red.
 func TestConnect_ConflictStrategyReachesTheReplay(t *testing.T) {
 	const (
 		sharedPath     = "kb/shared/protocol.md"
@@ -82,6 +86,31 @@ func TestConnect_ConflictStrategyReachesTheReplay(t *testing.T) {
 			}
 			if body := sseCall(t, s, http.MethodPost, base+"/commit", ""); strings.Contains(body, `"phase":"error"`) || !strings.Contains(body, `"phase":"done"`) {
 				t.Fatalf("commit: %s", body)
+			}
+
+			// The commit finalizes the session: it must no longer resolve.
+			{
+				rec := httptest.NewRecorder()
+				s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, base, nil)))
+				if rec.Code != http.StatusNotFound {
+					t.Errorf("%s: session after commit: status %d, want 404", tc.strategy, rec.Code)
+				}
+			}
+			// The origin config is persisted: the remote's URL and the branch
+			// the session tracked (the seeded remote's default, main).
+			{
+				rec := httptest.NewRecorder()
+				s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/core/origin", nil)))
+				var origin struct {
+					URL    string `json:"url"`
+					Branch string `json:"branch"`
+				}
+				if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &origin) != nil {
+					t.Fatalf("%s: GET origin: status %d body %s", tc.strategy, rec.Code, rec.Body.String())
+				}
+				if origin.URL != url || origin.Branch != "main" {
+					t.Errorf("%s: origin = {url %q, branch %q}, want {%q, main}", tc.strategy, origin.URL, origin.Branch, url)
+				}
 			}
 
 			factBody := func(path string) (int, string) {
