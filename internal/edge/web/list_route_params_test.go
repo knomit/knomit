@@ -65,7 +65,7 @@ func paramValue(t *testing.T, name, repo string) (string, string) {
 // answers it 400 "Not an experiment" — accepted as a parameter, refused for
 // the branch.
 //
-// Sabotage: remove the refuseUnknown call from one handler (its row answers
+// Sabotage: remove the RefuseUnknown call from one handler (its row answers
 // 200 to the unknown parameter); drop a declared name from a route's set
 // (that name's request is the unknown-parameter 400).
 func TestListRoutes_UnknownParamIs400_DeclaredParamsAccepted(t *testing.T) {

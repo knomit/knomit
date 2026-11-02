@@ -31,7 +31,7 @@ var kbParamValue = map[string]string{
 // spec route declares past the check. A route with a body to read answers
 // its bare URL 200, so the check is reached on a live route, not a 404.
 //
-// Sabotage, one group at a time: drop a route's refuseUnknown call (its row
+// Sabotage, one group at a time: drop a route's RefuseUnknown call (its row
 // answers 200/other to the unknown parameter); drop a name from a route's set
 // (that name's request is the unknown-parameter 400); route the fact read's
 // /commits sub-resource to factReadParams (its `limit` is refused).

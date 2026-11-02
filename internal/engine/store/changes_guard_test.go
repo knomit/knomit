@@ -78,7 +78,7 @@ var changesAllowedCalls = map[string][]string{
 		// the undeclared-parameter refusal (user ruling 2026-11-02): parses
 		// the query string against the route's declared set, no store and no
 		// clock.
-		"changesParams.refuseUnknown",
+		"changesParams.RefuseUnknown",
 		"err.Error", "errors.Is", "len",
 		// the repo's id for cursor and bookmark scope (a git read, cached)
 		"ri.ID", "federate.ID12", "model.ParseChangesSince", "strconv.Quote",
