@@ -69,8 +69,16 @@ func OpenOrigins(db *sql.DB, crypt *model.Crypt) *Origins {
 // origin is an ordinary state, not an error — the same contract
 // store.GetRemote has always had.
 func (o *Origins) Get(uid string) (*Origin, error) {
+	return o.get(o.db, uid)
+}
+
+type rowQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func (o *Origins) get(q rowQuerier, uid string) (*Origin, error) {
 	var org Origin
-	err := o.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT o.url, o.branch, o.auth_method, o.auth_token,
 		        CASE WHEN s.repo_uid IS NULL THEN ? ELSE ? END,
 		        COALESCE(l.secret_id, '')
@@ -127,16 +135,29 @@ func (o *Origins) Set(uid string, org Origin) error {
 	if org.Branch == "" {
 		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
 	}
-	stored, err := o.sealToken(uid, org.AuthToken)
-	if err != nil {
-		return err
-	}
 	tx, err := o.db.Begin()
 	if err != nil {
 		return fmt.Errorf("origins set: begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	if err := o.setTx(tx, uid, org); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("origins set: commit: %w", err)
+	}
+	return nil
+}
 
+// setTx is Set's writes inside tx.
+func (o *Origins) setTx(tx *sql.Tx, uid string, org Origin) error {
+	if org.Branch == "" {
+		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
+	}
+	stored, err := o.sealToken(uid, org.AuthToken)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(
 		`INSERT INTO repo_origins (repo_uid, url, branch, auth_method, auth_token)
 		 VALUES (?, ?, ?, ?, ?)
@@ -161,14 +182,74 @@ func (o *Origins) Set(uid string, org Origin) error {
 	if err != nil {
 		return fmt.Errorf("origins set mode: %w", err)
 	}
-	if err := setLink(tx, uid, org.SecretID); err != nil {
-		return err
-	}
+	return setLink(tx, uid, org.SecretID)
+}
 
+// Replace is Set that also returns the row it replaced (nil when there was
+// none), read in the SAME transaction as the write. A caller that may have to
+// undo its write (applySwap) restores exactly what it replaced, not a copy it
+// read earlier that a credential change may have overtaken.
+func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
+	if uid == "" {
+		return nil, fmt.Errorf("origins set: uid required")
+	}
+	tx, err := o.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("origins replace: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	prev, err := o.get(tx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.setTx(tx, uid, org); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("origins set: commit: %w", err)
+		return nil, fmt.Errorf("origins replace: commit: %w", err)
+	}
+	return prev, nil
+}
+
+// Restore undoes a Replace that wrote `written` over `prev`, in one
+// transaction. With prev nil the row is deleted. Otherwise prev is written
+// back, EXCEPT its credential when the current row's credential (method,
+// token, secret link) no longer equals written's: a credential change landed
+// after the Replace, and it is kept rather than reverted.
+func (o *Origins) Restore(uid string, written Origin, prev *Origin) error {
+	tx, err := o.db.Begin()
+	if err != nil {
+		return fmt.Errorf("origins restore: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	if prev == nil {
+		if _, err := tx.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins restore: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins restore: %w", err)
+		}
+	} else {
+		cur, err := o.get(tx, uid)
+		if err != nil {
+			return err
+		}
+		target := *prev
+		if cur != nil && !sameCredential(*cur, written) {
+			target.AuthMethod, target.AuthToken, target.SecretID = cur.AuthMethod, cur.AuthToken, cur.SecretID
+		}
+		if err := o.setTx(tx, uid, target); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("origins restore: commit: %w", err)
 	}
 	return nil
+}
+
+func sameCredential(a, b Origin) bool {
+	return a.AuthMethod == b.AuthMethod && a.AuthToken == b.AuthToken && a.SecretID == b.SecretID
 }
 
 // sealToken encrypts a non-empty token, refusing without a Crypt.

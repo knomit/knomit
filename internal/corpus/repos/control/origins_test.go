@@ -283,3 +283,39 @@ func TestOrigins_LinkToMissingSecretFails(t *testing.T) {
 	err = o.SetCredential("u1", "https://example.test/kb.git", "token", "", "nope")
 	require.Error(t, err)
 }
+
+func TestOrigins_ReplaceAndRestore(t *testing.T) {
+	r, o, _ := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+
+	// No previous row: Replace reports nil and Restore deletes.
+	written := Origin{URL: "https://example.test/new.git", Branch: "main", AuthMethod: "token", AuthToken: "w"}
+	prev, err := o.Replace("u1", written)
+	require.NoError(t, err)
+	require.Nil(t, prev)
+	require.NoError(t, o.Restore("u1", written, prev))
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	old := Origin{URL: "https://example.test/old.git", Branch: "main", AuthMethod: "token", AuthToken: "o", Mode: OriginModeSubscribe}
+	require.NoError(t, o.Set("u1", old))
+	prev, err = o.Replace("u1", written)
+	require.NoError(t, err)
+	require.Equal(t, old, *prev)
+
+	// Unchanged since the write: the previous row comes back whole.
+	require.NoError(t, o.Restore("u1", written, prev))
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, old, *got)
+
+	// A credential changed after the write is kept on the restored row.
+	_, err = o.Replace("u1", written)
+	require.NoError(t, err)
+	require.NoError(t, o.SetCredential("u1", written.URL, "basic", "u:p", ""))
+	require.NoError(t, o.Restore("u1", written, prev))
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.Equal(t, Origin{URL: old.URL, Branch: "main", AuthMethod: "basic", AuthToken: "u:p", Mode: OriginModeSubscribe}, *got)
+}
