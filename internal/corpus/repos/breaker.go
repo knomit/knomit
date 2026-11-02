@@ -2,6 +2,7 @@ package repos
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,6 +26,15 @@ import (
 // create-time push and the fleet operations' one push (join, leave, the
 // master's publish). None of them loops.
 // The local (no-origin) loop has no breaker: it does no network I/O.
+//
+// Nothing resets an open breaker early, with ONE scoped exception: a
+// CREDENTIAL change (a stored secret's value replaced, a repo linked to or
+// unlinked from a secret, or its pasted credential swapped) calls
+// RepoInstance.credentialChanged, which bumps the reset generation and wakes
+// the loop. The loop's next round sees the new generation, closes both
+// breakers and zeroes its failure counts before consulting them, so the new
+// credential is tried at once. A plain wake, a timer round, a URL or branch
+// change and every other event leave the breakers as they are.
 
 const (
 	// breakerTripAfter is the number of consecutive failures that opens a
@@ -124,6 +134,26 @@ func viewOf(b breaker, now time.Time) BreakerView {
 type syncBreakers struct {
 	mu          sync.Mutex
 	fetch, push breaker
+	// reset is the credential-change generation: requestReset bumps it and
+	// the loop resets its breakers when it sees a value it has not seen.
+	reset atomic.Uint64
+}
+
+// requestReset asks the loop to close both breakers on its next round (a
+// credential change, see the file comment). Nil-safe.
+func (s *syncBreakers) requestReset() {
+	if s == nil {
+		return
+	}
+	s.reset.Add(1)
+}
+
+// resetGen is the current reset generation; 0 for nil.
+func (s *syncBreakers) resetGen() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.reset.Load()
 }
 
 func (s *syncBreakers) publish(fetch, push breaker) {
