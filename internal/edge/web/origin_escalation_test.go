@@ -386,7 +386,7 @@ func TestOriginEscalation_LocalSocketCallerSetsAnOrigin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/repos/x/origin", strings.NewReader(escBody(map[string]any{"url": bare, "branch": "main"})))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "@" // a unix conn has no ip; the peer is what counts
-	req = req.WithContext(auth.WithPeer(req.Context(), auth.Peer{ID: me.ID, Via: auth.ViaSocket}))
+	req = req.WithContext(auth.WithPeer(req.Context(), auth.Peer{ID: me.ID, Via: auth.LocalVia}))
 	rec := httptest.NewRecorder()
 	f.s.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
