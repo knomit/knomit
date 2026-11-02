@@ -348,6 +348,7 @@ paths:
               schema: { $ref: "#/components/schemas/ProbeOriginResult" }
         "400": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /repos:probe-initialized:
     post:
@@ -397,6 +398,7 @@ paths:
               schema: { $ref: "#/components/schemas/ProbeInitializedResult" }
         "400": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /ontologies:validate:
     post:
@@ -2382,6 +2384,12 @@ paths:
 
         On the fleet repository: 409 `fleet_repository` (POST /fleet/follow
         points it at a new host).
+
+        On a repository linked to a stored secret the link is kept: credential
+        fields are refused with 409 "Linked to a stored secret" (unlink it
+        with PUT /origin/credential first), and a URL change also needs the
+        local-or-same-origin admin gate (403 otherwise) and a URL the secret's
+        hosts list and type allow (422 otherwise).
       requestBody:
         required: true
         content:
@@ -2407,6 +2415,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
         "502":
           description: Origin not attached — the remote could not be reached or refused the credentials; nothing changed.
@@ -2425,7 +2434,10 @@ paths:
       tags: [origin]
       summary: Remove origin configuration
       operationId: deleteOrigin
-      description: Requires the `operator` permission (403 otherwise).
+      description: >-
+        Requires the `operator` permission (403 otherwise). On a repository
+        linked to a stored secret, detaching unlinks it and also needs the
+        local-or-same-origin admin gate (403 otherwise).
       responses:
         "204": { description: Deleted }
         "403": { $ref: "#/components/responses/Problem" }
@@ -2515,12 +2527,20 @@ paths:
         `auth_method` is token (with `token`), basic (with `user` and
         `password`, or `token` as user:password), ssh or none. 400 "Invalid
         credential" for a malformed credential or one that does not fit the
-        URL's scheme, 400 for `secret_id` (not accepted by this endpoint), 400
-        "Invalid origin" for a fleet peer origin (it authenticates with this
-        instance's certificate). 409 "Linked to a stored secret" when the
-        repository uses a stored secret, 409 "No origin", and 409 "Origin
-        changed" when the origin was re-pointed while the credential was being
-        replaced (nothing changed: read the origin and retry).
+        URL's scheme, 400 "Invalid origin" for a fleet peer origin (it
+        authenticates with this instance's certificate).
+
+        `secret_id` links a stored secret (its hosts list must allow the
+        origin's host and its type fit the scheme: 422 otherwise); `secret_id:
+        null` unlinks, replacing the link with the pasted credential sent
+        alongside, or with none. Linking and unlinking need the
+        local-or-same-origin admin gate (403 otherwise). A link, an unlink and
+        a pasted change all reset the sync back-off.
+
+        409 "Linked to a stored secret" for a pasted credential on a linked
+        repository without `secret_id: null`, 409 "No origin", and 409
+        "Origin changed" when the origin was changed concurrently: read it
+        with GET /repos/{repo}/origin, then retry.
       operationId: setOriginCredential
       requestBody:
         required: true
@@ -2541,6 +2561,7 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
@@ -2566,11 +2587,16 @@ paths:
       tags: [origin]
       summary: Create origin session
       operationId: createOriginSession
+      description: >-
+        A session with secret_id tests and commits with that stored secret.
+        Its commit, and a commit that replaces the origin of a repository
+        linked to a stored secret (which unlinks it), need the
+        local-or-same-origin admin gate (403 otherwise).
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/OriginConfigRequest" }
+            schema: { $ref: "#/components/schemas/OriginSessionRequest" }
       responses:
         "200":
           description: Session created
@@ -2591,6 +2617,8 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions/{sessionID}:
@@ -5236,12 +5264,24 @@ components:
   schemas:
     OriginCredentialRequest:
       type: object
-      required: [auth_method]
+      description: >-
+        One of: a pasted credential (auth_method with token, or with user and
+        password); "secret_id": "<id>" to link a stored secret; or
+        "secret_id": null to unlink, with a pasted credential to replace the
+        link or with none for no credential (anonymous).
       properties:
         auth_method: { type: string, enum: [token, basic, ssh, none] }
         token: { type: string, writeOnly: true }
         user: { type: string }
         password: { type: string, writeOnly: true }
+        secret_id:
+          type: string
+          nullable: true
+          description: >-
+            A stored secret's id links it (its hosts list must allow the
+            origin's host and its type fit the scheme, 422 otherwise); null
+            unlinks. Either needs the local-or-same-origin admin gate (403
+            otherwise). Not together with a pasted credential when linking (400).
 
     Secret:
       type: object
@@ -6632,6 +6672,13 @@ components:
         branch:      { type: string, description: Remote branch to track }
         auth_method: { type: string, enum: [token, basic, ssh] }
         auth_token:  { type: string }
+        secret_id:
+          type: string
+          description: >-
+            Use a stored secret (GET /secrets) instead of a pasted credential:
+            not together with one (400). Needs the local-or-same-origin admin
+            gate (403 otherwise) and a secret whose hosts list allows the URL's
+            host and whose type fits its scheme (422 otherwise).
 
     CreateRepoRequest:
       type: object
@@ -6797,6 +6844,13 @@ components:
         branch:      { type: string, description: "Branch to report as upstream if already known; otherwise the probe derives it (see ProbeOriginResult.upstream_branch)." }
         auth_method: { type: string, enum: [token, basic, ssh] }
         auth_token:  { type: string }
+        secret_id:
+          type: string
+          description: >-
+            Use a stored secret (GET /secrets) instead of a pasted credential:
+            not together with one (400). Needs the local-or-same-origin admin
+            gate (403 otherwise) and a secret whose hosts list allows the URL's
+            host and whose type fits its scheme (422 otherwise).
 
     ProbeInitializedRequest:
       type: object
@@ -6815,6 +6869,13 @@ components:
             branch that turned out to be.
         auth_method: { type: string, enum: [token, basic, ssh] }
         auth_token:  { type: string }
+        secret_id:
+          type: string
+          description: >-
+            Use a stored secret (GET /secrets) instead of a pasted credential:
+            not together with one (400). Needs the local-or-same-origin admin
+            gate (403 otherwise) and a secret whose hosts list allows the URL's
+            host and whose type fits its scheme (422 otherwise).
 
     ProbeInitializedResult:
       type: object
@@ -7191,6 +7252,15 @@ components:
             chains to this instance's fleet root, decided once when the
             origin is set); it is served over the fleet's mutual-TLS
             transport. Not accepted as input.
+        secret_id:
+          type: string
+          description: "The stored secret this origin links to. Only for a caller that passes the local-or-same-origin admin gate."
+        secret_name:   { type: string, description: "The linked stored secret's name." }
+        secret_status:
+          type: string
+          enum: [ok, expiring, expired, none]
+          description: "The linked secret's expiry status (expiring = within 14 days). Advisory."
+        secret_expires_at: { type: string, format: date-time, description: "The linked secret's expiry date, when it has one." }
         fetch_breaker:    { $ref: "#/components/schemas/SyncBreaker" }
         push_breaker:     { $ref: "#/components/schemas/SyncBreaker" }
         _links:           { $ref: "#/components/schemas/LinkMap" }
@@ -7233,6 +7303,19 @@ components:
             PUT /origin only. Admit a remote branch that shares no history with
             this repository's main, which the next sync then replaces with the
             remote's. Never admits another active repository's knowledge base.
+
+    OriginSessionRequest:
+      allOf:
+        - $ref: "#/components/schemas/OriginConfigRequest"
+        - type: object
+          properties:
+            secret_id:
+              type: string
+              description: >-
+                Use a stored secret (GET /secrets) instead of a pasted credential:
+                not together with one (400). Needs the local-or-same-origin admin
+                gate (403 otherwise) and a secret whose hosts list allows the URL's
+                host and whose type fits its scheme (422 otherwise).
 
     OriginSetResponse:
       type: object

@@ -15,10 +15,12 @@ import (
 	"knomit/internal/engine/store/model"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/control"
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
@@ -34,9 +36,14 @@ type createSessionRequest struct {
 	Token      string `json:"token"`
 	User       string `json:"user"`
 	Password   string `json:"password"`
+	// SecretID tests and commits with a stored secret instead of a pasted
+	// credential (admin only; the secret must fit the URL).
+	SecretID string `json:"secret_id"`
 }
 
-func handleCreateSession(b hal.URLBuilder, sm *sessionManager) http.HandlerFunc {
+// handleCreateSession serves POST /repos/{repo}/origin-sessions. A session
+// with secret_id passes admin and must fit the URL (422).
+func handleCreateSession(b hal.URLBuilder, rm *repos.Manager, sm *sessionManager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
@@ -78,18 +85,34 @@ func handleCreateSession(b hal.URLBuilder, sm *sessionManager) http.HandlerFunc 
 		// Local-origin policy is enforced at the clone boundary (Manager.Resolve-
 		// Auth, invoked when the session is tested), so it isn't re-checked here.
 
-		// Validate URL/auth compatibility.
-		if err := httpx.ValidateURLAuth(req.URL, req.AuthMethod); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
-				err.Error(), r.URL.Path)
-			return
-		}
-
 		auth := authConfig{
 			Method:   req.AuthMethod,
 			Token:    req.Token,
 			User:     req.User,
 			Password: req.Password,
+		}
+		if req.SecretID != "" {
+			if req.AuthMethod != "" || req.Token != "" || req.User != "" || req.Password != "" {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+					"send either secret_id or a pasted credential (auth_method with token, or with user and password), not both", r.URL.Path)
+				return
+			}
+			if !httpx.Admits(admin, w, r) {
+				return
+			}
+			method, err := rm.CheckSecretForURL(req.SecretID, req.URL)
+			if err != nil {
+				writeSecretRefusal(w, r, err)
+				return
+			}
+			auth = authConfig{Method: method, SecretID: req.SecretID}
+		}
+
+		// Validate URL/auth compatibility.
+		if err := httpx.ValidateURLAuth(req.URL, auth.Method); err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
+				err.Error(), r.URL.Path)
+			return
 		}
 
 		sess, err := sm.Create(repo, req.URL, auth)
@@ -226,24 +249,27 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 		// Phase: connecting.
 		sendEvent(map[string]string{"phase": "connecting"})
 
-		// Resolve auth from session config.
-		authCfg := config.RemoteAuthConfig{
-			AuthMethod: sess.Auth.Method,
-			Token:      sess.Auth.Token,
-			User:       sess.Auth.User,
-			Password:   sess.Auth.Password,
-		}
 		// The transport is decided first (a fleet peer is cloned over the
 		// fleet transport); the commit's attach or swap decides again from
 		// the same input.
-		decided, err := rm.ResolveOrigin(r.Context(), repos.OriginSpec{URL: sess.URL, AuthMethod: sess.Auth.Method,
-			AuthToken: httpx.AssembleAuthToken(sess.Auth.Method, sess.Auth.Token, sess.Auth.User, sess.Auth.Password)})
+		decided, err := rm.ResolveOrigin(r.Context(), sessionOriginSpec(sess.URL, "", sess.Auth))
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("origin refused: %v", err)})
 			return
 		}
-		authCfg.AuthMethod = decided.AuthMethod
-		gitURL, auth, err := rm.ResolveAuth(authCfg, sess.URL)
+		// A stored secret is resolved like every other git operation's.
+		var gitURL string
+		var auth transport.AuthMethod
+		if sess.Auth.SecretID != "" {
+			gitURL, auth, err = rm.ResolveSpecAuth(decided)
+		} else {
+			gitURL, auth, err = rm.ResolveAuth(config.RemoteAuthConfig{
+				AuthMethod: decided.AuthMethod,
+				Token:      sess.Auth.Token,
+				User:       sess.Auth.User,
+				Password:   sess.Auth.Password,
+			}, sess.URL)
+		}
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -875,7 +901,11 @@ type commitRequest struct {
 // before the machine changed anything (a different knowledge base, a remote
 // already held by another repo) is still a plain HTTP problem: the stream
 // opens only once the event is under way.
-func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) http.HandlerFunc {
+//
+// A commit that links a stored secret (the session's secret_id), or that
+// replaces the origin of a repo linked to one (which unlinks it), needs
+// admin.
+func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -922,6 +952,12 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) htt
 		ri := repos.RepoFromContext(r.Context())
 		b := hal.URLBuilder{Base: httpx.APIBase}
 
+		if authCfg.SecretID != "" || repoLinked(rm, ri) {
+			if !httpx.Admits(admin, w, r) {
+				return
+			}
+		}
+
 		// Exclusive with indexing, checked before the session's clone is
 		// closed, so a refused commit can be retried with cancel_indexing.
 		if ri.Status().IndexRunning && !body.CancelIndexing {
@@ -936,12 +972,7 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string) htt
 		if upstreamMain == "" {
 			upstreamMain = testResult.DefaultBranch
 		}
-		origin := repos.OriginSpec{
-			URL:        remoteURL,
-			Branch:     upstreamMain,
-			AuthMethod: authCfg.Method,
-			AuthToken:  httpx.AssembleAuthToken(authCfg.Method, authCfg.Token, authCfg.User, authCfg.Password),
-		}
+		origin := sessionOriginSpec(remoteURL, upstreamMain, authCfg)
 
 		var e repos.MachineEvent
 		attach := true // false: the shared-history commit has no branch to record
@@ -1193,4 +1224,44 @@ func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 	default:
 		hal.WriteProblem(w, http.StatusInternalServerError, "Commit failed", err.Error(), r.URL.Path)
 	}
+}
+
+// sessionOriginSpec is the origin a session tests and commits: its pasted
+// credential, or its stored secret (SecretID, no token).
+func sessionOriginSpec(url, branch string, a authConfig) repos.OriginSpec {
+	return repos.OriginSpec{
+		URL:        url,
+		Branch:     branch,
+		AuthMethod: a.Method,
+		AuthToken:  httpx.AssembleAuthToken(a.Method, a.Token, a.User, a.Password),
+		SecretID:   a.SecretID,
+	}
+}
+
+// writeSecretRefusal answers a stored secret that cannot be used for the
+// session's URL.
+func writeSecretRefusal(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, control.ErrSecretNotFound):
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret not found",
+			"secret_id names no stored secret: list them with GET /secrets", r.URL.Path)
+	case errors.Is(err, repos.ErrSecretHostNotAllowed), errors.Is(err, repos.ErrSecretTypeMismatch):
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Secret does not fit the origin", err.Error(), r.URL.Path)
+	default:
+		hal.WriteProblem(w, http.StatusInternalServerError, "Failed to check the secret", err.Error(), r.URL.Path)
+	}
+}
+
+// repoLinked reports whether ri's stored origin links a stored secret. An
+// origin that cannot be read counts as linked, so the gate fails closed.
+func repoLinked(rm *repos.Manager, ri *repos.RepoInstance) bool {
+	o := rm.Origins()
+	if o == nil {
+		return false
+	}
+	stored, err := o.Get(ri.UID())
+	if err != nil {
+		return true
+	}
+	return stored != nil && stored.SecretID != ""
 }

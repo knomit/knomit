@@ -14,6 +14,7 @@ type probeOriginRequest struct {
 	Branch     string `json:"branch"`
 	AuthMethod string `json:"auth_method"`
 	AuthToken  string `json:"auth_token"`
+	SecretID   string `json:"secret_id"`
 }
 
 // handleReposProbeOrigin serves POST /api/v1/repos:probe-origin. Collection
@@ -23,7 +24,10 @@ type probeOriginRequest struct {
 // Unreachable and auth-required come back as 200 results, not HTTP errors:
 // both are states the wizard renders and recovers from. Only a refused
 // request (the local-origin gate) is a 4xx.
-func handleReposProbeOrigin(m *repos.Manager) http.HandlerFunc {
+//
+// secret_id probes with a stored secret instead of a pasted credential: it
+// needs admin and must fit the URL (422).
+func handleReposProbeOrigin(m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req probeOriginRequest
 		if !httpx.DecodeJSON(w, r, &req, 0) {
@@ -36,12 +40,15 @@ func handleReposProbeOrigin(m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", "url is required", r.URL.Path)
 			return
 		}
-		res, err := m.ProbeOrigin(r.Context(), repos.OriginSpec{
-			URL:        req.URL,
-			Branch:     req.Branch,
-			AuthMethod: req.AuthMethod,
-			AuthToken:  req.AuthToken,
-		})
+		method, ok := admitSecretID(w, r, m, admin, req.SecretID, req.URL, req.AuthToken != "")
+		if !ok {
+			return
+		}
+		spec := repos.OriginSpec{URL: req.URL, Branch: req.Branch, AuthMethod: req.AuthMethod, AuthToken: req.AuthToken}
+		if method != "" {
+			spec.AuthMethod, spec.SecretID = method, req.SecretID
+		}
+		res, err := m.ProbeOrigin(r.Context(), spec)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Origin rejected", err.Error(), r.URL.Path)
 			return

@@ -88,10 +88,10 @@ func TestOriginCredentialAPI_Refusals(t *testing.T) {
 	meta, err := f.m.Secrets().Create(control.SecretInput{Name: "pat", Type: control.SecretTypeToken,
 		Hosts: []string{"github.com"}, Value: control.SecretValue{Token: "s"}}, time.Now().UTC())
 	require.NoError(t, err)
-	o, err := f.m.Origins().Get(riX.UID())
+	// The origin is a local path, which no secret can be linked to through
+	// the API (no host); the link row is planted to reach the refusal.
+	_, err = f.m.Repos().DB().Exec(`INSERT INTO repo_origin_secrets (repo_uid, secret_id) VALUES (?, ?)`, riX.UID(), meta.ID)
 	require.NoError(t, err)
-	o.SecretID, o.AuthToken = meta.ID, ""
-	require.NoError(t, f.m.Origins().Set(riX.UID(), *o))
 	rec := escDo(h, tok, http.MethodPut, "/api/v1/repos/x/origin/credential", `{"auth_method":"token","token":"t"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), "secret_id")

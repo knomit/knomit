@@ -6,6 +6,7 @@ package origins
 
 import (
 	"context"
+	"net/http"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -43,7 +44,11 @@ import (
 // sessions, so a caller that serves the routes from more than one router
 // mounts ONE r in all of them (web's router does, for its plain and OAuth
 // listeners).
-func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string, released *sync.WaitGroup) {
+//
+// admin is the local-or-same-origin admin gate: a session that uses a
+// stored secret (secret_id), and a commit that would replace a stored-secret
+// link, pass it.
+func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, sessionsDir string, released *sync.WaitGroup, admin func(http.Handler) http.Handler) {
 	sm := newSessionManager(ctx, sessionsDir)
 	if released != nil {
 		released.Add(1)
@@ -54,19 +59,19 @@ func Mount(ctx context.Context, r chi.Router, rm *repos.Manager, agentBranch, se
 			released.Done()
 		})
 	}
-	routes(r, rm, agentBranch, sm)
+	routes(r, rm, agentBranch, sm, admin)
 }
 
 // routes is Mount's route table, over a given manager so the package's tests
 // can reach the sessions their requests create.
-func routes(r chi.Router, rm *repos.Manager, agentBranch string, sm *sessionManager) {
+func routes(r chi.Router, rm *repos.Manager, agentBranch string, sm *sessionManager, admin func(http.Handler) http.Handler) {
 	b := hal.URLBuilder{Base: httpx.APIBase}
 	r.Get("/", handleListSessions(b, sm))
-	r.Post("/", handleCreateSession(b, sm))
+	r.Post("/", handleCreateSession(b, rm, sm, admin))
 	r.Get("/{sessionID}", handleGetSession(b, sm))
 	r.Delete("/{sessionID}", handleDeleteSession(sm))
 	r.Get("/{sessionID}/test", handleTestConnectivity(rm, sm, agentBranch))
 	r.Get("/{sessionID}/preview", handlePreview(sm, agentBranch))
 	r.Post("/{sessionID}/apply", handleApply(sm, agentBranch))
-	r.Post("/{sessionID}/commit", handleCommit(rm, sm, agentBranch))
+	r.Post("/{sessionID}/commit", handleCommit(rm, sm, agentBranch, admin))
 }

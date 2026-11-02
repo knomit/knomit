@@ -104,7 +104,7 @@ func Mount(
 	// A create that names an origin chooses one, so it needs the operator
 	// like PUT /origin; the handler applies the gate once it has read the
 	// body (a create without an origin stays a `write`).
-	top.Post("/repos", handleHALReposCreate(b, rm, operator))
+	top.Post("/repos", handleHALReposCreate(b, rm, operator, admin))
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING
 	// collection rather than "/repos/creates/{id}", and the precedent for a
@@ -175,14 +175,14 @@ func Mount(
 	// it runs BEFORE any repo exists. Both probes are the operator's, like the
 	// origin-session wizard: they read a remote the caller names (refs, and
 	// for :probe-initialized a tip and its ontology).
-	top.With(operator).Post("/repos:probe-origin", handleReposProbeOrigin(rm))
+	top.With(operator).Post("/repos:probe-origin", handleReposProbeOrigin(rm, admin))
 
 	// The second, per-BRANCH half of that classification: does the chosen
 	// branch already hold a knomit knowledge base? Separate from probe-origin
 	// because the answer differs per branch and the branch is not known when
 	// that probe runs — and because this one actually transfers a commit
 	// (shallow, single-branch, discarded) rather than only listing refs.
-	top.With(operator).Post("/repos:probe-initialized", handleReposProbeInitialized(rm))
+	top.With(operator).Post("/repos:probe-initialized", handleReposProbeInitialized(rm, admin))
 
 	// Ontology endpoints. Collection-level and repo-independent: the create
 	// wizard calls them BEFORE any repo exists, so they cannot live under

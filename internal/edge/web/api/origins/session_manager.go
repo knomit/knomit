@@ -24,6 +24,9 @@ type authConfig struct {
 	Token    string
 	User     string
 	Password string
+	// SecretID: a stored secret instead of a pasted credential; Method is
+	// then the secret's transport and the other fields are empty.
+	SecretID string
 }
 
 // sessionState represents the lifecycle stage of an originSession.
