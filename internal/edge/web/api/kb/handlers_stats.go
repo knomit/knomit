@@ -61,7 +61,7 @@ type statsView struct {
 // handleHALStats serves GET /repos/{repo}/branches/{branch}/stats.
 func handleHALStats(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !statsParams.refuseUnknown(w, r) {
+		if !statsParams.RefuseUnknown(w, r) {
 			return
 		}
 		repoName := chi.URLParam(r, "repo")

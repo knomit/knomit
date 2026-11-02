@@ -98,7 +98,7 @@ type lensStatsResponse struct {
 // both sides, changing nothing).
 func handleHALLensStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !lensStatsParams.refuseUnknown(w, r) {
+		if !lensStatsParams.RefuseUnknown(w, r) {
 			return
 		}
 		b := repos.BindingFromContext(r.Context())

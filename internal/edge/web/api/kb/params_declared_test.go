@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"knomit/internal/edge/web/httpx"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,19 +39,6 @@ func openAPIQueryParams(t *testing.T, route string) []string {
 	return out
 }
 
-// names renders d back into OpenAPI's spelling, sorted.
-func (d declaredParams) list() []string {
-	var out []string
-	for n := range d.names {
-		out = append(out, n)
-	}
-	for _, p := range d.prefixes {
-		out = append(out, p+"<key>")
-	}
-	sort.Strings(out)
-	return out
-}
-
 // Each list route's code-side declared set IS its OpenAPI parameter list: a
 // parameter added to the handler's set and not to the spec, or the other way
 // round, fails here, so the 400 a client gets and the reference it reads
@@ -59,23 +47,12 @@ func (d declaredParams) list() []string {
 // Sabotage: drop "sort" from repoFactsParams (or since_fork from the spec)
 // and the repo /facts row differs.
 func TestListRouteParams_MatchOpenAPI(t *testing.T) {
-	for route, d := range map[string]declaredParams{
+	for route, d := range map[string]httpx.DeclaredParams{
 		"/repos/{repo}/branches/{branch}/search": repoSearchParams,
 		"/repos/{repo}/branches/{branch}/facts":  repoFactsParams,
 		"/lenses/{lens}/search":                  lensSearchParams,
 		"/lenses/{lens}/facts":                   lensFactsParams,
 	} {
-		require.Equal(t, openAPIQueryParams(t, route), d.list(), route)
+		require.Equal(t, openAPIQueryParams(t, route), d.Names(), route)
 	}
-}
-
-// A family declares only its members: "context." alone, or a name that only
-// shares a stem, is unknown.
-func TestDeclaredParams_FamilyPrefix(t *testing.T) {
-	d := declare("q", "context.<key>")
-	require.True(t, d.has("q"))
-	require.True(t, d.has("context.task"))
-	require.False(t, d.has("context."))
-	require.False(t, d.has("contextual"))
-	require.False(t, d.has("qq"))
 }

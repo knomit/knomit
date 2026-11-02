@@ -1,6 +1,9 @@
 package kb
 
 import (
+	"knomit/internal/edge/web/httpx"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,8 +18,8 @@ import (
 // Sabotage: drop "axis" from statsParams (or "repo" from lensTopicsParams) and
 // that route's row differs.
 func TestKBRouteParams_MatchOpenAPI(t *testing.T) {
-	materialize := declaredParams{names: materializeParams}
-	for route, d := range map[string]declaredParams{
+	materialize := httpx.DeclareParams(slices.Collect(maps.Keys(materializeParams))...)
+	for route, d := range map[string]httpx.DeclaredParams{
 		"/repos/{repo}/branches/{branch}/topics":                      topicsParams,
 		"/repos/{repo}/branches/{branch}/topics/{path}":               topicsParams,
 		"/repos/{repo}/branches/{branch}/changes":                     changesParams,
@@ -46,7 +49,7 @@ func TestKBRouteParams_MatchOpenAPI(t *testing.T) {
 		"/lenses/{lens}/topics/{path}":                                lensTopicsParams,
 	} {
 		want := openAPIQueryParams(t, route)
-		got := d.list()
+		got := d.Names()
 		if len(want) == 0 && len(got) == 0 {
 			continue
 		}

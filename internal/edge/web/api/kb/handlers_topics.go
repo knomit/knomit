@@ -67,7 +67,7 @@ type topicEntry struct {
 func handleTopics(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	list := topicHandler(b, ontologyRoot, false)
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !topicsParams.refuseUnknown(w, r) {
+		if !topicsParams.RefuseUnknown(w, r) {
 			return
 		}
 		list(w, r)
@@ -79,7 +79,7 @@ func handleTopics(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 // sub-resources when the wildcard path ends with those suffixes.
 func handleTopicNode(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !topicsParams.refuseUnknown(w, r) {
+		if !topicsParams.RefuseUnknown(w, r) {
 			return
 		}
 		nodePath := chi.URLParam(r, "*")
