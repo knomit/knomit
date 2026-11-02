@@ -108,4 +108,66 @@ describe('the FactSet entry control', () => {
     expect(new URLSearchParams(s.params).get('q')).toBe('auth');
     expect(new URLSearchParams(s.params).has('repo')).toBe(false);
   });
+
+  // The ruled copy (user, 2026-11-02). Sabotage: put the old string back.
+  it('reads "Materialize results" (tooltip and aria-label); disabled keeps its own tooltip', async () => {
+    const { unmount } = render(<Library state={repoState({ freeText: 'x' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(control()).not.toBeNull());
+    expect(control()!.getAttribute('aria-label')).toBe('Materialize results');
+    expect(control()!.getAttribute('title')).toBe('Materialize results');
+    unmount();
+    render(<Library state={repoState({ freeText: 'x', asOf: { mode: 'history', commit: 'abc1234' } })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(control()).not.toBeNull());
+    expect(control()!.getAttribute('title')).toBe('Not available in history');
+  });
+});
+
+// A reload with factset=1: once App has restored the list (the flag is
+// 'ready'), the Library re-creates the FactSet from THIS list's search, or
+// drops the flag where nothing can be re-created.
+//
+// Sabotage, one run each: re-create without the `live` check (history opens
+// one); re-create without the factsetSearch check (path mode keeps the flag).
+describe('re-creating a FactSet after a reload', () => {
+  const arm = () => {
+    window.history.replaceState(null, '', '/?factset=1');
+    factsetView.load();
+    factsetView.arm();
+  };
+
+  it('a search list re-creates it from the list search', async () => {
+    arm();
+    render(<Library state={repoState({ freeText: 'goroutine' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(factsetView.get().search).not.toBeNull());
+    const s = factsetView.get().search!;
+    expect(s.target).toEqual({ kind: 'repo', repo: 'knomit-kb', branch: 'agent/test' });
+    expect(Object.fromEntries(new URLSearchParams(s.params))).toEqual({ q: 'goroutine', path: 'kb' });
+    expect(factsetView.get().pending).toBe(false);
+    expect(window.location.search).toBe('?factset=1');
+  });
+
+  it('a flag still waiting for the list is left alone', async () => {
+    window.history.replaceState(null, '', '/?factset=1');
+    factsetView.load();
+    render(<Library state={repoState({ librarySort: 'path' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(calls.some(c => c.fn === 'browse')).toBe(true));
+    expect(factsetView.get().pending).toBe('wait');
+    expect(window.location.search).toBe('?factset=1');
+  });
+
+  it('the path tree drops the flag', async () => {
+    arm();
+    render(<Library state={repoState({ librarySort: 'path' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(factsetView.get().pending).toBe(false));
+    expect(factsetView.get().search).toBeNull();
+    expect(window.location.search).toBe('');
+  });
+
+  it('history drops the flag', async () => {
+    arm();
+    render(<Library state={repoState({ freeText: 'goroutine', asOf: { mode: 'history', commit: 'abc1234' } })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(factsetView.get().pending).toBe(false));
+    expect(factsetView.get().search).toBeNull();
+    expect(window.location.search).toBe('');
+  });
 });

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useAsync } from './hooks';
 import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
@@ -931,6 +931,16 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const openFactSet = useCallback(() => {
     if (factsetSearch && live) factsetView.open(factsetSearch);
   }, [factsetSearch, live]);
+  // A reload with factset=1: once App has put the URL's list back (the flag is
+  // 'ready'), the FactSet is re-created from THIS list's search, a new first
+  // call built by the same builders, never an id or cursor from the URL. When
+  // nothing can be re-created (the path tree, history) the flag goes.
+  const fsPending = useSyncExternalStore(factsetView.subscribe, () => factsetView.get().pending);
+  useEffect(() => {
+    if (fsPending !== 'ready') return;
+    if (factsetSearch && live) factsetView.open(factsetSearch);
+    else factsetView.dropPending();
+  }, [fsPending, factsetSearch, live]);
 
   // Whole names or none, ordered by how many rows carry each — the same grammar
   // the fact header's motif cells follow, so the two surfaces cannot drift.

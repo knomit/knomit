@@ -169,6 +169,9 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  // A reload puts back the list the URL carried (listUrl.ts), once its context
+  // and branch are confirmed. ONE action so it lands as one state.
+  | { type: 'RESTORE_LIST'; filters: FilterChip[]; freeText: string; sort: LibrarySort; lensSources: string[] | null; sinceFork: boolean }
   // "Show me every fact with this shape." ONE action, not ADD_FILTER plus a
   // path clear: two dispatches would be two chances to push and, as the
   // lens-sources bug showed, in practice none.
@@ -645,6 +648,20 @@ function applyAction(s: AppState, a: Action): AppState {
       // auto-select their first row after the fetch settles; Path mode
       // starts un-selected so the user picks deliberately from the tree.
       return { ...s, librarySort: a.sort, factPath: null };
+    case 'RESTORE_LIST':
+      // A page load, not a move: nothing is pushed, there is no trail to go
+      // back along yet. sinceFork is held to the SET_SINCE_FORK guard: only
+      // inside an experiment. lensSources only in a lens context, where a
+      // mount selection means something.
+      return {
+        ...s,
+        filters: a.filters,
+        freeText: a.freeText,
+        librarySort: a.sort,
+        lensSources: s.context.kind === 'lens' ? a.lensSources : s.lensSources,
+        sinceFork: s.experiment ? a.sinceFork : false,
+        factPath: null,
+      };
     case 'SET_NOTICE':
       return { ...s, notice: a.text };
     case 'CLEAR_NOTICE':

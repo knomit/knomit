@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import { FakeEventSource } from './testEventSource';
 
@@ -8,6 +8,14 @@ import { FakeEventSource } from './testEventSource';
 // not set `globals: true`, so we register cleanup explicitly.
 afterEach(() => {
   cleanup();
+});
+
+// App writes the list's search and its context into the query string
+// (listUrl.ts) and reads it back on mount, as a page load does. jsdom keeps
+// one URL per file, so each test starts from a bare one: a URL left by the
+// previous test would be read as a reload of it.
+beforeEach(() => {
+  window.history.replaceState(null, '', '/');
 });
 
 // jsdom does not implement IntersectionObserver. Components that use it for

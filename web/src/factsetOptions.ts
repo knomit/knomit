@@ -3,7 +3,8 @@
 // a11a0b03), under their own keys so they never collide with the single-fact
 // view's `materialize=1` / mat_* keys (Q-UI6). The URL carries no FactSet id
 // or cursor: the search is the results list's, frozen when the view opens, and
-// the FactSet is re-created from it.
+// after a reload the FactSet is re-created from the list's search, which comes
+// back from the URL too (listUrl.ts).
 //
 // The Library opens the view and the right panel shows it; they share this
 // small store (state.ts is unchanged).
@@ -57,27 +58,31 @@ export function writeFactSetParams(search: string, s: FsUrlState): string {
 }
 
 /** What the right panel shows: the FactSet of `search` at `options`, or
- *  nothing (search null). */
-export interface FsView { search: FsSearch | null; options: MatOptions }
+ *  nothing (search null). `pending` is a reload's open flag waiting to be
+ *  re-created: the URL said factset=1 and the list it came from has not been
+ *  restored yet ('wait'), or has been and the Library may now re-create the
+ *  FactSet from it ('ready'). */
+export interface FsView { search: FsSearch | null; options: MatOptions; pending: false | 'wait' | 'ready' }
 
 type Listener = () => void;
 
 /** The shared FactSet view state: the frozen search (memory only) plus the
  *  open flag and options (mirrored into the query string). */
 class FactSetViewStore {
-  private view: FsView;
+  private view: FsView = { search: null, options: DEFAULT_OPTIONS, pending: false };
   private listeners = new Set<Listener>();
 
-  constructor() {
+  constructor() { this.load(); }
+
+  /** Reads the page's URL as a page load does. A factset=1 there is NOT
+   *  cleared: it waits for the list's search to come back from the URL
+   *  (listUrl.ts), and is then re-created from it (a new first call) or, when
+   *  nothing can be re-created (the path tree, history, a context that is
+   *  gone), dropped. App calls this once when it mounts. */
+  load(): void {
     const url = parseFactSetParams(typeof window !== 'undefined' ? window.location.search : '');
-    this.view = { search: null, options: url.options };
-    // A reload has no list search to re-create the FactSet from (the list's
-    // state is not in the URL), so a stale open flag is cleared at once; the
-    // options stay with it, written again only when a FactSet opens.
-    if (url.open && typeof window !== 'undefined') {
-      const q = writeFactSetParams(window.location.search, { open: false, options: url.options });
-      window.history.replaceState(window.history.state, '', window.location.pathname + q + window.location.hash);
-    }
+    this.view = { search: null, options: url.options, pending: url.open ? 'wait' : false };
+    this.listeners.forEach(l => l());
   }
 
   subscribe = (l: Listener): (() => void) => {
@@ -89,7 +94,7 @@ class FactSetViewStore {
   private set(v: FsView): void {
     this.view = v;
     if (typeof window !== 'undefined') {
-      const q = writeFactSetParams(window.location.search, { open: v.search !== null, options: v.options });
+      const q = writeFactSetParams(window.location.search, { open: v.search !== null || v.pending !== false, options: v.options });
       if (q !== window.location.search) {
         window.history.replaceState(window.history.state, '', window.location.pathname + q + window.location.hash);
       }
@@ -98,11 +103,15 @@ class FactSetViewStore {
   }
 
   /** Opens the FactSet of the list's current search (frozen from here on). */
-  open(search: FsSearch): void { this.set({ ...this.view, search }); }
-  close(): void { if (this.view.search) this.set({ ...this.view, search: null }); }
+  open(search: FsSearch): void { this.set({ ...this.view, search, pending: false }); }
+  close(): void { if (this.view.search || this.view.pending) this.set({ ...this.view, search: null, pending: false }); }
   setOptions(options: MatOptions): void {
     if (!sameOptions(options, this.view.options)) this.set({ ...this.view, options });
   }
+  /** The list a pending flag waits for is restored: the Library may re-create. */
+  arm(): void { if (this.view.pending === 'wait') this.set({ ...this.view, pending: 'ready' }); }
+  /** Nothing can be re-created: the flag goes, the options stay in memory. */
+  dropPending(): void { if (this.view.pending) this.set({ ...this.view, pending: false }); }
 }
 
 export const factsetView = new FactSetViewStore();

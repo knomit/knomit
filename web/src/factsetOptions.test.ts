@@ -39,19 +39,25 @@ describe('factset URL state', () => {
   });
 });
 
-// L5: after a reload nothing can re-create the FactSet (the list's search is
-// not in the URL), so a stale factset=1 is cleared when the store loads; the
-// options are kept in memory for the next FactSet.
+// After a reload the open flag is NOT cleared on load (it was, under L5, when
+// the list's search was not in the URL): it waits for the list to come back
+// from the URL and is re-created from it, or dropped when nothing can be.
 //
-// Sabotage: drop the clearing in the store's constructor: the URL keeps
-// factset=1&fs_depth=7.
-describe('a stale open flag after a reload (L5)', () => {
-  it('is cleared on load, other keys kept, options remembered', async () => {
+// Sabotage: clear the flag in load() again: the URL loses factset=1 and
+// pending reads false.
+describe('the open flag after a reload', () => {
+  it('waits on load; arm, then drop, keep the options', async () => {
     window.history.replaceState(null, '', '/?x=1&factset=1&fs_depth=7');
     vi.resetModules();
     const mod = await import('./factsetOptions');
+    expect(window.location.search).toBe('?x=1&factset=1&fs_depth=7');
+    expect(mod.factsetView.get()).toEqual({ search: null, options: { ...DEFAULT_OPTIONS, depth: 7 }, pending: 'wait' });
+    mod.factsetView.arm();
+    expect(mod.factsetView.get().pending).toBe('ready');
+    expect(window.location.search).toBe('?x=1&factset=1&fs_depth=7');
+    mod.factsetView.dropPending();
     expect(window.location.search).toBe('?x=1');
-    expect(mod.factsetView.get()).toEqual({ search: null, options: { ...DEFAULT_OPTIONS, depth: 7 } });
+    expect(mod.factsetView.get()).toEqual({ search: null, options: { ...DEFAULT_OPTIONS, depth: 7 }, pending: false });
   });
 
   it('leaves a URL without the flag alone', async () => {
