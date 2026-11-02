@@ -4,7 +4,8 @@ describe('the event stream seam', () => {
   // Every stream the app opens must go through openEventStream, or that stream
   // stays on a plain EventSource and is dead on the desktop's Windows build.
   it('is the only place that constructs an EventSource', () => {
-    const files = import.meta.glob(['./*.ts', './*.tsx'], {
+    // Recursive, so a file in a subdirectory cannot hide a raw EventSource.
+    const files = import.meta.glob(['./**/*.ts', './**/*.tsx', '!./**/node_modules/**'], {
       query: '?raw', import: 'default', eager: true,
     }) as Record<string, string>;
     const names = Object.keys(files);

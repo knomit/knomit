@@ -90,8 +90,12 @@ func TestAPIProxy_StripsWailsAndOriginHeadersAndRewritesHost(t *testing.T) {
 	}))
 	h := apiProxy(assetStub, always(true), up)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/repos?x=1", nil)
-	req.Host = "localhost"
-	req.Header.Set("Origin", "wails://localhost")
+	// The webview's own Host, which is not the one the server must see: Windows
+	// serves the UI from http://wails.localhost (desktopOrigin), so the proxy
+	// has to rewrite it. (On macOS/Linux the Host is already "localhost", where
+	// a rewrite could not be told apart from a pass-through.)
+	req.Host = "wails.localhost"
+	req.Header.Set("Origin", "http://wails.localhost")
 	req.Header.Set("x-wails-window-id", "1")
 	req.Header.Set("X-Wails-Window-Name", "main")
 	req.Header.Set("X-Knomit-Client", "web")
