@@ -24,7 +24,7 @@ import (
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
-	"knomit/internal/testsupport/gitfixture"
+	"knomit/test/testenv/gitserver"
 	"knomit/internal/testsupport/testsigner"
 )
 
@@ -35,7 +35,7 @@ const linkedToken = "tok-linked-1"
 type secretsFixture struct {
 	m    *Manager
 	deps Deps
-	srv  *gitfixture.HTTPRemote
+	srv  *gitserver.Server
 	url string // the http URL of the seeded remote
 	dir string
 }
@@ -44,8 +44,7 @@ func newSecretsFixture(t *testing.T) *secretsFixture {
 	t.Helper()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "srv")
-	seedBareRemote(t, filepath.Join(root, "remote.git"))
-	srv := gitfixture.ServeHTTP(t, root, "x-token", linkedToken)
+	srv := linkedRemote(t, root, "remote.git", seedBareRemote)
 	home := filepath.Join(dir, "home")
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	key := filepath.Join(home, "agent.key")
@@ -90,6 +89,41 @@ func (f *secretsFixture) linkedRepo(t *testing.T) (*RepoInstance, string) {
 		Origin: &OriginSpec{URL: f.url, Branch: "main", AuthMethod: "token", SecretID: id}}, nil)
 	require.NoError(t, err)
 	return ri, id
+}
+
+// linkedRemote seeds root/name with seed and serves root over smart HTTP,
+// requiring x-token:linkedToken. Pushes are enabled on the repo.
+func linkedRemote(t *testing.T, root, name string, seed func(*testing.T, string) string) *gitserver.Server {
+	t.Helper()
+	bare := filepath.Join(root, name)
+	seed(t, bare)
+	runGit(t, bare, "config", "http.receivepack", "true")
+	srv := gitserver.New(t, root)
+	t.Cleanup(srv.Close)
+	srv.Fault().RequireBasicAuth("x-token", linkedToken)
+	return srv
+}
+
+// accepted counts the requests that carried the accepted credential.
+func accepted(srv *gitserver.Server) int {
+	n := 0
+	for _, a := range srv.Fault().AuthAttempts() {
+		if a.OK {
+			n++
+		}
+	}
+	return n
+}
+
+// refused lists the passwords of the refused requests ("" for none).
+func refused(srv *gitserver.Server) []string {
+	var out []string
+	for _, a := range srv.Fault().AuthAttempts() {
+		if !a.OK {
+			out = append(out, a.Password)
+		}
+	}
+	return out
 }
 
 func newTestSecrets(t *testing.T, crypt *model.Crypt) *control.Secrets {
@@ -244,8 +278,8 @@ func TestLoop_LinkedRepoSyncsWithTheSecret(t *testing.T) {
 	require.Equal(t, id, stored.SecretID)
 	require.Empty(t, stored.AuthToken)
 	require.Equal(t, id, injected(t, ri).SecretID)
-	require.Positive(t, f.srv.Accepted(), "the clone authenticated with the secret")
-	require.NotContains(t, f.srv.Refused(), "", "never an anonymous request after the challenge")
+	require.Positive(t, accepted(f.srv), "the clone authenticated with the secret")
+	require.NotContains(t, refused(f.srv), "", "never an anonymous request after the challenge")
 
 	require.NoError(t, ri.OriginRoundForTest(context.Background()))
 	require.Equal(t, "ok", derefStr(injected(t, ri).LastStatus))
@@ -261,13 +295,13 @@ func TestLoop_UndecryptableSecretIsASyncError(t *testing.T) {
 
 	var attempts []string
 	setSyncHooks(t, syncHooks{attempt: func(repo, step string) { attempts = append(attempts, step) }})
-	before := f.srv.Accepted()
+	before := accepted(f.srv)
 	require.NoError(t, ri.OriginRoundForTest(context.Background()))
 	r := injected(t, ri)
 	require.Equal(t, "error", derefStr(r.LastStatus))
 	require.Contains(t, derefStr(r.LastError), "gh-pat")
 	require.Empty(t, attempts, "no fetch or push was attempted")
-	require.Equal(t, before, f.srv.Accepted(), "nothing reached the remote")
+	require.Equal(t, before, accepted(f.srv), "nothing reached the remote")
 }
 
 // A linked repo whose URL is changed (any path) to a host off the list: the
@@ -282,13 +316,13 @@ func TestLoop_HostOffTheListNeverSendsTheSecret(t *testing.T) {
 		o.URL = moved
 		svc.Remote().SetOrigin(o)
 	}))
-	before := f.srv.Accepted()
+	before := accepted(f.srv)
 	require.NoError(t, ri.OriginRoundForTest(context.Background()))
 	r := injected(t, ri)
 	require.Equal(t, "error", derefStr(r.LastStatus))
 	require.Contains(t, derefStr(r.LastError), "not allowed for host localhost")
-	require.Equal(t, before, f.srv.Accepted())
-	for _, p := range f.srv.Refused() {
+	require.Equal(t, before, accepted(f.srv))
+	for _, p := range refused(f.srv) {
 		require.NotEqual(t, linkedToken, p)
 	}
 }

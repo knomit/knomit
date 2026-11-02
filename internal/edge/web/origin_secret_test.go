@@ -16,7 +16,7 @@ import (
 	"knomit/internal/corpus/repos/control"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
-	"knomit/internal/testsupport/gitfixture"
+	"knomit/test/testenv/gitserver"
 )
 
 const linkedSecretValue = "LINKED-zz9-secret-value"
@@ -27,7 +27,7 @@ const linkedSecretValue = "LINKED-zz9-secret-value"
 type linkedFixture struct {
 	*escFixture
 	ri       *repos.RepoInstance
-	srv      *gitfixture.HTTPRemote
+	srv      *gitserver.Server
 	url      string
 	otherURL string
 	secretID string
@@ -39,8 +39,12 @@ func newLinkedFixture(t *testing.T) *linkedFixture {
 	t.Helper()
 	f := newEscFixture(t)
 	root := filepath.Join(t.TempDir(), "srv")
-	seedBareRemoteKBForTest(t, filepath.Join(root, "kb.git"))
-	srv := gitfixture.ServeHTTP(t, root, "x-token", linkedSecretValue)
+	bare := filepath.Join(root, "kb.git")
+	seedBareRemoteKBForTest(t, bare)
+	runGitForTest(t, bare, "config", "http.receivepack", "true")
+	srv := gitserver.New(t, root)
+	t.Cleanup(srv.Close)
+	srv.Fault().RequireBasicAuth("x-token", linkedSecretValue)
 	url := srv.URL + "/kb.git"
 	meta, err := f.m.Secrets().Create(control.SecretInput{Name: "gh-pat", Type: control.SecretTypeToken,
 		Hosts: []string{"127.0.0.1"}, Value: control.SecretValue{Token: linkedSecretValue}}, time.Now())
@@ -142,8 +146,8 @@ func TestOriginPut_LinkedURLChangeNeedsAdmin(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "gh-pat")
 	require.Contains(t, rec.Body.String(), "localhost")
 	f.requireLinked(t, f.url)
-	for _, p := range f.srv.Refused() {
-		require.NotEqual(t, linkedSecretValue, p)
+	for _, a := range f.srv.Fault().AuthAttempts() {
+		require.True(t, a.OK || a.Password != linkedSecretValue, "the secret was sent and refused")
 	}
 }
 
