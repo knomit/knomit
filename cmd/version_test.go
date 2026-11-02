@@ -63,6 +63,31 @@ func TestVersionCmdHelper(t *testing.T) {
 	os.Exit(0) // before the testing framework prints PASS to stdout
 }
 
+// `knomit --version` prints the same single line as `knomit version`, on stdout.
+func TestRootCmd_VersionFlagMatchesVersionSubcommand(t *testing.T) {
+	run := func(arg string) string {
+		root := RootCmd()
+		var out, errOut bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&errOut)
+		root.SetArgs([]string{arg})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("knomit %s: %v", arg, err)
+		}
+		if errOut.Len() != 0 {
+			t.Errorf("knomit %s wrote to stderr: %q", arg, errOut.String())
+		}
+		return out.String()
+	}
+	want := version.String() + "\n"
+	if got := run("--version"); got != want {
+		t.Errorf("--version output = %q, want %q", got, want)
+	}
+	if got := run("version"); got != want {
+		t.Errorf("version output = %q, want %q", got, want)
+	}
+}
+
 func TestRootCmd_HasVersionSubcommand(t *testing.T) {
 	root := RootCmd()
 	for _, c := range root.Commands() {
