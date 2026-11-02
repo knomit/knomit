@@ -46,7 +46,10 @@ var forbiddenTCP = map[string]bool{
 // carrying webview traffic, and a file that names uiUpstream,
 // newUpstreamTransport or apiProxy is wired into it by construction. A new
 // file on the UI path is therefore checked without anyone remembering to add
-// it to a list. Files that import neither (tray icons, autostart, paths)
+// it to a list. HTTP code under tools/desktop is therefore treated as UI path:
+// legitimate non-UI HTTP (e.g. a future self-updater) belongs in a package
+// outside tools/desktop, or needs an explicit, reviewed allowlist entry here.
+// Files that import neither (tray icons, autostart, paths)
 // cannot dial the server over HTTP and stay out, which keeps the set quiet.
 func deriveUIPathFiles(t *testing.T, root string) []string {
 	t.Helper()
@@ -111,8 +114,12 @@ type uiPathResult struct {
 //     to an http.Transport literal (which rule 2 then checks); a client
 //     without one uses http.DefaultTransport. new(http.Client) and a
 //     zero-value `var c http.Client` are forbidden for the same reason;
-//  4. every httputil.ReverseProxy literal sets Transport, for the same reason.
-func checkUIPathFile(file *ast.File) uiPathResult {
+//  4. every httputil.ReverseProxy literal sets Transport with the same
+//     provenance as rule 3, and httputil.NewSingleHostReverseProxy is
+//     forbidden (it leaves Transport nil, so it dials TCP);
+//  5. a struct field of non-pointer type http.Client, http.Transport or
+//     httputil.ReverseProxy is forbidden, like the zero-value `var`.
+func checkUIPathFile(fset *token.FileSet, file *ast.File) uiPathResult {
 	var r uiPathResult
 	pkgs := map[string]string{} // local name -> import path
 	for _, imp := range file.Imports {
@@ -174,7 +181,7 @@ func checkUIPathFile(file *ast.File) uiPathResult {
 		return ok && typeName(l.Type) == "net/http.Transport"
 	}
 	bad := func(pos token.Pos, msg string) {
-		r.violations = append(r.violations, msg+" (offset "+strconv.Itoa(int(pos))+")")
+		r.violations = append(r.violations, fset.Position(pos).String()+": "+msg)
 	}
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -206,11 +213,22 @@ func checkUIPathFile(file *ast.File) uiPathResult {
 					bad(n.Pos(), "http.Client literal does not set Transport to newUpstreamTransport(...) or a checked http.Transport literal, so it uses http.DefaultTransport")
 				}
 			case "net/http/httputil.ReverseProxy":
-				if field(n, "Transport") == nil {
-					bad(n.Pos(), "httputil.ReverseProxy literal does not set Transport, so it uses http.DefaultTransport")
+				tr := field(n, "Transport")
+				if !contains(tr, isSharedCall) && !contains(tr, isTransportLit) {
+					bad(n.Pos(), "httputil.ReverseProxy literal does not set Transport to newUpstreamTransport(...) or a checked http.Transport literal, so it uses http.DefaultTransport")
+				}
+			}
+		case *ast.StructType:
+			for _, f := range n.Fields.List {
+				switch typeName(f.Type) {
+				case "net/http.Transport", "net/http.Client", "net/http/httputil.ReverseProxy":
+					bad(f.Pos(), "struct field of non-pointer type "+typeName(f.Type)+" is a zero value that dials TCP")
 				}
 			}
 		case *ast.CallExpr:
+			if typeName(n.Fun) == "net/http/httputil.NewSingleHostReverseProxy" {
+				bad(n.Pos(), "httputil.NewSingleHostReverseProxy leaves Transport nil (http.DefaultTransport, TCP); build &httputil.ReverseProxy{Transport: newUpstreamTransport(...)}")
+			}
 			if id, ok := n.Fun.(*ast.Ident); ok && id.Name == "new" && len(n.Args) == 1 {
 				switch typeName(n.Args[0]) {
 				case "net/http.Transport", "net/http.Client", "net/http/httputil.ReverseProxy":
@@ -255,7 +273,7 @@ func TestDesktopUIPathNeverDialsTCP(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-		res := checkUIPathFile(file)
+		res := checkUIPathFile(fset, file)
 		for _, v := range res.violations {
 			t.Errorf("%s: %s", rel, v)
 		}
@@ -313,15 +331,25 @@ var x = &http.Client{Transport: tr}`, true},
 	return auth.DialLocal(ctx, "p", 0)
 }}}`, false},
 		{"reverse proxy with transport", `var x = &httputil.ReverseProxy{Transport: newUpstreamTransport()}`, false},
+		{"single host reverse proxy", `func f() { _ = httputil.NewSingleHostReverseProxy(nil) }`, true},
+		{"reverse proxy with unknown transport", `var tr http.RoundTripper
+var x = &httputil.ReverseProxy{Transport: tr}`, true},
+		{"reverse proxy with http.DefaultTransport", `var x = &httputil.ReverseProxy{Transport: http.DefaultTransport}`, true},
+		{"non-pointer client struct field", `type s struct{ c http.Client }`, true},
+		{"non-pointer transport struct field", `type s struct{ t http.Transport }`, true},
+		{"reverse proxy with checked transport literal", `var x = &httputil.ReverseProxy{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	return auth.DialLocal(ctx, "p", 0)
+}}}`, false},
 		{"pointer client field", `type s struct{ c *http.Client }`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f, err := parser.ParseFile(token.NewFileSet(), "synthetic.go", head+tc.body, parser.SkipObjectResolution)
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "synthetic.go", head+tc.body, parser.SkipObjectResolution)
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			got := checkUIPathFile(f).violations
+			got := checkUIPathFile(fset, f).violations
 			if tc.wantBad && len(got) == 0 {
 				t.Errorf("expected a violation, got none")
 			}
