@@ -44,6 +44,11 @@
 .k-mat-status.k-mat-bad { color: #f88; }
 
 .k-mat-scroll { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; }
+/* The FactSet scroller keeps the reader's place on a prepend itself
+   (FactSetView: scrollTop + the prepended height). Native scroll anchoring
+   would shift the view a second time, and the desktop webview cannot be
+   relied on to have it: keep it off on this scroller only. */
+.k-fs-scroll { overflow-anchor: none; }
 .k-mat-article { padding: 26px 28px 56px; min-width: 0; transition: opacity 0.15s; }
 .k-mat-article[data-stale='true'] { opacity: 0.38; }
 

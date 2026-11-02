@@ -6,6 +6,7 @@ import { DEFAULT_OPTIONS } from './materializeApi';
 import { FsError } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FactSetPage, FsSearch } from './factsetApi';
 import type { SaveOutcome } from './saveFile';
+import materializeCss from './materialize.css?raw';
 
 class MockIO {
   static all: MockIO[] = [];
@@ -94,9 +95,12 @@ describe('FactSetView (test 5)', () => {
   it('units: numbered root headings with their own rule; server numbers; tree-depth ladder', async () => {
     const { api } = makeApi();
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    liveLayout(screen.getByTestId('fs-scroll'));
     await waitFor(() => expect(sections()).toHaveLength(3));
     nearBottom();
     await waitFor(() => expect(sections()).toHaveLength(5));
+    // The reader is on unit 1 (at the top of the pane), though unit 2 is loaded (unit_to 2).
+    expect(screen.getByTestId('fs-progress').textContent).toBe('unit 1 of 3');
     const roots = sections().filter(s => s.classList.contains('k-fs-unit'));
     expect(roots.map(s => s.dataset.fsUnit)).toEqual(['1', '2']);
     expect(roots.map(s => within(s).getByTestId('mat-num').textContent?.trim())).toEqual(['1.', '2.']);
@@ -106,7 +110,6 @@ describe('FactSetView (test 5)', () => {
     expect(shared.dataset.lv).toBe('2');
     expect(screen.getByTestId('fs-title').textContent).toBe('Observations about x');
     expect(screen.getByTestId('fs-search-line').textContent).toBe('text "x" · sorted by relevance');
-    expect(screen.getByTestId('fs-progress').textContent).toBe('unit 2 of 3');
   });
 
   it('link stubs show "see" and a short title, no number, no body; only the written section is a scroll target', async () => {
@@ -334,6 +337,11 @@ describe('a failure reading the unit above the run (L2)', () => {
     fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: '3' } });
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async () => { throw new FsError('boom', 500); });
+    // Only the reader's own scroll UP arms the top sentinel after a seek (QA 2).
+    const userScroll = scrollPane(screen.getByTestId('fs-scroll'));
+    await settle();
+    userScroll(200);
+    userScroll(100);
     act(() => {
       for (const o of MockIO.all.filter(x => x.live)) {
         const t = o.watched.find(e => (e as HTMLElement).dataset.testid === 'fs-top-sentinel');
@@ -344,5 +352,325 @@ describe('a failure reading the unit above the run (L2)', () => {
     expect(err.textContent).toContain('boom');
     expect(err.compareDocumentPosition(sections()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByTestId('fs-tail-error')).toBeNull();
+  });
+});
+
+/** Makes the pane scrollable in jsdom: its scrollTop is kept (clamped at 0),
+ *  and the returned function is the READER's scroll to a position (it fires
+ *  the scroll event a real scroll would). */
+function scrollPane(box: HTMLElement) {
+  let v = 0;
+  Object.defineProperty(box, 'scrollTop', { configurable: true, get: () => v, set: (x: number) => { v = Math.max(0, x); } });
+  return (to: number) => { act(() => { v = to; fireEvent.scroll(box); }); };
+}
+
+/** A laid-out pane: section i sits at 10 + 100 i - scrollTop below the pane
+ *  top, the top sentinel just above section 0, and the pane is as tall as its
+ *  sections (so keeping the place on a prepend moves scrollTop). */
+function liveLayout(box: HTMLElement) {
+  const userScroll = scrollPane(box);
+  const secs = () => Array.from(document.querySelectorAll('[data-testid="mat-section"]'));
+  Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => 100 * secs().length });
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const i = secs().indexOf(this);
+    const st = box.scrollTop;
+    const top = i >= 0 ? 10 + 100 * i - st : (this as HTMLElement).dataset?.testid === 'fs-top-sentinel' ? 9 - st : 0;
+    return { top, bottom: top + (i >= 0 ? 100 : 1), left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON() {} } as DOMRect;
+  });
+  return userScroll;
+}
+
+const fireTop = () => act(() => {
+  for (const o of MockIO.all.filter(x => x.live)) {
+    const t = o.watched.find(e => (e as HTMLElement).dataset.testid === 'fs-top-sentinel');
+    if (t) o.cb([{ isIntersecting: true, target: t } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
+  }
+});
+/** Waits for the run to settle (one frame after it landed). */
+const settle = () => act(async () => { await new Promise<void>(r => requestAnimationFrame(() => r())); });
+const seekUnit = (u: number) => {
+  fireEvent.change(screen.getByTestId('fs-unit'), { target: { value: String(u) } });
+  fireEvent.blur(screen.getByTestId('fs-unit'), { target: { value: String(u) } });
+};
+
+// QA 1: the "Related, not included" entries. A lens FactSet's not-followed
+// leaf reads "<repo name> `<path>`" (ruling S2, as the export writes it); every
+// other reason renders as before.
+//
+// Sabotage: render the lens leaf through the old "title || id || path
+// (reason)" line: it reads "kb://eaa1900d37f1/kb/... (lens_repo)".
+describe('not-included entries (QA 1)', () => {
+  const rel = (sec: HTMLElement) => Array.from(sec.querySelectorAll<HTMLElement>('.k-mat-rel .k-mat-src')).map(e => e.textContent);
+
+  it('a lens_repo leaf reads the repo name, then the fact path without kb://<id12>/, no reason code', async () => {
+    const page: FactSetPage = { ...P1, has_more: false, facts: [n(1, 1, 'Alpha', {
+      repo_name: 'alpha',
+      not_included: [{ path: 'kb://eaa1900d37f1/kb/architecture/network/n1.md', reason: 'lens_repo', repo_name: 'beta' }],
+    })] };
+    const { api } = makeApi({ first: vi.fn(async () => page) });
+    render(<FactSetView search={LENS} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(1));
+    expect(rel(sections()[0])).toEqual(['beta kb/architecture/network/n1.md']);
+    expect(sections()[0].querySelector('.k-mat-rel .k-mat-src code')?.textContent).toBe('kb/architecture/network/n1.md');
+  });
+
+  it('control: cross_kb_off on a repo FactSet keeps its rendering', async () => {
+    const page: FactSetPage = { ...P1, has_more: false, facts: [n(1, 1, 'Alpha', {
+      not_included: [
+        { path: 'kb://0123456789ab/kb/x/t.md', title: 'Titled', id: 't', reason: 'cross_kb_off' },
+        { path: 'kb://0123456789ab/kb/x/u.md', reason: 'cross_kb_off' },
+      ],
+    })] };
+    const { api } = makeApi({ first: vi.fn(async () => page) });
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(1));
+    expect(rel(sections()[0])).toEqual(['Titled (cross_kb_off)', 'kb://0123456789ab/kb/x/u.md (cross_kb_off)']);
+  });
+});
+
+// QA 2: a seek lands with the top sentinel in view; the unit above must not be
+// asked for until the reader scrolls. Scrolling up then prepends it (Q-UI9).
+//
+// Sabotage: drop the armedEpoch check in the observer: the sentinel's first
+// intersection after landing calls seek 2.
+describe('no eager prepend after a seek (QA 2)', () => {
+  it('no loadBefore at landing; the reader\'s scroll up prepends the unit above', async () => {
+    const { api, calls } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const userScroll = scrollPane(screen.getByTestId('fs-scroll'));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    calls.length = 0;
+    fireTop(); // the sentinel is in view at landing
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(calls).toEqual([]);
+    expect(sections()[0].dataset.fsUnit).toBe('3');
+    await settle();
+    userScroll(300);
+    userScroll(100); // up
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    expect(calls[0]).toBe('seek 2');
+  });
+});
+
+// QA 4: the progress line names the unit the reader is on (the one at the top
+// of the pane, as the Unit control shows), not the last unit loaded.
+//
+// Sabotage: render env.unit_to again: it reads "unit 5 of 20" on open.
+describe('progress names the unit the reader is on (QA 4)', () => {
+  it('open, scroll, seek, and scroll up into a prepended unit', async () => {
+    const { api } = pagedView(20, 2, 10); // 5 units on page 1
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const userScroll = liveLayout(screen.getByTestId('fs-scroll'));
+    await waitFor(() => expect(sections()).toHaveLength(10));
+    const progress = () => screen.getByTestId('fs-progress').textContent;
+    const stepper = () => (screen.getByTestId('fs-unit') as HTMLInputElement).value;
+    await waitFor(() => expect(progress()).toBe('unit 1 of 20'));
+    expect(stepper()).toBe('1');
+    userScroll(400); // unit 3's root (section 4) at the top
+    expect(progress()).toBe('unit 3 of 20');
+    expect(stepper()).toBe('3');
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await waitFor(() => expect(progress()).toBe('unit 10 of 20'));
+    expect(stepper()).toBe('10');
+    await settle();
+    userScroll(50);
+    userScroll(0); // up: unit 9 is prepended, the place is kept on unit 10
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    await waitFor(() => expect(progress()).toBe('unit 10 of 20'));
+    userScroll(0); // into unit 9
+    expect(progress()).toBe('unit 9 of 20');
+    expect(stepper()).toBe('9');
+  });
+});
+
+// #726 review M1: a seek to a unit root lands at scrollTop 0 (the root sits
+// above PATH_H + 8), where a wheel or swipe up scrolls nothing and fires no
+// scroll event. That move is the reader's move up all the same.
+//
+// Sabotage: drop the onWheel handler: no call is made.
+describe('a wheel up at the very top after a seek (#726 M1)', () => {
+  it('lands at scrollTop 0; one wheel up prepends the unit above with exactly one loadBefore, no scroll down first', async () => {
+    const { api, calls } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const box = screen.getByTestId('fs-scroll');
+    scrollPane(box);
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    expect(box.scrollTop).toBe(0);
+    calls.length = 0;
+    fireEvent.wheel(box, { deltaY: -120 });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    expect(calls).toEqual(['seek 2']);
+  });
+
+  it('control: a wheel down at the top asks for nothing', async () => {
+    const { api, calls } = pagedView(4, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const box = screen.getByTestId('fs-scroll');
+    scrollPane(box);
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    calls.length = 0;
+    fireEvent.wheel(box, { deltaY: 120 });
+    fireTop();
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(calls).toEqual([]);
+  });
+});
+
+// #726 review M2: only a move UP arms the top sentinel. Scrolling down and
+// then loading the next page rebuilds the observer, whose first entry for the
+// in-range sentinel must not prepend while the reader reads down.
+//
+// Sabotage: arm on any reader scroll (drop the `up` test in onScroll): the
+// rebuilt observer's entry calls seek 2.
+describe('a scroll down never arms the top sentinel (#726 M2)', () => {
+  it('land, scroll down 100px, finish a loadMore: no loadBefore', async () => {
+    const { api, calls } = pagedView(6, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const userScroll = scrollPane(screen.getByTestId('fs-scroll'));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    calls.length = 0;
+    userScroll(100); // down
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.4.0']);
+    fireTop(); // the rebuilt observer reports the sentinel in range
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(calls).toEqual(['next F.4.0']);
+    expect(sections()[0].dataset.fsUnit).toBe('3');
+  });
+});
+
+// #726 browser re-check: a run lands ONCE per landing request. `land` stays
+// set for the whole run and byUnitN is rebuilt on every page, so a landing
+// effect keyed on it snapped the reader back to the jump target on every
+// append and prepend.
+//
+// Sabotage: re-land on every byUnitN change (drop the landed.current check):
+// the append snaps scrollTop to 0 and the prepend lands on 174, not 350.
+describe('a landing happens once per request (#726 re-check)', () => {
+  it('after a jump, an append does not move scrollTop', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.11.0']);
+    expect(box.scrollTop).toBe(250);
+  });
+
+  it('after a jump, a prepend moves scrollTop by exactly the prepended height', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    userScroll(150); // up: unit 9 (two sections, 200px) is prepended
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    expect(calls).toEqual(['seek 9']);
+    expect(box.scrollTop).toBe(150 + 200);
+  });
+
+  it('a link-click seek, followed by an append, does not re-land', async () => {
+    // Unit 1's second section is a forward stub to unit 4's root.
+    const { api, calls } = pagedView(8, 2, 2, (u, k) => u === 1 && k === 1
+      ? { written: false, body: undefined, title: 'U4 S1', anchor_id: 'f-4-1', link: { anchor_id: 'f-4-1', direction: 'forward', unit: 4, number: '4', cited_blob: 'b' } } : {});
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    fireEvent.click(within(sections()[1]).getByTestId('fs-stub-link'));
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('4'));
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.5.0']);
+    expect(box.scrollTop).toBe(250);
+  });
+});
+
+// #726 browser re-check (point 1): a prepend at scrollTop > 0 shifted the view
+// twice, because native scroll anchoring kept the place AND the view added
+// the height again; and the head skeleton pushed the run down while loading.
+// The view's place-keeping is the only one: overflow-anchor is off on this
+// scroller, and the skeleton's height is part of the place-keeping.
+//
+// jsdom runs no native anchoring, so the rule is asserted as CSS, and the
+// manual math with mocked heights: section i sits at 10 + skeleton + 100 i -
+// scrollTop, the skeleton (while mounted) is 80px above the run.
+//
+// Sabotage: (a) drop the skeleton branch of the place-keeping: the anchor
+// moves 80px down while the unit above loads; (b) delete the .k-fs-scroll
+// rule: the CSS assertion fails.
+describe('a prepend keeps the reader\'s anchor steady (#726 point 1)', () => {
+  it('the FactSet scroller turns native scroll anchoring off', async () => {
+    const { api } = makeApi();
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(3));
+    expect(screen.getByTestId('fs-scroll').classList.contains('k-fs-scroll')).toBe(true);
+    expect(materializeCss.replace(/\s+/g, ' ')).toContain('.k-fs-scroll { overflow-anchor: none; }');
+  });
+
+  it('at scrollTop > 0 the anchor keeps its offset while the skeleton shows and after the unit is prepended', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = scrollPane(box);
+    const SKEL = 80;
+    const secs = () => Array.from(document.querySelectorAll('[data-testid="mat-section"]'));
+    const skel = () => (document.querySelector('[data-testid="fs-head-loading"]') ? SKEL : 0);
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => skel() + 100 * secs().length });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const i = secs().indexOf(this);
+      const top = i >= 0 ? 10 + skel() + 100 * i - box.scrollTop : (this as HTMLElement).dataset?.testid === 'fs-top-sentinel' ? 9 - box.scrollTop : 0;
+      return { top, bottom: top + (i >= 0 ? 100 : 1), left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON() {} } as DOMRect;
+    });
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    let release!: () => void;
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async (t, c, u, sig) => {
+      await new Promise<void>(r => { release = r; });
+      return realSeek(t, c, u, sig);
+    });
+    const anchor = () => document.querySelector('[data-fs-unit="10"][data-mat-n="1"]')!.getBoundingClientRect().top;
+    userScroll(150); // up: the unit above starts loading
+    const before = anchor();
+    await waitFor(() => expect(screen.getByTestId('fs-head-loading')).toBeTruthy());
+    expect(Math.abs(anchor() - before)).toBeLessThanOrEqual(1);
+    calls.length = 0;
+    await act(async () => { release(); });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    expect(screen.queryByTestId('fs-head-loading')).toBeNull();
+    expect(Math.abs(anchor() - before)).toBeLessThanOrEqual(1);
+    expect(box.scrollTop).toBe(150 + 200); // scrollTop + the prepended height
   });
 });
