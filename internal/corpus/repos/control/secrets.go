@@ -160,7 +160,7 @@ func (s *Secrets) Create(in SecretInput, now time.Time) (SecretMeta, error) {
 	if err != nil {
 		return SecretMeta{}, err
 	}
-	hosts, err := normalizeHosts(in.Hosts)
+	hosts, err := NormalizeHosts(in.Hosts)
 	if err != nil {
 		return SecretMeta{}, err
 	}
@@ -287,7 +287,7 @@ func (s *Secrets) ReplaceValue(id string, v SecretValue, now time.Time) error {
 // allowed by the current list and would not be by the new one: the error is a
 // *HostInUseError naming the removed hosts that repo used and the repos.
 func (s *Secrets) SetHosts(id string, hosts []string, now time.Time) error {
-	norm, err := normalizeHosts(hosts)
+	norm, err := NormalizeHosts(hosts)
 	if err != nil {
 		return err
 	}
@@ -542,6 +542,19 @@ func hostMatches(entry, remoteHost string) bool {
 	return err == nil && name == entry
 }
 
+// ValidateSecretName checks a name as Create and Rename do.
+func ValidateSecretName(name string) error {
+	_, err := validateName(name)
+	return err
+}
+
+// ValidateSecretValue checks v for typ as Create and ReplaceValue do,
+// without storing anything (SSH keys are parsed).
+func ValidateSecretValue(typ string, v SecretValue) error {
+	_, err := checkValue(typ, v)
+	return err
+}
+
 func validateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > maxSecretNameLen {
@@ -550,7 +563,9 @@ func validateName(name string) (string, error) {
 	return name, nil
 }
 
-func normalizeHosts(in []string) ([]string, error) {
+// NormalizeHosts normalises each entry (NormalizeHost), deduplicates, and
+// requires at least one.
+func NormalizeHosts(in []string) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
 	for _, h := range in {
@@ -573,6 +588,26 @@ type sealed struct{ value, passphrase, fingerprint string }
 
 // sealValue validates v for typ and encrypts it. Errors never quote the value.
 func (s *Secrets) sealValue(typ string, v SecretValue) (sealed, error) {
+	c, err := checkValue(typ, v)
+	if err != nil {
+		return sealed{}, err
+	}
+	enc, err := s.crypt.Encrypt(c.value)
+	if err != nil {
+		return sealed{}, fmt.Errorf("secrets encrypt: %w", err)
+	}
+	out := sealed{value: enc, fingerprint: c.fingerprint}
+	if c.passphrase != "" {
+		if out.passphrase, err = s.crypt.Encrypt(c.passphrase); err != nil {
+			return sealed{}, fmt.Errorf("secrets encrypt: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// checkValue validates v for typ and returns the PLAINTEXT to store (in the
+// sealed shape, unencrypted). Errors never quote the value.
+func checkValue(typ string, v SecretValue) (sealed, error) {
 	var plain, pp, fp string
 	switch typ {
 	case SecretTypeToken:
@@ -597,17 +632,7 @@ func (s *Secrets) sealValue(typ string, v SecretValue) (sealed, error) {
 	default:
 		return sealed{}, fmt.Errorf("%w: type: must be %s, %s or %s", ErrSecretInvalid, SecretTypeToken, SecretTypeBasic, SecretTypeSSHKey)
 	}
-	enc, err := s.crypt.Encrypt(plain)
-	if err != nil {
-		return sealed{}, fmt.Errorf("secrets encrypt: %w", err)
-	}
-	out := sealed{value: enc, fingerprint: fp}
-	if pp != "" {
-		if out.passphrase, err = s.crypt.Encrypt(pp); err != nil {
-			return sealed{}, fmt.Errorf("secrets encrypt: %w", err)
-		}
-	}
-	return out, nil
+	return sealed{value: plain, passphrase: pp, fingerprint: fp}, nil
 }
 
 func parseSSHKey(key, passphrase string) (ssh.Signer, error) {

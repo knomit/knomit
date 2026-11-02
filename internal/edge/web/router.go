@@ -15,6 +15,7 @@ import (
 	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/api/manage"
 	"knomit/internal/edge/web/api/origins"
+	"knomit/internal/edge/web/api/secrets"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
@@ -40,6 +41,14 @@ func (s *Server) NewAPIRouter() chi.Router {
 	if s.OAuthIssuer != nil {
 		s.mountOAuthPending(r)
 	}
+	// The instance's stored credentials (api/secrets). Like the approval
+	// endpoints: THIS router only, never the OAuth listener's, and behind the
+	// local-or-same-origin admin gate, because a secret is what a remote
+	// principal holding operator must never be able to redirect or read.
+	r.Route("/secrets", func(r chi.Router) {
+		r.Use(s.requireLocalOrSameOriginAdmin)
+		secrets.Mount(r, s.Manager)
+	})
 	return r
 }
 
