@@ -104,6 +104,11 @@ type RemoteAuthConfig struct {
 	// <Home>/known_hosts. Point it at ~/.ssh/known_hosts to share the pins with
 	// your interactive ssh client.
 	KnownHosts string `toml:"known_hosts"`
+	// SSHKeyPEM is an in-memory private key (a stored ssh_key secret),
+	// used instead of SSHKey when set. Never read from or written to TOML.
+	SSHKeyPEM string `toml:"-"`
+	// SSHKeyPassphrase decrypts SSHKeyPEM when it is encrypted.
+	SSHKeyPassphrase string `toml:"-"`
 }
 
 // Config holds LLM-related configuration.

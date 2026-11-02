@@ -57,6 +57,9 @@ var (
 	ErrSecretHostInUse     = errors.New("host is used by repositories linked to this secret")
 	ErrSecretInvalid       = errors.New("invalid secret")
 	ErrSecretUndecryptable = errors.New("cannot decrypt: the instance key changed since it was stored")
+	// ErrSecretHostNotAllowed: the remote's host is not on the secret's
+	// hosts list, so the secret is neither linked nor sent.
+	ErrSecretHostNotAllowed = errors.New("the remote's host is not on this secret's hosts list: add the host to the secret (PATCH /secrets/{id} with \"hosts\") or use another credential")
 	// ErrEncryptionUnavailable: the instance key is unreadable, so no secret
 	// can be written or read. Metadata reads still work.
 	ErrEncryptionUnavailable = errors.New("secret storage is unavailable: the instance key cannot be read")
@@ -291,9 +294,11 @@ type SecretUpdate struct {
 	ExpiresAt *time.Time // with SetExpiry: nil clears the expiry
 }
 
-// Update changes a secret's name, hosts and expiry in ONE transaction: every
-// refusal (invalid input, a host in use as SetHosts describes, a taken name)
-// writes nothing at all.
+// Update changes a secret's name, hosts and expiry in ONE IMMEDIATE
+// transaction: every refusal (invalid input, a host in use as SetHosts
+// describes, a taken name) writes nothing at all, and a link written
+// concurrently (which re-checks the hosts list in its own IMMEDIATE
+// transaction) is either seen by the host check here or sees the new list.
 func (s *Secrets) Update(id string, u SecretUpdate, now time.Time) error {
 	var name string
 	if u.Name != nil {
@@ -309,51 +314,44 @@ func (s *Secrets) Update(id string, u SecretUpdate, now time.Time) error {
 			return err
 		}
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("secrets update: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-
-	var oldJSON string
-	err = tx.QueryRow(`SELECT hosts FROM secrets WHERE id = ?`, id).Scan(&oldJSON)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrSecretNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("secrets update: %w", err)
-	}
-	if u.Hosts != nil {
-		if err := checkHostsKeepLinks(tx, id, oldJSON, norm); err != nil {
-			return err
+	return immediateTx(s.db, "secrets update", func(tx dbTx) error {
+		var oldJSON string
+		err := tx.QueryRow(`SELECT hosts FROM secrets WHERE id = ?`, id).Scan(&oldJSON)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSecretNotFound
 		}
-		hostsJSON, _ := json.Marshal(norm)
-		if _, err := tx.Exec(`UPDATE secrets SET hosts = ? WHERE id = ?`, string(hostsJSON), id); err != nil {
-			return fmt.Errorf("secrets update hosts: %w", err)
+		if err != nil {
+			return fmt.Errorf("secrets update: %w", err)
 		}
-	}
-	if u.Name != nil {
-		if _, err := tx.Exec(`UPDATE secrets SET name = ? WHERE id = ?`, name, id); err != nil {
-			return mapWriteErr("secrets rename", err)
+		if u.Hosts != nil {
+			if err := checkHostsKeepLinks(tx, id, oldJSON, norm); err != nil {
+				return err
+			}
+			hostsJSON, _ := json.Marshal(norm)
+			if _, err := tx.Exec(`UPDATE secrets SET hosts = ? WHERE id = ?`, string(hostsJSON), id); err != nil {
+				return fmt.Errorf("secrets update hosts: %w", err)
+			}
 		}
-	}
-	if u.SetExpiry {
-		if _, err := tx.Exec(`UPDATE secrets SET expires_at = ? WHERE id = ?`, unixOrNil(u.ExpiresAt), id); err != nil {
-			return fmt.Errorf("secrets update expiry: %w", err)
+		if u.Name != nil {
+			if _, err := tx.Exec(`UPDATE secrets SET name = ? WHERE id = ?`, name, id); err != nil {
+				return mapWriteErr("secrets rename", err)
+			}
 		}
-	}
-	if _, err := tx.Exec(`UPDATE secrets SET updated_at = ? WHERE id = ?`, now.Unix(), id); err != nil {
-		return fmt.Errorf("secrets update: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("secrets update: commit: %w", err)
-	}
-	return nil
+		if u.SetExpiry {
+			if _, err := tx.Exec(`UPDATE secrets SET expires_at = ? WHERE id = ?`, unixOrNil(u.ExpiresAt), id); err != nil {
+				return fmt.Errorf("secrets update expiry: %w", err)
+			}
+		}
+		if _, err := tx.Exec(`UPDATE secrets SET updated_at = ? WHERE id = ?`, now.Unix(), id); err != nil {
+			return fmt.Errorf("secrets update: %w", err)
+		}
+		return nil
+	})
 }
 
 // checkHostsKeepLinks refuses a new host list that would stop a linked repo
 // matching (see SetHosts).
-func checkHostsKeepLinks(tx *sql.Tx, id, oldJSON string, norm []string) error {
+func checkHostsKeepLinks(tx dbTx, id, oldJSON string, norm []string) error {
 	var old []string
 	if err := json.Unmarshal([]byte(oldJSON), &old); err != nil {
 		return fmt.Errorf("secrets set hosts: hosts column: %w", err)

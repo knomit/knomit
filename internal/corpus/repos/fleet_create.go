@@ -600,7 +600,7 @@ func (m *Manager) retractFleetBranch(ctx context.Context, ri *RepoInstance) erro
 		if remote == nil {
 			return
 		}
-		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		auth, err := m.remoteAuthFn()(remote)
 		if err != nil {
 			rerr = err
 			return
@@ -703,7 +703,7 @@ func (m *Manager) publishFleetMainNow(ctx context.Context, ri *RepoInstance) err
 			return
 		}
 		if remote != nil {
-			auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+			auth, err := m.remoteAuthFn()(remote)
 			if err != nil {
 				perr = err
 				return

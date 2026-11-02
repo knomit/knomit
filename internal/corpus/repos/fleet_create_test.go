@@ -479,7 +479,7 @@ func TestCreateFleet_MainIsNeverForced(t *testing.T) {
 	svc := testService(t, ri)
 	remote, err := svc.Remote().GetRemote("origin")
 	require.NoError(t, err)
-	auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+	auth, err := m.remoteAuthFn()(remote)
 	require.NoError(t, err)
 	_, err = svc.Remote().PublishUpstream(ctx, ri.AgentBranch(), auth)
 	require.Error(t, err, "a non-fast-forward main is refused")

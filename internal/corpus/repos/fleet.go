@@ -658,7 +658,7 @@ func (m *Manager) pushAgentBranch(ctx context.Context, ri *RepoInstance) error {
 			perr = fmt.Errorf("fleet repository has no origin: %v", err)
 			return
 		}
-		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		auth, err := m.remoteAuthFn()(remote)
 		if err != nil {
 			perr = err
 			return

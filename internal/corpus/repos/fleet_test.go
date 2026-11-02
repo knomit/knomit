@@ -133,7 +133,7 @@ func syncFleet(t *testing.T, m *Manager) {
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
 		remote, err := svc.Remote().GetRemote("origin")
 		require.NoError(t, err)
-		auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+		auth, err := m.remoteAuthFn()(remote)
 		require.NoError(t, err)
 		_, err = svc.Remote().Sync(context.Background(), ri.AgentBranch(), auth)
 		require.NoError(t, err)

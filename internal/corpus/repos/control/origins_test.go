@@ -2,6 +2,7 @@ package control
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"knomit/internal/engine/store/model"
@@ -274,8 +275,7 @@ func TestOrigins_LinkToMissingSecretFails(t *testing.T) {
 	r, o, _ := openTestSecrets(t, testCrypt(t))
 	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
 	err := o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", SecretID: "nope"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "FOREIGN KEY")
+	require.ErrorIs(t, err, ErrSecretNotFound)
 	got, gerr := o.Get("u1")
 	require.NoError(t, gerr)
 	require.Nil(t, got, "the whole Set rolled back")
@@ -329,4 +329,65 @@ func TestOrigins_ReplaceAndRestore(t *testing.T) {
 	got, err = o.Get("u1")
 	require.NoError(t, err)
 	require.Equal(t, Origin{URL: old.URL, Branch: "main", AuthMethod: "basic", AuthToken: "u:p", Mode: OriginModeSubscribe}, *got)
+}
+
+func TestOrigins_LinkRefusesAHostNotOnTheList(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	meta, err := s.Create(SecretInput{Name: "gh-pat", Type: SecretTypeToken, Hosts: []string{"github.com"}, Value: SecretValue{Token: "tok-value"}}, testNow)
+	require.NoError(t, err)
+
+	err = o.Set("u1", Origin{URL: "https://gitlab.com/a/b.git", Branch: "main", AuthMethod: "token", SecretID: meta.ID})
+	require.ErrorIs(t, err, ErrSecretHostNotAllowed)
+	require.Contains(t, err.Error(), "gh-pat")
+	require.NotContains(t, err.Error(), "tok-value")
+	got, gerr := o.Get("u1")
+	require.NoError(t, gerr)
+	require.Nil(t, got, "the whole Set rolled back")
+
+	require.NoError(t, o.Set("u1", Origin{URL: "https://gitlab.com/a/b.git", Branch: "main", AuthMethod: "token"}))
+	require.ErrorIs(t, o.SetCredential("u1", "https://gitlab.com/a/b.git", "token", "", meta.ID), ErrSecretHostNotAllowed)
+	got, gerr = o.Get("u1")
+	require.NoError(t, gerr)
+	require.Empty(t, got.SecretID)
+
+	prev, err := o.Replace("u1", Origin{URL: "https://gitlab.com/a/b.git", Branch: "main", AuthMethod: "token", SecretID: meta.ID})
+	require.ErrorIs(t, err, ErrSecretHostNotAllowed)
+	require.Nil(t, prev)
+}
+
+func TestOrigins_LinkCarriesNoToken(t *testing.T) {
+	r, o, s := openTestSecrets(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+	id := newLinkableSecret(t, s, "pat")
+	require.Error(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token", AuthToken: "x", SecretID: id}))
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.test/kb.git", Branch: "main", AuthMethod: "token"}))
+	require.Error(t, o.SetCredential("u1", "https://example.test/kb.git", "token", "x", id))
+}
+
+// A host removal and a link to a repo on that host, racing: whichever
+// commits first, the end state never has a linked repo whose host the list
+// does not allow.
+func TestOrigins_LinkAndHostRemovalNeverStrand(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		r, o, s := openTestSecrets(t, testCrypt(t))
+		require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+		meta, err := s.Create(SecretInput{Name: "pat", Type: SecretTypeToken, Hosts: []string{"github.com", "gitlab.com"}, Value: SecretValue{Token: "t"}}, testNow)
+		require.NoError(t, err)
+		require.NoError(t, o.Set("u1", Origin{URL: "https://gitlab.com/a/b.git", Branch: "main", AuthMethod: "token"}))
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = o.SetCredential("u1", "https://gitlab.com/a/b.git", "token", "", meta.ID) }()
+		go func() { defer wg.Done(); _ = s.SetHosts(meta.ID, []string{"github.com"}, testNow) }()
+		wg.Wait()
+
+		got, err := s.Get(meta.ID)
+		require.NoError(t, err)
+		org, err := o.Get("u1")
+		require.NoError(t, err)
+		if org.SecretID != "" {
+			require.True(t, HostAllowed(got.Hosts, "gitlab.com"), "a linked repo's host was removed: %v", got.Hosts)
+		}
+	}
 }

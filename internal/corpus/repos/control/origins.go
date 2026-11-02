@@ -12,6 +12,7 @@ package control
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -135,24 +136,16 @@ func (o *Origins) Set(uid string, org Origin) error {
 	if org.Branch == "" {
 		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
 	}
-	tx, err := o.db.Begin()
-	if err != nil {
-		return fmt.Errorf("origins set: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
-	if err := o.setTx(tx, uid, org); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("origins set: commit: %w", err)
-	}
-	return nil
+	return immediateTx(o.db, "origins set", func(tx dbTx) error { return o.setTx(tx, uid, org) })
 }
 
 // setTx is Set's writes inside tx.
-func (o *Origins) setTx(tx *sql.Tx, uid string, org Origin) error {
+func (o *Origins) setTx(tx dbTx, uid string, org Origin) error {
 	if org.Branch == "" {
 		return fmt.Errorf("origins set: %w", model.ErrNoConsensusBranch)
+	}
+	if org.SecretID != "" && org.AuthToken != "" {
+		return fmt.Errorf("origins set: %w", errLinkWithToken)
 	}
 	stored, err := o.sealToken(uid, org.AuthToken)
 	if err != nil {
@@ -193,20 +186,16 @@ func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
 	if uid == "" {
 		return nil, fmt.Errorf("origins set: uid required")
 	}
-	tx, err := o.db.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("origins replace: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
-	prev, err := o.get(tx, uid)
+	var prev *Origin
+	err := immediateTx(o.db, "origins replace", func(tx dbTx) error {
+		var gerr error
+		if prev, gerr = o.get(tx, uid); gerr != nil {
+			return gerr
+		}
+		return o.setTx(tx, uid, org)
+	})
 	if err != nil {
 		return nil, err
-	}
-	if err := o.setTx(tx, uid, org); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("origins replace: commit: %w", err)
 	}
 	return prev, nil
 }
@@ -220,19 +209,16 @@ func (o *Origins) Replace(uid string, org Origin) (*Origin, error) {
 // credential set after the Replace was vetted against written's URL, and
 // carrying it to prev's URL would send it to another host.
 func (o *Origins) Restore(uid string, written Origin, prev *Origin) error {
-	tx, err := o.db.Begin()
-	if err != nil {
-		return fmt.Errorf("origins restore: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
-	if prev == nil {
-		if _, err := tx.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
-			return fmt.Errorf("origins restore: %w", err)
+	return immediateTx(o.db, "origins restore", func(tx dbTx) error {
+		if prev == nil {
+			if _, err := tx.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
+				return fmt.Errorf("origins restore: %w", err)
+			}
+			if _, err := tx.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
+				return fmt.Errorf("origins restore: %w", err)
+			}
+			return nil
 		}
-		if _, err := tx.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
-			return fmt.Errorf("origins restore: %w", err)
-		}
-	} else {
 		cur, err := o.get(tx, uid)
 		if err != nil {
 			return err
@@ -241,14 +227,8 @@ func (o *Origins) Restore(uid string, written Origin, prev *Origin) error {
 		if cur != nil && prev.URL == written.URL && cur.URL == written.URL && !sameCredential(*cur, written) {
 			target.AuthMethod, target.AuthToken, target.SecretID = cur.AuthMethod, cur.AuthToken, cur.SecretID
 		}
-		if err := o.setTx(tx, uid, target); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("origins restore: commit: %w", err)
-	}
-	return nil
+		return o.setTx(tx, uid, target)
+	})
 }
 
 func sameCredential(a, b Origin) bool {
@@ -271,10 +251,19 @@ func (o *Origins) sealToken(uid, token string) (string, error) {
 }
 
 // setLink writes (secretID != "") or removes (secretID == "") uid's secret
-// link inside tx. A secretID with no secrets row fails on the foreign key.
-func setLink(tx *sql.Tx, uid, secretID string) error {
+// link inside tx. Writing a link re-checks, in the same transaction, that the
+// secret exists and that its hosts list allows the host of the url stored in
+// repo_origins for uid (written earlier in tx): ErrSecretNotFound or
+// ErrSecretHostNotAllowed, naming the secret, and nothing is written. Every
+// write that links runs under immediateTx, as does every host-list change, so
+// a host removed concurrently either sees this link (and refuses) or this
+// link sees the new list (and refuses).
+func setLink(tx dbTx, uid, secretID string) error {
 	var err error
 	if secretID != "" {
+		if err := checkLinkHost(tx, uid, secretID); err != nil {
+			return err
+		}
 		_, err = tx.Exec(`INSERT OR REPLACE INTO repo_origin_secrets (repo_uid, secret_id) VALUES (?, ?)`, uid, secretID)
 	} else {
 		_, err = tx.Exec(`DELETE FROM repo_origin_secrets WHERE repo_uid = ?`, uid)
@@ -285,41 +274,63 @@ func setLink(tx *sql.Tx, uid, secretID string) error {
 	return nil
 }
 
+// checkLinkHost is setLink's host check: the secret's hosts list must allow
+// the host of uid's stored origin url.
+func checkLinkHost(tx dbTx, uid, secretID string) error {
+	var name, hostsJSON string
+	err := tx.QueryRow(`SELECT name, hosts FROM secrets WHERE id = ?`, secretID).Scan(&name, &hostsJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSecretNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("origins set secret link: %w", err)
+	}
+	var hosts []string
+	if err := json.Unmarshal([]byte(hostsJSON), &hosts); err != nil {
+		return fmt.Errorf("stored secret %q: hosts column: %w", name, err)
+	}
+	var url string
+	if err := tx.QueryRow(`SELECT url FROM repo_origins WHERE repo_uid = ?`, uid).Scan(&url); err != nil {
+		return fmt.Errorf("origins set secret link: %w", err)
+	}
+	host, herr := RemoteHost(url)
+	if herr != nil {
+		return fmt.Errorf("stored secret %q: %w: %v", name, ErrSecretHostNotAllowed, herr)
+	}
+	if !HostAllowed(hosts, host) {
+		return fmt.Errorf("stored secret %q: %w: %s", name, ErrSecretHostNotAllowed, host)
+	}
+	return nil
+}
+
 // SetCredential changes ONLY the credential of uid's origin: auth_method,
 // auth_token and the secret link, in one transaction, and only while the
 // stored url is still url (the caller's vetted url). Otherwise it is
 // ErrOriginChanged and nothing is written. URL, branch and Mode are untouched,
 // which is what lets a credential change skip the attach lifecycle.
 func (o *Origins) SetCredential(uid, url, authMethod, authToken, secretID string) error {
+	if secretID != "" && authToken != "" {
+		return fmt.Errorf("origins set credential: %w", errLinkWithToken)
+	}
 	stored, err := o.sealToken(uid, authToken)
 	if err != nil {
 		return err
 	}
-	tx, err := o.db.Begin()
-	if err != nil {
-		return fmt.Errorf("origins set credential: begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
-
-	res, err := tx.Exec(`UPDATE repo_origins SET auth_method = ?, auth_token = ? WHERE repo_uid = ? AND url = ?`,
-		authMethod, stored, uid, url)
-	if err != nil {
-		return fmt.Errorf("origins set credential: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("origins set credential: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("origins set credential: %w: no origin with the checked url is configured for %q", ErrOriginChanged, uid)
-	}
-	if err := setLink(tx, uid, secretID); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("origins set credential: commit: %w", err)
-	}
-	return nil
+	return immediateTx(o.db, "origins set credential", func(tx dbTx) error {
+		res, err := tx.Exec(`UPDATE repo_origins SET auth_method = ?, auth_token = ? WHERE repo_uid = ? AND url = ?`,
+			authMethod, stored, uid, url)
+		if err != nil {
+			return fmt.Errorf("origins set credential: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("origins set credential: %w", err)
+		}
+		if n == 0 {
+			return fmt.Errorf("origins set credential: %w: no origin with the checked url is configured for %q", ErrOriginChanged, uid)
+		}
+		return setLink(tx, uid, secretID)
+	})
 }
 
 // ErrOriginChanged is SetBranch's refusal when no origin with the url the
@@ -327,6 +338,10 @@ func (o *Origins) SetCredential(uid, url, authMethod, authToken, secretID string
 // origin in between, so the branch change would apply to a remote nobody
 // checked. Nothing is written.
 var ErrOriginChanged = errors.New("the origin changed")
+
+// errLinkWithToken: an origin linked to a stored secret keeps no token of
+// its own (a kept token would be a silent fallback if the link were dropped).
+var errLinkWithToken = errors.New("an origin linked to a stored secret carries no auth token of its own")
 
 // SetBranch changes the consensus upstream branch WITHOUT touching stored auth,
 // and only while the stored url is still url: the compare-and-set is the WHERE

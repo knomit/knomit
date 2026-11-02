@@ -127,6 +127,10 @@ type OriginSpec struct {
 	Branch     string
 	AuthMethod string
 	AuthToken  string
+	// SecretID links the origin to a stored secret instead of AuthToken:
+	// AuthMethod is the secret's transport and AuthToken is empty. Every
+	// spec-carried git operation resolves it through resolveSpecAuth.
+	SecretID string
 
 	decided bool // ResolveOrigin ran: AuthMethod is the decided one
 }
@@ -736,6 +740,7 @@ func (m *Manager) populate(ctx context.Context, r *RepoInstance, spec MountSpec)
 			AuthMethod: cs.Origin.AuthMethod,
 			AuthToken:  cs.Origin.AuthToken,
 			Mode:       originModeFor(cs.Mode),
+			SecretID:   cs.Origin.SecretID,
 		}); oerr != nil {
 			return fmt.Errorf("persist origin: %w", oerr)
 		}
@@ -1079,7 +1084,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 		return "", err
 	}
 	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "cloning from " + spec.Origin.URL, Pct: 40})
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.resolveSpecAuth(spec.Origin)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1248,7 +1253,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 		}
 	}
 
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.resolveSpecAuth(spec.Origin)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}
@@ -1414,7 +1419,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 		return "", err
 	}
 	emit(Event{Step: "subscribe", Phase: PhaseTransfer, Indeterminate: true, Message: "subscribing to " + spec.Origin.URL, Pct: 40})
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	gitURL, auth, err := m.resolveSpecAuth(spec.Origin)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
 	}

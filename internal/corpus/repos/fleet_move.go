@@ -255,7 +255,7 @@ func (e *forgeProbeError) Is(target error) bool { return target == ErrOriginUnre
 // restores the previous origin (none for the hub), so this copy is exactly
 // as it was, and is returned.
 func (m *Manager) moveFleetToForge(ctx context.Context, ri *RepoInstance, decided OriginSpec, prev *control.Origin) error {
-	gitURL, auth, err := m.ResolveAuth(authConfigFromSpec(&decided), decided.URL)
+	gitURL, auth, err := m.resolveSpecAuth(&decided)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOriginUnreachable, err)
 	}
@@ -306,11 +306,12 @@ func (m *Manager) restoreFleetOrigin(ctx context.Context, ri *RepoInstance, prev
 		_, err := m.Send(ctx, ri, DetachOrigin())
 		return err
 	}
-	method, token := prev.AuthMethod, prev.AuthToken
+	method, token, secretID := prev.AuthMethod, prev.AuthToken, prev.SecretID
 	if method == "cert" {
-		method, token = "", ""
+		// A peer never carries a secret: cert is classified again.
+		method, token, secretID = "", "", ""
 	}
-	_, err := m.Send(ctx, ri, AttachOrigin(OriginSpec{URL: prev.URL, Branch: prev.Branch, AuthMethod: method, AuthToken: token}))
+	_, err := m.Send(ctx, ri, AttachOrigin(OriginSpec{URL: prev.URL, Branch: prev.Branch, AuthMethod: method, AuthToken: token, SecretID: secretID}))
 	return err
 }
 

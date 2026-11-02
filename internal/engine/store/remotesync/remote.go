@@ -127,6 +127,10 @@ type Origin struct {
 	Branch     string
 	AuthMethod string
 	AuthToken  string
+	// SecretID is the stored secret the origin links to ("" for none). The
+	// credential is resolved from it at every operation; AuthToken is then
+	// empty and AuthMethod names the transport.
+	SecretID string
 }
 
 // Remote represents a configured git remote for sync and push.
@@ -144,6 +148,7 @@ type Remote struct {
 	LastPushError  *string `json:"last_push_error"`
 	AuthMethod     string  `json:"auth_method,omitempty"`
 	AuthToken      string  `json:"auth_token,omitempty"`
+	SecretID       string  `json:"secret_id,omitempty"`
 }
 
 // DeleteRemote tears down this repo's use of a remote: it removes the git
@@ -191,6 +196,7 @@ func (ri *Index) GetRemote(name string) (*Remote, error) {
 		Branch:     origin.Branch,
 		AuthMethod: origin.AuthMethod,
 		AuthToken:  origin.AuthToken,
+		SecretID:   origin.SecretID,
 	}
 	// Status is optional: a repo whose origin was just configured has no row
 	// until its first sync, and that is not an error.

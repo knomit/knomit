@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"knomit/internal/corpus/repos/control"
 	"sync"
 	"time"
 
@@ -130,10 +131,19 @@ func awaitPushWindow(ctx context.Context, wake <-chan struct{}) bool {
 }
 
 // makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
-// record using the given fallback config and key path.
-func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
+// record using the given fallback config and key path. A record linked to a
+// stored secret (SecretID) is resolved from the secret through secrets, at
+// every call, so a replaced value is used by the next operation with nothing
+// rebuilt; it never falls back to the [remote] config, a pasted token or
+// anonymous. secrets may be nil or return nil (no secrets store): a linked
+// record then fails to resolve.
+func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string, secrets func() *control.Secrets) remoteAuthFn {
 	return func(remote *remotesync.Remote) (transport.AuthMethod, error) {
-		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
+		authCfg, err := remoteAuthConfig(remote, fallbackAuth, secrets)
+		if err != nil {
+			log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed")
+			return nil, err
+		}
 		// The URL go-git uses is the derived .git/config; this resolves the
 		// credential and refuses a URL stored with the fleet transport's
 		// internal scheme before anything is dialled.
@@ -148,6 +158,28 @@ func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remo
 		}
 		return auth, nil
 	}
+}
+
+// remoteAuthConfig is the auth config for a stored remote record: from its
+// linked secret when it has one, else from the record over the fallback.
+func remoteAuthConfig(remote *remotesync.Remote, fallbackAuth config.RemoteAuthConfig, secrets func() *control.Secrets) (config.RemoteAuthConfig, error) {
+	if remote.SecretID == "" {
+		return remoteAuthFromRecord(remote, fallbackAuth), nil
+	}
+	if remote.AuthMethod == "cert" {
+		return config.RemoteAuthConfig{}, ErrSecretOnPeer
+	}
+	var s *control.Secrets
+	if secrets != nil {
+		s = secrets()
+	}
+	return resolveLinkedAuth(s, remote.SecretID, remote.URL, fallbackAuth.KnownHosts)
+}
+
+// remoteAuthFn is the Manager's remoteAuthFn: [remote] config, the instance
+// key and the secrets store.
+func (m *Manager) remoteAuthFn() remoteAuthFn {
+	return makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath, m.Secrets)
 }
 
 // reconcileFailureEscalateThreshold is the number of consecutive sync- or
@@ -658,7 +690,7 @@ func (ri *RepoInstance) OriginRoundForTest(ctx context.Context) error {
 	defer release()
 	cfg := ri.env.cfg
 	runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
-		makeRemoteAuthFn(cfg.Remote, ri.env.keyPath), cfg.LocalOriginRoot, cfg.ReadOnly,
+		makeRemoteAuthFn(cfg.Remote, ri.env.keyPath, ri.env.secrets), cfg.LocalOriginRoot, cfg.ReadOnly,
 		ri.env.onPush, nil, nil, nil, nil, ri.peers, ri.reidentifyAfterRewind, true)
 	return nil
 }

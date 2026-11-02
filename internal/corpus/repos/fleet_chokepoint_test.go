@@ -292,7 +292,7 @@ func TestFleetReserved_BootAdmitsOnlyTheRecordedFleet(t *testing.T) {
 			require.NoError(t, kb.WithRead(func(svc *store.Service) {
 				remote, err := svc.Remote().GetRemote("origin")
 				require.NoError(t, err)
-				auth, err := makeRemoteAuthFn(m.deps.Cfg.Remote, m.deps.KeyPath)(remote)
+				auth, err := m.remoteAuthFn()(remote)
 				require.NoError(t, err)
 				_, err = svc.Remote().Sync(ctx, kb.AgentBranch(), auth)
 				require.NoError(t, err)

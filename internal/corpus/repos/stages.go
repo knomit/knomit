@@ -176,7 +176,7 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 	// The origin before OpenRepo: rehydrating the upstream and the fetch
 	// refspec read it. control.db owns it; the store holds no credential.
 	if origin != nil {
-		svc.Remote().SetOrigin(&remotesync.Origin{URL: origin.URL, Branch: origin.Branch, AuthMethod: origin.AuthMethod, AuthToken: origin.AuthToken})
+		svc.Remote().SetOrigin(&remotesync.Origin{URL: origin.URL, Branch: origin.Branch, AuthMethod: origin.AuthMethod, AuthToken: origin.AuthToken, SecretID: origin.SecretID})
 	}
 	if env.embedder != nil {
 		svc.SetEmbedder(env.embedder)
@@ -868,7 +868,7 @@ func (syncStage) Enter(ctx context.Context, life *Life, r *RepoInstance) error {
 		if remote != nil {
 			r.syncOrigin = remote.URL
 		}
-		authFn := makeRemoteAuthFn(cfg.Remote, env.keyPath)
+		authFn := makeRemoteAuthFn(cfg.Remote, env.keyPath, env.secrets)
 		name = "reconcile"
 		run = func(ctx context.Context) {
 			runReconcileLoop(ctx, svc, r.pub, r.remoteEdgeSink(), r.Name(), r.agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly,
