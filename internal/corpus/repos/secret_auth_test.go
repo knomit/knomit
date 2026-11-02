@@ -24,8 +24,8 @@ import (
 	"knomit/internal/engine/store/model"
 	"knomit/internal/engine/store/remotesync"
 	"knomit/internal/foundation/config"
-	"knomit/test/testenv/gitserver"
 	"knomit/internal/testsupport/testsigner"
+	"knomit/test/testenv/gitserver"
 )
 
 const linkedToken = "tok-linked-1"
@@ -36,8 +36,8 @@ type secretsFixture struct {
 	m    *Manager
 	deps Deps
 	srv  *gitserver.Server
-	url string // the http URL of the seeded remote
-	dir string
+	url  string // the http URL of the seeded remote
+	dir  string
 }
 
 func newSecretsFixture(t *testing.T) *secretsFixture {
