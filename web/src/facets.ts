@@ -62,7 +62,7 @@ export type DraftKind = 'repo' | 'lens' | 'fleet';
 
 /** A server page behind the gear. Not a target: nothing on it belongs to a
  *  repository, a lens or the fleet. */
-export type ServerPage = 'logs' | 'auth';
+export type ServerPage = 'logs' | 'access';
 
 /** Anything the rail can select: a normal target (the browse context), a
  *  pinned one, or a draft. */
@@ -312,15 +312,24 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
 }
 
 /**
- * serverPagesFor: the server tabs, in order: Logs, then Authorizations when
- * there is an OAuth issuer (useOAuthAvailability). The fleet is not here: it
- * is a target in the rail. Both are OMITTED on a read-only server, whose
- * endpoints answer 403 for both, so a tab would be a control that cannot
- * work; with no page at all there is no gear.
+ * serverPagesFor: the server tabs, in order: Logs, then Access (stored
+ * secrets, and Authorizations when there is an OAuth issuer: accessTabsFor).
+ * The fleet is not here: it is a target in the rail. Both are OMITTED on a
+ * read-only server, whose endpoints refuse every write, so a tab would be a
+ * control that cannot work; with no page at all there is no gear.
  */
-export function serverPagesFor(serverReadOnly: boolean, oauthAvailable: boolean): ServerPage[] {
-  if (serverReadOnly) return [];
-  return oauthAvailable ? ['logs', 'auth'] : ['logs'];
+export function serverPagesFor(serverReadOnly: boolean): ServerPage[] {
+  return serverReadOnly ? [] : ['logs', 'access'];
+}
+
+/** A tab of the Access server page. */
+export type AccessTab = 'secrets' | 'auth';
+
+/** accessTabsFor: the Access page's tabs, in order: Secrets always, then
+ *  Authorizations only with an OAuth issuer (useOAuthAvailability). A missing
+ *  tab is omitted, never disabled. */
+export function accessTabsFor(oauthAvailable: boolean): AccessTab[] {
+  return oauthAvailable ? ['secrets', 'auth'] : ['secrets'];
 }
 
 /** draftCancellable: whether the draft offers Cancel. A repository draft with

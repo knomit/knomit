@@ -1,19 +1,21 @@
 package manage
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"knomit/internal/corpus/repos/events"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/engine/store/remotesync"
 )
 
 // repoSummary is the minimal shape for an item inside the /repos collection.
@@ -88,6 +90,14 @@ type repoSummary struct {
 	// when it changes.
 	Remote *repoRemoteHealth `json:"remote,omitempty"`
 
+	// CredentialStatus flags a repo linked to a stored secret that needs
+	// attention: "expiring" (within 14 days) or "expired". CredentialSecret
+	// is that secret's name. Both are absent otherwise (not linked, no
+	// expiry, ok, or the secret could not be read): absence is "nothing to
+	// flag". Expiry is advisory; sync keeps using the secret.
+	CredentialStatus string `json:"credential_status,omitempty"`
+	CredentialSecret string `json:"credential_secret,omitempty"`
+
 	Links hal.LinkMap `json:"_links"`
 }
 
@@ -102,13 +112,52 @@ type repoRemoteHealth struct {
 // read GET /origin uses. Every failure is an absent field: a list row is
 // not the place to report that one repo's status row is unreadable, and the
 // repo's own origin view still says why.
-func remoteHealthOf(ctx context.Context, ri *repos.RepoInstance) *repoRemoteHealth {
-	remote, err := getOrigin(ctx, ri)
-	if err != nil || remote == nil {
+func remoteHealthOf(remote *remotesync.Remote) *repoRemoteHealth {
+	if remote == nil {
 		return nil
 	}
 	s, p := events.RemoteHealth(remote)
 	return &repoRemoteHealth{Sync: s, Push: p}
+}
+
+// secretsByID is the stored secrets' metadata, read at most once per listing
+// and only when a listed repo is linked. A failed read flags nothing.
+type secretsByID struct {
+	m      *repos.Manager
+	loaded bool
+	byID   map[string]control.SecretMeta
+}
+
+func (s *secretsByID) get(id string) (control.SecretMeta, bool) {
+	if !s.loaded {
+		s.loaded = true
+		if sec := s.m.Secrets(); sec != nil {
+			if list, err := sec.List(); err == nil {
+				s.byID = make(map[string]control.SecretMeta, len(list))
+				for _, meta := range list {
+					s.byID[meta.ID] = meta
+				}
+			}
+		}
+	}
+	meta, ok := s.byID[id]
+	return meta, ok
+}
+
+// credentialFlagOf sets a listed row's credential_status and
+// credential_secret from the origin's secret link, when it needs attention.
+func credentialFlagOf(row *repoSummary, remote *remotesync.Remote, secrets *secretsByID, now time.Time) {
+	if remote == nil || remote.SecretID == "" {
+		return
+	}
+	meta, ok := secrets.get(remote.SecretID)
+	if !ok {
+		return
+	}
+	switch st := control.ExpiryStatus(meta.ExpiresAt, now); st {
+	case control.ExpiryExpiring, control.ExpiryExpired:
+		row.CredentialStatus, row.CredentialSecret = st, meta.Name
+	}
 }
 
 // summaryFor is an ACTIVE repo's row, read from its machine's status.
@@ -166,11 +215,17 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		})
 
 		items := make([]repoSummary, 0, len(names))
+		secrets := &secretsByID{m: m}
+		now := time.Now().UTC()
 		for _, name := range names {
 			row := summaryFor(b, name, instances[name])
-			// Per-repo remote health, so the client can mark every listed repo
-			// without a GET /origin per repo. Only live rows have a store to ask.
-			row.Remote = remoteHealthOf(r.Context(), instances[name])
+			// Per-repo remote health and credential expiry, so the client can
+			// mark every listed repo without a GET /origin per repo. Only live
+			// rows have a store to ask; every failure is an absent field.
+			if remote, err := getOrigin(r.Context(), instances[name]); err == nil {
+				row.Remote = remoteHealthOf(remote)
+				credentialFlagOf(&row, remote, secrets, now)
+			}
 			items = append(items, row)
 		}
 		for _, u := range m.Unavailable() {

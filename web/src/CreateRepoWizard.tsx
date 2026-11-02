@@ -259,7 +259,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     // an SSH URL, where the token is dropped and knomit's own key is used
     // instead. The check still failed; it just failed at something else.
     const sent = authFor(state);
-    const suppliedSomething = sent.auth_token !== '';
+    const suppliedSomething = sent.auth_token !== '' || !!sent.secret_id;
     const probe = await runProbe();
     if (probe?.reachable && !probe.auth_required) setCheckedOk(n => n + 1);
     if (probe?.reachable && probe.auth_required) {
@@ -449,6 +449,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
       (step === 'source' && state.choice === 'local'));
   const nextDisabled = creating || probing || checkingBranch || !nameOk ||
     (step === 'access' && basicMissingUser) ||
+    (step === 'access' && state.authMethod === 'secret' && state.secretId === '') ||
     (step === 'ontology' && !ontologyValid);
 
   // The repository draft's layout: the step rail is the index column (at the

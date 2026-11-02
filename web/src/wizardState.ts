@@ -12,9 +12,13 @@ export interface WizardState {
   probe: ProbeResult | null;
   name: string;
   branch: string;
+  /** '' (auto-detect) | none | token | basic | ssh, or 'secret' (UI only:
+   *  the request sends secret_id and no auth fields). */
   authMethod: string;
   authUser: string;
   authToken: string;
+  /** The stored secret chosen when authMethod is 'secret'. */
+  secretId: string;
   /** 'default' | 'code' when a preset is selected, '' when custom yaml is used. */
   preset: string;
   /**
@@ -117,7 +121,7 @@ export interface WizardState {
 // would make the other option read as wrong.
 export const initialWizardState: WizardState = {
   choice: 'remote', url: '', probe: null, name: '', branch: '',
-  authMethod: '', authUser: '', authToken: '',
+  authMethod: '', authUser: '', authToken: '', secretId: '',
   preset: 'default', seedPreset: 'default', yaml: '',
   useTemplate: false, template: null,
   initialized: '', initializedDetail: '', initializedBranch: '', alreadyLocal: '',
@@ -136,6 +140,7 @@ export type WizardAction =
   | { type: 'SET_AUTH_METHOD'; method: string }
   | { type: 'SET_AUTH_USER'; user: string }
   | { type: 'SET_TOKEN'; token: string }
+  | { type: 'SET_SECRET'; id: string }
   | { type: 'SET_PRESET'; preset: string }
   | { type: 'SET_YAML'; yaml: string }
   | { type: 'SET_USE_TEMPLATE'; on: boolean }
@@ -268,6 +273,7 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     case 'SET_AUTH_METHOD': return { ...s, authMethod: a.method, ...uncheckedBranch };
     case 'SET_AUTH_USER': return { ...s, authUser: a.user, ...uncheckedBranch };
     case 'SET_TOKEN':     return { ...s, authToken: a.token, ...uncheckedBranch };
+    case 'SET_SECRET':    return { ...s, secretId: a.id, ...uncheckedBranch };
     // The ONLY action that establishes it. An absent `initialized` is the
     // unestablished state and is stored as '' with the reason alongside —
     // never coerced into 'no', which stepsFor would route straight to
@@ -320,8 +326,8 @@ export function currentStep(s: WizardState): StepId {
  * that alters nothing on the wire must not invalidate a good answer.
  */
 function remoteKey(s: WizardState): string {
-  const { auth_method, auth_token } = authFor(s);
-  return [s.url.trim(), auth_method, auth_token].join('\u0000');
+  const { auth_method, auth_token, secret_id } = authFor(s);
+  return [s.url.trim(), auth_method, auth_token, secret_id ?? ''].join('\u0000');
 }
 
 /** branchKey adds the branch: the initialization answer is per-branch. */
@@ -478,7 +484,10 @@ export function createBodyFor(s: WizardState): CreateRepoBody {
  * `empty:false` and created as `clone`, silently discarding the ontology the
  * user picked. One function, both call sites.
  */
-export function authFor(s: WizardState): { auth_method: string; auth_token: string } {
+export function authFor(s: WizardState): { auth_method: string; auth_token: string; secret_id?: string } {
+  // A stored secret: the request carries secret_id and NO pasted fields (the
+  // server refuses both together, and derives the method from the secret).
+  if (s.authMethod === 'secret') return { auth_method: '', auth_token: '', secret_id: s.secretId };
   // Auto-detect ('') resolves to anonymous/SSH and ignores any token. A token
   // typed under auto-detect (the common private-HTTPS case) promotes to
   // explicit token auth so the credential is actually used — carried over from
@@ -673,5 +682,5 @@ export function stepSummary(s: WizardState, id: StepId): string {
 }
 
 const ACCESS_WORDS: Record<string, string> = {
-  '': 'auto-detect', none: 'anonymous', token: 'token', basic: 'basic', ssh: 'ssh key',
+  '': 'auto-detect', none: 'anonymous', token: 'token', basic: 'basic', ssh: 'ssh key', secret: 'stored secret',
 };

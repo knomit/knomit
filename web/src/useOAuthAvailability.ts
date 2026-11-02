@@ -17,7 +17,8 @@ export interface OAuthAvailability {
   /** Requests waiting, for the tab's badge; null when unknown. */
   count: number | null;
   /** The Authorizations page's own poll reports here. */
-  setCount: (n: number) => void;
+  /** null: the page's own poll found no issuer (404), so the tab goes. */
+  setCount: (n: number | null) => void;
 }
 
 const PROBE_MS = 30_000;
@@ -46,6 +47,9 @@ export function useOAuthAvailability({ enabled, pageOpen }: {
     const t = setInterval(probe, PROBE_MS);
     return () => { cancelled = true; clearInterval(t); };
   }, [enabled, pageOpen]);
-  const setCount = useCallback((n: number) => setCountState(n), []);
+  const setCount = useCallback((n: number | null) => {
+    setCountState(n);
+    if (n === null) setAvailable(false);
+  }, []);
   return { available, count, setCount };
 }

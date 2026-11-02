@@ -80,22 +80,22 @@ describe('ArchivedSettings — one archived repo', () => {
     expect(screen.getByTestId('archived-condition-s.2')).toHaveTextContent('unopenable');
   });
 
-  it('Restore calls restoreRepo with the id and then onRestored with the restored name', async () => {
-    const p = renderPage();
+  it('Restore of a repo with no origin calls restoreRepo with the id and then onRestored, with no prompt', async () => {
+    const p = renderPage({ info: { ...Q3, origin: '' } });
     fireEvent.click(screen.getByTestId('archived-restore-id-q3'));
     await waitFor(() => expect(p.onRestored).toHaveBeenCalledWith('q3-planning'));
-    expect(api.restoreRepo).toHaveBeenCalledWith('id-q3', '');
+    expect(api.restoreRepo).toHaveBeenCalledWith('id-q3', '', undefined);
   });
 
   it('asks for a new name when the name is taken, and restores under it', async () => {
     vi.mocked(api.restoreRepo).mockResolvedValue({ name: 'q3-again' });
-    const p = renderPage({ activeNames: new Set(['q3-planning']) });
+    const p = renderPage({ info: { ...Q3, origin: '' }, activeNames: new Set(['q3-planning']) });
     fireEvent.click(screen.getByTestId('archived-restore-id-q3'));
     expect(api.restoreRepo).not.toHaveBeenCalled();
     fireEvent.change(screen.getByTestId('restore-name-input-id-q3'), { target: { value: 'q3-again' } });
     fireEvent.click(screen.getByTestId('restore-confirm-id-q3'));
     await waitFor(() => expect(p.onRestored).toHaveBeenCalledWith('q3-again'));
-    expect(api.restoreRepo).toHaveBeenCalledWith('id-q3', 'q3-again');
+    expect(api.restoreRepo).toHaveBeenCalledWith('id-q3', 'q3-again', undefined);
   });
 
   it('Purge requires the typed name, then calls purgeRepo with the id and onPurged', async () => {

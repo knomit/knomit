@@ -296,6 +296,17 @@ describe('RepoSettings', () => {
     expect(await screen.findByTestId('toc-remote-problem')).toBeInTheDocument();
   });
 
+  it('an expired linked secret marks the Remote index item', async () => {
+    (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',
+      last_sync_at: '2026-06-11T10:00:00Z', last_status: 'ok', last_error: null,
+      last_push_status: 'ok', last_push_error: null,
+      secret_name: 'gh-pat', secret_status: 'expired', secret_expires_at: '2026-10-01T00:00:00Z',
+    });
+    render(<Page />);
+    expect(await screen.findByTestId('toc-remote-problem')).toBeInTheDocument();
+  });
+
   it('a healthy origin leaves the Remote index item unmarked', async () => {
     (api.getOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'origin', url: 'https://github.com/knomit/kb.git', branch: 'main', auth_method: 'token',

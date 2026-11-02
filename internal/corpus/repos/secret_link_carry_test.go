@@ -70,7 +70,7 @@ func TestCarry_RestoreFleetOrigin(t *testing.T) {
 	ri, id := f.linkedRepo(t)
 	prev, err := f.m.Origins().Get(ri.UID())
 	require.NoError(t, err)
-	_, err = f.m.Send(context.Background(), ri, DetachOrigin())
+	_, err = f.m.Send(context.Background(), ri, DetachOriginUnlinking())
 	require.NoError(t, err)
 	require.NoError(t, f.m.restoreFleetOrigin(context.Background(), ri, prev))
 	requireLinked(t, f, ri, id)
@@ -113,4 +113,33 @@ func TestCarry_AttachRacingALinkIsRefused(t *testing.T) {
 	o, err = f.m.Origins().Get(ri.UID())
 	require.NoError(t, err)
 	require.Empty(t, o.SecretID)
+}
+
+// A detach decided before a concurrent link (an operator's DELETE /origin
+// read the unlinked origin, then an admin linked a secret) is refused in the
+// delete's own transaction: the link, the git remote and memory all stand.
+func TestCarry_DetachRacingALinkIsRefused(t *testing.T) {
+	f := newSecretsFixture(t)
+	ri := f.pastedRepo(t)
+	id := f.tokenSecret(t, "gh-pat", linkedToken)
+	beforeDetachOriginWrite = func() {
+		beforeDetachOriginWrite = nil
+		require.NoError(t, f.m.Origins().SetCredential(ri.UID(), f.url, "token", "", id))
+	}
+	t.Cleanup(func() { beforeDetachOriginWrite = nil })
+	_, err := f.m.Send(context.Background(), ri, DetachOrigin())
+	require.ErrorIs(t, err, control.ErrOriginLinked)
+	o, err := f.m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.NotNil(t, o, "the origin row stands")
+	require.Equal(t, id, o.SecretID, "the concurrent link stands")
+	require.Equal(t, f.url, injected(t, ri).URL, "the git remote is put back and memory keeps the origin")
+
+	// The admin-gated detach unlinks and removes the origin.
+	_, err = f.m.Send(context.Background(), ri, DetachOriginUnlinking())
+	require.NoError(t, err)
+	o, err = f.m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Nil(t, o)
+	require.NoError(t, f.m.Secrets().Delete(id), "the detach dropped the link")
 }

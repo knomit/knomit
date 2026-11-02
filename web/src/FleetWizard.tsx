@@ -73,7 +73,7 @@ export function FleetWizard({ fleet, onDone, onCancel }: {
         const r = await api.probeOrigin({ url: s.forgeUrl.trim(), ...auth });
         if (!r.reachable || r.auth_required) throw new Error(r.detail || 'the remote refused the credential');
       } else {
-        const r = await api.checkFleetJoin(s.bundle, auth.auth_method, auth.auth_token);
+        const r = await api.checkFleetJoin(s.bundle, auth);
         if (r.auth_required) throw new Error(r.detail || 'the forge refused the credential');
       }
       dispatch({ type: 'ACCESS_CHECKED' });
@@ -89,14 +89,15 @@ export function FleetWizard({ fleet, onDone, onCancel }: {
         onDone({ kind: 'created' });
       } else {
         const auth = s.check?.hosting === 'forge' ? fleetAuth(s) : {};
-        const st = await api.joinFleet(s.bundle, auth.auth_method, auth.auth_token);
+        const st = await api.joinFleet(s.bundle, auth);
         onDone({ kind: 'joined', rootFingerprint: st.root_fingerprint ?? s.check?.root_fingerprint ?? '' });
       }
     } catch (e) { setErr(asError(e)); }
     setBusy(false);
   };
 
-  const gate = s.step === 'access' && accessRequired(s) ? `Next unlocks once a check gets in to ${hostOf(accessURL(s))}` : '';
+  const gate = s.step === 'access' && s.authMethod === 'secret' && !s.secretId ? 'Choose a stored secret first'
+    : s.step === 'access' && accessRequired(s) ? `Next unlocks once a check gets in to ${hostOf(accessURL(s))}` : '';
   // Creating and joining are served to the desktop app only: GET /fleet's
   // `local` decides, here too (the rail's + is the only way in).
   if (fleet && fleet.local !== true) {
@@ -356,6 +357,9 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
   // A file:// remote has no host: the URL names it.
   const host = hostOf(url) || url;
   const asked = s.choice === 'create' ? !!s.probe?.auth_required : !!s.check?.auth_required;
+  // A check needs something to try: a typed token, ssh (this server's key),
+  // or a chosen stored secret.
+  const nothingToTry = asked && (s.authMethod === 'secret' ? !s.secretId : !s.authToken && s.authMethod !== 'ssh');
   return (
     <div data-testid="fleet-step-access">
       {s.accessChecked ? (
@@ -381,7 +385,8 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
           <OutcomeCard tone="bad" testid="fleet-access-refused" headline={`${host || 'The remote'} refused those credentials`} url={url} detail={err.message} />
         </div>
       )}
-      <CredentialFields url={url} method={s.authMethod} user={s.authUser} token={s.authToken}
+      <CredentialFields url={url} method={s.authMethod} user={s.authUser} token={s.authToken} secretId={s.secretId}
+        onSecretId={id => dispatch({ type: 'SET_SECRET', id })}
         onMethod={method => dispatch({ type: 'SET_AUTH_METHOD', method })}
         onUser={user => dispatch({ type: 'SET_AUTH_USER', user })}
         onToken={token => dispatch({ type: 'SET_TOKEN', token })}
@@ -389,8 +394,8 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
           ? "knomit cannot read the fleet repository until it can get in. The token is this instance's own; a bundle is not a forge credential."
           : 'Optional — the check above already succeeded. A private remote over HTTPS still needs a token here to WRITE, even when reading it worked.'} />
       <div style={{ ...btnRow, marginTop: 12 }}>
-        <button type="button" data-testid="fleet-access-check" style={btn(checking || (asked && !s.authToken && s.authMethod !== 'ssh'))}
-          disabled={checking || (asked && !s.authToken && s.authMethod !== 'ssh')} onClick={onCheck}>{checking ? 'Checking…' : 'Check access'}</button>
+        <button type="button" data-testid="fleet-access-check" style={btn(checking || nothingToTry)}
+          disabled={checking || nothingToTry} onClick={onCheck}>{checking ? 'Checking…' : 'Check access'}</button>
       </div>
       {asked && !s.accessChecked && <p style={fieldHint}>Next unlocks once a check gets in to {host}.</p>}
     </div>

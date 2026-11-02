@@ -125,11 +125,11 @@ describe('the fleet target', () => {
     expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
   });
 
-  it('the gear says logs and authorizations only, and has no Fleet tab', async () => {
+  it('the gear says logs and access only, and has no Fleet tab', async () => {
     await primeApi();
     await mountApp();
     const gear = screen.getByTestId('server-toggle');
-    expect(gear).toHaveAttribute('title', 'Server: logs and authorizations');
+    expect(gear).toHaveAttribute('title', 'Server: logs and access');
     await act(async () => { fireEvent.click(gear); });
     await screen.findByTestId('logs-facet');
     expect(screen.queryByTestId('server-tab-fleet')).toBeNull();

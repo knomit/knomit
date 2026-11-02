@@ -1,23 +1,31 @@
 import { LogsFacet } from './LogsFacet';
-import { AuthPage } from './ManageOAuth';
-import type { ServerPage } from './facets';
+import { AccessPage } from './AccessPage';
+import type { AccessTab, ServerPage } from './facets';
 
 // ServerPages is the body behind the gear: the server's own pages, which
-// belong to no repository, lens or fleet. Authorizations is an indexed page
-// like a target's Settings; Logs is a toolbar over the log. The fleet is not
-// here: it is a target in the rail, with its own tabs.
+// belong to no repository, lens or fleet. Access is a tabbed page (stored
+// secrets; Authorizations with an OAuth issuer); Logs is a toolbar over the
+// log. The fleet is not here: it is a target in the rail, with its own tabs.
 //
-// Which pages exist is App's to decide (serverPagesFor, from the read-only
-// flag and the OAuth probe); `page` here is always one of them.
-export function ServerPages({ page, onAuthCount }: {
+// Which pages and Access tabs exist is App's to decide (serverPagesFor from
+// the read-only flag, accessTabsFor from the OAuth probe); `page` here is
+// always one of them.
+export function ServerPages({ page, accessTab, onAccessTab, oauthAvailable, authCount, onAuthCount }: {
   page: ServerPage;
-  /** The Authorizations page reports its own count while it polls. */
-  onAuthCount: (n: number) => void;
+  accessTab: AccessTab;
+  onAccessTab: (t: AccessTab) => void;
+  oauthAvailable: boolean;
+  authCount: number | null;
+  /** The Authorizations tab reports its own count while it polls. */
+  onAuthCount: (n: number | null) => void;
 }) {
   return (
     <div data-testid="server-pages" style={body}>
       {page === 'logs' && <LogsFacet />}
-      {page === 'auth' && <AuthPage onCount={onAuthCount} />}
+      {page === 'access' && (
+        <AccessPage tab={accessTab} onTab={onAccessTab} oauthAvailable={oauthAvailable}
+          authCount={authCount} onAuthCount={onAuthCount} />
+      )}
     </div>
   );
 }

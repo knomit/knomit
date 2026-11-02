@@ -415,18 +415,35 @@ func (o *Origins) SetBranch(uid, url, branch string) error {
 	return nil
 }
 
-// Delete removes a repo's origin. Deleting an absent origin is not an error.
+// Delete removes a repo's origin, its subscription row and its secret link.
+// Deleting an absent origin is not an error. It drops a link unconditionally;
+// a detach that must not drop a link it did not see uses DeleteAttached.
 func (o *Origins) Delete(uid string) error {
-	if _, err := o.db.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
-		return fmt.Errorf("origins delete: %w", err)
-	}
-	// repo_origins deletion alone would leave a stale subscriptions row for a
-	// repo that is refused origin deletion anyway (Task 9); delete it here too
-	// to keep the presence table honest rather than relying on that refusal.
-	if _, err := o.db.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
-		return fmt.Errorf("origins delete: %w", err)
-	}
-	return nil
+	return o.DeleteAttached(uid, true)
+}
+
+// DeleteAttached is Delete for a detach: in the SAME transaction as the
+// delete it refuses (ErrOriginLinked, nothing deleted) when the origin is
+// linked to a stored secret, unless replaceLink. A detach decided before a
+// concurrent link therefore never drops that link. Pass replaceLink only
+// after the admin gate (or on the local-only fleet routes).
+func (o *Origins) DeleteAttached(uid string, replaceLink bool) error {
+	return immediateTx(o.db, "origins delete", func(tx dbTx) error {
+		if err := refuseUnseenUnlink(tx, uid, Origin{}, replaceLink); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM repo_origin_secrets WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins delete: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins delete: %w", err)
+		}
+		// Keep the presence table honest: no subscription row without an origin.
+		if _, err := tx.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
+			return fmt.Errorf("origins delete: %w", err)
+		}
+		return nil
+	})
 }
 
 // ActiveRepoWithURL returns the NAME of the active repo whose origin URL equals

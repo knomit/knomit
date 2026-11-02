@@ -2576,7 +2576,9 @@ paths:
             read-only has no content of its own; archive it instead. Or "Repo
             is indexing", carrying `_links.cancel-index` {href, method: POST}.
             On the fleet repository: `fleet_repository` (POST /fleet/host
-            hosts the fleet here).
+            hosts the fleet here). Or "Linked to a stored secret": the repo
+            was linked after the request checked it; retry, which then needs
+            the admin gate.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -5844,6 +5846,17 @@ components:
           properties:
             sync: { type: string, enum: [ok, error, ""] }
             push: { type: string, enum: [ok, error, ""] }
+        credential_status:
+          type: string
+          enum: [expiring, expired]
+          description: |
+            Set only when the repo is linked to a stored secret that expires
+            within 14 days (`expiring`) or has expired (`expired`). Absent
+            otherwise: not linked, no expiry, not yet expiring, or the secret
+            could not be read. Advisory: sync keeps using the secret.
+        credential_secret:
+          type: string
+          description: The linked secret's name, present with `credential_status`.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     ReposCollection:
@@ -7419,6 +7432,9 @@ components:
         secret_id:
           type: string
           description: "The stored secret this origin links to. Only for a caller that passes the local-or-same-origin admin gate."
+        secret_linked:
+          type: boolean
+          description: "true when the origin is linked to a stored secret, for every reader, even when the secret's name cannot be read (then secret_name is absent)."
         secret_name:   { type: string, description: "The linked stored secret's name." }
         secret_status:
           type: string

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession, RepoIndexingError } from './api';
-import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
+import type { SSEEvent, TestResult, PreviewResult, ApplyResult, SecretType } from './api';
 import { GlobeIcon } from './icons';
 import { btn, card } from './manageStyles';
 import { repoHue, noMouseFocus } from './utils';
@@ -9,6 +9,8 @@ import {
   actions, block, blockHead, blockHint, blockTitle, column, crumb, crumbLink, crumbSep, grid, gridClass, iconBox, input, label, pageHead, rail, railClass, railItem, railLabel, railMark, railNote,
 } from './connectStyles';
 import { isSSHURL, urlAuthMismatch } from './originAuth';
+import { SecretPicker } from './SecretPicker';
+import { methodForSecretType } from './secrets';
 
 type Step =
   | 'idle' | 'creating' | 'testing' | 'tested'
@@ -48,7 +50,14 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   // omitted auth_method so the backend's auto-promotion can run. Another
   // knomit instance of this fleet is an https URL with Auto-detect: the
   // server decides it is one.
-  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic'>('');
+  // 'secret': a stored secret (Access → Secrets); the session is created with
+  // secret_id and no pasted fields.
+  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic' | 'secret'>('');
+  const [secretId, setSecretId] = useState('');
+  const [secretType, setSecretType] = useState<SecretType | null>(null);
+  // The origin being replaced is linked to a stored secret: committing over
+  // it unlinks it, which needs the admin gate as linking does.
+  const [wasLinked, setWasLinked] = useState(false);
   const [token, setToken] = useState('');
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
@@ -115,7 +124,11 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
       // A stored 'cert' is the server's decision, never an input: it maps to
       // Auto-detect, so a re-submit is decided again.
       const m = o.auth_method;
-      if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
+      if (o.secret_linked || o.secret_name || o.secret_id) {
+        setWasLinked(true);
+        setAuthMethod('secret');
+        if (o.secret_id) setSecretId(o.secret_id);
+      } else if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
     }).catch(() => { /* leave blank */ });
     return () => { cancelled = true; };
   }, [repo]);
@@ -137,7 +150,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     // showed either. The only way out was to leave and start over.
     let created = false;
     try {
-      const sess = await createSession(repo, {
+      const sess = await createSession(repo, authMethod === 'secret' ? { url: sendURL, secret_id: secretId } : {
         url: sendURL,
         auth_method: authMethod || undefined,
         token: authMethod === 'token' ? token : undefined,
@@ -223,7 +236,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
           const cur = ev.current || 0; const tot = ev.total || 0;
           setProgress(tot > 0 ? `Indexing… ${cur}/${tot}` : 'Indexing…');
         } else { setProgress(ev.phase + '…'); }
-      }, cancelIndexing ? { cancelIndexing: true } : undefined);
+      }, commitOpts(cancelIndexing, authMethod === 'secret' || wasLinked));
     } catch (e) {
       // Refusals that arrive before the stream opens (409, 502, 400) land
       // here with the problem's detail as the message. The indexing one is
@@ -291,14 +304,15 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   };
 
   const isSSH = isSSHURL(sendURL);
-  const authMismatch = urlAuthMismatch(sendURL, authMethod);
+  const authMismatch = urlAuthMismatch(sendURL,
+    authMethod === 'secret' ? (secretType ? methodForSecretType(secretType) : '') : authMethod);
   // Non-blocking advisory: 'none' on an SSH-style URL is a deliberate override
   // (force anonymous), but it almost always fails to authenticate. Warn without
   // disabling Test so the override stays usable for the rare anonymous host.
   const authWarning = (isSSH && authMethod === 'none')
     ? 'Anonymous auth on an SSH URL usually fails — choose SSH (knomit key) unless this host allows anonymous access.'
     : '';
-  const canTest = !!url && !authMismatch && step === 'idle';
+  const canTest = !!url && !authMismatch && step === 'idle' && (authMethod !== 'secret' || secretId !== '');
   const busy = step === 'creating' || step === 'testing' || step === 'previewing' || step === 'applying' || step === 'committing';
   const isSharedHistory = testResult?.history === 'shared';
 
@@ -378,7 +392,14 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
                   <option value="ssh">SSH (knomit key)</option>
                   <option value="token">Token</option>
                   <option value="basic">Basic (user / password)</option>
+                  <option value="secret">Stored secret</option>
                 </select>
+                {authMethod === 'secret' && (
+                  <div style={{ marginTop: 8 }}>
+                    <SecretPicker url={sendURL} value={secretId} allowCreate testid="wizard-secret-picker"
+                      onChange={(id, s) => { setSecretId(id); setSecretType(s?.type ?? null); }} />
+                  </div>
+                )}
                 {authMethod === 'token' && (<>
                   <label style={label} htmlFor="wizard-token">Token</label>
                   <input id="wizard-token" style={input} type="password" value={token} disabled={busy} placeholder="ghp_…" onChange={e => setToken(e.target.value)} />
@@ -569,3 +590,8 @@ const warnText: React.CSSProperties = { color: '#d2a24c', fontSize: 12, marginTo
 const progressText: React.CSSProperties = { fontSize: 13, color: '#8af', marginTop: 8 };
 const radio = (busy: boolean): React.CSSProperties => ({ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 });
 
+// commitOpts: streamCommit's options, undefined when there are none.
+function commitOpts(cancelIndexing: boolean, gated: boolean): { cancelIndexing?: boolean; gated?: boolean } | undefined {
+  if (!cancelIndexing && !gated) return undefined;
+  return { ...(cancelIndexing ? { cancelIndexing: true } : {}), ...(gated ? { gated: true } : {}) };
+}

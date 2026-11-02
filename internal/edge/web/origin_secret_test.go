@@ -111,6 +111,7 @@ func TestOriginGet_SecretFieldsAdminOnly(t *testing.T) {
 	var view map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
 	require.Equal(t, f.secretID, view["secret_id"])
+	require.Equal(t, true, view["secret_linked"])
 	require.Equal(t, "gh-pat", view["secret_name"])
 	require.Equal(t, "expiring", view["secret_status"])
 	require.NotEmpty(t, view["secret_expires_at"])
@@ -122,6 +123,7 @@ func TestOriginGet_SecretFieldsAdminOnly(t *testing.T) {
 	view = nil
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
 	require.NotContains(t, view, "secret_id")
+	require.Equal(t, true, view["secret_linked"], "every reader learns the repo is linked")
 	require.Equal(t, "gh-pat", view["secret_name"])
 	require.Equal(t, "expiring", view["secret_status"])
 	require.NotContains(t, rec.Body.String(), linkedSecretValue)

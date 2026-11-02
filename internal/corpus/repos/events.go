@@ -184,9 +184,20 @@ func AttachOriginReplacing(spec OriginSpec) MachineEvent {
 }
 
 // DetachOrigin removes the origin and restarts Sync, which then runs the
-// origin-less local loop.
+// origin-less local loop. It refuses (control.ErrOriginLinked, nothing
+// changed) when the origin is linked to a stored secret, checked in the
+// delete's own transaction; a gated caller that may unlink uses
+// DetachOriginUnlinking.
 func DetachOrigin() MachineEvent {
 	return MachineEvent{kind: evDetachOrigin, target: StageSync}
+}
+
+// DetachOriginUnlinking is DetachOrigin that may also drop a stored-secret
+// link. Use it only after the admin gate (or on the local-only fleet routes).
+func DetachOriginUnlinking() MachineEvent {
+	e := DetachOrigin()
+	e.origin.ReplaceLink = true
+	return e
 }
 
 // SwapStore replaces the repo's database with spec.TempDB and its origin with
@@ -529,7 +540,7 @@ func (e *MachineEvent) apply(m *Machine) error {
 	case evAttachOrigin:
 		return applyAttach(r, e.origin)
 	case evDetachOrigin:
-		return applyDetach(r)
+		return applyDetach(r, e.origin.ReplaceLink)
 	case evSwapStore:
 		// The walk opens what is on disk after the install, whichever way the
 		// install went.
@@ -592,7 +603,7 @@ func applyAttach(r *RepoInstance, o OriginSpec) error {
 // applyDetach drops the git remote, deletes the durable record and clears the
 // injected origin, in that order: the record outlives every step that can
 // fail, and a failed delete puts the git remote back.
-func applyDetach(r *RepoInstance) error {
+func applyDetach(r *RepoInstance, replaceLink bool) error {
 	origins := r.env.m.Origins()
 	if origins == nil {
 		return ErrManagerStopped
@@ -609,7 +620,12 @@ func applyDetach(r *RepoInstance) error {
 	if err := svc.Remote().DeleteRemote("origin"); err != nil {
 		return err
 	}
-	if err := origins.Delete(r.uid); err != nil {
+	if beforeDetachOriginWrite != nil {
+		beforeDetachOriginWrite()
+	}
+	// The link check and the delete share one transaction, so a link written
+	// after the caller decided to detach is refused, not dropped.
+	if err := origins.DeleteAttached(r.uid, replaceLink); err != nil {
 		restoreRemote(svc, r, existing)
 		return err
 	}
@@ -707,6 +723,10 @@ func applySwap(m *Machine, s SwapSpec) error {
 // beforeAttachOriginWrite (tests only) runs in applyAttach after the git
 // remote is rewritten, before the origin row is written.
 var beforeAttachOriginWrite func()
+
+// beforeDetachOriginWrite (tests only) runs in applyDetach after the git
+// remote is deleted, before the origin row is deleted.
+var beforeDetachOriginWrite func()
 
 // beforeSwapOriginWrite (tests only) runs after the backup, before the swap
 // writes the new origin row.

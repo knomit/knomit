@@ -16,7 +16,7 @@ import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
 import { useListUrl } from './listUrl';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
-import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, railShown, FLEET_FACETS } from './facets';
+import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, accessTabsFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
 import { isMatFocus } from './matFocus';
@@ -26,6 +26,7 @@ import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
 import { FacetLayoutProvider } from './facetLayout';
 import { ServerPages } from './ServerPages';
+import type { AccessTab } from './facets';
 import { useOAuthAvailability } from './useOAuthAvailability';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateLensForm } from './CreateLensForm';
@@ -1114,13 +1115,22 @@ export default function App() {
 
   // The server pages, behind the gear. They show OVER the displayed target,
   // which stays exactly as it was, so the gear again (or any rail pick) is the
-  // way back to it. Which pages exist: Fleet always; Logs and Authorizations
-  // never on a read-only server; Authorizations only with an OAuth issuer,
-  // probed while the pages are open (useOAuthAvailability). A page whose tab
-  // is gone falls back to Fleet.
+  // way back to it. Which pages exist: Logs and Access, never on a read-only
+  // server. Access's Authorizations tab only with an OAuth issuer, probed
+  // while the pages are open (useOAuthAvailability); a tab that is gone falls
+  // back to Secrets.
   const serverOpen = view.server !== null;
-  const oauth = useOAuthAvailability({ enabled: serverOpen && !state.serverReadOnly, pageOpen: view.server === 'auth' });
-  const serverPages = useMemo(() => serverPagesFor(state.serverReadOnly, oauth.available), [state.serverReadOnly, oauth.available]);
+  const [accessTab, setAccessTab] = useState<AccessTab>('secrets');
+  // The Authorizations tab can only be picked while it exists, and while it
+  // shows it polls for itself.
+  const oauth = useOAuthAvailability({
+    enabled: serverOpen && !state.serverReadOnly,
+    pageOpen: view.server === 'access' && accessTab === 'auth',
+  });
+  // A tab that is gone (the OAuth issuer went away) is forgotten, not kept
+  // for later: the reader lands on Secrets and stays there if it returns.
+  if (!accessTabsFor(oauth.available).includes(accessTab)) setAccessTab('secrets');
+  const serverPages = useMemo(() => serverPagesFor(state.serverReadOnly), [state.serverReadOnly]);
   const serverPage: ServerPage | null = view.server === null ? null : serverPages.includes(view.server) ? view.server : (serverPages[0] ?? null);
   const onServerPage = useCallback((p: ServerPage) => dispatchView({ type: 'SET_SERVER_PAGE', page: p }), [dispatchView]);
   // The gear refuses while a connect commit runs in the Settings facet:
@@ -1632,7 +1642,8 @@ export default function App() {
           <FacetLayoutProvider value={facetLayout}>
             {serverPage !== null && (
               <ErrorBoundary variant="inline" label="The server pages hit an error">
-                <ServerPages page={serverPage} onAuthCount={oauth.setCount} />
+                <ServerPages page={serverPage} accessTab={accessTab} onAccessTab={setAccessTab}
+                  oauthAvailable={oauth.available} authCount={oauth.count} onAuthCount={oauth.setCount} />
               </ErrorBoundary>
             )}
             {/* The drafts stay MOUNTED while another target is shown, hidden

@@ -2,6 +2,7 @@ import type { WizardAction, WizardState } from './wizardState';
 import { isValidRepoName, transportFor, repoNameFromURL, hostOf, httpsFromSSH, probeIsCurrent } from './wizardState';
 import { OutcomeCard } from './OutcomeCard';
 import { btn } from './manageStyles';
+import { SecretPicker } from './SecretPicker';
 
 // StepAccess is reached only for a reachable remote (stepsFor never lists it
 // otherwise), and it is reached for EVERY reachable remote — including the two
@@ -95,13 +96,23 @@ export function StepAccess({ state, dispatch, onProbe, onCancelProbe, probing, p
       )}
 
       <label style={label}>Auth method</label>
-      <select style={input} value={state.authMethod} onChange={e => dispatch({ type: 'SET_AUTH_METHOD', method: e.target.value })}>
+      <select data-testid="create-auth-method" style={input} value={state.authMethod} onChange={e => dispatch({ type: 'SET_AUTH_METHOD', method: e.target.value })}>
         <option value="">auto-detect</option>
         <option value="none">none</option>
         <option value="token">token</option>
         <option value="basic">basic</option>
         <option value="ssh">ssh</option>
+        <option value="secret">stored secret</option>
       </select>
+      {/* A stored secret from Access → Secrets: only those that fit this
+          remote's host and scheme are offered, and one can be created here
+          with the host already allowed. No pasted field is sent with it. */}
+      {state.authMethod === 'secret' && (
+        <div style={{ marginTop: 8 }}>
+          <SecretPicker url={state.url} value={state.secretId} allowCreate testid="create-secret-picker"
+            onChange={id => dispatch({ type: 'SET_SECRET', id })} />
+        </div>
+      )}
       {authRequired ? (
         <div data-testid="auth-required-hint" style={hint}>
           knomit cannot see whether this remote already has any history until it

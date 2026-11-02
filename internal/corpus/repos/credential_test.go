@@ -188,7 +188,7 @@ func TestChangeOriginCredential_AttachAfterRereadWins(t *testing.T) {
 // in memory.
 func TestChangeOriginCredential_DetachAfterRereadWins(t *testing.T) {
 	m, ri := newCredentialRepo(t)
-	afterCredentialReread = func() { require.NoError(t, applyDetach(ri)) }
+	afterCredentialReread = func() { require.NoError(t, applyDetach(ri, false)) }
 	t.Cleanup(func() { afterCredentialReread = nil })
 
 	err := m.ChangeOriginCredential(context.Background(), ri, CredentialChange{AuthMethod: "token", AuthToken: "tok-new"}, false)
