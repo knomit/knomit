@@ -1396,7 +1396,7 @@ paths:
         a function of the factset and the position alone: any unit can be
         read in any order, by any number of calls at once, with the same
         bytes. A call that must plan units reserves planning memory under the
-        budget (`session.factset_memory_mib`, 64 MiB, which also holds the
+        budget (`session.factset_memory_mib`, 128 MiB, which also holds the
         cached factsets, least recently used evicted first) and waits while
         it is full (the budget is soft: one plan is always admitted when no
         other is in flight, so the process may exceed it by one plan plus the
