@@ -75,17 +75,7 @@ func (fq *FactQuery) RecentFacts(ctx context.Context, branch string, opts Search
 	}
 	flt := newFactFilter(opts)
 
-	// Build the ep filter clause (operates on cl.operation from the LEFT JOIN).
-	epClause := ""
-	epArgs := []any{}
-	if len(opts.EpisodeOps) > 0 {
-		ph := strings.Repeat("?,", len(opts.EpisodeOps))
-		epArgs = make([]any, len(opts.EpisodeOps))
-		for i, op := range opts.EpisodeOps {
-			epArgs[i] = op
-		}
-		epClause = " AND COALESCE(cl.operation, '') IN (" + ph[:len(ph)-1] + ")"
-	}
+	epClause, epArgs := episodeOpsClause(opts.EpisodeOps)
 
 	countArgs := append(append([]any{branchID}, flt.args...), epArgs...)
 	var total int
@@ -322,7 +312,7 @@ type SearchOptions struct {
 	IncludeKinds   []string  // only return facts with these kinds (empty = all)
 	ExcludeKinds   []string  // exclude facts with these kinds
 	IncludeOrigins []string  // only return facts with these origins (empty = all)
-	EpisodeOps     []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
+	EpisodeOps     []string  // filter by the operation that wrote each path's current version (e.g. "learn", "update"); SQL, before the limit (episodeOpsClause)
 
 	// Motifs filters by the aspect axis (blueprint §6). Empty means no motif
 	// filtering at all — the field is inert unless a caller asks for it, which
@@ -764,65 +754,22 @@ func (fq *FactQuery) expandMotifQuery(ctx context.Context, branchID int64, q Sea
 	return out, nil
 }
 
-func (fq *FactQuery) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
-	if len(ops) == 0 || len(results) == 0 {
-		return results, nil
+// episodeOpsClause is the ep filter (SearchOptions.EpisodeOps) as SQL over
+// the `cl` alias, a LEFT JOIN of commit_log ON bf.commit_hash = cl.commit_hash
+// AND f.path = cl.path: the operation that wrote THIS PATH's current version.
+// Every read applies it in SQL, before its LIMIT, so RecentFacts and Search
+// (text-less and vector alike) select the same facts. A per-COMMIT lookup
+// would answer a batch commit that learned A and updated B with one arbitrary
+// op for both, and a post-LIMIT filter would see only the window's rows.
+func episodeOpsClause(ops []string) (string, []any) {
+	if len(ops) == 0 {
+		return "", nil
 	}
-
-	// Build a set of allowed operations for O(1) lookup.
-	allowed := make(map[string]bool, len(ops))
-	for _, op := range ops {
-		allowed[op] = true
+	args := make([]any, len(ops))
+	for i, op := range ops {
+		args[i] = op
 	}
-
-	// Collect unique commit hashes from results.
-	hashes := make([]string, 0, len(results))
-	seen := make(map[string]bool, len(results))
-	for _, r := range results {
-		if r.CommitHash != "" && !seen[r.CommitHash] {
-			hashes = append(hashes, r.CommitHash)
-			seen[r.CommitHash] = true
-		}
-	}
-	if len(hashes) == 0 {
-		return nil, nil
-	}
-
-	ph := strings.Repeat("?,", len(hashes))
-	args := make([]any, len(hashes))
-	for i, h := range hashes {
-		args[i] = h
-	}
-
-	rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
-		`SELECT commit_hash, operation FROM commit_log WHERE commit_hash IN (`+ph[:len(ph)-1]+`) GROUP BY commit_hash`,
-		args...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("filterByEpisodeOps: %w", err)
-	}
-	defer rows.Close()
-
-	opByHash := make(map[string]string, len(hashes))
-	for rows.Next() {
-		var hash, op string
-		if err := rows.Scan(&hash, &op); err != nil {
-			return nil, fmt.Errorf("filterByEpisodeOps scan: %w", err)
-		}
-		opByHash[hash] = op
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	out := results[:0]
-	for _, r := range results {
-		op := opByHash[r.CommitHash]
-		if allowed[op] {
-			out = append(out, r)
-		}
-	}
-	return out, nil
+	return " AND COALESCE(cl.operation, '') IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ops)), ",") + ")", args
 }
 
 // Search performs a vector similarity search over the index.
@@ -968,8 +915,9 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	// SQLite's plan produced (the I6 storytest flake). The order is the one
 	// recentFactsSearch falls back to on a score tie — newest commit first,
 	// then path — so a text-less search lists like every recency listing.
+	epClause, epArgs := episodeOpsClause(q.EpisodeOps)
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
-		args := append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), limit)
+		args := append(append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), epArgs...), limit)
 		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 			        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
@@ -979,7 +927,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 			 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
-			 WHERE bf.branch_id = ?`+flt.SQL()+`
+			 WHERE bf.branch_id = ?`+flt.SQL()+epClause+`
 			 ORDER BY COALESCE(cl.committed_at, 0) DESC, f.path ASC
 			 LIMIT ?`,
 			args...,
@@ -1000,7 +948,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		return fq.filterByEpisodeOps(ctx, out, q.EpisodeOps)
+		return out, nil
 	}
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
@@ -1170,8 +1118,8 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
-		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
-		append(pathArgs, flt.args...)...,
+		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL()+epClause,
+		append(append(pathArgs, flt.args...), epArgs...)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search: meta fetch: %w", err)
@@ -1234,5 +1182,5 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		c.rec.Context = fact.ExtractContext([]byte(c.rec.Body))
 		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 	}
-	return fq.filterByEpisodeOps(ctx, out, q.EpisodeOps)
+	return out, nil
 }
