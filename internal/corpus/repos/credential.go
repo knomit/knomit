@@ -130,9 +130,10 @@ func checkPastedCredential(url string, c CredentialChange) error {
 // compare-and-set on the stored URL, so an attach that re-points the origin
 // in between wins and this answers control.ErrOriginChanged with nothing
 // written. On success it re-reads the row and injects it into the running
-// store with svc.Remote().SetOriginIfURL, a second compare-and-set on the
-// injected URL: an attach or detach that lands after the durable write keeps
-// memory (and the durable row it wrote), and this answers
+// store with svc.Remote().SetOriginIf, a second compare-and-set on the whole
+// injected origin as it was before the durable write: an attach, re-attach
+// or detach that lands after the durable write keeps memory (and the durable
+// row it wrote), and this answers
 // control.ErrOriginChanged without signalling anything. Otherwise it signals
 // a credential change, which resets the breakers and wakes the sync loop.
 func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, c CredentialChange, unlink bool) error {
@@ -160,6 +161,15 @@ func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, 
 	if err := checkPastedCredential(stored.URL, c); err != nil {
 		return err
 	}
+	// What the running store holds now, before the durable write: the
+	// in-memory write below applies only while memory still holds exactly
+	// this. With the store not open, the row an open would inject.
+	expect := remotesync.Origin{URL: stored.URL, Branch: stored.Branch, AuthMethod: stored.AuthMethod, AuthToken: stored.AuthToken}
+	_ = ri.WithRead(func(svc *store.Service) {
+		if mem := svc.Remote().InjectedOrigin(); mem != nil {
+			expect = *mem
+		}
+	})
 	if beforeCredentialWrite != nil {
 		beforeCredentialWrite()
 	}
@@ -176,17 +186,18 @@ func (m *Manager) ChangeOriginCredential(ctx context.Context, ri *RepoInstance, 
 	if afterCredentialReread != nil {
 		afterCredentialReread()
 	}
-	// The running store's copy, as a compare-and-set on the injected URL.
-	// An attach or detach can land between the re-read and this write: it
-	// writes control.db, the git remote and memory, and this must never put
-	// cur back over it. The reconcile loop builds auth from memory while
+	// The running store's copy, as a compare-and-set on the WHOLE injected
+	// origin read before the durable write. An attach or detach (even a
+	// re-attach to the same URL) can land between the re-read and this write:
+	// it writes control.db, the git remote and memory, and this must never
+	// put cur back over it. The reconcile loop builds auth from memory while
 	// go-git dials the git remote's URL, so an unconditional write here would
 	// send the old origin's credential to the attached host, or resurrect a
 	// detached origin. A store that is not open needs no write: opening
 	// injects the control.db row.
 	applied := true
 	if werr := ri.WithRead(func(svc *store.Service) {
-		applied = svc.Remote().SetOriginIfURL(cur.URL, &remotesync.Origin{
+		applied = svc.Remote().SetOriginIf(expect, &remotesync.Origin{
 			URL: cur.URL, Branch: cur.Branch, AuthMethod: cur.AuthMethod, AuthToken: cur.AuthToken,
 		})
 	}); werr != nil {

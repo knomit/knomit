@@ -211,3 +211,25 @@ func TestChangeOriginCredential_BasicNeedsPassword(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "bob:", o.AuthToken)
 }
+
+// A re-attach to the SAME URL with another credential, in the same window:
+// the URL alone matches, so only a whole-origin compare keeps memory on the
+// attach's credential (which control.db holds) instead of the swap's.
+func TestChangeOriginCredential_SameURLReattachAfterRereadWins(t *testing.T) {
+	m, ri := newCredentialRepo(t)
+	before, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	afterCredentialReread = func() {
+		require.NoError(t, applyAttach(ri, OriginSpec{URL: before.URL, Branch: before.Branch, AuthMethod: "basic", AuthToken: "att:pw"}))
+	}
+	t.Cleanup(func() { afterCredentialReread = nil })
+
+	err = m.ChangeOriginCredential(context.Background(), ri, CredentialChange{AuthMethod: "token", AuthToken: "tok-new"}, false)
+	require.ErrorIs(t, err, control.ErrOriginChanged)
+	mem := injected(t, ri)
+	require.Equal(t, "basic", mem.AuthMethod)
+	require.Equal(t, "att:pw", mem.AuthToken, "memory matches the attach")
+	row, err := m.Origins().Get(ri.UID())
+	require.NoError(t, err)
+	require.Equal(t, "att:pw", row.AuthToken, "control.db matches the attach")
+}
