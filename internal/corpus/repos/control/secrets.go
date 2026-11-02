@@ -151,6 +151,10 @@ func OpenSecrets(db *sql.DB, crypt *model.Crypt) *Secrets {
 	return &Secrets{db: db, crypt: crypt}
 }
 
+// CanStoreValues reports whether values can be written and read (the
+// instance key is readable). Metadata works either way.
+func (s *Secrets) CanStoreValues() bool { return s.crypt != nil }
+
 // Create validates and stores a new secret.
 func (s *Secrets) Create(in SecretInput, now time.Time) (SecretMeta, error) {
 	if s.crypt == nil {

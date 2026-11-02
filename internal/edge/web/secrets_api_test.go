@@ -347,3 +347,19 @@ func TestSecretsAPI_PatchIsAtomic(t *testing.T) {
 	require.Equal(t, []string{"github.com"}, got.Hosts, "hosts unchanged after the refused PATCH")
 	require.Nil(t, got.ExpiresAt, "expiry unchanged after the refused PATCH")
 }
+
+// With no instance key, a PATCH carrying a value is refused 503 BEFORE any
+// metadata is written.
+func TestSecretsAPI_NoCryptPatchWritesNothing(t *testing.T) {
+	f := newSecretsFixture(t, false)
+	_, err := f.m.Repos().DB().Exec(`INSERT INTO secrets (id, name, type, hosts, value_enc, created_at, updated_at)
+		VALUES ('s1', 'pat', 'token', '["github.com"]', 'x', 1, 1)`)
+	require.NoError(t, err)
+
+	rec := f.do(t, "PATCH", "/api/v1/secrets/s1", `{"name":"renamed","hosts":["gitlab.com"],"value":"v"}`)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	got, err := f.m.Secrets().Get("s1")
+	require.NoError(t, err)
+	require.Equal(t, "pat", got.Name)
+	require.Equal(t, []string{"github.com"}, got.Hosts)
+}

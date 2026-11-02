@@ -297,6 +297,12 @@ func handlePatchSecret(rm *repos.Manager) http.HandlerFunc {
 			}
 		}
 		if body.present() {
+			// Refuse before anything is written: without the instance key the
+			// value cannot be stored, and the metadata must not change alone.
+			if !s.CanStoreValues() {
+				writeError(w, r, control.ErrEncryptionUnavailable)
+				return
+			}
 			if err := control.ValidateSecretValue(meta.Type, body.secretValue()); err != nil {
 				writeError(w, r, err)
 				return
