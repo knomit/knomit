@@ -960,6 +960,14 @@ paths:
       tags: [facts]
       summary: Create a fact
       description: |
+        The fact is written at `kb/<domain[0]>/<domain[1]>/<id>.md`
+        (`domain[1]` defaults to `domain[0]`, and an absent `domain` to
+        `["uncategorized"]`). 422 "Invalid fact placement" when `domain[0]` is
+        not a top-level topic of the repository's ontology (detail
+        `validate path: unknown topic "<topic>"`) or the category is blank
+        (detail `category is required`): the same check, and the same text,
+        as `knomit_learn`. Nothing is written.
+
         422 "Fact fails the ontology's validations" when the fact fails a
         validation of the repository's ontology (at the branch's tip): the
         detail is the rule's own message, and nothing is written.
@@ -1071,7 +1079,13 @@ paths:
         with no exception — and 400 "Invalid artifact path" for a malformed
         path under `artifacts/` (any case). An `artifacts/<area>/<name>` path
         is written at the repo root, outside the ontology; a `context` on it
-        is 422. 422 "Fact fails the ontology's validations" when the content
+        is 422. A PUT to a path where no fact exists yet creates one, and
+        answers 422 "Invalid fact placement" (detail
+        `validate path: unknown topic "<topic>"`, `knomit_learn`'s text) when
+        the path's first segment under the ontology root is not a top-level
+        topic of the repository's ontology; nothing is written. A PUT to an
+        existing fact is an edit and its topic is not re-judged, as with
+        `knomit_update`. 422 "Fact fails the ontology's validations" when the content
         fails a validation of the repository's ontology (at the branch's tip),
         with the rule's own message: an edit of a fact that already failed
         one must bring it into compliance. Nothing is written.

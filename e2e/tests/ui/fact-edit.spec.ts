@@ -6,7 +6,7 @@ test.describe('Fact Edit', () => {
   test('create a fact via API and verify it appears in UI', async ({ freshKnomit, page }) => {
     // Create a fact via API
     const res = await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/test-fact.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/test-fact.md`,
       {
         data: {
           content: `---
@@ -28,6 +28,7 @@ Created by e2e test.`,
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
+    await browse.clickEntry('e2e');
     await browse.clickEntry('test-fact.md');
     const factPanel = new FactPanel(page);
     await expect(factPanel.title).toContainText('Test Fact');
@@ -36,7 +37,7 @@ Created by e2e test.`,
   test('edit an existing fact via API and verify update in UI', async ({ freshKnomit, page }) => {
     // Seed a fact
     await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/editable.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/editable.md`,
       {
         data: {
           content: `---
@@ -56,6 +57,7 @@ Original content.`,
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
+    await browse.clickEntry('e2e');
     await browse.clickEntry('editable.md');
 
     const factPanel = new FactPanel(page);
@@ -64,7 +66,7 @@ Original content.`,
 
     // Update the fact via API (the editor textarea only appears for parse errors)
     const updateRes = await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/editable.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/editable.md`,
       {
         data: {
           content: `---
@@ -86,6 +88,7 @@ Updated content via e2e test.`,
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
     const browse2 = new BrowsePage(page);
+    await browse2.clickEntry('e2e');
     await browse2.clickEntry('editable.md');
 
     const factPanel2 = new FactPanel(page);

@@ -44,9 +44,9 @@ func requireStoreUnavailable(t *testing.T, rec *httptest.ResponseRecorder) {
 func unavailableWrites(branchURL, existing string) []struct{ name, method, url, body string } {
 	base := "/repos/alpha/branches/" + branchURL + "/facts"
 	return []struct{ name, method, url, body string }{
-		{"POST plain", http.MethodPost, base, `{"title":"T","body":"b","domain":["ai"]}`},
-		{"POST fact ref", http.MethodPost, base, `{"title":"T","body":"b","domain":["ai"],"refs":["kb/ai/other.md"]}`},
-		{"POST system-file ref", http.MethodPost, base, `{"title":"T","body":"b","domain":["ai"],"refs":[".knomit/ontology.yaml"]}`},
+		{"POST plain", http.MethodPost, base, `{"title":"T","body":"b","domain":["technology"]}`},
+		{"POST fact ref", http.MethodPost, base, `{"title":"T","body":"b","domain":["technology"],"refs":["kb/technology/other.md"]}`},
+		{"POST system-file ref", http.MethodPost, base, `{"title":"T","body":"b","domain":["technology"],"refs":[".knomit/ontology.yaml"]}`},
 		{"PUT", http.MethodPut, base + "/" + existing, `{"content":"` + testFactContent + `"}`},
 		{"DELETE", http.MethodDelete, base + "/" + existing, ""},
 	}
@@ -87,7 +87,7 @@ func TestFactWrite_ClosedRepo_RefusedAndWritesNothing(t *testing.T) {
 	require.NotNil(t, ri)
 	branch := ri.AgentBranch()
 	require.Equal(t, "machine/test", branch)
-	const seeded = "kb/ai/test.md"
+	const seeded = "kb/technology/test.md"
 
 	// Seed through the API, so the PUT and DELETE below target a real fact.
 	seed := serveWrite(t, s, http.MethodPut, "/repos/alpha/branches/machine:test/facts/"+seeded,
