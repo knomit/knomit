@@ -91,6 +91,21 @@ func (d writeDestination) summary(what string) string {
 	return fmt.Sprintf("wrote %s to %s on branch %q", what, where, d.Branch)
 }
 
+// unchangedSummary is summary's sentence for a write that wrote nothing
+// because file already held exactly these bytes (#432). It must not say
+// "wrote": a caller reading the prose would take a no-op for a revision.
+func (d writeDestination) unchangedSummary(file string) string {
+	where := fmt.Sprintf("repo %q", d.Repo)
+	if d.RepoID != "" {
+		where = fmt.Sprintf("repo %q (%s)", d.Repo, d.RepoID)
+	}
+	if d.Lens != "" {
+		return fmt.Sprintf("no change: %s already has this content on branch %q of %s — the write repo of lens %q",
+			file, d.Branch, where, d.Lens)
+	}
+	return fmt.Sprintf("no change: %s already has this content on branch %q of %s", file, d.Branch, where)
+}
+
 // pluralFacts renders a fact count for the summary sentence.
 func pluralFacts(n int) string {
 	if n == 1 {

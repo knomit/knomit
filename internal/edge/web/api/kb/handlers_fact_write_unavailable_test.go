@@ -161,11 +161,12 @@ func TestFactWriteHelpers_ReturnAcquireRefusal(t *testing.T) {
 	require.ErrorIs(t, err, repos.ErrStoreUnavailable, "priorRefs: not \"no prior version\"")
 	require.Nil(t, prior)
 
-	h, err := writeFact(ctx, ri, branch, path, "x", "m")
+	wres, err := writeFact(ctx, ri, branch, path, "x", "m")
 	require.ErrorIs(t, err, repos.ErrStoreUnavailable, "writeFact")
-	require.Empty(t, h)
+	require.Empty(t, wres.CommitHash)
+	require.False(t, wres.Unchanged)
 
-	h, err = deleteFact(ctx, ri, branch, path, "m")
+	h, err := deleteFact(ctx, ri, branch, path, "m")
 	require.ErrorIs(t, err, repos.ErrStoreUnavailable, "deleteFact")
 	require.NotErrorIs(t, err, errFactNotFound, "deleteFact: nothing was looked up, so not a 404")
 	require.Empty(t, h)

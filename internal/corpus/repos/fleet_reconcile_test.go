@@ -396,3 +396,41 @@ func TestFleetRecord_HistoryIsVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{memberRecordPath("kb", "test-fleet")}, strings.Fields(string(out)), "one record file")
 }
+
+// #432: the fleet record writer (writeRecord, both its doors: the
+// compare-and-swap WriteFactIfUnchanged and the plain WriteFact) re-writing
+// the record it already has makes no commit: the agent tip stays where it is
+// and neither call errors. The reconcile's own "write only when a field
+// changed" rule is unchanged (TestFleetRecord_BootReconcile); this pins what
+// the store now does for a caller that writes anyway. Asserted on the branch
+// tip, not the record's path log (kb/gotchas/testing/git/commit-counting).
+//
+// SABOTAGE: drop the blob-hash comparison from the store's writeFileExact ->
+// each identical writeRecord commits and the tip moves -> red.
+func TestFleetRecord_IdenticalRecordWriteMakesNoCommit(t *testing.T) {
+	dir := t.TempDir()
+	bare := filepath.Join(dir, "fleet.git")
+	url, root := seedJoinableFleet(t, bare)
+	m, _ := bootFleet(t, dir, nil)
+	registerAt(t, m, url, root)
+	ri := m.fleetRepo()
+	cur, found, err := m.ownRecordAt(ri, ri.AgentBranch())
+	require.NoError(t, err)
+	require.True(t, found)
+	svc := testService(t, ri)
+	tip, err := svc.HeadCommit(context.Background(), ri.AgentBranch())
+	require.NoError(t, err)
+
+	require.NoError(t, m.writeRecord(context.Background(), ri, cur.Member, "test: same record", cur.Blob))
+	require.NoError(t, m.writeRecord(context.Background(), ri, cur.Member, "test: same record", ""))
+	now, err := svc.HeadCommit(context.Background(), ri.AgentBranch())
+	require.NoError(t, err)
+	require.Equal(t, tip, now, "an identical record write is a no-op")
+
+	changed, err := m.refreshOwnRecord(context.Background(), ri)
+	require.NoError(t, err)
+	require.Empty(t, changed, "the record is current: the reconcile writes nothing")
+	now, err = svc.HeadCommit(context.Background(), ri.AgentBranch())
+	require.NoError(t, err)
+	require.Equal(t, tip, now)
+}

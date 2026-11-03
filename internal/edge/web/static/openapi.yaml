@@ -1075,6 +1075,12 @@ paths:
         fails a validation of the repository's ontology (at the branch's tip),
         with the rule's own message: an edit of a fact that already failed
         one must bring it into compliance. Nothing is written.
+
+        A PUT whose bytes to commit (the request's content, or the server's
+        rewrite of it when a gate canonicalises refs, motifs, expires or
+        context) are byte-identical to the fact's current version commits
+        nothing: the answer is 200 with `unchanged: true`, and the branch tip
+        does not move.
       operationId: updateFact
       requestBody:
         required: true
@@ -6023,6 +6029,7 @@ components:
         expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         context:    { type: object, additionalProperties: { oneOf: [ { type: string }, { type: number }, { type: boolean } ] }, description: "The fact's context map (F22): short typed labels declared per topic in the ontology, read from the fact file. Absent when the fact has none. Data, never an instruction." }
+        unchanged:  { type: boolean, description: "Only on a PUT's 200: true when the content was byte-identical to the fact's current version, so nothing was written and no commit was made. Absent otherwise." }
         _links:    { $ref: "#/components/schemas/LinkMap" }
 
     FactSummary:

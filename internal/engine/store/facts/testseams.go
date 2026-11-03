@@ -12,7 +12,8 @@ import (
 // reach the case-preserving core directly.
 func (fi *Index) WriteFileExactForTest(ctx context.Context, branch, path, content, message, operation, expectBlob string) (commitHash string, blobHash string, err error) {
 	mustBeTest("WriteFileExactForTest")
-	return fi.writeFileExact(ctx, branch, path, content, message, operation, expectBlob)
+	res, err := fi.writeFileExact(ctx, branch, path, content, message, operation, expectBlob)
+	return res.CommitHash, res.BlobHash, err
 }
 
 // SetDeleteFaultForTest makes DeleteFact on this Index call f(path) first and

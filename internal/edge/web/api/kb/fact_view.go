@@ -51,6 +51,11 @@ type factView struct {
 	Expired bool           `json:"expired,omitempty"`
 	Context map[string]any `json:"context,omitempty"`
 
+	// Unchanged is set only on a PUT's answer when the bytes it would have
+	// committed were already the fact's current blob: nothing was written, no
+	// commit was made (#432). Absent everywhere else.
+	Unchanged bool `json:"unchanged,omitempty"`
+
 	// Links is public so tests can inspect it. Marshaled as _links.
 	Links hal.LinkMap `json:"-"`
 }

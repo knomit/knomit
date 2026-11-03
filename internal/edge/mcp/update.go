@@ -30,7 +30,7 @@ const updateToolName = "knomit_update"
 
 func updateTool() mcpgo.Tool {
 	return mcpgo.NewTool(updateToolName,
-		mcpgo.WithDescription("Update an existing fact in the knowledge base."),
+		mcpgo.WithDescription("Update an existing fact in the knowledge base. An update whose resulting fact is byte-identical to the current revision writes nothing: the result says `unchanged: true` and carries no commit."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
@@ -476,6 +476,19 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			"commit":     writeRes.CommitHash,
 			"written_to": dest,
 			"summary":    dest.summary("1 fact revision"),
+		}
+		if writeRes.Unchanged {
+			// The final bytes (after trimming, context normalisation and ref
+			// canonicalisation) equal the fact's current blob: the store
+			// wrote nothing (#432). No commit is reported, because none was
+			// made — the tip the store compared against is not this
+			// update's commit.
+			result = map[string]interface{}{
+				"file":       file,
+				"unchanged":  true,
+				"written_to": dest,
+				"summary":    dest.unchangedSummary(file),
+			}
 		}
 		if len(opDeltas) > 0 {
 			result["ops"] = opDeltas

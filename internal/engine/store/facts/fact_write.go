@@ -118,12 +118,13 @@ func IsInvalidPath(err error) bool {
 }
 
 // writeFile writes content to path in a new commit with message on branch,
-// normalizing case first. Returns the commit hash and the blob hash.
+// normalizing case first. Returns the commit hash and the blob hash (or, for
+// content identical to what is there, Unchanged and the tip: writeFileExact).
 //
 // The lowercasing keeps FACT paths free of case-duplicate topics ("AI" vs
 // "ai") — see fact.NormalizePath. It is a fact-path rule, not a storage rule,
 // so writeFileExact is the door for files that are not facts.
-func (fi *Index) writeFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+func (fi *Index) writeFile(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	return fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation, "")
 }
 
@@ -134,12 +135,21 @@ func (fi *Index) writeFile(ctx context.Context, branch, path, content, message, 
 // on the branch tip must be expectBlob, checked INSIDE the branch write lock so
 // no other write can land between the check and the commit. On a mismatch
 // nothing is written and the error wraps ErrFactChanged.
-func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, message, operation, expectBlob string) (commitHash string, blobHash string, err error) {
+//
+// A write whose content is byte-identical to the blob already at path on the
+// branch tip is a NO-OP (#432). It is detected under the same lock, after the
+// precondition and before validation or any object write, by comparing the
+// git blob hash of content with the tip's blob. Nothing is written — no
+// object, no commit — the ref does not move, NotifyCommit is not called, and
+// the result carries Unchanged with CommitHash = the tip. The comparison is of
+// the FINAL bytes handed in here (after whatever normalisation the caller
+// did), never of what the caller's own client sent.
+func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error) {
 	if fi.rh.vr.ReadOnly() {
-		return "", "", ErrRepoReadOnly
+		return WriteFactResult{}, ErrRepoReadOnly
 	}
 	if err := ValidatePath(path); err != nil {
-		return "", "", fmt.Errorf("store: WriteFile: %w", err)
+		return WriteFactResult{}, fmt.Errorf("store: WriteFile: %w", err)
 	}
 
 	unlock := fi.rh.vr.LockBranch(branch)
@@ -147,50 +157,61 @@ func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, mess
 
 	headHash, err := fi.rh.vr.ResolveRef(ctx, branch)
 	if err != nil {
-		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
+		return WriteFactResult{}, fmt.Errorf("WriteFile: ref: %w", err)
 	}
-	if expectBlob != "" {
-		current, err := fi.rh.vr.BlobAtCommit(headHash, path)
-		if err != nil {
-			return "", "", fmt.Errorf("WriteFile: precondition: %w", err)
+	// The blob at path on the tip: the precondition's subject and the no-op
+	// check's. An unborn branch has no tip, so no blob. Without a
+	// precondition a failed read only disables the no-op check: the write
+	// proceeds exactly as it did before the check existed.
+	current := ""
+	if headHash != plumbing.ZeroHash {
+		var rerr error
+		if current, rerr = fi.rh.vr.BlobAtCommit(headHash, path); rerr != nil {
+			if expectBlob != "" {
+				return WriteFactResult{}, fmt.Errorf("WriteFile: precondition: %w", rerr)
+			}
+			current = ""
 		}
-		if current != expectBlob {
-			return "", "", fmt.Errorf("WriteFile: %q: %w", path, ErrFactChanged)
-		}
+	}
+	if expectBlob != "" && current != expectBlob {
+		return WriteFactResult{}, fmt.Errorf("WriteFile: %q: %w", path, ErrFactChanged)
+	}
+	if current != "" && current == plumbing.ComputeHash(plumbing.BlobObject, []byte(content)).String() {
+		return WriteFactResult{CommitHash: headHash.String(), BlobHash: current, Unchanged: true}, nil
 	}
 	// RuleValidation at the source, before any object is written (not for a
 	// copy of content that already exists: WithCarriedOver).
 	if !carriedOver(ctx) {
 		if err := fi.rh.validateWrite(headHash, map[string]string{path: content}, nil); err != nil {
-			return "", "", fmt.Errorf("WriteFile: %w", err)
+			return WriteFactResult{}, fmt.Errorf("WriteFile: %w", err)
 		}
 	}
 
 	signer, err := fi.rh.vr.CommitSigner()
 	if err != nil {
-		return "", "", fmt.Errorf("WriteFile: %w", err)
+		return WriteFactResult{}, fmt.Errorf("WriteFile: %w", err)
 	}
 	author, committer, err := fi.rh.vr.CommitSigs(ctx, branch, operation)
 	if err != nil {
-		return "", "", fmt.Errorf("WriteFile: %w", err)
+		return WriteFactResult{}, fmt.Errorf("WriteFile: %w", err)
 	}
 	// The causal-trace trailers (F07): stamped here, on the message the
 	// builder signs, when the caller's ctx carries a set; nothing otherwise.
 	message = model.AppendTrailers(message, model.TrailersFromContext(ctx))
 	newCommitHash, newBlobHash, err := vcs.WriteFileToStore(fi.rh.vr.Storer(), signer, headHash, path, content, message, author, committer)
 	if err != nil {
-		return "", "", err
+		return WriteFactResult{}, err
 	}
 
 	// Derive the commit's history rows BEFORE the ref moves: a failure here
 	// leaves the branch where it was, never moved with the call failed.
 	if err := fi.rh.vr.DeriveBeforeAdvance(ctx, newCommitHash); err != nil {
-		return "", "", err
+		return WriteFactResult{}, err
 	}
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.vr.Storer().SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
-		return "", "", err
+		return WriteFactResult{}, err
 	}
 
 	// Notify inside the lock — the ref advance, commit_log append, and
@@ -200,9 +221,9 @@ func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, mess
 	// NotifyCommit would see a torn state: git HEAD at the new commit,
 	// SQL index still at the previous one.
 	if err := fi.rh.vr.NotifyCommit(ctx, branch, newCommitHash); err != nil {
-		return "", "", err
+		return WriteFactResult{}, err
 	}
-	return newCommitHash.String(), newBlobHash.String(), nil
+	return WriteFactResult{CommitHash: newCommitHash.String(), BlobHash: newBlobHash.String()}, nil
 }
 
 // deleteFile removes path from branch and creates a commit.
@@ -510,6 +531,8 @@ func (fi *Index) batchWriteLocked(ctx context.Context, branch string, files map[
 }
 
 // WriteFact writes a fact to the store and returns the commit and blob hashes.
+// Content byte-identical to the current blob at path writes nothing and
+// returns Unchanged with the branch tip (see writeFileExact).
 // Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
 // via rh.NotifyCommit — no redundant fi.im.Sync call here.
 func (fi *Index) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
@@ -518,11 +541,7 @@ func (fi *Index) WriteFact(ctx context.Context, branch, path, content, message, 
 			return WriteFactResult{}, err
 		}
 	}
-	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
-	if err != nil {
-		return WriteFactResult{}, err
-	}
-	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
+	return fi.writeFile(ctx, branch, path, content, message, operation)
 }
 
 // WriteFactIfUnchanged is WriteFact with a compare-and-swap precondition: it
@@ -535,11 +554,7 @@ func (fi *Index) WriteFactIfUnchanged(ctx context.Context, branch, path, content
 	if expectBlob == "" {
 		return WriteFactResult{}, fmt.Errorf("WriteFactIfUnchanged: expectBlob is required")
 	}
-	commitHash, blobHash, err := fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation, expectBlob)
-	if err != nil {
-		return WriteFactResult{}, err
-	}
-	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
+	return fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation, expectBlob)
 }
 
 // WriteRootFile writes a root-level, non-fact file (README.md, and any future
@@ -549,11 +564,7 @@ func (fi *Index) WriteRootFile(ctx context.Context, branch, path, content, messa
 	if strings.Contains(path, "/") {
 		return WriteFactResult{}, fmt.Errorf("store: WriteRootFile: %q is not root-level", path)
 	}
-	commitHash, blobHash, err := fi.writeFileExact(ctx, branch, path, content, message, operation, "")
-	if err != nil {
-		return WriteFactResult{}, err
-	}
-	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
+	return fi.writeFileExact(ctx, branch, path, content, message, operation, "")
 }
 
 // DeleteFact deletes a fact. Index sync happens inside deleteFile via
