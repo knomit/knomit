@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { Fact } from './api';
 import type { Action, AppState } from './state';
-import { factHistoryAnchor } from './state';
+import { factHistoryAnchor, openFactSourceResolved } from './state';
 import { unifiedDiff } from './diff';
 
 interface Props {
@@ -30,9 +30,13 @@ export function FactDiffView({ state, dispatch }: Props) {
   // kb://<id12>/ qualifier stripped. Repo context collapses to
   // {state.repo, state.branch, bare path} — byte-identical to the old inline args.
   const anchor = factHistoryAnchor(state);
+  // In a lens, only once factSource is THIS fact's mount: the open fact can move
+  // to another mount while the diff stays open, and until RightPanel resolves
+  // the new source the anchor still names the previous fact's mount.
+  const resolved = openFactSourceResolved(state);
 
   useEffect(() => {
-    if (!inDiff) return;
+    if (!inDiff || !resolved) return;
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
@@ -49,7 +53,7 @@ export function FactDiffView({ state, dispatch }: Props) {
         setError(String(e));
       });
     return () => ctrl.abort();
-  }, [inDiff, anchor.repo, anchor.branch, anchor.path, from, to]);
+  }, [inDiff, resolved, anchor.repo, anchor.branch, anchor.path, from, to]);
 
   if (!inDiff) return null;
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
