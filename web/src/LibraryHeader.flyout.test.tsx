@@ -136,6 +136,22 @@ describe('collapse', () => {
     expect(document.activeElement).toBe(current());
   });
 
+  // #734 review (Safari): a pressed button is blurred with a null
+  // relatedTarget BEFORE its click. Collapsing then would unmount the strip
+  // and the click would land on whatever is underneath.
+  it('a blur with no relatedTarget during a press inside does not eat the click', () => {
+    const onSortChange = vi.fn();
+    render(<LibraryHeader {...base} sort="recent" onSortChange={onSortChange} />);
+    act(() => current().focus());
+    const path = screen.getByTestId('sort-path');
+    fireEvent.pointerDown(path, { pointerType: 'mouse' });
+    fireEvent.focusOut(current(), { relatedTarget: null }); // React's onBlur is focusout
+    expect(isOpen()).toBe(true);
+    fireEvent.pointerUp(path, { pointerType: 'mouse' });
+    fireEvent.click(path, { detail: 1 });
+    expect(onSortChange).toHaveBeenCalledWith('path');
+  });
+
   it('focus leaving the group collapses it; moving inside does not', () => {
     render(<LibraryHeader {...base} />);
     act(() => current().focus());
@@ -204,6 +220,28 @@ describe('keyboard', () => {
       fireEvent.keyDown(current(), { key: 'ArrowLeft' });
       fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
       expect(seen).toEqual([]);
+    } finally {
+      window.removeEventListener('keydown', onKey);
+    }
+  });
+
+  // #734 review: Up/Down never belong to the flyout, and Left/Right only while
+  // it is open, so the list keeps its arrows when focus sits on a mode icon.
+  it('closed, every arrow reaches the list; open, Up/Down still do', () => {
+    const seen: string[] = [];
+    const onKey = (e: KeyboardEvent) => seen.push(e.key);
+    window.addEventListener('keydown', onKey);
+    try {
+      render(<LibraryHeader {...base} />);
+      act(() => current().focus());
+      fireEvent.keyDown(current(), { key: 'Escape' }); // closed, focus kept
+      expect(isOpen()).toBe(false);
+      for (const key of ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight']) fireEvent.keyDown(current(), { key });
+      expect(seen).toEqual(['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight']);
+      seen.length = 0;
+      fireEvent.mouseEnter(group());
+      for (const key of ['ArrowDown', 'ArrowUp']) fireEvent.keyDown(current(), { key });
+      expect(seen).toEqual(['ArrowDown', 'ArrowUp']);
     } finally {
       window.removeEventListener('keydown', onKey);
     }

@@ -54,6 +54,10 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
   // Touch: focus (which opens) lands between pointerdown and click, so the
   // toggle must read the state from BEFORE the press.
   const press = useRef<{ type: string; wasOpen: boolean } | null>(null);
+  // Set from a pointerdown inside the group until the pointer is released.
+  // Safari blurs a pressed button with a null relatedTarget BEFORE its click;
+  // collapsing then would unmount the strip and lose the click.
+  const pressing = useRef(false);
 
   const cancel = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
   useEffect(() => cancel, []);
@@ -75,16 +79,21 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
   const onCurrentClick = () => {
     const p = press.current;
     press.current = null;
+    pressing.current = false;
     if (currentActs) { if (!current.disabled) current.onSelect(); collapse(false); return; }
     if (p && (p.type === 'touch' || p.type === 'pen')) setOpen(!p.wasOpen);
     else setOpen(true);
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    // The Library's window-level list keys (arrows move the selection, Enter
-    // opens a row, with preventDefault) must not also run off a key pressed
-    // on a mode icon: Enter would lose the button's own activation.
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', ' '].includes(e.key)) e.stopPropagation();
+    // The Library's window-level list keys run off keys pressed anywhere but a
+    // text field. Enter and Space belong to the focused icon (the Library's
+    // Enter preventDefaults, which would cancel the button's activation).
+    // Left/Right belong to the flyout only while it is OPEN; closed, they and
+    // Up/Down stay the list's, so the arrows keep moving the selection after
+    // a pick leaves focus on the current icon.
+    if (e.key === 'Enter' || e.key === ' ') e.stopPropagation();
+    if (open && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) e.stopPropagation();
     if (e.key === 'Escape' && open) {
       e.stopPropagation();
       collapse(true);
@@ -122,7 +131,14 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
       onMouseEnter={() => { cancel(); setOpen(true); }}
       onMouseLeave={() => { cancel(); timer.current = setTimeout(() => { timer.current = null; setOpen(false); }, COLLAPSE_MS); }}
       onFocus={() => { if (!quietFocus.current) { cancel(); setOpen(true); } }}
+      onPointerDownCapture={() => {
+        pressing.current = true;
+        const release = () => { pressing.current = false; };
+        window.addEventListener('pointerup', release, { once: true, capture: true });
+        window.addEventListener('pointercancel', release, { once: true, capture: true });
+      }}
       onBlur={e => {
+        if (pressing.current) return;
         const to = e.relatedTarget as Node | null;
         if (!to || !groupRef.current?.contains(to)) collapse(false);
       }}
@@ -148,10 +164,13 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
               aria-label={it.ariaLabel}
               aria-pressed={it.active}
               title={it.title}
-              onClick={() => {
+              onClick={e => {
+                pressing.current = false;
                 if (it.disabled) return;
                 it.onSelect();
-                collapse(true);
+                // A keyboard pick (detail 0) keeps focus in the group; a mouse
+                // pick does not pull focus back onto the current icon.
+                collapse(e.detail === 0);
               }}
               {...hover(it)}
               style={btnStyle(it)}

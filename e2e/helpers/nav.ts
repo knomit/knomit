@@ -10,15 +10,26 @@
  */
 import { expect, type Page } from '@playwright/test';
 
+/**
+ * Pick a library mode by its accessible name ("Sort by Recent", ...). The modes
+ * are a flyout (web/src/ModeFlyout.tsx): at rest only the CURRENT mode's icon
+ * exists, so hover the group to open it first. Picking the mode that is
+ * already current just leaves the flyout open, as before it was a no-op.
+ */
+export async function pickMode(page: Page, name: string) {
+  await page.getByTestId('mode-flyout').locator('button[data-current="true"]').hover();
+  await page.getByRole('button', { name }).click();
+}
+
 /** Switch the library to the recent-first (chrono) list and wait for items. */
 export async function enterChrono(page: Page) {
-  await page.getByRole('button', { name: 'Sort by Recent' }).click();
+  await pickMode(page, 'Sort by Recent');
   await page.getByTestId('chrono-item').first().waitFor({ timeout: 10_000 });
 }
 
 /** Switch the library back to the path tree and wait for directory entries. */
 export async function exitChrono(page: Page) {
-  await page.getByRole('button', { name: 'Sort by Path' }).click();
+  await pickMode(page, 'Sort by Path');
   await page.getByTestId('dir-entry').first().waitFor({ timeout: 10_000 });
   await expect(page.getByTestId('chrono-item')).toHaveCount(0);
 }
