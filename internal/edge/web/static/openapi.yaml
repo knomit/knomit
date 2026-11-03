@@ -1248,7 +1248,7 @@ paths:
         drawer's "this fact · N versions" section. 400 "Private path" for a
         path with a segment beginning with `.`. An `after`, `from` or
         `before` cursor naming a commit this repo does not hold is 404 with
-        `code: commit_not_in_repo`, never an empty page.
+        `code: commit_not_in_repo`, never an empty page. A cursor naming a commit the repo holds that changed no file (it has no log position) is 400 with `code: commit_not_in_log`.
       operationId: factCommits
       parameters:
         - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -2430,7 +2430,7 @@ paths:
       summary: List commits
       description: |
         An `after`, `from` or `before` cursor naming a commit this repo does
-        not hold is 404 with `code: commit_not_in_repo`, never an empty page.
+        not hold is 404 with `code: commit_not_in_repo`, never an empty page. A cursor naming a commit the repo holds that changed no file (it has no log position) is 400 with `code: commit_not_in_log`.
       operationId: listCommits
       parameters:
         - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -5805,7 +5805,10 @@ components:
             or a value that is no full 40-hex hash), on every commit-anchored
             route and on the `after`/`from`/`before` commit cursors. A 404
             WITHOUT it at a commit the repo holds is the path's own "not
-            found" (for example "Fact not found").
+            found" (for example "Fact not found"). `commit_not_in_log` (400):
+            an `after`/`from`/`before` cursor names a commit the repo DOES
+            hold that changed no file, so the commit log has no position for
+            it.
 
     # Discovery / repos / branches
     Root:

@@ -320,6 +320,28 @@ describe('RightPanel — anchored read at a commit the mount does not hold', () 
     expect(api.getLensFact).not.toHaveBeenCalled();
   });
 
+  // The panel keeps the PREVIOUS fact in `fact` until a new one loads. When the
+  // new read yields none (no version at the commit), the title cache must not
+  // label the NEW crumb (new path @ commit) with the previous fact's title —
+  // seen in the browser as "alpha fact 1 › alpha fact 1".
+  it('never caches the previous fact\'s title under the new path when the new read yields no fact', async () => {
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(writeFact());
+    (api.fact as ReturnType<typeof vi.fn>).mockRejectedValue(httpErr(404, 'commit_not_in_repo'));
+    const dispatch = vi.fn();
+    const { rerender } = render(<RightPanel state={lensState(WRITE_PATH, writeSource)} dispatch={dispatch} />);
+    await screen.findByTestId('fact-title');
+    await waitFor(() => expect(dispatch).toHaveBeenCalledWith(
+      { type: 'CACHE_FACT_TITLE', key: expect.stringContaining(WRITE_PATH), title: 'Rollback runbook' }));
+
+    const commit = 'ccc3333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    rerender(<RightPanel state={lensState(READ_PATH, readSource, { mode: 'history', commit })} dispatch={dispatch} />);
+    await screen.findByTestId('fact-no-version-at-commit');
+    const cachedForRead = dispatch.mock.calls
+      .map(c => c[0])
+      .filter(a => a?.type === 'CACHE_FACT_TITLE' && String(a.key).includes(READ_PATH));
+    expect(cachedForRead).toEqual([]);
+  });
+
   it('a 404 WITHOUT the code (a missing fact at a known commit) is still the error, not the no-version state', async () => {
     (api.fact as ReturnType<typeof vi.fn>).mockRejectedValue(httpErr(404));
     const asOf: AsOf = { mode: 'history', commit: 'ccc3333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };

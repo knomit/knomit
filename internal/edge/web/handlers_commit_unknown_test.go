@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/engine/store/storetest"
 )
 
 // A commit the repo does not hold is a CLIENT error: 404 with the problem's
@@ -89,6 +91,30 @@ func TestCommitAnchoredRoutes_UnknownCommitIs404CommitNotInRepo(t *testing.T) {
 	// A known commit on the not-implemented topics route stays 501.
 	rec := getAPI(t, s, beta+"/commits/"+betaSHA+"/topics")
 	require.Equal(t, http.StatusNotImplemented, rec.Code, rec.Body.String())
+
+	// A commit beta DOES hold that changed no file has zero commit_log rows
+	// (rows are one per changed path). The write path never makes one (an
+	// identical rewrite returns the head), but a merge whose side is already
+	// in the first parent's tree, or an empty commit arriving from a remote,
+	// does. A cursor naming it is NOT commit_not_in_repo: it is 400
+	// commit_not_in_log, and the commit-anchored read at it still works.
+	noop, err := storetest.CommitFiles(svcs["beta"], "agent/test",
+		map[string]string{"kb/x/f.md": commitsFactText("T beta")}, "empty: tree unchanged")
+	require.NoError(t, err)
+	require.NotEqual(t, betaSHA, noop)
+	// A later ordinary write records the branch's new commits in commit_log;
+	// the empty one gets no row.
+	write("beta", "kb/x/g.md")
+	for _, url := range []string{
+		beta + "/commits?from=" + noop,
+		beta + "/facts/kb/x/f.md/commits?before=" + noop,
+	} {
+		rec := getAPI(t, s, url)
+		require.Equal(t, http.StatusBadRequest, rec.Code, "%s: %s", url, rec.Body.String())
+		require.Contains(t, rec.Body.String(), `"code":"commit_not_in_log"`, url)
+	}
+	rec = getAPI(t, s, beta+"/commits/"+noop+"/facts/kb/x/f.md")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	// A missing FACT at a known commit keeps its own 404, without the code:
 	// the UI must be able to tell the two apart.

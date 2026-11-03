@@ -810,6 +810,17 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // commit shows the "no version" state, not an error (user ruling
   // 2026-11-03). asOf is left as it is: history stays on, and the reader
   // scrubs or returns to live from the timeline.
+  // showFact sets the fact a fetch for `factPath` returned and records which
+  // open path it belongs to. The panel keeps rendering the PREVIOUS fact until
+  // the new one loads (see openFactSourceResolved), so on a switch `fact` and
+  // `factPath` disagree for a while — and when the new read never yields a fact
+  // (no version at the anchored commit) they disagree for good. The title
+  // cache below must not label the new crumb with the old fact's title.
+  const factLoadedFor = useRef<string | null>(null);
+  const showFact = (f: Fact) => {
+    factLoadedFor.current = factPath;
+    setFact(f);
+  };
   const failAnchored = (e: unknown, commit: string) => {
     if (isCommitNotInRepo(e)) setNoVersionAt(commit);
     else setError(String(e));
@@ -857,14 +868,14 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           anchorCommit,
           useFallback ? { fallback: 'before' } : undefined,
         )
-          .then(f => { if (!stale()) setFact(f); })
+          .then(f => { if (!stale()) showFact(f); })
           .catch(e => { if (!stale()) failAnchored(e, anchorCommit); });
         return;
       }
       api.getLensFact(lensName, factPath)
         .then(f => {
           if (stale()) return;
-          setFact(f);
+          showFact(f);
           dispatch({ type: 'SET_FACT_SOURCE', source: f.source });
         })
         .catch(e => {
@@ -882,7 +893,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
     )
       .then(f => {
         if (stale()) return;
-        setFact(f);
+        showFact(f);
       })
       .catch(e => {
         if (stale()) return;
@@ -899,7 +910,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // title we already read — instead of a separate fetch that 404s for a
   // retracted fact. Keyed identically to the breadcrumb's crumb key.
   useEffect(() => {
-    if (fact?.title && factPath) {
+    if (fact?.title && factPath && factLoadedFor.current === factPath) {
       dispatch({ type: 'CACHE_FACT_TITLE', key: factTitleKey(factPath, anchorCommit ?? undefined), title: fact.title });
     }
   }, [fact, factPath, anchorCommit, dispatch]);

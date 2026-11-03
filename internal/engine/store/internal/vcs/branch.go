@@ -965,9 +965,17 @@ func (rh *Repo) CommitLogQuery(ctx context.Context, branch, path, after, from, b
 		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
 	}
 	rows, more, err := rh.gits.CommitLogQuery(branchID, path, cursor, limit)
-	if errors.Is(err, storegit.ErrCursorCommitUnknown) {
-		// The storer may not import model; the web layer keys on this.
-		err = fmt.Errorf("%w: %w", err, model.ErrCommitNotFound)
+	if errors.Is(err, storegit.ErrCursorNotInLog) {
+		// No commit_log row. Only the object store can say whether the repo
+		// holds the commit: a held commit that changed no file has no row by
+		// design, and is NOT "a commit this repo does not hold".
+		sentinel := model.ErrCommitNotFound
+		if plumbing.IsHash(cursor.Hash) {
+			if _, cerr := rh.repo.CommitObject(plumbing.NewHash(cursor.Hash)); cerr == nil {
+				sentinel = model.ErrCommitNotInLog
+			}
+		}
+		err = fmt.Errorf("%w: %w", err, sentinel)
 	}
 	return rows, more, err
 }

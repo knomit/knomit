@@ -24,3 +24,11 @@ var ErrPathNotFound = errors.New("path not found")
 // commit_not_in_repo, never 500 (user ruling 2026-11-03). A commit this repo
 // HAS where the requested path is absent is ErrPathNotFound instead.
 var ErrCommitNotFound = errors.New("commit not found in this repo")
+
+// ErrCommitNotInLog is returned when a commit-log cursor names a commit this
+// repository DOES hold but that has no commit_log row: it changed no file (a
+// write of identical content is a no-op commit with zero rows, by design), so
+// the log has no position to page from. It is not ErrCommitNotFound — the
+// commit exists — and the web layer answers it 400 with the problem code
+// commit_not_in_log.
+var ErrCommitNotInLog = errors.New("commit changed no file, so the commit log has no position for it")
