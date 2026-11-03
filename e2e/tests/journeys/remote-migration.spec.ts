@@ -164,7 +164,7 @@ test.describe('Remote Migration Journey', () => {
   test('cancel mid-workflow cleans up session', async ({ remoteMigration }) => {
     const { local, remote } = remoteMigration;
 
-    await seedFact(remote.api, remote.baseURL, remote.branch, 'kb/cancel-test/fact.md',
+    await seedFact(remote.api, remote.baseURL, remote.branch, 'kb/cancel-test/remote/fact.md',
       makeFact('Cancel Test', 'testing', 'For cancel test.'));
 
     const remoteGitURL = `${remote.baseURL}/git/knomit`;

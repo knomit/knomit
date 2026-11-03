@@ -119,8 +119,42 @@ test.describe('knomit_query', () => {
     expect(titles.some((t) => t.includes('PostgreSQL'))).toBe(false);
   });
 
-  test('query with no params returns error', async () => {
-    const result = await client.callTool('knomit_query', {});
-    expect(result.isError).toBe(true);
+  // #715 made a filterless query legal: the defaults bound it to one page of
+  // 20 snippet rows, with a cursor to the rest.
+  test('query with no params returns the bounded first page and a cursor', async () => {
+    const subjects = [
+      'Volcanic basalt columns', 'Medieval falconry', 'Sourdough fermentation', 'Tidal power turbines',
+      'Byzantine mosaics', 'Arctic tern migration', 'Origami tessellations', 'Jazz modal harmony',
+      'Coral reef bleaching', 'Roman aqueduct gradients', 'Beekeeping swarm control', 'Glacier calving',
+      'Typesetting ligatures', 'Chess endgame tablebases', 'Silk road caravanserais', 'Lichen symbiosis',
+      'Clock escapement design', 'Desert dune migration', 'Morse code timing', 'Bonsai root pruning',
+      'Lunar regolith sintering', 'Viking longship keels',
+    ];
+    const result = await client.callTool('knomit_learn', {
+      moment_name: 'test-query-unfiltered',
+      facts: subjects.map((s, i) => ({
+        topic: 'technology',
+        category: `unfiltered/q${String(i).padStart(2, '0')}`,
+        title: s,
+        body: `${s}: a fact about ${s.toLowerCase()} and nothing else, number ${i}.`,
+        entities: [`unfiltered-${i}`],
+      })),
+    });
+    expect(result.isError, result.content[0].text).toBeFalsy();
+
+    // The index syncs after the commit: wait until the first page is full.
+    let parsed: { facts?: unknown[]; cursor?: string | null; has_more?: boolean } = {};
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const res = await client.callTool('knomit_query', {});
+      expect(res.isError, res.content[0].text).toBeFalsy();
+      parsed = JSON.parse(res.content[0].text || '{}');
+      if ((parsed.facts?.length ?? 0) >= 20) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(parsed.facts?.length).toBe(20);
+    expect(parsed.has_more).toBe(true);
+    expect(typeof parsed.cursor).toBe('string');
+    expect(parsed.cursor).not.toBe('');
   });
 });

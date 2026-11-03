@@ -960,6 +960,15 @@ paths:
       tags: [facts]
       summary: Create a fact
       description: |
+        The fact is written at `kb/<domain[0]>/<domain[1]>/<id>.md`
+        (`domain[1]` defaults to `domain[0]`). 400 "Missing domain" (detail
+        `domain is required: …`) when `domain` is absent or empty: there is
+        no fallback topic. 422 "Invalid fact placement" when `domain[0]` is
+        not a top-level topic of the repository's ontology (detail
+        `validate path: unknown topic "<topic>"`) or the category is blank
+        (detail `category is required`): the same check, and the same text,
+        as `knomit_learn`. Nothing is written.
+
         422 "Fact fails the ontology's validations" when the fact fails a
         validation of the repository's ontology (at the branch's tip): the
         detail is the rule's own message, and nothing is written.
@@ -1071,7 +1080,16 @@ paths:
         with no exception — and 400 "Invalid artifact path" for a malformed
         path under `artifacts/` (any case). An `artifacts/<area>/<name>` path
         is written at the repo root, outside the ontology; a `context` on it
-        is 422. 422 "Fact fails the ontology's validations" when the content
+        is 422. A PUT to a path where no fact exists yet creates one, and
+        its path must be `kb/<topic>/<category>/<name>.md`, judged by the same
+        check as `knomit_learn` and POST. 422 "Invalid fact placement", with
+        nothing written, when the path is outside `kb/` or directly under it
+        (detail `a new fact's path must be kb/<topic>/<category>/<name>.md, …`),
+        when `<topic>` is not a top-level topic of the repository's ontology
+        (detail `validate path: unknown topic "<topic>"`), or when there is no
+        category folder (detail `category is required`). A PUT to an
+        existing fact is an edit and its topic is not re-judged, as with
+        `knomit_update`. 422 "Fact fails the ontology's validations" when the content
         fails a validation of the repository's ontology (at the branch's tip),
         with the rule's own message: an edit of a fact that already failed
         one must bring it into compliance. Nothing is written.

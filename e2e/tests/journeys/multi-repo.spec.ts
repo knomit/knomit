@@ -1,4 +1,5 @@
 import { test, expect } from '../../fixtures/knomit.js';
+import { BrowsePage } from '../../pages/browse.page.js';
 
 test.describe.serial('Multi-Repo', () => {
   // Skip: repos are discovered from *.db files at startup; you can't create a new repo
@@ -7,7 +8,7 @@ test.describe.serial('Multi-Repo', () => {
   test.skip('create facts in two repos → rail lists both → switch repos → different content', async ({ freshKnomit, page }) => {
     // Create a fact in the default "knomit" repo
     const res1 = await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/primary-fact.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/technology/software/primary-fact.md`,
       {
         data: {
           content: `---
@@ -28,7 +29,7 @@ Content in the default knomit repo.`,
 
     // Create a fact in a second repo (auto-created on first write)
     const res2 = await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/second/branches/${freshKnomit.branch}/facts/kb/secondary-fact.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/second/branches/${freshKnomit.branch}/facts/kb/technology/software/secondary-fact.md`,
       {
         data: {
           content: `---
@@ -55,7 +56,10 @@ Content in the second repo.`,
     await page.getByTestId('rail-toggle').click();
     await expect(page.getByTestId('rail-repo-second')).toBeVisible({ timeout: 10_000 });
 
-    // Verify default repo shows primary-fact
+    // Verify default repo shows primary-fact, under technology/software
+    const browse = new BrowsePage(page);
+    await browse.clickEntry('technology');
+    await browse.clickEntry('software');
     const entries = page.getByTestId('dir-entry');
     await entries.first().waitFor({ timeout: 10_000 });
     const initialNames: string[] = [];
@@ -69,7 +73,9 @@ Content in the second repo.`,
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
 
-    // Verify different content
+    // Verify different content, under technology/software
+    await browse.clickEntry('technology');
+    await browse.clickEntry('software');
     const newEntries = page.getByTestId('dir-entry');
     await newEntries.first().waitFor({ timeout: 10_000 });
     const newNames: string[] = [];

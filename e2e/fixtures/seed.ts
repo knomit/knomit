@@ -345,6 +345,37 @@ export function encodeBranch(name: string): string {
 export const E2E_REPO = 'knomit';
 
 /**
+ * Top-level topics the e2e suite writes facts under that the default preset
+ * does not declare. A REST write that creates a fact must name a top-level
+ * topic of the repo's ontology (422 otherwise, as knomit_learn), so the e2e
+ * repo's ontology is the default preset plus these. `e2e` holds the single
+ * facts the UI specs create and open from the tree.
+ */
+export const E2E_EXTRA_TOPICS = [
+  ...SEED_DOMAINS, 'discover', 'lifecycle', 'synth', 'cancel-test', 'e2e',
+] as const;
+
+/**
+ * The e2e repo's ontology: the server's own `default` preset (GET
+ * /ontologies/presets/default) with E2E_EXTRA_TOPICS added under `topics:`.
+ */
+export async function e2eOntologyYAML(baseURL: string): Promise<string> {
+  const res = await fetch(`${baseURL}/api/v1/ontologies/presets/default`);
+  if (!res.ok) {
+    throw new Error(`Failed to read the default preset: ${res.status}\n${await res.text()}`);
+  }
+  const yaml = await res.text();
+  const lines = yaml.split('\n');
+  const at = lines.indexOf('topics:');
+  if (at < 0) throw new Error(`default preset has no top-level "topics:" line:\n${yaml}`);
+  // Indent as the preset's own first topic is indented.
+  const pad = (lines[at + 1] ?? '').match(/^ */)?.[0] || '  ';
+  const extra = E2E_EXTRA_TOPICS.flatMap((t) => [`${pad}${t}:`, `${pad}${pad}description: e2e fixture topic ${t}`]);
+  lines.splice(at + 1, 0, ...extra);
+  return lines.join('\n');
+}
+
+/**
  * Create the e2e repo via POST /api/v1/repos. The endpoint answers 202 with a
  * create job and runs the create on its own; the job is polled through its
  * self link until it reaches a terminal state, because the repo is not ready
@@ -354,7 +385,7 @@ export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void
   const res = await fetch(`${baseURL}/api/v1/repos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: repo, mode: 'preset', ontology_preset: 'default' }),
+    body: JSON.stringify({ name: repo, mode: 'custom', ontology_yaml: await e2eOntologyYAML(baseURL) }),
   });
   if (!res.ok) {
     throw new Error(`Failed to create repo ${repo}: ${res.status} ${res.statusText}\n${await res.text()}`);

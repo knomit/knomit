@@ -89,7 +89,7 @@ test.describe('History (per-fact timeline)', () => {
 
 test.describe('History (fact with several versions)', () => {
   test('the timeline lists every version and selecting an older one shows its content', async ({ freshKnomit, page }) => {
-    const factPath = 'kb/history/demo.md';
+    const factPath = 'kb/history/e2e/demo.md';
     const put = async (body: string) => {
       const res = await freshKnomit.api.put(
         `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/${factPath}`,
@@ -118,6 +118,7 @@ ${body}`,
     await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
     await browse.clickEntry('history');
+    await browse.clickEntry('e2e');
     await browse.clickEntry('demo.md');
     const fact = new FactPanel(page);
     await expect(fact.body).toContainText('second version text');

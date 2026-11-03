@@ -5,7 +5,7 @@ test.describe.serial('Synthesis Flow', () => {
     // Create overlapping facts that could be candidates for synthesis
     const facts = [
       {
-        path: 'kb/synth/caching-basics.md',
+        path: 'kb/synth/caching/caching-basics.md',
         content: `---
 type: observation
 domain: [caching]
@@ -19,7 +19,7 @@ refs: []
 Caching stores frequently accessed data closer to the consumer to reduce latency and backend load.`,
       },
       {
-        path: 'kb/synth/caching-strategies.md',
+        path: 'kb/synth/caching/caching-strategies.md',
         content: `---
 type: observation
 domain: [caching]
@@ -33,7 +33,7 @@ refs: []
 Common strategies include cache-aside, write-through, and write-behind. Cache-aside is the most popular pattern for read-heavy workloads.`,
       },
       {
-        path: 'kb/synth/redis-caching.md',
+        path: 'kb/synth/caching/redis-caching.md',
         content: `---
 type: observation
 domain: [caching]

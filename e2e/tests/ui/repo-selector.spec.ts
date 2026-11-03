@@ -4,7 +4,7 @@ test.describe('Repo Selector', () => {
   test('with one repo, shows repo name as plain text (no dropdown)', async ({ freshKnomit, page }) => {
     // Seed a fact so at least one repo exists
     await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/repo-test.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/ui/repo-test.md`,
       {
         data: {
           content: `---

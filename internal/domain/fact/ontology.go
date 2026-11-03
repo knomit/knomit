@@ -794,6 +794,33 @@ func (o *Ontology) TopicNames() []string {
 	return names
 }
 
+// ValidatePlacement is the placement check every fact write that allocates a
+// path runs: knomit_learn, the REST create (POST .../facts) and the REST PUT
+// to a fresh path (on the topic and category its path names) all call it.
+// The topic must be one of the ontology's top-level topics (ValidatePath;
+// skipped when o is nil, a repository with no ontology), and the category
+// must be non-blank. It returns the topic path "topic/category" the rest of
+// the write validates against.
+//
+// Lens reads rely on it: a lens skips a member whose ontology lacks the topic
+// a path names (federate), so a fact written under an undeclared topic is
+// invisible through every lens.
+func ValidatePlacement(o *Ontology, topic, category string) (string, error) {
+	topicCategory := topic
+	if category != "" {
+		topicCategory = topic + "/" + category
+	}
+	if o != nil {
+		if err := o.ValidatePath(topicCategory); err != nil {
+			return "", err
+		}
+	}
+	if strings.TrimSpace(category) == "" {
+		return "", fmt.Errorf("category is required")
+	}
+	return topicCategory, nil
+}
+
 // ValidatePath checks that path is valid against this ontology.
 // The first segment must match a top-level topic. Subsequent segments are
 // walked against defined children; once no matching child is found the

@@ -45,6 +45,14 @@ const (
 	defaultCreateSources    = 1
 )
 
+// writePlacementProblem answers a fact placement the repository's ontology
+// refuses (an unknown topic, a blank category) with 422, for POST and for a
+// PUT that creates a fact. The detail is knomit_learn's own error text.
+func writePlacementProblem(w http.ResponseWriter, r *http.Request, err error) {
+	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid fact placement",
+		err.Error(), r.URL.Path)
+}
+
 // handleFactCreate serves POST /repos/{repo}/branches/{branch}/facts.
 // Allocates a new path via fact.BuildFactPath, serializes the fact, writes it
 // to the branch and returns 201 Created with a Location header and factView.
@@ -73,10 +81,13 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 			return
 		}
 
-		// Determine the domain-based category for path allocation.
+		// The domain names the fact's placement: domain[0] is the topic. There
+		// is no fallback topic — none would be declared by every ontology.
 		domain := req.Domain
 		if len(domain) == 0 {
-			domain = []string{"uncategorized"}
+			hal.WriteProblem(w, http.StatusBadRequest, "Missing domain",
+				"domain is required: its first entry is the fact's ontology topic", r.URL.Path)
+			return
 		}
 		// Use the first domain segment as both topic and category so the path
 		// is ontologyRoot/domain[0]/domain[0]/<uuid8>.md, which is a reasonable
@@ -85,6 +96,16 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		category := domain[0]
 		if len(domain) > 1 {
 			category = domain[1]
+		}
+
+		// The topic must be one of the repository's ontology topics: the same
+		// check, and the same error text, as knomit_learn. A lens read skips a
+		// member whose ontology lacks the topic a path names, so a fact
+		// written under an invented topic would be invisible through every
+		// lens. Runs before anything is written.
+		if _, err := knomitfact.ValidatePlacement(ri.Ontology(), topic, category); err != nil {
+			writePlacementProblem(w, r, err)
+			return
 		}
 
 		path := knomitfact.BuildFactPath(ontologyRoot, topic, category)

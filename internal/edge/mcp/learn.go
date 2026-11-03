@@ -298,18 +298,14 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			// validation and skip dedup-merge for this fact.
 			topicCategory = ""
 		} else {
-			topicCategory = fi.Topic
-			if fi.Category != "" {
-				topicCategory = fi.Topic + "/" + fi.Category
+			// The same placement check the REST create runs (POST .../facts):
+			// one rule for both write APIs, because a lens read skips a member
+			// whose ontology lacks the topic.
+			tc, err := fact.ValidatePlacement(ontology, fi.Topic, fi.Category)
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 			}
-			if ontology != nil {
-				if err := ontology.ValidatePath(topicCategory); err != nil {
-					return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
-				}
-			}
-			if strings.TrimSpace(fi.Category) == "" {
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: category is required", i)
-			}
+			topicCategory = tc
 			path = fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
 			// A private path can only be reached deliberately, via `path`.
 			// Reaching one from topic/category means the ontology has a

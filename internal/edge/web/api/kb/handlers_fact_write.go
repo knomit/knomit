@@ -3,6 +3,7 @@ package kb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	pathpkg "path"
@@ -100,9 +101,19 @@ func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path stri
 // "no prior version": a nil prior would make the gate re-judge every ref the
 // stored fact carries. handleFactUpdate answers it with 503.
 func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
+	refs, _, err := priorVersion(ctx, ri, branch, path)
+	return refs, err
+}
+
+// priorVersion is priorRefs plus whether a prior version exists at all, which
+// handleFactUpdate needs: a PUT to a fresh path CREATES a fact, and a create
+// must name an ontology topic. exists is true for a stored version that does
+// not parse (it is still a file at that path).
+func priorVersion(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, bool, error) {
 	var (
-		refs []string
-		err  error
+		refs   []string
+		exists bool
+		err    error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		res, rerr := svc.Facts().ReadFact(ctx, branch, path, nil)
@@ -115,6 +126,7 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 			err = rerr
 			return
 		}
+		exists = true
 		f, perr := knomitfact.ParseFact(path, res.Content)
 		if perr != nil {
 			// An unparseable prior version cannot tell us what it carried.
@@ -124,9 +136,9 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 		}
 		refs = f.Refs
 	}); aerr != nil {
-		return nil, aerr
+		return nil, false, aerr
 	}
-	return refs, err
+	return refs, exists, err
 }
 
 // writeFact commits content at path on branch with message and returns the
@@ -222,6 +234,26 @@ func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool
 	return false
 }
 
+// putPlacement judges the placement of a fact a PUT creates at path: it must
+// be <root>/<topic>/<category...>/<name>.md, and topic and category must pass
+// fact.ValidatePlacement — the one check every create runs. A path outside
+// the ontology root, or one with no topic folder under it, names no placement
+// at all and is refused before ValidatePlacement could misread a segment as
+// the topic. The store lowercases the whole path it writes, so the path and
+// root are compared lowercased.
+func putPlacement(o *knomitfact.Ontology, ontologyRoot, path string) error {
+	root := strings.ToLower(ontologyRoot)
+	rel, under := strings.CutPrefix(strings.ToLower(path), root+"/")
+	dir := pathpkg.Dir(rel)
+	if !under || dir == "." {
+		return fmt.Errorf("a new fact's path must be %s/<topic>/<category>/<name>.md, with a topic of the repository's ontology; %q names no topic and category under %s/",
+			root, path, root)
+	}
+	topic, category, _ := strings.Cut(dir, "/")
+	_, err := knomitfact.ValidatePlacement(o, topic, category)
+	return err
+}
+
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL factView with 200 OK.
@@ -314,7 +346,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		// the stored version already carried resolved at its own commit and is
 		// not re-judged, or editing a title would be refused over a citation
 		// written months ago.
-		prior, perr := priorRefs(r.Context(), ri, branch, path)
+		prior, exists, perr := priorVersion(r.Context(), ri, branch, path)
 		if perr != nil {
 			// The prior-version read is the first thing to touch the path, so
 			// go-git's refusal of a path it will not look up surfaces here,
@@ -326,6 +358,21 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 			}
 			httpx.WriteStoreError(w, r, perr, "Failed to read fact", branch)
 			return
+		}
+		// A PUT to a fresh path CREATES a fact, so it gets the create's
+		// placement rule — the same fact.ValidatePlacement knomit_learn and
+		// POST call, on the topic and category the path names. A PUT to an
+		// existing path is an edit and is not re-judged — knomit_update does
+		// not re-judge the topic either, so a legacy fact under a since
+		// removed topic stays editable. An artifact has no ontology placement.
+		// A repo with no usable ontology is skipped: in production it is
+		// read-only (WritableBranch refuses every branch), so this only
+		// spares bare test instances.
+		if o := ri.Ontology(); o != nil && !exists && !knomitfact.IsUnderArtifactsRoot(path) {
+			if err := putPlacement(o, ontologyRoot, path); err != nil {
+				writePlacementProblem(w, r, err)
+				return
+			}
 		}
 		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)
 		if gerr != nil {
