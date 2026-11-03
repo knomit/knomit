@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -40,7 +39,19 @@ import (
 // lingerTimeout, reading at most lingerMaxBytes. At most lingerSlots refused
 // connections linger at once per listener; past that a refused connection
 // closes hard, as before #543, so a flood of refused handshakes cannot pile up
-// goroutines. Each one already cost the peer a full TLS handshake.
+// goroutines. Each one already cost the peer a full TLS handshake. A drain
+// can outlive the listener and its http.Server (Shutdown and Close do not
+// track a connection net/http has already closed): by at most lingerTimeout,
+// and it touches nothing but its own socket.
+//
+// WHAT IS MARKED. Only a refusal by VerifyConnection, and only on a config
+// built by NewServer (its GetConfigForClient sets the mark): with any other
+// tls.Config every connection closes hard, as before. Refusals that never
+// reach VerifyConnection are not marked and still close hard: a client with
+// no certificate under RequireAnyClientCert (certificate_required), a bad
+// CertificateVerify, and a handshake on the uninstalled snapshot (no server
+// certificate; see NewServer). None of them is #543's path, a revoked or
+// otherwise invalid certificate, which always goes through VerifyConnection.
 func NewListener(inner net.Listener, cfg *tls.Config) net.Listener {
 	return tls.NewListener(&refusalListener{Listener: inner, slots: make(chan struct{}, lingerSlots)}, cfg)
 }
@@ -71,17 +82,19 @@ type refusalConn struct {
 	net.Conn
 	slots   chan struct{}
 	refused atomic.Bool
-	once    sync.Once
+	closed  atomic.Bool
 }
 
 // markRefused records that this connection's handshake was refused by our
 // verifier, so Close delivers the alert before closing.
 func (c *refusalConn) markRefused() { c.refused.Store(true) }
 
+// Close closes once; a later call answers net.ErrClosed, as a net.Conn does.
 func (c *refusalConn) Close() error {
-	var err error
-	c.once.Do(func() { err = c.close() })
-	return err
+	if c.closed.Swap(true) {
+		return net.ErrClosed
+	}
+	return c.close()
 }
 
 func (c *refusalConn) close() error {

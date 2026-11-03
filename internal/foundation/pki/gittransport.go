@@ -350,8 +350,9 @@ func advertisedOnce(get func() (*packp.AdvRefs, error)) (*packp.AdvRefs, error) 
 
 // resetBeforeResponse: err (as ClassifyPeerError returns it) is a connection
 // reset or abort (isConnReset; Windows only) that failed the HTTP request
-// itself, before any response: net/http reports that as *url.Error, while a
-// failure reading a response body is not one.
+// itself, before the response headers completed: net/http's Client.Do
+// reports that as *url.Error, while a failure reading a response body after
+// the headers is not one.
 func resetBeforeResponse(err error) bool {
 	var ue *url.Error
 	return err != nil && !errors.Is(err, ErrRefusedByPeer) && errors.As(err, &ue) && isConnReset(err)

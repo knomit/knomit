@@ -71,14 +71,14 @@ func HTTPClient(dir, keyPath string) (*http.Client, error) {
 	if h := afterHandshakeHook.Load(); h != nil {
 		// Tests only (see afterHandshakeHook): the same handshake, and the
 		// hook before the connection's first read. net/http starts reading
-		// as soon as the connection exists, so the hook has to delay that
-		// read, not the dial, to let an RST arrive before it.
+		// as soon as the connection exists, so the hook has to hold that
+		// read, not the dial.
 		tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			c, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}
-			return &hookedConn{Conn: c, hook: *h}, nil
+			return &hookedConn{Conn: c, hook: *h, wrote: make(chan struct{})}, nil
 		}
 	}
 	return &http.Client{Transport: tr}, nil
@@ -86,22 +86,40 @@ func HTTPClient(dir, keyPath string) (*http.Client, error) {
 
 // afterHandshakeHook, when set, runs on the client after a completed
 // handshake: in peerAccepted before its request is written, and on a
-// connection of an HTTPClient built while it is set before its first read.
-// TESTS ONLY: a delay there makes a refusing server's immediate close reset
-// the connection deterministically on Windows (knomit#543). Unset in
-// production, where HTTPClient builds exactly the transport it always did.
+// connection of an HTTPClient built while it is set before its first read
+// (which then also waits for the request to be written). TESTS ONLY: holding
+// the client there until the refusing server has closed makes the old
+// immediate close reset the connection deterministically on Windows
+// (knomit#543). Unset in production, where HTTPClient builds exactly the
+// transport it always did.
 var afterHandshakeHook atomic.Pointer[func()]
 
-// hookedConn runs hook once, before its first read (tests only).
+// hookedConn (tests only) holds its first read until hook has returned AND
+// its first write (net/http's request) has gone out, so the read comes after
+// whatever the peer answers that write with.
 type hookedConn struct {
 	net.Conn
-	hook func()
-	once sync.Once
+	hook      func()
+	once      sync.Once
+	wrote     chan struct{}
+	wroteOnce sync.Once
 }
 
 func (c *hookedConn) Read(p []byte) (int, error) {
-	c.once.Do(c.hook)
+	c.once.Do(func() {
+		c.hook()
+		select {
+		case <-c.wrote:
+		case <-time.After(10 * time.Second):
+		}
+	})
 	return c.Conn.Read(p)
+}
+
+func (c *hookedConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.wroteOnce.Do(func() { close(c.wrote) })
+	return n, err
 }
 
 // Dial connects to addr with mTLS and returns the peer's VERIFIED Identity.
