@@ -73,7 +73,7 @@ function lensState(factPath: string, factSource: LensSource): AppState {
   return {
     ...init,
     context: { kind: 'lens', name: 'all' },
-    lens,
+    lens, lensWriteId: alpha.id,
     repo: 'alpha', branch: 'agent/a', headCommit: 'alphaHEAD',
     factPath, factSource,
     asOf: { mode: 'live' },

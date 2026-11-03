@@ -129,7 +129,11 @@ export async function resolveLens(
     // arrival, from a persisted context they did not choose today.
     const broken = brokenLensMember(lens, fallbackRepos);
     if (broken !== null) throw new Error(`mount "${broken}" has no store`);
-    dispatch({ type: 'SET_LENS', lens });
+    // The write member's root-commit id, matched by uid (never by name): the
+    // identity a lens fact's source carries, so a bare-path fact can be told to
+    // belong to the write mount without trusting a name (openFactSourceResolved).
+    const writeId = fallbackRepos.find(r => r.uid === lens.write.uid)?.id;
+    dispatch({ type: 'SET_LENS', lens, ...(writeId ? { writeId } : {}) });
     // The lens response embeds its write member's branch root, so entering a
     // lens no longer needs a second hop to learn the branch. Absent when the
     // write member is a subscription (it has no agent branch) or on an older

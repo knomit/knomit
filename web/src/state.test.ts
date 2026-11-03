@@ -389,6 +389,25 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     expect(openFactSourceResolved({ ...init, factPath: 'kb/v.md' })).toBe(true);
   });
 
+  // A bare path is the write repo's, and "the write repo" is an IDENTITY: the
+  // source whose id is the write member's root-commit id. A read mount that
+  // happens to share the write repo's NAME must not pass for it.
+  it('openFactSourceResolved: a bare path is owned by the write member\'s id, not its name', () => {
+    const base: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, lensWriteId: 'workid123456', factPath: 'kb/w.md' };
+    const writeSrc: LensSource = { repo: 'work', id: 'workid123456', branch: 'agent/x' };
+    const namesake: LensSource = { repo: 'work', id: 'othr12345678', branch: 'main' };
+    expect(openFactSourceResolved({ ...base, factSource: writeSrc })).toBe(true);
+    expect(openFactSourceResolved({ ...base, factSource: namesake })).toBe(false);
+    // No id from the repo listing (an older server): the name is all there is.
+    expect(openFactSourceResolved({ ...base, lensWriteId: null, factSource: namesake })).toBe(true);
+  });
+
+  it('SET_LENS records the write member\'s id; a lens without one records null', () => {
+    const lensCtx: AppState = { ...init, context: { kind: 'lens', name: 'dev' } };
+    expect(reducer(lensCtx, { type: 'SET_LENS', lens, writeId: 'workid123456' }).lensWriteId).toBe('workid123456');
+    expect(reducer(lensCtx, { type: 'SET_LENS', lens }).lensWriteId).toBeNull();
+  });
+
   // The fact view keeps rendering the PREVIOUS fact until the new one loads, and
   // pairs it with the previous source; the reducer must not clear that source
   // on a switch, or that render falls back to the write repo with no branch.

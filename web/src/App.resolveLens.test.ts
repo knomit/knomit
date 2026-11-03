@@ -14,6 +14,21 @@ describe('resolveLens — App-level lens resolution', () => {
     expect(actions).toEqual([{ type: 'SET_LENS', lens }]);
   });
 
+  // The write member's root-commit id rides along, matched by UID: a repo that
+  // shares the write member's NAME but is a different registry entry must not
+  // lend it its id.
+  it('SET_LENS carries the write member\'s id, matched by uid, never by name', async () => {
+    const actions: Action[] = [];
+    const dispatch = (a: Action) => void actions.push(a);
+    const lens: Lens = { name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-work', name: 'work' }] };
+    const list: RepoInfo[] = [
+      { name: 'work', uid: 'uid-other', id: 'othr12345678' },
+      { name: 'work2', uid: 'uid-work', id: 'workid123456' },
+    ];
+    await resolveLens('dev', list, dispatch, vi.fn().mockResolvedValue(lens));
+    expect(actions).toEqual([{ type: 'SET_LENS', lens, writeId: 'workid123456' }]);
+  });
+
   it('falls back to the first repo and surfaces a notice when the lens is gone', async () => {
     const actions: Action[] = [];
     const dispatch = (a: Action) => void actions.push(a);

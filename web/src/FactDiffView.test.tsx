@@ -91,6 +91,22 @@ describe('FactDiffView', () => {
     expect(call.slice(0, 3)).toEqual(['docs', 'main', 'kb/api/auth.md']);
   });
 
+  // The open fact can move to another mount while the diff stays open; until
+  // RightPanel resolves its source, factSource names the PREVIOUS fact's mount.
+  it('does not diff a lens fact until its source is its own mount', async () => {
+    const fd = api.factDiff as unknown as ReturnType<typeof vi.fn>;
+    fd.mockClear();
+    fd.mockResolvedValue({ from: { ...baseFact }, to: { ...baseFact } });
+    const lens = { name: 'eng', write: { uid: 'uid-core', name: 'core' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
+    const lensBits = { context: { kind: 'lens', name: 'eng' }, lens, factPath: 'kb://docsid123456/kb/api/auth.md' };
+    const { rerender } = render(<FactDiffView state={makeState({ ...lensBits, factSource: { repo: 'core', id: 'coreid123456', branch: 'agent/main' } })} dispatch={vi.fn()} />);
+    await new Promise(r => setTimeout(r, 20));
+    expect(fd).not.toHaveBeenCalled();
+    rerender(<FactDiffView state={makeState({ ...lensBits, factSource: { repo: 'docs', id: 'docsid123456', branch: 'main' } })} dispatch={vi.fn()} />);
+    await waitFor(() => expect(fd).toHaveBeenCalled());
+    expect(fd.mock.calls.at(-1)!.slice(0, 3)).toEqual(['docs', 'main', 'kb/api/auth.md']);
+  });
+
   it('aborts in-flight request on factPath change', async () => {
     let abortCalled = false;
     (api.factDiff as unknown as ReturnType<typeof vi.fn>).mockImplementation(

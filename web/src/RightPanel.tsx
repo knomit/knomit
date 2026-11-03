@@ -4,7 +4,7 @@ import { PANEL_BOUNDS_ATTR, useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey, openFactSourceResolved } from './state';
 import { relativeTime } from './utils';
 import { RetractIcon, NewspaperIcon } from './icons';
 import { MaterializeView } from './MaterializeView';
@@ -782,11 +782,37 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       .catch(() => { /* fall back to state.branch (already the write agent branch) */ });
   }, [lensCtx, lensWrite]);
 
+  // Whether factSource is the open fact's own mount (see openFactSourceResolved).
+  const sourceResolved = openFactSourceResolved(state);
+  const resolvedDep = (anchorCommit || inDiff) ? sourceResolved : null;
+  // Resolve the open lens fact's source mount without showing its (live) body:
+  // the anchored and diff views read the body themselves, from that mount.
+  const resolveSourceOnly = (stale: () => boolean) => {
+    if (!lensName || !factPath) return;
+    api.getLensFact(lensName, factPath)
+      .then(f => { if (!stale()) dispatch({ type: 'SET_FACT_SOURCE', source: f.source }); })
+      .catch(e => {
+        if (stale()) return;
+        setError(String(e));
+        dispatch({ type: 'SET_FACT_SOURCE', source: null });
+      });
+  };
+
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
     // Skip this effect's fetch entirely so we don't issue a single-sided
     // request that gets discarded and may flash a 404 error.
-    if (inDiff) { setFact(null); setError(null); return; }
+    //
+    // In a lens, though, this effect is also the ONE place the open fact's
+    // source mount is resolved (SET_FACT_SOURCE), and FactDiffView waits on it
+    // (openFactSourceResolved). So a diff whose fact moved to another mount —
+    // the mounts picker re-selects the first row while the anchor stays put —
+    // still resolves the source here, without reading the fact body.
+    if (inDiff) {
+      setFact(null); setError(null);
+      if (factPath && lensCtx && lensName && !sourceResolved) resolveSourceOnly(stale);
+      return;
+    }
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
     setFact(null);
@@ -799,6 +825,13 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       // mount's repo-scoped commit endpoint instead — exactly as the repo-context
       // branch does — via factHistoryAnchor (mount repo/branch + RELATIVE path).
       // factSource is unchanged (same fact, same mount) so we don't re-dispatch it.
+      //
+      // Only once factSource OWNS the open path, though. The open fact can move
+      // to another mount while anchored (the mounts picker re-selects the first
+      // row and keeps asOf), and the previous fact's mount would then be read
+      // for this fact's path. Resolve the source first; the effect re-runs on
+      // `sourceResolved` and reads the anchored version from the right mount.
+      if (anchorCommit && !sourceResolved) { resolveSourceOnly(stale); return; }
       if (anchorCommit && state.factSource) {
         const a = factHistoryAnchor(state);
         api.fact(
@@ -834,7 +867,10 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
         setFact(f);
       })
       .catch(e => { if (!stale()) setError(String(e)); });
-  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName]);
+    // `resolvedDep` re-runs an anchored or diff read once SET_FACT_SOURCE makes
+    // the source own the open path. A live read neither needs nor wants it: it
+    // dispatched that source itself, and re-running would re-fetch the fact.
+  }, [factPath, anchorCommit, state.repo, useFallback, inDiff, lensCtx, lensName, resolvedDep]);
 
 
   // Cache the loaded fact's title so the breadcrumb labels this crumb with the

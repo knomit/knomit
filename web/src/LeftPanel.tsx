@@ -1,6 +1,6 @@
 import { memo, useCallback, type Dispatch } from 'react';
 import type { AppState, Action } from './state';
-import { isLive, selectAnchorCommit, factHistoryAnchor, canGoBack } from './state';
+import { isLive, selectAnchorCommit, factHistoryAnchor, canGoBack, openFactSourceResolved } from './state';
 import type { NavRequest } from './useNavigationManager';
 import { Library } from './Library';
 import { TimelineNav } from './TimelineNav';
@@ -41,6 +41,10 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
   // (factHistoryAnchor): {state.repo, state.branch, bare-path} in a repo context,
   // the fact's read mount + kb://<id12>/-stripped path in a lens context.
   const hist = factHistoryAnchor(state);
+  // ...but only once that mount is the open fact's own (openFactSourceResolved):
+  // the fact can move to another mount while the timeline is open, and until
+  // RightPanel resolves its source `hist` still names the previous fact's mount.
+  const histResolved = openFactSourceResolved(state);
 
   // No-op defaults so callers (e.g. App before Task 17) don't need to supply
   // these props while the real callbacks aren't wired yet.
@@ -82,7 +86,7 @@ export const LeftPanel = memo(function LeftPanel({ state, dispatch, navigate, on
           transition: TRANSITION,
         }}
       >
-        {!live && state.factPath && anchorCommit ? (
+        {!live && state.factPath && anchorCommit && histResolved ? (
           <TimelineNav
             repo={hist.repo}
             branch={hist.branch}

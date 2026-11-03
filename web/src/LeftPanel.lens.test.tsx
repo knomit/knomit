@@ -55,3 +55,13 @@ it('repo context: still {state.repo, state.branch} + the bare path (byte-identic
   const p = timelineProps.at(-1);
   expect(p).toMatchObject({ repo: 'r', branch: 'b', factPath: 'kb/a.md' });
 });
+
+// The fact can move to another mount while the timeline is open (the mounts
+// picker re-selects the first row and keeps asOf). Until its source resolves,
+// factSource is the PREVIOUS fact's mount: no timeline may be anchored on it.
+it('lens fact whose source is still the previous mount: no TimelineNav until it resolves', () => {
+  const { rerender } = render(<LeftPanel state={lensState('kb://docsid123456/kb/api/auth.md', writeSource, { mode: 'history', commit: 'c1' })} {...props()} />);
+  expect(timelineProps).toHaveLength(0);
+  rerender(<LeftPanel state={lensState('kb://docsid123456/kb/api/auth.md', readSource, { mode: 'history', commit: 'c1' })} {...props()} />);
+  expect(timelineProps.at(-1)).toMatchObject({ repo: 'docs', branch: 'main', factPath: 'kb/api/auth.md' });
+});

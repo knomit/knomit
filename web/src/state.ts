@@ -67,6 +67,11 @@ export interface AppState {
   // lens's write mount + its agent branch so write routing never breaks.
   context: BrowseContext;
   lens: Lens | null;            // resolved lens doc; null in repo context
+  // lensWriteId is the lens write member's 12-char root-commit id (RepoInfo.id,
+  // matched by uid when the lens resolves) — the identity a LensSource.id
+  // carries. The lens doc names its members by uid and name only. Meaningful
+  // only while `lens` is set; null when the repo listing gave no id.
+  lensWriteId: string | null;
   lensSources: string[] | null; // sources-dropdown selection; null = all mounts
   // factSource is the source mount of the currently open lens fact — set by the
   // fact-open path when a lens fact loads (Task 14/16), and cleared on context
@@ -154,7 +159,8 @@ export type Action =
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_CONTEXT'; context: BrowseContext }
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
-  | { type: 'SET_LENS'; lens: Lens }
+  // writeId: the write member's root-commit id (see AppState.lensWriteId).
+  | { type: 'SET_LENS'; lens: Lens; writeId?: string }
   | { type: 'SET_LENS_SOURCES'; repos: string[] | null }
   | { type: 'FOCUS_LENS_SOURCE'; repo: string }
   | { type: 'SET_FACT_SOURCE'; source: LensSource | null }
@@ -194,6 +200,7 @@ export const init: AppState = {
   repo: '',
   context: { kind: 'repo', repo: '' },
   lens: null,
+  lensWriteId: null,
   lensSources: null,
   factSource: null,
   view: 'library',
@@ -514,6 +521,7 @@ function applyAction(s: AppState, a: Action): AppState {
       return {
         ...s,
         lens: a.lens,
+        lensWriteId: a.writeId ?? null,
         repo: a.lens.write.name,
         branch: s.repo === a.lens.write.name ? s.branch : '',
         headCommit: s.repo === a.lens.write.name ? s.headCommit : '',
@@ -751,14 +759,19 @@ export function reducer(s: AppState, a: Action): AppState {
 //
 // The path is the canonical lens address (decision 10a3bcc0): a read mount's
 // fact is kb://<id12>/…, owned by the source with that id; a bare path is the
-// write repo's. A hop within one mount is resolved at once.
+// write repo's, owned by the source whose id is the write member's
+// (lensWriteId) — by identity, so a read mount that happens to share the write
+// repo's NAME is never taken for it. Only when the repo listing carried no id
+// (an older server) does the name stand in. A hop within one mount is resolved
+// at once.
 export function openFactSourceResolved(s: AppState): boolean {
   if (s.context.kind !== 'lens') return true;
   const src = s.factSource;
   if (!s.factPath || !src) return false;
   const m = /^kb:\/\/([^/]+)\//.exec(s.factPath);
   if (m) return src.id === m[1];
-  return !!s.lens && src.repo === s.lens.write.name;
+  if (!s.lens) return false;
+  return s.lensWriteId ? src.id === s.lensWriteId : src.repo === s.lens.write.name;
 }
 
 export function selectAnchorCommit(s: AppState): string | null {

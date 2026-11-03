@@ -240,3 +240,45 @@ describe('RightPanel — lens fact view', () => {
     await waitFor(() => expect(screen.queryByTestId('retracted-version-badge')).toBeNull());
   });
 });
+
+// The open fact can move to ANOTHER mount while asOf stays anchored: in history
+// the mounts picker still works, and the union list re-selects its first row
+// with AMEND_NAV, which keeps asOf. Until getLensFact answers, factSource is the
+// PREVIOUS fact's mount, and reading the anchored version from it asked the
+// write repo for a read mount's path (a 404 at that commit, shown as the error).
+describe('RightPanel — lens fact moved to another mount while anchored', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('history: resolves the new source first, never reads the previous mount, then reads the anchored version from the right one', async () => {
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(readFact());
+    (api.fact as ReturnType<typeof vi.fn>).mockResolvedValue(readFact({ commit_hash: 'ccc3333' }));
+    const dispatch = vi.fn();
+    const asOf: AsOf = { mode: 'history', commit: 'ccc3333' };
+    // Stale: the write fact's source, paired with the read-mount path.
+    const { rerender } = render(<RightPanel state={lensState(READ_PATH, writeSource, asOf)} dispatch={dispatch} />);
+    await waitFor(() => expect(dispatch).toHaveBeenCalledWith({ type: 'SET_FACT_SOURCE', source: readSource }));
+    expect(api.getLensFact).toHaveBeenCalledWith('eng', READ_PATH);
+    expect(api.fact).not.toHaveBeenCalled();
+    // The live body getLensFact returned is NOT shown under a history anchor.
+    expect(screen.queryByTestId('fact-title')).toBeNull();
+
+    rerender(<RightPanel state={lensState(READ_PATH, readSource, asOf)} dispatch={dispatch} />);
+    await screen.findByTestId('fact-title');
+    expect(api.fact).toHaveBeenCalledWith('docs', 'main', 'kb/api/auth.md', 'ccc3333', { fallback: 'before' });
+    expect((api.fact as ReturnType<typeof vi.fn>).mock.calls.every(c => c[0] !== 'core')).toBe(true);
+  });
+
+  it('diff: resolves the new source (FactDiffView waits on it) and never diffs against the previous mount', async () => {
+    (api.getLensFact as ReturnType<typeof vi.fn>).mockResolvedValue(readFact());
+    const dispatch = vi.fn();
+    const asOf: AsOf = { mode: 'diff', from: 'c1', to: 'c2' };
+    const { rerender } = render(<RightPanel state={lensState(READ_PATH, writeSource, asOf)} dispatch={dispatch} />);
+    await waitFor(() => expect(dispatch).toHaveBeenCalledWith({ type: 'SET_FACT_SOURCE', source: readSource }));
+    expect(api.factDiff).not.toHaveBeenCalled();
+
+    rerender(<RightPanel state={lensState(READ_PATH, readSource, asOf)} dispatch={dispatch} />);
+    await waitFor(() => expect(api.factDiff).toHaveBeenCalled());
+    expect((api.factDiff as ReturnType<typeof vi.fn>).mock.calls.at(-1)!.slice(0, 3)).toEqual(['docs', 'main', 'kb/api/auth.md']);
+    expect((api.factDiff as ReturnType<typeof vi.fn>).mock.calls.every(c => c[0] !== 'core')).toBe(true);
+  });
+});
