@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FleetWizard } from './FleetWizard';
 import { FacetLayoutProvider } from './facetLayout';
-import { stepsFor, initialFleetWizardState, fleetWizardReducer } from './fleetWizardState';
+import { stepsFor, stepSummary, initialFleetWizardState, fleetWizardReducer } from './fleetWizardState';
 import type { FleetStatus, FleetJoinCheck } from './api';
 import { stubFleetFetch, problem } from './fleetTestFetch';
 import { HOST_HERE_COPY } from './fleetText';
@@ -57,6 +57,19 @@ describe('fleetWizardState.stepsFor', () => {
     expect(reloaded.step).toBe('bundle');
     const ok = fleetWizardReducer(checked, { type: 'ACCESS_CHECKED' });
     expect(fleetWizardReducer(ok, { type: 'SET_TOKEN', token: 't' }).accessChecked).toBe(false);
+  });
+});
+
+describe('fleetWizardState.stepSummary access', () => {
+  const s = (over: object) => ({ ...initialFleetWizardState, choice: 'create' as const, forgeUrl: 'https://forge.example/acme/kb.git', ...over });
+  it('follows the credential that is sent', () => {
+    expect(stepSummary(s({ authMethod: '', authToken: 'ghp_x' }), 'access')).toBe('token');
+    expect(stepSummary(s({ authMethod: '', authToken: 'ghp_x', forgeUrl: 'git@forge.example:acme/kb.git' }), 'access')).toBe('auto-detect');
+    expect(stepSummary(s({ authMethod: '' }), 'access')).toBe('auto-detect');
+    expect(stepSummary(s({ authMethod: 'none' }), 'access')).toBe('none');
+    expect(stepSummary(s({ authMethod: 'basic', authUser: 'u', authToken: 'p' }), 'access')).toBe('basic');
+    expect(stepSummary(s({ authMethod: 'secret', secretId: 'sec1' }), 'access')).toBe('secret');
+    expect(stepSummary(s({ authMethod: 'secret' }), 'access')).toBe('secret');
   });
 });
 

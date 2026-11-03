@@ -180,6 +180,30 @@ describe('RepoSettings', () => {
       expect(screen.getByTestId('wizard-crumb-back').textContent).toBe('core');
     });
 
+    // A Reconnect clicked while this flow is open sets the APP's focus; the
+    // hand-back sets the local one. Consuming it must clear both owners.
+    it('clears the app\'s remote focus too when the flow hands back', async () => {
+      const onFocused = vi.fn();
+      function Owner() {
+        const [focus, setFocus] = useState<string | undefined>(undefined);
+        return (
+          <>
+            <button data-testid="reconnect" onClick={() => setFocus('remote')} />
+            <RepoSettings name="core" lenses={[]} focus={focus} onFocused={() => { onFocused(); setFocus(undefined); }}
+              canArchive serverReadOnly={false} hideRemoteConfig={false}
+              onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+          </>
+        );
+      }
+      render(<Owner />);
+      fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
+      await screen.findByTestId('remote-connect-wizard');
+      fireEvent.click(screen.getByTestId('reconnect'));
+      fireEvent.click(screen.getByTestId('wizard-crumb-back'));
+      await screen.findByTestId('repo-settings');
+      await waitFor(() => expect(onFocused).toHaveBeenCalled());
+    });
+
     it('replaces the settings page rather than stacking under it', async () => {
       await openConnect();
       expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();
