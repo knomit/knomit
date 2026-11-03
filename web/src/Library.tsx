@@ -398,18 +398,33 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const lensRs = useRef<RefreshState>(newRefreshState());
   const refreshing = () => recentRs.current.inFlight || relRs.current.inFlight || lensRs.current.inFlight;
   const selectedPathNow = () => activeListRef.current[selectedIdxRef.current]?.fullPath || undefined;
+  // Capture where the reader is, for the layout effect to re-anchor on after
+  // the new rows render. A hidden list (display:none under the FactSet's
+  // Focus) has no rects: the last place read on screen stands in.
+  const capturePlace = () => {
+    const el = containerRef.current;
+    pendingAnchor.current = el && isRendered(el) ? captureAnchor(el, selectedPathNow()) : lastAnchor.current;
+  };
+  // Path browse's own head-only record (the tree keeps its place too).
+  const pathAtRef = useRef<LoadedAt | null>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // ── Path sort: api.browse for directory entries ──
   useAsync((stale) => {
-    if (isLens) return; // lens context reads via the lens effect below
-    if (effectiveSort !== 'path') return;
+    if (isLens || effectiveSort !== 'path') { pathAtRef.current = null; return; } // lens context reads via the lens effect below
+    // A new head alone re-reads the folder in place: the rows are replaced
+    // (never cleared) and the reader's row is re-anchored, as in the paged
+    // lists. The scroll memory's restore would otherwise put back the old
+    // scrollTop over rows that moved.
+    const headOnly = sameScopeNewHead(pathAtRef,
+      [path, state.repo, state.branch, state.ontologyRoot, state.factPath].join('\u0001'), state.headCommit);
     api.browse(state.repo, state.branch, path, state.ontologyRoot).then(r => {
       if (stale()) return;
       const c = (r.children || []).slice().sort((a, b) => {
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+      if (headOnly) capturePlace();
       setChildren(c);
       if (state.factPath) {
         const factName = state.factPath.split('/').pop();
@@ -514,10 +529,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
    */
   const keepPlace = (paths: string[]) => {
     const selectedPath = selectedPathNow();
-    const el = containerRef.current;
-    // A hidden list (display:none under the FactSet's Focus) has no rects:
-    // anchor on the last place read while it was on screen instead.
-    pendingAnchor.current = el && isRendered(el) ? captureAnchor(el, selectedPath) : lastAnchor.current;
+    capturePlace();
     setSelectedIdx(selectedPath ? paths.indexOf(selectedPath) : -1);
   };
   useAsync((stale) => {
@@ -679,6 +691,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const lensAtRef = useRef<LoadedAt | null>(null);
   const lensRowsRef = useRef(lensRows);
   lensRowsRef.current = lensRows;
+  const lensTreeRef = useRef(lensTree);
+  lensTreeRef.current = lensTree;
   const lensSources = state.lensSources;
   const noneSelected = Array.isArray(lensSources) && lensSources.length === 0;
 
@@ -713,7 +727,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (emptyScope) { lensAtRef.current = null; beginFullLoad(rs); setLensRows([]); setLensTree([]); setTotal(0); setLensExhausted(true); setLensLoading(false); return; }
     const repos = reposParam;
     const scope = [lensName, path, state.freeText, effectiveSort, reposKey, filtersKey, state.ontologyRoot].join('\u0001');
-    if (sameScopeNewHead(lensAtRef, scope, state.headCommit) && effectiveSort !== 'path' && rs.loaded) {
+    const headOnly = sameScopeNewHead(lensAtRef, scope, state.headCommit);
+    if (headOnly && effectiveSort !== 'path' && rs.loaded) {
       // A new head alone: re-read the loaded union rows in place, through the
       // same route and parameters the list pages with.
       const toRow = (x: { path: string; title: string; type?: string; source: LensSource }): LensRow =>
@@ -748,11 +763,13 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       if (rows.some(r => r.path === open)) return;
       dispatch({ type: 'AMEND_NAV', factPath: rows[0].path });
     };
+    // A new head in the tree re-reads the folder in place (no clearing).
+    const treeInPlace = headOnly && effectiveSort === 'path' && lensTreeRef.current.length > 0;
     // Same window as the Recent reset: close it before the re-render does.
     lensLoadingRef.current = true;
     setLensLoading(true);
     setLensRows([]);
-    setLensTree([]);
+    if (!treeInPlace) setLensTree([]);
     setTotal(0);
     // A new scope is unpaged until its first page says otherwise.
     setLensExhausted(false);
@@ -782,6 +799,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       dispatch({ type: 'SET_SEARCHING', value: false });
       api.lensBrowse(lensName, path, state.ontologyRoot, repos).then(r => {
         if (stale()) return;
+        if (treeInPlace) capturePlace();
         setLensTree(r.children || []);
         setLensLoading(false);
       }).catch(() => { if (!stale()) { setLensTree([]); setLensLoading(false); } });
@@ -1250,11 +1268,12 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
             });
           }
         }}
-        // The paged lists re-anchor by hand on a new head (listRefresh.ts);
-        // native scroll anchoring on top would move the reader twice
-        // (60d4ace8). Path browse keeps native anchoring: it still reloads its
-        // folder on a new head and has no manual anchor.
-        style={{ flex: 1, overflowY: 'auto', overflowAnchor: effectiveSort === 'path' ? 'auto' : 'none' }}
+        // Every list re-anchors by hand on a new head (listRefresh.ts), path
+        // browse included; native scroll anchoring is off so it cannot move
+        // the reader a second time (60d4ace8). It could not keep the place on
+        // its own anyway: the scroll memory's restore puts the old scrollTop
+        // back over rows that moved.
+        style={{ flex: 1, overflowY: 'auto', overflowAnchor: 'none' }}
       >
         {isLens && effectiveSort === 'path' && (
           <>

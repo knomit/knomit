@@ -350,3 +350,30 @@ describe('Library — keeping the place under a busy agent (#739 review)', () =>
     expect(scroller.scrollTop).toBe(121 * ROW - 100);
   });
 });
+
+// L2 (#739 review): path browse still re-reads its folder on a new head, and
+// native scroll anchoring cannot keep the place (the scroll memory's restore
+// puts the old scrollTop back over rows that moved). It re-anchors like the
+// paged lists: entries inserted above the reader's top row move the scroll
+// with them.
+// Sabotage: drop the capture in the path effect and the scroll stays put
+// while the rows move down by three.
+describe('Library — path browse keeps the place on a new head', () => {
+  it('three entries inserted above the top visible row move the scroll by three rows', async () => {
+    const { api } = await import('./api');
+    let names = Array.from({ length: 200 }, (_, i) => `f${String(i).padStart(3, '0')}.md`);
+    (api.browse as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      path: 'kb', children: names.map(n => ({ name: n, is_dir: false, fullPath: `kb/${n}`, title: n })),
+    }));
+    const state: AppState = { ...repoBase, librarySort: 'path' };
+    const view = render(<Library state={state} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(200));
+    const scroller = screen.getAllByTestId('dir-entry')[0].parentElement!;
+    scroller.scrollTop = 120 * ROW - 100;
+    fireEvent.scroll(scroller);
+    names = ['a0.md', 'a1.md', 'a2.md', ...names];
+    view.rerender(<Library state={{ ...state, headCommit: 'h2' }} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(203));
+    expect(scroller.scrollTop).toBe(123 * ROW - 100);
+  });
+});
