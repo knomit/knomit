@@ -139,8 +139,9 @@ func (g Gate) LocalRepoID() string { return g.localRepoID }
 //
 // A newly added ref is satisfied when its path is any of:
 //   - in this batch — BatchWriteFacts commits the whole call as ONE commit, so
-//     facts written together may cite each other in any order, including
-//     circularly;
+//     a path written in this call resolves. Only paths a caller can name
+//     benefit (artifact paths are caller-chosen; knowledge-fact paths are
+//     generated, so callers cannot cite a kb/ sibling);
 //   - resolvable per ResolveFunc, which includes a fact retracted earlier and
 //     still reachable by walk-back.
 //
@@ -345,10 +346,9 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 		for _, p := range problems {
 			fmt.Fprintf(&b, "  %s cites %s, which does not exist\n", p.from, p.ref)
 		}
-		b.WriteString("\nEither write the referenced fact in THIS SAME call (all facts in one " +
-			"call are committed together, so they may reference each other in any order, " +
-			"including circularly), write it first in an earlier call, or fix the path if " +
-			"it is a typo.")
+		b.WriteString("\nA fact can only cite facts that already exist: fix the path if it is a " +
+			"typo, or write the target first and then add the ref (with knomit_update when the " +
+			"citing fact is new).")
 		sections = append(sections, b.String())
 	}
 	if len(missingFiles) > 0 {
