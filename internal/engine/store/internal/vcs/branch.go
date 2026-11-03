@@ -964,7 +964,12 @@ func (rh *Repo) CommitLogQuery(ctx context.Context, branch, path, after, from, b
 	case after != "":
 		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
 	}
-	return rh.gits.CommitLogQuery(branchID, path, cursor, limit)
+	rows, more, err := rh.gits.CommitLogQuery(branchID, path, cursor, limit)
+	if errors.Is(err, storegit.ErrCursorCommitUnknown) {
+		// The storer may not import model; the web layer keys on this.
+		err = fmt.Errorf("%w: %w", err, model.ErrCommitNotFound)
+	}
+	return rows, more, err
 }
 
 // CommitLogActivity resolves branch to its numeric ID and delegates to

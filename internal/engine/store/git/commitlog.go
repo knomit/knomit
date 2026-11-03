@@ -6,11 +6,16 @@ package git
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
-
-	"knomit/internal/engine/store/model"
 )
+
+// ErrCursorCommitUnknown is CommitLogQuery's answer to a cursor hash with no
+// commit_log row: a commit this repo does not hold. The vcs layer translates
+// it to model.ErrCommitNotFound (this package may not import model), which
+// the web layer answers 404 commit_not_in_repo.
+var ErrCursorCommitUnknown = errors.New("cursor names a commit this repo does not hold")
 
 // CommitLogEntry is one row inserted into commit_log.
 type CommitLogEntry struct {
@@ -184,7 +189,8 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
 
 	// A cursor hash with no commit_log row (MIN/MAX over no rows is NULL) is
-	// a commit this repo does not hold: model.ErrCommitNotFound, which the
+	// a commit this repo does not hold: ErrCursorCommitUnknown (vcs makes it
+	// model.ErrCommitNotFound), which the
 	// web layer answers 404, not the "converting NULL" scan error it was.
 	lookupTS := func(hash string) (int64, error) {
 		var ts sql.NullInt64
@@ -194,7 +200,7 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 			return 0, err
 		}
 		if !ts.Valid {
-			return 0, fmt.Errorf("%q: %w", hash, model.ErrCommitNotFound)
+			return 0, fmt.Errorf("%q: %w", hash, ErrCursorCommitUnknown)
 		}
 		return ts.Int64, nil
 	}
@@ -207,7 +213,7 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 			return 0, err
 		}
 		if !rid.Valid {
-			return 0, fmt.Errorf("%q: %w", hash, model.ErrCommitNotFound)
+			return 0, fmt.Errorf("%q: %w", hash, ErrCursorCommitUnknown)
 		}
 		return rid.Int64, nil
 	}
