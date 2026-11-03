@@ -31,6 +31,11 @@ func handleCommitAnchoredFact(b hal.URLBuilder, mgr *repos.Manager) http.Handler
 		if !refuseUnknownFactPath(w, r, path, true) {
 			return
 		}
+		// A commit this repo does not hold is 404 commit_not_in_repo for
+		// every read below, sub-resources and system files included.
+		if !refuseUnknownCommit(w, r, repos.RepoFromContext(r.Context()), sha) {
+			return
+		}
 		// A file under .knomit/ is readable by its exact path at this commit,
 		// raw (user ruling 2026-10-06).
 		if serveSystemFileRead(w, r, repos.RepoFromContext(r.Context()), branch, sha, path) {

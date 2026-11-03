@@ -15,3 +15,20 @@ var ErrBranchNotFound = errors.New("branch not found")
 // should exist. Callers use errors.Is to surface a 404 while propagating real
 // errors as 500.
 var ErrPathNotFound = errors.New("path not found")
+
+// ErrCommitNotFound is returned when a caller names a commit this repository
+// does not hold: a commit-anchored read at a hash from ANOTHER repo (a lens
+// keeps one mount's asOf commit while it reads another mount's fact), a
+// commit-log cursor naming such a hash, or a value that is no hash at all.
+// It is a client error: the web layer answers it 404 with the problem code
+// commit_not_in_repo, never 500 (user ruling 2026-11-03). A commit this repo
+// HAS where the requested path is absent is ErrPathNotFound instead.
+var ErrCommitNotFound = errors.New("commit not found in this repo")
+
+// ErrCommitNotInLog is returned when a commit-log cursor names a commit this
+// repository DOES hold but that has no commit_log row: it changed no file (a
+// write of identical content is a no-op commit with zero rows, by design), so
+// the log has no position to page from. It is not ErrCommitNotFound — the
+// commit exists — and the web layer answers it 400 with the problem code
+// commit_not_in_log.
+var ErrCommitNotInLog = errors.New("commit changed no file, so the commit log has no position for it")

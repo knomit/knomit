@@ -32,9 +32,35 @@ func WriteStoreUnavailable(w http.ResponseWriter, r *http.Request) {
 		"the repo's store is not available; try again", r.URL.Path)
 }
 
+// CodeCommitNotInRepo is the problem `code` of a 404 whose cause is the
+// COMMIT, not the fact: the request names a commit this repo does not hold.
+// A client tells it apart from "Fact not found" (a known commit without the
+// path) by this code alone. The web UI shows a "no version at that commit in
+// this repo" state for it instead of an error (user ruling 2026-11-03).
+const CodeCommitNotInRepo = "commit_not_in_repo"
+
+// CodeCommitNotInLog is the problem `code` of the 400 for a commit-log cursor
+// naming a commit the repo DOES hold that changed no file, so the log has no
+// position to page from. It is deliberately not commit_not_in_repo: that
+// code says the commit does not exist, and the UI shows "no version" for it.
+const CodeCommitNotInLog = "commit_not_in_log"
+
+// WriteCommitNotInRepo is the 404 for a commit this repo does not hold:
+// never a 500, which is only for internal errors (user ruling 2026-11-03).
+// sha is the commit as the request named it.
+func WriteCommitNotInRepo(w http.ResponseWriter, r *http.Request, sha string) {
+	hal.WriteProblemWithExtra(w, http.StatusNotFound, "Commit not found",
+		`this repo has no commit "`+sha+`"`, r.URL.Path,
+		map[string]any{"code": CodeCommitNotInRepo})
+}
+
 // WriteStoreError maps a store-layer error to a problem+json HTTP response.
 // A store that cannot be reached (StoreUnavailable) is 503; branch-not-found
-// becomes 404 with a stable title; every other error falls
+// becomes 404 with a stable title; a commit the repo does not hold
+// (model.ErrCommitNotFound) is 404 with code commit_not_in_repo; a held
+// commit the commit log has no row for (model.ErrCommitNotInLog) is 400 with
+// code commit_not_in_log; every other
+// error falls
 // through to 500 using the caller-supplied defaultTitle. Handlers pass the
 // branch name separately so the 404 detail message is accurate even when the
 // error chain doesn't carry it.
@@ -46,6 +72,16 @@ func WriteStoreError(w http.ResponseWriter, r *http.Request, err error, defaultT
 	if errors.Is(err, model.ErrBranchNotFound) {
 		hal.WriteProblem(w, http.StatusNotFound, "Branch not found",
 			`no branch named "`+branch+`"`, r.URL.Path)
+		return
+	}
+	if errors.Is(err, model.ErrCommitNotFound) {
+		hal.WriteProblemWithExtra(w, http.StatusNotFound, "Commit not found",
+			err.Error(), r.URL.Path, map[string]any{"code": CodeCommitNotInRepo})
+		return
+	}
+	if errors.Is(err, model.ErrCommitNotInLog) {
+		hal.WriteProblemWithExtra(w, http.StatusBadRequest, "Commit has no log position",
+			err.Error(), r.URL.Path, map[string]any{"code": CodeCommitNotInLog})
 		return
 	}
 	if errors.Is(err, facts.ErrInvalidPath) {

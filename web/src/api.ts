@@ -34,14 +34,18 @@ function encodeBranch(name: string): string {
 async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) {
-    // Best-effort: surface a problem+json `title`/`detail` if present.
+    // Best-effort: surface a problem+json `title`/`detail` if present. The
+    // status and the problem's `code` ride on the Error (HttpError) so a
+    // caller can branch on them; the message is unchanged.
     let detail = r.statusText;
+    let body: unknown = null;
     try {
-      detail = errorText(await r.json(), detail);
+      body = await r.json();
+      detail = errorText(body, detail);
     } catch {
       // Non-JSON body; keep the statusText.
     }
-    throw new Error(`${url} → ${r.status} ${detail}`);
+    throw httpError(r.status, `${url} → ${r.status} ${detail}`, problemCode(body));
   }
   return r.json() as Promise<T>;
 }
@@ -815,17 +819,43 @@ function parseSSELines(text: string): SSEEvent[] {
  * ADDED to an ordinary Error rather than carried by a subclass so `String(err)`
  * stays byte-identical for every existing consumer that renders it.
  */
-export interface HttpError extends Error { status?: number }
+export interface HttpError extends Error {
+  status?: number;
+  /** The problem document's `code`, when it carries one. */
+  code?: string;
+  /** The commit the request named, where the caller set it (factDiff). */
+  commit?: string;
+}
 
-function httpError(status: number, message: string): HttpError {
+function httpError(status: number, message: string, code?: string): HttpError {
   const e = new Error(message) as HttpError;
   e.status = status;
+  if (code) e.code = code;
   return e;
+}
+
+/** The problem document's `code` extension member, when it carries one. */
+function problemCode(body: unknown): string | undefined {
+  const c = (body as { code?: unknown } | null)?.code;
+  return typeof c === 'string' ? c : undefined;
 }
 
 /** True when err is an HTTP 404 — a missing resource, not a failed request. */
 export function isNotFound(err: unknown): boolean {
   return (err as HttpError | null)?.status === 404;
+}
+
+/** The problem code of a 404 whose cause is the COMMIT: the request named a
+ *  commit this repo does not hold. A lens keeps one mount's asOf commit when
+ *  the open fact moves to another mount, and that mount has no such commit. */
+export const COMMIT_NOT_IN_REPO = 'commit_not_in_repo';
+
+/** True when err is the server's 404 commit_not_in_repo — the fact has no
+ *  version at that commit in this repo. NOT a failure to show as an error, and
+ *  NOT the same as a 404 "Fact not found" at a commit the repo holds. */
+export function isCommitNotInRepo(err: unknown): boolean {
+  const e = err as HttpError | null;
+  return e?.status === 404 && e.code === COMMIT_NOT_IN_REPO;
 }
 
 function errorText(body: unknown, fallback: string): string {
@@ -2997,7 +3027,19 @@ export const api = {
     const fetchSide = async (commit: string): Promise<Fact | null> => {
       const url = `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`;
       const res = await fetch(url, { signal });
-      if (res.status === 404) return null;
+      if (res.status === 404) {
+        // A side the fact is absent at is null (the diff shows it empty).
+        // A commit this repo does not hold is not an absent side: rethrow
+        // it so the view can show "no version at that commit".
+        let body: unknown = null;
+        try { body = await res.json(); } catch { /* non-JSON 404: an absent side */ }
+        if (problemCode(body) === COMMIT_NOT_IN_REPO) {
+          const e = httpError(404, errorText(body, res.statusText), COMMIT_NOT_IN_REPO);
+          e.commit = commit;
+          throw e;
+        }
+        return null;
+      }
       if (!res.ok) throw new Error(res.statusText);
       return normalizeFactResponse(await res.json());
     };
@@ -3113,8 +3155,8 @@ export const api = {
       });
     };
     return Promise.all([
-      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText)); })),
-      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText)); })),
+      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText), problemCode(e)); })),
+      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText), problemCode(e)); })),
     ]).then(([inc, out]) => ({
       incoming: groupRefs(parseRefs(inc), 'incoming'),
       outgoing: groupRefs(parseRefs(out), 'outgoing'),

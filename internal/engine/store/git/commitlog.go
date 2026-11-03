@@ -6,9 +6,18 @@ package git
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrCursorNotInLog is CommitLogQuery's answer to a cursor hash with no
+// commit_log row. That is either a commit this repo does not hold, or a held
+// commit that changed no file (a no-op write records zero rows by design).
+// This package cannot tell the two apart and may not import model, so the vcs
+// layer checks the object store and maps it to model.ErrCommitNotFound or
+// model.ErrCommitNotInLog.
+var ErrCursorNotInLog = errors.New("cursor names a commit with no commit_log row")
 
 // CommitLogEntry is one row inserted into commit_log.
 type CommitLogEntry struct {
@@ -181,14 +190,25 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 	pathCond, pathArgs := commitLogPathCondPrefixed(path, "cl.")
 	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
 
+	// A cursor hash with no commit_log row (MIN over no rows is NULL, not
+	// sql.ErrNoRows) is ErrCursorNotInLog; vcs decides what it means (a commit
+	// the repo does not hold, or a held one that changed no file). Scanning
+	// the NULL into an int64 was the "converting NULL" 500 it used to be.
 	lookupTS := func(hash string) (int64, error) {
-		var ts int64
-		err := s.db.QueryRow(
+		var ts sql.NullInt64
+		if err := s.db.QueryRow(
 			`SELECT MIN(committed_at) FROM commit_log WHERE commit_hash = ?`, hash,
-		).Scan(&ts)
-		return ts, err
+		).Scan(&ts); err != nil {
+			return 0, err
+		}
+		if !ts.Valid {
+			return 0, fmt.Errorf("%q: %w", hash, ErrCursorNotInLog)
+		}
+		return ts.Int64, nil
 	}
 
+	// Always called after lookupTS found a row for the same hash, so MAX is
+	// never NULL here.
 	lookupMaxRowid := func(hash string) (int64, error) {
 		var rid int64
 		err := s.db.QueryRow(

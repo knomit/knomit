@@ -598,6 +598,11 @@ func (rh *Repo) ReadFileAtCommit(ctx context.Context, path, commitHash string) (
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
 	if err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			// A commit this repo does not hold (or a value that is no
+			// hash): the caller's error, which the web layer answers 404.
+			return "", fmt.Errorf("readFileAtCommit: %s: %w", commitHash, model.ErrCommitNotFound)
+		}
 		return "", fmt.Errorf("readFileAtCommit: commit: %w", err)
 	}
 	tree, err := commit.Tree()
@@ -959,7 +964,20 @@ func (rh *Repo) CommitLogQuery(ctx context.Context, branch, path, after, from, b
 	case after != "":
 		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
 	}
-	return rh.gits.CommitLogQuery(branchID, path, cursor, limit)
+	rows, more, err := rh.gits.CommitLogQuery(branchID, path, cursor, limit)
+	if errors.Is(err, storegit.ErrCursorNotInLog) {
+		// No commit_log row. Only the object store can say whether the repo
+		// holds the commit: a held commit that changed no file has no row by
+		// design, and is NOT "a commit this repo does not hold".
+		sentinel := model.ErrCommitNotFound
+		if plumbing.IsHash(cursor.Hash) {
+			if _, cerr := rh.repo.CommitObject(plumbing.NewHash(cursor.Hash)); cerr == nil {
+				sentinel = model.ErrCommitNotInLog
+			}
+		}
+		err = fmt.Errorf("%w: %w", err, sentinel)
+	}
+	return rows, more, err
 }
 
 // CommitLogActivity resolves branch to its numeric ID and delegates to
