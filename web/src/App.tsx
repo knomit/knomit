@@ -1645,7 +1645,10 @@ export default function App() {
               one is lost by a look at the log. */}
           <FacetLayoutProvider value={facetLayout}>
             {serverPage !== null && (
-              <ErrorBoundary variant="inline" label="The server pages hit an error">
+              // Keyed on the page so a tab switch remounts the boundary and
+              // drops a crashed page's error; without it the card outlives
+              // the page that threw. No onReset: nothing here for Retry to change.
+              <ErrorBoundary key={serverPage} variant="inline" label="The server pages hit an error">
                 <ServerPages page={serverPage} accessTab={accessTab} onAccessTab={setAccessTab}
                   oauthAvailable={oauth.available} authCount={oauth.count} onAuthCount={oauth.setCount} />
               </ErrorBoundary>
