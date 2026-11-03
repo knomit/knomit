@@ -683,7 +683,7 @@ describe('a prepend keeps the reader\'s anchor steady (#726 point 1)', () => {
   });
 });
 
-// ── The Back pill and Back to top (user report 2026-11-02) ──────────────────
+// ── Back (the back arrow) and Back to top (user report 2026-11-02) ──────────────────
 //
 // Unit u's root has a long title; its second section is a FORWARD stub to
 // unit u + ahead's root, titled like the target (as a stub is). Page size 2 =
@@ -692,7 +692,7 @@ describe('a prepend keeps the reader\'s anchor steady (#726 point 1)', () => {
 //
 // Sabotage, one run each (table in the PR): (a) Back re-applies the saved
 // scrollTop instead of re-seeking when the origin's run was dropped; (b) the
-// pill shows the stub's own title (its target's); (c) Back to top sets
+// back arrow shows the stub's own title (its target's); (c) Back to top sets
 // scrollTop 0 without seeking (the reported bug); (d) the Back landing is
 // treated as a builds-on landing (the origin stub is followed again); (e) no
 // flash on arrival.
@@ -720,8 +720,8 @@ const progressText = () => screen.getByTestId('fs-progress').textContent;
 const unitStepper = () => (screen.getByTestId('fs-unit') as HTMLInputElement).value;
 const clickStub = (i: number) => fireEvent.click(within(sections()[i]).getByTestId('fs-stub-link'));
 
-describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', () => {
-  it('a forward link to a LOADED target: it flashes, the pill reads "Back to <short origin title>", Back restores the exact scrollTop', async () => {
+describe('Back via the back arrow (design §5; label ruling 2026-11-02 "back to title")', () => {
+  it('a forward link to a LOADED target: it flashes, the back arrow reads "Back to <short origin title>", Back restores the exact scrollTop', async () => {
     const { api, calls } = linkedView(4, 1);
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
     const box = screen.getByTestId('fs-scroll');
@@ -867,6 +867,43 @@ describe('the back stack (user, 2026-11-03)', () => {
     expect(box.scrollTop).toBe(30);
     expect(calls).toEqual([]);
     expect(backArrow()).toBeNull();
+    expect(hint()).toBeNull();
+  });
+
+  // Sabotage (z2): recovery keeps the whole stack: two entries are left after
+  // the in-flight one lands.
+  it('a 404 during a pop re-creates the FactSet: only the in-flight entry survives, it restores, and the stack is then empty', async () => {
+    const { userScroll, calls, api } = await sixLoaded();
+    const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
+    const realFirst = (api.first as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['first'];
+    userScroll(30);
+    clickStub(1); // entry 1: unit 1's stub
+    clickStub(3); // entry 2: unit 2's stub
+    const o3 = topOf(3, 2);
+    clickStub(5); // entry 3: unit 3's stub -> unit 4 (seek)
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('4'));
+    let failed = false;
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async (t, c, u, sig) => {
+      if (u === 3 && !failed) { failed = true; calls.push('seek 3 (404)'); throw new FsError('gone', 404); }
+      return realSeek(t, c, u, sig);
+    });
+    let release!: () => void;
+    (api.first as ReturnType<typeof vi.fn>).mockImplementation(async (s, o, sig) => {
+      calls.push('first (held)');
+      await new Promise<void>(r => { release = r; });
+      return realFirst(s, o, sig);
+    });
+    calls.length = 0;
+    fireEvent.click(backArrow()!); // pop: entry 3's Back seek answers 404
+    await waitFor(() => expect(calls).toEqual(['seek 3 (404)', 'first (held)']));
+    // Re-creating: only the in-flight entry is left (one pop away from empty).
+    expect(backTitle()).toBe(BACK_LABEL);
+    await act(async () => { release(); });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    await waitFor(() => expect(topOf(3, 2)).toBe(o3));
+    expect(calls).toEqual(['seek 3 (404)', 'first (held)', 'first', 'seek 3', 'seek 2']); // the held call runs the real one
+    expect(screen.getByTestId('fs-notice').textContent).toBe(NOTICE_REFRESHED);
+    expect(backArrow()).toBeNull(); // entries 1 and 2 were dropped by the re-creation
     expect(hint()).toBeNull();
   });
 
@@ -1080,14 +1117,14 @@ describe('Back to top goes to the start of the FactSet (user report 2026-11-02)'
 // #736 review. M1: when the re-seek starts at the origin's unit, the saved
 // offset can need content above the origin that the new run does not hold
 // yet; it is read (loadBefore) before the offset is applied, never clamped.
-// M2: a failed Back seek keeps the pill and the origin: a 404 re-creates the
+// M2: a failed Back seek keeps the entry and the origin: a 404 re-creates the
 // FactSet AT the origin, any other failure's Retry retries the Back.
 //
 // Sabotage, one run each: (h) apply the offset clamped at 0 without reading
 // the unit above; (i) recover() ignores the pending Back (re-creates at
 // topUnit, the jump's destination); (j) Retry after a failed Back retries the
-// old run's tail; (k) the pill does not go on an option change.
-describe('the Back pill: exact offset, failures, options (#736 review)', () => {
+// old run's tail; (k) the entry does not go on an option change.
+describe('Back: exact offset, failures, options (#736 review)', () => {
   it('M1: an origin 120px down with unit 2 above it: Back reads unit 2 back in, then puts the origin at exactly 120px', async () => {
     const { api, calls } = linkedView(12, 4);
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
@@ -1142,7 +1179,7 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
     expect(screen.getByTestId('fs-notice').textContent).toBe(NOTICE_REFRESHED);
   });
 
-  it('M2: any other failure keeps the pill, and Retry retries the Back', async () => {
+  it('M2: any other failure keeps the entry, and Retry retries the Back', async () => {
     const { api, calls } = linkedView(12, 4);
     const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
@@ -1195,7 +1232,7 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
     expect(document.querySelector('[data-fs-unit="2"][data-mat-n="7"]')!.getBoundingClientRect().top).toBe(110);
   });
 
-  it('a builds-on link to a written section flashes it and shows the pill; an option change takes the pill away', async () => {
+  it('a builds-on link to a written section flashes it and pushes an entry; an option change clears it', async () => {
     const onOptionsChange = vi.fn();
     const { api } = pagedView(2, 3, 6, (u, k) => u === 1 && k === 0
       ? { title: ROOT_TITLE(1), builds_on: [{ n: 3, title: 'U1 S3', id: 'u1s3', anchor_id: 'f-1-3' }] } : {});

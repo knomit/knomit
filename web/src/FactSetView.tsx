@@ -73,9 +73,10 @@ function faultLine(f: FsFault): string {
  *  Export, ladder and gutter as the single-fact view; links are stubs that say
  *  "see <short title>" and scroll or seek to where the fact is written. */
 /** The back arrow's strip: the floating panel's own surface, so the panel
- *  reads as growing to the left (.k-fs-tools in materialize.css). */
+ *  reads as growing to the left. Its colours are .k-fs-tools's variables
+ *  (materialize.css), the one place they are defined. */
 const FS_TOOLS_STRIP = {
-  background: '#1a1e28', border: '1px solid #3d4a66', borderRight: 'none',
+  background: 'var(--fs-tools-bg)', border: '1px solid var(--fs-tools-edge-on)', borderRight: 'none',
   borderRadius: '6px 0 0 6px', top: -1, bottom: -1, paddingLeft: 3, gap: 0,
 } as const;
 
@@ -464,6 +465,17 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
     backSeek.current = o;
     if (!seek(o.unit, undefined, o.n, true)) backSeek.current = null;
   }, [back, stale, epoch, restoreStep, seek, popIf]);
+
+  // A re-creation after a 404 (the stream's recover) is a new FactSet that can
+  // renumber (unit, n), as an option change can: every entry is dropped except
+  // the one whose Back is in flight (its seek is what the re-creation lands
+  // on, and the entry leaves once that return has landed).
+  const { recreated } = s;
+  useEffect(() => {
+    if (recreated === 0) return;
+    const inFlight = backSeek.current;
+    setStack(st => (inFlight && st.includes(inFlight) ? [inFlight] : []));
+  }, [recreated]);
 
   // An option change restarts the FactSet: a recorded (unit, n) may then name
   // another section, so the stack is cleared.
