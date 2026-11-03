@@ -38,6 +38,19 @@ vi.mock('./api', async (importOriginal) => {
   };
 });
 
+// LogsFacet throws on render while `logsCrash.on`, to crash one server page.
+const logsCrash = vi.hoisted(() => ({ on: false }));
+vi.mock('./LogsFacet', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./LogsFacet')>();
+  return {
+    ...actual,
+    LogsFacet: () => {
+      if (logsCrash.on) throw new Error('logs page boom');
+      return <actual.LogsFacet />;
+    },
+  };
+});
+
 const pending = (id: string, name: string): OAuthPending => ({
   id, client_id: `https://${name}.example/meta`, client_name: name,
   redirect_uri: 'http://127.0.0.1:1/callback', scopes: ['read'], resource: 'http://localhost:1',
@@ -108,6 +121,7 @@ beforeEach(() => {
   vi.spyOn(console, 'info').mockImplementation(() => {});
 });
 afterEach(() => {
+  logsCrash.on = false;
   // cleanup FIRST: afterEach runs in stack order (see test-setup.ts).
   cleanup();
   vi.restoreAllMocks();
@@ -362,5 +376,20 @@ describe('a pinned target under the server pages', () => {
     expect(await screen.findByTestId('lens-broken-callout')).toBeInTheDocument();
     expect(screen.getByTestId('target-label')).toHaveTextContent('haunted');
     expect(screen.getByTestId('rail-lens-haunted')).toHaveAttribute('aria-current', 'true');
+  });
+});
+
+describe('a crashed server page', () => {
+  it('clears its error card when another server tab is picked', async () => {
+    await primeApi({ oauth: [] });
+    await mountApp();
+    logsCrash.on = true;
+    await act(async () => { fireEvent.click(gear()); });
+    const card = await screen.findByTestId('panel-error');
+    expect(card).toHaveTextContent('The server pages hit an error');
+
+    await act(async () => { fireEvent.click(screen.getByTestId('server-tab-access')); });
+    expect(await screen.findByTestId('secrets-tab')).toBeInTheDocument();
+    expect(screen.queryByTestId('panel-error')).toBeNull();
   });
 });
