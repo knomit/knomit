@@ -153,7 +153,7 @@ describe('Library — lens read path', () => {
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
     // The union relevance search forwards the current path scope (root 'kb' by
     // default) alongside the query; repos stays undefined for the null selection.
-    expect(api.lensSearch).toHaveBeenCalledWith('eng', 'auth', undefined, expect.objectContaining({ path: 'kb' }));
+    expect(api.lensSearch).toHaveBeenCalledWith('eng', 'auth', undefined, expect.objectContaining({ path: 'kb' }), { limit: 50, offset: 0 });
     expect(api.search).not.toHaveBeenCalled();
     // Search rows still carry a source badge.
     expect(screen.getAllByTestId('source-badge').length).toBe(1);

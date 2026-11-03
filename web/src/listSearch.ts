@@ -53,9 +53,9 @@ export type ListKind = 'relevance' | 'recent';
  * listSearchParams is the ONE builder of a repo results list's search: exactly
  * the parameters the list sends, minus the list's own paging (sort, offset,
  * limit). api.search and api.recent send it plus their paging, and a FactSet of
- * the list sends it plus `sort` and its own options, so "the FactSet's first 50
- * units ARE the list" holds by construction on the client, as UIListLimit makes
- * it hold on the server.
+ * the list sends it plus `sort` and its own options, so "the FactSet IS the
+ * list" holds by construction on the client, as the /search routes' one ranked
+ * list (paged by offset, as deep as a FactSet goes) makes it hold on the server.
  */
 export function listSearchParams(kind: ListKind, q: string, path: string, minConfidence: number, opts?: ListFilters): URLSearchParams {
   if (kind === 'relevance') {

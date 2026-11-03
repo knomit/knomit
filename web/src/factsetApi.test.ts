@@ -45,12 +45,16 @@ describe('the FactSet first call is the list search (test 1)', () => {
 
   it('relevance: api.search and the FactSet agree, chips, motifs and since_fork included', async () => {
     const f = stubFetch(() => new Response(JSON.stringify({ results: [] })));
-    await api.search('kb', 'agent/x', 'goroutine domain:go', 'kb/tech', 0, filters);
+    // A later page of the list (offset 50): the FactSet is the whole list, so
+    // its first call carries the list's search and none of its paging.
+    await api.search('kb', 'agent/x', 'goroutine domain:go', 'kb/tech', 0, filters, { limit: 50, offset: 50 });
     const search: FsSearch = { target: repoT, sort: 'relevance', params: listSearchParams('relevance', 'goroutine domain:go', 'kb/tech', 0, filters).toString() };
     await factsetApi.first(search, DEFAULT_OPTIONS);
     const list = urlOf(f, 0), fs = urlOf(f, 1);
     expect(list.pathname).toBe('/api/v1/repos/kb/branches/agent:x/search');
     expect(fs.pathname).toBe('/api/v1/repos/kb/branches/agent:x/search/factset');
+    expect(list.searchParams.get('offset')).toBe('50');
+    expect(fs.searchParams.has('offset')).toBe(false);
     const want = keysOf(list, PAGING);
     expect(keysOf(fs, OWN)).toEqual(want);
     expect(want).toMatchObject({
@@ -78,11 +82,13 @@ describe('the FactSet first call is the list search (test 1)', () => {
     const f = stubFetch(() => new Response(JSON.stringify({ results: [], facts: [], total: 0 })));
     const lensT: FsTarget = { kind: 'lens', lens: 'dev' };
     const lensOpts = { ...filters, sinceFork: undefined, path: 'kb/tech' };
-    await api.lensSearch('dev', 'goroutine', ['alpha', 'beta'], lensOpts);
+    await api.lensSearch('dev', 'goroutine', ['alpha', 'beta'], lensOpts, { limit: 50, offset: 100 });
     await factsetApi.first({ target: lensT, sort: 'relevance', params: lensListSearchParams('relevance', 'goroutine', ['alpha', 'beta'], lensOpts).toString() }, DEFAULT_OPTIONS);
     await api.listLensFacts('dev', { ...lensOpts, limit: 50, offset: 0, repos: ['alpha'] });
     await factsetApi.first({ target: lensT, sort: 'recent', params: lensListSearchParams('recent', '', ['alpha'], lensOpts).toString() }, DEFAULT_OPTIONS);
     expect(urlOf(f, 1).pathname).toBe('/api/v1/lenses/dev/search/factset');
+    expect(urlOf(f, 0).searchParams.get('offset')).toBe('100');
+    expect(urlOf(f, 1).searchParams.has('offset')).toBe(false);
     expect(keysOf(urlOf(f, 1), OWN)).toEqual(keysOf(urlOf(f, 0), PAGING));
     expect(keysOf(urlOf(f, 0), PAGING)).toMatchObject({ q: ['goroutine'], repo: ['alpha', 'beta'], type: ['observation,policy'] });
     expect(keysOf(urlOf(f, 3), OWN)).toEqual(keysOf(urlOf(f, 2), PAGING));

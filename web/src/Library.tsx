@@ -3,7 +3,7 @@ import { useAsync } from './hooks';
 import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import type { DirChild, LensDirChild, RecentFactEntry, LensSource } from './api';
+import type { DirChild, LensDirChild, RecentFactEntry, LensSource, SearchResult } from './api';
 import { lensListSearchParams, listSearchParams } from './listSearch';
 import type { ListFilters } from './listSearch';
 import type { FsSearch } from './factsetApi';
@@ -295,6 +295,17 @@ function ReadOnlyBanner({ message }: { message: string }) {
   );
 }
 
+/** A relevance page's rows as the list's entries. */
+function searchRows(results: SearchResult[] | undefined): DirChild[] {
+  return (results || []).map(sr => ({
+    name: sr.path.split('/').pop() || sr.path,
+    is_dir: false,
+    title: sr.title,
+    type: sr.type,
+    fullPath: sr.path,
+  }));
+}
+
 export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const path = currentPath(state);
   // Every chip except `path` is a content filter, and a content filter ranks:
@@ -413,7 +424,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
   // The ONE filters object every list call sends, and the FactSet of the list
   // too (listSearchParams / lensListSearchParams build both): the FactSet's
-  // first 50 units are the list by construction. The lens builders ignore
+  // units are the list, every page of it, by construction. The lens builders ignore
   // since_fork, which the lens lists never sent.
   const listFilters = useMemo<ListFilters>(() => ({
     types: types.length ? types : undefined,
@@ -485,32 +496,47 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (idx >= 0) setSelectedIdx(idx);
   }, [state.factPath, facts, effectiveSort]);
 
-  // ── Relevance sort: api.search for free-text results ──
+  // ── Relevance sort: api.search for free-text results, infinite-scroll paged
+  // like Recent. The route ranks ONE list (as deep as a FactSet goes) and each
+  // page is a slice of it by offset, so the list scrolls until a short page
+  // and ends exactly where the FactSet of the search ends. ──
+  const [relLoading, setRelLoading] = useState(false);
+  // Render-phase mirror of `relLoading` for loadMore's guard; see Infinite scroll.
+  const relLoadingRef = useRef(relLoading);
+  relLoadingRef.current = relLoading;
+  // A short page is the end of the ranked list: the terminator, as for the
+  // lens union (the repo /search route reports no total).
+  const [relExhausted, setRelExhausted] = useState(false);
+  // Scope generation for the relevance list, the counterpart of recentGenRef.
+  const relGenRef = useRef(0);
   useAsync((stale) => {
+    // A fresh scope invalidates any paged loadMore still in flight. Bumped
+    // before the early returns, as for Recent.
+    relGenRef.current += 1;
     if (isLens) return; // lens context reads via the lens effect below
     if (effectiveSort !== 'relevance') {
       dispatch({ type: 'SET_SEARCHING', value: false });
       return;
     }
+    // Same window as the Recent reset: close it before the re-render does.
+    relLoadingRef.current = true;
+    setRelLoading(true);
+    setRelExhausted(false);
     dispatch({ type: 'SET_SEARCHING', value: true });
-    api.search(state.repo, state.branch, state.freeText, path, 0, listFilters).then(r => {
+    api.search(state.repo, state.branch, state.freeText, path, 0, listFilters, { limit: PAGE_SIZE, offset: 0 }).then(r => {
       if (stale()) return;
       dispatch({ type: 'SET_SEARCHING', value: false });
-      const items: DirChild[] = (r.results || []).map(sr => ({
-        name: sr.path.split('/').pop() || sr.path,
-        is_dir: false,
-        title: sr.title,
-        type: sr.type,
-        fullPath: sr.path,
-      }));
+      const items = searchRows(r.results);
       setChildren(items);
+      setRelExhausted(items.length < PAGE_SIZE);
+      setRelLoading(false);
       const currentFactPath = staleStateRef.current.factPath;
       const matchIdx = items.findIndex(it => it.fullPath === currentFactPath);
       setSelectedIdx(matchIdx >= 0 ? matchIdx : items.length > 0 ? 0 : -1);
       if (matchIdx < 0 && items.length > 0 && items[0].fullPath) {
         dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
-    }).catch(() => { if (!stale()) { setChildren([]); dispatch({ type: 'SET_SEARCHING', value: false }); } });
+    }).catch(() => { if (!stale()) { setChildren([]); setRelLoading(false); dispatch({ type: 'SET_SEARCHING', value: false }); } });
   }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, isLens, state.sinceFork]);
 
   // ── Lens union list: api.listLensFacts (recent/path) or api.lensSearch
@@ -611,11 +637,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       dispatch({ type: 'SET_SEARCHING', value: true });
       // The lens search handler accepts the full content-filter set the repo
       // /search does (the facts handler does not) — forward path scope + chips.
-      api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }).then(results => {
+      // Paged like the union's Recent: the route ranks ONE fused list (as deep
+      // as the lens FactSet goes) and offset slices it.
+      api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }, { limit: PAGE_SIZE, offset: 0 }).then(results => {
         if (stale()) return;
         dispatch({ type: 'SET_SEARCHING', value: false });
         const rows = results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source }));
         setLensRows(rows);
+        setLensExhausted(rows.length < PAGE_SIZE);
         setLensLoading(false);
         openFirstRow(rows);
       }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); dispatch({ type: 'SET_SEARCHING', value: false }); } });
@@ -670,22 +699,39 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // doesn't reconnect on every loading-state flip (which would re-fire the
   // trigger and double-load). Defined after the lens union declarations so it
   // can page either list.
-  // A paged list shows the sentinel: repo Recent, or a lens union in a
-  // non-relevance sort (lensSearch results aren't paged; an empty scope has none).
+  // A paged list shows the sentinel: repo Recent and Relevance, and a lens
+  // union in Recent or Relevance (Path browse is unpaged; an empty scope has none).
   const paged = isLens
-    ? (effectiveSort !== 'relevance' && effectiveSort !== 'path' && !emptyScope && !lensExhausted)
-    : effectiveSort === 'recent';
+    ? (effectiveSort !== 'path' && !emptyScope && !lensExhausted)
+    : (effectiveSort === 'recent' || (effectiveSort === 'relevance' && !relExhausted));
   const loadMore = useCallback(() => {
     if (isLens) {
       // Lens union paging (I5): fetch the next offset with the SAME params
-      // (path/query/repos intersection) and append. Relevance/empty scopes and a
-      // fully-loaded union don't page.
-      if (effectiveSort === 'relevance' || effectiveSort === 'path' || emptyScope) return;
+      // (path/query/repos intersection) and append. Path browse, empty scopes
+      // and a fully-loaded union don't page.
+      if (effectiveSort === 'path' || emptyScope) return;
+      if (lensLoadingRef.current || lensExhausted) return;
+      if (effectiveSort === 'relevance') {
+        // The fused relevance list pages exactly as the union's Recent does:
+        // same generation snapshot, a short page is the end.
+        lensLoadingRef.current = true;
+        setLensLoading(true);
+        const gen = lensGenRef.current;
+        api.lensSearch(lensName, state.freeText, reposParam, { ...listFilters, path }, { limit: PAGE_SIZE, offset: lensRows.length })
+          .then(results => {
+            if (gen !== lensGenRef.current) return;
+            const page = results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source }));
+            setLensRows(prev => [...prev, ...page]);
+            if (page.length < PAGE_SIZE) setLensExhausted(true);
+            setLensLoading(false);
+          }).catch(() => { if (gen === lensGenRef.current) setLensLoading(false); });
+        return;
+      }
       // `lensExhausted` is the terminator, not `total`: with an overlapping
       // mount the count is an upper bound the row list can never reach, and the
       // sentinel would ask for empty pages forever. `total` is still checked —
       // it stops us one request EARLIER in the exact case (no mount truncated).
-      if (lensLoadingRef.current || lensExhausted || lensRows.length >= total) return;
+      if (lensRows.length >= total) return;
       // Close the double-fire window: the ref mirror only updates on re-render,
       // so a second observer tick before then would otherwise pass this guard
       // and double-load. Setting it synchronously blocks that.
@@ -711,6 +757,21 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         }).catch(() => { if (gen === lensGenRef.current) setLensLoading(false); });
       return;
     }
+    if (effectiveSort === 'relevance') {
+      // Same guards and generation snapshot as Recent; a short page is the end.
+      if (relLoadingRef.current || relExhausted) return;
+      relLoadingRef.current = true;
+      setRelLoading(true);
+      const gen = relGenRef.current;
+      api.search(state.repo, state.branch, state.freeText, path, 0, listFilters, { limit: PAGE_SIZE, offset: children.length }).then(r => {
+        if (gen !== relGenRef.current) return;
+        const page = searchRows(r.results);
+        setChildren(prev => [...prev, ...page]);
+        if (page.length < PAGE_SIZE) setRelExhausted(true);
+        setRelLoading(false);
+      }).catch(() => { if (gen === relGenRef.current) setRelLoading(false); });
+      return;
+    }
     if (effectiveSort !== 'recent') return;
     if (loadingRef.current || facts.length >= total) return;
     // Same double-fire window as the lens branch above: set it synchronously.
@@ -725,7 +786,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => { if (gen === recentGenRef.current) setLoading(false); });
-  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, listFilters]);
+  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, listFilters, relExhausted, children.length]);
 
   // The observer calls loadMore through a ref, and depends only on `paged`.
   // Depending on `loadMore` itself re-created the observer on every input to its
@@ -763,7 +824,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [paged]);
+    // effectiveSort and isLens: repo Recent and Relevance are both paged but
+    // mount different sentinels, so switching between them must observe the
+    // new element rather than the unmounted one.
+  }, [paged, effectiveSort, isLens]);
 
   // openFact is the fact-open chokepoint: it navigates with the RAW canonical
   // path (bare for the write repo, kb://<id12>/… for a read mount). It does NOT
@@ -1089,6 +1153,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
           />
         ))}
         {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
+        {!isLens && effectiveSort === 'relevance' && (
+          <>
+            {/* Infinite-scroll sentinel — the same mechanism as Recent: pages the
+                ranked list until a short page ends it. */}
+            <div ref={sentinelRef} data-testid="recent-sentinel" style={{ height: 1 }} />
+            {relLoading && children.length > 0 && <LoadingSpinner />}
+          </>
+        )}
         {!isLens && effectiveSort === 'recent' && (
           <>
             {facts.length === 0 && !loading && (
