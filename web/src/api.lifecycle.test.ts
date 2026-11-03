@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { api, streamCommit, readSSEStream, RepoIndexingError, statusFromBranchBody } from './api';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { api, streamCommit, streamApply, followRunEvents, RepoIndexingError, statusFromBranchBody } from './api';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 
 // The HTTP surface of the per-repo lifecycle machine (knomit#411): rebuilds
 // that are absorbed rather than refused, the index cancel, and the 409 "Repo
@@ -66,31 +67,110 @@ describe('the 409 "Repo is indexing" refusal', () => {
     expect(String(err)).toMatch(/disconnect → 409/);
   });
 
-  it('readSSEStream throws RepoIndexingError for it before any stream opens', async () => {
-    await expect(readSSEStream(respond(409, INDEXING_PROBLEM))).rejects.toBeInstanceOf(RepoIndexingError);
+  it('followRunEvents throws RepoIndexingError for it before any run starts', async () => {
+    await expect(followRunEvents(respond(409, INDEXING_PROBLEM))).rejects.toBeInstanceOf(RepoIndexingError);
   });
 
-  it('readSSEStream throws other pre-stream problems with their detail', async () => {
-    const err = await readSSEStream(respond(502, { title: 'Origin not attached', detail: 'origin was not attached: timeout' })).catch(e => e);
+  it('followRunEvents throws other pre-run problems with their detail', async () => {
+    const err = await followRunEvents(respond(502, { title: 'Origin not attached', detail: 'origin was not attached: timeout' })).catch(e => e);
     expect(err).not.toBeInstanceOf(RepoIndexingError);
     expect(err.message).toBe('origin was not attached: timeout');
   });
 });
 
-describe('streamCommit', () => {
-  const emptyStream = () => ({
-    ok: true, status: 200,
-    body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
+// knomit#509: apply and commit no longer stream on the POST. It answers 202
+// with a link to the run's events, which the client follows as an ordinary
+// event stream (openEventStream), so the Windows desktop gets them live.
+describe('following a started run', () => {
+  const EVENTS = '/api/v1/repos/kb/origin-sessions/s1/commit/events';
+  const accepted = (): Response => ({
+    ok: true, status: 202, statusText: 'Accepted',
+    headers: new Headers({ Location: EVENTS }),
+    json: async () => ({ session_id: 's1', run: 'commit', _links: { events: { href: EVENTS } } }),
   } as unknown as Response);
 
+  beforeEach(() => { installFakeEventSource(); FakeEventSource.emitReadyOnConnect = false; });
+  afterEach(() => { uninstallFakeEventSource(); });
+
+  // Lets the POST's json() and the stream's construction run.
+  const settle = () => new Promise(r => setTimeout(r, 0));
+
+  it('follows the events link, delivers every event, and resolves on done', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(accepted());
+    const seen: unknown[] = [];
+    let resolved = false;
+    const p = streamCommit('kb', 's1', e => seen.push(e)).then(() => { resolved = true; });
+    await settle();
+    const es = latestStream('/origin-sessions/s1/commit/events');
+    expect(es).toBeDefined();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // the POST only: the events are a stream, not a fetch
+    es!.emit('message', { phase: 'swapping' });
+    es!.emit('message', { phase: 'configuring' });
+    await settle();
+    expect(resolved).toBe(false);
+    es!.emit('message', { phase: 'done', index_state: 'ready' });
+    await p;
+    expect(seen).toEqual([{ phase: 'swapping' }, { phase: 'configuring' }, { phase: 'done', index_state: 'ready' }]);
+    expect(es!.closedByClient).toBe(true);
+  });
+
+  it('resolves on an error phase, which the caller reads from its events', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(accepted());
+    const seen: unknown[] = [];
+    const p = streamApply('kb', 's1', 'local_wins', undefined, e => seen.push(e));
+    await settle();
+    latestStream('/commit/events')!.emit('message', { phase: 'error', message: 'replay failed' });
+    await p;
+    expect(seen).toEqual([{ phase: 'error', message: 'replay failed' }]);
+  });
+
+  it('waits through a reconnect, and rejects when the stream is closed for good', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(accepted());
+    const p = streamCommit('kb', 's1', () => {});
+    await settle();
+    const es = latestStream('/commit/events')!;
+    es.readyState = FakeEventSource.CONNECTING;
+    es.emit('error');
+    let settled = false;
+    p.then(() => { settled = true; }, () => { settled = true; });
+    await settle();
+    expect(settled).toBe(false);
+    es.readyState = FakeEventSource.CLOSED;
+    es.emit('error');
+    await expect(p).rejects.toThrow(/lost the progress stream/);
+  });
+
+  it('rejects a 202 without a link', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 202, headers: new Headers(), json: async () => ({}) } as unknown as Response);
+    await expect(streamCommit('kb', 's1', () => {})).rejects.toThrow(/no link/);
+  });
+});
+
+describe('streamCommit', () => {
+  // The run ends at once: the fake stream says done as soon as it is opened.
+  const finishedRun = (): Response => ({
+    ok: true, status: 202,
+    headers: new Headers(),
+    json: async () => ({ _links: { events: { href: '/api/v1/repos/kb/origin-sessions/s1/commit/events' } } }),
+  } as unknown as Response);
+  const endEveryStream = () => {
+    const t = setInterval(() => {
+      for (const es of FakeEventSource.instances) es.emit('message', { phase: 'done' });
+    }, 1);
+    return () => clearInterval(t);
+  };
+  let stop = () => {};
+  beforeEach(() => { installFakeEventSource(); stop = endEveryStream(); });
+  afterEach(() => { stop(); uninstallFakeEventSource(); });
+
   it('POSTs with no body by default', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(emptyStream());
+    globalThis.fetch = vi.fn().mockResolvedValue(finishedRun());
     await streamCommit('kb', 's1', () => {});
     expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/origin-sessions\/s1\/commit$/), { method: 'POST' });
   });
 
   it('sends {"cancel_indexing": true} as JSON when asked to cancel indexing', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(emptyStream());
+    globalThis.fetch = vi.fn().mockResolvedValue(finishedRun());
     await streamCommit('kb', 's1', () => {}, { cancelIndexing: true });
     expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/origin-sessions\/s1\/commit$/), {
       method: 'POST',

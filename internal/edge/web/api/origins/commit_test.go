@@ -92,10 +92,11 @@ func newDisjointSession(t *testing.T, keyPath string) (*testServer, *repos.RepoI
 	return f.s, f.ri, f.sm, f.sess, f.remoteURL
 }
 
-// Returns the shared SSE recorder: /commit streams, and an SSE handler here
-// needs SetWriteDeadline as well as Flush — a bare ResponseRecorder has only
-// the latter, which sends the stream down its refuse-to-start path and reads
-// as an empty body rather than as an incomplete double.
+// Returns the shared SSE recorder of the commit's events GET (serveRun): an
+// SSE handler here needs SetWriteDeadline as well as Flush — a bare
+// ResponseRecorder has only the latter, which sends the stream down its
+// refuse-to-start path and reads as an empty body rather than as an
+// incomplete double. A refused POST comes back as its own recorder.
 func postCommit(t *testing.T, s *testServer, sessID string) *streamRecorder {
 	t.Helper()
 	return postCommitBody(t, s, sessID, "")
@@ -104,15 +105,13 @@ func postCommit(t *testing.T, s *testServer, sessID string) *streamRecorder {
 // postCommitBody is postCommit with a JSON body ("" for none).
 func postCommitBody(t *testing.T, s *testServer, sessID, body string) *streamRecorder {
 	t.Helper()
-	rec := newStreamRecorder()
 	var req *http.Request
 	if body == "" {
 		req = httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions/"+sessID+"/commit", nil)
 	} else {
 		req = newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions/"+sessID+"/commit", strings.NewReader(body))
 	}
-	s.ServeHTTP(rec, req)
-	return rec
+	return serveRun(t, s, req)
 }
 
 // TestHandleCommit_Disjoint_OriginPersistFailureAbortsTheSwap: the swap

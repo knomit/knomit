@@ -101,6 +101,8 @@ func TestRouter_OriginSessionsMountedInTheRepoGroup(t *testing.T) {
 		"DELETE /repos/{repo}/origin-sessions/{sessionID}",
 		"GET /repos/{repo}/origin-sessions/",
 		"GET /repos/{repo}/origin-sessions/{sessionID}",
+		"GET /repos/{repo}/origin-sessions/{sessionID}/apply/events",
+		"GET /repos/{repo}/origin-sessions/{sessionID}/commit/events",
 		"GET /repos/{repo}/origin-sessions/{sessionID}/preview",
 		"GET /repos/{repo}/origin-sessions/{sessionID}/test",
 		"POST /repos/{repo}/origin-sessions/",

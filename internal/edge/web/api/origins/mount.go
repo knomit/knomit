@@ -72,6 +72,10 @@ func routes(r chi.Router, rm *repos.Manager, agentBranch string, sm *sessionMana
 	r.Delete("/{sessionID}", handleDeleteSession(sm))
 	r.Get("/{sessionID}/test", handleTestConnectivity(rm, sm, agentBranch))
 	r.Get("/{sessionID}/preview", handlePreview(sm, agentBranch))
+	// apply and commit start a run and answer 202 with its events link; the
+	// GETs below are those links (RUNS in runs.go).
 	r.Post("/{sessionID}/apply", handleApply(sm, agentBranch))
+	r.Get("/{sessionID}/apply/events", handleRunEvents(sm, runApply))
 	r.Post("/{sessionID}/commit", handleCommit(rm, sm, agentBranch, admin))
+	r.Get("/{sessionID}/commit/events", handleRunEvents(sm, runCommit))
 }

@@ -600,24 +600,31 @@ type applyResult struct {
 	DanglingRefsDropped  int `json:"dangling_refs_dropped"`
 }
 
-// handleApply handles POST /api/v1/{repo}/origin/session/{sessionID}/apply
+// handleApply handles POST /api/v1/repos/{repo}/origin-sessions/{sessionID}/apply.
+//
+// It validates the request and refuses as a plain HTTP problem (404, 409, 400)
+// before anything starts; then it starts the apply as a run and answers 202
+// with the link to its events (RUNS in runs.go), which carry the phases the
+// POST used to stream itself: replaying (with current/total) or merging, then
+// done with the result, or error. The run holds the session's use until it
+// ends, and is cancelled if the session is dropped meanwhile.
 func handleApply(sm *sessionManager, agentBranch string) http.HandlerFunc {
+	b := hal.URLBuilder{Base: httpx.APIBase}
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
 
-		// The use pins the session's store and folder for this whole step
-		// (USE on originSession): a Delete, expiry or shutdown meanwhile
-		// finalizes it only when this handler returns.
-		sess, unuse, ok := sm.Use(r.Context(), repo, sessionID)
-		if ok {
-			defer unuse()
-		}
+		sess, l, unuse, ok := sm.beginRun(w, r, b, runApply)
 		if !ok {
-			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
-				"session not found", r.URL.Path)
 			return
 		}
+		started := false
+		defer func() {
+			if !started {
+				unuse()
+				sm.runs.drop(sessionID, l)
+			}
+		}()
 
 		sess.mu.Lock()
 		state := sess.State
@@ -663,119 +670,123 @@ func handleApply(sm *sessionManager, agentBranch string) http.HandlerFunc {
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		// Acquire pins the local store for the whole replay (see
-		// handleTestConnectivity); nil svc is rejected below before use.
-		var svc *store.Service
-		if s, release, err := ri.Acquire(); err == nil {
-			svc = s
-			defer release()
-		}
+		started = true
+		sm.startRun(w, r, b, sess, l, unuse, true, func(ctx context.Context, l *runLog) {
+			runApplyStep(ctx, l, ri, sess, repo, sessionID, agentBranch, strategy, remoteBranch, tr, remoteStore)
+		})
+	}
+}
 
-		sendEvent, ok := beginSSE(w)
-		if !ok {
+// runApplyStep is the apply's run: what handleApply streamed before #509.
+func runApplyStep(ctx context.Context, l *runLog, ri *repos.RepoInstance, sess *originSession, repo, sessionID, agentBranch string,
+	strategy merge.ConflictStrategy, remoteBranch string, tr connectivityResult, remoteStore *store.Service) {
+	// Acquire pins the local store for the whole replay (see
+	// handleTestConnectivity); nil svc is rejected below before use.
+	var svc *store.Service
+	if s, release, err := ri.Acquire(); err == nil {
+		svc = s
+		defer release()
+	}
+	sendEvent := func(v any) { l.event(v) }
+	if tr.History == "disjoint" {
+		sendEvent(map[string]string{"phase": "replaying"})
+
+		if svc == nil {
+			sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
 			return
 		}
 
-		if tr.History == "disjoint" {
-			sendEvent(map[string]string{"phase": "replaying"})
-
-			if svc == nil {
-				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
-				return
-			}
-
-			factsIter, err := svc.FactQuery().FactsIter(r.Context(), agentBranch)
-			if err != nil {
-				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
-				return
-			}
-
-			// Use the matched remote agent branch if found, otherwise our local agent branch name.
-			replayAgentBranch := tr.MatchedAgent
-			if replayAgentBranch == "" {
-				replayAgentBranch = agentBranch
-			}
-
-			cfg := store.ReplayConfig{
-				Strategy:          strategy,
-				AgentBranch:       replayAgentBranch,
-				DefaultBranch:     remoteBranch,
-				UseExistingBranch: tr.MatchedAgent != "",
-				// The clone is fully reindexed by IndexManager().Rebuild at commit
-				// time (handleCommit), so skip the per-fact index sync here — it
-				// would otherwise full-rebuild on the first write then incrementally
-				// re-sync for every remaining fact, all of it thrown away by Rebuild.
-				SkipIndexSync: true,
-				OnProgress: func(current, total int) {
-					sendEvent(map[string]any{
-						"phase":   "replaying",
-						"current": current,
-						"total":   total,
-					})
-				},
-			}
-
-			replayRes, err := store.Replay(r.Context(), svc, agentBranch, factsIter, remoteStore, cfg)
-			if err != nil {
-				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
-				sess.mu.Lock()
-				sess.State = stateError
-				sess.mu.Unlock()
-				return
-			}
-
-			result := applyResult{
-				TotalFacts:           replayRes.TotalFacts,
-				FromLocal:            replayRes.FromLocal,
-				FromRemote:           replayRes.FromRemote,
-				Overwrites:           replayRes.Overwrites,
-				RefsResolvedFromHist: replayRes.RefsResolvedFromHist,
-				DanglingRefsDropped:  replayRes.DanglingRefsDropped,
-			}
-
-			sendEvent(map[string]any{"phase": "done", "result": result})
-
-			sess.mu.Lock()
-			sess.State = stateApplied
-			sess.ApplyResult = result
-			sess.AppliedBranch = replayAgentBranch
-			sess.RemoteBranch = remoteBranch
-			sess.mu.Unlock()
-
-			log.Info().Str("repo", repo).Str("session_id", sessionID).
-				Int("total", result.TotalFacts).Int("from_local", result.FromLocal).
-				Int("from_remote", result.FromRemote).Int("overwrites", result.Overwrites).
-				Msg("apply completed (disjoint replay)")
-		} else {
-			// Shared history: simple merge path.
-			sendEvent(map[string]string{"phase": "merging"})
-
-			// For v1, shared history merge is a simplified path.
-			// TODO: implement full shared-history merge
-			result := applyResult{}
-			sendEvent(map[string]any{"phase": "done", "result": result})
-
-			// For shared history, the cloned store's HEAD is the remote's agent branch.
-			// Use the matched agent branch, or the first known remote agent branch,
-			// or fall back to localAgentBranch if none found.
-			sharedAppliedBranch := tr.MatchedAgent
-			if sharedAppliedBranch == "" && len(tr.AgentBranches) > 0 {
-				sharedAppliedBranch = tr.AgentBranches[0]
-			}
-			if sharedAppliedBranch == "" {
-				sharedAppliedBranch = agentBranch
-			}
-
-			sess.mu.Lock()
-			sess.State = stateApplied
-			sess.ApplyResult = result
-			sess.AppliedBranch = sharedAppliedBranch
-			sess.RemoteBranch = remoteBranch
-			sess.mu.Unlock()
-
-			log.Info().Str("repo", repo).Str("session_id", sessionID).
-				Msg("apply completed (shared merge)")
+		factsIter, err := svc.FactQuery().FactsIter(ctx, agentBranch)
+		if err != nil {
+			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
+			return
 		}
+
+		// Use the matched remote agent branch if found, otherwise our local agent branch name.
+		replayAgentBranch := tr.MatchedAgent
+		if replayAgentBranch == "" {
+			replayAgentBranch = agentBranch
+		}
+
+		cfg := store.ReplayConfig{
+			Strategy:          strategy,
+			AgentBranch:       replayAgentBranch,
+			DefaultBranch:     remoteBranch,
+			UseExistingBranch: tr.MatchedAgent != "",
+			// The clone is fully reindexed by IndexManager().Rebuild at commit
+			// time (handleCommit), so skip the per-fact index sync here — it
+			// would otherwise full-rebuild on the first write then incrementally
+			// re-sync for every remaining fact, all of it thrown away by Rebuild.
+			SkipIndexSync: true,
+			OnProgress: func(current, total int) {
+				sendEvent(map[string]any{
+					"phase":   "replaying",
+					"current": current,
+					"total":   total,
+				})
+			},
+		}
+
+		replayRes, err := store.Replay(ctx, svc, agentBranch, factsIter, remoteStore, cfg)
+		if err != nil {
+			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
+			sess.mu.Lock()
+			sess.State = stateError
+			sess.mu.Unlock()
+			return
+		}
+
+		result := applyResult{
+			TotalFacts:           replayRes.TotalFacts,
+			FromLocal:            replayRes.FromLocal,
+			FromRemote:           replayRes.FromRemote,
+			Overwrites:           replayRes.Overwrites,
+			RefsResolvedFromHist: replayRes.RefsResolvedFromHist,
+			DanglingRefsDropped:  replayRes.DanglingRefsDropped,
+		}
+
+		sendEvent(map[string]any{"phase": "done", "result": result})
+
+		sess.mu.Lock()
+		sess.State = stateApplied
+		sess.ApplyResult = result
+		sess.AppliedBranch = replayAgentBranch
+		sess.RemoteBranch = remoteBranch
+		sess.mu.Unlock()
+
+		log.Info().Str("repo", repo).Str("session_id", sessionID).
+			Int("total", result.TotalFacts).Int("from_local", result.FromLocal).
+			Int("from_remote", result.FromRemote).Int("overwrites", result.Overwrites).
+			Msg("apply completed (disjoint replay)")
+	} else {
+		// Shared history: simple merge path.
+		sendEvent(map[string]string{"phase": "merging"})
+
+		// For v1, shared history merge is a simplified path.
+		// TODO: implement full shared-history merge
+		result := applyResult{}
+		sendEvent(map[string]any{"phase": "done", "result": result})
+
+		// For shared history, the cloned store's HEAD is the remote's agent branch.
+		// Use the matched agent branch, or the first known remote agent branch,
+		// or fall back to localAgentBranch if none found.
+		sharedAppliedBranch := tr.MatchedAgent
+		if sharedAppliedBranch == "" && len(tr.AgentBranches) > 0 {
+			sharedAppliedBranch = tr.AgentBranches[0]
+		}
+		if sharedAppliedBranch == "" {
+			sharedAppliedBranch = agentBranch
+		}
+
+		sess.mu.Lock()
+		sess.State = stateApplied
+		sess.ApplyResult = result
+		sess.AppliedBranch = sharedAppliedBranch
+		sess.RemoteBranch = remoteBranch
+		sess.mu.Unlock()
+
+		log.Info().Str("repo", repo).Str("session_id", sessionID).
+			Msg("apply completed (shared merge)")
 	}
 }
 
@@ -807,8 +818,9 @@ func extractRefsFromFrontmatter(content string) []string {
 // beginSSE sets SSE headers on w and returns a sendEvent function.
 // Returns nil, false if streaming is not supported.
 //
-// Backed by sseStream, so all four flows that use it — test, preview, apply
-// and commit — get the bounded, error-checked write described in httpx/sse.go.
+// Backed by sseStream, so the two flows that stream on their own response —
+// test and preview — get the bounded, error-checked write described in
+// httpx/sse.go. (apply and commit log into a run instead: RUNS in runs.go.)
 //
 // sendEvent stays `func(v any)` with no result, deliberately. These handlers
 // thread it through long procedures (commitSharedHistory and friends) whose
@@ -893,23 +905,30 @@ type commitRequest struct {
 // A commit that links a stored secret (the session's secret_id), or that
 // replaces the origin of a repo linked to one (which unlinks it), needs
 // admin.
+//
+// Since #509 the POST does not stream: once the commit is under way (its
+// first phase) it answers 202 with the link to the run's events (RUNS in
+// runs.go), which carry the phases above. Every refusal above still comes
+// back on the POST. The run holds the session's use until it ends; it is NOT
+// cancelled when the session is dropped (a swap must not stop half-way), only
+// when the manager's lifetime ends.
 func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
+		b := hal.URLBuilder{Base: httpx.APIBase}
 
-		// The use pins the session's store and folder for this whole step
-		// (USE on originSession): a Delete, expiry or shutdown meanwhile
-		// finalizes it only when this handler returns.
-		sess, unuse, ok := sm.Use(r.Context(), repo, sessionID)
-		if ok {
-			defer unuse()
-		}
+		sess, l, unuse, ok := sm.beginRun(w, r, b, runCommit)
 		if !ok {
-			hal.WriteProblem(w, http.StatusNotFound, "Session not found",
-				"session not found", r.URL.Path)
 			return
 		}
+		started := false
+		defer func() {
+			if !started {
+				unuse()
+				sm.runs.drop(sessionID, l)
+			}
+		}()
 
 		var body commitRequest
 		if !httpx.DecodeOptionalJSON(w, r, &body, 0) {
@@ -938,7 +957,6 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		b := hal.URLBuilder{Base: httpx.APIBase}
 
 		replaceLink := false
 		if authCfg.SecretID != "" || repoLinked(rm, ri) {
@@ -1018,68 +1036,52 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 		sess.RemoteStore = nil
 		sess.mu.Unlock()
 
-		stream := &lazyStream{w: w}
-		if body.CancelIndexing {
-			if !stream.event(map[string]string{"phase": "cancelling-index"}) {
-				return
+		started = true
+		sm.startRun(w, r, b, sess, l, unuse, false, func(ctx context.Context, stream *runLog) {
+			if body.CancelIndexing {
+				stream.event(map[string]string{"phase": "cancelling-index"})
+				if _, err := rm.Send(ctx, ri, repos.CancelIndex()); err != nil {
+					stream.event(map[string]string{"phase": "error", "message": err.Error()})
+					return
+				}
 			}
-			if _, err := rm.Send(r.Context(), ri, repos.CancelIndex()); err != nil {
-				stream.event(map[string]string{"phase": "error", "message": err.Error()})
-				return
+			if attach {
+				if refusal, ok := streamLifecycle(ctx, rm, ri, stream, e); !ok {
+					if refusal != nil {
+						stream.refuse(func(w http.ResponseWriter, r *http.Request) {
+							writeCommitProblem(w, r, b, repo, refusal)
+						})
+					}
+					return
+				}
+			} else {
+				stream.event(map[string]string{"phase": "configuring"})
+				stream.event(map[string]any{"phase": "done", "index_state": ri.Status().Index.State,
+					"warning": "save remote config: " + model.ErrNoConsensusBranch.Error()})
 			}
-		}
-		if attach {
-			if !streamLifecycle(w, r, b, rm, ri, repo, stream, e) {
-				return
-			}
-		} else {
-			stream.event(map[string]string{"phase": "configuring"})
-			stream.event(map[string]any{"phase": "done", "index_state": ri.Status().Index.State,
-				"warning": "save remote config: " + model.ErrNoConsensusBranch.Error()})
-		}
 
-		sess.mu.Lock()
-		sess.State = stateCommitted
-		sess.mu.Unlock()
-		sm.Delete(repo, sessionID)
-		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).
-			Str("history", testResult.History).Msg("commit completed")
+			sess.mu.Lock()
+			sess.State = stateCommitted
+			sess.mu.Unlock()
+			// The session is done; its run's events outlive it (RUNS).
+			sm.Delete(repo, sessionID)
+			log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).
+				Str("history", testResult.History).Msg("commit completed")
+		})
 	}
 }
 
-// lazyStream is an SSE stream that opens on its first event, so a handler can
-// still answer with a plain HTTP problem until something has happened.
-type lazyStream struct {
-	w    http.ResponseWriter
-	send func(any)
-}
-
-func (s *lazyStream) opened() bool { return s.send != nil }
-
-// event opens the stream if needed and writes v; false when the response
-// cannot stream.
-func (s *lazyStream) event(v any) bool {
-	if s.send == nil {
-		send, ok := beginSSE(s.w)
-		if !ok {
-			return false
-		}
-		s.send = send
-	}
-	s.send(v)
-	return true
-}
-
-// streamLifecycle sends e to ri's machine and streams its transitions as
-// phases until the repo's index has left "indexing": swapping (the machine is
-// rewinding to Populate), configuring (Open, Identify), indexing with
-// current/total, then done (carrying index_state, and a warning carrying the
-// index's reason when it ended in error) or error with the event's own failure. A refusal that
-// arrives while the stream is still closed is answered as an HTTP problem.
-// It reports whether the event succeeded.
-func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, rm *repos.Manager,
-	ri *repos.RepoInstance, repo string, stream *lazyStream, e repos.MachineEvent) bool {
-	ctx, cancel := context.WithCancel(r.Context())
+// streamLifecycle sends e to ri's machine and narrates its transitions into
+// the run's log as phases until the repo's index has left "indexing":
+// swapping (the machine is rewinding to Populate), configuring (Open,
+// Identify), indexing with current/total, then done (carrying index_state,
+// and a warning carrying the index's reason when it ended in error) or error
+// with the event's own failure. It reports whether the event succeeded; a
+// refusal that changed nothing and arrived before any phase was logged is
+// returned instead, for the POST to answer as an HTTP problem.
+func streamLifecycle(ctx context.Context, rm *repos.Manager, ri *repos.RepoInstance, stream *runLog,
+	e repos.MachineEvent) (refusal error, ok bool) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watch := ri.Watch(ctx)
 
@@ -1130,12 +1132,11 @@ func streamLifecycle(w http.ResponseWriter, r *http.Request, b hal.URLBuilder, r
 		// A refusal changed nothing: still a plain HTTP problem while the
 		// stream is closed. Anything else failed after the machine had begun
 		// (a failed install, an unopenable store) and is a phase.
-		if !stream.opened() && isCommitRefusal(sendErr) {
-			writeCommitProblem(w, r, b, repo, sendErr)
-			return false
+		if !stream.isOpened() && isCommitRefusal(sendErr) {
+			return sendErr, false
 		}
 		stream.event(map[string]string{"phase": "error", "message": sendErr.Error()})
-		return false
+		return nil, false
 	}
 	// The watch is lossy (cap 1, latest wins) and the loop above may have left
 	// on done before reading its last value: take whatever is pending, without
@@ -1175,7 +1176,7 @@ drain:
 		doneEv["warning"] = "index: " + st.Index.Reason
 	}
 	stream.event(doneEv)
-	return true
+	return nil, true
 }
 
 // isCommitRefusal reports whether err is a refusal that changed nothing: the

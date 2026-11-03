@@ -790,17 +790,6 @@ function sessionBase(repo: string, sessionId: string) {
   return `${repoBase(repo)}/origin-sessions/${sessionId}`;
 }
 
-function parseSSELines(text: string): SSEEvent[] {
-  const events: SSEEvent[] = [];
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('data: ')) {
-      try { events.push(JSON.parse(trimmed.slice(6))); } catch {}
-    }
-  }
-  return events;
-}
-
 // errorText pulls the human-readable message out of an error body. The API
 // emits RFC 9457 problem+json everywhere, so `detail` is the message and
 // `title` is the class; `error` remains as a fallback for any body that
@@ -880,31 +869,6 @@ function repoIndexingError(status: number, body: unknown): RepoIndexingError | n
   if (status !== 409) return null;
   const href = (body as { _links?: { 'cancel-index'?: { href?: string } } } | null)?._links?.['cancel-index']?.href;
   return href ? new RepoIndexingError(errorText(body, 'Repo is indexing'), href) : null;
-}
-
-export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    throw repoIndexingError(res.status, err) ?? new Error(errorText(err, res.statusText));
-  }
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    // Only the bytes up to the last newline form complete lines; everything
-    // after is a partial line that must be retained for the next chunk. A chunk
-    // with no newline at all is entirely partial — keep the whole buffer (the
-    // old code wiped it here, silently dropping any event split across reads).
-    const nl = buf.lastIndexOf('\n');
-    if (nl < 0) continue;
-    for (const ev of parseSSELines(buf.slice(0, nl + 1))) onEvent?.(ev);
-    buf = buf.slice(nl + 1);
-  }
-  // Flush a trailing complete line that lacked a final newline.
-  for (const ev of parseSSELines(buf)) onEvent?.(ev);
 }
 
 /**
@@ -1123,6 +1087,51 @@ export function streamPreview(repo: string, sessionId: string, onEvent: (e: SSEE
   return () => es.close();
 }
 
+// followRunEvents follows a started apply or commit (knomit#509). Their POST
+// does not stream: it answers 202 with a link to the run's events (HAL
+// `_links.events`, also the Location header), and this reads that link as an
+// ordinary event stream through openEventStream. That is what makes the
+// progress live on the Windows desktop, whose asset handler holds a streamed
+// POST response until it ends while GET event streams ride a Wails Stream.
+//
+// A refusal before the run started (409 "Repo is indexing" and the rest)
+// arrives on the POST as a problem and is thrown here, as the streamed POST did before.
+// Every event goes to onEvent; the promise resolves after the run's terminal
+// event (done or error, which callers read from onEvent, as before), and
+// rejects if the event stream is refused or closed for good before one. A
+// dropped connection reconnects on its own and the server resumes after the
+// last event id, so no event is delivered twice.
+export async function followRunEvents(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    throw repoIndexingError(res.status, err) ?? new Error(errorText(err, res.statusText));
+  }
+  const body = await res.json().catch(() => null) as { _links?: { events?: { href?: string } } } | null;
+  const href = body?._links?.events?.href ?? res.headers?.get('Location') ?? '';
+  if (!href) throw new Error('the server started the run but sent no link to its progress');
+  await new Promise<void>((resolve, reject) => {
+    const es = openEventStream(apiUrl(href));
+    let ended = false;
+    const end = (err?: Error) => {
+      if (ended) return;
+      ended = true;
+      es.close();
+      if (err) reject(err); else resolve();
+    };
+    es.addEventListener('message', (e) => {
+      let ev: SSEEvent;
+      try { ev = JSON.parse(e.data); } catch { return; }
+      onEvent?.(ev);
+      if (ev.phase === 'done' || ev.phase === 'error') end();
+    });
+    es.addEventListener('error', (e) => {
+      // CONNECTING: EventSource (or the desktop's adapter) is reconnecting and
+      // the server resumes after Last-Event-ID. CLOSED: refused or gone.
+      if (es.readyState === 2) end(new Error('lost the progress stream' + streamErrorSuffix(e)));
+    });
+  });
+}
+
 export async function streamApply(repo: string, sessionId: string, strategy: string, branch?: string, onEvent?: (e: SSEEvent) => void): Promise<void> {
   const body: Record<string, string> = { conflict_strategy: strategy };
   if (branch) body.branch = branch;
@@ -1131,14 +1140,14 @@ export async function streamApply(repo: string, sessionId: string, strategy: str
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  await readSSEStream(res, onEvent);
+  await followRunEvents(res, onEvent);
 }
 
 // streamCommit swaps the session's store in. It can be refused BEFORE the
-// stream opens, as an ordinary problem response — 409 "Repo is indexing"
-// (thrown as RepoIndexingError), 409 "Different knowledge base", 409
-// "Knowledge base already local", 502 "Origin not attached", 400 — and
-// readSSEStream throws each with its detail.
+// run starts, as an ordinary problem response on the POST — 409 "Repo is
+// indexing" (thrown as RepoIndexingError), 409 "Different knowledge base",
+// 409 "Knowledge base already local", 502 "Origin not attached", 400 — and
+// followRunEvents throws each with its detail.
 //
 // cancelIndexing is the way through the indexing refusal: the server cancels
 // the repo's index job first, streaming "cancelling-index" before the swap.
@@ -1152,7 +1161,7 @@ export async function streamCommit(repo: string, sessionId: string, onEvent: (e:
       ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel_indexing: true }) }
       : { method: 'POST' };
   const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, init);
-  await readSSEStream(res, onEvent);
+  await followRunEvents(res, onEvent);
 }
 
 export function deleteSession(repo: string, sessionId: string): Promise<void> {

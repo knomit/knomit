@@ -113,6 +113,12 @@ func (b URLBuilder) OriginSession(repo, sessionID string) string {
 	return b.OriginSessions(repo) + "/" + sessionID
 }
 
+// OriginSessionRunEvents returns the event stream of a session's apply or
+// commit run (run is "apply" or "commit"): the link their POST answers 202 with.
+func (b URLBuilder) OriginSessionRunEvents(repo, sessionID, run string) string {
+	return b.OriginSession(repo, sessionID) + "/" + run + "/events"
+}
+
 // Sessions returns the client-session collection URL. Global, not repo- or
 // lens-scoped: sessions cut across both.
 func (b URLBuilder) Sessions() string { return b.Base + "/sessions" }

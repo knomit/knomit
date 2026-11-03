@@ -1,10 +1,15 @@
 package web
 
 import (
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"knomit/internal/edge/web/httpx"
 )
 
 // Shared SSE test double. Every stream handler in this package is exercised
@@ -117,3 +122,40 @@ func (s *streamRecorder) waitFor(t *testing.T, what string, cond func(string) bo
 		}
 	}
 }
+
+// followRunEvents completes an origin-session /apply or /commit POST the way
+// the page does since #509: when post answered 202, it GETs the run's events
+// link (the body's _links.events) through serve, with a streamRecorder, and
+// returns that recorder: status 200 and the run's whole event stream, which
+// is what the POST itself answered before. The GET ends with the run, so the
+// session's next step finds it finished. A POST that did not answer 202 (a
+// refusal) is returned unchanged.
+//
+// serve gets the link as the server wrote it (/api/v1/...); a caller driving
+// NewAPIRouter, which has no /api/v1 prefix, strips it.
+func followRunEvents(t *testing.T, post *httptest.ResponseRecorder, serve func(href string, rec *streamRecorder)) *httptest.ResponseRecorder {
+	t.Helper()
+	if post.Code != http.StatusAccepted {
+		return post
+	}
+	var body struct {
+		Links map[string]struct {
+			Href string `json:"href"`
+		} `json:"_links"`
+	}
+	if err := json.Unmarshal(post.Body.Bytes(), &body); err != nil || body.Links["events"].Href == "" {
+		t.Fatalf("202 without an events link: %v; body=%s", err, post.Body.String())
+	}
+	href := body.Links["events"].Href
+	if loc := post.Header().Get("Location"); loc != href {
+		t.Fatalf("202 Location %q differs from its events link %q", loc, href)
+	}
+	rec := newStreamRecorder()
+	serve(href, rec)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return rec.ResponseRecorder
+}
+
+// stripAPIBase turns an /api/v1 link into the path NewAPIRouter serves.
+func stripAPIBase(href string) string { return strings.TrimPrefix(href, httpx.APIBase) }
