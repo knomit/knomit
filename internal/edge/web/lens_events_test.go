@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
+	"knomit/internal/foundation/auth"
 )
 
 // lensEventStream is an open GET /lenses/{lens}/events, read frame by frame.
@@ -212,4 +217,156 @@ func TestLensEvents_UnknownParamIs400(t *testing.T) {
 	env.r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lenses/eng/events?since=1", nil))
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `unknown parameter \"since\"`)
+}
+
+// A member PINNED to a branch other than its read branch is covered: the
+// store syncs the committed branch on every commit (NotifyCommit), the repo's
+// status event fires, and the pinned branch's settled watermark moves. (The
+// review's probe: a notice within ~1.4s for a member pinned to agent/side.)
+//
+// Sabotage: watch each member at its read branch instead of the pinned one,
+// and the agent/side write produces no notice.
+func TestLensEvents_PinnedBranchMemberIsCovered(t *testing.T) {
+	emb := &cosEmbedder{}
+	m, _ := newTestLensManagerWith(t, emb, "alpha", "beta")
+	beta := m.Get("beta")
+	ctx := context.Background()
+	require.NoError(t, beta.WithRead(func(svc *store.Service) {
+		require.NoError(t, svc.CreateBranch(ctx, "agent/side", beta.ReadBranch()))
+	}))
+	r := (&Server{Manager: m, Embedder: emb}).NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta","branch":"agent/side"}]}`)
+	s := openLensEvents(t, r, "eng")
+	s.none(t, 200*time.Millisecond)
+
+	require.NoError(t, beta.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(ctx, "agent/side", "kb/b/pinned.md", factText(t, "kb/b/pinned.md", "pinned", 0.9, nil), "pinned", "learn")
+		require.NoError(t, err)
+	}))
+	f := s.next(t, 10*time.Second)
+	var ev struct{ Repo, Branch, Head string }
+	require.NoError(t, json.Unmarshal([]byte(f.data), &ev))
+	require.Equal(t, "beta", ev.Repo)
+	require.Equal(t, "agent/side", ev.Branch)
+	require.NoError(t, beta.WithRead(func(svc *store.Service) {
+		wm, _, settled, err := svc.HistoryQuery().SettledWatermark(ctx, "agent/side")
+		require.NoError(t, err)
+		require.True(t, settled)
+		require.Equal(t, wm, ev.Head)
+	}))
+}
+
+// L1 (#749 review): the middleware reads the lens BEFORE the handler takes
+// LensRegistry.Changed, so an edit in between closes no channel the stream
+// holds. The handler reads the lens again after taking it, and a membership
+// that differs from the binding ends the stream at once. Driven with a binding
+// resolved before the edit, as the race would leave it.
+//
+// Sabotage: skip the re-read (lensReadsMatch) and the stale stream stays open.
+func TestLensEvents_StaleBindingEndsTheStream(t *testing.T) {
+	env := searchLens(t, "alpha", "beta", "gamma")
+	staleCtx, err := repos.ResolveLensBinding(auth.WithPrincipal(context.Background(), auth.Principal{Kind: auth.KindHost, ID: "t"}), env.m, "eng")
+	require.NoError(t, err)
+	rec := patchLens(t, env.m, env.r, "eng", `{"reads":[{"repo":"beta"}]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	br, lens := chi.NewRouter(), chi.NewRouter()
+	lens.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(repos.WithRepoInstance(repos.WithBinding(r.Context(), repos.BindingFromContext(staleCtx)), repos.BindingFromContext(staleCtx).Write())))
+		})
+	})
+	kb.Mount(br, lens, "kb", env.emb, env.m)
+	srv := httptest.NewServer(lens)
+	t.Cleanup(srv.Close)
+	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, srv.URL+"/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "the stale stream must end on its own, not hang until the deadline")
+	defer resp.Body.Close()
+	done := make(chan error, 1)
+	go func() { _, err := bufio.NewReader(resp.Body).ReadString(0); done <- err }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a stream opened on a stale binding did not end")
+	}
+}
+
+// failSettled makes ri's SettledWatermark reads fail while on is set: what a
+// Rebuild holding the branch unsettled looks like to the stream ("" head).
+func failSettled(t *testing.T, ri *repos.RepoInstance, on *atomicBool) {
+	t.Helper()
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		restore := svc.Search().SetOverridesForTest(index.Overrides{Reads: func(method string) error {
+			if method == "SettledWatermark" && on.get() {
+				return errors.New("held by a rebuild")
+			}
+			return nil
+		}})
+		t.Cleanup(restore)
+	}))
+}
+
+type atomicBool struct {
+	mu sync.Mutex
+	v  bool
+}
+
+func (b *atomicBool) set(v bool) { b.mu.Lock(); b.v = v; b.mu.Unlock() }
+func (b *atomicBool) get() bool  { b.mu.Lock(); defer b.mu.Unlock(); return b.v }
+
+// L3 (#749 review): a member whose head cannot be read settled when its
+// status event arrives (a Rebuild holds the branch) stays DIRTY: its notice
+// goes out on the next wake, here the write repo's own status event.
+//
+// Sabotage: clear the dirty mark when the head is "" and beta's notice is
+// lost: only alpha's arrives.
+func TestLensEvents_UnsettledMemberStaysDirty(t *testing.T) {
+	env := searchLens(t, "alpha", "beta")
+	s := openLensEvents(t, env.r, "eng")
+	s.none(t, 200*time.Millisecond)
+	var held atomicBool
+	failSettled(t, env.m.Get("beta"), &held)
+	held.set(true)
+	writeFactsInOneCommit(t, env.m.Get("beta"), factSpec{path: "kb/b/held.md", title: "held"})
+	s.none(t, quietWindow) // the status event came and went: nothing readable yet
+	held.set(false)
+	writeFactsInOneCommit(t, env.m.Get("alpha"), factSpec{path: "kb/a/wake.md", title: "wake"})
+	got := map[string]bool{}
+	for len(got) < 2 {
+		f := s.next(t, 10*time.Second)
+		var ev struct{ Repo string }
+		require.NoError(t, json.Unmarshal([]byte(f.data), &ev))
+		got[ev.Repo] = true
+	}
+	require.True(t, got["beta"], "the held member's notice was kept, not lost")
+}
+
+// L3 (#749 review): an index job finishing (IndexEvent "ready") is a wake too,
+// so a held member's notice goes out when its Rebuild ends even if nothing
+// else ever commits.
+//
+// Sabotage: ignore IndexEvent and the notice never comes.
+func TestLensEvents_IndexReadyWakesAHeldMember(t *testing.T) {
+	env := searchLens(t, "alpha", "beta")
+	s := openLensEvents(t, env.r, "eng")
+	s.none(t, 200*time.Millisecond)
+	beta := env.m.Get("beta")
+	var held atomicBool
+	failSettled(t, beta, &held)
+	held.set(true)
+	writeFactsInOneCommit(t, beta, factSpec{path: "kb/b/held.md", title: "held"})
+	s.none(t, quietWindow)
+	held.set(false)
+	rec := httptest.NewRecorder()
+	env.r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/beta/branches/"+strings.ReplaceAll(beta.ReadBranch(), "/", ":")+"/index-rebuilds", nil)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	f := s.next(t, 20*time.Second)
+	var ev struct{ Repo string }
+	require.NoError(t, json.Unmarshal([]byte(f.data), &ev))
+	require.Equal(t, "beta", ev.Repo)
 }

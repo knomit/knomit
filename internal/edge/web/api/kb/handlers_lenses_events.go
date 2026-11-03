@@ -34,9 +34,10 @@ type lensEventMember struct {
 }
 
 // settledHead is the member branch's index watermark, or "" when the index is
-// not settled at it (a sync is rewriting the branch's rows) or the store
-// cannot be read. "" never produces a notice: the sync in progress publishes
-// its own status when it completes, and that pass reports the new head.
+// not settled at it (a sync or a Rebuild is rewriting the branch's rows) or
+// the store cannot be read. "" never produces a notice and never clears the
+// member's dirty mark: it is re-checked on the next wake, which a completed
+// sync (status event) or a finished index job (index event "ready") sends.
 func (m *lensEventMember) settledHead(ctx context.Context) string {
 	head := ""
 	_ = m.ri.WithRead(func(svc *store.Service) {
@@ -55,11 +56,14 @@ func (m *lensEventMember) settledHead(ctx context.Context) string {
 // member whose CONTENT changed, and nothing else (no status, task, index,
 // sync or log events).
 //
-//   - WHEN: after the member's index has absorbed the commit. The trigger is
-//     the member's TaskHub StatusEvent, which the commit observer publishes
-//     only after IndexManager().SyncLocked returns; the head sent is the
-//     branch's SETTLED index watermark (HistoryQuery.SettledWatermark), so a
-//     read issued on the notice sees the change.
+//   - WHEN: after the member's index has absorbed the commit. The triggers
+//     are the member's TaskHub StatusEvent, which the commit observer
+//     publishes only after its index sync returns, and an IndexEvent in state
+//     "ready" (an index job finished). The store also syncs the committed
+//     branch itself on every commit (NotifyCommit), so a member pinned to a
+//     non-read branch is covered too. The head sent is the branch's SETTLED
+//     index watermark (HistoryQuery.SettledWatermark), so a read issued on
+//     the notice sees the change.
 //   - WHICH BRANCH: each member at the branch the lens binding resolved for it
 //     (reads[].branch, or the repo's read branch), the write repo included.
 //   - COALESCING: per member, without timers. A status event only marks the
@@ -69,7 +73,9 @@ func (m *lensEventMember) settledHead(ctx context.Context) string {
 //     notice per member carrying the latest head, however many commits it
 //     held, and a slow client never queues more than one pending wake.
 //   - MEMBERSHIP: the stream serves the membership resolved at connect, and
-//     ENDS when any lens changes (LensRegistry.Changed closes on every
+//     ENDS when it is stale: at once when the lens read now differs from the
+//     binding the middleware resolved (an edit between the two reads), and
+//     later when any lens changes (LensRegistry.Changed closes on every
 //     committed Update/Rename/Delete). The client's EventSource
 //     reconnects onto the new membership and refreshes once on reopen.
 //   - NO Last-Event-ID: like every other stream here, events carry no id and
@@ -82,14 +88,20 @@ func handleHALLensEvents(mgr *repos.Manager) http.HandlerFunc {
 		}
 		b := repos.BindingFromContext(r.Context())
 		var changed <-chan struct{}
+		stale := false
 		if mgr != nil {
 			if reg := mgr.LensRegistry(); reg != nil {
 				changed = reg.Changed()
+				// The middleware read the lens BEFORE Changed was taken, so an
+				// edit in between would close no channel this stream holds.
+				// Read it again now: a membership that differs from the binding
+				// ends the stream at once, and the client reconnects onto it.
+				stale = !lensReadsMatch(mgr, b)
 			}
 		}
 
 		stream, ok := httpx.StartSSE(w)
-		if !ok {
+		if !ok || stale {
 			return
 		}
 		ctx := r.Context()
@@ -132,7 +144,15 @@ func handleHALLensEvents(mgr *repos.Manager) http.HandlerFunc {
 						if !ok {
 							return
 						}
-						if _, isStatus := e.(events.StatusEvent); !isStatus {
+						switch ev := e.(type) {
+						case events.StatusEvent:
+						case events.IndexEvent:
+							// An index job (a Rebuild) finished: a head held
+							// unsettled by it can be read now.
+							if ev.State != events.IndexStateReady {
+								continue
+							}
+						default:
 							continue
 						}
 						mu.Lock()
@@ -177,7 +197,15 @@ func handleHALLensEvents(mgr *repos.Manager) http.HandlerFunc {
 				for _, i := range due {
 					m := members[i]
 					head := m.settledHead(ctx)
-					if head == "" || head == m.last {
+					if head == "" {
+						// Not settled (a sync or a Rebuild holds the branch):
+						// keep it dirty for the next wake rather than lose it.
+						mu.Lock()
+						dirty[i] = true
+						mu.Unlock()
+						continue
+					}
+					if head == m.last {
 						continue
 					}
 					m.last = head
@@ -195,4 +223,41 @@ func handleHALLensEvents(mgr *repos.Manager) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// lensReadsMatch reports whether the lens as stored NOW has the membership the
+// binding was resolved with: the same (repo, branch) read targets. A lens that
+// is gone, or cannot be read, does not match.
+func lensReadsMatch(mgr *repos.Manager, b *repos.Binding) bool {
+	reg := mgr.LensRegistry()
+	if reg == nil {
+		return true
+	}
+	l, ok, err := reg.Get(b.Name())
+	if err != nil || !ok {
+		return false
+	}
+	now, err := repos.NewBindingOfLens(mgr, l)
+	if err != nil {
+		return false
+	}
+	targets := func(bb *repos.Binding) map[string]bool {
+		out := map[string]bool{}
+		for _, t := range bb.Reads() {
+			if t.RI != nil {
+				out[t.RI.ID()+"\x00"+t.Branch] = true
+			}
+		}
+		return out
+	}
+	a, c := targets(b), targets(now)
+	if len(a) != len(c) {
+		return false
+	}
+	for k := range a {
+		if !c[k] {
+			return false
+		}
+	}
+	return true
 }
