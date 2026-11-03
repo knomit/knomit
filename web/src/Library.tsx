@@ -18,6 +18,8 @@ import { useMotifClusters } from './useMotifClusters';
 import { motifEndpointOf } from './motifEndpoint';
 import { factSubject, subjectSummary } from './motifSubject';
 import type { NavRequest } from './useNavigationManager';
+import { beginFullLoad, captureAnchor, isRendered, newRefreshState, restoreAnchor, runRefresh, sentinelInView } from './listRefresh';
+import type { RefreshState, ScrollAnchor } from './listRefresh';
 
 type RowItem = { name: string; fullPath: string; is_dir: boolean };
 
@@ -117,6 +119,7 @@ const EntryRow = memo(function EntryRow({
       data-name={name}
       data-isdir={String(isDir)}
       data-path={path}
+      data-selected={selected || undefined}
       title={clamped ? fullTitle : undefined}
       aria-label={clamped ? fullTitle : undefined}
       ref={setRef}
@@ -199,6 +202,7 @@ const LensFactRow = memo(function LensFactRow({
     <div
       data-testid="lens-item"
       data-path={row.path}
+      data-selected={selected || undefined}
       ref={setRef}
       onClick={onClick}
       style={{
@@ -238,6 +242,7 @@ const ChronoRow = memo(function ChronoRow({
     <div
       data-testid="chrono-item"
       data-path={fact.path}
+      data-selected={selected || undefined}
       onClick={onClick}
       style={selected ? factRowSelected : factRow}
     >
@@ -294,6 +299,21 @@ function ReadOnlyBanner({ message }: { message: string }) {
       </span>
     </div>
   );
+}
+
+/** The head a list was last loaded at, under which scope. */
+interface LoadedAt { scope: string; head: string }
+
+/**
+ * sameScopeNewHead reports whether this run of a list effect is ONLY a new
+ * head (the scope, everything else the list depends on, unchanged), and
+ * records the run. A new head alone keeps the reader's place (listRefresh.ts);
+ * any other change is a new list, loaded from page 1.
+ */
+function sameScopeNewHead(ref: { current: LoadedAt | null }, scope: string, head: string): boolean {
+  const prev = ref.current;
+  ref.current = { scope, head };
+  return !!prev && prev.scope === scope && prev.head !== head;
 }
 
 /** A relevance page's rows as the list's entries. */
@@ -354,18 +374,65 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
 
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
+  // ── Keeping the reader's place on a new head (user ruling 2026-11-03,
+  // option b; listRefresh.ts). When an agent's write moves the head while the
+  // reader is in a Recent or relevance list (repo or lens), the list re-reads
+  // the rows already loaded, quietly: no reset, no spinner, no AMEND_NAV. The
+  // open fact stays open, the selected row stays selected BY PATH, and the
+  // scroll is re-anchored on the row the reader was looking at. ──
+  const selectedIdxRef = useRef(selectedIdx);
+  selectedIdxRef.current = selectedIdx;
+  // The rows on screen, by path (set once activeList is computed below).
+  const activeListRef = useRef<RowItem[]>([]);
+  // The anchor captured just before refreshed rows are applied; the layout
+  // effect after activeList re-anchors on it once, or, while the list is
+  // hidden (the FactSet view holds Focus), the ResizeObserver does when it
+  // shows again.
+  const pendingAnchor = useRef<ScrollAnchor | null>(null);
+  // The last anchor read while the list was on screen: what a refresh that
+  // lands while the list is hidden anchors on (a hidden list has no rects).
+  const lastAnchor = useRef<ScrollAnchor | null>(null);
+  // Per-list refresh state (listRefresh.ts): scope generation, page-1-landed,
+  // one refresh in flight with trailing-edge coalescing, a blocked loadMore.
+  const recentRs = useRef<RefreshState>(newRefreshState());
+  const relRs = useRef<RefreshState>(newRefreshState());
+  const lensRs = useRef<RefreshState>(newRefreshState());
+  const refreshing = () => recentRs.current.inFlight || relRs.current.inFlight || lensRs.current.inFlight;
+  const selectedPathNow = () => activeListRef.current[selectedIdxRef.current]?.fullPath || undefined;
+  // The row the reader's place hangs on: the selected row if on screen, else
+  // the top visible row; the last place seen while the list is hidden.
+  const anchorPathNow = () => {
+    const el = containerRef.current;
+    if (el && isRendered(el)) return captureAnchor(el, selectedPathNow())?.path ?? selectedPathNow();
+    return lastAnchor.current?.path ?? selectedPathNow();
+  };
+  // Capture where the reader is, for the layout effect to re-anchor on after
+  // the new rows render. A hidden list (display:none under the FactSet's
+  // Focus) has no rects: the last place read on screen stands in.
+  const capturePlace = () => {
+    const el = containerRef.current;
+    pendingAnchor.current = el && isRendered(el) ? captureAnchor(el, selectedPathNow()) : lastAnchor.current;
+  };
+  // Path browse's own head-only record (the tree keeps its place too).
+  const pathAtRef = useRef<LoadedAt | null>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // ── Path sort: api.browse for directory entries ──
   useAsync((stale) => {
-    if (isLens) return; // lens context reads via the lens effect below
-    if (effectiveSort !== 'path') return;
+    if (isLens || effectiveSort !== 'path') { pathAtRef.current = null; return; } // lens context reads via the lens effect below
+    // A new head alone re-reads the folder in place: the rows are replaced
+    // (never cleared) and the reader's row is re-anchored, as in the paged
+    // lists. The scroll memory's restore would otherwise put back the old
+    // scrollTop over rows that moved.
+    const headOnly = sameScopeNewHead(pathAtRef,
+      [path, state.repo, state.branch, state.ontologyRoot, state.factPath].join('\u0001'), state.headCommit);
     api.browse(state.repo, state.branch, path, state.ontologyRoot).then(r => {
       if (stale()) return;
       const c = (r.children || []).slice().sort((a, b) => {
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+      if (headOnly) capturePlace();
       setChildren(c);
       if (state.factPath) {
         const factName = state.factPath.split('/').pop();
@@ -456,14 +523,45 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // effect below bumps it, and a paged loadMore drops a response whose
   // generation has moved on (knomit#275).
   const recentGenRef = useRef(0);
+  const recentAtRef = useRef<LoadedAt | null>(null);
+  const factsRef = useRef(facts);
+  factsRef.current = facts;
+  /**
+   * keepPlace is called with a refreshed list's paths just before its rows
+   * are applied: it captures where the reader is (the selected row if on
+   * screen, else the top row on screen) for the layout effect to re-anchor,
+   * and moves the selection to the selected row's NEW index, by path. A
+   * selected row that is gone (deleted, or no longer matching) leaves nothing
+   * selected; the open fact stays open (nothing navigates) and the scroll
+   * anchors on its nearest surviving neighbour.
+   */
+  const keepPlace = (paths: string[]) => {
+    const selectedPath = selectedPathNow();
+    capturePlace();
+    setSelectedIdx(selectedPath ? paths.indexOf(selectedPath) : -1);
+  };
   useAsync((stale) => {
     // A fresh scope invalidates any paged loadMore still in flight. Bumped
     // BEFORE the early returns, so leaving Recent (another sort, or a lens)
     // drops an in-flight page too rather than appending it to a list nobody
     // is paging.
     recentGenRef.current += 1;
-    if (isLens) return; // lens context reads via the lens effect below
-    if (effectiveSort !== 'recent') return;
+    const rs = recentRs.current;
+    if (isLens || effectiveSort !== 'recent') { recentAtRef.current = null; beginFullLoad(rs); return; } // lens context reads via the lens effect below
+    const scope = [path, state.freeText, state.repo, state.branch, filtersKey, state.sinceFork].join('\u0001');
+    // Keep the place only once THIS scope's page 1 has landed (rs.loaded): a
+    // head while page 1 is in flight is a fresh load, whatever rows are held.
+    // An EMPTY landed list has no place to keep and nothing to re-read (a
+    // refresh of 0 rows would read nothing): a new head reloads it from page 1.
+    if (sameScopeNewHead(recentAtRef, scope, state.headCommit) && rs.loaded && factsRef.current.length > 0) {
+      runRefresh<RecentFactEntry>(rs, factsRef.current.map(f => f.path), f => f.path, anchorPathNow,
+        (offset, limit) => api.recent(state.repo, state.branch, path, state.freeText, limit, offset, listFilters)
+          .then(r => ({ rows: r.facts || [], total: r.total })),
+        r => { keepPlace(r.rows.map(f => f.path)); setFacts(r.rows); setTotal(r.total); setLoading(false); },
+        () => setLoading(false));
+      return;
+    }
+    const gen = beginFullLoad(rs);
     // Synchronously, beside setLoading: loadingRef is otherwise mirrored only
     // on the next render, and until then loadMoreRef holds a closure with this
     // scope's filters and the OLD row count. A sentinel tick in that window
@@ -475,6 +573,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     setTotal(0);
     api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, 0, listFilters).then(r => {
       if (stale()) return;
+      if (gen === rs.gen) rs.loaded = true;
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
@@ -510,15 +609,33 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const [relExhausted, setRelExhausted] = useState(false);
   // Scope generation for the relevance list, the counterpart of recentGenRef.
   const relGenRef = useRef(0);
+  const relAtRef = useRef<LoadedAt | null>(null);
+  const childrenRef = useRef(children);
+  childrenRef.current = children;
   useAsync((stale) => {
     // A fresh scope invalidates any paged loadMore still in flight. Bumped
     // before the early returns, as for Recent.
     relGenRef.current += 1;
-    if (isLens) return; // lens context reads via the lens effect below
+    const rs = relRs.current;
+    if (isLens) { relAtRef.current = null; beginFullLoad(rs); return; } // lens context reads via the lens effect below
     if (effectiveSort !== 'relevance') {
+      relAtRef.current = null;
+      beginFullLoad(rs);
       dispatch({ type: 'SET_SEARCHING', value: false });
       return;
     }
+    const scope = [path, state.freeText, state.repo, state.branch, filtersKey, state.sinceFork].join('\u0001');
+    if (sameScopeNewHead(relAtRef, scope, state.headCommit) && rs.loaded && childrenRef.current.length > 0) {
+      // A new head alone: re-read the loaded rows in place. The ranked list
+      // is at most 500 rows, so a pass is one call.
+      runRefresh<DirChild>(rs, childrenRef.current.map(c => c.fullPath || ''), c => c.fullPath || '', anchorPathNow,
+        (offset, limit) => api.search(state.repo, state.branch, state.freeText, path, 0, listFilters, { limit, offset })
+          .then(r => ({ rows: searchRows(r.results), total: r.total })),
+        r => { keepPlace(r.rows.map(c => c.fullPath || '')); setChildren(r.rows); setTotal(r.total); setRelExhausted(r.short); setRelLoading(false); },
+        () => setRelLoading(false));
+      return;
+    }
+    const gen = beginFullLoad(rs);
     // Same window as the Recent reset: close it before the re-render does.
     relLoadingRef.current = true;
     setRelLoading(true);
@@ -527,6 +644,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     dispatch({ type: 'SET_SEARCHING', value: true });
     api.search(state.repo, state.branch, state.freeText, path, 0, listFilters, { limit: PAGE_SIZE, offset: 0 }).then(r => {
       if (stale()) return;
+      if (gen === rs.gen) rs.loaded = true;
       dispatch({ type: 'SET_SEARCHING', value: false });
       const items = searchRows(r.results);
       setChildren(items);
@@ -577,6 +695,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // in flight when the scope narrows can never append stale-scope rows onto the
   // fresh page-1 list the effect just set.
   const lensGenRef = useRef(0);
+  const lensAtRef = useRef<LoadedAt | null>(null);
+  const lensRowsRef = useRef(lensRows);
+  lensRowsRef.current = lensRows;
+  const lensTreeRef = useRef(lensTree);
+  lensTreeRef.current = lensTree;
   const lensSources = state.lensSources;
   const noneSelected = Array.isArray(lensSources) && lensSources.length === 0;
 
@@ -604,11 +727,30 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const reposKey = reposParam === undefined ? ' ALL' : reposParam.join('\0');
 
   useAsync((stale) => {
-    if (!isLens) return;
+    const rs = lensRs.current;
+    if (!isLens) { lensAtRef.current = null; beginFullLoad(rs); return; }
     // A fresh scope invalidates any paged loadMore still in flight.
     lensGenRef.current += 1;
-    if (emptyScope) { setLensRows([]); setLensTree([]); setTotal(0); setLensExhausted(true); setLensLoading(false); return; }
+    if (emptyScope) { lensAtRef.current = null; beginFullLoad(rs); setLensRows([]); setLensTree([]); setTotal(0); setLensExhausted(true); setLensLoading(false); return; }
     const repos = reposParam;
+    const scope = [lensName, path, state.freeText, effectiveSort, reposKey, filtersKey, state.ontologyRoot].join('\u0001');
+    const headOnly = sameScopeNewHead(lensAtRef, scope, state.headCommit);
+    if (headOnly && effectiveSort !== 'path' && rs.loaded && lensRowsRef.current.length > 0) {
+      // A new head alone: re-read the loaded union rows in place, through the
+      // same route and parameters the list pages with.
+      const toRow = (x: { path: string; title: string; type?: string; source: LensSource }): LensRow =>
+        ({ path: x.path, title: x.title, type: x.type, source: x.source });
+      runRefresh<LensRow>(rs, lensRowsRef.current.map(x => x.path), x => x.path, anchorPathNow,
+        (offset, limit) => effectiveSort === 'relevance'
+          ? api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }, { limit, offset })
+            .then(r => ({ rows: r.results.map(toRow), total: r.total }))
+          : api.listLensFacts(lensName, { ...listFilters, path, query: state.freeText || undefined, limit, offset, repos })
+            .then(r => ({ rows: (r.facts || []).map(toRow), total: r.total })),
+        r => { keepPlace(r.rows.map(x => x.path)); setLensRows(r.rows); setTotal(r.total); setLensExhausted(r.short); setLensLoading(false); },
+        () => setLensLoading(false));
+      return;
+    }
+    const gen = beginFullLoad(rs);
     // Landing on a result is half of what picking a facet means: the chip
     // narrows the list, the first row opens. The repo list has always done this
     // (api.recent and api.search both AMEND_NAV); the union did not, so a domain
@@ -628,11 +770,13 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       if (rows.some(r => r.path === open)) return;
       dispatch({ type: 'AMEND_NAV', factPath: rows[0].path });
     };
+    // A new head in the tree re-reads the folder in place (no clearing).
+    const treeInPlace = headOnly && effectiveSort === 'path' && lensTreeRef.current.length > 0;
     // Same window as the Recent reset: close it before the re-render does.
     lensLoadingRef.current = true;
     setLensLoading(true);
     setLensRows([]);
-    setLensTree([]);
+    if (!treeInPlace) setLensTree([]);
     setTotal(0);
     // A new scope is unpaged until its first page says otherwise.
     setLensExhausted(false);
@@ -650,6 +794,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         setTotal(r.total);
         setLensExhausted(rows.length < PAGE_SIZE);
         setLensLoading(false);
+        if (gen === rs.gen) rs.loaded = true;
         openFirstRow(rows);
       }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); dispatch({ type: 'SET_SEARCHING', value: false }); } });
       return;
@@ -661,6 +806,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       dispatch({ type: 'SET_SEARCHING', value: false });
       api.lensBrowse(lensName, path, state.ontologyRoot, repos).then(r => {
         if (stale()) return;
+        if (treeInPlace) capturePlace();
         setLensTree(r.children || []);
         setLensLoading(false);
       }).catch(() => { if (!stale()) { setLensTree([]); setLensLoading(false); } });
@@ -678,6 +824,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       setTotal(r.total);
       setLensExhausted(rows.length < PAGE_SIZE);
       setLensLoading(false);
+      if (gen === rs.gen) rs.loaded = true;
       openFirstRow(rows);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
   }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, state.ontologyRoot]);
@@ -708,7 +855,13 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const paged = isLens
     ? (effectiveSort !== 'path' && !emptyScope && !lensExhausted)
     : (effectiveSort === 'recent' || (effectiveSort === 'relevance' && !relExhausted));
+  // A loadMore refused during a refresh: retried once the refresh lands, if
+  // the sentinel is still in view (the observer reports only changes).
+  const loadMoreBlocked = useRef(false);
   const loadMore = useCallback(() => {
+    // A refresh is replacing the rows: a page appended now would land on the
+    // old list (and its offset would be the old length).
+    if (refreshing()) { loadMoreBlocked.current = true; return; }
     if (isLens) {
       // Lens union paging (I5): fetch the next offset with the SAME params
       // (path/query/repos intersection) and append. Path browse, empty scopes
@@ -881,6 +1034,47 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     return children.map(c => ({ name: c.name, fullPath: c.fullPath || '', is_dir: c.is_dir }));
   }, [isLens, lensRows, lensTree, effectiveSort, facts, children]);
+  activeListRef.current = activeList;
+
+  // Re-anchor once after a refresh's rows render (keepPlace captured where the
+  // reader was). A LAYOUT effect, so the reader never sees the unanchored
+  // frame; it also records the new position in scrollMemory, which the
+  // passive restore below would otherwise roll back to the old scrollTop. A
+  // hidden list (FactSet Focus) keeps the anchor pending and writes nothing:
+  // the ResizeObserver below re-anchors when it shows again.
+  const anchorFrame = useRef(0);
+  const scrollKeyRef = useRef(scrollKey);
+  scrollKeyRef.current = scrollKey;
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || !isRendered(el)) return;
+    const anchor = pendingAnchor.current;
+    if (anchor) {
+      pendingAnchor.current = null;
+      const top = restoreAnchor(el, anchor);
+      if (top !== null) scrollMemory.current.set(scrollKey, top);
+    }
+    lastAnchor.current = captureAnchor(el, selectedPathNow()) ?? lastAnchor.current;
+    // A page refused while the refresh ran: ask again if it is still wanted.
+    if (loadMoreBlocked.current && !refreshing()) {
+      loadMoreBlocked.current = false;
+      if (sentinelInView(el, sentinelRef.current)) loadMoreRef.current();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeList, scrollKey]);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const anchor = pendingAnchor.current;
+      if (!anchor || !isRendered(el)) return;
+      pendingAnchor.current = null;
+      const top = restoreAnchor(el, anchor);
+      if (top !== null) scrollMemory.current.set(scrollKeyRef.current, top);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Restore on arrival, after the rows for this key have rendered. Depending on
   // activeList (not just the key) is what makes it land AFTER the fetch — a
@@ -1078,8 +1272,23 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       )}
       <div
         ref={containerRef}
-        onScroll={e => scrollMemory.current.set(scrollKey, (e.target as HTMLDivElement).scrollTop)}
-        style={{ flex: 1, overflowY: 'auto' }}
+        onScroll={e => {
+          scrollMemory.current.set(scrollKey, (e.target as HTMLDivElement).scrollTop);
+          // The place a hidden-list refresh would anchor on: read once per frame.
+          if (!anchorFrame.current) {
+            anchorFrame.current = requestAnimationFrame(() => {
+              anchorFrame.current = 0;
+              const el = containerRef.current;
+              if (el) lastAnchor.current = captureAnchor(el, selectedPathNow()) ?? lastAnchor.current;
+            });
+          }
+        }}
+        // Every list re-anchors by hand on a new head (listRefresh.ts), path
+        // browse included; native scroll anchoring is off so it cannot move
+        // the reader a second time (60d4ace8). It could not keep the place on
+        // its own anyway: the scroll memory's restore puts the old scrollTop
+        // back over rows that moved.
+        style={{ flex: 1, overflowY: 'auto', overflowAnchor: 'none' }}
       >
         {isLens && effectiveSort === 'path' && (
           <>
@@ -1163,7 +1372,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
             registerRef={registerRef}
           />
         ))}
-        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
+        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && !(effectiveSort === 'relevance' && relLoading) && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
         {!isLens && effectiveSort === 'relevance' && (
           <>
             {/* Infinite-scroll sentinel — the same mechanism as Recent: pages the
