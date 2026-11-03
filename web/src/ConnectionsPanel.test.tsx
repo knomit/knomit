@@ -4,6 +4,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { ConnectionsPanel } from './ConnectionsPanel';
 import type { RefGroup } from './api';
 
+// Stands in for the measured clamp so the open half can assert the exact value
+// that reaches the panel; jsdom has no layout to measure.
+let mockClamp: { maxWidth?: number; maxHeight?: number } = {};
+vi.mock('./hooks', async (orig) => ({
+  ...(await orig<typeof import('./hooks')>()),
+  usePanelClamp: () => mockClamp,
+}));
+
 const group = (path: string, title: string, deleted = false): RefGroup => ({
   path, title, type: 'observation', deleted,
   versions: [{ commit: `${path}-c`, committed_at: 1, deleted }],
@@ -74,13 +82,6 @@ describe('ConnectionsPanel', () => {
   // panel leftward past the fact pane's edge, where the pane's overflow:hidden
   // cut it off beside the list rail. jsdom cannot show clipping, so the anchor
   // itself is the contract.
-  it('caps its width to its containing block when closed, and uses the measured clamp when open', () => {
-    const { rerender } = render(<ConnectionsPanel {...base} open={null} />);
-    expect(screen.getByTestId('connections-panel').style.maxWidth).toBe('100%');
-    rerender(<ConnectionsPanel {...base} open="in" />);
-    expect(screen.getByTestId('connections-panel').style.maxWidth).not.toBe('100%');
-  });
-
   it('hangs from the menu, left-aligned', () => {
     render(<ConnectionsPanel {...base} open="in" />);
     const panel = screen.getByTestId('connections-panel');
@@ -88,6 +89,20 @@ describe('ConnectionsPanel', () => {
     expect(panel.style.top).toBe('100%');
     expect(panel.style.left).toBe('0px');
     expect(panel.style.right).toBe('');
+  });
+
+  it('caps its width to its containing block when closed, and applies the measured clamp when open', () => {
+    const { rerender } = render(<ConnectionsPanel {...base} open={null} />);
+    const panel = screen.getByTestId('connections-panel');
+    expect(panel.style.maxWidth).toBe('100%');
+    // The cap drops AFTER the fade (delayed like visibility), so closing does not narrow it mid-fade.
+    expect(panel.style.transition).toContain('max-width 0s linear 160ms');
+
+    mockClamp = { maxWidth: 237 };
+    rerender(<ConnectionsPanel {...base} open="in" />);
+    expect(panel.style.maxWidth).toBe('237px');
+    expect(panel.style.transition).toContain('max-width 0s linear 0s');
+    mockClamp = {};
   });
 
   it('closes on Escape, on the × and on an outside click', () => {

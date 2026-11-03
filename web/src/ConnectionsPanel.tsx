@@ -110,7 +110,7 @@ export function ConnectionsPanel({
         visibility: open ? 'visible' : 'hidden',
         transition: prefersReducedMotion
           ? 'none'
-          : `opacity 160ms ease-out, transform 160ms ease-out, visibility 0s linear ${open ? '0s' : '160ms'}`,
+          : `opacity 160ms ease-out, transform 160ms ease-out, visibility 0s linear ${open ? '0s' : '160ms'}, max-width 0s linear ${open ? '0s' : '160ms'}`,
         // Closed, it must not swallow clicks aimed at the fact body behind it.
         pointerEvents: open ? 'auto' : 'none',
       }}
