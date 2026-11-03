@@ -26,7 +26,7 @@ func credFixture(t *testing.T) (*escFixture, *repos.RepoInstance, string) {
 	gitfixture.InitBare(t, bare, "main")
 	tok := f.mintOperatorToken(t, "x")
 	rec := escDo(f.s.OAuthHandler(), tok, http.MethodPut, "/api/v1/repos/x/origin",
-		`{"url":"`+bare+`","branch":"main","auth_method":"token","token":"tok-old"}`)
+		mustJSON(t, map[string]any{"url": bare, "branch": "main", "auth_method": "token", "token": "tok-old"}))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	return f, riX, tok
 }
