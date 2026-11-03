@@ -35,8 +35,8 @@ function backLabel(title: string): string {
 
 /** Where the reader was when they followed a link: the section used as the
  *  reference (the clicked one, else the one at the top of the pane), its
- *  offset from the pane's top, and the scrollTop then. */
-interface Origin { unit: number; n: number; anchor?: string; offset: number; scrollTop: number; title: string }
+ *  offset from the pane's top, and the pill's title. */
+interface Origin { unit: number; n: number; offset: number; title: string }
 
 /** The export's file name when the server sends none. PLACEHOLDER copy. */
 export const FALLBACK_EXPORT_NAME = 'factset.md'; // PLACEHOLDER copy
@@ -133,13 +133,18 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
 
   // The arrival highlight on a link's target (no CSS: the Web Animations API,
   // absent in jsdom; data-fs-flash marks it for the same time).
+  // One timer per element: a second flash within FLASH_MS restarts it, so the
+  // mark is not dropped early by the first flash's timer.
+  const [flashTimers] = useState(() => new WeakMap<HTMLElement, number>());
   const flash = useCallback((el: HTMLElement) => {
     el.dataset.fsFlash = 'true';
     if (typeof el.animate === 'function') {
       el.animate([{ backgroundColor: 'rgba(224, 168, 64, 0.22)' }, { backgroundColor: 'rgba(224, 168, 64, 0)' }], { duration: FLASH_MS, easing: 'ease-out' });
     }
-    window.setTimeout(() => { delete el.dataset.fsFlash; }, FLASH_MS);
-  }, []);
+    const prev = flashTimers.get(el);
+    if (prev !== undefined) window.clearTimeout(prev);
+    flashTimers.set(el, window.setTimeout(() => { flashTimers.delete(el); delete el.dataset.fsFlash; }, FLASH_MS));
+  }, [flashTimers]);
   const arrive = useCallback((el: HTMLElement) => { scrollToEl(el); flash(el); }, [scrollToEl, flash]);
 
   // A link's click: scroll to the written section when it is on screen, else
@@ -149,17 +154,24 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   const follow = useCallback((l: FactSetLink): boolean => {
     const move = anchors.resolve(l, a => !!findAnchor(a));
     if (move.kind === 'scroll') { const el = findAnchor(move.anchor); if (el) { arrive(el); return true; } return false; }
-    if (move.kind === 'seek') { setPending(move.anchor); seek(move.unit, move.anchor); return true; }
+    if (move.kind === 'seek') {
+      if (!seek(move.unit, move.anchor)) return false;
+      setPending(move.anchor);
+      return true;
+    }
     return false;
   }, [anchors, findAnchor, arrive, seek]);
 
   // ── The Back pill (design §5). Following any in-document link (a stub,
   // forward or back, or a builds-on link) records the reader's origin; the
-  // pill returns there exactly and goes away. ONE origin is kept, the latest:
-  // a second link followed before Back replaces it. ──
+  // pill returns there exactly and goes away once it has. ONE origin is kept,
+  // the latest: a second link followed before Back replaces it. ──
   const [back, setBack] = useState<Origin | null>(null);
   /** The origin a Back seek is returning to, consumed by its landing. */
   const backSeek = useRef<Origin | null>(null);
+  /** An origin being restored in the run of `epoch`: its offset is applied
+   *  once the run holds enough above (or below) it (restoreStep). */
+  const restore = useRef<{ o: Origin; epoch: number } | null>(null);
   /** The section the reader's last click inside the article was in. */
   const clickSec = useRef<HTMLElement | null>(null);
   const takeOrigin = useCallback((): Origin | null => {
@@ -187,7 +199,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
       node = up;
     }
     const title = node ? (node.title || node.path) : '';
-    return { unit, n, anchor: el.dataset.anchor, offset: el.getBoundingClientRect().top - boxTop, scrollTop: box.scrollTop, title };
+    return { unit, n, offset: el.getBoundingClientRect().top - boxTop, title };
   }, [byUnitN]);
   const onLink = useCallback((l: FactSetLink) => {
     const o = takeOrigin();
@@ -204,7 +216,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (!unit) return;
     const target = byUnitN.get(`${unit}.${l.n}`);
     if (target?.link) { if (follow(target.link) && o) setBack(o); return; }
-    if (!target) { setPending(l.anchor_id); reach({ unit, n: l.n }); if (o) setBack(o); }
+    if (!target && reach({ unit, n: l.n })) { setPending(l.anchor_id); if (o) setBack(o); }
   }, [byUnitN, findAnchor, arrive, follow, reach, takeOrigin]);
 
   // The extras of each FactSet section, stable per node object so the memoized
@@ -216,6 +228,56 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     }
     return m;
   }, [nodes]);
+
+  // The unit at the top of the pane, for the stream (restart / refresh land
+  // there) and the unit control.
+  const trackTop = useCallback(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const line = box.getBoundingClientRect().top + PATH_H + 24;
+    let cur = 0;
+    for (const el of Array.from(box.querySelectorAll<HTMLElement>('[data-fs-unit]'))) {
+      if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.fsUnit); else break;
+    }
+    if (!cur && nodes[0]) cur = nodes[0].unit;
+    if (cur) { reportTop(cur); setTopUnit(u => (u === cur ? u : cur)); }
+  }, [nodes, reportTop]);
+
+  // Restoring an origin: put its section back at the saved offset. When the
+  // run does not hold enough above it (the jump's seek dropped the units
+  // above, and the re-seek starts at the origin's unit), the offset would
+  // clamp at 0: read the unit above first (loadBefore; the place-keeping
+  // holds the section still) and apply it then, or at the FactSet's start.
+  // Likewise below: read on while the scroll range is too short. Re-run on
+  // every change of the run until it is applied.
+  const restoreStep = useCallback(() => {
+    const r = restore.current;
+    const box = scroller.current;
+    if (!r || !box) return;
+    if (r.epoch !== epoch || stale) { if (r.epoch !== epoch) restore.current = null; return; }
+    const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${r.o.unit}"][data-mat-n="${r.o.n}"]`);
+    if (!sec) { restore.current = null; return; }
+    const need = box.scrollTop + sec.getBoundingClientRect().top - box.getBoundingClientRect().top - r.o.offset;
+    const max = box.scrollHeight - box.clientHeight;
+    let more: (() => void) | null = null;
+    let wait = false;
+    if (need < 0 && (nodes[0]?.unit ?? 1) > 1) {
+      if (head === 'idle') more = loadBefore; else wait = head === 'loading';
+    } else if (need > max + 1) {
+      if (tail === 'idle') more = loadMore; else wait = tail === 'loading';
+    }
+    setScrollTop(box, Math.max(0, need));
+    if (more) {
+      const go = more;
+      // After this commit: the call that brought the run in has finished.
+      requestAnimationFrame(() => { if (restore.current === r) go(); });
+      return;
+    }
+    if (wait) return;
+    restore.current = null;
+    trackTop();
+  }, [epoch, stale, nodes, head, tail, loadBefore, loadMore, setScrollTop, trackTop]);
+  useEffect(() => { restoreStep(); }, [restoreStep]);
 
   // Land where the stream says once that run is on screen: a clicked link's
   // anchor, or the unit the reader was at before a restart, a seek or a refresh.
@@ -235,12 +297,15 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (land.back) {
       const o = backSeek.current;
       backSeek.current = null;
-      const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"][data-mat-n="${land.n}"]`);
-      if (o && sec) { setScrollTop(box, box.scrollTop + sec.getBoundingClientRect().top - box.getBoundingClientRect().top - o.offset); return; }
+      setBack(null);
+      if (o && o.unit === land.unit && o.n === land.n) { restore.current = { o, epoch: land.epoch }; restoreStep(); return; }
       const root = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
       if (root) scrollToEl(root);
       return;
     }
+    // Any other landing supersedes a Back seek still in flight.
+    backSeek.current = null;
+    restore.current = null;
     // Section n of the unit (a builds-on target): a stub is followed, a
     // written section is the scroll target.
     if (land.n !== undefined) {
@@ -255,7 +320,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (a) { arrive(a); return; }
     const el = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
     if (el) scrollToEl(el);
-  }, [land, epoch, stale, findAnchor, scrollToEl, arrive, setScrollTop, byUnitN, follow]);
+  }, [land, epoch, stale, findAnchor, scrollToEl, arrive, byUnitN, follow, restoreStep]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // The run is settled one frame after it (and its landing) is on screen.
@@ -342,38 +407,37 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (settledEpoch.current === epoch && box.scrollTop <= 0) readerUp(box);
   }, [epoch, readerUp]);
 
-  // The unit at the top of the pane, for the stream (restart / refresh land
-  // there) and the unit control.
-  const trackTop = useCallback(() => {
-    const box = scroller.current;
-    if (!box) return;
-    const line = box.getBoundingClientRect().top + PATH_H + 24;
-    let cur = 0;
-    for (const el of Array.from(box.querySelectorAll<HTMLElement>('[data-fs-unit]'))) {
-      if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.fsUnit); else break;
-    }
-    if (!cur && nodes[0]) cur = nodes[0].unit;
-    if (cur) { reportTop(cur); setTopUnit(u => (u === cur ? u : cur)); }
-  }, [nodes, reportTop]);
   useEffect(() => { trackTop(); }, [trackTop, nodes.length, epoch]);
 
   // Back: to the origin at its offset when its section is in the run, else a
   // seek back to the origin's unit, reading on to its section, whose landing
   // restores the offset. Either way the pill goes.
+  // The pill stays until the Back has landed: a refused or failed seek keeps
+  // it (Retry retries the Back; a 404 re-creates the FactSet at the origin).
   const goBack = useCallback(() => {
     const o = back;
-    setBack(null);
     const box = scroller.current;
     if (!o || !box) return;
     const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${o.unit}"][data-mat-n="${o.n}"]`);
-    if (sec) {
-      setScrollTop(box, box.scrollTop + sec.getBoundingClientRect().top - box.getBoundingClientRect().top - o.offset);
-      trackTop();
+    if (sec && !stale) {
+      setBack(null);
+      backSeek.current = null;
+      restore.current = { o, epoch };
+      restoreStep();
       return;
     }
     backSeek.current = o;
-    seek(o.unit, undefined, o.n, true);
-  }, [back, setScrollTop, trackTop, seek]);
+    if (!seek(o.unit, undefined, o.n, true)) backSeek.current = null;
+  }, [back, stale, epoch, restoreStep, seek]);
+
+  // An option change restarts the FactSet: a recorded (unit, n) may then name
+  // another section, so the pill goes.
+  const changeOptions = useCallback((o: MatOptions) => {
+    setBack(null);
+    backSeek.current = null;
+    restore.current = null;
+    onOptionsChange(o);
+  }, [onOptionsChange]);
 
   // Back to top: the start of the FactSet, unit 1's root. When unit 1 heads
   // the run nothing can be prepended above it, so the top of the run IS the
@@ -464,12 +528,12 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
         <div className="k-mat-row">
           <div className="k-mat-controls">
             <Stepper label="Max depth" value={options.depth} min={0} max={MAX_DEPTH} step={1} testid="fs-depth"
-              onCommit={n => onOptionsChange({ ...options, depth: clampDepth(n) })} />
+              onCommit={n => changeOptions({ ...options, depth: clampDepth(n) })} />
             <Stepper label="References" value={options.references} min={0} max={MAX_REFERENCES} step={50} testid="fs-refs"
-              onCommit={n => onOptionsChange({ ...options, references: clampReferences(n) })} />
+              onCommit={n => changeOptions({ ...options, references: clampReferences(n) })} />
             {/* A lens refuses cross_kb (a lens of any size): the switch is not offered there. */}
-            {!lens && <Switch label="Cross-KB" checked={options.crossKb} testid="fs-cross-kb" onChange={v => onOptionsChange({ ...options, crossKb: v })} />}
-            <Switch label="Unpin" checked={options.unpin} testid="fs-unpin" onChange={v => onOptionsChange({ ...options, unpin: v })} />
+            {!lens && <Switch label="Cross-KB" checked={options.crossKb} testid="fs-cross-kb" onChange={v => changeOptions({ ...options, crossKb: v })} />}
+            <Switch label="Unpin" checked={options.unpin} testid="fs-unpin" onChange={v => changeOptions({ ...options, unpin: v })} />
             {units > 1 && (
               <Stepper label="Unit" // PLACEHOLDER copy
                 value={topUnit} min={1} max={units} step={1} testid="fs-unit"

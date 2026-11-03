@@ -746,8 +746,9 @@ describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', 
     expect(pill()!.textContent).toBe(BACK_LABEL);
     calls.length = 0;
     fireEvent.click(pill()!);
-    expect(pill()).toBeNull();
+    expect(pill()).not.toBeNull(); // kept until the Back has landed
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('1'));
+    expect(pill()).toBeNull();
     expect(calls).toEqual(['seek 1']); // the origin stub is not followed again
     expect(box.scrollTop).toBe(30);
     await waitFor(() => expect(progressText()).toBe('unit 1 of 12'));
@@ -842,5 +843,140 @@ describe('Back to top goes to the start of the FactSet (user report 2026-11-02)'
     await waitFor(() => expect(sections()).toHaveLength(4));
     expect(calls).toEqual(['next F.2.0']);
     expect(box.scrollTop).toBe(250);
+  });
+});
+
+// #736 review. M1: when the re-seek starts at the origin's unit, the saved
+// offset can need content above the origin that the new run does not hold
+// yet; it is read (loadBefore) before the offset is applied, never clamped.
+// M2: a failed Back seek keeps the pill and the origin: a 404 re-creates the
+// FactSet AT the origin, any other failure's Retry retries the Back.
+//
+// Sabotage, one run each: (h) apply the offset clamped at 0 without reading
+// the unit above; (i) recover() ignores the pending Back (re-creates at
+// topUnit, the jump's destination); (j) Retry after a failed Back retries the
+// old run's tail; (k) the pill does not go on an option change.
+describe('the Back pill: exact offset, failures, options (#736 review)', () => {
+  it('M1: an origin 120px down with unit 2 above it: Back reads unit 2 back in, then puts the origin at exactly 120px', async () => {
+    const { api, calls } = linkedView(12, 4);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(6));
+    await settle();
+    userScroll(390);
+    const stubTop = () => document.querySelector('[data-fs-unit="3"][data-mat-n="2"]')!.getBoundingClientRect().top;
+    expect(stubTop()).toBe(120);
+    clickStub(5); // unit 3's stub -> unit 7
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
+    calls.length = 0;
+    fireEvent.click(pill()!);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    await waitFor(() => expect(box.scrollTop).toBe(190));
+    expect(stubTop()).toBe(120);
+    expect(calls).toEqual(['seek 3', 'seek 2']);
+    expect(pill()).toBeNull();
+    await waitFor(() => expect(progressText()).toBe('unit 3 of 12'));
+    expect(unitStepper()).toBe('3');
+  });
+
+  it('M2: a 404 on the Back seek re-creates the FactSet at the ORIGIN unit and restores the offset', async () => {
+    const { api, calls } = linkedView(12, 4);
+    const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    userScroll(30); // unit 3's stub at 80
+    clickStub(1);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
+    let failed = false;
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async (t, c, u, sig) => {
+      if (u === 3 && !failed) { failed = true; calls.push('seek 3 (404)'); throw new FsError('gone', 404); }
+      return realSeek(t, c, u, sig);
+    });
+    calls.length = 0;
+    fireEvent.click(pill()!);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    expect(calls).toEqual(['seek 3 (404)', 'first', 'seek 3']);
+    expect(box.scrollTop).toBe(30);
+    expect(pill()).toBeNull();
+    expect(screen.getByTestId('fs-notice').textContent).toBe(NOTICE_REFRESHED);
+  });
+
+  it('M2: any other failure keeps the pill, and Retry retries the Back', async () => {
+    const { api, calls } = linkedView(12, 4);
+    const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    userScroll(30);
+    clickStub(1);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
+    let failed = false;
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async (t, c, u, sig) => {
+      if (u === 3 && !failed) { failed = true; calls.push('seek 3 (500)'); throw new FsError('boom', 500); }
+      return realSeek(t, c, u, sig);
+    });
+    calls.length = 0;
+    fireEvent.click(pill()!);
+    await screen.findByTestId('fs-tail-retry');
+    expect(pill()!.textContent).toBe(BACK_LABEL);
+    fireEvent.click(screen.getByTestId('fs-tail-retry'));
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    expect(calls).toEqual(['seek 3 (500)', 'seek 3']);
+    expect(box.scrollTop).toBe(30);
+    expect(pill()).toBeNull();
+  });
+
+  it('an origin past the first page of its unit (2.7): Back seeks, reads on to it, and restores its offset', async () => {
+    const { api, calls } = pagedView(6, 8, 5, (u, k) => u === 2 && k === 6
+      ? { written: false, body: undefined, title: 'U5 S1', anchor_id: 'stub-2-7', link: { anchor_id: 'f-5-1', direction: 'forward', unit: 5, number: '5', cited_blob: 'b' } } : {});
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(5));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(10));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(15));
+    await settle();
+    userScroll(1300); // 2.7 (section 14) at 110
+    clickStub(14);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('5'));
+    expect(pill()!.textContent).toBe('Back to U2 S1');
+    calls.length = 0;
+    fireEvent.click(pill()!);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    expect(calls).toEqual(['seek 2', 'next F.2.5']);
+    expect(box.scrollTop).toBe(500);
+    expect(document.querySelector('[data-fs-unit="2"][data-mat-n="7"]')!.getBoundingClientRect().top).toBe(110);
+  });
+
+  it('a builds-on link to a written section flashes it and shows the pill; an option change takes the pill away', async () => {
+    const onOptionsChange = vi.fn();
+    const { api } = pagedView(2, 3, 6, (u, k) => u === 1 && k === 0
+      ? { title: ROOT_TITLE(1), builds_on: [{ n: 3, title: 'U1 S3', id: 'u1s3', anchor_id: 'f-1-3' }] } : {});
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={onOptionsChange} onBack={() => {}} api={api} />);
+    liveLayout(screen.getByTestId('fs-scroll'));
+    await waitFor(() => expect(sections()).toHaveLength(6));
+    fireEvent.click(within(sections()[0]).getByTestId('mat-builds-toggle'));
+    fireEvent.click(within(sections()[0]).getByTestId('mat-builds-link'));
+    expect(sections()[2].dataset.fsFlash).toBe('true');
+    expect(pill()!.textContent).toBe(BACK_LABEL);
+    fireEvent.click(screen.getByTestId('fs-unpin'));
+    expect(onOptionsChange).toHaveBeenCalled();
+    expect(pill()).toBeNull();
   });
 });
