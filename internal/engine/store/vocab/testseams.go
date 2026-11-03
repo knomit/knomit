@@ -55,3 +55,10 @@ func PairKeyForTest(a, b string) string {
 	mustBeTest("PairKeyForTest")
 	return pairKey(a, b)
 }
+
+// TitleKNNSQLForTest is the exact SQL of TopTitleNeighbours' vec0 read (alias
+// of its vec0 table: tv). Args: blob, k, branch name, factID.
+func TitleKNNSQLForTest() string {
+	mustBeTest("TitleKNNSQLForTest")
+	return titleKNNSQL
+}

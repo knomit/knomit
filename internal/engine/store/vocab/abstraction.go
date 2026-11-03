@@ -204,6 +204,26 @@ func (ax *AbstractionIndex) liveEpistemicFacts(ctx context.Context, branch strin
 // superseded revisions. graphBuildSimilarityEdges pays the same tax as knnK+1.
 const titleKNNOverfetch = 4
 
+// titleKNNSQL is TopTitleNeighbours' read: the k nearest title vectors,
+// filtered to live epistemic facts on one branch, self excluded. Args: blob,
+// k, branch name, factID.
+//
+// The vec0 table is the OUTER loop (`fact_titles_vec tv CROSS JOIN …`, a fixed
+// join order in SQLite). Written as plain JOINs the planner may drive from
+// another table and re-run the whole KNN once per row of it, which makes every
+// call linear in that table (#725, see index/vec_knn_sql.go). The order
+// changes the plan only: the k window applies before the join and the filters
+// either way. TestVecKNN_JoinOrderKeepsVec0Outer (store package) EXPLAINs this
+// exact string through TitleKNNSQLForTest.
+const titleKNNSQL = `SELECT f.id, f.path, (1.0 - tv.distance) AS similarity
+	   FROM fact_titles_vec tv
+	   CROSS JOIN facts f ON f.id = tv.rowid
+	   CROSS JOIN branch_facts bf ON bf.fact_id = f.id
+	   CROSS JOIN branches b ON b.id = bf.branch_id
+	  WHERE tv.embedding MATCH ? AND tv.k = ?
+	    AND b.name = ? AND f.kind = 'epistemic' AND f.id != ?
+	  ORDER BY tv.distance ASC`
+
 // TopTitleNeighbours returns up to k nearest live epistemic neighbours of
 // factID on the abstraction axis, self excluded, most similar first.
 //
@@ -223,15 +243,7 @@ func (ax *AbstractionIndex) TopTitleNeighbours(ctx context.Context, branch strin
 		return nil, fmt.Errorf("abstraction: read title vector %d: %w", factID, err)
 	}
 
-	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx,
-		`SELECT f.id, f.path, (1.0 - tv.distance) AS similarity
-		   FROM fact_titles_vec tv
-		   JOIN facts f ON f.id = tv.rowid
-		   JOIN branch_facts bf ON bf.fact_id = f.id
-		   JOIN branches b ON b.id = bf.branch_id
-		  WHERE tv.embedding MATCH ? AND tv.k = ?
-		    AND b.name = ? AND f.kind = 'epistemic' AND f.id != ?
-		  ORDER BY tv.distance ASC`,
+	rows, err := conn(ctx, ax.rh.DB()).QueryContext(ctx, titleKNNSQL,
 		blob, k*titleKNNOverfetch, branch, factID)
 	if err != nil {
 		return nil, fmt.Errorf("abstraction: title knn for %d: %w", factID, err)
