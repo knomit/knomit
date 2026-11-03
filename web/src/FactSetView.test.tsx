@@ -1016,6 +1016,17 @@ describe('the Top tool group (the results header\'s flyout, ModeFlyout)', () => 
     await waitFor(() => expect(box.scrollTop).toBe(0));
   });
 
+  it('with an empty stack nothing opens: Top focused, Esc still closes the view (no data-keeps-esc)', async () => {
+    const { userScroll, onBack } = await sixLoaded();
+    userScroll(700);
+    const top = screen.getByTestId('fs-top');
+    act(() => { top.focus(); });
+    expect(screen.getByTestId('fs-tools').dataset.open).toBe('false');
+    expect(screen.getByTestId('fs-tools').getAttribute('data-keeps-esc')).toBeNull();
+    fireEvent.keyDown(top, { key: 'Escape' });
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it('blur out of the group collapses it', async () => {
     const { userScroll } = await sixLoaded();
     userScroll(30);
