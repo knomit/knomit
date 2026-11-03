@@ -30,7 +30,7 @@ const updateToolName = "knomit_update"
 
 func updateTool() mcpgo.Tool {
 	return mcpgo.NewTool(updateToolName,
-		mcpgo.WithDescription("Update an existing fact in the knowledge base. An update whose resulting fact is byte-identical to the current revision writes nothing: the result says `unchanged: true` and carries no commit."),
+		mcpgo.WithDescription("Update an existing fact in the knowledge base. An update whose resulting fact is byte-identical to the current revision writes nothing: the result says `unchanged: true` and carries no commit. Because no commit is made, a `trace` passed with a no-op update leaves no trailer anywhere."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),

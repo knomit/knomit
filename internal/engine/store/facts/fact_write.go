@@ -160,18 +160,16 @@ func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, mess
 		return WriteFactResult{}, fmt.Errorf("WriteFile: ref: %w", err)
 	}
 	// The blob at path on the tip: the precondition's subject and the no-op
-	// check's. An unborn branch has no tip, so no blob. Without a
-	// precondition a failed read only disables the no-op check: the write
-	// proceeds exactly as it did before the check existed.
-	current := ""
-	if headHash != plumbing.ZeroHash {
-		var rerr error
-		if current, rerr = fi.rh.vr.BlobAtCommit(headHash, path); rerr != nil {
-			if expectBlob != "" {
-				return WriteFactResult{}, fmt.Errorf("WriteFile: precondition: %w", rerr)
-			}
-			current = ""
+	// check's ("" when the path is absent). An unborn branch never gets here:
+	// ResolveRef refuses it above. Without a precondition a failed read only
+	// disables the no-op check: the write proceeds exactly as it did before
+	// the check existed.
+	current, rerr := fi.rh.vr.BlobAtCommit(headHash, path)
+	if rerr != nil {
+		if expectBlob != "" {
+			return WriteFactResult{}, fmt.Errorf("WriteFile: precondition: %w", rerr)
 		}
+		current = ""
 	}
 	if expectBlob != "" && current != expectBlob {
 		return WriteFactResult{}, fmt.Errorf("WriteFile: %q: %w", path, ErrFactChanged)

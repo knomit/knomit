@@ -1080,7 +1080,10 @@ paths:
         rewrite of it when a gate canonicalises refs, motifs, expires or
         context) are byte-identical to the fact's current version commits
         nothing: the answer is 200 with `unchanged: true`, and the branch tip
-        does not move.
+        does not move. An unchanged write is not a validation: the no-op is
+        detected before the ontology's validations run, so an identical PUT
+        of a fact that already fails one answers 200 `unchanged` rather than
+        422, and the fact stays as it was.
       operationId: updateFact
       requestBody:
         required: true
