@@ -398,6 +398,13 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const lensRs = useRef<RefreshState>(newRefreshState());
   const refreshing = () => recentRs.current.inFlight || relRs.current.inFlight || lensRs.current.inFlight;
   const selectedPathNow = () => activeListRef.current[selectedIdxRef.current]?.fullPath || undefined;
+  // The row the reader's place hangs on: the selected row if on screen, else
+  // the top visible row; the last place seen while the list is hidden.
+  const anchorPathNow = () => {
+    const el = containerRef.current;
+    if (el && isRendered(el)) return captureAnchor(el, selectedPathNow())?.path ?? selectedPathNow();
+    return lastAnchor.current?.path ?? selectedPathNow();
+  };
   // Capture where the reader is, for the layout effect to re-anchor on after
   // the new rows render. A hidden list (display:none under the FactSet's
   // Focus) has no rects: the last place read on screen stands in.
@@ -544,7 +551,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     // Keep the place only once THIS scope's page 1 has landed (rs.loaded): a
     // head while page 1 is in flight is a fresh load, whatever rows are held.
     if (sameScopeNewHead(recentAtRef, scope, state.headCommit) && rs.loaded) {
-      runRefresh<RecentFactEntry>(rs, factsRef.current.map(f => f.path), f => f.path, selectedPathNow,
+      runRefresh<RecentFactEntry>(rs, factsRef.current.map(f => f.path), f => f.path, anchorPathNow,
         (offset, limit) => api.recent(state.repo, state.branch, path, state.freeText, limit, offset, listFilters)
           .then(r => ({ rows: r.facts || [], total: r.total })),
         r => { keepPlace(r.rows.map(f => f.path)); setFacts(r.rows); setTotal(r.total); setLoading(false); },
@@ -618,7 +625,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (sameScopeNewHead(relAtRef, scope, state.headCommit) && rs.loaded) {
       // A new head alone: re-read the loaded rows in place. The ranked list
       // is at most 500 rows, so a pass is one call.
-      runRefresh<DirChild>(rs, childrenRef.current.map(c => c.fullPath || ''), c => c.fullPath || '', selectedPathNow,
+      runRefresh<DirChild>(rs, childrenRef.current.map(c => c.fullPath || ''), c => c.fullPath || '', anchorPathNow,
         (offset, limit) => api.search(state.repo, state.branch, state.freeText, path, 0, listFilters, { limit, offset })
           .then(r => ({ rows: searchRows(r.results), total: r.total })),
         r => { keepPlace(r.rows.map(c => c.fullPath || '')); setChildren(r.rows); setTotal(r.total); setRelExhausted(r.short); setRelLoading(false); },
@@ -733,7 +740,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       // same route and parameters the list pages with.
       const toRow = (x: { path: string; title: string; type?: string; source: LensSource }): LensRow =>
         ({ path: x.path, title: x.title, type: x.type, source: x.source });
-      runRefresh<LensRow>(rs, lensRowsRef.current.map(x => x.path), x => x.path, selectedPathNow,
+      runRefresh<LensRow>(rs, lensRowsRef.current.map(x => x.path), x => x.path, anchorPathNow,
         (offset, limit) => effectiveSort === 'relevance'
           ? api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }, { limit, offset })
             .then(r => ({ rows: r.results.map(toRow), total: r.total }))

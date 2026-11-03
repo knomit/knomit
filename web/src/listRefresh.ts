@@ -77,18 +77,19 @@ export function beginFullLoad(st: RefreshState): number {
 /**
  * runRefresh re-reads the loaded rows of a list whose head moved, coalescing
  * heads that arrive while it runs. `paths` is the list's current paths;
- * `selected` the selected row's path at completion time. Each pass reads
- * [0, n) (n = the rows the previous pass landed) and, when the selected row
- * is not among them but the window filled, reads on by at most as many rows
- * as were inserted above it (only those can have pushed it out), so the
- * extension is bounded too. `apply` receives each pass's rows;
+ * `anchor` the path of the row the reader's place hangs on (the selected row
+ * if on screen, else the top visible row), read at completion time. Each pass
+ * reads [0, n) (n = the rows the previous pass landed) and, when the window
+ * filled, reads on by exactly as many rows as were inserted above the anchor,
+ * so the rows below it are still loaded and the scroller can put it back
+ * where it sat. The extension is bounded by those inserts. `apply` receives each pass's rows;
  * `onError` runs on a failed pass (the list keeps its rows).
  */
 export function runRefresh<T>(
   st: RefreshState,
   paths: string[],
   pathOf: (row: T) => string,
-  selected: () => string | undefined,
+  anchor: () => string | undefined,
   fetchPage: (offset: number, limit: number) => Promise<ListPageResult<T>>,
   apply: (r: { rows: T[]; total: number; short: boolean }) => void,
   onError: () => void,
@@ -100,16 +101,24 @@ export function runRefresh<T>(
   const pass = async (old: string[]) => {
     const r = await refetchLoaded(old.length, fetchPage, stale);
     if (!r) return null;
-    const sel = selected();
+    const at = anchor();
     const got = r.rows.map(pathOf);
-    if (sel && !r.short && old.includes(sel) && !got.includes(sel)) {
-      // Only rows inserted ABOVE it can have pushed the selected row out of
-      // the window: count the new paths up to the nearest old row that sat
-      // above it and is still listed. None means it was deleted or no longer
-      // matches, and nothing more is read.
+    if (at && !r.short && old.includes(at)) {
+      // KEEP WHAT LIES BELOW THE ANCHOR. The window re-reads n rows, so every
+      // row inserted ABOVE the anchor pushes one row out at the bottom. Read on
+      // by exactly that many, or (a) a row near the window's end cannot sit
+      // where it sat: the scroller cannot scroll that far and clamps (the
+      // ~125px drift seen after a burst), and (b) the anchor itself can fall
+      // out of the window. Count the new paths up to the anchor, or, when it
+      // is gone, up to the nearest old row above it that is still listed.
+      // None (it was deleted or no longer matches, and nothing was inserted
+      // above it) reads nothing more.
       const known = new Set(old);
-      let k = -1;
-      for (let i = old.indexOf(sel) - 1; i >= 0 && k < 0; i--) k = got.indexOf(old[i]);
+      let k = got.indexOf(at) - 1;
+      if (k < -1) {
+        k = -1;
+        for (let i = old.indexOf(at) - 1; i >= 0 && k < 0; i--) k = got.indexOf(old[i]);
+      }
       const inserted = got.slice(0, k + 1).filter(p => !known.has(p)).length;
       if (inserted > 0) {
         const more = await refetchRange(old.length, old.length + inserted, fetchPage, stale);

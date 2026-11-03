@@ -160,7 +160,10 @@ describe('Library — a new head keeps the reader\'s place', () => {
       list = [NEW, ...list];
       view.rerender(<Library state={{ ...open, headCommit: 'h2' }} dispatch={dispatch} navigate={navigate} />);
       await waitFor(() => expect(paths(c.testId)[0]).toBe(NEW));
-      expect(paths(c.testId)).toHaveLength(150);
+      // The window read on by the one row inserted above the anchor, so what
+      // lay below it is still loaded.
+      await waitFor(() => expect(paths(c.testId)).toHaveLength(151));
+      expect(paths(c.testId).at(-1)).toBe(pathOf(149));
       expect(selectedPath()).toBe(pathOf(120));
       expect(paths(c.testId).indexOf(pathOf(120))).toBe(121);
       // The row moved down one row; the scroll moved with it, so it sits where
@@ -276,12 +279,18 @@ describe('Library — keeping the place under a busy agent (#739 review)', () =>
     view.rerender(<Library state={{ ...open, headCommit: 'h4' }} dispatch={dispatch} navigate={navigate} />);
     await act(async () => { await Promise.resolve(); });
     expect(search).toHaveBeenCalledTimes(1);
-    await act(async () => { gates.shift()!(); });
-    await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
-    await act(async () => { gates.shift()!(); });
+    // Release the gated calls one at a time until nothing is pending: pass 1
+    // reads [0,150) then reads on by the 3 rows inserted above the anchor;
+    // the one trailing pass (for h3 and h4 together) reads [0,153).
+    for (let i = 0; i < 10 && (gates.length > 0 || i === 0); i++) {
+      await waitFor(() => expect(gates.length).toBeGreaterThan(0));
+      await act(async () => { gates.shift()!(); });
+      await act(async () => { await Promise.resolve(); });
+      if (search.mock.calls.length >= 3 && gates.length === 0) break;
+    }
     await waitFor(() => expect(paths(c.testId).slice(0, 3)).toEqual(['kb/r/c.md', 'kb/r/b.md', 'kb/r/a.md']));
     expect(maxInFlight).toBe(1);
-    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls.map(cl => cl[6])).toEqual([{ limit: 150, offset: 0 }, { limit: 3, offset: 150 }, { limit: 153, offset: 0 }]);
     expect(selectedPath()).toBe(pathOf(120));
     expect(paths(c.testId).indexOf(pathOf(120))).toBe(123);
   });
@@ -375,5 +384,45 @@ describe('Library — path browse keeps the place on a new head', () => {
     view.rerender(<Library state={{ ...state, headCommit: 'h2' }} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(203));
     expect(scroller.scrollTop).toBe(123 * ROW - 100);
+  });
+});
+
+// THE ~125px DRIFT (#739 review round 3). The window re-reads n rows, so each
+// row inserted above the reader pushes one row out at the bottom. With the
+// reader's row within a viewport of the window's end, the scroller then
+// cannot scroll far enough to put it back: it clamps, and the row comes back
+// lower by the inserted rows (3 x 47px in the browser; 3 x ROW here). The
+// refresh reads on by exactly the rows inserted above the anchor, so the
+// content below it is kept and the restore is exact.
+// Sabotage: read on only when the anchor fell out of the window (the old L3
+// rule) and the scroll clamps at the bottom.
+describe('Library — a reader at the bottom of the loaded rows', () => {
+  it('rows inserted above keep the anchor exact, though the scroller clamps', async () => {
+    const c = CASES[0];
+    const { view, dispatch, navigate, open, scroller } = await deepInList(c.state, c.testId);
+    // A real scroller cannot scroll past its content: emulate the clamp.
+    let top = 0;
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get() { return top; },
+      set(v: number) {
+        const rows = scroller.querySelectorAll('[data-path]').length;
+        top = Math.max(0, Math.min(v, rows * ROW - 400));
+      },
+    });
+    // The selected row 145 at 300px: 4 rows below it, so the list ends at the
+    // bottom of the viewport (scrollTop = max).
+    fireEvent.click(screen.getAllByTestId(c.testId)[145]);
+    const at145 = { ...open, factPath: pathOf(145) };
+    view.rerender(<Library state={at145} dispatch={dispatch} navigate={navigate} />);
+    await waitFor(() => expect(selectedPath()).toBe(pathOf(145)));
+    scroller.scrollTop = 145 * ROW - 300;
+    expect(scroller.scrollTop).toBe(150 * ROW - 400);
+    list = ['kb/r/x0.md', 'kb/r/x1.md', 'kb/r/x2.md', ...list];
+    view.rerender(<Library state={{ ...at145, headCommit: 'h2' }} dispatch={dispatch} navigate={navigate} />);
+    await waitFor(() => expect(paths(c.testId)[0]).toBe('kb/r/x0.md'));
+    await waitFor(() => expect(paths(c.testId)).toHaveLength(153));
+    expect(paths(c.testId).indexOf(pathOf(145))).toBe(148);
+    expect(scroller.scrollTop).toBe(148 * ROW - 300);
   });
 });
