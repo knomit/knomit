@@ -47,6 +47,35 @@ func TestReadFact_ReturnsErrPathNotFound_AtCommit(t *testing.T) {
 		"expected ErrPathNotFound for missing path at commit, got %v", err)
 }
 
+// TestReadFact_UnknownCommit_ReturnsErrCommitNotFound: a commit this repo
+// does not hold (here a real commit of ANOTHER repo) surfaces
+// ErrCommitNotFound, not ErrPathNotFound and not a bare go-git error, so
+// every caller can answer it as the client's mistake (404, never 500). HasCommit
+// agrees.
+func TestReadFact_UnknownCommit_ReturnsErrCommitNotFound(t *testing.T) {
+	ctx := context.Background()
+	open := func(name string) *Service {
+		svc, err := Open(filepath.Join(t.TempDir(), name+".db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+		require.NoError(t, svc.InitRepo(ctx, map[string]string{}, "main"))
+		return svc
+	}
+	alpha, beta := open("alpha"), open("beta")
+	ca, err := alpha.Facts().WriteFact(ctx, "main", "kb/e.md", testFactBody("e", 0.9, nil), "init", "")
+	require.NoError(t, err)
+	cb, err := beta.Facts().WriteFact(ctx, "main", "kb/e.md", testFactBody("e", 0.9, nil), "init", "")
+	require.NoError(t, err)
+
+	_, err = beta.Facts().ReadFact(ctx, "main", "kb/e.md", &facts.ReadFactOpts{AtCommit: ca.CommitHash})
+	require.ErrorIs(t, err, model.ErrCommitNotFound)
+	require.False(t, errors.Is(err, model.ErrPathNotFound), "%v", err)
+
+	require.False(t, beta.HasCommit(ca.CommitHash))
+	require.True(t, beta.HasCommit(cb.CommitHash))
+	require.False(t, beta.HasCommit(cb.CommitHash[:7]), "a short hash is not resolved")
+}
+
 // TestReadFact_BeforeCommit_NoPrior_ReturnsErrPathNotFound: when the path has
 // no prior version before the requested commit, the fallback path returns
 // ErrPathNotFound rather than a free-form string error.
