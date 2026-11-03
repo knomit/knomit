@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,13 +252,11 @@ func checkFleetEndpoint(ep *transport.Endpoint, auth transport.AuthMethod) error
 type upSession struct{ transport.UploadPackSession }
 
 func (s upSession) AdvertisedReferences() (*packp.AdvRefs, error) {
-	ar, err := s.UploadPackSession.AdvertisedReferences()
-	return ar, ClassifyPeerError(err)
+	return advertisedOnce(s.UploadPackSession.AdvertisedReferences)
 }
 
 func (s upSession) AdvertisedReferencesContext(ctx context.Context) (*packp.AdvRefs, error) {
-	ar, err := s.UploadPackSession.AdvertisedReferencesContext(ctx)
-	return ar, ClassifyPeerError(err)
+	return advertisedOnce(func() (*packp.AdvRefs, error) { return s.UploadPackSession.AdvertisedReferencesContext(ctx) })
 }
 
 func (s upSession) UploadPack(ctx context.Context, req *packp.UploadPackRequest) (*packp.UploadPackResponse, error) {
@@ -268,13 +267,11 @@ func (s upSession) UploadPack(ctx context.Context, req *packp.UploadPackRequest)
 type rpSession struct{ transport.ReceivePackSession }
 
 func (s rpSession) AdvertisedReferences() (*packp.AdvRefs, error) {
-	ar, err := s.ReceivePackSession.AdvertisedReferences()
-	return ar, ClassifyPeerError(err)
+	return advertisedOnce(s.ReceivePackSession.AdvertisedReferences)
 }
 
 func (s rpSession) AdvertisedReferencesContext(ctx context.Context) (*packp.AdvRefs, error) {
-	ar, err := s.ReceivePackSession.AdvertisedReferencesContext(ctx)
-	return ar, ClassifyPeerError(err)
+	return advertisedOnce(func() (*packp.AdvRefs, error) { return s.ReceivePackSession.AdvertisedReferencesContext(ctx) })
 }
 
 func (s rpSession) ReceivePack(ctx context.Context, req *packp.ReferenceUpdateRequest) (*packp.ReportStatus, error) {
@@ -330,3 +327,32 @@ type shownAs struct{ shown, cause error }
 
 func (e shownAs) Error() string { return e.shown.Error() }
 func (e shownAs) Unwrap() error { return e.cause }
+
+// advertisedOnce runs a session's first request, GET info/refs (the request a
+// refusing peer's alert answers), and redials it ONCE when it failed with a
+// connection reset before any response (resetBeforeResponse): on Windows that
+// is how a refusing peer's alert can be lost (knomit#543; a peer older than
+// its fix still closes that way), and a second race is almost always won by
+// the alert. Only this request is retried: it is an idempotent GET, and
+// UploadPack and ReceivePack are never redialled, so nothing is retried
+// mid-transfer. A reset is never read as a refusal; a second one is returned
+// as it is.
+func advertisedOnce(get func() (*packp.AdvRefs, error)) (*packp.AdvRefs, error) {
+	ar, err := get()
+	err = ClassifyPeerError(err)
+	if resetBeforeResponse(err) {
+		log.Info().Err(err).Msg("fleet transport: the connection was reset before the peer answered; redialling once")
+		ar, err = get()
+		err = ClassifyPeerError(err)
+	}
+	return ar, err
+}
+
+// resetBeforeResponse: err (as ClassifyPeerError returns it) is a connection
+// reset or abort (isConnReset; Windows only) that failed the HTTP request
+// itself, before any response: net/http reports that as *url.Error, while a
+// failure reading a response body is not one.
+func resetBeforeResponse(err error) bool {
+	var ue *url.Error
+	return err != nil && !errors.Is(err, ErrRefusedByPeer) && errors.As(err, &ue) && isConnReset(err)
+}
