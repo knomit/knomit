@@ -17,7 +17,7 @@ test.describe('Fact Retract', () => {
   test('retract button appears in tree mode and retracts the fact', async ({ freshKnomit, page }) => {
     // Seed the fact
     const res = await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/to-retract.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/ui/to-retract.md`,
       { data: { content: FACT_CONTENT } },
     );
     expect(res.ok()).toBeTruthy();
@@ -27,6 +27,7 @@ test.describe('Fact Retract', () => {
 
     const browse = new BrowsePage(page);
     await browse.clickEntry('e2e');
+    await browse.clickEntry('ui');
     await browse.clickEntry('to-retract.md');
 
     const factPanel = new FactPanel(page);
@@ -57,13 +58,13 @@ test.describe('Fact Retract', () => {
   test('retract commits with correct message and operation', async ({ freshKnomit }) => {
     // Seed the fact
     await freshKnomit.api.put(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/retract-check.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/ui/retract-check.md`,
       { data: { content: FACT_CONTENT } },
     );
 
     // Retract via API directly. The HAL endpoint returns 204 No Content with an empty body.
     const retractRes = await freshKnomit.api.delete(
-      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/retract-check.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/e2e/ui/retract-check.md`,
     );
     expect(retractRes.ok()).toBeTruthy();
     expect(retractRes.status()).toBe(204);
@@ -74,7 +75,7 @@ test.describe('Fact Retract', () => {
     );
     const hist = await histRes.json();
     const latest = hist._embedded.commits[0];
-    expect(latest.message).toBe('manual-review: retract kb/e2e/retract-check.md');
+    expect(latest.message).toBe('manual-review: retract kb/e2e/ui/retract-check.md');
     expect(latest.operation).toBe('retract');
   });
 });

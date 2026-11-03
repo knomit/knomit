@@ -9,7 +9,7 @@ test.describe.serial('Browse and Discover', () => {
     const sharedEntity = 'discovery-topic';
     const facts = [
       {
-        path: 'kb/discover/alpha.md',
+        path: 'kb/discover/journey/alpha.md',
         content: `---
 type: observation
 domain: [testing]
@@ -23,7 +23,7 @@ refs: []
 First fact about the discovery topic.`,
       },
       {
-        path: 'kb/discover/beta.md',
+        path: 'kb/discover/journey/beta.md',
         content: `---
 type: observation
 domain: [testing]
@@ -37,7 +37,7 @@ refs: []
 Second fact about the discovery topic.`,
       },
       {
-        path: 'kb/discover/gamma.md',
+        path: 'kb/discover/journey/gamma.md',
         content: `---
 type: observation
 domain: [testing]
@@ -68,9 +68,11 @@ Third fact about the discovery topic.`,
     await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
 
-    // Navigate directory tree: root shows 'discover' dir, click into it
+    // Navigate directory tree: root shows 'discover' dir, click into it and
+    // its 'journey' category
     await browse.waitForEntry('discover');
     await browse.clickEntry('discover');
+    await browse.clickEntry('journey');
     await browse.waitForFactEntry();
     const entries = await browse.getDirectoryEntries();
     const names = entries.map(e => e.name);

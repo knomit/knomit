@@ -150,7 +150,7 @@ func TestHandleFactCreate_TrimsTitleEdges(t *testing.T) {
 	r := fx.s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts",
-		strings.NewReader(`{"title":"  Padded  ","body":"b"}`)))
+		strings.NewReader(`{"title":"  Padded  ","body":"b","domain":["technology","software"]}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -334,7 +334,7 @@ func TestHandleFactCreate_ExplicitZeroSourcesSurvives(t *testing.T) {
 	fx := newFactWriteFixture(t, "know")
 	r := fx.s.NewAPIRouter()
 
-	body := `{"title":"My Fact","body":"some body","type":"observation","sources":0,"confidence":0}`
+	body := `{"title":"My Fact","body":"some body","type":"observation","sources":0,"confidence":0,"domain":["technology","software"]}`
 	rec := httptest.NewRecorder()
 	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+restWriteURL+"/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")

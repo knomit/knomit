@@ -87,7 +87,7 @@ func TestFactWrite_ClosedRepo_RefusedAndWritesNothing(t *testing.T) {
 	require.NotNil(t, ri)
 	branch := ri.AgentBranch()
 	require.Equal(t, "machine/test", branch)
-	const seeded = "kb/technology/test.md"
+	const seeded = "kb/technology/software/test.md"
 
 	// Seed through the API, so the PUT and DELETE below target a real fact.
 	seed := serveWrite(t, s, http.MethodPut, "/repos/alpha/branches/machine:test/facts/"+seeded,

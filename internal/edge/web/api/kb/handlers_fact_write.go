@@ -3,6 +3,7 @@ package kb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	pathpkg "path"
@@ -233,6 +234,26 @@ func refuseNonFactPath(w http.ResponseWriter, r *http.Request, path string) bool
 	return false
 }
 
+// putPlacement judges the placement of a fact a PUT creates at path: it must
+// be <root>/<topic>/<category...>/<name>.md, and topic and category must pass
+// fact.ValidatePlacement — the one check every create runs. A path outside
+// the ontology root, or one with no topic folder under it, names no placement
+// at all and is refused before ValidatePlacement could misread a segment as
+// the topic. The store lowercases the whole path it writes, so the path and
+// root are compared lowercased.
+func putPlacement(o *knomitfact.Ontology, ontologyRoot, path string) error {
+	root := strings.ToLower(ontologyRoot)
+	rel, under := strings.CutPrefix(strings.ToLower(path), root+"/")
+	dir := pathpkg.Dir(rel)
+	if !under || dir == "." {
+		return fmt.Errorf("a new fact's path must be %s/<topic>/<category>/<name>.md, with a topic of the repository's ontology; %q names no topic and category under %s/",
+			root, path, root)
+	}
+	topic, category, _ := strings.Cut(dir, "/")
+	_, err := knomitfact.ValidatePlacement(o, topic, category)
+	return err
+}
+
 // handleFactUpdate serves PUT /repos/{repo}/branches/{branch}/facts/{path...}.
 // Body: JSON {"content": "<full markdown with YAML frontmatter>"}.
 // Returns HAL factView with 200 OK.
@@ -339,21 +360,18 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 			return
 		}
 		// A PUT to a fresh path CREATES a fact, so it gets the create's
-		// placement rule: the topic must be one of the repository's ontology
-		// topics (ValidatePath, knomit_learn's check and error text). A PUT to
-		// an existing path is an edit and is not re-judged — knomit_update
-		// does not re-judge the topic either, so a legacy fact under a since
+		// placement rule — the same fact.ValidatePlacement knomit_learn and
+		// POST call, on the topic and category the path names. A PUT to an
+		// existing path is an edit and is not re-judged — knomit_update does
+		// not re-judge the topic either, so a legacy fact under a since
 		// removed topic stays editable. An artifact has no ontology placement.
-		// The store lowercases the whole path it writes, so the topic is
-		// derived from the lowercased path and root.
-		if !exists && !knomitfact.IsUnderArtifactsRoot(path) {
-			if o := ri.Ontology(); o != nil {
-				lower := strings.ToLower(path)
-				topicPath := pathpkg.Dir(strings.TrimPrefix(lower, strings.ToLower(ontologyRoot)+"/"))
-				if err := o.ValidatePath(topicPath); err != nil {
-					writePlacementProblem(w, r, err)
-					return
-				}
+		// A repo with no usable ontology is skipped: in production it is
+		// read-only (WritableBranch refuses every branch), so this only
+		// spares bare test instances.
+		if o := ri.Ontology(); o != nil && !exists && !knomitfact.IsUnderArtifactsRoot(path) {
+			if err := putPlacement(o, ontologyRoot, path); err != nil {
+				writePlacementProblem(w, r, err)
+				return
 			}
 		}
 		canonRefs, changed, gerr := writerGate(ri, branch).Apply(r.Context(), path, f.Refs, prior)

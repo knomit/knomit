@@ -81,10 +81,13 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 			return
 		}
 
-		// Determine the domain-based category for path allocation.
+		// The domain names the fact's placement: domain[0] is the topic. There
+		// is no fallback topic — none would be declared by every ontology.
 		domain := req.Domain
 		if len(domain) == 0 {
-			domain = []string{"uncategorized"}
+			hal.WriteProblem(w, http.StatusBadRequest, "Missing domain",
+				"domain is required: its first entry is the fact's ontology topic", r.URL.Path)
+			return
 		}
 		// Use the first domain segment as both topic and category so the path
 		// is ontologyRoot/domain[0]/domain[0]/<uuid8>.md, which is a reasonable

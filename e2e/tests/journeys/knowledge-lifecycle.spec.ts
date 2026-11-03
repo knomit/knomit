@@ -6,7 +6,7 @@ import { openHistory } from '../../helpers/nav.js';
 
 test.describe.serial('Knowledge Lifecycle', () => {
   test('create → view → search → edit → history → retract', async ({ freshKnomit, page }) => {
-    const factPath = 'kb/lifecycle/demo.md';
+    const factPath = 'kb/lifecycle/journey/demo.md';
     const factContent = `---
 type: observation
 domain: [testing]
@@ -33,6 +33,7 @@ This fact exercises the full lifecycle.`;
 
     // Navigate into lifecycle directory then click the fact
     await browse.clickEntry('lifecycle');
+    await browse.clickEntry('journey');
     await browse.clickEntry('demo.md');
 
     // 3. Verify it displays
@@ -76,6 +77,7 @@ Updated content after edit.`;
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
     await browse.clickEntry('lifecycle');
+    await browse.clickEntry('journey');
     await browse.clickEntry('demo.md');
     await expect(factPanel.body).toContainText('Updated content after edit');
 
@@ -91,7 +93,7 @@ Updated content after edit.`;
     const mcp = new McpClient(freshKnomit.baseURL, 'knomit', 'code', freshKnomit.branch);
     await mcp.initialize();
     try {
-      const retractResult = await mcp.callTool('knomit_retract', { file: 'lifecycle/demo', moment_name: 'e2e-test' });
+      const retractResult = await mcp.callTool('knomit_retract', { file: 'lifecycle/journey/demo', moment_name: 'e2e-test' });
       expect(retractResult.isError).toBeFalsy();
     } finally {
       await mcp.close();
