@@ -204,6 +204,23 @@ describe('RepoSettings', () => {
       await waitFor(() => expect(onFocused).toHaveBeenCalled());
     });
 
+    // The guard: the hand-back consumes ITS focus; an app focus naming another
+    // block is not satisfied by that and must survive.
+    it('leaves an app focus on a different block alone when the flow hands back', async () => {
+      const onFocused = vi.fn();
+      render(
+        <RepoSettings name="core" lenses={[]} focus="not-a-block" onFocused={onFocused}
+          canArchive serverReadOnly={false} hideRemoteConfig={false}
+          onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />,
+      );
+      fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
+      await screen.findByTestId('remote-connect-wizard');
+      fireEvent.click(screen.getByTestId('wizard-crumb-back'));
+      await screen.findByTestId('repo-settings');
+      await act(async () => {});
+      expect(onFocused).not.toHaveBeenCalled();
+    });
+
     it('replaces the settings page rather than stacking under it', async () => {
       await openConnect();
       expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();

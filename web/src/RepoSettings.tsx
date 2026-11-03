@@ -278,7 +278,8 @@ export function RepoSettings({ name, lenses, focus, onFocused, canArchive, serve
     if (focus === focusEff) onFocused?.();
   };
   useEffect(() => {
-    if (focusEff === 'remote' && !hasRemoteBlock) onFocusedEff?.();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a one-shot clear of a focus this page cannot satisfy: one extra render
+    if (focusEff === 'remote' && !hasRemoteBlock) onFocusedEff();
     // onFocusedEff is a notification, not an input.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusEff, hasRemoteBlock]);
