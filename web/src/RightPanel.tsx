@@ -1005,6 +1005,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           key={searchKey(fsv.search)}
           search={fsv.search}
           options={fsv.options}
+          listTotal={fsv.listTotal}
           onOptionsChange={o => factsetView.setOptions(o)}
           onBack={() => factsetView.close()}
         />

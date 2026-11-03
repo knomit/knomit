@@ -77,6 +77,21 @@ describe('the FactSet entry control', () => {
     expect(Object.fromEntries(new URLSearchParams(s.params))).toEqual({ path: 'kb', domain: 'ai' });
   });
 
+  // Ruling 2026-11-03 (c): a Recent list is not capped, so the FactSet view
+  // compares its units with the list's own server total (the header's
+  // data-count). Sabotage: hand the view the total on a relevance list too.
+  it('hands the FactSet view the Recent list total (data-count), and no total for a relevance list', async () => {
+    const { unmount } = render(<Library state={repoState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await enabledControl();
+    const count = Number(screen.getByTestId('library-header').getAttribute('data-count'));
+    expect(count).toBe(1);
+    expect(factsetView.get().listTotal).toBe(count);
+    unmount();
+    render(<Library state={repoState({ freeText: 'goroutine' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await enabledControl();
+    expect(factsetView.get().listTotal).toBeUndefined();
+  });
+
   it('is absent in the path tree (not a search)', async () => {
     render(<Library state={repoState({ librarySort: 'path' })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'browse')).toBe(true));

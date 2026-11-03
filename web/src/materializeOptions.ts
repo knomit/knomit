@@ -107,3 +107,66 @@ export function exportFilename(title: string, path: string): string {
 export function headingLevel(depth: number): 2 | 3 | 4 | 5 | 6 {
   return Math.min(6, Math.max(2, 2 + Math.trunc(depth))) as 2 | 3 | 4 | 5 | 6;
 }
+
+// ── Nesting and the sticky section path (shared by both materialize views) ──
+
+/** The knobs of the nesting presentation (from the deep-nesting prototype, variant C). */
+export const NESTING = {
+  /** Only tree depths 1..NUMBER_LEVELS print a number ("1.", "1.1", "1.1.1"). */
+  NUMBER_LEVELS: 3,
+  /** Most ticks in the depth gutter; a deeper section shows this many, the last in the cap colour. */
+  GUTTER_CAP: 6,
+  /** The heading ladder: level = tree depth + 1; levels past this repeat its style. */
+  LADDER_MAX_LEVEL: 5,
+  /** Each title in the section path is clipped to this many characters. */
+  PATH_TITLE_CHARS: 30,
+  /** The path's character budget (also limited by the pane width). */
+  PATH_MAX_CHARS: 190,
+  /** First ancestors that survive the path's middle truncation. */
+  PATH_KEEP_HEAD: 1,
+  /** Average glyph width at the path's 11px size, to turn pane width into characters. */
+  CHAR_PX: 6.3,
+  /** Characters a " › " separator costs. */
+  SEP_COST: 3,
+} as const;
+
+/** One item of the section path: the section's ordinal, its full label (the
+ *  tooltip), the clipped label shown, or the "…" gap of a middle truncation. */
+export interface PathItem { n: number; unit?: number; full: string; label: string; gap?: boolean }
+
+export const clipTitle = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t);
+
+/** Middle-truncate a path: keep the first PATH_KEEP_HEAD items and as many of the
+ *  last as fit the budget (always the last one), with a gap marker between. */
+export function midTruncate(items: PathItem[], budget: number): PathItem[] {
+  const cost = (i: PathItem) => i.label.length + NESTING.SEP_COST;
+  const total = items.reduce((t, i) => t + cost(i), 0);
+  const keep = NESTING.PATH_KEEP_HEAD;
+  if (total <= budget || items.length <= keep + 1) return items;
+  const head = items.slice(0, keep);
+  let used = head.reduce((t, i) => t + cost(i), 0) + 1 + NESTING.SEP_COST;
+  const tail: PathItem[] = [];
+  for (let i = items.length - 1; i >= keep; i--) {
+    const c = cost(items[i]);
+    if (used + c > budget && tail.length) break;
+    tail.unshift(items[i]);
+    used += c;
+  }
+  // Nothing was dropped after all: no gap.
+  if (head.length + tail.length === items.length) return items;
+  return [...head, { n: -1, full: '', label: '…', gap: true }, ...tail];
+}
+
+/** The path's character budget for a pane `width` px wide. */
+export function pathBudget(width: number): number {
+  return Math.max(20, Math.min(NESTING.PATH_MAX_CHARS, Math.floor((width - 90) / NESTING.CHAR_PX)));
+}
+
+// The unit ribbon of a FactSet unit root (book design §5).
+/** The ribbon's width: a base (padding and the point) plus one mono glyph per
+ *  digit (6.6px = 0.6em at 11px), so "130" (30px) fits the 44px gutter and the
+ *  34px narrow one. The book prototype's numbers. */
+export const RIBBON = { BASE_PX: 10, DIGIT_PX: 6.6 } as const;
+export function ribbonWidth(unit: number): number {
+  return Math.round((RIBBON.BASE_PX + RIBBON.DIGIT_PX * String(unit).length) * 10) / 10;
+}

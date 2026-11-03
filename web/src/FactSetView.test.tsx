@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { FactSetView, NOTICE_REFRESHED } from './FactSetView';
+import { PATH_UNIT_CHARS } from './factsetAnchors';
 import { CHANGED_SINCE_CITED, TIP_DIFFERENT_VERSION, TIP_RULE1 } from './materializeParts';
+import { NESTING, ribbonWidth } from './materializeOptions';
 import { DEFAULT_OPTIONS } from './materializeApi';
 import { FsError } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FactSetPage, FsSearch } from './factsetApi';
@@ -92,7 +94,7 @@ const sections = () => screen.queryAllByTestId('mat-section') as HTMLElement[];
 // enable Export before page 1 (clicking it before page 1 calls export with no
 // cursor); (d) let Esc bubble (the shell's handler sees it).
 describe('FactSetView (test 5)', () => {
-  it('units: numbered root headings with their own rule; server numbers; tree-depth ladder', async () => {
+  it('units: a ribbon in the gutter holds the unit number, the root heading is the title only; server numbers; tree-depth ladder', async () => {
     const { api } = makeApi();
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
     liveLayout(screen.getByTestId('fs-scroll'));
@@ -103,7 +105,12 @@ describe('FactSetView (test 5)', () => {
     expect(screen.getByTestId('fs-progress').textContent).toBe('unit 1 of 3');
     const roots = sections().filter(s => s.classList.contains('k-fs-unit'));
     expect(roots.map(s => s.dataset.fsUnit)).toEqual(['1', '2']);
-    expect(roots.map(s => within(s).getByTestId('mat-num').textContent?.trim())).toEqual(['1.', '2.']);
+    // Book design §5 (ruling 2026-11-03, supersedes Q-UI8's numbered heading):
+    // the number is in the ribbon on the root's row, in the gutter, and the
+    // heading is the title alone.
+    expect(roots.map(s => within(within(s).getByTestId('mat-gutter')).getByTestId('fs-ribbon').textContent)).toEqual(['1', '2']);
+    expect(roots.map(s => within(s).queryByTestId('mat-num'))).toEqual([null, null]);
+    expect(roots.map(s => s.querySelector('.k-mat-h')!.textContent)).toEqual(['Alpha', 'Beta']);
     const shared = sections()[1];
     expect(within(shared).getByTestId('mat-num').textContent?.trim()).toBe('1.1');
     expect(shared.dataset.td).toBe('1');
@@ -1047,5 +1054,147 @@ describe('a pending Back restore yields to the reader (#736 re-verify)', () => {
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
     await settle();
     expect(box.scrollTop).toBe(0 + 300); // only the place-keeping, no restore to 290
+  });
+});
+
+
+// ── Ribbon, sticky path and the Recent-beyond-the-FactSet notice (rulings
+// 2026-11-03: book design §5 / prototype items 2 and 5; Recent beyond 500 (c)) ──
+//
+// Sabotage, one run each (table in the PR): (a) the unit root keeps its number
+// in the heading; (b) the ribbon has a fixed width; (c) the path drops the unit
+// root when it truncates; (d) the path's middle truncation drops the current
+// section; (e) the notice shows whenever a list total is known.
+
+const LONG = (k: number) => `Section ${k} with a rather long title that runs past thirty characters`;
+const ROOT_LONG = 'Orchestrating many agents across one shared harness';
+/** Unit 1: a root and a chain five levels deep (each section the child of the
+ *  one before), then unit 2's root. */
+function deepPage(): FactSetPage {
+  const chain = [2, 3, 4, 5, 6].map((idx, i) => n(1, idx, LONG(idx), {
+    anchor_id: `f-deep-${idx}`, tree_depth: i + 1, parent: idx - 1, number: [1, ...Array(i + 1).fill(1)].join('.'),
+  }));
+  return { ...env(2, 2, "D.3.0", false), facts: [n(1, 1, ROOT_LONG), ...chain, n(2, 1, 'Second unit root')] };
+}
+const pathItems = () => screen.queryAllByTestId('fs-path-item').map(b => b.textContent);
+const ROOT28 = `${ROOT_LONG.slice(0, PATH_UNIT_CHARS - 1).trimEnd()}…`;
+const clip30 = (t: string) => `${t.slice(0, NESTING.PATH_TITLE_CHARS - 1).trimEnd()}…`;
+function widthOf(box: HTMLElement, w: number) { Object.defineProperty(box, 'clientWidth', { configurable: true, get: () => w }); }
+
+describe('the unit ribbon (book design §5)', () => {
+  it('width grows with the digits: 17px for 1 digit, 23px for 2, 30px for 3 (fits the 34px narrow gutter)', () => {
+    expect([ribbonWidth(1), ribbonWidth(13), ribbonWidth(130)]).toEqual([16.6, 23.2, 29.8]);
+    expect(Math.round(ribbonWidth(7))).toBe(17);
+    expect(Math.round(ribbonWidth(130))).toBe(30);
+    expect(ribbonWidth(130)).toBeLessThanOrEqual(34 - 3);
+  });
+
+  it('a rendered ribbon carries the width of its digit count, and only unit roots have one', async () => {
+    const page: FactSetPage = { ...env(130, 130, "D.131.0", false), unit_from: 13, facts: [
+      n(13, 1, 'Thirteen'), n(13, 2, 'Inside 13'), n(130, 1, 'One hundred thirty'),
+    ] };
+    const { api } = makeApi({ first: vi.fn(async () => page) });
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(3));
+    const ribbons = screen.getAllByTestId('fs-ribbon') as HTMLElement[];
+    expect(ribbons.map(r => [r.textContent, r.style.width])).toEqual([['13', '23.2px'], ['130', '29.8px']]);
+    expect(within(sections()[1]).queryByTestId('fs-ribbon')).toBeNull();
+    // A section inside the unit keeps its number in its heading.
+    expect(within(sections()[1]).getByTestId('mat-num').textContent?.trim()).toBe('13.1');
+  });
+
+  it('CSS: the 2px unit rule is gone; the narrow gutter leaves room for "130"', () => {
+    expect(materializeCss).not.toMatch(/\.k-fs-unit\s*\{[^}]*border-top:\s*2px/);
+    expect(materializeCss).toMatch(/@media \(max-width: 1100px\) \{ \.k-fs-unit > \.k-mat-gut \{ padding-right: 3px; \} \}/);
+  });
+
+  it('on a lens the repo name stays on the unit root, first on the meta line under the title-only heading', async () => {
+    const lensP1: FactSetPage = { ...P1, facts: [n(1, 1, 'Alpha', { repo_name: 'alpha' }), n(1, 2, 'Shared')], has_more: false };
+    const { api } = makeApi({ first: vi.fn(async () => lensP1) });
+    render(<FactSetView search={LENS} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    const root = sections()[0];
+    expect(within(root).getByTestId('fs-ribbon').textContent).toBe('1');
+    expect(within(root).getByTestId('mat-meta').firstElementChild).toBe(within(root).getByTestId('fs-repo-name'));
+    expect(root.querySelector('.k-mat-h')!.textContent).toBe('Alpha');
+  });
+});
+
+describe('the sticky section path (book design §5 / prototype item 5)', () => {
+  async function openDeep(width: number) {
+    const { api } = makeApi({ first: vi.fn(async () => deepPage()) });
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    widthOf(box, width);
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(7));
+    await settle();
+    return userScroll;
+  }
+
+  it('at a unit root the path is the root alone, clipped to PATH_UNIT_CHARS, after "unit X of N" on the same line', async () => {
+    const userScroll = await openDeep(1400);
+    userScroll(0);
+    const path = screen.getByTestId('fs-path');
+    expect(within(path).getByTestId('fs-progress').textContent).toBe('unit 1 of 2');
+    expect(pathItems()).toEqual([ROOT28]);
+    expect(pathItems()[0]!.length).toBeLessThanOrEqual(PATH_UNIT_CHARS);
+    expect(screen.getByTestId('fs-path-item').getAttribute('title')).toBe(ROOT_LONG);
+    // The progress is not repeated in the bar.
+    expect(screen.getAllByTestId('fs-progress')).toHaveLength(1);
+  });
+
+  it('at a deep section: root first, every ancestor, the section last (current), titles clipped to 30', async () => {
+    const userScroll = await openDeep(1400);
+    userScroll(260); // section 3 (tree depth 3) is at the top
+    const items = pathItems();
+    expect(items).toEqual([ROOT28, `1.1 ${clip30(LONG(2))}`, `1.1.1 ${clip30(LONG(3))}`, `1.1.1.1 ${clip30(LONG(4))}`]);
+    expect(screen.getAllByTestId('fs-path-item').at(-1)!.className).toBe('cur');
+    expect(screen.queryByTestId('fs-path-gap')).toBeNull();
+    expect(within(screen.getByTestId('fs-path')).getByTestId('fs-progress').textContent).toBe('unit 1 of 2');
+  });
+
+  it('a narrower pane drops only the ancestors between the root and the current section, as one "…" gap', async () => {
+    const userScroll = await openDeep(900); // budget (900 - 90) / 6.3 = 128 chars
+    userScroll(460); // section 5 (tree depth 5) at the top: 6 items
+    expect(pathItems()).toEqual([ROOT28, clip30(LONG(5)), clip30(LONG(6))]);
+    const nav = screen.getByTestId('fs-path');
+    const kids = Array.from(nav.querySelectorAll('[data-testid="fs-path-item"], [data-testid="fs-path-gap"]'));
+    expect(kids.map(k => k.getAttribute('data-testid'))).toEqual(['fs-path-item', 'fs-path-gap', 'fs-path-item', 'fs-path-item']);
+    // The narrowest pane still keeps the root and the current section.
+    widthOf(screen.getByTestId('fs-scroll'), 200);
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => expect(pathItems()).toEqual([ROOT28, clip30(LONG(6))]));
+    expect(screen.getAllByTestId('fs-path-gap')).toHaveLength(1);
+  });
+
+  it('a path item scrolls to its section and records no Back origin', async () => {
+    const userScroll = await openDeep(1400);
+    userScroll(260);
+    const box = screen.getByTestId('fs-scroll');
+    fireEvent.click(screen.getAllByTestId('fs-path-item')[1]); // 1.1, section index 1
+    // Section i sits at 10 + 100 i - scrollTop; a scroll puts it at PATH_H + 8 = 36.
+    expect(box.scrollTop).toBe(10 + 100 - 36);
+    expect(screen.queryByTestId('fs-back-pill')).toBeNull();
+  });
+});
+
+describe('a Recent list longer than the FactSet (ruling 2026-11-03 (c))', () => {
+  async function openWith(listTotal: number | undefined, units: number) {
+    const { api } = makeApi({ first: vi.fn(async () => ({ ...env(units, 1, "D.2.0", false), facts: [n(1, 1, 'Alpha')] })) });
+    render(<FactSetView search={LENS} options={DEFAULT_OPTIONS} listTotal={listTotal} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(1));
+  }
+  it('says how many of the list it shows when the list total is greater than the units', async () => {
+    await openWith(1919, 500);
+    expect(screen.getByTestId('fs-more-notice').textContent).toBe('Showing the first 500 of 1,919 results.');
+  });
+  it('says nothing when the FactSet holds the whole list', async () => {
+    await openWith(500, 500);
+    expect(screen.queryByTestId('fs-more-notice')).toBeNull();
+  });
+  it('says nothing when there is no list total (a relevance list)', async () => {
+    await openWith(undefined, 500);
+    expect(screen.queryByTestId('fs-more-notice')).toBeNull();
   });
 });

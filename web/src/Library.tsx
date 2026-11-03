@@ -1000,6 +1000,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const openFactSet = useCallback(() => {
     if (factsetSearch && live) factsetView.open(factsetSearch);
   }, [factsetSearch, live]);
+  // A Recent list is not capped, so it can hold more than the FactSet's cap:
+  // the view says so from this total (ruling 2026-11-03 (c)). The server's
+  // count, the one the header carries as data-count.
+  const recentTotal = effectiveSort === 'recent' && factsetSearch ? total : undefined;
+  useEffect(() => { factsetView.setListTotal(recentTotal); }, [recentTotal]);
   // A reload with factset=1: once App has put the URL's list back (the flag is
   // 'ready'), the FactSet is re-created from THIS list's search, a new first
   // call built by the same builders, never an id or cursor from the URL. When

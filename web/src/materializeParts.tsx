@@ -10,7 +10,10 @@ import { markdownPlugins, markdownComponents } from './markdown';
 import { ChevronDownIcon } from './icons';
 import { MARK_LATEST_OTHER_KB } from './materializeApi';
 import type { MatLink, MatNode, MatOmission } from './materializeApi';
-import { headingLevel } from './materializeOptions';
+import { NESTING, headingLevel, midTruncate, ribbonWidth } from './materializeOptions';
+import type { PathItem } from './materializeOptions';
+
+export { NESTING };
 import { isHttpUrl, repoHue } from './utils';
 import type { FactSetLink } from './factsetApi';
 import { stubLabel } from './factsetAnchors';
@@ -90,27 +93,37 @@ export function Disclosure({ label, count, open, onToggle, testid, flag }: {
   );
 }
 
-/** The knobs of the nesting presentation (from the deep-nesting prototype, variant C). */
-export const NESTING = {
-  /** Only tree depths 1..NUMBER_LEVELS print a number ("1.", "1.1", "1.1.1"). */
-  NUMBER_LEVELS: 3,
-  /** Most ticks in the depth gutter; a deeper section shows this many, the last in the cap colour. */
-  GUTTER_CAP: 6,
-  /** The heading ladder: level = tree depth + 1; levels past this repeat its style. */
-  LADDER_MAX_LEVEL: 5,
-  /** Each title in the section path is clipped to this many characters. */
-  PATH_TITLE_CHARS: 30,
-  /** The path's character budget (also limited by the pane width). */
-  PATH_MAX_CHARS: 190,
-  /** First ancestors that survive the path's middle truncation. */
-  PATH_KEEP_HEAD: 1,
-  /** Average glyph width at the path's 11px size, to turn pane width into characters. */
-  CHAR_PX: 6.3,
-  /** Characters a " › " separator costs. */
-  SEP_COST: 3,
-} as const;
 /** The height (px) of the sticky section path. */
 export const PATH_H = 28;
+
+// ── The sticky section path (shared by both views) ──────────────────────────
+
+/** The sticky section path at the top of the article: `lead` (the FactSet's
+ *  progress), then the items with " › " between, the last one current. */
+export function SectionPath({ items, budget, onPick, lead, prefix }: {
+  items: PathItem[]; budget: number; onPick: (it: PathItem) => void;
+  /** Shown before the items, with a " · " after it; its length comes off the budget. */
+  lead?: { text: string; testid: string };
+  /** The test ids' prefix: "mat" (single-fact view) or "fs" (FactSet view). */
+  prefix: 'mat' | 'fs';
+}) {
+  const shown = midTruncate(items, budget - (lead ? lead.text.length + NESTING.SEP_COST : 0));
+  return (
+    <nav className="k-mat-path" data-testid={`${prefix}-path`} aria-label="Section path">
+      {lead && <span className="k-mat-path-lead" data-testid={lead.testid} role="status">{lead.text}</span>}
+      {lead && shown.length > 0 && <span className="sep" aria-hidden="true">·</span>}
+      {shown.map((it, i, all) => (
+        <span key={`${it.unit ?? ''}-${it.n}-${i}`} style={{ display: 'contents' }}>
+          {i > 0 && <span className="sep" aria-hidden="true">›</span>}
+          {it.gap
+            ? <span className="gap" data-testid={`${prefix}-path-gap`}>…</span>
+            : <button type="button" data-testid={`${prefix}-path-item`} data-n={it.n} data-unit={it.unit} title={it.full}
+                className={i === all.length - 1 ? 'cur' : undefined} onClick={() => onPick(it)}>{it.label}</button>}
+        </span>
+      ))}
+    </nav>
+  );
+}
 
 // ── Marks (user ruling Q-UI12, 2026-11-01: both read "changed since cited",
 // each with its own tooltip, verbatim) ──────────────────────────────────────
@@ -173,7 +186,10 @@ export const Section = memo(function Section({ node, group, num, td, onGoto, fs,
 }) {
   const lv = Math.min(td + 1, NESTING.LADDER_MAX_LEVEL);
   const tag = `h${headingLevel(td)}`;
-  const numbered = num !== '' && td <= NESTING.NUMBER_LEVELS;
+  // A FactSet unit root carries its unit number in the ribbon in the gutter,
+  // not in the heading (book design §5): the heading is the title only.
+  const unitRoot = !!fs && td === 0;
+  const numbered = num !== '' && td <= NESTING.NUMBER_LEVELS && !unitRoot;
   const ticks = Math.min(td, NESTING.GUTTER_CAP);
   const cross = node.marks?.includes(MARK_LATEST_OTHER_KB);
   // Open/closed is the reader's, per section, and not remembered anywhere.
@@ -189,11 +205,14 @@ export const Section = memo(function Section({ node, group, num, td, onGoto, fs,
   return (
     <>
       {group && <div className="k-mat-group" data-testid="mat-group">{group}</div>}
-      <section className={fs && td === 0 ? 'k-mat-sec k-fs-unit' : 'k-mat-sec'} data-mat-n={node.n} data-lv={lv} data-td={td}
+      <section className={unitRoot ? 'k-mat-sec k-fs-unit' : 'k-mat-sec'} data-mat-n={node.n} data-lv={lv} data-td={td}
         data-anchor={stub ? undefined : node.anchor_id} data-testid="mat-section"
         data-fs-unit={fs?.unit} data-fs-stub={stub ? 'true' : undefined}
         aria-labelledby={hid}>
         <div className="k-mat-gut" data-testid="mat-gutter" data-ticks={ticks} title={num ? `Position ${num} · depth ${td}` : undefined}>
+          {unitRoot && (
+            <span className="k-fs-ribbon" data-testid="fs-ribbon" style={{ width: ribbonWidth(fs.unit) }}>{fs.unit}</span>
+          )}
           {ticks > 0 && (
             <div className="k-mat-gut-m">
               {Array.from({ length: ticks }, (_, i) => <i key={i} className={td > NESTING.GUTTER_CAP && i === ticks - 1 ? 'cap' : undefined} />)}

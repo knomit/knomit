@@ -62,7 +62,12 @@ export function writeFactSetParams(search: string, s: FsUrlState): string {
  *  re-created: the URL said factset=1 and the list it came from has not been
  *  restored yet ('wait'), or has been and the Library may now re-create the
  *  FactSet from it ('ready'). */
-export interface FsView { search: FsSearch | null; options: MatOptions; pending: false | 'wait' | 'ready' }
+export interface FsView {
+  search: FsSearch | null; options: MatOptions; pending: false | 'wait' | 'ready';
+  /** The results list's total (the server count) when it is a Recent list,
+   *  which the FactSet's cap can cut short (ruling 2026-11-03 (c)); memory only. */
+  listTotal?: number;
+}
 
 type Listener = () => void;
 
@@ -107,6 +112,10 @@ class FactSetViewStore {
   close(): void { if (this.view.search || this.view.pending) this.set({ ...this.view, search: null, pending: false }); }
   setOptions(options: MatOptions): void {
     if (!sameOptions(options, this.view.options)) this.set({ ...this.view, options });
+  }
+  /** The Library's Recent list total (undefined for any other list). */
+  setListTotal(n: number | undefined): void {
+    if (n !== this.view.listTotal) { this.view = { ...this.view, listTotal: n }; this.listeners.forEach(l => l()); }
   }
   /** The list a pending flag waits for is restored: the Library may re-create. */
   arm(): void { if (this.view.pending === 'wait') this.set({ ...this.view, pending: 'ready' }); }
