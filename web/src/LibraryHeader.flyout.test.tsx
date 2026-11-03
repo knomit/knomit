@@ -54,6 +54,7 @@ describe('rest state', () => {
       .toEqual(['mode-flyout', 'library-header-sep', 'library-factset']);
     const sep = screen.getByTestId('library-header-sep');
     expect(sep.style.width).toBe('1px');
+    expect(sep.style.background).toBe('rgb(58, 58, 58)');
     expect(header.textContent).not.toContain('1919');
     expect(screen.queryByTestId('library-count')).toBeNull();
   });

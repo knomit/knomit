@@ -352,7 +352,10 @@ export function LibraryHeader({
           <span
             data-testid="library-header-sep"
             aria-hidden="true"
-            style={{ width: 1, height: 14, background: '#222', flexShrink: 0 }}
+            // No vertical toolbar divider exists to reuse; the panel dividers'
+            // #222 is invisible on this #0f0f0f row (checked in a browser), so
+            // the bar takes this header's own muted grey (its disabled icons).
+            style={{ width: 1, height: 14, background: '#3a3a3a', flexShrink: 0 }}
           />
           <button
             type="button"
