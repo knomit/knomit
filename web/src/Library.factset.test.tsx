@@ -85,11 +85,12 @@ describe('the FactSet entry control', () => {
     await enabledControl();
     const count = Number(screen.getByTestId('library-header').getAttribute('data-count'));
     expect(count).toBe(1);
-    expect(factsetView.get().listTotal).toBe(count);
+    // The store is set from an effect, after the commit that shows the count.
+    await waitFor(() => expect(factsetView.get().listTotal).toBe(count));
     unmount();
     render(<Library state={repoState({ freeText: 'goroutine' })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await enabledControl();
-    expect(factsetView.get().listTotal).toBeUndefined();
+    await waitFor(() => expect(factsetView.get().listTotal).toBeUndefined());
   });
 
   it('is absent in the path tree (not a search)', async () => {
