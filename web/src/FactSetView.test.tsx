@@ -980,3 +980,72 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
     expect(pill()).toBeNull();
   });
 });
+
+// #736 re-verify, Low A: a Back restore waiting on the unit above must not
+// pull the reader back once they have navigated elsewhere (an in-run link);
+// Low B: nor once they wheel or swipe themselves.
+//
+// Sabotage, one run each: (m) takeOrigin no longer clears the pending
+// restore: the prepend lands the reader on the old origin (290), not on the
+// link target kept in place (474); (n) the wheel no longer abandons it: 290,
+// not 300.
+describe('a pending Back restore yields to the reader (#736 re-verify)', () => {
+  // Three sections a unit, one unit a page: the root builds on section 3
+  // (written, f-u-3); section 2 is a forward stub to unit u + 4.
+  function threeView() {
+    return pagedView(12, 3, 3, (u, k) => k === 0
+      ? { title: ROOT_TITLE(u), builds_on: [{ n: 3, title: `U${u} S3`, id: `u${u}s3`, anchor_id: `f-${u}-3` }] }
+      : k === 1
+        ? { written: false, body: undefined, title: `Multi-agent vs single-threaded target ${u + 4}`, anchor_id: `stub-${u}`,
+            link: { anchor_id: `f-${u + 4}-1`, direction: 'forward', unit: u + 4, number: String(u + 4), cited_blob: 'b' } }
+        : {});
+  }
+  async function backWaitingOnUnit2() {
+    const { api, calls } = threeView();
+    const realSeek = (api.seek as ReturnType<typeof vi.fn>).getMockImplementation() as FactSetApi['seek'];
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(3));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(6));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(9));
+    await settle();
+    userScroll(590); // unit 3's stub (section 7) at 120: Back will need unit 2 above it
+    clickStub(7);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
+    let release!: () => void;
+    (api.seek as ReturnType<typeof vi.fn>).mockImplementation(async (t, c, u, sig) => {
+      if (u === 2) { calls.push('seek 2 (held)'); await new Promise<void>(r => { release = r; }); }
+      return realSeek(t, c, u, sig);
+    });
+    calls.length = 0;
+    fireEvent.click(pill()!);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await waitFor(() => expect(calls).toEqual(['seek 3', 'seek 2 (held)'])); // waiting on unit 2
+    expect(box.scrollTop).toBe(0);
+    return { box, release: () => release() };
+  }
+
+  it('Low A: an in-run link followed while Back waits keeps the reader on the link target when unit 2 lands', async () => {
+    const { box, release } = await backWaitingOnUnit2();
+    fireEvent.click(within(sections()[0]).getByTestId('mat-builds-toggle'));
+    fireEvent.click(within(sections()[0]).getByTestId('mat-builds-link')); // -> 3.3, loaded
+    expect(box.scrollTop).toBe(10 + 200 - 36);
+    await act(async () => { release(); });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    await settle();
+    expect(box.scrollTop).toBe(174 + 300); // the place kept, no pull back to the origin
+    expect(document.querySelector('[data-anchor="f-3-3"]')!.getBoundingClientRect().top).toBe(36);
+  });
+
+  it('Low B: the reader\'s own wheel while Back waits abandons the restore', async () => {
+    const { box, release } = await backWaitingOnUnit2();
+    fireEvent.wheel(box, { deltaY: 120 });
+    await act(async () => { release(); });
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    await settle();
+    expect(box.scrollTop).toBe(0 + 300); // only the place-keeping, no restore to 290
+  });
+});

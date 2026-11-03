@@ -175,6 +175,9 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   /** The section the reader's last click inside the article was in. */
   const clickSec = useRef<HTMLElement | null>(null);
   const takeOrigin = useCallback((): Origin | null => {
+    // A new navigation: a Back restore still waiting on the unit above must
+    // not pull the reader back when that unit lands.
+    restore.current = null;
     const box = scroller.current;
     if (!box) return null;
     const boxTop = box.getBoundingClientRect().top;
@@ -444,6 +447,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   // start; otherwise the top of the run is only the top of what is loaded
   // (landing there prepends and keeps the place), so seek to unit 1.
   const toTop = useCallback(() => {
+    restore.current = null;
     const box = scroller.current;
     if (!box) return;
     if (nodes[0]?.unit === 1) {
@@ -453,6 +457,10 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     }
     seek(1);
   }, [nodes, seek, setScrollTop]);
+
+  // The reader's own wheel or swipe while a Back restore waits: the reader
+  // wins, the restore is abandoned rather than fought on the next render.
+  const abandonRestore = useCallback(() => { restore.current = null; }, []);
 
   // The refreshed notice goes away on its own.
   const { notice, clearNotice } = s;
@@ -538,6 +546,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
               <Stepper label="Unit" // PLACEHOLDER copy
                 value={topUnit} min={1} max={units} step={1} testid="fs-unit"
                 onCommit={u => {
+                  restore.current = null;
                   const el = scroller.current?.querySelector<HTMLElement>(`[data-fs-unit="${u}"]`);
                   if (el) scrollToEl(el); else seek(u);
                 }} />
@@ -564,11 +573,12 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
 
       <div className="k-mat-scroll k-fs-scroll" ref={scroller} data-testid="fs-scroll"
         onScroll={e => { setScrolled(e.currentTarget.scrollTop > FS_NEAR_PX); trackTop(); onScroll(e.currentTarget); }}
-        onWheel={e => { if (e.deltaY < 0) atTopUp(e.currentTarget); }}
+        onWheel={e => { abandonRestore(); if (e.deltaY < 0) atTopUp(e.currentTarget); }}
         onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }}
         onTouchMove={e => {
           const y = e.touches[0]?.clientY;
           if (y === undefined || touchY.current === null) return;
+          abandonRestore();
           // A finger moving down the screen scrolls the content up.
           if (y > touchY.current) atTopUp(e.currentTarget);
           touchY.current = y;
