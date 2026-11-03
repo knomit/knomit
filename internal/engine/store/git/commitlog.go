@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"knomit/internal/engine/store/model"
 )
 
 // CommitLogEntry is one row inserted into commit_log.
@@ -181,20 +183,33 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 	pathCond, pathArgs := commitLogPathCondPrefixed(path, "cl.")
 	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
 
+	// A cursor hash with no commit_log row (MIN/MAX over no rows is NULL) is
+	// a commit this repo does not hold: model.ErrCommitNotFound, which the
+	// web layer answers 404, not the "converting NULL" scan error it was.
 	lookupTS := func(hash string) (int64, error) {
-		var ts int64
-		err := s.db.QueryRow(
+		var ts sql.NullInt64
+		if err := s.db.QueryRow(
 			`SELECT MIN(committed_at) FROM commit_log WHERE commit_hash = ?`, hash,
-		).Scan(&ts)
-		return ts, err
+		).Scan(&ts); err != nil {
+			return 0, err
+		}
+		if !ts.Valid {
+			return 0, fmt.Errorf("%q: %w", hash, model.ErrCommitNotFound)
+		}
+		return ts.Int64, nil
 	}
 
 	lookupMaxRowid := func(hash string) (int64, error) {
-		var rid int64
-		err := s.db.QueryRow(
+		var rid sql.NullInt64
+		if err := s.db.QueryRow(
 			`SELECT MAX(rowid) FROM commit_log WHERE commit_hash = ?`, hash,
-		).Scan(&rid)
-		return rid, err
+		).Scan(&rid); err != nil {
+			return 0, err
+		}
+		if !rid.Valid {
+			return 0, fmt.Errorf("%q: %w", hash, model.ErrCommitNotFound)
+		}
+		return rid.Int64, nil
 	}
 
 	var cursorCond string

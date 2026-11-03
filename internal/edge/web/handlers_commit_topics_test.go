@@ -4,21 +4,32 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
+// The commit-anchored topic routes are not implemented: 501 at a commit the
+// repo holds. (An unknown commit is 404 commit_not_in_repo first; see
+// TestCommitAnchoredRoutes_UnknownCommitIs404CommitNotInRepo.)
 func TestHandleCommitAnchoredTopicNode_Returns501(t *testing.T) {
+	m, svcs := newRealStoreManager(t, "alpha")
+	res, err := svcs["alpha"].Facts().WriteFact(t.Context(), "agent/test", "kb/ai/a.md",
+		commitsFactText("A"), "add a", "learn")
+	require.NoError(t, err)
+	base := "/repos/alpha/branches/agent:test/commits/" + res.CommitHash
+
 	tests := []struct {
 		name string
 		path string
 	}{
-		{"root topics", "/repos/alpha/branches/main/commits/abc123/topics"},
-		{"topic node", "/repos/alpha/branches/main/commits/abc123/topics/ai"},
-		{"topic facts", "/repos/alpha/branches/main/commits/abc123/topics/ai/facts"},
-		{"topic stats", "/repos/alpha/branches/main/commits/abc123/topics/ai/stats"},
-		{"nested", "/repos/alpha/branches/main/commits/abc123/topics/ai/ml/facts"},
+		{"root topics", base + "/topics"},
+		{"topic node", base + "/topics/ai"},
+		{"topic facts", base + "/topics/ai/facts"},
+		{"topic stats", base + "/topics/ai/stats"},
+		{"nested", base + "/topics/ai/ml/facts"},
 	}
 
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 
 	for _, tc := range tests {

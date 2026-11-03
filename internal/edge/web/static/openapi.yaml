@@ -1246,7 +1246,9 @@ paths:
         Returns commits that touched the given fact path, in reverse chronological
         order. Used by the version walker (right-pane fact header) and the commit
         drawer's "this fact · N versions" section. 400 "Private path" for a
-        path with a segment beginning with `.`.
+        path with a segment beginning with `.`. An `after`, `from` or
+        `before` cursor naming a commit this repo does not hold is 404 with
+        `code: commit_not_in_repo`, never an empty page.
       operationId: factCommits
       parameters:
         - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -1332,6 +1334,7 @@ paths:
       summary: Browse ontology at a specific commit (not implemented)
       operationId: getTopicsAtCommit
       responses:
+        "404": { $ref: "#/components/responses/Problem" }
         "501": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/commits/{sha}/topics/{path}:
@@ -1345,6 +1348,7 @@ paths:
       summary: Topic node at a specific commit (not implemented)
       operationId: getTopicAtCommit
       responses:
+        "404": { $ref: "#/components/responses/Problem" }
         "501": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches/{branch}/topics:
@@ -2424,6 +2428,9 @@ paths:
     get:
       tags: [commits]
       summary: List commits
+      description: |
+        An `after`, `from` or `before` cursor naming a commit this repo does
+        not hold is 404 with `code: commit_not_in_repo`, never an empty page.
       operationId: listCommits
       parameters:
         - { name: limit,  in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -5255,7 +5262,7 @@ components:
         operation's own responses are authoritative.
       schema: { type: string }
     Branch:     { name: branch,    in: path, required: true, schema: { type: string } }
-    Sha:        { name: sha,       in: path, required: true, schema: { type: string } }
+    Sha:        { name: sha,       in: path, required: true, schema: { type: string }, description: "A full 40-hex commit hash this repo holds. Any other value (a commit of another repo, a short or malformed hash) is 404 with problem `code: commit_not_in_repo`, after the query parameters are checked (400 first) and before anything is read at the commit." }
     JobID:      { name: id,        in: path, required: true, schema: { type: string } }
     SessionID:  { name: sessionID, in: path, required: true, schema: { type: string } }
     ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: "The repo's registry uid, as returned in `ArchivedRepo.id`." }
@@ -5787,6 +5794,18 @@ components:
         status:   { type: integer }
         detail:   { type: string }
         instance: { type: string }
+        code:
+          type: string
+          description: |
+            Extension member (RFC 9457 §3.2) naming the failure where a client
+            must act on WHICH failure it is, not only on the status. Values
+            are route-specific (see each operation); absent when the status
+            and title say enough. `commit_not_in_repo` (404): the request
+            names a commit this repo does not hold (a commit of another repo,
+            or a value that is no full 40-hex hash), on every commit-anchored
+            route and on the `after`/`from`/`before` commit cursors. A 404
+            WITHOUT it at a commit the repo holds is the path's own "not
+            found" (for example "Fact not found").
 
     # Discovery / repos / branches
     Root:

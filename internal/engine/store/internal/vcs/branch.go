@@ -598,6 +598,11 @@ func (rh *Repo) ReadFileAtCommit(ctx context.Context, path, commitHash string) (
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
 	if err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			// A commit this repo does not hold (or a value that is no
+			// hash): the caller's error, which the web layer answers 404.
+			return "", fmt.Errorf("readFileAtCommit: %s: %w", commitHash, model.ErrCommitNotFound)
+		}
 		return "", fmt.Errorf("readFileAtCommit: commit: %w", err)
 	}
 	tree, err := commit.Tree()

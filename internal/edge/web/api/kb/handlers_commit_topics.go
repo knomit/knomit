@@ -3,6 +3,9 @@ package kb
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
+	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/hal"
 )
 
@@ -20,6 +23,11 @@ import (
 func handleCommitAnchoredTopicNode() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !commitTopicsParams.RefuseUnknown(w, r) {
+			return
+		}
+		// An unknown commit is 404 commit_not_in_repo even here: what the
+		// request names does not exist, whatever the route can serve.
+		if !refuseUnknownCommit(w, r, repos.RepoFromContext(r.Context()), chi.URLParam(r, "sha")) {
 			return
 		}
 		hal.WriteProblem(w, http.StatusNotImplemented, "Not Implemented",

@@ -201,6 +201,9 @@ func handleHALCommitDetail(b hal.URLBuilder, ontologyRoot string) http.HandlerFu
 				"commit SHA is required", r.URL.Path)
 			return
 		}
+		if !refuseUnknownCommit(w, r, ri, sha) {
+			return
+		}
 
 		detail, files, err := commitDetail(r.Context(), ri, branch, sha, ontologyRoot)
 		if httpx.StoreUnavailable(err) {

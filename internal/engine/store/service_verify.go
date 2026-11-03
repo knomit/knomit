@@ -15,6 +15,17 @@ func (s *Service) CommitExists(h plumbing.Hash) bool {
 	return err == nil
 }
 
+// HasCommit reports whether sha is a full 40-hex commit hash this
+// repository's object store holds. Anything else (a short or malformed hash,
+// a commit of another repo) is false: the web layer answers it 404
+// commit_not_in_repo before a commit-anchored read runs.
+func (s *Service) HasCommit(sha string) bool {
+	if !plumbing.IsHash(sha) {
+		return false
+	}
+	return s.CommitExists(plumbing.NewHash(sha))
+}
+
 // CommitAgent is the agent id in the author address of commit h (the lookup
 // the commit judge makes, AgentIDOfAuthor): "" when this repository does not
 // hold h or its author is not an agent address. Nothing is derived from a

@@ -231,17 +231,19 @@ func TestHandleCommitsList_FromAndBeforeCursors(t *testing.T) {
 	require.NotContains(t, before.Links, "next")
 }
 
-// A cursor naming no commit fails the store's log read, and the list reports
-// that as a store error, not as an empty page.
-func TestHandleCommitsList_UnknownCursorIsAStoreError(t *testing.T) {
+// A cursor naming a commit this repo does not hold is the client's error:
+// 404 with code commit_not_in_repo (user ruling 2026-11-03; it was a 500),
+// and never an empty page that reads as "no commits".
+func TestHandleCommitsList_UnknownCursorIs404CommitNotInRepo(t *testing.T) {
 	f := newCommitsFixture(t)
 	sha := "0123456789abcdef0123456789abcdef01234567"
 
 	rec := getAPI(t, f.s, "/repos/alpha/branches/"+commitsOtherURL+"/commits?after="+sha)
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 	title, detail := decodeProblem(t, rec)
-	require.Equal(t, "Failed to list commits", title)
+	require.Equal(t, "Commit not found", title)
 	require.Contains(t, detail, "LogPaginated: CommitLogQuery: after lookup:")
+	require.Contains(t, rec.Body.String(), `"code":"commit_not_in_repo"`)
 }
 
 type commitDetailBody struct {
@@ -354,7 +356,8 @@ func TestHandleCommitDetail_ListsOnlyFilesUnderTheRoot(t *testing.T) {
 	}
 }
 
-// An unknown commit is a 404 problem carrying the store's reason.
+// An unknown commit is a 404 problem with code commit_not_in_repo, refused
+// before the history index is asked.
 func TestHandleCommitDetail_UnknownCommitIs404(t *testing.T) {
 	f := newCommitsFixture(t)
 	sha := "0123456789abcdef0123456789abcdef01234567"
@@ -363,7 +366,8 @@ func TestHandleCommitDetail_UnknownCommitIs404(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 	title, detail := decodeProblem(t, rec)
 	require.Equal(t, "Commit not found", title)
-	require.Equal(t, "CommitDetail: commit not found in history index: "+sha, detail)
+	require.Equal(t, `this repo has no commit "`+sha+`"`, detail)
+	require.Contains(t, rec.Body.String(), `"code":"commit_not_in_repo"`)
 }
 
 // A repo with no live store answers the one store-unavailable 503 for both

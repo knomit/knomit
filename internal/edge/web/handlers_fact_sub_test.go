@@ -488,17 +488,19 @@ func TestHandleFactCommits_FromAndBeforeCursors(t *testing.T) {
 	require.NotContains(t, before.Links, "next")
 }
 
-// A cursor naming no commit fails the store's log read; the handler reports it
-// as a store error, not as an empty page.
-func TestHandleFactCommits_UnknownCursorIsAStoreError(t *testing.T) {
+// A cursor naming a commit this repo does not hold is the client's error:
+// 404 with code commit_not_in_repo (user ruling 2026-11-03; it was a 500),
+// and never an empty page.
+func TestHandleFactCommits_UnknownCursorIs404CommitNotInRepo(t *testing.T) {
 	f := newFactCommitsFixture(t)
 	sha := "0123456789abcdef0123456789abcdef01234567"
 
 	rec := getAPI(t, f.s, "/repos/alpha/branches/"+fsOtherURL+"/facts/kb/a.md/commits?after="+sha)
-	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 	title, detail := decodeProblem(t, rec)
-	require.Equal(t, "Failed to list commits", title)
+	require.Equal(t, "Commit not found", title)
 	require.Contains(t, detail, "LogPaginated: CommitLogQuery: after lookup:")
+	require.Contains(t, rec.Body.String(), `"code":"commit_not_in_repo"`)
 }
 
 func TestHandleFactCommits_UnknownRepo_Returns404(t *testing.T) {
