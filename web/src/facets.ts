@@ -167,6 +167,10 @@ export type ViewAction =
   /** A pinned target was picked. Its facets are `available` (facetsFor);
    *  absent, Settings only, which is every pinned target but the fleet. */
   | { type: 'SELECT_PINNED'; target: PinnedTarget; available?: Facet[] }
+  /** A lens was renamed: a broken-lens pin naming `from` (on screen, or held
+   *  for Cancel in returnTo) now names `to`. Nothing else moves: the reader
+   *  stays on the facet, focus and server page they are on. */
+  | { type: 'RENAME_PINNED_LENS'; from: string; to: string }
   /** A rail `+`: insert the draft (or show the one already there). `from` is
    *  the browse context, recorded for Cancel. */
   | { type: 'OPEN_DRAFT'; kind: DraftKind; from: BrowseContext }
@@ -261,6 +265,18 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
     }
     case 'SELECT_PINNED':
       return applyFacetRule({ ...s, pinned: a.target, draftShown: false, server: null }, a.available ?? ['settings']);
+    case 'RENAME_PINNED_LENS': {
+      // Not SELECT_PINNED: that is a pick, and a pick closes the server pages
+      // and runs the facet rule. A rename is the same target under a new
+      // name, so only the name changes. Matching here, not in App, means a
+      // late rename for a pin the reader has since left changes nothing.
+      const follow = (p: PinnedTarget | null): PinnedTarget | null =>
+        p?.kind === 'brokenLens' && p.name === a.from ? { kind: 'brokenLens', name: a.to } : p;
+      const pinned = follow(s.pinned);
+      const returnTo = s.returnTo && follow(s.returnTo.pinned) !== s.returnTo.pinned
+        ? { ...s.returnTo, pinned: follow(s.returnTo.pinned) } : s.returnTo;
+      return pinned === s.pinned && returnTo === s.returnTo ? s : { ...s, pinned, returnTo };
+    }
     case 'OPEN_DRAFT':
       if (s.draft === a.kind && s.draftShown) return s.server === null ? s : { ...s, server: null };
       return { ...s, draft: a.kind, draftShown: true, returnTo: returnToFrom(s, a.from), server: null };

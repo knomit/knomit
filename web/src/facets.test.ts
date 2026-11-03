@@ -163,6 +163,25 @@ describe('pinned targets and the facet rule', () => {
     expect(repoB.lastFacet).toBeNull();
   });
 
+  // #476: a rename is the same target under a new name, not a pick. Only the
+  // name changes: the facet, focus, lastFacet and server page stay as they are.
+  it('RENAME_PINNED_LENS follows a broken-lens pin to its new name and moves nothing else', () => {
+    const pinned: ViewState = {
+      ...viewReducer(onActivity(), { type: 'SELECT_PINNED', target: { kind: 'brokenLens', name: 'old' } }),
+      focus: 'mounts', server: 'logs',
+    };
+    const renamed = viewReducer(pinned, { type: 'RENAME_PINNED_LENS', from: 'old', to: 'new' });
+    expect(renamed).toEqual({ ...pinned, pinned: { kind: 'brokenLens', name: 'new' } });
+    // Another lens's rename, or a pin of another kind, is left alone.
+    expect(viewReducer(pinned, { type: 'RENAME_PINNED_LENS', from: 'other', to: 'new' })).toBe(pinned);
+    const archived = viewReducer(onActivity(), { type: 'SELECT_PINNED', target: { kind: 'archived', id: 'old' } });
+    expect(viewReducer(archived, { type: 'RENAME_PINNED_LENS', from: 'old', to: 'new' })).toBe(archived);
+    // The pin held for a draft's Cancel follows too.
+    const underDraft = viewReducer(pinned, { type: 'OPEN_DRAFT', kind: 'repo', from: { kind: 'repo', repo: 'ops-kb' } });
+    const back = viewReducer(viewReducer(underDraft, { type: 'RENAME_PINNED_LENS', from: 'old', to: 'new' }), { type: 'CANCEL_DRAFT' });
+    expect(back.pinned).toEqual({ kind: 'brokenLens', name: 'new' });
+  });
+
   it('a SET_FACET while pinned clears lastFacet, so the next normal target keeps the facet just chosen', () => {
     const pinned = viewReducer(onActivity(), { type: 'SELECT_PINNED', target: { kind: 'unavailable', repo: 'vendor-docs' } });
     expect(pinned.lastFacet).toBe('activity');
