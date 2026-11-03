@@ -259,6 +259,20 @@ export function RepoSettings({ name, lenses, focus, onFocused, canArchive, serve
   // licence, agent branch, agent access, the index chip, and Browse — the
   // repo is readable from the index phase on, which is the whole point.
   const creating = !!createJob && !isTerminalCreateState(createJob.state);
+  // Whether the Remote block is rendered at all (see where it is pushed).
+  const hasRemoteBlock = !hideRemoteConfig && !creating;
+  const onFocusedEff = returnFocus ? () => setReturnFocus(undefined) : onFocused;
+  // A Remote focus (the banner's Reconnect) that this page cannot satisfy is
+  // dropped now, not parked: SettingsPage only reports a focus it found a block
+  // for, so one left standing would pull the page to Remote whenever the block
+  // later appeared (a create finishing) — long after the click. Specific to
+  // Remote on purpose: other blocks (Licence) arrive late and must keep waiting.
+  const focusEff = returnFocus ?? focus;
+  useEffect(() => {
+    if (focusEff === 'remote' && !hasRemoteBlock) onFocusedEff?.();
+    // onFocusedEff is a notification, not an input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusEff, hasRemoteBlock]);
   // THIS repo's own read-only-ness: a subscription follows a remote branch and
   // owns no content, so nothing IN it can change — README and LICENSE commit to
   // an agent branch it does not have, and the server fails every such write.
@@ -454,7 +468,7 @@ export function RepoSettings({ name, lenses, focus, onFocused, canArchive, serve
   // Not while creating: sync activation is the LAST thing a remote create
   // does, so until the job ends the origin this block would show is not yet
   // the origin the repository has.
-  if (!hideRemoteConfig && !creating) {
+  if (hasRemoteBlock) {
     const connected = remote.loading || remote.origin || remote.err;
     sections.push({
       id: 'remote',
@@ -689,7 +703,7 @@ export function RepoSettings({ name, lenses, focus, onFocused, canArchive, serve
 
   return (
     <SettingsPage kind="repo" sections={sections} focus={returnFocus ?? focus}
-      onFocused={returnFocus ? () => setReturnFocus(undefined) : onFocused} testid="repo-settings" />
+      onFocused={onFocusedEff} testid="repo-settings" />
   );
 }
 

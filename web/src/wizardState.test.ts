@@ -785,6 +785,14 @@ describe('stepSummary', () => {
     expect(stepSummary(s({ authMethod: 'token' }), 'access')).toBe('token');
     expect(stepSummary(s({ authMethod: 'none' }), 'access')).toBe('anonymous');
     expect(stepSummary(s({ authMethod: '' }), 'access')).toBe('auto-detect');
+    expect(stepSummary(s({ authMethod: 'secret', secretId: 'sec1' }), 'access')).toBe('stored secret');
+  });
+
+  it('access: follows what is sent — auto-detect plus a token on HTTPS is a token', () => {
+    const https = 'https://github.com/acme/kb.git';
+    expect(stepSummary(s({ authMethod: '', authToken: 'ghp_x', url: https }), 'access')).toBe('token');
+    expect(stepSummary(s({ authMethod: '', authToken: 'ghp_x', url: 'git@github.com:acme/kb.git' }), 'access')).toBe('auto-detect');
+    expect(stepSummary(s({ authMethod: '', authToken: '', url: https }), 'access')).toBe('auto-detect');
   });
 
   it('branch: the branch; ontology: the template, the preset, or custom', () => {

@@ -1161,6 +1161,62 @@ describe('RepoSettings — arriving with focus', () => {
   });
 });
 
+// A Remote focus the page cannot satisfy is dropped at once: otherwise it
+// would linger and yank the page to Remote when the block later appeared.
+describe('RepoSettings — a Remote focus with no Remote block', () => {
+  const job = (over: Partial<RepoCreateStatus> = {}): RepoCreateStatus =>
+    ({ create_id: 'c1', name: 'core', mode: 'subscribe', state: 'running', step: 'index', index_state: 'indexing', ...over });
+  const mount = (createJob: RepoCreateStatus | null, onFocused: () => void, hideRemoteConfig = false) => (
+    <RepoSettings name="core" lenses={[]} focus="remote" onFocused={onFocused} canArchive serverReadOnly={false}
+      hideRemoteConfig={hideRemoteConfig} createJob={createJob}
+      onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+  );
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' }); });
+
+  it('drops it while the repo is being created', async () => {
+    const onFocused = vi.fn();
+    render(mount(job(), onFocused));
+    await screen.findByTestId('create-progress');
+    expect(onFocused).toHaveBeenCalled();
+    expect(screen.queryByTestId('block-remote')).toBeNull();
+  });
+
+  it('drops it when the server hides remote config', async () => {
+    const onFocused = vi.fn();
+    render(mount(null, onFocused, true));
+    await screen.findByTestId('block-agent-branch');
+    expect(onFocused).toHaveBeenCalled();
+  });
+
+  it('does not scroll to Remote when the block appears after the create ends', async () => {
+    const scroll = vi.fn();
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      // The owner clears the focus when told, as the app's CLEAR_FOCUS does.
+      function Owner() {
+        const [focus, setFocus] = useState<string | undefined>('remote');
+        const [createJob, setJob] = useState<RepoCreateStatus | null>(job());
+        return (
+          <>
+            <button data-testid="finish" onClick={() => setJob(null)} />
+            <RepoSettings name="core" lenses={[]} focus={focus} onFocused={() => setFocus(undefined)} canArchive
+              serverReadOnly={false} hideRemoteConfig={false} createJob={createJob}
+              onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+          </>
+        );
+      }
+      render(<Owner />);
+      await screen.findByTestId('create-progress');
+      fireEvent.click(screen.getByTestId('finish'));
+      await screen.findByTestId('block-remote');
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
+  });
+});
+
 describe('RepoSettings — Mounted in', () => {
   const mount = (lenses: Lens[]) => (
     <RepoSettings name="core" lenses={lenses} canArchive serverReadOnly={false} hideRemoteConfig={false}
