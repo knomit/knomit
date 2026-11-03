@@ -142,6 +142,12 @@ html[data-mat-focus] [data-testid='library-splitter'] { display: none !important
 .k-mat-top { position: absolute; right: 22px; bottom: 22px; z-index: 5; width: 30px; height: 30px; border-radius: 50%; background: #1a1e28; border: 1px solid #2a3040; color: #8a96a8; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0.85; padding: 0; }
 .k-mat-top:hover { opacity: 1; color: #cfd8e6; border-color: #3d4a66; }
 .k-mat-top:active { opacity: 0.6; }
+/* The FactSet's Top as a tool group (ModeFlyout, the results header's flyout):
+   the same floating spot and surface; the back arrow's strip opens to the left
+   on the same surface, so the panel reads as growing that way. */
+.k-fs-tools { right: 22px; bottom: 22px; z-index: 5; padding: 3px; border-radius: 6px; background: #1a1e28; border: 1px solid #2a3040; opacity: 0.9; }
+.k-fs-tools:hover, .k-fs-tools[data-open="true"] { opacity: 1; border-color: #3d4a66; }
+.k-fs-tools[data-open="true"] { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 
 
 /* ---- Heading ladder (level = tree depth + 1; levels past 5 repeat L5) and gutter, from the

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, ComponentType, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 
 type IconType = ComponentType<{ color: string; size?: number }>;
 
@@ -14,6 +14,9 @@ export interface FlyoutItem {
   disabled: boolean;
   color: string;
   onSelect: () => void;
+  /** A mode is a toggle (aria-pressed = active); an action (the FactSet's Top
+   *  and Back) is not. Default true. */
+  toggle?: boolean;
 }
 
 interface Props {
@@ -24,8 +27,20 @@ interface Props {
   /** The current icon is a trigger, not an action — EXCEPT for a derived mode
    *  (a search's relevance, a motif pivot), whose lit segment has always been
    *  the way OUT. While it is current every other mode is disabled, so the
-   *  flyout has nothing to pick and the click keeps that exit. */
+   *  flyout has nothing to pick and the click keeps that exit. An acting
+   *  current icon with ENABLED others (the FactSet's Top with Back beside it)
+   *  still acts on a mouse click; a touch or pen tap that finds the group
+   *  closed opens it instead, since there is no hover to reach the others. */
   currentActs: boolean;
+  /** The group's test id; the strip and the hint are `${testid}-strip` and
+   *  `${testid}-hint`. Default 'mode-flyout'. */
+  testid?: string;
+  /** Class and style of the group itself (the FactSet's floating panel). */
+  className?: string;
+  style?: CSSProperties;
+  /** Extra style for the strip (it is drawn over whatever is to the left). */
+  stripStyle?: CSSProperties;
+  iconSize?: number;
 }
 
 /** Collapse delay after the pointer leaves the group (book design §5). */
@@ -43,7 +58,7 @@ export const COLLAPSE_MS = 250;
  * Arrow keys move between modes while open, in on-screen order; only the
  * current icon is in the Tab order.
  */
-export function ModeFlyout({ items, currentKey, currentActs }: Props) {
+export function ModeFlyout({ items, currentKey, currentActs, testid = 'mode-flyout', className, style, stripStyle, iconSize = 14 }: Props) {
   const [wantOpen, setOpen] = useState(false);
   const groupRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLButtonElement>(null);
@@ -64,8 +79,8 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
 
   const current = items.find(i => i.key === currentKey) ?? items[0];
   const others = items.filter(i => i !== current);
-  // Nothing to pick (the caller hides unavailable modes, so a derived mode is
-  // often alone): no expansion and no corner hint.
+  // Nothing to open, nothing open: no strip, no data-keeps-esc, so Esc stays
+  // the page's (the FactSet's Top with an empty back stack). Same rule as #742.
   const open = wantOpen && others.length > 0;
 
   const focusCurrent = () => {
@@ -83,8 +98,14 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
     const p = press.current;
     press.current = null;
     pressing.current = false;
-    if (currentActs) { if (!current.disabled) current.onSelect(); collapse(false); return; }
-    if (p && (p.type === 'touch' || p.type === 'pen')) setOpen(!p.wasOpen);
+    const touch = !!p && (p.type === 'touch' || p.type === 'pen');
+    if (currentActs) {
+      if (touch && !p.wasOpen && others.some(o => !o.disabled)) { setOpen(true); return; }
+      if (!current.disabled) current.onSelect();
+      collapse(false);
+      return;
+    }
+    if (touch) setOpen(!p.wasOpen);
     else setOpen(true);
   };
 
@@ -127,10 +148,14 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
   return (
     <div
       ref={groupRef}
-      data-testid="mode-flyout"
+      data-testid={testid}
       data-open={open ? 'true' : 'false'}
+      // While open, Esc belongs to the group (it collapses it): a view that
+      // takes Esc in the capture phase (useMatFocus) leaves it alone.
+      data-keeps-esc={open ? 'true' : undefined}
       role="group"
-      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
+      className={className}
+      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0, ...style }}
       onMouseEnter={() => { cancel(); setOpen(true); }}
       onMouseLeave={() => { cancel(); timer.current = setTimeout(() => { timer.current = null; setOpen(false); }, COLLAPSE_MS); }}
       onFocus={() => { if (!quietFocus.current) { cancel(); setOpen(true); } }}
@@ -149,11 +174,11 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
     >
       {open && others.length > 0 && (
         <div
-          data-testid="mode-flyout-strip"
+          data-testid={`${testid}-strip`}
           style={{
             position: 'absolute', right: '100%', top: 0, bottom: 0,
             display: 'flex', alignItems: 'center', gap: 4, paddingLeft: 4,
-            background: '#0f0f0f', zIndex: 2,
+            background: '#0f0f0f', zIndex: 2, ...stripStyle,
           }}
         >
           {others.map(it => (
@@ -165,7 +190,7 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
               tabIndex={-1}
               disabled={it.disabled}
               aria-label={it.ariaLabel}
-              aria-pressed={it.active}
+              aria-pressed={it.toggle === false ? undefined : it.active}
               title={it.title}
               onClick={e => {
                 pressing.current = false;
@@ -177,7 +202,7 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
               }}
               {...hover(it)}
               style={btnStyle(it)}
-            ><it.Icon color="currentColor" size={14} /></button>
+            ><it.Icon color="currentColor" size={iconSize} /></button>
           ))}
         </div>
       )}
@@ -190,7 +215,7 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
         tabIndex={0}
         disabled={current.disabled}
         aria-label={current.ariaLabel}
-        aria-pressed={current.active}
+        aria-pressed={current.toggle === false ? undefined : current.active}
         aria-haspopup={others.length > 0 ? 'true' : undefined}
         aria-expanded={others.length > 0 ? open : undefined}
         title={current.title}
@@ -199,10 +224,11 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
         {...hover(current)}
         style={btnStyle(current)}
       >
-        <current.Icon color="currentColor" size={14} />
-        {/* The group hint: a 4px triangle in the bottom-right corner. */}
+        <current.Icon color="currentColor" size={iconSize} />
+        {/* The group hint: a 4px triangle in the bottom-right corner, while
+            there is anything to open. */}
         {others.length > 0 && <span
-          data-testid="mode-flyout-hint"
+          data-testid={`${testid}-hint`}
           aria-hidden="true"
           style={{
             position: 'absolute', right: 1, bottom: 1, width: 0, height: 0,

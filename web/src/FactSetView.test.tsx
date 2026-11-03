@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { FactSetView, NOTICE_REFRESHED } from './FactSetView';
 import { PATH_UNIT_CHARS } from './factsetAnchors';
 import { CHANGED_SINCE_CITED, TIP_DIFFERENT_VERSION, TIP_RULE1 } from './materializeParts';
@@ -9,6 +9,7 @@ import { FsError } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FactSetPage, FsSearch } from './factsetApi';
 import type { SaveOutcome } from './saveFile';
 import materializeCss from './materialize.css?raw';
+import { COLLAPSE_MS } from './ModeFlyout';
 
 class MockIO {
   static all: MockIO[] = [];
@@ -706,7 +707,15 @@ function linkedView(units: number, ahead: number) {
       link: { anchor_id: `f-${u + ahead}-1`, direction: 'forward', unit: u + ahead, number: String(u + ahead), cited_blob: 'b' },
     });
 }
-const pill = () => screen.queryByTestId('fs-back-pill');
+/** The back arrow: the Top tool group is hovered open (as a reader does) and
+ *  the arrow in its strip returned, or null when the stack is empty. */
+const backArrow = () => {
+  const g = screen.queryByTestId('fs-tools');
+  if (!g) return null;
+  fireEvent.mouseEnter(g);
+  return screen.queryByTestId('fs-stack-back');
+};
+const backTitle = () => backArrow()?.getAttribute('title') ?? null;
 const progressText = () => screen.getByTestId('fs-progress').textContent;
 const unitStepper = () => (screen.getByTestId('fs-unit') as HTMLInputElement).value;
 const clickStub = (i: number) => fireEvent.click(within(sections()[i]).getByTestId('fs-stub-link'));
@@ -722,16 +731,16 @@ describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', 
     await waitFor(() => expect(sections()).toHaveLength(4));
     await settle();
     userScroll(30);
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
     calls.length = 0;
     clickStub(1); // unit 1's stub -> unit 2's root, loaded (section 2)
     expect(calls).toEqual([]);
     expect(box.scrollTop).toBe(30 + (10 + 200 - 30) - 36);
     expect(sections()[2].dataset.fsFlash).toBe('true');
-    expect(pill()!.textContent).toBe(BACK_LABEL);
-    fireEvent.click(pill()!);
+    expect(backTitle()).toBe(BACK_LABEL);
+    fireEvent.click(backArrow()!);
     expect(box.scrollTop).toBe(30);
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
     expect(calls).toEqual([]);
     expect(progressText()).toBe('unit 1 of 4');
     expect(unitStepper()).toBe('1');
@@ -750,12 +759,12 @@ describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', 
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('5'));
     expect(calls).toEqual(['seek 5']);
     await waitFor(() => expect(sections()[0].dataset.fsFlash).toBe('true'));
-    expect(pill()!.textContent).toBe(BACK_LABEL);
+    expect(backTitle()).toBe(BACK_LABEL);
     calls.length = 0;
-    fireEvent.click(pill()!);
-    expect(pill()).not.toBeNull(); // kept until the Back has landed
+    fireEvent.click(backArrow()!);
+    expect(backArrow()).not.toBeNull(); // kept until the Back has landed
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('1'));
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
     expect(calls).toEqual(['seek 1']); // the origin stub is not followed again
     expect(box.scrollTop).toBe(30);
     await waitFor(() => expect(progressText()).toBe('unit 1 of 12'));
@@ -781,7 +790,7 @@ describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', 
     userScroll(30);
     clickStub(1); // unit 3's stub -> unit 7
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
-    fireEvent.click(pill()!);
+    fireEvent.click(backArrow()!);
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     expect(box.scrollTop).toBe(30);
     await settle();
@@ -793,25 +802,229 @@ describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', 
     expect(box.scrollTop).toBe(150 + 200);
   });
 
-  it('keeps the LATEST origin only: two links followed, one Back returns to the second origin and the pill goes', async () => {
-    const { api } = linkedView(4, 1);
+});
+
+// ── The back stack and the Top tool group (user, 2026-11-03: "remember
+// multiple jumps, in a stack like fashion"; Top uses the results header's
+// ModeFlyout; back arrow = pop one; Top = top and clear). ──
+//
+// Sabotage, one run each against a commit (table in the PR): (p) keep one
+// origin (push replaces the stack); (q) Top does not clear the stack; (r) an
+// option change does not clear it; (s) the hint shows with an empty stack;
+// (t) the old scrolled-only rule hides Top while the stack holds an origin;
+// (u) useMatFocus takes Esc from an open flyout (the view closes).
+const topOf = (u: number, k: number) => document.querySelector(`[data-fs-unit="${u}"][data-mat-n="${k}"]`)!.getBoundingClientRect().top;
+const hint = () => screen.queryByTestId('fs-tools-hint');
+
+async function sixLoaded(units = 4, ahead = 1) {
+  const v = linkedView(units, ahead);
+  const onBack = vi.fn();
+  const onOptionsChange = vi.fn();
+  render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={onOptionsChange} onBack={onBack} api={v.api} />);
+  const box = screen.getByTestId('fs-scroll');
+  const userScroll = liveLayout(box);
+  await waitFor(() => expect(sections()).toHaveLength(2));
+  nearBottom();
+  await waitFor(() => expect(sections()).toHaveLength(4));
+  nearBottom();
+  await waitFor(() => expect(sections()).toHaveLength(6));
+  await settle();
+  return { ...v, box, userScroll, onBack, onOptionsChange };
+}
+
+describe('the back stack (user, 2026-11-03)', () => {
+  it('three jumps, then pop, pop, pop returns to each origin in reverse order at its exact offset (re-seeking and reading above as needed)', async () => {
+    const { box, userScroll, calls } = await sixLoaded();
+    userScroll(30);
+    const o1 = topOf(1, 2); // unit 1's stub
+    clickStub(1); // -> unit 2's root, loaded
+    expect(box.scrollTop).toBe(174);
+    const o2 = topOf(2, 2);
+    clickStub(3); // -> unit 3's root, loaded
+    expect(box.scrollTop).toBe(374);
+    const o3 = topOf(3, 2);
+    clickStub(5); // -> unit 4, not loaded: a seek replaces the run
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('4'));
+    expect([o1, o2, o3]).toEqual([80, 136, 136]);
+
+    calls.length = 0;
+    fireEvent.click(backArrow()!); // pop 1: unit 3's stub, by re-seek (unit 2 read in above it)
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    await waitFor(() => expect(topOf(3, 2)).toBe(o3));
+    expect(calls).toEqual(['seek 3', 'seek 2']);
+    expect(backArrow()).not.toBeNull();
+
+    calls.length = 0;
+    fireEvent.click(backArrow()!); // pop 2: unit 2's stub, in the run; its offset needs unit 1 read in above it
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('1'));
+    await waitFor(() => expect(topOf(2, 2)).toBe(o2));
+    expect(calls).toEqual(['seek 1']);
+    expect(backArrow()).not.toBeNull();
+
+    calls.length = 0;
+    fireEvent.click(backArrow()!); // pop 3: unit 1's stub, in the run now
+    expect(topOf(1, 2)).toBe(o1);
+    expect(box.scrollTop).toBe(30);
+    expect(calls).toEqual([]);
+    expect(backArrow()).toBeNull();
+    expect(hint()).toBeNull();
+  });
+
+  it('Top goes to the top and clears the stack: after it, one jump and one pop empty it', async () => {
+    const { box, userScroll } = await sixLoaded();
+    userScroll(30);
+    clickStub(1);
+    clickStub(3);
+    expect(hint()).not.toBeNull();
+    fireEvent.click(screen.getByTestId('fs-top'));
+    await waitFor(() => expect(box.scrollTop).toBe(0));
+    expect(hint()).toBeNull();
+    expect(backArrow()).toBeNull();
+    clickStub(1); // unit 1's stub at 110 -> unit 2's root
+    expect(box.scrollTop).toBe(174);
+    fireEvent.click(backArrow()!);
+    expect(box.scrollTop).toBe(0);
+    expect(backArrow()).toBeNull(); // the two older origins are gone
+  });
+
+  it('an option change clears the stack: after it, one jump and one pop empty it', async () => {
+    const { box, userScroll, onOptionsChange } = await sixLoaded();
+    userScroll(30);
+    clickStub(1);
+    clickStub(3);
+    fireEvent.click(screen.getByTestId('fs-unpin'));
+    expect(onOptionsChange).toHaveBeenCalled();
+    expect(hint()).toBeNull();
+    expect(backArrow()).toBeNull();
+    userScroll(30);
+    clickStub(1);
+    fireEvent.click(backArrow()!);
+    expect(box.scrollTop).toBe(30);
+    expect(backArrow()).toBeNull();
+  });
+
+  it('Top is shown while the stack holds an origin, even near the top of unit 1', async () => {
+    const { api } = pagedView(2, 3, 6, (u, k) => u === 1 && k === 0
+      ? { title: ROOT_TITLE(1), builds_on: [{ n: 3, title: 'U1 S3', id: 'u1s3', anchor_id: 'f-1-3' }] } : {});
     render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
     const box = screen.getByTestId('fs-scroll');
-    const userScroll = liveLayout(box);
-    await waitFor(() => expect(sections()).toHaveLength(2));
-    nearBottom();
-    await waitFor(() => expect(sections()).toHaveLength(4));
-    nearBottom();
+    liveLayout(box);
     await waitFor(() => expect(sections()).toHaveLength(6));
-    await settle();
+    expect(screen.queryByTestId('fs-top')).toBeNull(); // the start of the FactSet, nothing to go back to
+    fireEvent.click(within(sections()[0]).getByTestId('mat-builds-toggle'));
+    fireEvent.click(within(sections()[0]).getByTestId('mat-builds-link'));
+    expect(box.scrollTop).toBe(174); // not past 600, still unit 1
+    expect(screen.getByTestId('fs-top')).toBeTruthy();
+    expect(hint()).not.toBeNull();
+  });
+});
+
+describe('the Top tool group (the results header\'s flyout, ModeFlyout)', () => {
+  it('rest state: no triangle and nothing to open with an empty stack; the triangle once an origin is pushed', async () => {
+    const { userScroll } = await sixLoaded();
+    userScroll(700);
+    const top = screen.getByTestId('fs-top');
+    expect(top.getAttribute('aria-label')).toBe('Back to top');
+    expect(top.getAttribute('aria-haspopup')).toBeNull();
+    expect(hint()).toBeNull();
+    fireEvent.mouseEnter(screen.getByTestId('fs-tools'));
+    expect(screen.queryByTestId('fs-tools-strip')).toBeNull();
+    fireEvent.mouseLeave(screen.getByTestId('fs-tools'));
     userScroll(30);
-    clickStub(1); // -> unit 2's root at 174
+    clickStub(1);
+    expect(hint()).not.toBeNull();
+    await waitFor(() => expect(screen.queryByTestId('fs-tools-strip')).toBeNull()); // at rest: only Top
+    expect(screen.getByTestId('fs-top').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('hover opens the back arrow inline to the LEFT; it collapses COLLAPSE_MS after the pointer leaves, not before; re-entering cancels', async () => {
+    const { userScroll } = await sixLoaded();
+    userScroll(30);
+    clickStub(1);
+    const g = screen.getByTestId('fs-tools');
+    fireEvent.mouseEnter(g);
+    const strip = screen.getByTestId('fs-tools-strip');
+    const back = within(strip).getByTestId('fs-stack-back');
+    expect(strip.style.right).toBe('100%');
+    expect(strip.compareDocumentPosition(screen.getByTestId('fs-top')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(back.getAttribute('aria-label')).toBe(BACK_LABEL);
+    expect(back.getAttribute('title')).toBe(BACK_LABEL);
+    expect(back.tabIndex).toBe(-1);
+    expect(screen.getByTestId('fs-top').tabIndex).toBe(0);
+    expect(screen.getByTestId('fs-top').getAttribute('aria-expanded')).toBe('true');
+    fireEvent.mouseLeave(g);
+    await act(async () => { await new Promise(r => setTimeout(r, COLLAPSE_MS - 100)); });
+    expect(screen.queryByTestId('fs-tools-strip')).not.toBeNull();
+    fireEvent.mouseEnter(g); // re-entering cancels: no flicker
+    await act(async () => { await new Promise(r => setTimeout(r, 200)); });
+    expect(screen.queryByTestId('fs-tools-strip')).not.toBeNull();
+    fireEvent.mouseLeave(g);
+    await act(async () => { await new Promise(r => setTimeout(r, COLLAPSE_MS + 50)); });
+    expect(screen.queryByTestId('fs-tools-strip')).toBeNull();
+  });
+
+  it('keyboard: focus opens it, Left moves to the back arrow, a keyboard pick pops and returns focus to Top; Esc collapses without closing the view', async () => {
+    const { box, userScroll, onBack } = await sixLoaded();
+    userScroll(30);
+    clickStub(1); // origin A (30)
+    clickStub(3); // origin B (174)
+    const top = screen.getByTestId('fs-top');
+    act(() => { top.focus(); });
+    expect(screen.queryByTestId('fs-tools-strip')).not.toBeNull();
+    fireEvent.keyDown(top, { key: 'ArrowLeft' });
+    const back = screen.getByTestId('fs-stack-back');
+    expect(document.activeElement).toBe(back);
+    fireEvent.click(back, { detail: 0 }); // Enter on a button
     expect(box.scrollTop).toBe(174);
-    clickStub(3); // unit 2's stub (at 10 + 300 - 174 = 136) -> unit 3's root
-    expect(box.scrollTop).toBe(174 + (10 + 400 - 174) - 36);
-    fireEvent.click(pill()!);
-    expect(box.scrollTop).toBe(174);
-    expect(pill()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('fs-top'));
+    act(() => { screen.getByTestId('fs-top').blur(); });
+    act(() => { screen.getByTestId('fs-top').focus(); });
+    expect(screen.queryByTestId('fs-tools-strip')).not.toBeNull();
+    fireEvent.keyDown(screen.getByTestId('fs-top'), { key: 'Escape' });
+    expect(screen.queryByTestId('fs-tools-strip')).toBeNull();
+    expect(onBack).not.toHaveBeenCalled(); // the view stays
+    expect(document.activeElement).toBe(screen.getByTestId('fs-top'));
+    // Closed, Esc is the view's again (Focus exit, 8f74df50).
+    fireEvent.keyDown(screen.getByTestId('fs-top'), { key: 'Escape' });
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('touch and pen: a tap on a closed group opens it (no hover to reach Back); a tap on the open group is Top; a mouse click is Top at once', async () => {
+    for (const pointerType of ['touch', 'pen']) {
+      const { box, userScroll } = await sixLoaded();
+      userScroll(30);
+      clickStub(1); // scrollTop 174, one origin
+      const top = screen.getByTestId('fs-top');
+      fireEvent.pointerDown(top, { pointerType });
+      act(() => top.focus()); // a tap focuses the button between pointerdown and click
+      fireEvent.click(top);
+      expect(screen.queryByTestId('fs-tools-strip')).not.toBeNull();
+      expect(box.scrollTop).toBe(174); // not acted
+      expect(hint()).not.toBeNull();
+      fireEvent.pointerDown(top, { pointerType });
+      fireEvent.click(top);
+      await waitFor(() => expect(box.scrollTop).toBe(0));
+      expect(hint()).toBeNull(); // Top cleared the stack
+      cleanup();
+      vi.restoreAllMocks();
+    }
+    const { box, userScroll } = await sixLoaded();
+    userScroll(30);
+    clickStub(1);
+    fireEvent.pointerDown(screen.getByTestId('fs-top'), { pointerType: 'mouse' });
+    fireEvent.click(screen.getByTestId('fs-top'));
+    await waitFor(() => expect(box.scrollTop).toBe(0));
+  });
+
+  it('blur out of the group collapses it', async () => {
+    const { userScroll } = await sixLoaded();
+    userScroll(30);
+    clickStub(1);
+    const top = screen.getByTestId('fs-top');
+    act(() => { top.focus(); });
+    expect(screen.queryByTestId('fs-tools-strip')).not.toBeNull();
+    fireEvent.blur(top, { relatedTarget: screen.getByTestId('fs-scroll') });
+    expect(screen.queryByTestId('fs-tools-strip')).toBeNull();
   });
 });
 
@@ -881,12 +1094,12 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
     clickStub(5); // unit 3's stub -> unit 7
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
     calls.length = 0;
-    fireEvent.click(pill()!);
+    fireEvent.click(backArrow()!);
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
     await waitFor(() => expect(box.scrollTop).toBe(190));
     expect(stubTop()).toBe(120);
     expect(calls).toEqual(['seek 3', 'seek 2']);
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
     await waitFor(() => expect(progressText()).toBe('unit 3 of 12'));
     expect(unitStepper()).toBe('3');
   });
@@ -910,11 +1123,11 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
       return realSeek(t, c, u, sig);
     });
     calls.length = 0;
-    fireEvent.click(pill()!);
+    fireEvent.click(backArrow()!);
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     expect(calls).toEqual(['seek 3 (404)', 'first', 'seek 3']);
     expect(box.scrollTop).toBe(30);
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
     expect(screen.getByTestId('fs-notice').textContent).toBe(NOTICE_REFRESHED);
   });
 
@@ -937,14 +1150,14 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
       return realSeek(t, c, u, sig);
     });
     calls.length = 0;
-    fireEvent.click(pill()!);
+    fireEvent.click(backArrow()!);
     await screen.findByTestId('fs-tail-retry');
-    expect(pill()!.textContent).toBe(BACK_LABEL);
+    expect(backTitle()).toBe(BACK_LABEL);
     fireEvent.click(screen.getByTestId('fs-tail-retry'));
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     expect(calls).toEqual(['seek 3 (500)', 'seek 3']);
     expect(box.scrollTop).toBe(30);
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
   });
 
   it('an origin past the first page of its unit (2.7): Back seeks, reads on to it, and restores its offset', async () => {
@@ -962,9 +1175,9 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
     userScroll(1300); // 2.7 (section 14) at 110
     clickStub(14);
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('5'));
-    expect(pill()!.textContent).toBe('Back to U2 S1');
+    expect(backTitle()).toBe('Back to U2 S1');
     calls.length = 0;
-    fireEvent.click(pill()!);
+    fireEvent.click(backArrow()!);
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
     expect(calls).toEqual(['seek 2', 'next F.2.5']);
     expect(box.scrollTop).toBe(500);
@@ -981,10 +1194,10 @@ describe('the Back pill: exact offset, failures, options (#736 review)', () => {
     fireEvent.click(within(sections()[0]).getByTestId('mat-builds-toggle'));
     fireEvent.click(within(sections()[0]).getByTestId('mat-builds-link'));
     expect(sections()[2].dataset.fsFlash).toBe('true');
-    expect(pill()!.textContent).toBe(BACK_LABEL);
+    expect(backTitle()).toBe(BACK_LABEL);
     fireEvent.click(screen.getByTestId('fs-unpin'));
     expect(onOptionsChange).toHaveBeenCalled();
-    expect(pill()).toBeNull();
+    expect(backArrow()).toBeNull();
   });
 });
 
@@ -1028,7 +1241,7 @@ describe('a pending Back restore yields to the reader (#736 re-verify)', () => {
       return realSeek(t, c, u, sig);
     });
     calls.length = 0;
-    fireEvent.click(pill()!);
+    fireEvent.click(backArrow()!);
     await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
     await waitFor(() => expect(calls).toEqual(['seek 3', 'seek 2 (held)'])); // waiting on unit 2
     expect(box.scrollTop).toBe(0);
@@ -1189,7 +1402,7 @@ describe('the sticky section path (book design §5 / prototype item 5)', () => {
     fireEvent.click(screen.getAllByTestId('fs-path-item')[1]); // 1.1, section index 1
     // Section i sits at 10 + 100 i - scrollTop; a scroll puts it at PATH_H + 8 = 36.
     expect(box.scrollTop).toBe(10 + 100 - 36);
-    expect(screen.queryByTestId('fs-back-pill')).toBeNull();
+    expect(backArrow()).toBeNull(); // no origin recorded
   });
 });
 
