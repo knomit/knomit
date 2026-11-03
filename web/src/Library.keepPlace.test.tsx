@@ -46,11 +46,28 @@ let observers: IntersectionObserverCallback[] = [];
 const origIO = window.IntersectionObserver;
 const origRect = Element.prototype.getBoundingClientRect;
 const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+const origClientRects = Element.prototype.getClientRects;
+const origRO = globalThis.ResizeObserver;
+// hidden: the Library is display:none (the FactSet view holds Focus): no
+// layout box, so getClientRects() is empty.
+let hidden = false;
+let resizeCallbacks: ResizeObserverCallback[] = [];
 
 beforeEach(async () => {
   vi.clearAllMocks();
   list = Array.from({ length: 160 }, (_, i) => pathOf(i));
   observers = [];
+  hidden = false;
+  resizeCallbacks = [];
+  Element.prototype.getClientRects = function () {
+    return (hidden ? [] : [{}]) as unknown as DOMRectList;
+  };
+  globalThis.ResizeObserver = class {
+    constructor(cb: ResizeObserverCallback) { resizeCallbacks.push(cb); }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
   window.IntersectionObserver = class {
     constructor(cb: IntersectionObserverCallback) { observers.push(cb); }
     observe() {}
@@ -90,6 +107,8 @@ beforeEach(async () => {
 afterEach(() => {
   window.IntersectionObserver = origIO;
   Element.prototype.getBoundingClientRect = origRect;
+  Element.prototype.getClientRects = origClientRects;
+  globalThis.ResizeObserver = origRO;
   if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight);
   else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
 });
@@ -185,5 +204,149 @@ describe('Library — a new head keeps the reader\'s place', () => {
     const { view, dispatch, navigate, open } = await deepInList(CASES[0].state, CASES[0].testId);
     view.rerender(<Library state={{ ...open, headCommit: 'h2', freeText: 'other' }} dispatch={dispatch} navigate={navigate} />);
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(50));
+  });
+});
+
+/** A promise the test resolves by hand. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+describe('Library — keeping the place under a busy agent (#739 review)', () => {
+  // H1: a head while the CURRENT scope's page 1 is in flight is a fresh load,
+  // not a refresh of whatever rows are still held (here, the folder the reader
+  // searched from).
+  // Sabotage: drop the rs.loaded check (keep place whenever rows are held) and
+  // the head refreshes the folder's 7 rows ({limit: 7}), page 1 never lands
+  // and the search spinner stays on.
+  it('a new head during page 1 reloads page 1: it lands, the spinner stops, row 0 opens', async () => {
+    const { api } = await import('./api');
+    (api.browse as ReturnType<typeof vi.fn>).mockResolvedValue({
+      path: 'kb', children: Array.from({ length: 7 }, (_, i) => ({ name: `d${i}.md`, is_dir: false, fullPath: `kb/d${i}.md`, title: `D${i}` })),
+    });
+    const search = api.search as ReturnType<typeof vi.fn>;
+    const firstPage = deferred<{ results: unknown[]; total: number }>();
+    const real = search.getMockImplementation()! as (...a: unknown[]) => unknown;
+    search.mockImplementationOnce(() => firstPage.promise);
+    const dispatch = vi.fn();
+    const pathState: AppState = { ...repoBase, librarySort: 'path' };
+    const view = render(<Library state={pathState} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(7));
+    const searching = { ...pathState, freeText: 'agentic' };
+    view.rerender(<Library state={searching} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    search.mockImplementation(real);
+    view.rerender(<Library state={{ ...searching, headCommit: 'h2' }} dispatch={dispatch} navigate={vi.fn()} />);
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+    firstPage.resolve({ results: [], total: 0 }); // the superseded page 1: dropped
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(50));
+    expect(search.mock.calls.map(c => c[6])).toEqual([{ limit: 50, offset: 0 }, { limit: 50, offset: 0 }]);
+    const searchingFlags = dispatch.mock.calls.map(c => c[0]).filter(a => a.type === 'SET_SEARCHING');
+    expect(searchingFlags.at(-1)).toEqual({ type: 'SET_SEARCHING', value: false });
+    expect(dispatch.mock.calls.map(c => c[0]).filter(a => a.type === 'AMEND_NAV').at(-1)).toEqual({ type: 'AMEND_NAV', factPath: pathOf(0) });
+  });
+
+  // M1: heads arriving faster than a refresh completes coalesce: at most one
+  // refresh is in flight, the in-flight one still lands, and one more pass
+  // runs after it, reading the state after the LAST head.
+  // Sabotage: restart on every head (no dirty flag: a new pass per head) and
+  // three passes overlap; drop the trailing re-run and the last head's rows
+  // never show.
+  it('heads faster than a refresh: one in flight, every pass lands, the last head wins', async () => {
+    const { api } = await import('./api');
+    const c = CASES[1];
+    const { view, dispatch, navigate, open } = await deepInList(c.state, c.testId);
+    const search = api.search as ReturnType<typeof vi.fn>;
+    const real = search.getMockImplementation()! as (...a: unknown[]) => unknown;
+    let inFlight = 0, maxInFlight = 0;
+    const gates: Array<() => void> = [];
+    search.mockClear();
+    search.mockImplementation((...args: unknown[]) => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise(resolve => gates.push(() => { inFlight--; resolve(real(...args)); }));
+    });
+    list = ['kb/r/a.md', ...list];
+    view.rerender(<Library state={{ ...open, headCommit: 'h2' }} dispatch={dispatch} navigate={navigate} />);
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    list = ['kb/r/b.md', ...list];
+    view.rerender(<Library state={{ ...open, headCommit: 'h3' }} dispatch={dispatch} navigate={navigate} />);
+    list = ['kb/r/c.md', ...list];
+    view.rerender(<Library state={{ ...open, headCommit: 'h4' }} dispatch={dispatch} navigate={navigate} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(search).toHaveBeenCalledTimes(1);
+    await act(async () => { gates.shift()!(); });
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+    await act(async () => { gates.shift()!(); });
+    await waitFor(() => expect(paths(c.testId).slice(0, 3)).toEqual(['kb/r/c.md', 'kb/r/b.md', 'kb/r/a.md']));
+    expect(maxInFlight).toBe(1);
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(selectedPath()).toBe(pathOf(120));
+    expect(paths(c.testId).indexOf(pathOf(120))).toBe(123);
+  });
+
+  // M2: a page the sentinel asked for while a refresh ran is asked for again
+  // once the refresh lands (the sentinel is still in view, and the observer
+  // only reports changes).
+  // Sabotage: drop the retry in the layout effect and offset 150 is never read.
+  it('a loadMore refused during a refresh is retried when it lands', async () => {
+    const { api } = await import('./api');
+    const c = CASES[1];
+    const { view, dispatch, navigate, open } = await deepInList(c.state, c.testId);
+    const search = api.search as ReturnType<typeof vi.fn>;
+    const real = search.getMockImplementation()! as (...a: unknown[]) => unknown;
+    const gate = deferred<void>();
+    search.mockClear();
+    search.mockImplementationOnce(async (...args: unknown[]) => { await gate.promise; return real(...args); });
+    view.rerender(<Library state={{ ...open, headCommit: 'h2' }} dispatch={dispatch} navigate={navigate} />);
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    intersect(); // refused: the refresh is replacing the rows
+    expect(search).toHaveBeenCalledTimes(1);
+    await act(async () => { gate.resolve(); });
+    await waitFor(() => expect(search.mock.calls.map(cl => cl[6])).toEqual([{ limit: 150, offset: 0 }, { limit: 50, offset: 150 }]));
+    await waitFor(() => expect(paths(c.testId)).toHaveLength(160));
+  });
+
+  // L3: inserts above the selected row push it past the loaded rows. The
+  // refresh reads on by exactly the number of rows inserted above it (40),
+  // so the selected row is still loaded, selected and anchored.
+  // Sabotage: no extension, and the selected row falls out of the list (no
+  // selection, the reader's row gone).
+  it('a selected row pushed past the loaded rows is read on to, bounded by the inserts above it', async () => {
+    const { api } = await import('./api');
+    const c = CASES[1];
+    const { view, dispatch, navigate, open, scroller } = await deepInList(c.state, c.testId);
+    const search = api.search as ReturnType<typeof vi.fn>;
+    search.mockClear();
+    list = [...Array.from({ length: 40 }, (_, i) => `kb/r/n${String(i).padStart(2, '0')}.md`), ...list];
+    view.rerender(<Library state={{ ...open, headCommit: 'h2' }} dispatch={dispatch} navigate={navigate} />);
+    await waitFor(() => expect(paths(c.testId)).toHaveLength(190));
+    expect(search.mock.calls.map(cl => cl[6])).toEqual([{ limit: 150, offset: 0 }, { limit: 40, offset: 150 }]);
+    expect(selectedPath()).toBe(pathOf(120));
+    expect(paths(c.testId).indexOf(pathOf(120))).toBe(160);
+    expect(scroller.scrollTop).toBe(160 * ROW - 100);
+  });
+
+  // M3: a refresh while the list is hidden (FactSet Focus: display:none) reads
+  // no rects. It must not anchor on row 0 or write scrollTop 0 into the
+  // scroll memory; it re-anchors on the last place seen once the list shows.
+  // Sabotage: capture the anchor from the hidden list (no isRendered check)
+  // and the place is lost: the anchor resolves to nothing usable and the
+  // scroll is not moved with the inserted row.
+  it('a refresh while the list is hidden keeps the place for when it shows', async () => {
+    const c = CASES[0];
+    const { view, dispatch, navigate, open, scroller } = await deepInList(c.state, c.testId);
+    fireEvent.scroll(scroller);
+    await act(async () => { await new Promise(r => requestAnimationFrame(() => r(null))); });
+    hidden = true;
+    list = [NEW, ...list];
+    view.rerender(<Library state={{ ...open, headCommit: 'h2' }} dispatch={dispatch} navigate={navigate} />);
+    await waitFor(() => expect(paths(c.testId)[0]).toBe(NEW));
+    expect(scroller.scrollTop).toBe(120 * ROW - 100);
+    expect(selectedPath()).toBe(pathOf(120));
+    hidden = false;
+    act(() => { for (const cb of resizeCallbacks) cb([], {} as ResizeObserver); });
+    expect(scroller.scrollTop).toBe(121 * ROW - 100);
   });
 });
