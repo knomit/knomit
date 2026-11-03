@@ -74,6 +74,13 @@ describe('ConnectionsPanel', () => {
   // panel leftward past the fact pane's edge, where the pane's overflow:hidden
   // cut it off beside the list rail. jsdom cannot show clipping, so the anchor
   // itself is the contract.
+  it('caps its width to its containing block when closed, and uses the measured clamp when open', () => {
+    const { rerender } = render(<ConnectionsPanel {...base} open={null} />);
+    expect(screen.getByTestId('connections-panel').style.maxWidth).toBe('100%');
+    rerender(<ConnectionsPanel {...base} open="in" />);
+    expect(screen.getByTestId('connections-panel').style.maxWidth).not.toBe('100%');
+  });
+
   it('hangs from the menu, left-aligned', () => {
     render(<ConnectionsPanel {...base} open="in" />);
     const panel = screen.getByTestId('connections-panel');
