@@ -1,6 +1,7 @@
 import { createOutageLog } from './streamOutage';
 import { openEventStream, streamErrorSuffix } from './eventStream';
 import { lensListSearchParams, listSearchParams } from './listSearch';
+import { apiUrl } from './apiBase';
 export { lensListSearchParams, listSearchParams, parseSearchQuery } from './listSearch';
 export type { ListFilters, ListKind } from './listSearch';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
@@ -10,17 +11,9 @@ export type { ListFilters, ListKind } from './listSearch';
 // the handler proxies /api/ to the server's local socket, so no call leaves the
 // page's origin and no TCP port is involved. The event streams are opened
 // through openEventStream (eventStream.ts). One bundle, runtime-configured.
-// apiBase reads the configured base at call time (not import time) so it is
-// robust to script/module evaluation order and easy to test.
-function apiBase(): string {
-  return (typeof window !== 'undefined' &&
-    (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__) || '';
-}
-
-// apiUrl prefixes an absolute API path with the runtime API base.
-export function apiUrl(path: string): string {
-  return apiBase() + path;
-}
+// apiUrl (apiBase.ts) prefixes an absolute API path with the runtime base,
+// read at call time.
+export { apiUrl };
 
 function encodeBranch(name: string): string {
   return name.replaceAll('/', ':');

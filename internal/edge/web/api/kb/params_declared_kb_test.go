@@ -46,6 +46,7 @@ func TestKBRouteParams_MatchOpenAPI(t *testing.T) {
 		"/lenses/{lens}/motifs":                                       lensMotifsParams,
 		"/lenses/{lens}/motifs/{key}":                                 lensMotifClusterParams,
 		"/lenses/{lens}/stats":                                        lensStatsParams,
+		"/lenses/{lens}/events":                                       lensEventsParams,
 		"/lenses/{lens}/topics":                                       lensTopicsParams,
 		"/lenses/{lens}/topics/{path}":                                lensTopicsParams,
 	} {

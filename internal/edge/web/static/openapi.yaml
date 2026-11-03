@@ -4902,6 +4902,36 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /lenses/{lens}/events:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, events]
+      summary: Server-Sent Events stream of lens member content changes
+      operationId: streamLensEvents
+      description: |
+        PLACEHOLDER copy. One event kind, `content`: a lens member's content
+        changed. `data` is `{repo, id, branch, head}`: the member's name, its
+        12-hex id, the branch the lens reads it at, and that branch's index
+        watermark. It is sent only after the member's index has absorbed the
+        change, so a read issued on it sees the change; commits landing close
+        together give one event per member with the latest head. Every member
+        is covered, the write repo included. No status, task, index, sync or
+        log events, and no event ids (nothing is replayed on reconnect). The
+        stream ends when the lens's membership may have changed (any lens
+        edit, rename or delete); reconnect to follow the new membership.
+
+        Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /lenses/{lens}/stats:
     parameters:
       - $ref: "#/components/parameters/Lens"

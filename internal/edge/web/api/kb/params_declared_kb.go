@@ -60,6 +60,8 @@ var (
 	lensStatsParams = httpx.DeclareParams("path", "repo", "axis")
 	// GET /lenses/{lens}/topics[/{path}]
 	lensTopicsParams = httpx.DeclareParams("repo")
+	// GET /lenses/{lens}/events
+	lensEventsParams = httpx.DeclareParams()
 )
 
 // refuseUnknownFactPath applies the declared set of a GET /facts/* request

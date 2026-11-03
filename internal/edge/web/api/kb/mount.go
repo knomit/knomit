@@ -80,6 +80,7 @@ func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr
 	lens.Get("/motifs", handleHALLensMotifs(b))
 	lens.Get("/motifs/{key}", handleHALLensMotifCluster(b))
 	lens.Get("/stats", handleHALLensStats())
+	lens.Get("/events", handleHALLensEvents(mgr))
 	lens.Get("/topics", handleHALLensTopics(ontologyRoot))
 	lens.Get("/topics/*", handleHALLensTopics(ontologyRoot))
 }

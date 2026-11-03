@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	// Registers the stock "sqlite3" driver. The registry deliberately does
 	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
@@ -116,6 +117,38 @@ type LensRegistry struct {
 	// the shared control.db handle to NewLensRegistry, and Registry closes it;
 	// a second Close here would shut a handle still in use.
 	owns bool
+
+	// changedMu guards changed: a channel closed (and replaced) by every
+	// successful Update, Rename and Delete. GET /lenses/{lens}/events
+	// holds the one current at connect and ends its stream when it closes, so
+	// a client reconnects onto the lens's new membership. Nil until the first
+	// Changed call.
+	changedMu sync.Mutex
+	changed   chan struct{}
+}
+
+// Changed returns a channel that is closed by the next successful change to
+// ANY existing lens (Update, Rename, Delete; a Create changes no open stream). A watcher re-reads what it needs
+// after it closes and calls Changed again for the next one. No goroutine and
+// no buffer: one channel per generation of the registry.
+func (r *LensRegistry) Changed() <-chan struct{} {
+	r.changedMu.Lock()
+	defer r.changedMu.Unlock()
+	if r.changed == nil {
+		r.changed = make(chan struct{})
+	}
+	return r.changed
+}
+
+// notifyChanged closes the current Changed channel. Called after a change has
+// been committed, never on a failed or no-op write.
+func (r *LensRegistry) notifyChanged() {
+	r.changedMu.Lock()
+	defer r.changedMu.Unlock()
+	if r.changed != nil {
+		close(r.changed)
+		r.changed = nil
+	}
 }
 
 // NewLensRegistry wraps an already-open, already-migrated control.db handle.
@@ -309,6 +342,7 @@ func (r *LensRegistry) Update(l Lens) (Lens, error) {
 	if err := tx.Commit(); err != nil {
 		return Lens{}, fmt.Errorf("update lens: %w", err)
 	}
+	r.notifyChanged()
 	return l, nil
 }
 
@@ -360,6 +394,7 @@ func (r *LensRegistry) Delete(name string) error {
 	if _, err := r.db.Exec(`DELETE FROM lenses WHERE name = ?`, name); err != nil {
 		return fmt.Errorf("delete lens: %w", err)
 	}
+	r.notifyChanged()
 	return nil
 }
 
@@ -401,6 +436,9 @@ func (r *LensRegistry) Rename(uid, from, to string) (bool, error) {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("rename lens: %w", err)
+	}
+	if n > 0 {
+		r.notifyChanged()
 	}
 	return n > 0, nil
 }

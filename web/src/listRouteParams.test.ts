@@ -5,6 +5,7 @@ import { api, branchEventsUrl, subscribeRepoEvents } from './api';
 import { materializeApi } from './materializeApi';
 import type { MatOptions, MatTarget } from './materializeApi';
 import type { ListFilters } from './listSearch';
+import { lensEventsUrl } from './useLensContentRev';
 
 const MAT: MatTarget = { repo: 'r', branch: 'b', path: 'kb/x.md' };
 const MAT_OPTS: MatOptions = { depth: 2, references: 9, crossKb: true, unpin: true };
@@ -172,6 +173,14 @@ describe('the knowledge-base reads send only the parameters their route declares
 
   // App.tsx opens the branch stream at branchEventsUrl (an EventSource, so no
   // fetch to capture): its URL is checked against /events directly.
+  // The lens list's member-content stream (useLensContentRev): no parameter.
+  it('the lens content stream → /lenses/{lens}/events', () => {
+    const u = new URL(lensEventsUrl('eng'), 'http://x');
+    expect(u.pathname).toBe('/api/v1/lenses/eng/events');
+    expect(specQueryParams('/lenses/{lens}/events')).toEqual([]);
+    expect([...u.searchParams.keys()]).toEqual([]);
+  });
+
   it('App’s branch stream → /events', () => {
     const u = new URL(branchEventsUrl('r', 'agent/x'), 'http://x');
     expect(u.pathname).toBe('/api/v1/repos/r/branches/agent:x/events');
