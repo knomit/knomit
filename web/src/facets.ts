@@ -50,7 +50,10 @@ export type Facet = 'browse' | 'activity' | 'settings' | 'members';
  */
 export type PinnedTarget =
   | { kind: 'archived'; id: string }
-  | { kind: 'pending'; createId: string }
+  /** A create not yet registered. It carries its NAME because the label cannot
+   *  look it up later: the server omits a cancelled job from the creates list,
+   *  so after a cancel the job is gone while the pin stays. */
+  | { kind: 'pending'; createId: string; name: string }
   | { kind: 'unavailable'; repo: string }
   | { kind: 'brokenLens'; name: string }
   /** The fleet this instance is in: a target of its own (Members, Activity,
@@ -418,7 +421,7 @@ export function targetLabelFor(
       const job = creates.find(c => c.create_id === target.createId);
       const flag = job ? createFlag(job.state) : null;
       return {
-        kind: 'repo', name: job?.name ?? '',
+        kind: 'repo', name: job?.name ?? target.name,
         ...(flag ? { chip: { text: flag, tone: flag === 'failed' ? 'bad' as const : 'creating' as const } } : {}),
       };
     }

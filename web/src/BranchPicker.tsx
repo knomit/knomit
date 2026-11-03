@@ -26,19 +26,25 @@ export function BranchPicker({ state, onEnterBranch }: Props) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 0 });
-  const [rows, setRows] = useState<ExperimentRow[]>([]);
+  // Tagged with the repo they were fetched for: the picker outlives a repo
+  // switch, and the previous repo's list must not show while the new one loads.
+  const [fetched, setFetched] = useState<{ repo: string; rows: ExperimentRow[] } | null>(null);
+  const rows = fetched && fetched.repo === state.repo ? fetched.rows : [];
 
   useDismiss(open, () => setOpen(false), [btnRef, menuRef]);
 
   // Fetched when the menu OPENS rather than held in app state: the list is
   // small, it is only ever read here, and a stale one would offer a branch
-  // that a commit elsewhere has since deleted.
+  // that a commit elsewhere has since deleted. The last list for THIS repo
+  // shows at once on a reopen while the refetch lands; another repo's never
+  // does (see `fetched`).
   useEffect(() => {
     if (!open || !state.repo) return;
     let alive = true;
-    api.listExperiments(state.repo)
-      .then(res => { if (alive) setRows(res.experiments); })
-      .catch(() => { if (alive) setRows([]); });
+    const repo = state.repo;
+    api.listExperiments(repo)
+      .then(res => { if (alive) setFetched({ repo, rows: res.experiments }); })
+      .catch(() => { if (alive) setFetched({ repo, rows: [] }); });
     return () => { alive = false; };
   }, [open, state.repo]);
 

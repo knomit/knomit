@@ -193,7 +193,7 @@ describe('pinned targets and the facet rule', () => {
 
   it('facetsFor gives every pinned target settings alone, and a draft no facets', () => {
     expect(facetsFor({ kind: 'archived', id: 'x' }, [], [], [])).toEqual(['settings']);
-    expect(facetsFor({ kind: 'pending', createId: 'c1' }, [], [], [])).toEqual(['settings']);
+    expect(facetsFor({ kind: 'pending', createId: 'c1', name: 'b-kb' }, [], [], [])).toEqual(['settings']);
     expect(facetsFor({ kind: 'unavailable', repo: 'gone' }, [], [], [])).toEqual(['settings']);
     expect(facetsFor({ kind: 'brokenLens', name: 'bad' }, [], [], [])).toEqual(['settings']);
     expect(facetsFor({ kind: 'draft', draft: 'repo' }, [], [], [])).toEqual([]);
@@ -311,9 +311,14 @@ describe('targetLabelFor', () => {
   });
 
   it('chips a create by its flag: creating, or failed in the bad tone', () => {
-    expect(targetLabelFor({ kind: 'pending', createId: 'c1' }, repos, [], creates)).toEqual(
+    expect(targetLabelFor({ kind: 'pending', createId: 'c1', name: 'b-kb' }, repos, [], creates)).toEqual(
       { kind: 'repo', name: 'b-kb', chip: { text: 'creating', tone: 'creating' } });
-    expect(targetLabelFor({ kind: 'pending', createId: 'c2' }, repos, [], creates).chip).toEqual({ text: 'failed', tone: 'bad' });
+    expect(targetLabelFor({ kind: 'pending', createId: 'c2', name: 'x' }, repos, [], creates).chip).toEqual({ text: 'failed', tone: 'bad' });
+  });
+
+  it('keeps a pending target\'s name once its job has left the list (a cancelled create is omitted by the server)', () => {
+    expect(targetLabelFor({ kind: 'pending', createId: 'gone', name: 'cancelled-kb' }, repos, [], creates)).toEqual(
+      { kind: 'repo', name: 'cancelled-kb' });
   });
 
   it('chips a registered repo whose create is still working, and leaves a plain repo bare', () => {
