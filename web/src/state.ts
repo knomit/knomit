@@ -734,6 +734,33 @@ export function reducer(s: AppState, a: Action): AppState {
   return next;
 }
 
+// openFactSourceResolved says whether factSource is the mount of the fact
+// state.factPath names — i.e. whether pairing the two addresses a real fact.
+// Outside a lens there is no per-fact mount, so it is always true.
+//
+// factSource is re-set only once getLensFact answers for a NEW path, so for one
+// stretch after the open fact changes it still names the PREVIOUS fact's mount.
+// A reader that pairs it with the NEW path (useFactEdges, synchronously) asked
+// alpha's route for a beta fact: two 404s on /incoming and /outgoing. Such a
+// reader waits on this, exactly as it waits for a null source on a first open.
+//
+// It is deliberately NOT applied by clearing factSource in the reducer: the
+// fact view keeps rendering the previous fact until its replacement loads, and
+// pairs it — coherently — with the previous source (VersionWalker's commits).
+// Clearing it sends that render to the write-repo fallback {write, ''}.
+//
+// The path is the canonical lens address (decision 10a3bcc0): a read mount's
+// fact is kb://<id12>/…, owned by the source with that id; a bare path is the
+// write repo's. A hop within one mount is resolved at once.
+export function openFactSourceResolved(s: AppState): boolean {
+  if (s.context.kind !== 'lens') return true;
+  const src = s.factSource;
+  if (!s.factPath || !src) return false;
+  const m = /^kb:\/\/([^/]+)\//.exec(s.factPath);
+  if (m) return src.id === m[1];
+  return !!s.lens && src.repo === s.lens.write.name;
+}
+
 export function selectAnchorCommit(s: AppState): string | null {
   switch (s.asOf.mode) {
     case 'live':     return null;

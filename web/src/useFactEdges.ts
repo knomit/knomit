@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { api, isNotFound } from './api';
 import type { RefGroup } from './api';
 import type { AppState } from './state';
-import { factHistoryAnchor, edgeAnchorCommit, isLive, isLensContext } from './state';
+import { factHistoryAnchor, edgeAnchorCommit, isLive, isLensContext, openFactSourceResolved } from './state';
 import { useAsync } from './hooks';
 
 export interface FactEdges {
@@ -49,6 +49,10 @@ const EMPTY: FactEdges = {
  * getLensFact). Fetching before then reads the wrong mount and yields an empty
  * edge set — so this waits, and re-runs when factSource lands. RightPanel had
  * this guard; EdgesRail did not, which is one way the two calls could differ.
+ * The same wait covers a SWITCH between facts on different mounts: until
+ * SET_FACT_SOURCE lands for the new path, factSource is still the PREVIOUS
+ * fact's mount, so the guard is openFactSourceResolved (the source owns this
+ * path), not a bare null check.
  *
  * A LIVE 404 IS A STALE CACHE, NOT AN ANSWER. Live edge fetches are anchored at
  * state.headCommit, which only the page-load bootstrap, SSE `status` events and
@@ -94,11 +98,12 @@ export function useFactEdges(state: AppState, onHead?: (head: string) => void): 
   const live = isLive(state);
   const inDiff = state.asOf.mode === 'diff';
   const a = factHistoryAnchor(state);
+  const sourceResolved = openFactSourceResolved(state);
 
   useAsync((stale) => {
     const clear = () => { setEdges({ incoming: [], outgoing: [] }); setError(null); setLoading(false); };
     if (!factPath) { clear(); return; }
-    if (lensCtx && !state.factSource) { clear(); return; }
+    if (lensCtx && !sourceResolved) { clear(); return; }
 
     setLoading(true);
     setError(null);
@@ -154,7 +159,7 @@ export function useFactEdges(state: AppState, onHead?: (head: string) => void): 
     run(anchor, true);
     // Deps are the resolved anchor values, not `state`: every field that can
     // change WHICH edges these are appears here, and nothing else re-fetches.
-  }, [factPath, a.repo, a.branch, a.path, anchor, live, lensCtx, state.factSource?.repo, state.factSource?.branch]);
+  }, [factPath, a.repo, a.branch, a.path, anchor, live, lensCtx, sourceResolved, state.factSource?.repo, state.factSource?.branch]);
 
   const refCommits = useMemo(() => {
     const m = new Map<string, string>();

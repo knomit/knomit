@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, readOnlyTitle, READ_ONLY_TITLE, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, readOnlyTitle, READ_ONLY_TITLE, isLensContext, lensResolutionPending, openFactSource, openFactSourceResolved, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
 import type { AppState, FilterChip } from './state';
 
 // Crumb identity without the pop count (asserted separately in state_asof.test.ts).
@@ -368,6 +368,34 @@ describe('reducer — BrowseContext (SET_CONTEXT / SET_REPO wrapper)', () => {
     s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     expect(s.factPath).toBeNull();
     expect(s.factSource).toBeNull();
+  });
+
+  // factSource lags a switch of the open fact by one getLensFact round trip. A
+  // reader pairing it with the NEW path must see it as unresolved until then.
+  it('openFactSourceResolved: the source must own the open path, kb://<id12>/ by id, a bare path by the write repo', () => {
+    const work: LensSource = { repo: 'work', id: 'workid123456', branch: 'agent/x' };
+    const base: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens };
+    // stale: the previous fact's mount, the new fact on another mount
+    expect(openFactSourceResolved({ ...base, factPath: 'kb://abc123def456/kb/x.md', factSource: work })).toBe(false);
+    expect(openFactSourceResolved({ ...base, factPath: 'kb/w.md', factSource: source })).toBe(false);
+    expect(openFactSourceResolved({ ...base, factPath: 'kb://ffffffffffff/kb/y.md', factSource: source })).toBe(false);
+    // unresolved: no source, or no fact
+    expect(openFactSourceResolved({ ...base, factPath: 'kb/w.md', factSource: null })).toBe(false);
+    expect(openFactSourceResolved({ ...base, factPath: null, factSource: work })).toBe(false);
+    // owned: the same read mount, or the write repo for a bare path
+    expect(openFactSourceResolved({ ...base, factPath: 'kb://abc123def456/kb/y.md', factSource: source })).toBe(true);
+    expect(openFactSourceResolved({ ...base, factPath: 'kb/v.md', factSource: work })).toBe(true);
+    // a repo context has no per-fact mount
+    expect(openFactSourceResolved({ ...init, factPath: 'kb/v.md' })).toBe(true);
+  });
+
+  // The fact view keeps rendering the PREVIOUS fact until the new one loads, and
+  // pairs it with the previous source; the reducer must not clear that source
+  // on a switch, or that render falls back to the write repo with no branch.
+  it('factSource survives a switch to another mount until SET_FACT_SOURCE replaces it', () => {
+    const s0: AppState = { ...init, context: { kind: 'lens', name: 'dev' }, lens, factPath: 'kb/w.md', factSource: source };
+    const s = reducer(s0, { type: 'APPLY_NAV', view: 'library', factPath: 'kb://ffffffffffff/kb/y.md', asOf: { mode: 'live' } });
+    expect(s.factSource).toBe(source);
   });
 
   it('SET_LENS is a no-op after switching back to a repo context (stale resolution)', () => {
