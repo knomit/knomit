@@ -130,6 +130,22 @@ describe('FactBand', () => {
     expect(act.style.marginLeft).toBe('auto');
   });
 
+  // User, 2026-11-03: in a narrow pane the actions slid under the motif cells
+  // and could not be clicked. Row 3 now WRAPS, so the actions drop to a line
+  // of their own instead of overlapping. jsdom has no layout, so this pins the
+  // rule; the real-browser screenshots in the PR cover the geometry.
+  // SABOTAGE: drop flexWrap from fact-band-edges in FactBand.tsx -> red.
+  it('row 3 wraps, so the actions go under the openers rather than over them', () => {
+    render(<FactBand fact={fact} dispatch={vi.fn()} pinned={false} actions={actions}
+      edges={<span data-testid="the-edges">edges</span>} />);
+    const row = screen.getByTestId('fact-band-edges');
+    expect(row.style.flexWrap).toBe('wrap');
+    expect(row.style.columnGap).toBe('12px');
+    expect(row.style.rowGap).toBe('4px');
+    // The actions group stays one unit that cannot shrink into the openers.
+    expect(screen.getByTestId('fact-band-actions').style.flex).toBe('0 0 auto');
+  });
+
   it('shows no mount or branch in a repo context', () => {
     render(<FactBand fact={fact} dispatch={vi.fn()} pinned={false} actions={actions} />);
     expect(screen.queryByTestId('source-badge')).toBeNull();

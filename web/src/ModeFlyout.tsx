@@ -44,7 +44,7 @@ export const COLLAPSE_MS = 250;
  * current icon is in the Tab order.
  */
 export function ModeFlyout({ items, currentKey, currentActs }: Props) {
-  const [open, setOpen] = useState(false);
+  const [wantOpen, setOpen] = useState(false);
   const groupRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLButtonElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,6 +64,9 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
 
   const current = items.find(i => i.key === currentKey) ?? items[0];
   const others = items.filter(i => i !== current);
+  // Nothing to pick (the caller hides unavailable modes, so a derived mode is
+  // often alone): no expansion and no corner hint.
+  const open = wantOpen && others.length > 0;
 
   const focusCurrent = () => {
     quietFocus.current = true;
@@ -188,8 +191,8 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
         disabled={current.disabled}
         aria-label={current.ariaLabel}
         aria-pressed={current.active}
-        aria-haspopup="true"
-        aria-expanded={open}
+        aria-haspopup={others.length > 0 ? 'true' : undefined}
+        aria-expanded={others.length > 0 ? open : undefined}
         title={current.title}
         onPointerDown={(e: ReactPointerEvent<HTMLButtonElement>) => { press.current = { type: e.pointerType, wasOpen: open }; }}
         onClick={onCurrentClick}
@@ -198,14 +201,14 @@ export function ModeFlyout({ items, currentKey, currentActs }: Props) {
       >
         <current.Icon color="currentColor" size={14} />
         {/* The group hint: a 4px triangle in the bottom-right corner. */}
-        <span
+        {others.length > 0 && <span
           data-testid="mode-flyout-hint"
           aria-hidden="true"
           style={{
             position: 'absolute', right: 1, bottom: 1, width: 0, height: 0,
             borderLeft: '4px solid transparent', borderBottom: '4px solid currentColor',
           }}
-        />
+        />}
       </button>
     </div>
   );

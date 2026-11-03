@@ -289,10 +289,12 @@ function renderFact(
                 data-testid="materialize-btn"
                 title="Materialize"
                 aria-label="Materialize"
-                className="k-bare"
+                // .k-materialize: the results header's hover accent (App.css).
+                className="k-bare k-materialize"
                 onClick={onMaterialize}
                 style={{
-                  background: 'none', border: 'none', padding: 2, color: '#8a96a8',
+                  background: 'none', border: 'none', padding: 2,
+                  ['--k-materialize-rest' as string]: '#8a96a8',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.75,
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
@@ -550,7 +552,9 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate, motifEnd
 // there is no radius left to clip, and clipping would eat the inset underline
 // an open cell draws on its bottom edge.
 const controlStrip: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'stretch', gap: 2, flexShrink: 0,
+  // Wraps its cells when the pane is narrower than the strip (FactBand's row 3
+  // wraps the strip and the actions apart; this wraps within the strip).
+  display: 'inline-flex', alignItems: 'stretch', gap: 2, flexWrap: 'wrap', minWidth: 0,
   // Every cell carries CELL_PAD_X of its own, which an open cell needs so its
   // fill and underline are not flush against the text. With no border to sit
   // inside, that padding pushed the first cell's text one notch right of the

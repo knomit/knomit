@@ -14,6 +14,15 @@ a { color: inherit; }
 .k-bare:focus { outline: none; }
 .k-bare:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; border-radius: 4px; }
 
+/* Materialize (the newspaper glyph) takes the results header's accent on
+   hover, in BOTH places it appears: the results-list header (LibraryHeader)
+   and the single-fact header (RightPanel). One rule, so the two cannot drift.
+   Each button sets its own resting colour through --k-materialize-rest; an
+   inline `color` would outrank this :hover. #7c9 is LibraryHeader's ACCENT
+   (the lit mode); LibraryHeader.flyout.test.tsx pins the two equal. */
+.k-materialize { color: var(--k-materialize-rest, #888); }
+.k-materialize:not(:disabled):hover { color: #7c9; }
+
 /* The Connect page (RemoteConnectWizard, FleetFollowFlow): form beside a
    progress rail, stacked with the rail above the form on a phone. */
 .k-connect-grid { grid-template-columns: minmax(0, 1fr) 178px; }
