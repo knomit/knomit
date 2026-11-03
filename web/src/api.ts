@@ -1881,8 +1881,9 @@ async function listLensFacts(lens: string, opts: {
 }
 
 // lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
-// search. The envelope is flat ({results,total}); this returns just the results
-// array (each row canonical path + source). `repos` → repeated `repo=` params.
+// search. The envelope is flat ({results,total}): each row carries a canonical
+// path + source, and `total` is the ranked list's length (what `offset` can
+// reach), the list's count whatever page this is. `repos` → repeated `repo=` params.
 // `opts` forwards the same content filters the repo /search sends. The lens
 // FACTS handler accepts the identical set, so filter-bearing reads no longer
 // have to come through here — this path is now for RANKING (a text query), and
@@ -1897,11 +1898,12 @@ async function lensSearch(
   opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
            motifs?: string[]; motifMatch?: MotifMatch },
   page?: ListPage,
-): Promise<(SearchResult & { source: LensSource })[]> {
+): Promise<{ results: (SearchResult & { source: LensSource })[]; total: number }> {
   const p = lensListSearchParams('relevance', q, repos, opts);
   setListPage(p, page);
-  const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
-  return data.results ?? [];
+  const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[]; total?: number }>(`${lensBase(lens)}/search?${p}`);
+  const results = data.results ?? [];
+  return { results, total: data.total ?? results.length };
 }
 
 // lensCompletions GETs /api/v1/lenses/{lens}/completions — the union of per-mount
@@ -2738,7 +2740,7 @@ export const api = {
     opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
              motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean },
     page?: ListPage,
-  ): Promise<{ results: SearchResult[] }> => {
+  ): Promise<{ results: SearchResult[]; total: number }> => {
     // The route ranks ONE list (depth materialize.MaxFactSetFacts) and
     // `page` slices it; without a limit the server's default page is
     // materialize.UIListLimit. A FactSet of this search (listSearchParams
@@ -2748,6 +2750,8 @@ export const api = {
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
       const results: SearchResult[] = data._embedded?.results || data.results || [];
+      // The ranked list's length (what `offset` can reach), not the page's.
+      const total: number = data.total ?? results.length;
       // Anonymous telemetry: counts only — never the query text. No-op unless a
       // host defined window.knomitTelemetry (see telemetry.ts). Once per
       // search: a later page of the same list is a scroll, not a search.
@@ -2758,7 +2762,7 @@ export const api = {
           had_results: results.length > 0,
         });
       }
-      return { results };
+      return { results, total };
     });
   },
 

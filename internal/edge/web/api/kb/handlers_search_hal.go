@@ -77,9 +77,13 @@ type searchResultItem struct {
 }
 
 // searchView is the search collection plus an optional notice. Notice is
-// omitted unless the caller's min_similarity removed every candidate.
+// omitted unless the caller's min_similarity removed every candidate. Total
+// is the ranked list's length (at most materialize.MaxFactSetFacts): every
+// offset below it has a row, and the FactSet of the search has that many
+// units. Count is the page's length.
 type searchView struct {
 	hal.CollectionView[searchResultItem]
+	Total  int    `json:"total"`
 	Notice string `json:"notice,omitempty"`
 }
 
@@ -176,8 +180,11 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			// exactly where the FactSet's units end. Stateless: each page
 			// re-runs the search, as the /facts collection's text search does
 			// (recentFactsSearch); ties are ordered by path, so pages of an
-			// unmoved index are contiguous and disjoint.
+			// unmoved index are contiguous and disjoint. The store cuts the
+			// page out of the ranked list BEFORE it reads any body (Page), so a
+			// page loads only its own rows, and reports the list's length.
 			Limit: materialize.MaxFactSetFacts,
+			Page:  &index.SearchPage{Offset: offset, Limit: limit},
 		}
 		now := timeNow()
 		if !applyExpiryParams(w, r, &q, now) {
@@ -223,6 +230,8 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			Str("branch", branch).
 			Int("vec_hits", diag.VecHits).
 			Int("after_cutoff", diag.Candidates).
+			Int("list", q.Page.Total).
+			Int("offset", offset).
 			Int("returned", len(results)).
 			Msg("hal search")
 		if err != nil {
@@ -230,7 +239,6 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			httpx.WriteStoreError(w, r, err, "Search failed", branch)
 			return
 		}
-		results = pageOf(results, offset, limit)
 
 		selfURL := httpx.SelfWithQuery(b.Branch(repoName, a)+"/search", r)
 
@@ -260,7 +268,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			items = append(items, item)
 		}
 
-		view := searchView{CollectionView: hal.CollectionView[searchResultItem]{
+		view := searchView{Total: q.Page.Total, CollectionView: hal.CollectionView[searchResultItem]{
 			Count: len(items),
 			Links: hal.LinkMap{"self": {Href: selfURL}},
 			Embedded: map[string][]searchResultItem{

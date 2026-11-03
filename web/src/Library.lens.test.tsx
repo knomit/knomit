@@ -21,9 +21,9 @@ vi.mock('./api', () => ({
       ],
       total: 2,
     }),
-    lensSearch: vi.fn().mockResolvedValue([
+    lensSearch: vi.fn().mockResolvedValue({ results: [
       { path: 'kb://bbbbbbbbbbbb/kb/api/auth.md', title: 'Auth flow', type: 'concept', source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' } },
-    ]),
+    ], total: 1 }),
     getLensFact: vi.fn().mockResolvedValue({
       path: 'kb://bbbbbbbbbbbb/kb/api/auth.md', title: 'Auth flow', body: 'b',
       domain: [], entities: [], refs: [], confidence: 1, sources: 1,
@@ -410,10 +410,10 @@ describe('Library — lens union auto-select', () => {
       ],
       total: 2,
     });
-    (api.lensSearch as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (api.lensSearch as ReturnType<typeof vi.fn>).mockResolvedValue({ results: [
       { path: AUTH, title: 'Auth flow', type: 'concept',
         source: { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main' } },
-    ]);
+    ], total: 1 });
   });
   const amends = (dispatch: ReturnType<typeof vi.fn>) =>
     dispatch.mock.calls.map(c => c[0]).filter(a => a.type === 'AMEND_NAV');

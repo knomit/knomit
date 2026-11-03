@@ -978,9 +978,11 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 		}
 
 		resp := lensSearchResponse{Results: rows, Total: total}
-		if len(rows) == 0 {
+		// The cutoff notice explains an empty LIST, not a page past its end.
+		if total == 0 {
 			resp.Notice = index.CutoffNotice(base.Text != "", minSimilarity, diags...)
 		}
+		log.Debug().Int("list", total).Int("offset", offset).Int("returned", len(rows)).Str("lens", b.Name()).Msg("lens search page")
 		logLensSearchDiag("search", b.Name(), base.Text != "", minSimilarity, targets, diags, len(rows))
 		hal.WriteHAL(w, http.StatusOK, resp)
 	}

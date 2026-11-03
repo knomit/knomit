@@ -71,9 +71,10 @@ async function primeApi() {
   api.getOrigin.mockResolvedValue(null);
   api.browse.mockResolvedValue({ path: 'kb', children: [] });
   api.recent.mockResolvedValue({ facts: [], total: 0 });
-  // One row each: Materialize is disabled for an empty list.
-  api.search.mockResolvedValue({ results: [{ path: 'kb/a.md', title: 'A', type: 'observation', score: 0.9 }] });
-  api.lensSearch.mockResolvedValue([{ path: 'kb/a.md', title: 'A', type: 'observation', source: { repo: 'alpha', id: 'u-a', branch: 'machine/test' } }]);
+  // One row each: Materialize is disabled for an empty list (the count is the
+  // server's total, so each mock carries one).
+  api.search.mockResolvedValue({ results: [{ path: 'kb/a.md', title: 'A', type: 'observation', score: 0.9 }], total: 1 });
+  api.lensSearch.mockResolvedValue({ results: [{ path: 'kb/a.md', title: 'A', type: 'observation', source: { repo: 'alpha', id: 'u-a', branch: 'machine/test' } }], total: 1 });
   api.listLensFacts.mockResolvedValue({ facts: [], total: 0 });
   api.lensBrowse.mockResolvedValue({ children: [] });
   // The first row opens; its fact view stays loading (none of these tests reads it).

@@ -20,6 +20,7 @@ import (
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/index"
 	"knomit/internal/foundation/auth"
 )
 
@@ -76,6 +77,29 @@ func searchPaths(t *testing.T, h http.Handler, query string) []string {
 		out = append(out, r.Path)
 	}
 	return out
+}
+
+// searchPage is one page of the repo /search route: its paths and the
+// ranked list's total.
+func searchPage(t *testing.T, h http.Handler, query string) ([]string, int) {
+	t.Helper()
+	code, _, body := getMaterialize(t, h, "/repos/alpha/branches/agent:test/search?"+query)
+	require.Equal(t, http.StatusOK, code, body)
+	var v struct {
+		Total    *int `json:"total"`
+		Embedded struct {
+			Results []struct {
+				Path string `json:"path"`
+			} `json:"results"`
+		} `json:"_embedded"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &v))
+	require.NotNil(t, v.Total, "the response carries total: %s", body)
+	var out []string
+	for _, r := range v.Embedded.Results {
+		out = append(out, r.Path)
+	}
+	return out, *v.Total
 }
 
 // recentPaths is what the /facts collection lists for query (sort=recent).
@@ -1030,9 +1054,77 @@ func TestSearch_OffsetPagesEndWhereTheFactSetEnds(t *testing.T) {
 	require.Equal(t, materialize.MaxFactSetFacts, units)
 	require.Equal(t, list, roots, "the list's last page ends at the factset's last unit")
 
-	require.Empty(t, searchPaths(t, h, "q=x&path=kb/q/&offset=900"))
+	for _, off := range []int{0, 450, 900} {
+		page, total := searchPage(t, h, fmt.Sprintf("q=x&path=kb/q/&limit=50&offset=%d", off))
+		require.Equal(t, materialize.MaxFactSetFacts, total, "total is the ranked list's length on every page (offset %d)", off)
+		if off >= 500 {
+			require.Empty(t, page, "past the end: an empty page")
+		} else {
+			require.Equal(t, full[off:min(off+50, 500)], page)
+		}
+	}
+	few, total := searchPage(t, h, "q=x&path=kb/q/f00&limit=50")
+	require.Len(t, few, 10)
+	require.Equal(t, 10, total, "a short list's total is its length")
 	code, _, body := getMaterialize(t, h, "/repos/alpha/branches/agent:test/search?q=x&offset=-1")
 	require.Equal(t, http.StatusBadRequest, code, body)
+}
+
+// A /search page reads ONLY its own bodies: the store ranks the whole list at
+// depth Limit exactly as before, then cuts the page out of it BEFORE phase 2
+// (SearchOptions.Page), so page [450, 500) of a 520-hit text search loads 50
+// bodies, not 500, and returns the same rows as the unpaged list's slice.
+// The text-less path pages in SQL (LIMIT/OFFSET over a total ORDER BY) with
+// the same total and the same rows.
+//
+// Sabotage: cut the page AFTER the body fetch (phase 2 over the whole list)
+// and BodiesLoaded is 500.
+func TestSearch_PageLoadsOnlyItsOwnBodies(t *testing.T) {
+	_, ri := newEmbFactSet(t)
+	files := map[string]float64{}
+	for i := range 520 {
+		files[fmt.Sprintf("kb/q/f%03d.md", i)] = 0.95 - 0.001*float64(i)
+	}
+	cosFacts(t, ri, files, fact.Observation)
+	emb := &cosEmbedder{}
+	vec, err := emb.EmbedQuery(context.Background(), "x")
+	require.NoError(t, err)
+	search := func(text string, page *index.SearchPage) ([]string, index.SearchDiag) {
+		var diag index.SearchDiag
+		var out []index.SearchResult
+		require.NoError(t, ri.WithRead(func(svc *store.Service) {
+			q := index.SearchOptions{Text: text, Path: "kb/q/", Limit: materialize.MaxFactSetFacts, Page: page, Diag: &diag}
+			if text != "" {
+				q.QueryVec = vec
+			}
+			out, err = svc.FactQuery().Search(context.Background(), ri.AgentBranch(), q)
+			require.NoError(t, err)
+		}))
+		paths := make([]string, len(out))
+		for i, r := range out {
+			paths[i] = r.Path
+			require.NotEmpty(t, r.Body, "a returned row carries its body")
+		}
+		return paths, diag
+	}
+	for _, text := range []string{"x", ""} {
+		full, fd := search(text, nil)
+		require.Len(t, full, materialize.MaxFactSetFacts)
+		require.Equal(t, materialize.MaxFactSetFacts, fd.BodiesLoaded, "text %q: the unpaged list reads every body", text)
+		page := &index.SearchPage{Offset: 450, Limit: 50}
+		got, d := search(text, page)
+		require.Equal(t, full[450:500], got, "text %q: the page is the unpaged list's slice", text)
+		require.Equal(t, materialize.MaxFactSetFacts, page.Total, "text %q", text)
+		require.Equal(t, 50, d.BodiesLoaded, "text %q: the page reads only its own bodies", text)
+		tail := &index.SearchPage{Offset: 490, Limit: 50}
+		got, d = search(text, tail)
+		require.Equal(t, full[490:], got, "text %q: the last page stops at the list's depth", text)
+		require.Equal(t, 10, d.BodiesLoaded, "text %q", text)
+		past := &index.SearchPage{Offset: 500, Limit: 50}
+		got, _ = search(text, past)
+		require.Empty(t, got)
+		require.Equal(t, materialize.MaxFactSetFacts, past.Total, "text %q: a page past the end still reports the list", text)
+	}
 }
 
 func deleteFactSet(t *testing.T, h http.Handler, u string) (int, string) {

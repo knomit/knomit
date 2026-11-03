@@ -622,8 +622,9 @@ describe('api lens read surface', () => {
     });
     const res = await api.lensSearch('dev', 'query text', ['core', 'beta']);
     expect(calls[0]).toBe('/api/v1/lenses/dev/search?q=query+text&repo=core&repo=beta');
-    expect(res).toHaveLength(1);
-    expect(res[0].source).toEqual({ repo: 'beta', id: 'abc123def456', branch: 'main' });
+    expect(res.results).toHaveLength(1);
+    expect(res.total).toBe(1);
+    expect(res.results[0].source).toEqual({ repo: 'beta', id: 'abc123def456', branch: 'main' });
   });
 
   it('lensSearch omits repo= when no repos are passed', async () => {

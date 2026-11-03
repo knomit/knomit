@@ -1624,6 +1624,9 @@ paths:
         page through it; every page is re-run statelessly over the current
         index, ties ordered by path, so pages of an unmoved index are
         contiguous and disjoint, and a page shorter than `limit` is the end.
+        `total` is the ranked list's length: every offset below it has a
+        row. `count` is the page's length. Only the page's own rows are read
+        in full.
         The factset of the same search (`/search/factset`) holds exactly this
         list, in this order: its last unit is the list's last row.
 
@@ -6360,6 +6363,9 @@ components:
                 results:
                   type: array
                   items: { $ref: "#/components/schemas/SearchHit" }
+            total:
+              type: integer
+              description: "The length of the ranked list `offset` pages through (at most 500, the factset's `facts` ceiling); `count` is the page's length."
             notice:
               type: string
               description: &searchNotice |

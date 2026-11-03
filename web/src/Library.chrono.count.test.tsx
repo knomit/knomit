@@ -34,7 +34,7 @@ vi.mock('./api', () => ({
     search: vi.fn(async () => []),
     lensBrowse: vi.fn(async () => ({ children: [] })),
     listLensFacts: vi.fn(async () => ({ facts: [], total: 0 })),
-    lensSearch: vi.fn(async () => []),
+    lensSearch: vi.fn(async () => ({ results: [], total: 0 })),
     listLensFactsSearch: vi.fn(async () => ({ facts: [], total: 0 })),
   },
 }));

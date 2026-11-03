@@ -302,9 +302,13 @@ type SearchOptions struct {
 	// how many survived it. It is an OUTPUT parameter (one per Search call —
 	// never share one across concurrent calls) that lets a caller tell "nothing
 	// matched" from "the cutoff removed everything".
-	Diag           *SearchDiag
-	Limit          int
-	Offset         int       // RecentFacts pagination offset; ignored by Search
+	Diag   *SearchDiag
+	Limit  int
+	Offset int // RecentFacts pagination offset; ignored by Search
+	// Page, when set, makes Search return one page of its ranked list
+	// (SearchPage): ranked at depth Limit as always, cut to the page before
+	// any body is read. nil returns the whole list.
+	Page           *SearchPage
 	QueryVec       []float32 // pre-computed embedding vector; if set, skips Embed(Text)
 	QueryByPath    string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
 	IncludeTypes   []string  // only return facts with these types (empty = all)
@@ -808,6 +812,36 @@ type SearchDiag struct {
 	BestCosine float64 // highest cosine among them (0 when VecHits == 0)
 	Cutoff     float64 // the cosine cutoff applied (caller's, or the model's floor)
 	Candidates int     // candidates strictly above the cutoff
+	// BodiesLoaded is how many fact bodies the call read from the object
+	// store: the returned rows only. Under a Page it is the page's rows,
+	// never the whole ranked list's.
+	BodiesLoaded int
+}
+
+// SearchPage asks Search for ONE page of its ranked list. The list is ranked
+// exactly as without a page, at depth Limit (SearchOptions.Limit: the KNN
+// window and the trim are unchanged, so pages of one search join up), and
+// only the rows [Offset, Offset+Limit) of it are returned; only their bodies
+// are read. Total is an OUTPUT: the ranked list's length (at most
+// SearchOptions.Limit), set by Search, so a caller can report how far the
+// list goes without loading it.
+type SearchPage struct {
+	Offset int
+	Limit  int
+	Total  int
+}
+
+// window returns the bounds [lo, hi) of page p over a list of n rows.
+func (p *SearchPage) window(n int) (lo, hi int) {
+	lo = p.Offset
+	if lo > n {
+		lo = n
+	}
+	hi = n
+	if p.Limit < hi-lo {
+		hi = lo + p.Limit
+	}
+	return lo, hi
 }
 
 // CutoffEmptied reports that the KNN found candidates and the cutoff removed
@@ -917,7 +951,33 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	// then path — so a text-less search lists like every recency listing.
 	epClause, epArgs := episodeOpsClause(q.EpisodeOps)
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
-		args := append(append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), epArgs...), limit)
+		// The ORDER BY is total (path breaks every tie), so the page
+		// [Offset, Offset+Limit) of the depth-limit list is exactly
+		// LIMIT min(Page.Limit, limit-Offset) OFFSET Offset.
+		rowLimit, rowOffset := limit, 0
+		if q.Page != nil {
+			var n int
+			countArgs := append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), epArgs...)
+			if err := conn(ctx, fq.rh.DB()).QueryRowContext(ctx,
+				`SELECT COUNT(*)
+				 FROM branch_facts bf
+				 JOIN facts f ON f.id = bf.fact_id
+				 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
+				 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+				 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
+				 WHERE bf.branch_id = ?`+flt.SQL()+epClause,
+				countArgs...,
+			).Scan(&n); err != nil {
+				return nil, fmt.Errorf("search: count: %w", err)
+			}
+			q.Page.Total = min(n, limit)
+			lo, hi := q.Page.window(q.Page.Total)
+			if hi <= lo {
+				return nil, nil
+			}
+			rowLimit, rowOffset = hi-lo, lo
+		}
+		args := append(append(append([]any{vcs.BlobObjectType, branchID}, flt.args...), epArgs...), rowLimit, rowOffset)
 		rows, err := conn(ctx, fq.rh.DB()).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 			        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
@@ -929,7 +989,7 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 			 WHERE bf.branch_id = ?`+flt.SQL()+epClause+`
 			 ORDER BY COALESCE(cl.committed_at, 0) DESC, f.path ASC
-			 LIMIT ?`,
+			 LIMIT ? OFFSET ?`,
 			args...,
 		)
 		if err != nil {
@@ -947,6 +1007,9 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
+		}
+		if q.Diag != nil {
+			q.Diag.BodiesLoaded = len(out)
 		}
 		return out, nil
 	}
@@ -1125,6 +1188,19 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 	rankCandidates(candidates)
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
+	}
+	// One page of the ranked list: cut BEFORE phase 2, so a page reads only
+	// its own bodies (and extracts only their context).
+	if q.Page != nil {
+		q.Page.Total = len(candidates)
+		lo, hi := q.Page.window(len(candidates))
+		candidates = candidates[lo:hi]
+		if len(candidates) == 0 {
+			return nil, nil
+		}
+	}
+	if q.Diag != nil {
+		q.Diag.BodiesLoaded = len(candidates)
 	}
 
 	// ── Phase 2: fetch bodies for the top-limit facts only ────────────────

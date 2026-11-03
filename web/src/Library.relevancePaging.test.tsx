@@ -72,10 +72,14 @@ describe('Library — relevance list infinite scroll', () => {
     const search = api.search as ReturnType<typeof vi.fn>;
     search.mockImplementation(async (_r: string, _b: string, _q: string, _p: string, _c: number, _o: unknown, page?: { limit?: number; offset?: number }) => {
       const off = page?.offset ?? 0, lim = page?.limit ?? 50;
-      return { results: all.slice(off, off + lim) };
+      return { results: all.slice(off, off + lim), total: all.length };
     });
     render(<Library state={base} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(50));
+    // The count is the ranked list's length from page 1, not the rows loaded.
+    await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('70'));
+    // data-count drives Materialize: enabled on a relevance list with results.
+    expect((screen.getByTestId('library-factset') as HTMLButtonElement).disabled).toBe(false);
     expect(search.mock.calls.map(c => c[6])).toEqual([{ limit: 50, offset: 0 }]);
 
     intersect();
@@ -96,10 +100,13 @@ describe('Library — relevance list infinite scroll', () => {
     const lensSearch = api.lensSearch as ReturnType<typeof vi.fn>;
     lensSearch.mockImplementation(async (_l: string, _q: string, _r: unknown, _o: unknown, page?: { limit?: number; offset?: number }) => {
       const off = page?.offset ?? 0, lim = page?.limit ?? 50;
-      return all.slice(off, off + lim);
+      return { results: all.slice(off, off + lim), total: all.length };
     });
     render(<Library state={lensState} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+    await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('60'));
+    // data-count drives Materialize: enabled on a relevance list with results.
+    expect((screen.getByTestId('library-factset') as HTMLButtonElement).disabled).toBe(false);
     expect(lensSearch.mock.calls.map(c => c[4])).toEqual([{ limit: 50, offset: 0 }]);
 
     intersect();
@@ -117,7 +124,7 @@ describe('Library — relevance list infinite scroll', () => {
   it('a list that fits one page never asks for a second', async () => {
     const { api } = await import('./api');
     const search = api.search as ReturnType<typeof vi.fn>;
-    search.mockResolvedValue({ results: ranked(12) });
+    search.mockResolvedValue({ results: ranked(12), total: 12 });
     render(<Library state={base} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(12));
     if (observers.length) intersect();

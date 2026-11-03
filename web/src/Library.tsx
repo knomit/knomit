@@ -522,12 +522,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     relLoadingRef.current = true;
     setRelLoading(true);
     setRelExhausted(false);
+    setTotal(0);
     dispatch({ type: 'SET_SEARCHING', value: true });
     api.search(state.repo, state.branch, state.freeText, path, 0, listFilters, { limit: PAGE_SIZE, offset: 0 }).then(r => {
       if (stale()) return;
       dispatch({ type: 'SET_SEARCHING', value: false });
       const items = searchRows(r.results);
       setChildren(items);
+      setTotal(r.total);
       setRelExhausted(items.length < PAGE_SIZE);
       setRelLoading(false);
       const currentFactPath = staleStateRef.current.factPath;
@@ -639,11 +641,12 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       // /search does (the facts handler does not) — forward path scope + chips.
       // Paged like the union's Recent: the route ranks ONE fused list (as deep
       // as the lens FactSet goes) and offset slices it.
-      api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }, { limit: PAGE_SIZE, offset: 0 }).then(results => {
+      api.lensSearch(lensName, state.freeText, repos, { ...listFilters, path }, { limit: PAGE_SIZE, offset: 0 }).then(r => {
         if (stale()) return;
         dispatch({ type: 'SET_SEARCHING', value: false });
-        const rows = results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source }));
+        const rows = r.results.map(x => ({ path: x.path, title: x.title, type: x.type, source: x.source }));
         setLensRows(rows);
+        setTotal(r.total);
         setLensExhausted(rows.length < PAGE_SIZE);
         setLensLoading(false);
         openFirstRow(rows);
@@ -718,10 +721,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         setLensLoading(true);
         const gen = lensGenRef.current;
         api.lensSearch(lensName, state.freeText, reposParam, { ...listFilters, path }, { limit: PAGE_SIZE, offset: lensRows.length })
-          .then(results => {
+          .then(r => {
             if (gen !== lensGenRef.current) return;
-            const page = results.map(r => ({ path: r.path, title: r.title, type: r.type, source: r.source }));
+            const page = r.results.map(x => ({ path: x.path, title: x.title, type: x.type, source: x.source }));
             setLensRows(prev => [...prev, ...page]);
+            setTotal(r.total);
             if (page.length < PAGE_SIZE) setLensExhausted(true);
             setLensLoading(false);
           }).catch(() => { if (gen === lensGenRef.current) setLensLoading(false); });
@@ -767,6 +771,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         if (gen !== relGenRef.current) return;
         const page = searchRows(r.results);
         setChildren(prev => [...prev, ...page]);
+        setTotal(r.total);
         if (page.length < PAGE_SIZE) setRelExhausted(true);
         setRelLoading(false);
       }).catch(() => { if (gen === relGenRef.current) setRelLoading(false); });
@@ -1026,14 +1031,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
            not the number on screen. Path browse is unpaged, so there the two
            are the same thing and rows.length stays. */
         /* Three lists, three honest counts. Path browse is unpaged, so its rows
-           ARE the count. Recent is paged, so the rows are a scroll position and
-           the count must come from the server's total. Relevance is not paged
-           either — the sentinel is disabled for it and the whole result set
-           arrives in one call — so its rows are the count too; reading `total`
-           there rendered 0, because nothing on the relevance path sets it. */
-        count={effectiveSort === 'recent' ? total
-          : isLens ? (effectiveSort === 'path' ? lensTree.length : lensRows.length)
-          : children.length}
+           ARE the count. Recent and Relevance are paged, so the rows are a
+           scroll position and the count is the server's total: for Recent the
+           matching rows, for Relevance the ranked list's length (what offset
+           can reach, the FactSet's unit count). */
+        count={effectiveSort === 'path' ? (isLens ? lensTree.length : children.length) : total}
         ancestors={ancestors}
         leaf={leaf}
         narrow={narrow}
