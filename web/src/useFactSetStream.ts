@@ -37,9 +37,11 @@ export const MAX_BUSY_RETRIES = 3;
 export const MAX_RETRY_AFTER_S = 10;
 
 export type FsEnv = Omit<FactSetPage, 'facts'>;
-export interface Land { unit: number; anchor?: string; n?: number; epoch: number }
+/** `back`: the landing returns the reader to a Back pill's origin (the view
+ *  restores the saved offset there instead of following or flashing). */
+export interface Land { unit: number; anchor?: string; n?: number; back?: boolean; epoch: number }
 /** What a reach looks for in a unit: a written section's anchor, or section n. */
-export interface Target { unit: number; anchor?: string; n?: number }
+export interface Target { unit: number; anchor?: string; n?: number; back?: boolean }
 export interface FsFault { kind: FsErrorKind; detail: string }
 
 export interface FsStreamState {
@@ -141,6 +143,11 @@ export class FactSetStream {
   /** The FactSet a cursor call answered 404 for: already gone on the server,
    *  so it is never closed (a DELETE would only 404 again). */
   private gone: string | null = null;
+  /** A Back seek not landed yet: a re-creation after a 404 on it lands on the
+   *  origin (not on topUnit, which is still the jump's destination). */
+  private backTarget: Target | null = null;
+  /** A Back seek that failed (not by 404): Retry retries the Back. */
+  private retryBack: Target | null = null;
 
   private sleep: (ms: number) => Promise<void>;
 
@@ -229,11 +236,14 @@ export class FactSetStream {
 
   /** Replaces the run with one starting at unit, reading on inside that unit
    *  until the anchor (or section n) has arrived, then lands on it (or the
-   *  unit's root). */
-  seek = (unit: number, anchor?: string, n?: number): void => {
+   *  unit's root). `back` marks the landing as a Back pill's return. */
+  seek = (unit: number, anchor?: string, n?: number, back?: boolean): boolean => {
     const s = this.state;
     const units = s.env?.units ?? 0;
-    if (s.phase !== 'ready' || !s.cursor || unit < 1 || unit > units) return;
+    if (s.phase !== 'ready' || !s.cursor || unit < 1 || unit > units) return false;
+    const target: Target = back ? { unit, anchor, n, back } : { unit, anchor, n };
+    this.backTarget = back ? target : null;
+    this.retryBack = null;
     this.gen++;
     this.abort?.abort();
     this.busy = false;
@@ -242,21 +252,26 @@ export class FactSetStream {
     this.commit({ stale: true });
     void this.chain(gen, async signal => {
       const page = await this.call(gen, sig => this.inputs!.api.seek(this.inputs!.search.target, cursor, unit, sig), signal);
-      const r = await this.readOn(gen, signal, page.facts, page, { unit, anchor, n });
+      const r = await this.readOn(gen, signal, page.facts, page, target);
       this.recoveries = 0;
-      this.showRun(r.nodes, r.page, { unit, anchor, n });
-    }, f => this.commit({ stale: false, tail: 'failed', tailError: f }), true);
+      this.backTarget = null;
+      this.showRun(r.nodes, r.page, target);
+    }, f => {
+      if (back) { this.retryBack = target; this.backTarget = null; }
+      this.commit({ stale: false, tail: 'failed', tailError: f });
+    }, true);
+    return true;
   };
 
   /** Brings a section of a unit on screen: when the unit is in the run, reads
    *  on from the run's tail until the target has arrived (or the cursor has
    *  passed the unit) and lands on it; otherwise seeks to the unit. */
-  reach = (t: Target): void => {
+  reach = (t: Target): boolean => {
     const s = this.state;
     const inRun = s.nodes.some(x => x.unit === t.unit);
-    if (!inRun) { this.seek(t.unit, t.anchor, t.n); return; }
-    if (has(s.nodes, t)) { this.commit({ land: { ...t, epoch: s.epoch } }); return; }
-    if (this.busy || s.phase !== 'ready' || s.stale || s.tail !== 'idle' || !this.tailCursor) return;
+    if (!inRun) return this.seek(t.unit, t.anchor, t.n);
+    if (has(s.nodes, t)) { this.commit({ land: { ...t, epoch: s.epoch } }); return true; }
+    if (this.busy || s.phase !== 'ready' || s.stale || s.tail !== 'idle' || !this.tailCursor) return false;
     this.commit({ tail: 'loading', tailError: null });
     const gen = this.gen;
     const cursor = this.tailCursor;
@@ -271,6 +286,7 @@ export class FactSetStream {
         tail: r.page.has_more ? 'idle' : 'done', land: { ...t, epoch: this.state.epoch },
       });
     }, f => this.commit({ tail: 'failed', tailError: f }), true);
+    return true;
   };
 
   /** Reads next pages after `page` while the target is not in `nodes` and the
@@ -293,6 +309,14 @@ export class FactSetStream {
   retry = (): void => {
     const s = this.state;
     if (s.phase === 'error') { this.recoveries = 0; this.start({ clear: true }); return; }
+    // A failed Back seek: Retry is the Back again, not the old run's tail.
+    if (this.retryBack && s.tail === 'failed') {
+      const t = this.retryBack;
+      if (s.tailError?.kind === 'expired') this.recoveries = 0;
+      this.commit({ tail: 'idle', tailError: null });
+      this.seek(t.unit, t.anchor, t.n, true);
+      return;
+    }
     // Retry is the reader's own act, so an expired FactSet may be re-created
     // again (it cannot loop): without this a second expiry before any cursor
     // call succeeded would leave Retry asking the same dead cursor forever.
@@ -319,7 +343,8 @@ export class FactSetStream {
     this.markGone(dead);
     if (this.recoveries >= 1) return;
     this.recoveries++;
-    this.start({ seekTo: this.topUnit, notice: 'refreshed' });
+    // A Back seek in flight lands on its origin, not on the jump's destination.
+    this.start({ seekTo: this.topUnit, notice: 'refreshed', land: this.backTarget ?? undefined });
   };
 
   /** A cursor answered 404 (`dead`, else the one on screen): its FactSet is
@@ -334,8 +359,11 @@ export class FactSetStream {
     if (c && this.inputs && factSetOf(c) !== this.gone) void this.inputs.api.close(this.inputs.search.target, c);
   }
 
-  private start(o: { clear?: boolean; seekTo?: number; notice?: 'refreshed' }): void {
+  private start(o: { clear?: boolean; seekTo?: number; notice?: 'refreshed'; land?: Target }): void {
     if (!this.inputs) return;
+    // Only a re-creation carries a pending Back on; anything else drops it.
+    this.backTarget = o.land ?? null;
+    this.retryBack = null;
     this.abort?.abort();
     this.gen++;
     this.busy = false;
@@ -357,13 +385,22 @@ export class FactSetStream {
         this.commit({ ...INITIAL, env: envOf(first), phase: 'ready', tail: 'done', epoch: this.state.epoch + 1, notice: this.state.notice });
         return;
       }
-      const to = o.seekTo ?? 1;
+      const land = o.land && o.land.unit <= first.units ? o.land : undefined;
+      const to = land?.unit ?? o.seekTo ?? 1;
       if (to > 1 && to <= first.units) {
         this.commit({ cursor: first.cursor, env: envOf(first) });
         const c = first.cursor;
         const page = await this.call(gen, sig => this.inputs!.api.seek(search.target, c, to, sig), signal);
         this.recoveries = 0; // the seek is a cursor call
-        this.showRun(page.facts, page, { unit: to });
+        const r = land ? await this.readOn(gen, signal, page.facts, page, land) : { nodes: page.facts, page };
+        this.backTarget = null;
+        this.showRun(r.nodes, r.page, land ?? { unit: to });
+        return;
+      }
+      if (land) {
+        const r = await this.readOn(gen, signal, first.facts, first, land);
+        this.backTarget = null;
+        this.showRun(r.nodes, r.page, land);
         return;
       }
       this.showRun(first.facts, first, keep ? { unit: 1 } : undefined);
