@@ -26,7 +26,9 @@ import (
 //     the function REST /lenses/{lens}/search and MCP knomit_query call),
 //     every mount asked for MaxFactSetFacts results the way the REST lens
 //     search asks for 500, fused, write-first deduped and truncated to
-//     Facts, so the first UIListLimit roots ARE the lens list, in order;
+//     Facts, so the roots ARE the lens list, in order, page after page: the
+//     REST lens search cuts its fused list to MaxFactSetFacts rows too, so
+//     the list's last page ends at the FactSet's last unit;
 //   - read between two reads of EVERY mount's settled index watermark under
 //     ONE deadline (session.factset_anchor_wait): any mount unsettled or
 //     moving re-runs the whole fan-out (RRF needs every list), and past the

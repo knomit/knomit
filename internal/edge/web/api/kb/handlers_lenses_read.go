@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/corpus/federate"
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
@@ -841,6 +842,10 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
+		}
 
 		motifs, motifMatch, ok := motifParams(w, r)
 		if !ok {
@@ -848,8 +853,8 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 		}
 
 		// Shared query across mounts (per-mount Path is set by the fused read).
-		// Depth is the per-mount candidate cap; the fused union is truncated to
-		// `limit` last.
+		// Depth is the per-mount candidate cap; the fused union is cut to the
+		// list's length and then paged by offset/limit last.
 		base := index.SearchOptions{
 			Text: qp.Get("q"),
 			// `entity` (singular, the canonical name) and `entities` (the alias)
@@ -953,11 +958,21 @@ func handleHALLensSearch(emb model.Embedder) http.HandlerFunc {
 			})
 		}
 
-		// total is the full deduped union size; `limit` caps the returned page.
-		total := len(rows)
-		if limit < len(rows) {
-			rows = rows[:limit]
+		// THE LIST IS THE FACTSET. The fused, deduped union is the ranked list
+		// this route pages through, cut to materialize.MaxFactSetFacts rows:
+		// the lens FactSet of the same search runs the same fused read and
+		// keeps at most that many units (runLensSearch), so the list's last
+		// page ends at the FactSet's last unit, whatever the union's size
+		// across mounts. `total` is that list's length: every offset below it
+		// has a row, and none at or past it does. Stateless: each page re-runs
+		// the fused search (as /facts with text does); RRF and the write-first
+		// dedupe are deterministic and ties go by path, so pages of unmoved
+		// indexes are contiguous and disjoint.
+		if len(rows) > materialize.MaxFactSetFacts {
+			rows = rows[:materialize.MaxFactSetFacts]
 		}
+		total := len(rows)
+		rows = pageOf(rows, offset, limit)
 		if rows == nil {
 			rows = []lensSearchItem{}
 		}

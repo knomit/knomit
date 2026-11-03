@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
@@ -139,6 +140,10 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
+		}
 		motifs, motifMatch, ok := motifParams(w, r)
 		if !ok {
 			return
@@ -160,7 +165,19 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			MotifMatch:     motifMatch,
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
-			Limit:          limit,
+			// THE RANKED LIST IS ONE LIST AT ONE DEPTH. Every page is a slice
+			// [offset, offset+limit) of the search at depth
+			// materialize.MaxFactSetFacts, never a search at limit or at
+			// offset+limit: a text search's nearest-neighbour window grows with
+			// its limit and its filters apply after the window, so a smaller
+			// call can end short where the full list goes on, and pages cut
+			// from different depths would not join up. The FactSet of this
+			// search (runFactSetSearch) runs this same call, so the list ends
+			// exactly where the FactSet's units end. Stateless: each page
+			// re-runs the search, as the /facts collection's text search does
+			// (recentFactsSearch); ties are ordered by path, so pages of an
+			// unmoved index are contiguous and disjoint.
+			Limit: materialize.MaxFactSetFacts,
 		}
 		now := timeNow()
 		if !applyExpiryParams(w, r, &q, now) {
@@ -187,7 +204,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			q.PathsIn = paths
 		}
 
-		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")
+		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Int("offset", offset).Msg("hal search")
 
 		var (
 			results []index.SearchResult
@@ -213,6 +230,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			httpx.WriteStoreError(w, r, err, "Search failed", branch)
 			return
 		}
+		results = pageOf(results, offset, limit)
 
 		selfURL := httpx.SelfWithQuery(b.Branch(repoName, a)+"/search", r)
 
@@ -254,4 +272,18 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 		view.Notice = index.CutoffNotice(text != "", minSimilarity, diag)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
+}
+
+// pageOf is the page [offset, offset+limit) of a ranked list: empty past its
+// end, short at it. The relevance lists (repo and lens /search) page this way
+// over the one list their search returns.
+func pageOf[T any](rows []T, offset, limit int) []T {
+	if offset >= len(rows) {
+		return rows[:0]
+	}
+	end := len(rows)
+	if limit < end-offset {
+		end = offset + limit
+	}
+	return rows[offset:end]
 }

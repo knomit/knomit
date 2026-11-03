@@ -908,20 +908,54 @@ func cosFacts(t *testing.T, ri *repos.RepoInstance, files map[string]float64, ty
 	}))
 }
 
-// N2 (review of PR #692): for a FILTERED TEXT search the factset's first 50
-// units are exactly the UI's list (the /search call at limit 50), in its
-// order, though the store's nearest-neighbour window grows with the limit
-// and the filters apply after it:
-//   - 300 observations at cosine 0.9 fill the UI's window (5 x 50), so the
-//     type=hypothesis list holds only the 5 hypotheses at 0.95. The 25 at
-//     0.6 are inside a limit-500 window, so a factset searching at limit 500
-//     had 30 units; it has the UI's 5.
-//   - 60 tied hypotheses at 0.9 (all inside the window): the UI lists the
-//     first 50 by path; the factset's first 50 are those, then the other 10.
+// pagedSearchPaths pages the repo /search route for query by offset, page
+// size limit, the way the UI's relevance list scrolls: from offset 0 until a
+// page comes back short. It asserts the pages are disjoint (no path twice)
+// and returns their concatenation and the number of pages read.
+func pagedSearchPaths(t *testing.T, h http.Handler, query string, limit int) ([]string, int) {
+	t.Helper()
+	var all []string
+	seen := map[string]bool{}
+	for pages := 1; ; pages++ {
+		page := searchPaths(t, h, fmt.Sprintf("%s&limit=%d&offset=%d", query, limit, len(all)))
+		for _, p := range page {
+			require.False(t, seen[p], "page %d repeats %s: pages overlap", pages, p)
+			seen[p] = true
+		}
+		all = append(all, page...)
+		if len(page) < limit {
+			return all, pages
+		}
+		require.Less(t, pages, 100, "paging does not end")
+	}
+}
+
+// factsetRoots is the unit roots, in order, of the factset of first.
+func factsetRoots(t *testing.T, h http.Handler, first string) ([]string, int) {
+	t.Helper()
+	nodes, pages := readFactSet(t, h, first)
+	var roots []string
+	for _, n := range nodes {
+		roots = append(roots, n.Path)
+	}
+	return roots, pages[0].Units
+}
+
+// THE FACTSET IS THE LIST, for a FILTERED TEXT search, though the store's
+// nearest-neighbour window grows with the limit and the filters apply after
+// it (review of PR #692; paging, user report 2026-11-02):
+//   - 300 observations at cosine 0.9 fill a 50-row call's window (5 x 50),
+//     so a search at limit 50 holds only the 5 hypotheses at 0.95. The
+//     /search route ranks ONE list at depth 500 and pages it by offset, so
+//     its first page already holds all 30 hypotheses (the 25 at 0.6 too);
+//     the factset is those 30, in that order.
+//   - 60 tied hypotheses at 0.9: page 1 is the first 50 by path, page 2 the
+//     other 10, and the factset is the 60 in that order.
 //
-// Sabotage: search once at limit Facts (the old runFactSetSearch), and the
-// factset holds 30 units where the list shows 5.
-func TestFactSet_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
+// Sabotage: run each page at limit (or offset+limit) instead of at the one
+// depth, and page 1 is the 5 hypotheses, short, so the list ends at 5 where
+// the factset holds 30.
+func TestFactSet_IsThePagedListForFilteredText(t *testing.T) {
 	h, ri := newEmbFactSet(t)
 	files := map[string]float64{}
 	for i := range 300 {
@@ -937,37 +971,68 @@ func TestFactSet_FirstFiftyAreTheUIListForFilteredText(t *testing.T) {
 	}
 	cosFacts(t, ri, hyps, fact.Hypothesis)
 
-	ui := searchPaths(t, h, "q=x&type=hypothesis&path=kb/n/&limit=50")
-	require.Equal(t, []string{"kb/n/h00.md", "kb/n/h01.md", "kb/n/h02.md", "kb/n/h03.md", "kb/n/h04.md"}, ui,
-		"the UI's window holds only the 5 hypotheses at 0.95")
-	nodes, pages := readFactSet(t, h, factsetBase+"?q=x&type=hypothesis&path=kb/n/&depth=0&limit=5")
-	require.Equal(t, 5, pages[0].Units, "the factset is the list the UI shows")
-	var roots []string
-	for _, n := range nodes {
-		roots = append(roots, n.Path)
-	}
-	require.Equal(t, ui, roots)
+	list, _ := pagedSearchPaths(t, h, "q=x&type=hypothesis&path=kb/n/", 50)
+	require.Len(t, list, 30, "the list holds every hypothesis of the depth-500 list")
+	require.Equal(t, []string{"kb/n/h00.md", "kb/n/h01.md", "kb/n/h02.md", "kb/n/h03.md", "kb/n/h04.md", "kb/n/h100.md"}, list[:6],
+		"the 5 at 0.95 first, then the 0.6 ones by path")
+	roots, units := factsetRoots(t, h, factsetBase+"?q=x&type=hypothesis&path=kb/n/&depth=0&limit=5")
+	require.Equal(t, 30, units, "the factset is the list")
+	require.Equal(t, list, roots)
 
 	tied := map[string]float64{}
 	for i := range 60 {
 		tied[fmt.Sprintf("kb/m/t%02d.md", 59-i)] = 0.9
 	}
 	cosFacts(t, ri, tied, fact.Hypothesis)
-	ui = searchPaths(t, h, "q=x&type=hypothesis&path=kb/m/&limit=50")
-	require.Len(t, ui, 50)
-	for i, p := range ui {
-		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", i), p, "ties are listed by path")
+	list, pages := pagedSearchPaths(t, h, "q=x&type=hypothesis&path=kb/m/", 50)
+	require.Equal(t, 2, pages, "a full page, then a short one")
+	require.Len(t, list, 60)
+	for i, p := range list {
+		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", i), p, "ties are listed by path, across the page boundary")
 	}
-	nodes, pages = readFactSet(t, h, factsetBase+"?q=x&type=hypothesis&path=kb/m/&depth=0&limit=5")
-	require.Equal(t, 60, pages[0].Units, "a full list extends past 50")
-	roots = roots[:0]
-	for _, n := range nodes {
-		roots = append(roots, n.Path)
+	roots, units = factsetRoots(t, h, factsetBase+"?q=x&type=hypothesis&path=kb/m/&depth=0&limit=5")
+	require.Equal(t, 60, units)
+	require.Equal(t, list, roots, "the factset is both pages, in order")
+}
+
+// The relevance list pages by offset and ENDS WHERE THE FACTSET ENDS
+// (user report 2026-11-02: "Matches 50", no scrolling past it, a 500-unit
+// factset). 520 text hits at distinct cosines: pages of 50 at offset 0, 50,
+// ... are contiguous and disjoint, their union is the one-call list at
+// limit 500 (the ranked list, in order), the 11th page is the short last
+// one and ends at row 500, and the factset of the same search has 500 units
+// whose roots are that list. Odd page sizes cut the same list. An offset
+// past the end is an empty page, a negative one a 400.
+//
+// Sabotage: drop the offset (every page is page 1) and the pages overlap;
+// rank each page at depth offset+limit and the list runs past 500 rows
+// while the factset stops at 500.
+func TestSearch_OffsetPagesEndWhereTheFactSetEnds(t *testing.T) {
+	h, ri := newEmbFactSet(t)
+	files := map[string]float64{}
+	for i := range 520 {
+		files[fmt.Sprintf("kb/q/f%03d.md", i)] = 0.95 - 0.001*float64(i)
 	}
-	require.Equal(t, ui, roots[:50], "the first 50 are the UI's list")
-	for i, p := range roots[50:] {
-		require.Equal(t, fmt.Sprintf("kb/m/t%02d.md", 50+i), p, "then the rest, deterministically")
+	cosFacts(t, ri, files, fact.Observation)
+
+	full := searchPaths(t, h, "q=x&path=kb/q/&limit=500")
+	require.Len(t, full, materialize.MaxFactSetFacts)
+	for i, p := range full {
+		require.Equal(t, fmt.Sprintf("kb/q/f%03d.md", i), p, "ranked by cosine")
 	}
+	list, pages := pagedSearchPaths(t, h, "q=x&path=kb/q/", materialize.UIListLimit)
+	require.Equal(t, 11, pages, "ten full pages, then an empty last one")
+	require.Equal(t, full, list, "the pages are the ranked list, contiguous")
+	odd, _ := pagedSearchPaths(t, h, "q=x&path=kb/q/", 37)
+	require.Equal(t, full, odd, "any page size cuts the same list")
+
+	roots, units := factsetRoots(t, h, factsetBase+"?q=x&path=kb/q/&depth=0&limit=5")
+	require.Equal(t, materialize.MaxFactSetFacts, units)
+	require.Equal(t, list, roots, "the list's last page ends at the factset's last unit")
+
+	require.Empty(t, searchPaths(t, h, "q=x&path=kb/q/&offset=900"))
+	code, _, body := getMaterialize(t, h, "/repos/alpha/branches/agent:test/search?q=x&offset=-1")
+	require.Equal(t, http.StatusBadRequest, code, body)
 }
 
 func deleteFactSet(t *testing.T, h http.Handler, u string) (int, string) {
