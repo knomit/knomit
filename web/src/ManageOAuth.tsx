@@ -136,7 +136,9 @@ function PendingRow({ p, onDone, onApproved }: { p: OAuthPending; onDone: () => 
 }
 
 // AuthPage is the Authorizations server page: one block per waiting request,
-// titled by the client as it names itself, or a single "Nothing waiting".
+// titled by the client as it names itself. With none, a single block: "Nothing
+// waiting" only once a read has returned an empty list; before that (loading,
+// or the first read failed) it is "Authorizations", since no queue was read.
 export function AuthPage({ onCount }: { onCount?: (n: number | null) => void }) {
   const [rows, setRows] = useState<OAuthPending[] | null>(null);
   const [err, setErr] = useState('');
@@ -192,8 +194,8 @@ export function AuthPage({ onCount }: { onCount?: (n: number | null) => void }) 
       ),
     }))
     : [{
-      id: 'none',
-      title: 'Nothing waiting',
+      id: rows !== null ? 'none' : 'requests',
+      title: rows !== null ? 'Nothing waiting' : 'Authorizations',
       body: (
         <>
           {preface}

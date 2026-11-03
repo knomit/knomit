@@ -204,4 +204,22 @@ describe('the Authorizations page layout', () => {
     expect(sectionIds()).toEqual(['none']);
     expect(screen.getByTestId('toc-none')).toHaveTextContent('Nothing waiting');
   });
+
+  it('is titled "Authorizations", not "Nothing waiting", while the list is loading', async () => {
+    vi.mocked(api.listOAuthPending).mockReturnValue(new Promise(() => {}));
+    render(<AuthPage />);
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    expect(sectionIds()).toEqual(['requests']);
+    expect(screen.getByTestId('toc-requests')).toHaveTextContent('Authorizations');
+    expect(screen.queryByText('Nothing waiting')).not.toBeInTheDocument();
+  });
+
+  it('is titled "Authorizations", not "Nothing waiting", when the first read failed', async () => {
+    vi.mocked(api.listOAuthPending).mockRejectedValue(new Error('the anonymous loopback principal does not hold admin'));
+    render(<AuthPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('does not hold admin');
+    expect(sectionIds()).toEqual(['requests']);
+    expect(screen.getByTestId('toc-requests')).toHaveTextContent('Authorizations');
+    expect(screen.queryByText('Nothing waiting')).not.toBeInTheDocument();
+  });
 });
