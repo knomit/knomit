@@ -475,7 +475,7 @@ func TestCreateFleet_MainIsNeverForced(t *testing.T) {
 	stray := gitRev(t, bare, "refs/heads/main")
 
 	ri := m.fleetRepo()
-	require.NoError(t, m.writeOwnRecord(ctx, ri, fact.MemberActive), "a new agent tip")
+	require.NoError(t, m.writeOwnRecord(ctx, ri, fact.MemberActive), "the record write (a no-op when the record is current, #432): the agent tip still lacks the stray main")
 	svc := testService(t, ri)
 	remote, err := svc.Remote().GetRemote("origin")
 	require.NoError(t, err)

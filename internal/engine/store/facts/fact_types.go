@@ -25,9 +25,17 @@ type ReadFactResult struct {
 }
 
 // WriteFactResult holds the commit and blob hashes from a write operation.
+//
+// Unchanged reports a NO-OP write (#432): the content was byte-identical to
+// the blob already at the path on the branch tip, so nothing was written — no
+// object, no commit, no ref move, no commit notification. CommitHash is then
+// the branch tip the write was compared against (NOT a new commit) and
+// BlobHash the blob already there. A caller must never treat CommitHash as
+// "the commit this write made" without checking Unchanged first.
 type WriteFactResult struct {
 	CommitHash string
 	BlobHash   string
+	Unchanged  bool
 }
 
 // ErrRepoReadOnly is returned by every authored-write door when the store has

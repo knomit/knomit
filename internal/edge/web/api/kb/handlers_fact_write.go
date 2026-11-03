@@ -130,25 +130,25 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 }
 
 // writeFact commits content at path on branch with message and returns the
-// commit hash. A store error is returned unchanged, and so is WithRead's when
+// store's result. Content byte-identical to the fact's current blob commits
+// nothing: the result has Unchanged and CommitHash is the branch tip, not a new
+// commit (#432). A store error is returned unchanged, and so is WithRead's when
 // the store cannot be reached: nothing is written, and the handlers answer 503
 // through httpx.WriteStoreError.
-func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (string, error) {
+func writeFact(ctx context.Context, ri *repos.RepoInstance, branch, path, content, message string) (facts.WriteFactResult, error) {
 	var (
-		commitHash string
-		err        error
+		res facts.WriteFactResult
+		err error
 	)
 	if aerr := ri.WithRead(func(svc *store.Service) {
-		res, werr := svc.Facts().WriteFact(ctx, branch, path, content, message, "update")
-		if werr != nil {
-			err = werr
-			return
-		}
-		commitHash = res.CommitHash
+		res, err = svc.Facts().WriteFact(ctx, branch, path, content, message, "update")
 	}); aerr != nil {
-		return "", aerr
+		return facts.WriteFactResult{}, aerr
 	}
-	return commitHash, err
+	if err != nil {
+		return facts.WriteFactResult{}, err
+	}
+	return res, nil
 }
 
 // deleteFact retracts path on branch with message and returns the commit hash.
@@ -375,7 +375,8 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		}
 
 		msg := "edit: update " + path + " via API"
-		if _, err := writeFact(r.Context(), ri, branch, path, content, msg); err != nil {
+		res, err := writeFact(r.Context(), ri, branch, path, content, msg)
+		if err != nil {
 			httpx.WriteStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
@@ -386,6 +387,9 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		// classifies the fact's outgoing refs.
 		resolver := readerRefResolver{ctx: r.Context(), ri: ri, branch: branch, commit: ""}
 		view := buildFactView(b, repoName, a, "", f, resolver, knomitfact.ID12(ri.ID()))
+		// The bytes to commit (the client's, or the gates' rewrite of them)
+		// were already the fact's current blob: nothing was committed (#432).
+		view.Unchanged = res.Unchanged
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }
