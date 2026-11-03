@@ -8,6 +8,7 @@
 // right: 100% anchoring; the real-browser screenshots cover the geometry.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { LibraryHeader } from './LibraryHeader';
 import { COLLAPSE_MS } from './ModeFlyout';
@@ -285,22 +286,116 @@ describe('Materialize', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('takes the header accent on hover, and only while enabled', () => {
-    const { rerender } = render(<LibraryHeader {...base} factset={{ enabled: true, onOpen: vi.fn() }} />);
+  // The hover accent is ONE CSS rule shared with the fact header's
+  // Materialize (App.css .k-materialize, user 2026-11-03), so this pins the
+  // class, that no inline colour outranks the :hover, and that the rule's
+  // colour IS the lit mode's accent. Disabled is handled by :not(:disabled).
+  // SABOTAGE: change the colour in App.css's .k-materialize:hover -> red.
+  it('takes the header accent on hover via the shared rule, and only while enabled', () => {
+    render(<LibraryHeader {...base} factset={{ enabled: true, onOpen: vi.fn() }} />);
     const btn = screen.getByTestId('library-factset') as HTMLButtonElement;
-    expect(btn.style.color).toBe('rgb(136, 136, 136)');
+    expect(btn.classList.contains('k-materialize')).toBe(true);
+    expect(btn.style.color).toBe('');
+    expect(btn.style.getPropertyValue('--k-materialize-rest')).toBe('#888');
     expect(btn.querySelector('svg')?.getAttribute('stroke')).toBe('currentColor');
-    fireEvent.mouseEnter(btn);
-    // #7c9: the same accent as the lit mode.
-    expect(btn.style.color).toBe('rgb(119, 204, 153)');
+    const css = readFileSync('src/App.css', 'utf8');
+    const m = css.match(/\.k-materialize:not\(:disabled\):hover\s*\{\s*color:\s*(#[0-9a-fA-F]+);\s*\}/);
+    expect(m).not.toBeNull();
+    // Resolve the rule's colour the way the browser would and compare it with
+    // the lit mode's (ACCENT, #7c9).
+    const probe = document.createElement('span');
+    probe.style.color = m![1];
     fireEvent.mouseEnter(group());
     expect(current().style.color).toBe('rgb(119, 204, 153)');
-    fireEvent.mouseLeave(btn);
-    expect(btn.style.color).toBe('rgb(136, 136, 136)');
-    // Hovered when it turns disabled (history, or the list empties): no accent.
-    fireEvent.mouseEnter(btn);
-    expect(btn.style.color).toBe('rgb(119, 204, 153)');
-    rerender(<LibraryHeader {...base} count={0} factset={{ enabled: true, onOpen: vi.fn() }} />);
-    expect(btn.style.color).toBe('rgb(136, 136, 136)');
+    expect(probe.style.color).toBe(current().style.color);
   });
+});
+
+
+// User, 2026-11-03: unavailable modes are NOT SHOWN. When the current mode is
+// all that is left (a motif pivot, a search, a chip-filtered list) there is
+// nothing to pick, so the group neither expands nor shows the corner hint.
+describe('nothing to pick', () => {
+  const MOTIF = { canonical: 'failure-presents-as-success' };
+  const cases: Array<[string, Partial<React.ComponentProps<typeof LibraryHeader>>, string]> = [
+    ['a motif pivot', { sort: 'recent', motif: MOTIF, onExitMotif: vi.fn() }, 'sort-motif'],
+    ['a relevance search', { sort: 'relevance', searchActive: true, onExitSearch: vi.fn() }, 'sort-relevance'],
+    ['a chip-filtered list', { sort: 'recent', contentFiltered: true }, 'sort-recent'],
+  ];
+
+  // SABOTAGE: render the hint unconditionally in ModeFlyout.tsx -> red; drop
+  // the .filter() after flyoutItems in LibraryHeader.tsx -> red.
+  for (const [name, props, testid] of cases) {
+    it(`${name}: one icon, no corner hint, and hover or focus expands nothing`, () => {
+      render(<LibraryHeader {...base} {...props} />);
+      expect(current().getAttribute('data-testid')).toBe(testid);
+      expect(screen.queryByTestId('mode-flyout-hint')).toBeNull();
+      expect(current()).not.toHaveAttribute('aria-haspopup');
+      expect(current()).not.toHaveAttribute('aria-expanded');
+      fireEvent.mouseEnter(group());
+      expect(isOpen()).toBe(false);
+      expect(strip()).toBeNull();
+      act(() => current().focus());
+      expect(isOpen()).toBe(false);
+      expect(group().querySelectorAll('button')).toHaveLength(1);
+    });
+  }
+
+  // Closed, Left/Right belong to the list, and a group with nothing to pick
+  // is always closed — so the list keeps its arrows even after a hover.
+  it('the list keeps Left/Right while the lone icon is hovered and focused', () => {
+    const seen: string[] = [];
+    const onKey = (e: KeyboardEvent) => seen.push(e.key);
+    window.addEventListener('keydown', onKey);
+    try {
+      render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+      fireEvent.mouseEnter(group());
+      act(() => current().focus());
+      fireEvent.keyDown(current(), { key: 'ArrowLeft' });
+      fireEvent.keyDown(current(), { key: 'ArrowRight' });
+      expect(seen).toEqual(['ArrowLeft', 'ArrowRight']);
+    } finally {
+      window.removeEventListener('keydown', onKey);
+    }
+  });
+
+  it('the current icon keeps its exit', () => {
+    const onExitMotif = vi.fn();
+    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={onExitMotif} />);
+    fireEvent.click(current());
+    expect(onExitMotif).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('arrow keys skip nothing visible', () => {
+  // Every icon drawn in the open group is reachable by the arrows: walking
+  // Left from the current icon to the end and back Right visits each one. A
+  // greyed (disabled) icon would be drawn but skipped, which is the state this
+  // pins out. SABOTAGE: drop the .filter() after flyoutItems in
+  // LibraryHeader.tsx -> red (the chip case draws a disabled Path).
+  const states: Array<[string, Partial<React.ComponentProps<typeof LibraryHeader>>]> = [
+    ['path tree', { sort: 'path' }],
+    ['recent', { sort: 'recent' }],
+    ['chip-filtered', { sort: 'recent', contentFiltered: true }],
+    ['searching', { sort: 'relevance', searchActive: true, onExitSearch: vi.fn() }],
+  ];
+  for (const [name, props] of states) {
+    it(name, () => {
+      render(<LibraryHeader {...base} {...props} />);
+      fireEvent.mouseEnter(group());
+      act(() => current().focus());
+      const drawn = Array.from(group().querySelectorAll('button'));
+      const visited = new Set<Element>([document.activeElement!]);
+      for (let i = 0; i < drawn.length; i++) {
+        fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+        visited.add(document.activeElement!);
+      }
+      for (let i = 0; i < drawn.length; i++) {
+        fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+        visited.add(document.activeElement!);
+      }
+      expect(drawn.every(b => visited.has(b))).toBe(true);
+      expect(visited.size).toBe(drawn.length);
+    });
+  }
 });

@@ -1,4 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RightPanel } from './RightPanel';
 import { init } from './state';
@@ -43,6 +44,24 @@ describe('the Materialize action in the fact header', () => {
     const retract = screen.getByTestId('retract-btn');
     expect(btn.compareDocumentPosition(retract) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(btn.parentElement).toBe(retract.parentElement);
+  });
+
+  // User, 2026-11-03: the SAME hover colour as the results header's
+  // Materialize, from the same CSS rule (App.css .k-materialize). jsdom cannot
+  // hover, so this pins the class, the absence of an inline colour (which
+  // would outrank the :hover rule) and the rule itself; the PR's browser
+  // screenshots show both buttons hovered. LibraryHeader.flyout.test.tsx pins
+  // the rule's colour to the lit mode's.
+  // SABOTAGE: drop k-materialize from materialize-btn's className -> red.
+  it('takes the results header hover accent through the shared .k-materialize rule', async () => {
+    render(<RightPanel state={state} dispatch={vi.fn()} />);
+    const btn = await screen.findByTestId('materialize-btn');
+    expect(btn.classList.contains('k-materialize')).toBe(true);
+    expect(btn.style.color).toBe('');
+    expect(btn.style.getPropertyValue('--k-materialize-rest')).toBe('#8a96a8');
+    const css = readFileSync('src/App.css', 'utf8');
+    expect(css).toMatch(/\.k-materialize:not\(:disabled\):hover\s*\{\s*color:\s*#7c9;\s*\}/);
+    expect(css).toMatch(/\.k-materialize\s*\{\s*color:\s*var\(--k-materialize-rest/);
   });
 
   it('draws a glyph of its own, not the lens mark or the repo mark', () => {

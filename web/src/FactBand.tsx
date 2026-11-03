@@ -81,9 +81,18 @@ export function FactBand({ fact, dispatch, lensMeta, pinned, actions, edges, fil
           it is read with and the retract button are pinned right, apart from
           them. Version removes itself while its own history loads and is
           absent entirely on a fact with no recorded versions — over there it
-          can come and go without leaving a gap among the openers. */}
+          can come and go without leaving a gap among the openers.
+
+          IT WRAPS. In a narrow pane the openers plus the actions are wider
+          than the row, and with no wrap the openers' group shrank under the
+          actions, which then drew on top of the motif cells and could not be
+          clicked (user, 2026-11-03). Wrapping breaks on each item's natural
+          width, so the actions group moves to a line of its own (still pinned
+          right by its auto margin) the moment it would overlap, and the
+          openers' strip wraps its own cells the same way. Wide, everything fits
+          on one line and nothing moves. */}
       <div data-testid="fact-band-edges" style={{
-        display: 'flex', alignItems: 'center', gap: 12, minWidth: 0,
+        display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 12, rowGap: 4, minWidth: 0,
       }}>
         {edges}
         <div data-testid="fact-band-actions" style={{

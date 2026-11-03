@@ -1,5 +1,4 @@
 import type { LibrarySort } from './state';
-import { useState } from 'react';
 import type { ComponentType } from 'react';
 import { TreeIcon, StopwatchIcon, TargetIcon, MotifIcon, ChevronLeftIcon, NewspaperIcon } from './icons';
 import { OverflowCrumb } from './OverflowCrumb';
@@ -99,7 +98,8 @@ const segments: { value: Mode; label: string; testid: string; Icon: IconType }[]
   { value: 'motif',     label: 'Motif',     testid: 'sort-motif',     Icon: MotifIcon },
 ];
 
-// The header's accent: the lit mode, the folder name, and Materialize on hover.
+// The header's accent: the lit mode and the folder name. Materialize's hover
+// takes the same colour from App.css's .k-materialize (keep the two equal).
 const ACCENT = '#7c9';
 
 type AncItem =
@@ -223,8 +223,10 @@ export function LibraryHeader({
     return {
       key: seg.value, testid: seg.testid, Icon: seg.Icon, active, disabled, color,
       ariaLabel: exitsSearch ? 'Clear search' : exitsMotif ? 'Leave this motif' : `Sort by ${seg.label}`,
-      title: pathBlocked ? 'The tree cannot filter — remove the chip to browse it'
-        : disabled ? (pivoting ? 'Sorting is disabled inside a motif' : 'Sorting is disabled while searching')
+      // Only the CURRENT segment can still be disabled here (the rest are
+      // filtered out below), and the only such case is a pivot without an
+      // exit.
+      title: disabled ? 'Sorting is disabled inside a motif'
         : exitsSearch ? 'Clear search and go back'
         : exitsMotif ? 'Leave this motif and go back'
         : `Sort by ${seg.label}`,
@@ -235,11 +237,17 @@ export function LibraryHeader({
         else onSortChange(seg.value as LibrarySort);
       },
     };
-  });
+  })
+  // An unavailable mode is NOT SHOWN (user, 2026-11-03): a greyed icon in the
+  // flyout is a choice the reader cannot make. Disabled segments drop out here,
+  // at the caller, and ModeFlyout draws no corner hint and does not expand when
+  // the current mode is all that is left — a derived mode (search, pivot) and a
+  // chip-filtered list both end up there. The current segment always stays,
+  // even disabled (a pivot without an exit), because the header needs an icon.
+  .filter(it => !it.disabled || it.key === mode);
   // Disabled in history (Q-UI3) and for an empty list: nothing to
   // materialize (book design §5).
   const matEnabled = !!factset?.enabled && count > 0;
-  const [matHover, setMatHover] = useState(false);
 
   return (
     <>
@@ -360,9 +368,8 @@ export function LibraryHeader({
           <button
             type="button"
             data-testid="library-factset"
+            className="k-materialize"
             onClick={() => { if (matEnabled) factset.onOpen(); }}
-            onMouseEnter={() => setMatHover(true)}
-            onMouseLeave={() => setMatHover(false)}
             disabled={!matEnabled}
             aria-label="Materialize results"
             title={factset.enabled
@@ -371,7 +378,9 @@ export function LibraryHeader({
             style={{
               background: 'none', border: 'none', outline: 'none', padding: 2, flexShrink: 0,
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              color: matEnabled && matHover ? ACCENT : '#888',
+              // Rest colour only; the hover accent is App.css's .k-materialize,
+              // shared with the fact header's Materialize button.
+              ['--k-materialize-rest' as string]: '#888',
               cursor: matEnabled ? 'pointer' : 'default', opacity: matEnabled ? 0.75 : 0.3,
             }}
           >

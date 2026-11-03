@@ -125,19 +125,16 @@ describe('LibraryHeader', () => {
     expect((recent as HTMLElement).style.borderStyle).toBe('none');
   });
 
-  it('disables Path/Recent while a search/relevance filter is active (only Relevance stays enabled)', () => {
+  // Unavailable modes are NOT SHOWN (user, 2026-11-03), where they used to be
+  // drawn greyed in the open flyout. SABOTAGE: drop the .filter() after
+  // flyoutItems in LibraryHeader.tsx -> red.
+  it('hides Path/Recent while searching: Relevance alone, nothing greyed', () => {
     renderOpen(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={vi.fn()} />);
-    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('sort-path')).toBeNull();
+    expect(screen.queryByTestId('sort-recent')).toBeNull();
     expect((screen.getByTestId('sort-relevance') as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it('does not dispatch onSortChange when a disabled (search-mode) segment is clicked', () => {
-    const handler = vi.fn();
-    renderOpen(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={handler} />);
-    fireEvent.click(screen.getByTestId('sort-path'));
-    fireEvent.click(screen.getByTestId('sort-recent'));
-    expect(handler).not.toHaveBeenCalled();
+    expect(screen.getByTestId('mode-flyout').querySelectorAll('button')).toHaveLength(1);
+    expect(screen.getByTestId('mode-flyout').querySelectorAll('button:disabled')).toHaveLength(0);
   });
 
   it('keeps Path/Recent enabled when not searching', () => {
@@ -152,29 +149,19 @@ describe('LibraryHeader', () => {
   // Left enabled, the button wrote the librarySort it already held and the
   // override recomputed straight back to Recent — a live-looking control whose
   // entire effect was cancelled, with no feedback to say so.
-  it('disables Path — and only Path — while a content chip is filtering', () => {
+  // Since 2026-11-03 an unavailable mode is hidden rather than greyed, so the
+  // chip-blocked Path is simply absent and Recent is left alone.
+  it('hides Path — and only Path — while a content chip is filtering', () => {
     renderOpen(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
-    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('sort-path')).toBeNull();
     expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('says why Path is unavailable rather than leaving it silently inert', () => {
-    renderOpen(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
-    expect(screen.getByTestId('sort-path').getAttribute('title'))
-      .toBe('The tree cannot filter — remove the chip to browse it');
-  });
-
-  it('does not dispatch onSortChange when the chip-disabled Path segment is clicked', () => {
-    const handler = vi.fn();
-    renderOpen(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} onSortChange={handler} />);
-    fireEvent.click(screen.getByTestId('sort-path'));
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it('re-enables Path once the chip is gone', () => {
+  it('brings Path back once the chip is gone', () => {
     const { rerender } = renderOpen(<LibraryHeader {...base} sort="recent" contentFiltered={true} />);
-    expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('sort-path')).toBeNull();
     rerender(<LibraryHeader {...base} sort="recent" contentFiltered={false} />);
+    fireEvent.mouseEnter(screen.getByTestId('mode-flyout'));
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -326,10 +313,10 @@ describe('the Relevance segment while searching', () => {
     expect(screen.getByTestId('sort-relevance').title.toLowerCase()).toMatch(/clear|exit|leave/);
   });
 
-  it('is still the only enabled segment', () => {
+  it('is the only segment shown', () => {
     renderOpen(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
-    expect(screen.getByTestId('sort-path')).toBeDisabled();
-    expect(screen.getByTestId('sort-recent')).toBeDisabled();
+    expect(screen.queryByTestId('sort-path')).toBeNull();
+    expect(screen.queryByTestId('sort-recent')).toBeNull();
     expect(screen.getByTestId('sort-relevance')).not.toBeDisabled();
   });
 });
@@ -357,7 +344,7 @@ describe('the Motif segment', () => {
     // name the ordering while the reader is asking about a shape.
     renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
     expect(screen.getByTestId('sort-motif')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('sort-recent')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByTestId('sort-recent')).toBeNull();
   });
 
   it('leaves the pivot when pressed, and never re-enters it', () => {
@@ -377,9 +364,10 @@ describe('the Motif segment', () => {
     // has: clicking it would write what is already there and clear the open
     // fact for nothing. An enabled button whose whole effect is overridden is
     // worse than a disabled one.
+    // Since 2026-11-03 the overridden modes are not drawn at all.
     renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
-    expect(screen.getByTestId('sort-path')).toBeDisabled();
-    expect(screen.getByTestId('sort-recent')).toBeDisabled();
+    expect(screen.queryByTestId('sort-path')).toBeNull();
+    expect(screen.queryByTestId('sort-recent')).toBeNull();
     expect(screen.getByTestId('sort-motif')).not.toBeDisabled();
   });
 
