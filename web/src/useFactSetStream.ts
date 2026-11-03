@@ -61,6 +61,9 @@ export interface FsStreamState {
   headError: FsFault | null;
   /** Set after an expired FactSet was re-created; the view shows its notice. */
   notice: 'refreshed' | null;
+  /** Counts the re-creations after a 404 (recover): each is a new FactSet
+   *  whose (unit, n) may name other sections. */
+  recreated: number;
   /** Counts the times a new run replaced the text. */
   epoch: number;
   /** Where the view should scroll once the run of epoch `land.epoch` is on
@@ -74,6 +77,7 @@ export interface FsStreamState {
 const INITIAL: FsStreamState = {
   nodes: [], env: null, phase: 'loading', error: null, stale: false,
   tail: 'idle', tailError: null, head: 'done', headError: null, notice: null, epoch: 0, land: null, cursor: null,
+  recreated: 0,
 };
 
 interface Inputs { api: FactSetApi; search: FsSearch; options: MatOptions }
@@ -343,6 +347,7 @@ export class FactSetStream {
     this.markGone(dead);
     if (this.recoveries >= 1) return;
     this.recoveries++;
+    this.commit({ recreated: this.state.recreated + 1 });
     // A Back seek in flight lands on its origin, not on the jump's destination.
     this.start({ seekTo: this.topUnit, notice: 'refreshed', land: this.backTarget ?? undefined });
   };
@@ -376,13 +381,13 @@ export class FactSetStream {
     if (keep) {
       this.commit({ stale: true, error: null, cursor: null, notice: o.notice ?? this.state.notice });
     } else {
-      this.commit({ ...INITIAL, epoch: this.state.epoch, notice: o.notice ?? null });
+      this.commit({ ...INITIAL, epoch: this.state.epoch, notice: o.notice ?? null, recreated: this.state.recreated });
     }
     const { search, options } = this.inputs;
     void this.chain(gen, async signal => {
       const first = await this.call(gen, sig => this.inputs!.api.first(search, options, sig), signal);
       if (first.units === 0 || !first.cursor) {
-        this.commit({ ...INITIAL, env: envOf(first), phase: 'ready', tail: 'done', epoch: this.state.epoch + 1, notice: this.state.notice });
+        this.commit({ ...INITIAL, env: envOf(first), phase: 'ready', tail: 'done', epoch: this.state.epoch + 1, notice: this.state.notice, recreated: this.state.recreated });
         return;
       }
       const land = o.land && o.land.unit <= first.units ? o.land : undefined;

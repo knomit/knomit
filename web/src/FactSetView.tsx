@@ -13,6 +13,8 @@ import { FsError, factsetApi } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FsSearch } from './factsetApi';
 import { FactSetAnchors, fsPathTo, moreThanFactSet, stubLabel } from './factsetAnchors';
 import { useFactSetStream } from './useFactSetStream';
+import { ModeFlyout } from './ModeFlyout';
+import type { FlyoutItem } from './ModeFlyout';
 import type { FsFault } from './useFactSetStream';
 import './materialize.css';
 
@@ -27,16 +29,17 @@ export const NOTICE_REFRESHED = 'FactSet refreshed';
  *  "scrolls to the written appearance and flashes it"). */
 export const FLASH_MS = 1200;
 
-/** The Back pill's label (user ruling 2026-11-02: "back to title"): "Back to"
- *  and the origin section's title, shortened by the link stubs' rule (the
- *  stub's label minus its "see "), no numbers. */
+/** The back arrow's tooltip and accessible name (user ruling 2026-11-02:
+ *  "back to title"): "Back to" and the title of the origin it returns to,
+ *  shortened by the link stubs' rule (the stub's label minus its "see "), no
+ *  numbers. */
 function backLabel(title: string): string {
   return `Back to ${stubLabel(title).slice('see '.length)}`;
 }
 
 /** Where the reader was when they followed a link: the section used as the
  *  reference (the clicked one, else the one at the top of the pane), its
- *  offset from the pane's top, and the pill's title. */
+ *  offset from the pane's top, and the back arrow's title. */
 interface Origin { unit: number; n: number; offset: number; title: string }
 
 /** The export's file name when the server sends none. PLACEHOLDER copy. */
@@ -69,6 +72,14 @@ function faultLine(f: FsFault): string {
  *  numbered unit heading (the root) and what it builds on. Same bar, Focus,
  *  Export, ladder and gutter as the single-fact view; links are stubs that say
  *  "see <short title>" and scroll or seek to where the fact is written. */
+/** The back arrow's strip: the floating panel's own surface, so the panel
+ *  reads as growing to the left. Its colours are .k-fs-tools's variables
+ *  (materialize.css), the one place they are defined. */
+const FS_TOOLS_STRIP = {
+  background: 'var(--fs-tools-bg)', border: '1px solid var(--fs-tools-edge-on)', borderRight: 'none',
+  borderRadius: '6px 0 0 6px', top: -1, bottom: -1, paddingLeft: 3, gap: 0,
+} as const;
+
 export function FactSetView({ search, options, onOptionsChange, onBack, listTotal, api = factsetApi, save = saveExport }: {
   search: FsSearch;
   /** The results list's own total (the server count the Library shows as
@@ -171,11 +182,18 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
     return false;
   }, [anchors, findAnchor, arrive, seek]);
 
-  // ── The Back pill (design §5). Following any in-document link (a stub,
-  // forward or back, or a builds-on link) records the reader's origin; the
-  // pill returns there exactly and goes away once it has. ONE origin is kept,
-  // the latest: a second link followed before Back replaces it. ──
-  const [back, setBack] = useState<Origin | null>(null);
+  // ── The back stack (user, 2026-11-03: "remember multiple jumps, in a stack
+  // like fashion"). Following any in-document link (a stub, forward or back,
+  // or a builds-on link) PUSHES the reader's origin; the back arrow in the Top
+  // button's flyout POPS one and returns there exactly, and the entry leaves
+  // the stack once that return has landed. Top and an option change clear it.
+  // No cap: it lives as long as this FactSet view (one per search). ──
+  const [stack, setStack] = useState<Origin[]>([]);
+  const push = useCallback((o: Origin) => setStack(st => [...st, o]), []);
+  /** Drops `o` once its return has landed: only when it is still the top (a
+   *  link followed meanwhile pushed above it, and that entry stays). */
+  const popIf = useCallback((o: Origin) => setStack(st => (st[st.length - 1] === o ? st.slice(0, -1) : st)), []);
+  const back = stack.length > 0 ? stack[stack.length - 1] : null;
   /** The origin a Back seek is returning to, consumed by its landing. */
   const backSeek = useRef<Origin | null>(null);
   /** An origin being restored in the run of `epoch`: its offset is applied
@@ -215,8 +233,8 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
   }, [byUnitN]);
   const onLink = useCallback((l: FactSetLink) => {
     const o = takeOrigin();
-    if (follow(l) && o) setBack(o);
-  }, [takeOrigin, follow]);
+    if (follow(l) && o) push(o);
+  }, [takeOrigin, follow, push]);
 
   // A builds-on link points inside its unit: to the written section when it is
   // on screen, else through the unit's own appearance of it (a stub's link),
@@ -224,12 +242,12 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
   const onGoto = useCallback((l: MatLink, unit?: number) => {
     const o = takeOrigin();
     const el = findAnchor(l.anchor_id);
-    if (el) { arrive(el); if (o) setBack(o); return; }
+    if (el) { arrive(el); if (o) push(o); return; }
     if (!unit) return;
     const target = byUnitN.get(`${unit}.${l.n}`);
-    if (target?.link) { if (follow(target.link) && o) setBack(o); return; }
-    if (!target && reach({ unit, n: l.n })) { setPending(l.anchor_id); if (o) setBack(o); }
-  }, [byUnitN, findAnchor, arrive, follow, reach, takeOrigin]);
+    if (target?.link) { if (follow(target.link) && o) push(o); return; }
+    if (!target && reach({ unit, n: l.n })) { setPending(l.anchor_id); if (o) push(o); }
+  }, [byUnitN, findAnchor, arrive, follow, reach, takeOrigin, push]);
 
   // The extras of each FactSet section, stable per node object so the memoized
   // Section re-renders only when its node changed.
@@ -301,7 +319,6 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
 
   // Land where the stream says once that run is on screen: a clicked link's
   // anchor, or the unit the reader was at before a restart, a seek or a refresh.
-  /* eslint-disable react-hooks/set-state-in-effect -- landing is a reaction to the stream's state (following a stub may start a seek) */
   // Exactly once per landing request: `land` stays set for the whole run while
   // byUnitN is rebuilt on every append and prepend, so without this every new
   // page would snap the reader back to the landing target.
@@ -312,12 +329,12 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
     if (!box) return;
     landed.current = land;
     setPending(null);
-    // A Back pill's return: the origin section at the offset it had (never
-    // followed, even when it is a stub, and not flashed).
+    // A Back return: the origin section at the offset it had (never followed,
+    // even when it is a stub, and not flashed). Its entry leaves the stack.
     if (land.back) {
       const o = backSeek.current;
       backSeek.current = null;
-      setBack(null);
+      if (o) popIf(o);
       if (o && o.unit === land.unit && o.n === land.n) { restore.current = { o, epoch: land.epoch }; restoreStep(); return; }
       const root = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
       if (root) scrollToEl(root);
@@ -340,8 +357,7 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
     if (a) { arrive(a); return; }
     const el = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
     if (el) scrollToEl(el);
-  }, [land, epoch, stale, findAnchor, scrollToEl, arrive, byUnitN, follow, restoreStep]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  }, [land, epoch, stale, findAnchor, scrollToEl, arrive, byUnitN, follow, restoreStep, popIf]);
 
   // The run is settled one frame after it (and its landing) is on screen.
   useEffect(() => {
@@ -429,18 +445,18 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
 
   useEffect(() => { trackTop(); }, [trackTop, nodes.length, epoch]);
 
-  // Back: to the origin at its offset when its section is in the run, else a
-  // seek back to the origin's unit, reading on to its section, whose landing
-  // restores the offset. Either way the pill goes.
-  // The pill stays until the Back has landed: a refused or failed seek keeps
-  // it (Retry retries the Back; a 404 re-creates the FactSet at the origin).
+  // Back (one pop): to the top origin at its offset when its section is in
+  // the run, else a seek back to the origin's unit, reading on to its section,
+  // whose landing restores the offset. The entry stays on the stack until
+  // the Back has landed: a refused or failed seek keeps it (Retry retries the
+  // Back; a 404 re-creates the FactSet at the origin).
   const goBack = useCallback(() => {
     const o = back;
     const box = scroller.current;
     if (!o || !box) return;
     const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${o.unit}"][data-mat-n="${o.n}"]`);
     if (sec && !stale) {
-      setBack(null);
+      popIf(o);
       backSeek.current = null;
       restore.current = { o, epoch };
       restoreStep();
@@ -448,32 +464,48 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
     }
     backSeek.current = o;
     if (!seek(o.unit, undefined, o.n, true)) backSeek.current = null;
-  }, [back, stale, epoch, restoreStep, seek]);
+  }, [back, stale, epoch, restoreStep, seek, popIf]);
+
+  // A re-creation after a 404 (the stream's recover) is a new FactSet that can
+  // renumber (unit, n), as an option change can: every entry is dropped except
+  // the one whose Back is in flight (its seek is what the re-creation lands
+  // on, and the entry leaves once that return has landed).
+  const { recreated } = s;
+  useEffect(() => {
+    if (recreated === 0) return;
+    const inFlight = backSeek.current;
+    setStack(st => (inFlight && st.includes(inFlight) ? [inFlight] : []));
+  }, [recreated]);
 
   // An option change restarts the FactSet: a recorded (unit, n) may then name
-  // another section, so the pill goes.
+  // another section, so the stack is cleared.
   const changeOptions = useCallback((o: MatOptions) => {
-    setBack(null);
+    setStack([]);
     backSeek.current = null;
     restore.current = null;
     onOptionsChange(o);
   }, [onOptionsChange]);
 
-  // Back to top: the start of the FactSet, unit 1's root. When unit 1 heads
-  // the run nothing can be prepended above it, so the top of the run IS the
-  // start; otherwise the top of the run is only the top of what is loaded
-  // (landing there prepends and keeps the place), so seek to unit 1.
+  // Back to top: the start of the FactSet, unit 1's root, and the back stack
+  // is cleared (user, 2026-11-03). When unit 1 heads the run nothing can be
+  // prepended above it, so the top of the run IS the start; otherwise the top
+  // of the run is only the top of what is loaded (landing there prepends and
+  // keeps the place), so seek to unit 1. A run being replaced (a Back seek in
+  // flight) is superseded by the seek too, or its landing would pull the
+  // reader away from the top.
   const toTop = useCallback(() => {
     restore.current = null;
+    backSeek.current = null;
+    setStack([]);
     const box = scroller.current;
     if (!box) return;
-    if (nodes[0]?.unit === 1) {
+    if (nodes[0]?.unit === 1 && !stale) {
       if (typeof box.scrollTo === 'function') box.scrollTo({ top: 0, behavior: 'smooth' });
       else setScrollTop(box, 0);
       return;
     }
     seek(1);
-  }, [nodes, seek, setScrollTop]);
+  }, [nodes, stale, seek, setScrollTop]);
 
   // The reader's own wheel or swipe while a Back restore waits: the reader
   // wins, the restore is abandoned rather than fought on the next render.
@@ -527,6 +559,21 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
     const el = scroller.current?.querySelector<HTMLElement>(`[data-fs-unit="${it.unit}"][data-mat-n="${it.n}"]`);
     if (el) scrollToEl(el);
   }, [scrollToEl]);
+  // The Top button as a tool group (the results header's ModeFlyout, book
+  // design §5): Top at rest, with the corner triangle while the stack holds
+  // an origin; hover or focus opens the back arrow inline to its left.
+  const topItem: FlyoutItem = { key: 'top', testid: 'fs-top', ariaLabel: 'Back to top', title: 'Back to top', Icon: ArrowUpIcon,
+    active: false, disabled: false, color: '#8a96a8', onSelect: toTop, toggle: false };
+  const backTitle = back ? backLabel(back.title) : '';
+  const toolItems: FlyoutItem[] = back
+    ? [{ key: 'back', testid: 'fs-stack-back', ariaLabel: backTitle, title: backTitle, Icon: ChevronLeftIcon,
+        active: false, disabled: false, color: '#8a96a8', onSelect: goBack, toggle: false }, topItem]
+    : [topItem];
+  // Top is hidden only at the very start of the FactSet with nothing to go
+  // back to: never while the stack holds an origin, and never inside a run
+  // that starts past unit 1 (a jump lands near the top of its run, where the
+  // old scrolled-past-600px rule hid it).
+  const showTools = scrolled || stack.length > 0 || (nodes[0]?.unit ?? 1) > 1;
   const exporting = exp.kind === 'running';
   const canExport = !!cursor && phase === 'ready' && units > 0;
 
@@ -671,25 +718,9 @@ export function FactSetView({ search, options, onOptionsChange, onBack, listTota
           </div>
         </article>
       </div>
-      {back && (
-        <button type="button" className="k-bare" data-testid="fs-back-pill" onClick={goBack}
-          title={backLabel(back.title)}
-          style={{
-            position: 'absolute', left: '50%', bottom: 22, transform: 'translateX(-50%)', zIndex: 5,
-            maxWidth: 'calc(100% - 120px)', height: 30, padding: '0 12px 0 8px', borderRadius: 15,
-            background: '#1a1e28', border: '1px solid #2a3040', color: '#cfd8e6', opacity: 0.95,
-            display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 12,
-            whiteSpace: 'nowrap', boxShadow: '0 2px 10px rgba(0, 0, 0, 0.4)',
-          }}>
-          <ChevronLeftIcon color="currentColor" size={12} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{backLabel(back.title)}</span>
-        </button>
-      )}
-      {scrolled && (
-        <button type="button" className="k-bare k-mat-top" data-testid="fs-top" title="Back to top" aria-label="Back to top"
-          onClick={toTop}>
-          <ArrowUpIcon color="currentColor" size={15} />
-        </button>
+      {showTools && (
+        <ModeFlyout items={toolItems} currentKey="top" currentActs testid="fs-tools" className="k-fs-tools"
+          style={{ position: 'absolute' }} iconSize={15} stripStyle={FS_TOOLS_STRIP} />
       )}
     </div>
   );

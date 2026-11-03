@@ -142,6 +142,15 @@ html[data-mat-focus] [data-testid='library-splitter'] { display: none !important
 .k-mat-top { position: absolute; right: 22px; bottom: 22px; z-index: 5; width: 30px; height: 30px; border-radius: 50%; background: #1a1e28; border: 1px solid #2a3040; color: #8a96a8; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0.85; padding: 0; }
 .k-mat-top:hover { opacity: 1; color: #cfd8e6; border-color: #3d4a66; }
 .k-mat-top:active { opacity: 0.6; }
+/* The FactSet's Top as a tool group (ModeFlyout, the results header's flyout):
+   the same floating spot and surface; the back arrow's strip opens to the left
+   on the same surface, so the panel reads as growing that way.
+   The colours live ONLY here, as variables: the strip (a DOM child of the
+   group, styled inline by ModeFlyout's stripStyle) reads the same ones. */
+.k-fs-tools { --fs-tools-bg: #1a1e28; --fs-tools-edge: #2a3040; --fs-tools-edge-on: #3d4a66;
+  right: 22px; bottom: 22px; z-index: 5; padding: 3px; border-radius: 6px; background: var(--fs-tools-bg); border: 1px solid var(--fs-tools-edge); opacity: 0.9; }
+.k-fs-tools:hover, .k-fs-tools[data-open="true"] { opacity: 1; border-color: var(--fs-tools-edge-on); }
+.k-fs-tools[data-open="true"] { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 
 
 /* ---- Heading ladder (level = tree depth + 1; levels past 5 repeat L5) and gutter, from the

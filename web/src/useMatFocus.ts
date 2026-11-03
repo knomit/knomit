@@ -43,8 +43,11 @@ export function useMatFocus(onExit?: () => void): [boolean, (f: boolean | ((f: b
     // input it only leaves the field; anywhere else it exits Focus.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      e.stopImmediatePropagation();
       const a = document.activeElement as HTMLElement | null;
+      // An open tool-group flyout (ModeFlyout, the FactSet's Top/Back) takes
+      // its own Esc: it collapses, the view stays.
+      if (a?.closest?.('[data-keeps-esc="true"]')) return;
+      e.stopImmediatePropagation();
       if (a && holdsEsc(a)) {
         a.blur();
         return;
