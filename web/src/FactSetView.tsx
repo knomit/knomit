@@ -4,13 +4,14 @@ import { saveExport, saveOutcomeLine } from './saveFile';
 import type { SaveOutcome } from './saveFile';
 import { MAX_DEPTH, MAX_REFERENCES } from './materializeApi';
 import type { MatLink, MatOptions } from './materializeApi';
-import { clampDepth, clampReferences } from './materializeOptions';
-import { PATH_H, Section, Stepper, Switch } from './materializeParts';
+import { PATH_H, SectionPath, Section, Stepper, Switch } from './materializeParts';
+import { NESTING, clampDepth, clampReferences, pathBudget as budgetFor } from './materializeOptions';
+import type { PathItem } from './materializeOptions';
 import { useMatFocus } from './useMatFocus';
 import type { FsSectionExtra } from './materializeParts';
 import { FsError, factsetApi } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FsSearch } from './factsetApi';
-import { FactSetAnchors, stubLabel } from './factsetAnchors';
+import { FactSetAnchors, fsPathTo, moreThanFactSet, stubLabel } from './factsetAnchors';
 import { useFactSetStream } from './useFactSetStream';
 import type { FsFault } from './useFactSetStream';
 import './materialize.css';
@@ -68,8 +69,12 @@ function faultLine(f: FsFault): string {
  *  numbered unit heading (the root) and what it builds on. Same bar, Focus,
  *  Export, ladder and gutter as the single-fact view; links are stubs that say
  *  "see <short title>" and scroll or seek to where the fact is written. */
-export function FactSetView({ search, options, onOptionsChange, onBack, api = factsetApi, save = saveExport }: {
+export function FactSetView({ search, options, onOptionsChange, onBack, listTotal, api = factsetApi, save = saveExport }: {
   search: FsSearch;
+  /** The results list's own total (the server count the Library shows as
+   *  data-count) when that list is a Recent one: it can be longer than the
+   *  FactSet holds (its cap), and the view then says so. */
+  listTotal?: number;
   options: MatOptions;
   onOptionsChange: (o: MatOptions) => void;
   onBack: () => void;
@@ -92,6 +97,10 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   const exportCtl = useRef<AbortController | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [topUnit, setTopUnit] = useState(1);
+  // The section at the top of the pane ("unit.n"), for the sticky path, and
+  // the path's character budget (from the pane width).
+  const [curKey, setCurKey] = useState<string | null>(null);
+  const [budget, setBudget] = useState<number>(NESTING.PATH_MAX_CHARS);
   const lens = search.target.kind === 'lens';
 
   const { nodes, env, phase, tail, head, stale, epoch, land, loadMore, loadBefore, seek, reach, reportTop } = s;
@@ -239,12 +248,20 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (!box) return;
     const line = box.getBoundingClientRect().top + PATH_H + 24;
     let cur = 0;
+    let key: string | null = null;
     for (const el of Array.from(box.querySelectorAll<HTMLElement>('[data-fs-unit]'))) {
-      if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.fsUnit); else break;
+      if (el.getBoundingClientRect().top <= line) { cur = Number(el.dataset.fsUnit); key = `${cur}.${el.dataset.matN}`; } else break;
     }
-    if (!cur && nodes[0]) cur = nodes[0].unit;
+    if (!cur && nodes[0]) { cur = nodes[0].unit; key = `${nodes[0].unit}.${nodes[0].n}`; }
     if (cur) { reportTop(cur); setTopUnit(u => (u === cur ? u : cur)); }
+    setCurKey(k => (k === key ? k : key));
+    const b = budgetFor(box.clientWidth);
+    setBudget(prev => (prev === b ? prev : b));
   }, [nodes, reportTop]);
+  useEffect(() => {
+    window.addEventListener('resize', trackTop);
+    return () => window.removeEventListener('resize', trackTop);
+  }, [trackTop]);
 
   // Restoring an origin: put its section back at the saved offset. When the
   // run does not hold enough above it (the jump's seek dropped the units
@@ -498,6 +515,18 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   useEffect(() => () => exportCtl.current?.abort(), []);
 
   const units = env?.units ?? 0;
+  // The sticky path of the section at the top (design §5 / prototype item 5).
+  const pathItems = useMemo(() => {
+    const cur = (curKey && byUnitN.get(curKey)) || nodes[0];
+    return cur ? fsPathTo(cur.unit, cur.n, byUnitN) : [];
+  }, [curKey, byUnitN, nodes]);
+  // A path item: scroll to that section (no origin is recorded: it is not a
+  // link, as the Unit control and Back to top are not).
+  const pickPath = useCallback((it: PathItem) => {
+    restore.current = null;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-fs-unit="${it.unit}"][data-mat-n="${it.n}"]`);
+    if (el) scrollToEl(el);
+  }, [scrollToEl]);
   const exporting = exp.kind === 'running';
   const canExport = !!cursor && phase === 'ready' && units > 0;
 
@@ -555,11 +584,9 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
         </div>
         <div className="k-mat-meta2">
           {env && <span className="k-fs-sub" data-testid="fs-search-line">{env.search_line}</span>}
-          <span className="k-mat-progress" data-testid="fs-progress" role="status">
-            {/* The unit the reader is on (the one at the top of the pane, as the Unit
-                control shows), not the last one loaded. */}
-            {env && units > 0 ? `unit ${topUnit} of ${units}` /* PLACEHOLDER copy */ : ''}
-          </span>
+          {env && units > 0 && listTotal !== undefined && listTotal > units && (
+            <span className="k-fs-sub" data-testid="fs-more-notice" role="note">{moreThanFactSet(units, listTotal)}</span>
+          )}
           {s.notice === 'refreshed' && <span className="k-fs-notice" data-testid="fs-notice" role="status">{NOTICE_REFRESHED}</span>}
         </div>
         {exp.kind === 'failed' && (
@@ -583,6 +610,13 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
           if (y > touchY.current) atTopUp(e.currentTarget);
           touchY.current = y;
         }}>
+        {nodes.length > 0 && (
+          // One line, the design's: the progress ("unit X of N", the unit at the
+          // top of the pane as the Unit control shows, not the last one loaded),
+          // then the path of the section at the top.
+          <SectionPath prefix="fs" items={pathItems} budget={budget} onPick={pickPath}
+            lead={env && units > 0 ? { text: `unit ${topUnit} of ${units}` /* PLACEHOLDER copy */, testid: 'fs-progress' } : undefined} />
+        )}
         <article className="k-mat-article"
           onClickCapture={e => { clickSec.current = (e.target as Element).closest<HTMLElement>('[data-fs-unit][data-mat-n]'); }}
           data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'} data-pending={pending ?? undefined}>

@@ -4,11 +4,12 @@ import { saveExport, saveOutcomeLine } from './saveFile';
 import type { SaveOutcome } from './saveFile';
 import { MAX_DEPTH, MAX_REFERENCES, materializeApi } from './materializeApi';
 import type { MaterializeApi, MatLink, MatNode, MatOptions, MatTarget } from './materializeApi';
-import { clampDepth, clampReferences, exportFilename, id8, optionChange } from './materializeOptions';
 import { useMaterializeStream } from './useMaterializeStream';
 import { treeInfo } from './materializeNumbering';
 import type { TreeInfo } from './materializeNumbering';
-import { NESTING, PATH_H, Section, Stepper, Switch } from './materializeParts';
+import { PATH_H, SectionPath, Section, Stepper, Switch } from './materializeParts';
+import { NESTING, clampDepth, clampReferences, clipTitle, exportFilename, id8, optionChange, pathBudget as budgetFor } from './materializeOptions';
+import type { PathItem } from './materializeOptions';
 import { useMatFocus } from './useMatFocus';
 import './materialize.css';
 
@@ -35,29 +36,6 @@ type ExportState =
  *  reader was at before an option change; 'jump' is a clicked builds-on link. */
 interface Goto { anchor: string; n: number; kind: 'restore' | 'jump'; title: string; epoch: number }
 
-const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t);
-
-interface PathItem { n: number; full: string; label: string; gap?: boolean }
-
-/** Middle-truncate a path: keep the first PATH_KEEP_HEAD items and as many of the
- *  last as fit the budget, with a gap marker between. */
-function midTruncate(items: PathItem[], budget: number): PathItem[] {
-  const cost = (i: PathItem) => i.label.length + NESTING.SEP_COST;
-  const total = items.reduce((t, i) => t + cost(i), 0);
-  const keep = NESTING.PATH_KEEP_HEAD;
-  if (total <= budget || items.length <= keep + 1) return items;
-  const head = items.slice(0, keep);
-  let used = head.reduce((t, i) => t + cost(i), 0) + 1 + NESTING.SEP_COST;
-  const tail: PathItem[] = [];
-  for (let i = items.length - 1; i >= keep; i--) {
-    const c = cost(items[i]);
-    if (used + c > budget && tail.length) break;
-    tail.unshift(items[i]);
-    used += c;
-  }
-  return [...head, { n: -1, full: '', label: '…', gap: true }, ...tail];
-}
-
 /** The path root..n through the walk tree. */
 function pathTo(n: number, tree: Map<number, TreeInfo>, byN: Map<number, MatNode>): PathItem[] {
   const chain: number[] = [];
@@ -66,7 +44,7 @@ function pathTo(n: number, tree: Map<number, TreeInfo>, byN: Map<number, MatNode
     const ti = tree.get(k)!;
     const t = byN.get(k)?.title ?? '';
     const num = ti.num && ti.depth <= NESTING.NUMBER_LEVELS ? `${ti.num} ` : '';
-    return { n: k, full: `${ti.num ? `${ti.num} ` : ''}${t}`, label: num + clip(t, NESTING.PATH_TITLE_CHARS) };
+    return { n: k, full: `${ti.num ? `${ti.num} ` : ''}${t}`, label: num + clipTitle(t, NESTING.PATH_TITLE_CHARS) };
   });
 }
 
@@ -210,8 +188,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
       if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.matN); else break;
     }
     setCurN(prev => (prev === cur ? prev : cur));
-    const w = box.clientWidth;
-    const b = Math.max(20, Math.min(NESTING.PATH_MAX_CHARS, Math.floor((w - 90) / NESTING.CHAR_PX)));
+    const b = budgetFor(box.clientWidth);
     setPathBudget(prev => (prev === b ? prev : b));
   }, []);
   useEffect(() => { trackCurrent(); }, [trackCurrent, sections.length, stale]);
@@ -324,20 +301,11 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
       <div className="k-mat-scroll" ref={scroller} data-testid="mat-scroll"
         onScroll={e => { setScrolled(e.currentTarget.scrollTop > BACK_TO_TOP_PX); trackCurrent(); }}>
         {sections.length > 0 && (
-          <nav className="k-mat-path" data-testid="mat-path" aria-label="Section path">
-            {midTruncate(pathTo(curN ?? sections[0].n, tree, byN), pathBudget).map((it, i, all) => (
-              <span key={`${it.n}-${i}`} style={{ display: 'contents' }}>
-                {i > 0 && <span className="sep" aria-hidden="true">›</span>}
-                {it.gap
-                  ? <span className="gap" data-testid="mat-path-gap">…</span>
-                  : <button type="button" data-testid="mat-path-item" data-n={it.n} title={it.full} className={i === all.length - 1 ? 'cur' : undefined}
-                      onClick={() => {
-                        const el = scroller.current?.querySelector<HTMLElement>(`[data-mat-n="${it.n}"]`);
-                        if (el) scrollToEl(el);
-                      }}>{it.label}</button>}
-              </span>
-            ))}
-          </nav>
+          <SectionPath prefix="mat" items={pathTo(curN ?? sections[0].n, tree, byN)} budget={pathBudget}
+            onPick={it => {
+              const el = scroller.current?.querySelector<HTMLElement>(`[data-mat-n="${it.n}"]`);
+              if (el) scrollToEl(el);
+            }} />
         )}
         <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'}>
           {phase === 'loading' && sections.length === 0 && (

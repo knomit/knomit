@@ -12,6 +12,8 @@
 // hash, so on a lens (anchors per member) one map keyed by anchor_id is enough.
 
 import type { FactSetLink, FactSetNode } from './factsetApi';
+import { NESTING, clipTitle } from './materializeOptions';
+import type { PathItem } from './materializeOptions';
 
 /** How many characters of the target's title a link stub keeps.
  *  PLACEHOLDER: the user asked for "a very short form" and set no length. */
@@ -60,4 +62,37 @@ export class FactSetAnchors {
     if (unit && unit > 0) return { kind: 'seek', unit, anchor: link.anchor_id };
     return { kind: 'none' };
   }
+}
+
+// ── The FactSet view's sticky path and its Recent-list notice ───────────────
+
+/** The unit root's title in the sticky path is clipped to this many
+ *  characters (the book prototype's PATH_UNIT_CHARS): long enough to
+ *  recognise the fact, short enough that the chain keeps room at 900px. */
+export const PATH_UNIT_CHARS = 28;
+
+/** The notice when the list holds more results than the FactSet (user ruling
+ *  2026-11-03 (c): a Recent list is not capped; say so). PLACEHOLDER copy. */
+export function moreThanFactSet(units: number, listTotal: number): string {
+  const f = (x: number) => x.toLocaleString('en-US');
+  return `Showing the first ${f(units)} of ${f(listTotal)} results.`; // PLACEHOLDER copy
+}
+
+/** The sticky path of section (unit, n): the unit root's title first (clipped
+ *  to PATH_UNIT_CHARS, no number: the progress names the unit), the
+ *  ancestors, and the section itself last; numbers as the headings show them.
+ *  On the unit root itself the path is the root alone. */
+export function fsPathTo(unit: number, n: number, byUnitN: Map<string, FactSetNode>): PathItem[] {
+  const chain: FactSetNode[] = [];
+  const seen = new Set<number>();
+  for (let c = byUnitN.get(`${unit}.${n}`); c && !seen.has(c.n); c = c.tree_depth > 0 ? byUnitN.get(`${unit}.${c.parent || 1}`) : undefined) {
+    seen.add(c.n);
+    chain.unshift(c);
+  }
+  return chain.map(c => {
+    const t = c.title || c.path;
+    if (c.tree_depth === 0) return { n: c.n, unit, full: t, label: clipTitle(t, PATH_UNIT_CHARS) };
+    const num = c.number && c.tree_depth <= NESTING.NUMBER_LEVELS ? `${c.number} ` : '';
+    return { n: c.n, unit, full: `${c.number ? `${c.number} ` : ''}${t}`, label: num + clipTitle(t, NESTING.PATH_TITLE_CHARS) };
+  });
 }

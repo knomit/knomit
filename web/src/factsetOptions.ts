@@ -14,6 +14,7 @@ import { DEFAULT_OPTIONS } from './materializeApi';
 import type { MatOptions } from './materializeApi';
 import { clampDepth, clampReferences, sameOptions } from './materializeOptions';
 import type { FsSearch } from './factsetApi';
+import { searchKey } from './useFactSetStream';
 
 const P_OPEN = 'factset';
 const P_DEPTH = 'fs_depth';
@@ -62,7 +63,16 @@ export function writeFactSetParams(search: string, s: FsUrlState): string {
  *  re-created: the URL said factset=1 and the list it came from has not been
  *  restored yet ('wait'), or has been and the Library may now re-create the
  *  FactSet from it ('ready'). */
-export interface FsView { search: FsSearch | null; options: MatOptions; pending: false | 'wait' | 'ready' }
+export interface FsView {
+  search: FsSearch | null; options: MatOptions; pending: false | 'wait' | 'ready';
+  /** The total (the server count) of the Recent list the open FactSet was
+   *  frozen from, keyed by that list's search (searchKey), which the FactSet's
+   *  cap can cut short (ruling 2026-11-03 (c)); memory only. Captured when the
+   *  FactSet opens and updated only by the SAME search: a list the Library
+   *  shows afterwards (another scope, another sort, another repo or lens) is
+   *  not the frozen one and never changes it. Read it through fsListTotal. */
+  listTotal?: { key: string; total: number };
+}
 
 type Listener = () => void;
 
@@ -102,11 +112,30 @@ class FactSetViewStore {
     this.listeners.forEach(l => l());
   }
 
-  /** Opens the FactSet of the list's current search (frozen from here on). */
-  open(search: FsSearch): void { this.set({ ...this.view, search, pending: false }); }
-  close(): void { if (this.view.search || this.view.pending) this.set({ ...this.view, search: null, pending: false }); }
+  /** Opens the FactSet of the list's current search (frozen from here on),
+   *  with that list's total when it is a Recent list. */
+  open(search: FsSearch, listTotal?: number): void {
+    this.set({ ...this.view, search, pending: false,
+      listTotal: listTotal === undefined ? undefined : { key: searchKey(search), total: listTotal } });
+  }
+  close(): void {
+    if (this.view.search || this.view.pending) this.set({ ...this.view, search: null, pending: false, listTotal: undefined });
+  }
   setOptions(options: MatOptions): void {
     if (!sameOptions(options, this.view.options)) this.set({ ...this.view, options });
+  }
+  /** The Library's Recent list total for the list of search key `key`. Taken
+   *  only while the open FactSet was frozen from that very list (a reload opens
+   *  the FactSet before the list's total has arrived); any other list is
+   *  ignored. */
+  setListTotal(key: string, total: number): void {
+    // A list being reloaded reads 0 for a moment; 0 is never more than the
+    // FactSet holds, so it would only blink the notice away.
+    if (total <= 0 || !this.view.search || searchKey(this.view.search) !== key) return;
+    const cur = this.view.listTotal;
+    if (cur && cur.key === key && cur.total === total) return;
+    this.view = { ...this.view, listTotal: { key, total } };
+    this.listeners.forEach(l => l());
   }
   /** The list a pending flag waits for is restored: the Library may re-create. */
   arm(): void { if (this.view.pending === 'wait') this.set({ ...this.view, pending: 'ready' }); }
@@ -118,4 +147,12 @@ export const factsetView = new FactSetViewStore();
 
 export function useFactSetView(): FsView {
   return useSyncExternalStore(factsetView.subscribe, factsetView.get);
+}
+
+/** The list total to show with the open FactSet. The store keeps only the
+ *  total of the very search the FactSet was frozen from: open() records it
+ *  under that search's key, setListTotal() accepts that key alone, close()
+ *  drops it, so no key check is needed here. */
+export function fsListTotal(v: FsView): number | undefined {
+  return v.search ? v.listTotal?.total : undefined;
 }

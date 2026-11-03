@@ -14,7 +14,8 @@ import { Library } from './Library';
 import { init } from './state';
 import type { AppState } from './state';
 import type { Lens } from './api';
-import { factsetView } from './factsetOptions';
+import { factsetView, fsListTotal } from './factsetOptions';
+import { api } from './api';
 
 const calls: { fn: string; args: unknown[] }[] = [];
 vi.mock('./api', () => {
@@ -75,6 +76,57 @@ describe('the FactSet entry control', () => {
     const s = factsetView.get().search!;
     expect(s.sort).toBe('recent');
     expect(Object.fromEntries(new URLSearchParams(s.params))).toEqual({ path: 'kb', domain: 'ai' });
+  });
+
+  // Ruling 2026-11-03 (c): a Recent list is not capped, so the FactSet view
+  // compares its units with the list's own server total (the header's
+  // data-count). Sabotage: hand the view the total on a relevance list too.
+  it('hands the FactSet view the Recent list total (data-count), and no total for a relevance list', async () => {
+    const { unmount } = render(<Library state={repoState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    fireEvent.click(await enabledControl());
+    const count = Number(screen.getByTestId('library-header').getAttribute('data-count'));
+    expect(count).toBe(1);
+    expect(fsListTotal(factsetView.get())).toBe(count);
+    unmount();
+    factsetView.close();
+    render(<Library state={repoState({ freeText: 'goroutine' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    fireEvent.click(await enabledControl());
+    expect(factsetView.get().search).not.toBeNull();
+    expect(fsListTotal(factsetView.get())).toBeUndefined();
+  });
+
+  // Review H1: the total is the FROZEN list's. The Library under an open
+  // FactSet can move on (another scope, a relevance search, a lens): its
+  // totals are another list's and must neither show nor hide the notice.
+  // Sabotage: record the live list's total without its search key.
+  it("the notice total stays the frozen list's when the Library's scope, sort or lens changes", async () => {
+    const recent = vi.mocked(api.recent);
+    const lensFacts = vi.mocked(api.listLensFacts);
+    const { rerender } = render(<Library state={repoState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    fireEvent.click(await enabledControl());
+    expect(fsListTotal(factsetView.get())).toBe(1);
+    const frozen = factsetView.get().search;
+    const big = { facts: [{ path: 'kb/a.md', title: 'A', type: 'observation', committed_at: 1 }], total: 5000 };
+    recent.mockResolvedValue(big as Awaited<ReturnType<typeof api.recent>>);
+    lensFacts.mockResolvedValue({ ...big, facts: [{ ...big.facts[0], source: { repo: 'docs', id: 'u2', branch: 'main' } }] } as unknown as Awaited<ReturnType<typeof api.listLensFacts>>);
+    try {
+      // A wider scope: the list now counts 5,000.
+      rerender(<Library state={repoState({ librarySort: 'path', filters: [{ category: 'type', value: 'policy' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('5000'));
+      expect(factsetView.get().search).toBe(frozen);
+      expect(fsListTotal(factsetView.get())).toBe(1);
+      // A relevance list does not hide it.
+      rerender(<Library state={repoState({ freeText: 'goroutine' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(calls.some(c => c.fn === 'search')).toBe(true));
+      expect(fsListTotal(factsetView.get())).toBe(1);
+      // Nor does a lens's Recent list.
+      rerender(<Library state={lensState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('5000'));
+      expect(fsListTotal(factsetView.get())).toBe(1);
+    } finally {
+      recent.mockReset();
+      lensFacts.mockReset();
+    }
   });
 
   it('is absent in the path tree (not a search)', async () => {

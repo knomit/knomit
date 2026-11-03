@@ -8,6 +8,7 @@ import { lensListSearchParams, listSearchParams } from './listSearch';
 import type { ListFilters } from './listSearch';
 import type { FsSearch } from './factsetApi';
 import { factsetView } from './factsetOptions';
+import { searchKey } from './useFactSetStream';
 import type { AppState, Action } from './state';
 import { currentPath, isLive, isLensContext, canGoBack } from './state';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath, rowPath, clampTitle } from './utils';
@@ -998,8 +999,16 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // History (time travel) cannot materialize: the server refuses `commit` (Q-UI3).
   const live = isLive(state);
   const openFactSet = useCallback(() => {
-    if (factsetSearch && live) factsetView.open(factsetSearch);
-  }, [factsetSearch, live]);
+    if (factsetSearch && live) factsetView.open(factsetSearch, effectiveSort === 'recent' ? total : undefined);
+  }, [factsetSearch, live, effectiveSort, total]);
+  // A Recent list is not capped, so it can hold more than the FactSet's cap:
+  // the view says so from this total (ruling 2026-11-03 (c)). The server's
+  // count, the one the header carries as data-count.
+  // The total belongs to THIS list's search (its key): the store takes it only
+  // while the open FactSet was frozen from the same search.
+  const recentTotal = effectiveSort === 'recent' && factsetSearch ? total : undefined;
+  const recentKey = recentTotal !== undefined && factsetSearch ? searchKey(factsetSearch) : null;
+  useEffect(() => { if (recentKey !== null && recentTotal !== undefined) factsetView.setListTotal(recentKey, recentTotal); }, [recentKey, recentTotal]);
   // A reload with factset=1: once App has put the URL's list back (the flag is
   // 'ready'), the FactSet is re-created from THIS list's search, a new first
   // call built by the same builders, never an id or cursor from the URL. When
@@ -1007,9 +1016,9 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const fsPending = useSyncExternalStore(factsetView.subscribe, () => factsetView.get().pending);
   useEffect(() => {
     if (fsPending !== 'ready') return;
-    if (factsetSearch && live) factsetView.open(factsetSearch);
+    if (factsetSearch && live) factsetView.open(factsetSearch, effectiveSort === 'recent' ? total : undefined);
     else factsetView.dropPending();
-  }, [fsPending, factsetSearch, live]);
+  }, [fsPending, factsetSearch, live, effectiveSort, total]);
 
   // Whole names or none, ordered by how many rows carry each — the same grammar
   // the fact header's motif cells follow, so the two surfaces cannot drift.
