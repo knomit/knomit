@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { api, parseFilterQuery } from './api';
+import { api, parseFilterQuery, isCommitNotInRepo, isNotFound } from './api';
+import type { HttpError } from './api';
 
 // Regression: most api.* functions used to call `.then(r => r.json())` without
 // checking r.ok, silently parsing problem+json bodies as success and returning
@@ -104,5 +105,46 @@ describe('parseFilterQuery — malformed at:/vs: tokens surface warnings', () =>
   it('warnings are emitted independently for each malformed token', () => {
     const r = parseFilterQuery('at:bad1 vs:bad2..bad3');
     expect(r.warnings.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// A commit-anchored read at a commit the repo does not hold answers 404 with
+// problem code commit_not_in_repo (user ruling 2026-11-03). The client must
+// tell it apart from a 404 "Fact not found" at a commit the repo holds.
+describe('api — 404 commit_not_in_repo is recognisable', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  function mock404(body: Record<string, unknown>) {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 404, statusText: 'Not Found', json: async () => body,
+    } as unknown as Response);
+  }
+  const notInRepo = { type: 'about:blank', title: 'Commit not found', status: 404, detail: 'this repo has no commit "c0ffee"', code: 'commit_not_in_repo' };
+  const factMissing = { type: 'about:blank', title: 'Fact not found', status: 404, detail: 'no fact at path' };
+
+  it('fact at a commit: the rejection carries status and code, and the message is unchanged', async () => {
+    mock404(notInRepo);
+    const err = await api.fact('beta', 'main', 'kb/x.md', 'c0ffee', { fallback: 'before' }).catch(e => e);
+    expect(isCommitNotInRepo(err)).toBe(true);
+    expect(String(err)).toMatch(/→ 404 this repo has no commit "c0ffee"/);
+  });
+
+  it('a 404 without the code is NOT commit_not_in_repo', async () => {
+    mock404(factMissing);
+    const err = await api.fact('beta', 'main', 'kb/x.md', 'c0ffee').catch(e => e);
+    expect(isNotFound(err)).toBe(true);
+    expect(isCommitNotInRepo(err)).toBe(false);
+  });
+
+  it('factDiff: a side at an unknown commit rejects (naming that commit) instead of reading as an absent side', async () => {
+    mock404(notInRepo);
+    const err = await api.factDiff('beta', 'main', 'kb/x.md', 'c0ffee', 'c0ffee').catch(e => e);
+    expect(isCommitNotInRepo(err)).toBe(true);
+    expect((err as HttpError).commit).toBe('c0ffee');
+  });
+
+  it('factDiff: a plain 404 side is still an absent side (null)', async () => {
+    mock404(factMissing);
+    await expect(api.factDiff('beta', 'main', 'kb/x.md', 'a1', 'a2')).resolves.toEqual({ from: null, to: null });
   });
 });

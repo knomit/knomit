@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import { PANEL_BOUNDS_ATTR, useAsync } from './hooks';
-import { api } from './api';
+import { api, isCommitNotInRepo } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey, openFactSourceResolved } from './state';
@@ -14,6 +14,7 @@ import { factsetView, fsListTotal, useFactSetView } from './factsetOptions';
 import { searchKey } from './useFactSetStream';
 import type { MatOptions } from './materializeApi';
 import { FactDiffView } from './FactDiffView';
+import { NoVersionAtCommit } from './NoVersionAtCommit';
 import { FactBody } from './FactBody';
 import { FactBand } from './FactBand';
 import { ConnectionsCell, CELL_PAD_X } from './ConnectionsMenu';
@@ -606,6 +607,9 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   const [lensStats, setLensStats] = useState<LensStats | null>(null);
   const [lensStatsError, setLensStatsError] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  // The commit an anchored read found this fact's repo does not hold (404
+  // commit_not_in_repo), or null. A state, not an error: see NoVersionAtCommit.
+  const [noVersionAt, setNoVersionAt] = useState<string | null>(null);
   const [retracting, setRetracting] = useState(false);
   const [confirmRetract, setConfirmRetract] = useState(false);
   // The materialized view replaces the fact view. Its options live in the
@@ -802,6 +806,15 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
       });
   };
 
+  // An anchored read that failed because this fact's repo does not hold the
+  // commit shows the "no version" state, not an error (user ruling
+  // 2026-11-03). asOf is left as it is: history stays on, and the reader
+  // scrubs or returns to live from the timeline.
+  const failAnchored = (e: unknown, commit: string) => {
+    if (isCommitNotInRepo(e)) setNoVersionAt(commit);
+    else setError(String(e));
+  };
+
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
     // Skip this effect's fetch entirely so we don't issue a single-sided
@@ -813,12 +826,13 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
     // the mounts picker re-selects the first row while the anchor stays put —
     // still resolves the source here, without reading the fact body.
     if (inDiff) {
-      setFact(null); setError(null);
+      setFact(null); setError(null); setNoVersionAt(null);
       if (factPath && lensCtx && lensName && !sourceResolved) resolveSourceOnly(stale);
       return;
     }
-    if (!factPath) { setFact(null); setError(null); return; }
+    if (!factPath) { setFact(null); setError(null); setNoVersionAt(null); return; }
     setError(null);
+    setNoVersionAt(null);
     setFact(null);
     if (lensCtx && lensName) {
       // Anchored lens read (C1): a scrub/diff entered from an open fact carries
@@ -844,7 +858,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           useFallback ? { fallback: 'before' } : undefined,
         )
           .then(f => { if (!stale()) setFact(f); })
-          .catch(e => { if (!stale()) setError(String(e)); });
+          .catch(e => { if (!stale()) failAnchored(e, anchorCommit); });
         return;
       }
       api.getLensFact(lensName, factPath)
@@ -870,7 +884,11 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
         if (stale()) return;
         setFact(f);
       })
-      .catch(e => { if (!stale()) setError(String(e)); });
+      .catch(e => {
+        if (stale()) return;
+        if (anchorCommit) failAnchored(e, anchorCommit);
+        else setError(String(e));
+      });
     // `resolvedDep` re-runs an anchored or diff read once SET_FACT_SOURCE makes
     // the source own the open path. A live read neither needs nor wants it: it
     // dispatched that source itself, and re-running would re-fetch the fact.
@@ -1063,6 +1081,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
     );
   }
 
+  if (noVersionAt && factPath) return <NoVersionAtCommit commit={noVersionAt} />;
   if (error && factPath) {
     return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
   }

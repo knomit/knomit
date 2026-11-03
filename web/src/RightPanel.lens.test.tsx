@@ -13,7 +13,10 @@ import { init, READ_ONLY_TITLE } from './state';
 import type { AppState, AsOf } from './state';
 import type { Lens, LensSource } from './api';
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importOriginal) => ({
+  // The real error predicates (isCommitNotInRepo): the tests below feed them
+  // errors shaped as the real fetchJSON throws them.
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     fact: vi.fn(),               // must NOT be called in lens context
     getLensFact: vi.fn(),
@@ -280,5 +283,59 @@ describe('RightPanel — lens fact moved to another mount while anchored', () =>
     await waitFor(() => expect(api.factDiff).toHaveBeenCalled());
     expect((api.factDiff as ReturnType<typeof vi.fn>).mock.calls.at(-1)!.slice(0, 3)).toEqual(['docs', 'main', 'kb/api/auth.md']);
     expect((api.factDiff as ReturnType<typeof vi.fn>).mock.calls.every(c => c[0] !== 'core')).toBe(true);
+  });
+});
+
+// After the source resolves, the anchored read goes to the RIGHT mount — at the
+// PREVIOUS mount's commit, which this mount does not hold. The server answers
+// 404 commit_not_in_repo (user ruling 2026-11-03). The panel shows the "no
+// version at that commit" state instead of an error, and does not move asOf:
+// history stays on (the ruling: do not drop back to live).
+describe('RightPanel — anchored read at a commit the mount does not hold', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  // Shaped as fetchJSON throws it: an Error with the status and problem code.
+  function httpErr(status: number, code?: string): Error {
+    const e = new Error(`/api/v1/… → ${status} this repo has no commit "ccc3333…"`) as Error & { status: number; code?: string };
+    e.status = status;
+    if (code) e.code = code;
+    return e;
+  }
+
+  it('history: shows the no-version state, not the error, and never dispatches an asOf change', async () => {
+    (api.fact as ReturnType<typeof vi.fn>).mockRejectedValue(httpErr(404, 'commit_not_in_repo'));
+    const dispatch = vi.fn();
+    const asOf: AsOf = { mode: 'history', commit: 'ccc3333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
+    render(<RightPanel state={lensState(READ_PATH, readSource, asOf)} dispatch={dispatch} />);
+    const state = await screen.findByTestId('fact-no-version-at-commit');
+    expect(state.textContent).toContain('ccc3333');
+    expect(state.textContent).not.toContain('ccc3333a');
+    expect(api.fact).toHaveBeenCalledWith('docs', 'main', 'kb/api/auth.md', asOf.commit, { fallback: 'before' });
+    // The raw error text is not rendered.
+    expect(screen.queryByText(/this repo has no commit/)).toBeNull();
+    // asOf is the caller's: nothing but source bookkeeping is dispatched — no
+    // SET_AS_OF, no AMEND_NAV, no return to live.
+    expect(dispatch.mock.calls.map(c => c[0]?.type).filter(t => t !== 'SET_FACT_SOURCE' && t !== 'CACHE_FACT_TITLE')).toEqual([]);
+    // No live read stood in for the anchored one.
+    expect(api.getLensFact).not.toHaveBeenCalled();
+  });
+
+  it('a 404 WITHOUT the code (a missing fact at a known commit) is still the error, not the no-version state', async () => {
+    (api.fact as ReturnType<typeof vi.fn>).mockRejectedValue(httpErr(404));
+    const asOf: AsOf = { mode: 'history', commit: 'ccc3333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
+    render(<RightPanel state={lensState(READ_PATH, readSource, asOf)} dispatch={vi.fn()} />);
+    await screen.findByText(/this repo has no commit/);
+    expect(screen.queryByTestId('fact-no-version-at-commit')).toBeNull();
+  });
+
+  it('diff: a side at a commit the mount does not hold shows the no-version state for that commit', async () => {
+    const e = httpErr(404, 'commit_not_in_repo') as Error & { commit?: string };
+    e.commit = 'c1c1c1c1c1';
+    (api.factDiff as ReturnType<typeof vi.fn>).mockRejectedValueOnce(e);
+    const dispatch = vi.fn();
+    render(<RightPanel state={lensState(READ_PATH, readSource, { mode: 'diff', from: 'c1c1c1c1c1', to: 'c2c2c2c2c2' })} dispatch={dispatch} />);
+    const state = await screen.findByTestId('fact-no-version-at-commit');
+    expect(state.textContent).toContain('c1c1c1c');
+    expect(dispatch.mock.calls.filter(c => c[0]?.type === 'SET_AS_OF')).toEqual([]);
   });
 });

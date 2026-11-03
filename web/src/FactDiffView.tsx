@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import type { Dispatch } from 'react';
-import { api } from './api';
-import type { Fact } from './api';
+import { api, isCommitNotInRepo } from './api';
+import type { Fact, HttpError } from './api';
+import { NoVersionAtCommit } from './NoVersionAtCommit';
 import type { Action, AppState } from './state';
 import { factHistoryAnchor, openFactSourceResolved } from './state';
 import { unifiedDiff } from './diff';
@@ -15,6 +16,9 @@ export function FactDiffView({ state, dispatch }: Props) {
   const [fromFact, setFromFact] = useState<Fact | null>(null);
   const [toFact, setToFact] = useState<Fact | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A side whose commit this fact's repo does not hold (404 commit_not_in_repo):
+  // the "no version" state, not an error. asOf stays as it is.
+  const [noVersionAt, setNoVersionAt] = useState<string | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
 
   // Diff endpoints expect both `from` and `to`. Outside diff mode we don't
@@ -41,6 +45,7 @@ export function FactDiffView({ state, dispatch }: Props) {
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
     setError(null);
+    setNoVersionAt(null);
     api.factDiff(anchor.repo, anchor.branch, anchor.path, from, to, ctrl.signal)
       .then(({ from: f, to: t }) => {
         if (ctrl.signal.aborted) return;
@@ -50,12 +55,14 @@ export function FactDiffView({ state, dispatch }: Props) {
       .catch(e => {
         if (ctrl.signal.aborted) return;
         if (e instanceof DOMException && e.name === 'AbortError') return;
+        if (isCommitNotInRepo(e)) { setNoVersionAt((e as HttpError).commit || to); return; }
         setError(String(e));
       });
     return () => ctrl.abort();
   }, [inDiff, resolved, anchor.repo, anchor.branch, anchor.path, from, to]);
 
   if (!inDiff) return null;
+  if (noVersionAt) return <NoVersionAtCommit commit={noVersionAt} />;
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   const exitDiff = () => dispatch({ type: 'SET_AS_OF', asOf: { mode: 'history', commit: to } });
