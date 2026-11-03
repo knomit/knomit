@@ -181,12 +181,19 @@ html[data-mat-focus] [data-testid='library-splitter'] { display: none !important
    gutter on its root's row, the unit number inside (book design §5; replaces
    Q-UI8's numbered heading and its 2px rule): the heading is the title only.
    The ribbon sits in the slot the ticks use, its width grows with the digits
-   (materializeParts ribbonWidth: 17px for "1", 23px for "13", 30px for "130"),
+   (materializeOptions ribbonWidth: 16.6px for "1", 23.2px for "13", 29.8px for "130"),
    and it is centred on the L1 heading's first line. A lens unit root names its
    member the way lens search rows do (a dot in the repo hue + the name), first
    on the meta line under the title. */
 .k-fs-unit { margin-top: 18px; }
-.k-fs-unit:first-child { margin-top: 0; }
+/* The first section of the article opens it with no rule above it. Not
+   :first-child: the FactSet's top sentinel (and the head skeleton while it
+   loads) come first, so that never matched and left a hairline and a gap
+   over the first unit. section:first-of-type skips those divs, so it does not
+   flip while the skeleton mounts; after a prepend the old first section gets
+   its rule back, which the prepend's place-keeping (a scrollHeight delta)
+   already counts. */
+.k-mat-article > section.k-mat-sec:first-of-type { border-top: none; padding-top: 4px; margin-top: 0; }
 .k-fs-ribbon {
   box-sizing: border-box; display: block; flex-shrink: 0; height: 18px; line-height: 18px;
   margin-top: calc((var(--lv1-size) * var(--lv-line) - 18px) / 2);

@@ -1103,9 +1103,23 @@ describe('the unit ribbon (book design §5)', () => {
     expect(within(sections()[1]).getByTestId('mat-num').textContent?.trim()).toBe('13.1');
   });
 
+  // Review M1: the number left the heading, not the section's name. Sabotage:
+  // label the section by its heading alone.
+  it("the unit number stays in the root section's accessible name (ribbon, then title)", async () => {
+    const { api } = makeApi();
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    await waitFor(() => expect(sections()).toHaveLength(3));
+    expect(screen.getByRole('region', { name: '1 Alpha' })).toBe(sections()[0]);
+    // A section inside the unit is named by its heading, its number included.
+    expect(screen.getByRole('region', { name: /^1\.1\s*Shared$/ })).toBe(sections()[1]);
+  });
+
   it('CSS: the 2px unit rule is gone; the narrow gutter leaves room for "130"', () => {
     expect(materializeCss).not.toMatch(/\.k-fs-unit\s*\{[^}]*border-top:\s*2px/);
     expect(materializeCss).toMatch(/@media \(max-width: 1100px\) \{ \.k-fs-unit > \.k-mat-gut \{ padding-right: 3px; \} \}/);
+    // The first section of the article opens it with no rule, though the top
+    // sentinel comes first (review: :first-child never matched).
+    expect(materializeCss).toContain('.k-mat-article > section.k-mat-sec:first-of-type { border-top: none; padding-top: 4px; margin-top: 0; }');
   });
 
   it('on a lens the repo name stays on the unit root, first on the meta line under the title-only heading', async () => {

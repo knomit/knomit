@@ -10,7 +10,7 @@ import { RetractIcon, NewspaperIcon } from './icons';
 import { MaterializeView } from './MaterializeView';
 import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
 import { FactSetView } from './FactSetView';
-import { factsetView, useFactSetView } from './factsetOptions';
+import { factsetView, fsListTotal, useFactSetView } from './factsetOptions';
 import { searchKey } from './useFactSetStream';
 import type { MatOptions } from './materializeApi';
 import { FactDiffView } from './FactDiffView';
@@ -1005,7 +1005,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           key={searchKey(fsv.search)}
           search={fsv.search}
           options={fsv.options}
-          listTotal={fsv.listTotal}
+          listTotal={fsListTotal(fsv)}
           onOptionsChange={o => factsetView.setOptions(o)}
           onBack={() => factsetView.close()}
         />

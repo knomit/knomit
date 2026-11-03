@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { factsetView, parseFactSetParams, writeFactSetParams } from './factsetOptions';
+import { factsetView, fsListTotal, parseFactSetParams, writeFactSetParams } from './factsetOptions';
+import { searchKey } from './useFactSetStream';
 import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
 import { DEFAULT_OPTIONS } from './materializeApi';
 import type { FsSearch } from './factsetApi';
@@ -65,5 +66,31 @@ describe('the open flag after a reload', () => {
     vi.resetModules();
     await import('./factsetOptions');
     expect(window.location.search).toBe('?x=1&fs_depth=7');
+  });
+});
+
+// Review H1: the Recent list total belongs to the search the FactSet was frozen
+// from. A reload opens the FactSet before the list's total arrives, so the
+// same search may fill it in later; any other search never touches it.
+//
+// Sabotage: setListTotal ignores the key.
+describe('the list total of the open FactSet', () => {
+  const s: FsSearch = { target: { kind: 'repo', repo: 'kb', branch: 'main' }, sort: 'recent', params: 'path=kb' };
+  const other: FsSearch = { ...s, params: 'path=kb&type=policy' };
+  it('is captured on open, filled in by the same search only, and gone on close', () => {
+    factsetView.open(s);
+    expect(fsListTotal(factsetView.get())).toBeUndefined();
+    factsetView.setListTotal(searchKey(s), 1919);
+    expect(fsListTotal(factsetView.get())).toBe(1919);
+    factsetView.setListTotal(searchKey(other), 5000);
+    expect(fsListTotal(factsetView.get())).toBe(1919);
+    factsetView.setListTotal(searchKey(s), 0); // a list reloading reads 0 for a moment
+    expect(fsListTotal(factsetView.get())).toBe(1919);
+    factsetView.close();
+    expect(fsListTotal(factsetView.get())).toBeUndefined();
+    factsetView.setListTotal(searchKey(s), 7); // nothing open: ignored
+    expect(factsetView.get().listTotal).toBeUndefined();
+    factsetView.open(other, 40);
+    expect(fsListTotal(factsetView.get())).toBe(40);
   });
 });

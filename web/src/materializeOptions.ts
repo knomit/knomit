@@ -152,8 +152,6 @@ export function midTruncate(items: PathItem[], budget: number): PathItem[] {
     tail.unshift(items[i]);
     used += c;
   }
-  // Nothing was dropped after all: no gap.
-  if (head.length + tail.length === items.length) return items;
   return [...head, { n: -1, full: '', label: '…', gap: true }, ...tail];
 }
 

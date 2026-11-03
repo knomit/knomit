@@ -201,6 +201,9 @@ export const Section = memo(function Section({ node, group, num, td, onGoto, fs,
   // written one (or an unavailable root) is a scroll target and owns the id.
   const stub = fs?.link;
   const hid = stub ? `${node.anchor_id}-${fs.unit}-${node.n}-h` : `${node.anchor_id}-h`;
+  // The unit number left the heading for the ribbon: the section is named by
+  // both, so the number stays in its accessible name.
+  const rid = unitRoot ? `${hid}-unit` : undefined;
   const rule1 = fs ? (node.marks ?? []).filter(m => m === MARK_CHANGED_SINCE_CITED || m === MARK_DELETED) : [];
   return (
     <>
@@ -208,10 +211,10 @@ export const Section = memo(function Section({ node, group, num, td, onGoto, fs,
       <section className={unitRoot ? 'k-mat-sec k-fs-unit' : 'k-mat-sec'} data-mat-n={node.n} data-lv={lv} data-td={td}
         data-anchor={stub ? undefined : node.anchor_id} data-testid="mat-section"
         data-fs-unit={fs?.unit} data-fs-stub={stub ? 'true' : undefined}
-        aria-labelledby={hid}>
+        aria-labelledby={rid ? `${rid} ${hid}` : hid}>
         <div className="k-mat-gut" data-testid="mat-gutter" data-ticks={ticks} title={num ? `Position ${num} · depth ${td}` : undefined}>
           {unitRoot && (
-            <span className="k-fs-ribbon" data-testid="fs-ribbon" style={{ width: ribbonWidth(fs.unit) }}>{fs.unit}</span>
+            <span className="k-fs-ribbon" id={rid} data-testid="fs-ribbon" style={{ width: ribbonWidth(fs.unit) }}>{fs.unit}</span>
           )}
           {ticks > 0 && (
             <div className="k-mat-gut-m">
