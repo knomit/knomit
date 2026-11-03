@@ -351,7 +351,7 @@ describe('TargetRail — creates in flight', () => {
     const onPin = vi.fn();
     renderRail({ repos: abc, onPin });
     fireEvent.click(await screen.findByTestId('pending-create-rail-b-kb'));
-    expect(onPin).toHaveBeenCalledWith({ kind: 'pending', createId: 'c1' });
+    expect(onPin).toHaveBeenCalledWith({ kind: 'pending', createId: 'c1', name: 'b-kb' });
   });
 
   it('draws a cancelling create, and never a cancelled one', async () => {
@@ -380,7 +380,7 @@ describe('TargetRail — creates in flight', () => {
 
   it('a pinned pending create is the selected row', async () => {
     vi.mocked(api.listRepoCreates).mockResolvedValue([job()]);
-    renderRail({ repos: abc, pinned: { kind: 'pending', createId: 'c1' } });
+    renderRail({ repos: abc, pinned: { kind: 'pending', createId: 'c1', name: 'b-kb' } });
     expect(await screen.findByTestId('pending-create-rail-b-kb')).toHaveAttribute('aria-current', 'true');
   });
 

@@ -97,4 +97,23 @@ describe('BranchPicker — the picker', () => {
     expect(onEnterBranch).toHaveBeenCalledWith('agent/box-1a2b3c4d');
     expect(screen.queryByTestId('toknomitr-branch-menu')).toBeNull();
   });
+
+  it('never shows another repo\'s experiments while this repo\'s list is loading', async () => {
+    const { api } = await import('./api');
+    const exp = (name: string) => ({ name, branch: `exp/${name}`, parent: 'agent/box-1a2b3c4d', fork_commit: 'abc', description: '', writable: true });
+    const list = api.listExperiments as unknown as ReturnType<typeof vi.fn>;
+    list.mockResolvedValueOnce({ experiments: [exp('only-in-alpha')] });
+    const { rerender } = render(<BranchPicker state={state} onEnterBranch={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('toknomitr-branch'));
+    expect(await screen.findByTestId('toknomitr-branch-option-only-in-alpha')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('toknomitr-branch'));
+
+    // Repo B's fetch never lands: whatever the menu shows came from alpha.
+    list.mockReturnValueOnce(new Promise(() => {}));
+    rerender(<BranchPicker state={{ ...state, repo: 'beta', context: { kind: 'repo', repo: 'beta' } }} onEnterBranch={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('toknomitr-branch'));
+    await waitFor(() => expect(list).toHaveBeenCalledWith('beta'));
+    expect(screen.getByTestId('toknomitr-branch-menu')).toBeInTheDocument();
+    expect(screen.queryByTestId('toknomitr-branch-option-only-in-alpha')).toBeNull();
+  });
 });

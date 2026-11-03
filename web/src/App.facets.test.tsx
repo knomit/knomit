@@ -919,6 +919,26 @@ describe('Browse opens after the repo it lands on was made current by the list r
   });
 });
 
+// #472: a cancelled create leaves the creates list (the server omits it), so
+// the pinned target must carry the name the top bar shows.
+describe('a pinned pending create that is cancelled', () => {
+  it('keeps its name in the top bar after the job leaves the list', async () => {
+    const { m } = await primeApi();
+    m.listRepoCreates.mockResolvedValue([{ create_id: 'c9', name: 'b-kb', mode: 'subscribe', state: 'running' }]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('footer-creates'));
+    fireEvent.click(await screen.findByTestId('pending-create-rail-b-kb'));
+    await waitFor(() => expect(screen.getByTestId('target-label')).toHaveTextContent('b-kb'));
+    // The cancel lands: the server now omits the job from the list and serves it by id.
+    m.listRepoCreates.mockResolvedValue([]);
+    m.getRepoCreate.mockResolvedValue({ create_id: 'c9', name: 'b-kb', mode: 'subscribe', state: 'cancelled' });
+    m.cancelRepoCreate.mockResolvedValue(undefined);
+    fireEvent.click(await screen.findByTestId('create-cancel-button'));
+    await screen.findByTestId('create-cancelled');
+    expect(screen.getByTestId('target-label')).toHaveTextContent('b-kb');
+  });
+});
+
 describe('the status footer\'s creates count', () => {
   it('opens the rail, where each create is a row with its chip', async () => {
     const { m } = await primeApi();

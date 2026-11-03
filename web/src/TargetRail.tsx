@@ -186,7 +186,7 @@ export function TargetRail({
                   style={{ ...row(selected ? 'repo' : null, false), justifyContent: 'space-between' }}
                   active={selected}
                   disabled={locked}
-                  onOpen={id => pin({ kind: 'pending', createId: id })} />
+                  onOpen={id => pin({ kind: 'pending', createId: id, name: it.job.name })} />
               );
             }
             const r = it.repo;
