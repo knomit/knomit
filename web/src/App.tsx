@@ -1316,6 +1316,7 @@ export default function App() {
     try {
       const { lenses: ls, repos: rs } = await refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens, renamed);
       setLenses(ls); setRepos(rs);
+      // Harmless on a repo rename: lenses and repos share one namespace, so a repo's old name never matches a brokenLens pin.
       if (renamed) dispatchView({ type: 'RENAME_PINNED_LENS', from: renamed.from, to: renamed.to });
     } catch { /* best-effort: the lists keep what they had */ }
     await archivedRead;
