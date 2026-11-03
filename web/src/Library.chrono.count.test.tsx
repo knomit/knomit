@@ -6,6 +6,11 @@
 //
 // The Path tab keeps rows.length: a directory listing is not paged, so there
 // the two numbers are the same thing.
+//
+// Since fix/results-header-flyout the count is no longer SHOWN (the user ruled
+// the total out of the header, 2026-11-02). It still decides whether
+// Materialize has anything to materialize, so the header carries it as
+// data-count and these tests read that.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -39,7 +44,7 @@ const repoState = (over: Partial<AppState> = {}): AppState => ({
   context: { kind: 'repo', repo: 'knomit-kb' }, ...over,
 });
 
-const count = () => screen.getByTestId('library-header').querySelector('[data-testid="library-count"]')?.textContent;
+const count = () => screen.getByTestId('library-header').getAttribute('data-count');
 
 describe('the root count', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -78,7 +83,7 @@ describe('a content chip filters; it does not become a search', () => {
     await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
     expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent');
     // The count is the server's, not the page's — 385 from the stubbed total.
-    expect(screen.getByTestId('library-count').textContent).toBe('385');
+    expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('385');
   });
 
   it('leaves Path sort for a list, because a tree cannot express a chip', async () => {

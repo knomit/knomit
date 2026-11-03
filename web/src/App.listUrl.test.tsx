@@ -71,11 +71,15 @@ async function primeApi() {
   api.getOrigin.mockResolvedValue(null);
   api.browse.mockResolvedValue({ path: 'kb', children: [] });
   api.recent.mockResolvedValue({ facts: [], total: 0 });
-  api.search.mockResolvedValue({ results: [] });
-  api.lensSearch.mockResolvedValue([]);
+  // One row each: Materialize is disabled for an empty list.
+  api.search.mockResolvedValue({ results: [{ path: 'kb/a.md', title: 'A', type: 'observation', score: 0.9 }] });
+  api.lensSearch.mockResolvedValue([{ path: 'kb/a.md', title: 'A', type: 'observation', source: { repo: 'alpha', id: 'u-a', branch: 'machine/test' } }]);
   api.listLensFacts.mockResolvedValue({ facts: [], total: 0 });
   api.lensBrowse.mockResolvedValue({ children: [] });
-  api.stats.mockResolvedValue({ total: 0, domains: {}, entities: {} });
+  // The first row opens; its fact view stays loading (none of these tests reads it).
+  api.explain.mockReturnValue(new Promise(() => {}));
+  api.fact.mockReturnValue(new Promise(() => {}));
+  api.stats.mockResolvedValue({ total: 0, avg_confidence: 0, domains: {}, entities: {}, types: {}, highlights: [], default_axis: 'impact' });
   api.activity.mockResolvedValue({ last_commit: '', total: 0, changes_7d: 0, changes_30d: 0, changes_90d: 0 });
   api.completions.mockResolvedValue({});
   api.listBranchNames.mockResolvedValue(['machine/test']);
@@ -93,12 +97,19 @@ const flush = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.
 
 // Phase 1 of a reload test: a bare URL, a typed search, the FactSet opened.
 // Returns its first call; the URL now carries the list and factset=1.
+// The Materialize control, once the list has rows (it is disabled while empty).
+async function openableFactSet() {
+  const btn = await screen.findByTestId('library-factset');
+  await waitFor(() => expect(btn).not.toBeDisabled());
+  return btn;
+}
+
 async function openFactSetAt(ctxKey: 'ctx_repo' | 'ctx_lens', ctxVal: string) {
   render(<App />);
   await waitFor(() => expect(query().get(ctxKey)).toBe(ctxVal));
   await typeSearch('goroutine');
   await waitFor(() => expect(query().get('l_q')).toBe('goroutine'));
-  fireEvent.click(await screen.findByTestId('library-factset'));
+  fireEvent.click(await openableFactSet());
   const before = firstCall();
   expect(before).toContain('q=goroutine');
   cleanup();
@@ -213,7 +224,7 @@ describe('the list search in the URL', () => {
     await waitFor(() => expect(query().get('ctx_repo')).toBe('u-a'));
     await typeSearch('goroutine');
     await waitFor(() => expect(query().get('l_q')).toBe('goroutine'));
-    fireEvent.click(await screen.findByTestId('library-factset'));
+    fireEvent.click(await openableFactSet());
     const before = firstCall();
     expect(before).toContain('q=goroutine');
     expect(query().get('factset')).toBe('1');
@@ -237,7 +248,7 @@ describe('the list search in the URL', () => {
     await typeSearch('goroutine');
     await waitFor(() => expect(query().get('l_q')).toBe('goroutine'));
     await waitFor(() => expect(api.lensSearch).toHaveBeenCalled());
-    fireEvent.click(await screen.findByTestId('library-factset'));
+    fireEvent.click(await openableFactSet());
     const before = firstCall();
     expect(before).toContain('/lenses/eng/');
     expect(before).toContain('q=goroutine');

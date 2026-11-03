@@ -1,9 +1,14 @@
 import type { LibrarySort } from './state';
+import { useState } from 'react';
 import type { ComponentType } from 'react';
 import { TreeIcon, StopwatchIcon, TargetIcon, MotifIcon, ChevronLeftIcon, NewspaperIcon } from './icons';
 import { OverflowCrumb } from './OverflowCrumb';
+import { ModeFlyout } from './ModeFlyout';
+import type { FlyoutItem } from './ModeFlyout';
 
 interface Props {
+  /** The list's own count. Not shown (the user ruled the total out of this
+   *  header, 2026-11-02); it disables Materialize on an empty list. */
   count: number;
   /** Ancestor chain, root-first, display-ready. Empty at the root. */
   ancestors: string[];
@@ -49,8 +54,9 @@ interface Props {
    *  anywhere in the ontology — a motif cuts across it. */
   motif?: MotifPivot;
   /** Present on every search list (not the path tree): the control that opens
-   *  the FactSet of this list, beside the count, the same for repo and lens
-   *  lists (Q-UI1). Disabled in history (Q-UI3). */
+   *  the FactSet of this list, alone at the right of the header, the same for
+   *  repo and lens lists (Q-UI1, book design §5). Disabled in history (Q-UI3)
+   *  and for an empty list. */
   factset?: { enabled: boolean; onOpen: () => void };
 }
 
@@ -92,6 +98,9 @@ const segments: { value: Mode; label: string; testid: string; Icon: IconType }[]
   { value: 'relevance', label: 'Relevance', testid: 'sort-relevance', Icon: TargetIcon },
   { value: 'motif',     label: 'Motif',     testid: 'sort-motif',     Icon: MotifIcon },
 ];
+
+// The header's accent: the lit mode, the folder name, and Materialize on hover.
+const ACCENT = '#7c9';
 
 type AncItem =
   | { kind: 'seg'; index: number }
@@ -175,11 +184,68 @@ export function LibraryHeader({
   const visible = segments.filter(s =>
     (s.value !== 'relevance' || searchActive) && (s.value !== 'motif' || pivoting));
   const items = layoutAncestors(ancestors.length, narrow);
+  // Sort axes as borderless glyphs — state reads through color alone:
+  // accent green = active, muted = idle, brighter on hover. No pill, no
+  // selection border. The icon inherits the button's CSS color.
+  const flyoutItems: FlyoutItem[] = visible.map(seg => {
+      const active = mode === seg.value;
+      // A DERIVED mode forces the ordering, so nothing else in the strip
+      // can change it: while searching, order is relevance; while pivoting,
+      // the list is one motif's carriers newest-first and the tree cannot
+      // hold a shape at all. In both, the derived segment is the only live
+      // control. An enabled button whose entire effect is overridden is
+      // worse than a disabled one — it gives no feedback and the reader is
+      // left clicking it — and in a pivot Recent is exactly that: it writes
+      // the axis the list already has and clears the open fact for nothing.
+      //
+      // A content chip on its own (no search, no pivot) still disables PATH
+      // alone: the tree cannot honour a filter, so Library borrows Recent,
+      // and Recent stays live because the reader may want to say explicitly
+      // that that is what they are in before removing the chip.
+      const pathBlocked = contentFiltered && seg.value === 'path';
+      const derived: Mode | null = searchActive ? 'relevance' : pivoting ? 'motif' : null;
+      // The motif segment is an exit and nothing else, and the exit needs
+      // the optional onExitMotif. Without one, an enabled segment would
+      // fall through to onSortChange and dispatch 'motif' — not a
+      // LibrarySort, a value every list effect early-returns on. A dead
+      // segment misleads less than a panel-blanking one.
+      const disabled = (derived !== null && seg.value !== derived) || pathBlocked
+        || (seg.value === 'motif' && !onExitMotif);
+      // ...and give that one live control a job. Both derived modes are
+      // entered from elsewhere — a search box, a motif cell — so setting
+      // them from here was a no-op that still nulled the open fact. Pressed
+      // while lit, each now LEAVES: the search is cleared, or the motif
+      // chip that IS the pivot is dropped, and the reader falls back to
+      // whichever mode was showing before.
+      const exitsSearch = searchActive && seg.value === 'relevance' && !!onExitSearch;
+      const exitsMotif = pivoting && seg.value === 'motif' && !!onExitMotif;
+      const color = disabled ? '#3a3a3a' : active ? ACCENT : '#666';
+    return {
+      key: seg.value, testid: seg.testid, Icon: seg.Icon, active, disabled, color,
+      ariaLabel: exitsSearch ? 'Clear search' : exitsMotif ? 'Leave this motif' : `Sort by ${seg.label}`,
+      title: pathBlocked ? 'The tree cannot filter — remove the chip to browse it'
+        : disabled ? (pivoting ? 'Sorting is disabled inside a motif' : 'Sorting is disabled while searching')
+        : exitsSearch ? 'Clear search and go back'
+        : exitsMotif ? 'Leave this motif and go back'
+        : `Sort by ${seg.label}`,
+      onSelect: () => {
+        if (disabled) return;
+        if (exitsSearch) onExitSearch!();
+        else if (exitsMotif) onExitMotif!();
+        else onSortChange(seg.value as LibrarySort);
+      },
+    };
+  });
+  // Disabled in history (Q-UI3) and for an empty list: nothing to
+  // materialize (book design §5).
+  const matEnabled = !!factset?.enabled && count > 0;
+  const [matHover, setMatHover] = useState(false);
 
   return (
     <>
     <div
       data-testid="library-header"
+      data-count={count}
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '5px 10px 6px 6px', borderBottom: '1px solid #1a1a1a', background: '#0f0f0f',
@@ -269,108 +335,48 @@ export function LibraryHeader({
       </div>
       )}
 
+      {/* The modes as a tool-group flyout, then Materialize ALONE at the right,
+          a vertical bar between them (book design §5 "Entry point"; the
+          separator, the hover colour and dropping the total are the user's
+          2026-11-02 additions). No count here: the user ruled the total out of
+          this header; `count` now only decides whether there is anything to
+          materialize, and rides on data-count for the tests that pin it. */}
+      <ModeFlyout
+        items={flyoutItems}
+        currentKey={mode}
+        currentActs={(searchActive && mode === 'relevance' && !!onExitSearch)
+          || (pivoting && mode === 'motif' && !!onExitMotif)}
+      />
       {factset && (
-        // Beside the count, the same place for repo and lens lists (Q-UI1).
-        <button
-          type="button"
-          data-testid="library-factset"
-          onClick={() => { if (factset.enabled) factset.onOpen(); }}
-          disabled={!factset.enabled}
-          aria-label="Materialize results"
-          title={factset.enabled
-            ? 'Materialize results'
-            : 'Not available in history'} // PLACEHOLDER copy
-          style={{
-            background: 'none', border: 'none', outline: 'none', padding: 2, flexShrink: 0,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            cursor: factset.enabled ? 'pointer' : 'default', opacity: factset.enabled ? 0.75 : 0.3,
-          }}
-        >
-          {/* PLACEHOLDER glyph: the single-fact Materialize button's newspaper. */}
-          <NewspaperIcon color="#888" size={12} />
-        </button>
+        <>
+          <span
+            data-testid="library-header-sep"
+            aria-hidden="true"
+            style={{ width: 1, height: 14, background: '#222', flexShrink: 0 }}
+          />
+          <button
+            type="button"
+            data-testid="library-factset"
+            onClick={() => { if (matEnabled) factset.onOpen(); }}
+            onMouseEnter={() => setMatHover(true)}
+            onMouseLeave={() => setMatHover(false)}
+            disabled={!matEnabled}
+            aria-label="Materialize results"
+            title={factset.enabled
+              ? 'Materialize results'
+              : 'Not available in history'} // PLACEHOLDER copy
+            style={{
+              background: 'none', border: 'none', outline: 'none', padding: 2, flexShrink: 0,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              color: matEnabled && matHover ? ACCENT : '#888',
+              cursor: matEnabled ? 'pointer' : 'default', opacity: matEnabled ? 0.75 : 0.3,
+            }}
+          >
+            {/* PLACEHOLDER glyph: the single-fact Materialize button's newspaper. */}
+            <NewspaperIcon color="currentColor" size={12} />
+          </button>
+        </>
       )}
-      <span data-testid="library-count" style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>
-        {/* ALWAYS the list's own count, a pivot included. This used to render
-            the cluster's carrier_count on a pivot, on the grounds that it was
-            the same number said more directly — true only while nothing else
-            narrowed the list. Add a domain chip and the rows went 14 → 8 while
-            this went on saying 14, so the one number a reader checks to see
-            whether their filter did anything was the one number that could not
-            move. A count beside a list must be OF that list. */}
-        {count}
-      </span>
-
-      {/* Sort axes as borderless glyphs — state reads through color alone:
-          accent green = active, muted = idle, brighter on hover. No pill, no
-          selection border. The icon inherits the button's CSS color. */}
-      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-        {visible.map(seg => {
-          const active = mode === seg.value;
-          // A DERIVED mode forces the ordering, so nothing else in the strip
-          // can change it: while searching, order is relevance; while pivoting,
-          // the list is one motif's carriers newest-first and the tree cannot
-          // hold a shape at all. In both, the derived segment is the only live
-          // control. An enabled button whose entire effect is overridden is
-          // worse than a disabled one — it gives no feedback and the reader is
-          // left clicking it — and in a pivot Recent is exactly that: it writes
-          // the axis the list already has and clears the open fact for nothing.
-          //
-          // A content chip on its own (no search, no pivot) still disables PATH
-          // alone: the tree cannot honour a filter, so Library borrows Recent,
-          // and Recent stays live because the reader may want to say explicitly
-          // that that is what they are in before removing the chip.
-          const pathBlocked = contentFiltered && seg.value === 'path';
-          const derived: Mode | null = searchActive ? 'relevance' : pivoting ? 'motif' : null;
-          // The motif segment is an exit and nothing else, and the exit needs
-          // the optional onExitMotif. Without one, an enabled segment would
-          // fall through to onSortChange and dispatch 'motif' — not a
-          // LibrarySort, a value every list effect early-returns on. A dead
-          // segment misleads less than a panel-blanking one.
-          const disabled = (derived !== null && seg.value !== derived) || pathBlocked
-            || (seg.value === 'motif' && !onExitMotif);
-          // ...and give that one live control a job. Both derived modes are
-          // entered from elsewhere — a search box, a motif cell — so setting
-          // them from here was a no-op that still nulled the open fact. Pressed
-          // while lit, each now LEAVES: the search is cleared, or the motif
-          // chip that IS the pivot is dropped, and the reader falls back to
-          // whichever mode was showing before.
-          const exitsSearch = searchActive && seg.value === 'relevance' && !!onExitSearch;
-          const exitsMotif = pivoting && seg.value === 'motif' && !!onExitMotif;
-          const color = disabled ? '#3a3a3a' : active ? '#7c9' : '#666';
-          return (
-            <button
-              key={seg.value}
-              data-testid={seg.testid}
-              disabled={disabled}
-              onClick={() => {
-                if (disabled) return;
-                if (exitsSearch) onExitSearch!();
-                else if (exitsMotif) onExitMotif!();
-                else onSortChange(seg.value as LibrarySort);
-              }}
-              aria-label={exitsSearch ? 'Clear search' : exitsMotif ? 'Leave this motif' : `Sort by ${seg.label}`}
-              aria-pressed={active}
-              title={pathBlocked ? 'The tree cannot filter — remove the chip to browse it'
-                : disabled ? (pivoting ? 'Sorting is disabled inside a motif' : 'Sorting is disabled while searching')
-                : exitsSearch ? 'Clear search and go back'
-                : exitsMotif ? 'Leave this motif and go back'
-                : `Sort by ${seg.label}`}
-              onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.color = '#aaa'; }}
-              onMouseLeave={e => { if (!disabled && !active) e.currentTarget.style.color = color; }}
-              style={{
-                background: 'none',
-                color,
-                border: 'none',
-                outline: 'none',
-                padding: '3px 5px', borderRadius: 4,
-                cursor: disabled ? 'not-allowed' : 'pointer',
-                display: 'inline-flex', alignItems: 'center',
-              }}
-            ><seg.Icon color="currentColor" size={14} /></button>
-          );
-        })}
-      </div>
     </div>
 
     {/* The second line: what the shape MEANS, and what its facts are about.
