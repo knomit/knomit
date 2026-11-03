@@ -1437,12 +1437,11 @@ paths:
         `motif_match`, `min_confidence`, `min_similarity`, `since_fork`),
         plus `sort` (`relevance`, the default, is `/search`; `recent` is the
         `/facts` collection's order). The server runs the search itself, up
-        to `facts`: its first 50 units are EXACTLY the list the UI shows (the
-        same call at limit 50, in its order; ties in a text search are
-        ordered by path), and only when that list is full does the factset
-        extend past it, appending the further results of the same search at
-        limit `facts` in their order. A list shorter than 50 is the whole
-        factset. The factset's options are `facts` (1-500, default every result up
+        to `facts`: its units are EXACTLY the list the UI pages through (the
+        `/search` route's one ranked list at depth 500, or the `/facts`
+        collection from offset 0, in its order; ties in a text search are
+        ordered by path), so the list's last page ends at the factset's last
+        unit. The factset's options are `facts` (1-500, default every result up
         to 500), `depth`, `max_nodes`, `unpin`, `cross_kb` (as for one fact)
         and `limit` (sections per page, 1-5, default 3). Any other parameter
         is a 400. The frozen inputs (results, anchor, tips) are written ONCE,
@@ -1619,10 +1618,23 @@ paths:
     get:
       tags: [search]
       summary: Full-text / semantic search
-      description: 'Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.'
+      description: |
+        The results are ONE ranked list: the search at depth 500 (the
+        factset's `facts` ceiling), at most 500 rows. `offset` and `limit`
+        page through it; every page is re-run statelessly over the current
+        index, ties ordered by path, so pages of an unmoved index are
+        contiguous and disjoint, and a page shorter than `limit` is the end.
+        `total` is the ranked list's length: every offset below it has a
+        row. `count` is the page's length. Only the page's own rows are read
+        in full.
+        The factset of the same search (`/search/factset`) holds exactly this
+        list, in this order: its last unit is the list's last row.
+
+        Any query parameter not listed here is 400 "Invalid parameter" with detail `unknown parameter "<name>"`.
       operationId: search
       parameters:
         - { name: q,              in: query, schema: { type: string } }
+        - { name: offset,         in: query, description: "Rows of the ranked list to skip; a non-negative integer, else 400. Past the list's end the page is empty.", schema: { type: integer, default: 0, minimum: 0 } }
         - { name: entities,       in: query, description: CSV, schema: { type: string } }
         - { name: domain,         in: query, description: "CSV. Default match is slash-hierarchy OR token containment of the de-hyphenized tag (e.g. 'ai' matches 'ai governance'). Set domain_exact=true for exact canonical match.", schema: { type: string } }
         - { name: domain_exact,   in: query, description: "Match domain by exact canonical tag only (no containment/hierarchy).", schema: { type: boolean, default: false } }
@@ -4608,10 +4620,17 @@ paths:
         which are not comparable across mounts. After fusion, rows are deduped
         by repo-relative path with the write mount's copy winning, even when a
         shadowed copy ranks higher. Read-mount paths are qualified as
-        `kb://<id12>/…`. Every mount is asked for its best 500 rows; `limit`
-        caps the fused list. `knomit_query` on the lens's MCP endpoint asks
-        the same depth, and its `max_results` caps only the fused list, so its
-        first `max_results` rows are this route's `limit=<max_results>`.
+        `kb://<id12>/…`. Every mount is asked for its best 500 rows, and the
+        fused list is cut to 500 rows (the factset's `facts` ceiling): that is
+        the ranked list `offset` and `limit` page through, and `total` is its
+        length, so every offset below `total` has a row. Each page re-runs the
+        fused search statelessly over the current indexes (ties by path), so
+        pages of unmoved indexes are contiguous and disjoint. The lens factset
+        of the same search (`/lenses/{lens}/search/factset`) holds exactly
+        this list, in this order. `knomit_query` on the lens's MCP endpoint
+        asks the same depth, and its `max_results` caps only the fused list,
+        so its first `max_results` rows are this route's
+        `offset=0&limit=<max_results>`.
 
         MOTIF FILTERS ARE WIDENED TO THE LENS'S MERGED CLUSTERS before the
         fan-out. A motif term resolves through ONE branch's alias table, and a
@@ -4647,6 +4666,7 @@ paths:
       parameters:
         - { name: q,              in: query, schema: { type: string } }
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+        - { name: offset,         in: query, description: "Rows of the fused list to skip; a non-negative integer, else 400. At or past `total` the page is empty.", schema: { type: integer, default: 0, minimum: 0 } }
         - $ref: "#/components/parameters/LensPathFilter"
         - $ref: "#/components/parameters/LensRepoNarrow"
         - { name: entity,         in: query, description: "CSV. Canonical name; merges with the `entities` alias.", schema: { type: string } }
@@ -4701,8 +4721,8 @@ paths:
         ROOTS: the search is the lens list's (`GET /lenses/{lens}/search`
         for relevance, `GET /lenses/{lens}/facts` for `sort=recent`): one
         fused fan-out over the members, motif terms widened to the lens's
-        merged clusters, the text query embedded once; the first 50 units
-        are that list. `repo` (repeatable, a member's repo name) narrows the
+        merged clusters, the text query embedded once; the units are that
+        list, page after page. `repo` (repeatable, a member's repo name) narrows the
         fan-out exactly as it narrows the lens list; a name that is not a
         member of this lens is the lens list's 422 "Unknown repo".
 
@@ -6343,6 +6363,9 @@ components:
                 results:
                   type: array
                   items: { $ref: "#/components/schemas/SearchHit" }
+            total:
+              type: integer
+              description: "The length of the ranked list `offset` pages through (at most 500, the factset's `facts` ceiling); `count` is the page's length."
             notice:
               type: string
               description: &searchNotice |
@@ -7752,7 +7775,9 @@ components:
         results:
           type: array
           items: { $ref: "#/components/schemas/LensSearchItem" }
-        total: { type: integer }
+        total:
+          type: integer
+          description: "The length of the ranked list this route pages through: the fused, deduped union cut to 500 rows. Every offset below it has a row."
         notice:
           type: string
           description: *searchNotice

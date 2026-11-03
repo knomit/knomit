@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"testing"
 
@@ -135,4 +136,74 @@ func TestLensFactSet_RecentFirstFiftyAreTheRESTFactsList(t *testing.T) {
 		require.Equal(t, "beta", names[i], "the fork's own facts are the newest rows of the union: root %d", i+1)
 	}
 	require.Equal(t, "alpha", names[5], "then the upstream's copies win the shared paths")
+}
+
+// The lens relevance list pages by offset like a repo's, and ENDS WHERE THE
+// LENS FACTSET ENDS (user report 2026-11-02, the "all" lens: "Matches 50",
+// no scrolling past it, a 500-unit factset). Two mounts of 300 text hits
+// each fuse to 600 rows, more than a factset holds: /lenses/{lens}/search
+// pages of 50 at offset 0, 50, ... are contiguous and disjoint, their union
+// is the one-call list at limit 500 (the fused list, in order), `total` is
+// that list's length (500) on every page, the page at offset 500 is empty,
+// and the lens factset of the same search has 500 units whose roots are the
+// list, page after page.
+//
+// Sabotage: drop the offset (every page is page 1) and the pages overlap;
+// drop the cut to materialize.MaxFactSetFacts and the list runs to 600 rows
+// while the factset stops at 500.
+func TestLensSearch_OffsetPagesEndWhereTheFactSetEnds(t *testing.T) {
+	emb := &cosEmbedder{}
+	mounts := []string{"alpha", "beta"}
+	m, _ := newTestLensManagerWith(t, emb, mounts...)
+	for k, name := range mounts {
+		specs := make([]factSpec, 300)
+		for i := range specs {
+			specs[i] = factSpec{
+				path:  fmt.Sprintf("kb/%s/f%03d.md", name[:1], i),
+				title: name + " " + strconv.Itoa(i),
+				cos:   0.95 - 0.001*float64(i) - 0.0003*float64(k),
+			}
+		}
+		writeFactsInOneCommit(t, m.Get(name), specs...)
+	}
+	r := (&Server{Manager: m, Embedder: emb}).NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	paths := func(b lensSearchBody) []string {
+		out := make([]string, len(b.Results))
+		for i, res := range b.Results {
+			out[i] = res.Path
+		}
+		return out
+	}
+	full := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x&limit=500"))
+	require.Equal(t, materialize.MaxFactSetFacts, full.Total, "the fused 600 are cut to the factset's ceiling")
+	require.Len(t, full.Results, materialize.MaxFactSetFacts)
+
+	var list []string
+	seen := map[string]bool{}
+	pages := 0
+	for {
+		pages++
+		page := decodeLensSearch(t, getLensFacts(t, r, fmt.Sprintf("/lenses/eng/search?q=x&limit=%d&offset=%d", materialize.UIListLimit, len(list))))
+		require.Equal(t, materialize.MaxFactSetFacts, page.Total, "total is the list's length on every page")
+		for _, p := range paths(page) {
+			require.False(t, seen[p], "page %d repeats %s: pages overlap", pages, p)
+			seen[p] = true
+		}
+		list = append(list, paths(page)...)
+		if len(page.Results) < materialize.UIListLimit {
+			break
+		}
+		require.Less(t, pages, 100, "paging does not end")
+	}
+	require.Equal(t, 11, pages, "ten full pages, then an empty last one")
+	require.Equal(t, paths(full), list, "the pages are the fused list, contiguous")
+
+	roots, _, units := lensFactSetRoots(t, m, "eng", materialize.FactSetSearch{Text: "x", Sort: materialize.SortRelevance}, emb.EmbedQuery)
+	require.Equal(t, materialize.MaxFactSetFacts, units)
+	require.Equal(t, list, roots, "the list's last page ends at the factset's last unit")
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&offset=-1")
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }

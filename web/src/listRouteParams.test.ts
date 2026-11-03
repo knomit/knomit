@@ -84,14 +84,16 @@ describe('the results lists send only the parameters their route declares', () =
   it('reads each route’s declared set from openapi.yaml', () => {
     expect(specQueryParams('/repos/{repo}/branches/{branch}/facts')).toContain('offset');
     expect(specQueryParams('/lenses/{lens}/search')).toContain('repo');
-    expect(specQueryParams('/repos/{repo}/branches/{branch}/search')).not.toContain('offset');
+    // The relevance lists page by offset like Recent (user report 2026-11-02).
+    expect(specQueryParams('/repos/{repo}/branches/{branch}/search')).toContain('offset');
+    expect(specQueryParams('/lenses/{lens}/search')).toContain('offset');
   });
 
   it('api.search → repo /search', async () => {
     const f = mockFetch();
-    await api.search('r', 'b', 'text domain:x entity:y', 'kb/x/', 0.5, EVERY);
+    await api.search('r', 'b', 'text domain:x entity:y', 'kb/x/', 0.5, EVERY, { limit: 50, offset: 50 });
     const sent = sentNames(f);
-    expect(sent).toContain('since_fork');
+    expect(sent).toEqual(expect.arrayContaining(['since_fork', 'limit', 'offset']));
     expect(undeclared(sent, specQueryParams('/repos/{repo}/branches/{branch}/search'))).toEqual([]);
   });
 
@@ -105,9 +107,9 @@ describe('the results lists send only the parameters their route declares', () =
 
   it('lensSearch → lens /search', async () => {
     const f = mockFetch();
-    await api.lensSearch('eng', 'text', ['alpha'], { ...EVERY, path: 'kb/x/' });
+    await api.lensSearch('eng', 'text', ['alpha'], { ...EVERY, path: 'kb/x/' }, { limit: 50, offset: 50 });
     const sent = sentNames(f);
-    expect(sent).toContain('repo');
+    expect(sent).toEqual(expect.arrayContaining(['repo', 'limit', 'offset']));
     expect(undeclared(sent, specQueryParams('/lenses/{lens}/search'))).toEqual([]);
   });
 

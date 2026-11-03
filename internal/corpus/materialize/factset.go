@@ -50,12 +50,16 @@ const (
 	// DefaultFactSetFacts is the Facts control's default: every result, up
 	// to the cap.
 	DefaultFactSetFacts = MaxFactSetFacts
-	// MaxFactSetFacts caps the units, the same ceiling as max_nodes.
+	// MaxFactSetFacts caps the units, the same ceiling as max_nodes. It is
+	// also the DEPTH of a relevance results list (the repo and lens /search
+	// routes): the ranked list those routes page through by offset is the
+	// search at this depth, cut to this many rows, so the list ends exactly
+	// where a FactSet of it ends.
 	MaxFactSetFacts = 500
-	// UIListLimit is how many results the web UI's results list shows: the
-	// default limit of the repo /search route and of the /facts collection
-	// (which the UI no longer sends). A FactSet's first UIListLimit units are
-	// exactly that list.
+	// UIListLimit is the web UI's results-list PAGE: the default limit of the
+	// repo /search route and of the /facts collection (which the UI no longer
+	// sends). The list pages on by offset; a FactSet's units are the whole
+	// list, page after page, in order.
 	UIListLimit = 50
 )
 
@@ -692,17 +696,17 @@ func (c *fsCall) freezeTips() (map[string]frozenTip, error) {
 // runFactSetSearch runs the frozen search on the write mount and returns the
 // ordered results, at most req.Facts, each with its version.
 //
-// THE FIRST UIListLimit RESULTS ARE THE UI'S LIST, EXACTLY. A text search
-// takes a nearest-neighbour window that grows with its limit, and its
-// filters apply after that window, so the same search at limit 500 can rank
-// results the 50-row list never showed, or list more than it did. The
-// FactSet therefore runs the very call the UI makes (limit UIListLimit) and
-// freezes its answer as the prefix. Only when that list is full and Facts
-// asks for more does it search again at limit Facts and append, in that
-// call's order, every result the prefix does not hold. A list the UI shows
-// short (fewer than UIListLimit) is the whole FactSet: "you found 10, you see
-// 10". Ties are ordered by path in the store, so both calls are
-// deterministic. A Facts below UIListLimit truncates the list.
+// THE FACTSET IS THE LIST. The results list the UI pages through (the repo
+// /search route by offset, or the /facts collection for sort=recent) is ONE
+// ranked list: the search at depth MaxFactSetFacts, cut to MaxFactSetFacts
+// rows, each page a slice of it. The FactSet runs that same call and keeps
+// its first req.Facts rows, so unit n is row n of the list and the list's
+// last page ends at the FactSet's last unit. A text search at a smaller
+// limit is NOT a prefix of it: its nearest-neighbour window grows with the
+// limit and its filters apply after that window, so a search at limit 50
+// can end short (5 rows) where the depth-500 list holds 30. Neither the
+// list nor the FactSet ever runs a smaller window. Ties are ordered by path
+// in the store, so the call is deterministic.
 func runFactSetSearch(ctx context.Context, m *mount, req FactSetRequest) ([]factsetHit, error) {
 	if req.NoResults {
 		return nil, nil
@@ -718,25 +722,9 @@ func runFactSetSearch(ctx context.Context, m *mount, req FactSetRequest) ([]fact
 		}
 		vec = v
 	}
-	hits, err := factsetSearchOnce(ctx, m, req, UIListLimit, vec)
+	hits, err := factsetSearchOnce(ctx, m, req, MaxFactSetFacts, vec)
 	if err != nil {
 		return nil, err
-	}
-	if len(hits) == UIListLimit && req.Facts > UIListLimit {
-		more, err := factsetSearchOnce(ctx, m, req, req.Facts, vec)
-		if err != nil {
-			return nil, err
-		}
-		seen := make(map[string]bool, len(hits))
-		for _, h := range hits {
-			seen[h.path] = true
-		}
-		for _, h := range more {
-			if !seen[h.path] {
-				seen[h.path] = true
-				hits = append(hits, h)
-			}
-		}
 	}
 	if len(hits) > req.Facts {
 		hits = hits[:req.Facts]
@@ -745,8 +733,8 @@ func runFactSetSearch(ctx context.Context, m *mount, req FactSetRequest) ([]fact
 }
 
 // factsetSearchOnce is one search call at limit, as the UI's list makes it:
-// the repo /search route (sort relevance) or the /facts collection's
-// sort=recent.
+// the repo /search route (sort relevance, depth MaxFactSetFacts) or the
+// /facts collection's sort=recent from offset 0.
 func factsetSearchOnce(ctx context.Context, m *mount, req FactSetRequest, limit int, vec []float32) ([]factsetHit, error) {
 	q := req.Search.options(limit, req.PathsIn)
 	var hits []factsetHit

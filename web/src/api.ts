@@ -1855,6 +1855,15 @@ function fetchMotifCluster(base: string, key: string): Promise<MotifCluster> {
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
 // repeated `repo=` params (narrows the fan-out); omitted params are dropped.
+/** A relevance list's page: the slice [offset, offset+limit) of the one
+ *  ranked list the /search routes return. */
+export interface ListPage { limit?: number; offset?: number }
+
+function setListPage(p: URLSearchParams, page?: ListPage): void {
+  if (page?.limit !== undefined) p.set('limit', String(page.limit));
+  if (page?.offset !== undefined) p.set('offset', String(page.offset));
+}
+
 async function listLensFacts(lens: string, opts: {
   path?: string; query?: string; limit?: number; offset?: number; repos?: string[];
   types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
@@ -1872,20 +1881,29 @@ async function listLensFacts(lens: string, opts: {
 }
 
 // lensSearch GETs /api/v1/lenses/{lens}/search — the RRF-fused union relevance
-// search. The envelope is flat ({results,total}); this returns just the results
-// array (each row canonical path + source). `repos` → repeated `repo=` params.
+// search. The envelope is flat ({results,total}): each row carries a canonical
+// path + source, and `total` is the ranked list's length (what `offset` can
+// reach), the list's count whatever page this is. `repos` → repeated `repo=` params.
 // `opts` forwards the same content filters the repo /search sends. The lens
 // FACTS handler accepts the identical set, so filter-bearing reads no longer
 // have to come through here — this path is now for RANKING (a text query), and
 // a bare chip goes to listLensFacts where it can be paged and counted.
+//
+// `page` is the list's own paging, sent beside (never inside) the shared
+// builder's parameters: the route ranks ONE fused list and `offset`/`limit`
+// slice it, so a FactSet of the search (lensListSearchParams alone) holds
+// exactly the rows the list scrolls through.
 async function lensSearch(
   lens: string, q: string, repos?: string[],
   opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
            motifs?: string[]; motifMatch?: MotifMatch },
-): Promise<(SearchResult & { source: LensSource })[]> {
+  page?: ListPage,
+): Promise<{ results: (SearchResult & { source: LensSource })[]; total: number }> {
   const p = lensListSearchParams('relevance', q, repos, opts);
-  const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
-  return data.results ?? [];
+  setListPage(p, page);
+  const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[]; total?: number }>(`${lensBase(lens)}/search?${p}`);
+  const results = data.results ?? [];
+  return { results, total: data.total ?? results.length };
 }
 
 // lensCompletions GETs /api/v1/lenses/{lens}/completions — the union of per-mount
@@ -2720,23 +2738,31 @@ export const api = {
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
     opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
-             motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean }
-  ): Promise<{ results: SearchResult[] }> => {
-    // No limit: the server's default is the results list's length
-    // (materialize.UIListLimit), the one place it is written, so a FactSet
-    // of this search starts with exactly this list.
+             motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean },
+    page?: ListPage,
+  ): Promise<{ results: SearchResult[]; total: number }> => {
+    // The route ranks ONE list (depth materialize.MaxFactSetFacts) and
+    // `page` slices it; without a limit the server's default page is
+    // materialize.UIListLimit. A FactSet of this search (listSearchParams
+    // alone, no paging) holds exactly the rows the list scrolls through.
     const p = listSearchParams('relevance', q, path, minConfidence, opts);
+    setListPage(p, page);
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
       const results: SearchResult[] = data._embedded?.results || data.results || [];
+      // The ranked list's length (what `offset` can reach), not the page's.
+      const total: number = data.total ?? results.length;
       // Anonymous telemetry: counts only — never the query text. No-op unless a
-      // host defined window.knomitTelemetry (see telemetry.ts).
-      track('search_performed', {
-        result_count: results.length,
-        query_len: q.length,
-        had_results: results.length > 0,
-      });
-      return { results };
+      // host defined window.knomitTelemetry (see telemetry.ts). Once per
+      // search: a later page of the same list is a scroll, not a search.
+      if (!page?.offset) {
+        track('search_performed', {
+          result_count: results.length,
+          query_len: q.length,
+          had_results: results.length > 0,
+        });
+      }
+      return { results, total };
     });
   },
 

@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/corpus/materialize"
 	"knomit/internal/corpus/repos"
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
@@ -76,9 +77,13 @@ type searchResultItem struct {
 }
 
 // searchView is the search collection plus an optional notice. Notice is
-// omitted unless the caller's min_similarity removed every candidate.
+// omitted unless the caller's min_similarity removed every candidate. Total
+// is the ranked list's length (at most materialize.MaxFactSetFacts): every
+// offset below it has a row, and the FactSet of the search has that many
+// units. Count is the page's length.
 type searchView struct {
 	hal.CollectionView[searchResultItem]
+	Total  int    `json:"total"`
 	Notice string `json:"notice,omitempty"`
 }
 
@@ -139,6 +144,10 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
+		}
 		motifs, motifMatch, ok := motifParams(w, r)
 		if !ok {
 			return
@@ -160,7 +169,22 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			MotifMatch:     motifMatch,
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
-			Limit:          limit,
+			// THE RANKED LIST IS ONE LIST AT ONE DEPTH. Every page is a slice
+			// [offset, offset+limit) of the search at depth
+			// materialize.MaxFactSetFacts, never a search at limit or at
+			// offset+limit: a text search's nearest-neighbour window grows with
+			// its limit and its filters apply after the window, so a smaller
+			// call can end short where the full list goes on, and pages cut
+			// from different depths would not join up. The FactSet of this
+			// search (runFactSetSearch) runs this same call, so the list ends
+			// exactly where the FactSet's units end. Stateless: each page
+			// re-runs the search, as the /facts collection's text search does
+			// (recentFactsSearch); ties are ordered by path, so pages of an
+			// unmoved index are contiguous and disjoint. The store cuts the
+			// page out of the ranked list BEFORE it reads any body (Page), so a
+			// page loads only its own rows, and reports the list's length.
+			Limit: materialize.MaxFactSetFacts,
+			Page:  &index.SearchPage{Offset: offset, Limit: limit},
 		}
 		now := timeNow()
 		if !applyExpiryParams(w, r, &q, now) {
@@ -187,7 +211,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			q.PathsIn = paths
 		}
 
-		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")
+		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Int("offset", offset).Msg("hal search")
 
 		var (
 			results []index.SearchResult
@@ -206,6 +230,8 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			Str("branch", branch).
 			Int("vec_hits", diag.VecHits).
 			Int("after_cutoff", diag.Candidates).
+			Int("list", q.Page.Total).
+			Int("offset", offset).
 			Int("returned", len(results)).
 			Msg("hal search")
 		if err != nil {
@@ -242,7 +268,7 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 			items = append(items, item)
 		}
 
-		view := searchView{CollectionView: hal.CollectionView[searchResultItem]{
+		view := searchView{Total: q.Page.Total, CollectionView: hal.CollectionView[searchResultItem]{
 			Count: len(items),
 			Links: hal.LinkMap{"self": {Href: selfURL}},
 			Embedded: map[string][]searchResultItem{
@@ -254,4 +280,18 @@ func handleSearch(b hal.URLBuilder, emb model.Embedder) http.HandlerFunc {
 		view.Notice = index.CutoffNotice(text != "", minSimilarity, diag)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
+}
+
+// pageOf is the page [offset, offset+limit) of a ranked list: empty past its
+// end, short at it. The relevance lists (repo and lens /search) page this way
+// over the one list their search returns.
+func pageOf[T any](rows []T, offset, limit int) []T {
+	if offset >= len(rows) {
+		return rows[:0]
+	}
+	end := len(rows)
+	if limit < end-offset {
+		end = offset + limit
+	}
+	return rows[offset:end]
 }

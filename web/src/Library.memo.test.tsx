@@ -34,7 +34,7 @@ vi.mock('./api', () => ({
     recent: vi.fn(),
     search: vi.fn().mockResolvedValue({ results: [] }),
     listLensFacts: vi.fn(),
-    lensSearch: vi.fn().mockResolvedValue([]),
+    lensSearch: vi.fn().mockResolvedValue({ results: [], total: 0 }),
     lensBrowse: vi.fn().mockResolvedValue({ children: [] }),
   },
 }));

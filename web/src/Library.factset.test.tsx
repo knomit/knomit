@@ -23,11 +23,11 @@ vi.mock('./api', () => {
     api: {
       browse: rec('browse', { children: [{ name: 'architecture', is_dir: true }] }),
       recent: rec('recent', { facts: [{ path: 'kb/a.md', title: 'A', type: 'observation', committed_at: 1 }], total: 1 }),
-      search: rec('search', { results: [{ path: 'kb/a.md', title: 'A', type: 'observation' }] }),
+      search: rec('search', { results: [{ path: 'kb/a.md', title: 'A', type: 'observation' }], total: 1 }),
       lensBrowse: rec('lensBrowse', { children: [] }),
       // One row each: Materialize is disabled for an empty list.
       listLensFacts: rec('listLensFacts', { facts: [{ path: 'kb/a.md', title: 'A', type: 'concept', committed_at: 1, source: { repo: 'docs', id: 'u2', branch: 'main' } }], total: 1 }),
-      lensSearch: rec('lensSearch', [{ path: 'kb/a.md', title: 'A', type: 'concept', source: { repo: 'core', id: 'u1', branch: 'agent/main' } }]),
+      lensSearch: rec('lensSearch', { results: [{ path: 'kb/a.md', title: 'A', type: 'concept', source: { repo: 'core', id: 'u1', branch: 'agent/main' } }], total: 1 }),
     },
   };
 });

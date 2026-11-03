@@ -10,7 +10,7 @@ import "knomit/internal/edge/web/httpx"
 var (
 	// GET /repos/{repo}/branches/{branch}/search
 	repoSearchParams = httpx.DeclareParams(
-		"q", "entities", "domain", "domain_exact", "path", "min_confidence", "min_similarity", "limit",
+		"q", "entities", "domain", "domain_exact", "path", "min_confidence", "min_similarity", "limit", "offset",
 		"type", "exclude_type", "kind", "exclude_kind", "origin", "ep", "motifs", "motif_match",
 		"expired", "expires_before", "expires_after", "context.<key>", "since_fork",
 	)
@@ -22,7 +22,7 @@ var (
 	)
 	// GET /lenses/{lens}/search
 	lensSearchParams = httpx.DeclareParams(
-		"q", "limit", "path", "repo", "entity", "entities", "domain", "domain_exact", "applies_to",
+		"q", "limit", "offset", "path", "repo", "entity", "entities", "domain", "domain_exact", "applies_to",
 		"type", "exclude_type", "kind", "exclude_kind", "origin", "ep", "min_confidence", "min_similarity",
 		"motifs", "motif_match", "expired", "expires_before", "expires_after", "context.<key>",
 	)
