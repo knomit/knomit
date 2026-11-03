@@ -223,10 +223,15 @@ export function LibraryHeader({
     return {
       key: seg.value, testid: seg.testid, Icon: seg.Icon, active, disabled, color,
       ariaLabel: exitsSearch ? 'Clear search' : exitsMotif ? 'Leave this motif' : `Sort by ${seg.label}`,
-      // Only the CURRENT segment can still be disabled here (the rest are
-      // filtered out below), and the only such case is a pivot without an
-      // exit.
-      title: disabled ? 'Sorting is disabled inside a motif'
+      // INVARIANT: only the CURRENT segment survives the filter below while
+      // disabled, and for every state Library can produce (its effectiveSort
+      // never pairs Path with a chip, and a search always arrives as
+      // 'relevance') that segment is the motif pivot without an onExitMotif.
+      // So the title is scoped to that case alone, and any other disabled
+      // segment falls through to its ordinary label rather than claiming to
+      // be inside a motif. LibraryHeader.flyout.test.tsx enumerates the
+      // reachable states and pins the invariant.
+      title: disabled && seg.value === 'motif' ? 'Sorting is disabled inside a motif'
         : exitsSearch ? 'Clear search and go back'
         : exitsMotif ? 'Leave this motif and go back'
         : `Sort by ${seg.label}`,

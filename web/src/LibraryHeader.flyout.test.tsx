@@ -399,3 +399,49 @@ describe('arrow keys skip nothing visible', () => {
     });
   }
 });
+
+
+// #742 review (L2): the only disabled segment that can still be DRAWN is the
+// current one, and across every state Library can produce that is the motif
+// pivot without an exit — the one case the 'Sorting is disabled inside a
+// motif' title is for. Library passes the EFFECTIVE sort: a search always
+// arrives as 'relevance', and a content chip never arrives with 'path'
+// (Library.tsx effectiveSort). SABOTAGE: drop the .filter() after flyoutItems
+// in LibraryHeader.tsx -> red.
+describe('a drawn disabled mode can only be the motif pivot', () => {
+  const MOTIF = { canonical: 'failure-presents-as-success' };
+  const states: Array<Partial<React.ComponentProps<typeof LibraryHeader>>> = [];
+  for (const searchActive of [false, true])
+    for (const contentFiltered of [false, true])
+      for (const sort of ['path', 'recent', 'relevance'] as const)
+        for (const pivot of [false, true])
+          for (const exits of [false, true]) {
+            if (searchActive !== (sort === 'relevance')) continue;
+            if (contentFiltered && sort === 'path') continue;
+            if (pivot && sort === 'path') continue; // a pivot is a chip
+            states.push({
+              sort, searchActive, contentFiltered: contentFiltered || pivot,
+              motif: pivot ? MOTIF : undefined,
+              onExitMotif: exits ? vi.fn() : undefined,
+              onExitSearch: exits ? vi.fn() : undefined,
+            });
+          }
+
+  it(`holds in all ${states.length} reachable states`, () => {
+    expect(states.length).toBe(18);
+    let sawMotifCase = false;
+    for (const props of states) {
+      const { unmount } = render(<LibraryHeader {...base} {...props} />);
+      fireEvent.mouseEnter(group());
+      const disabled = Array.from(group().querySelectorAll<HTMLButtonElement>('button:disabled'));
+      for (const b of disabled) {
+        expect(b.getAttribute('data-testid'), JSON.stringify(props)).toBe('sort-motif');
+        expect(b.title).toBe('Sorting is disabled inside a motif');
+        sawMotifCase = true;
+      }
+      unmount();
+    }
+    // The motif-without-exit case is in the set, so the loop is not vacuous.
+    expect(sawMotifCase).toBe(true);
+  });
+});
