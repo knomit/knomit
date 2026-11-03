@@ -94,14 +94,14 @@ describe('the landed pivot', () => {
     // (Reproduced against the live app: 14 carriers, `domain:reliability`,
     // 8 rows, header still 14.)
     const plain = draw(pivoted());
-    await waitFor(() => expect(screen.getByTestId('library-count').textContent).toBe('26'));
+    await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('26'));
     plain.unmount();
 
     draw(pivoted({ filters: [
       { category: 'motif', value: 'failure-presents-as-success' },
       { category: 'domain', value: 'store' },
     ] }));
-    await waitFor(() => expect(screen.getByTestId('library-count').textContent).toBe('2'));
+    await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('2'));
     // Still the pivot — the heading has not given up naming the shape just
     // because the list under it is narrower.
     expect(screen.getByTestId('library-leaf').textContent).toBe('failure-presents-as-success');

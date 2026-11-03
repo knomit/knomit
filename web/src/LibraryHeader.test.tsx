@@ -2,6 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { LibraryHeader } from './LibraryHeader';
 
+// At rest the mode flyout shows only the current mode (ModeFlyout); the
+// segment tests below are about each mode's state and behaviour, so they open
+// the group first, as a reader's hover would.
+const renderOpen = (ui: React.ReactElement) => {
+  const out = render(ui);
+  fireEvent.mouseEnter(screen.getByTestId('mode-flyout'));
+  return out;
+};
+
 // Every render needs the location props now, and almost every test cares about
 // exactly one of them. `base` carries a plain scoped location so each test
 // overrides only what it is about.
@@ -22,11 +31,14 @@ const base = {
 describe('LibraryHeader', () => {
   // Was "renders fact count and scope label". The header names WHERE you are
   // instead of asserting a scoped boolean that never carried its value.
-  it('renders the count, the current folder and its ancestors', () => {
+  // The count is no longer shown (user, 2026-11-02: the total was not in the
+  // book design); it rides on data-count, where it disables Materialize.
+  it('renders the current folder and its ancestors, and no count', () => {
     render(<LibraryHeader {...base} count={42} />);
     expect(screen.getByTestId('library-leaf')).toHaveTextContent('store');
     expect(screen.getAllByTestId('ancestor-seg').map(b => b.textContent)).toEqual(['kb', 'architecture']);
-    expect(screen.getByText('42')).toBeInTheDocument();
+    expect(screen.queryByText('42')).toBeNull();
+    expect(screen.getByTestId('library-header')).toHaveAttribute('data-count', '42');
   });
 
   // Was "renders global when not scoped", then "All facts". The root slot has no
@@ -77,24 +89,24 @@ describe('LibraryHeader', () => {
   });
 
   it('hides Relevance segment when search is not active', () => {
-    render(<LibraryHeader {...base} count={5} sort="recent" searchActive={false} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="recent" searchActive={false} onSortChange={vi.fn()} />);
     expect(screen.queryByTestId('sort-relevance')).toBeNull();
   });
 
   it('shows Relevance segment when search is active', () => {
-    render(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={vi.fn()} />);
     expect(screen.getByTestId('sort-relevance')).toBeInTheDocument();
   });
 
   it('dispatches onSortChange when a segment is clicked', () => {
     const handler = vi.fn();
-    render(<LibraryHeader {...base} count={5} sort="recent" searchActive={false} onSortChange={handler} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="recent" searchActive={false} onSortChange={handler} />);
     fireEvent.click(screen.getByTestId('sort-path'));
     expect(handler).toHaveBeenCalledWith('path');
   });
 
   it('renders sort axes as glyphs with the label as the accessible name (no visible text)', () => {
-    render(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
     expect(screen.getByLabelText('Sort by Path')).toBeInTheDocument();
     expect(screen.getByLabelText('Sort by Recent')).toBeInTheDocument();
     const path = screen.getByTestId('sort-path');
@@ -103,7 +115,7 @@ describe('LibraryHeader', () => {
   });
 
   it('marks the active axis with aria-pressed and uses no selection border', () => {
-    render(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
     const path = screen.getByTestId('sort-path');
     const recent = screen.getByTestId('sort-recent');
     expect(path.getAttribute('aria-pressed')).toBe('true');
@@ -114,7 +126,7 @@ describe('LibraryHeader', () => {
   });
 
   it('disables Path/Recent while a search/relevance filter is active (only Relevance stays enabled)', () => {
-    render(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={vi.fn()} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('sort-relevance') as HTMLButtonElement).disabled).toBe(false);
@@ -122,14 +134,14 @@ describe('LibraryHeader', () => {
 
   it('does not dispatch onSortChange when a disabled (search-mode) segment is clicked', () => {
     const handler = vi.fn();
-    render(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={handler} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="relevance" searchActive={true} onSortChange={handler} />);
     fireEvent.click(screen.getByTestId('sort-path'));
     fireEvent.click(screen.getByTestId('sort-recent'));
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('keeps Path/Recent enabled when not searching', () => {
-    render(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="path" searchActive={false} onSortChange={vi.fn()} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
   });
@@ -141,33 +153,33 @@ describe('LibraryHeader', () => {
   // override recomputed straight back to Recent — a live-looking control whose
   // entire effect was cancelled, with no feedback to say so.
   it('disables Path — and only Path — while a content chip is filtering', () => {
-    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('sort-recent') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('says why Path is unavailable rather than leaving it silently inert', () => {
-    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} />);
     expect(screen.getByTestId('sort-path').getAttribute('title'))
       .toBe('The tree cannot filter — remove the chip to browse it');
   });
 
   it('does not dispatch onSortChange when the chip-disabled Path segment is clicked', () => {
     const handler = vi.fn();
-    render(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} onSortChange={handler} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" searchActive={false} contentFiltered={true} onSortChange={handler} />);
     fireEvent.click(screen.getByTestId('sort-path'));
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('re-enables Path once the chip is gone', () => {
-    const { rerender } = render(<LibraryHeader {...base} sort="recent" contentFiltered={true} />);
+    const { rerender } = renderOpen(<LibraryHeader {...base} sort="recent" contentFiltered={true} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(true);
     rerender(<LibraryHeader {...base} sort="recent" contentFiltered={false} />);
     expect((screen.getByTestId('sort-path') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('suppresses the focus ring so a clicked segment does not look extra-"selected"', () => {
-    render(<LibraryHeader {...base} count={5} sort="recent" searchActive={false} onSortChange={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} count={5} sort="recent" searchActive={false} onSortChange={vi.fn()} />);
     expect((screen.getByTestId('sort-path') as HTMLElement).style.outline).toBe('none');
     expect((screen.getByTestId('sort-recent') as HTMLElement).style.outline).toBe('none');
   });
@@ -303,19 +315,19 @@ describe('the Relevance segment while searching', () => {
 
   it('exits the search instead of setting a sort', () => {
     const onSortChange = vi.fn(), onExitSearch = vi.fn();
-    render(<LibraryHeader {...searchingProps} onSortChange={onSortChange} onExitSearch={onExitSearch} />);
+    renderOpen(<LibraryHeader {...searchingProps} onSortChange={onSortChange} onExitSearch={onExitSearch} />);
     fireEvent.click(screen.getByTestId('sort-relevance'));
     expect(onExitSearch).toHaveBeenCalledTimes(1);
     expect(onSortChange).not.toHaveBeenCalled();
   });
 
   it('says so, rather than claiming to sort', () => {
-    render(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
+    renderOpen(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
     expect(screen.getByTestId('sort-relevance').title.toLowerCase()).toMatch(/clear|exit|leave/);
   });
 
   it('is still the only enabled segment', () => {
-    render(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
+    renderOpen(<LibraryHeader {...searchingProps} onSortChange={vi.fn()} onExitSearch={vi.fn()} />);
     expect(screen.getByTestId('sort-path')).toBeDisabled();
     expect(screen.getByTestId('sort-recent')).toBeDisabled();
     expect(screen.getByTestId('sort-relevance')).not.toBeDisabled();
@@ -334,7 +346,7 @@ describe('the Motif segment', () => {
   const MOTIF = { canonical: 'failure-presents-as-success' };
 
   it('is absent until a pivot is on', () => {
-    render(<LibraryHeader {...base} />);
+    renderOpen(<LibraryHeader {...base} />);
     expect(screen.queryByTestId('sort-motif')).toBeNull();
   });
 
@@ -343,7 +355,7 @@ describe('the Motif segment', () => {
     // a pivot because the tree cannot honour a chip. Without the pivot
     // outranking it, Recent would light up beside the motif and the strip would
     // name the ordering while the reader is asking about a shape.
-    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
     expect(screen.getByTestId('sort-motif')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('sort-recent')).toHaveAttribute('aria-pressed', 'false');
   });
@@ -351,7 +363,7 @@ describe('the Motif segment', () => {
   it('leaves the pivot when pressed, and never re-enters it', () => {
     const onExitMotif = vi.fn();
     const onSortChange = vi.fn();
-    render(<LibraryHeader {...base} sort="recent" motif={MOTIF}
+    renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF}
       onExitMotif={onExitMotif} onSortChange={onSortChange} />);
     fireEvent.click(screen.getByTestId('sort-motif'));
     expect(onExitMotif).toHaveBeenCalled();
@@ -365,7 +377,7 @@ describe('the Motif segment', () => {
     // has: clicking it would write what is already there and clear the open
     // fact for nothing. An enabled button whose whole effect is overridden is
     // worse than a disabled one.
-    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
     expect(screen.getByTestId('sort-path')).toBeDisabled();
     expect(screen.getByTestId('sort-recent')).toBeDisabled();
     expect(screen.getByTestId('sort-motif')).not.toBeDisabled();
@@ -377,7 +389,7 @@ describe('the Motif segment', () => {
     // onSortChange and dispatch 'motif' — not a LibrarySort, and a value every
     // list effect early-returns on, leaving the panel permanently blank.
     const onSortChange = vi.fn();
-    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onSortChange={onSortChange} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF} onSortChange={onSortChange} />);
     const seg = screen.getByTestId('sort-motif');
     expect(seg).toBeDisabled();
     fireEvent.click(seg);
@@ -385,17 +397,17 @@ describe('the Motif segment', () => {
   });
 
   it('says it is an exit, not a sort', () => {
-    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+    renderOpen(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
     const seg = screen.getByTestId('sort-motif');
     expect(seg).toHaveAttribute('aria-label', 'Leave this motif');
     expect(seg).toHaveAttribute('title', 'Leave this motif and go back');
   });
 
-  it('renders the count of the list, pivot or not', () => {
+  it('carries the count of the list, pivot or not', () => {
     // One number, one source. On a pivot this used to be the cluster's
     // carrier_count, which stopped agreeing with the rows the moment any other
-    // chip narrowed them.
+    // chip narrowed them. No longer shown, still the list's own.
     render(<LibraryHeader {...base} count={8} motif={MOTIF} onExitMotif={vi.fn()} />);
-    expect(screen.getByTestId('library-count')).toHaveTextContent('8');
+    expect(screen.getByTestId('library-header')).toHaveAttribute('data-count', '8');
   });
 });

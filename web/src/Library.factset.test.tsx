@@ -25,8 +25,9 @@ vi.mock('./api', () => {
       recent: rec('recent', { facts: [{ path: 'kb/a.md', title: 'A', type: 'observation', committed_at: 1 }], total: 1 }),
       search: rec('search', { results: [{ path: 'kb/a.md', title: 'A', type: 'observation' }] }),
       lensBrowse: rec('lensBrowse', { children: [] }),
-      listLensFacts: rec('listLensFacts', { facts: [], total: 0 }),
-      lensSearch: rec('lensSearch', []),
+      // One row each: Materialize is disabled for an empty list.
+      listLensFacts: rec('listLensFacts', { facts: [{ path: 'kb/a.md', title: 'A', type: 'concept', committed_at: 1, source: { repo: 'docs', id: 'u2', branch: 'main' } }], total: 1 }),
+      lensSearch: rec('lensSearch', [{ path: 'kb/a.md', title: 'A', type: 'concept', source: { repo: 'core', id: 'u1', branch: 'agent/main' } }]),
     },
   };
 });
@@ -40,17 +41,22 @@ const lensState = (over: Partial<AppState> = {}): AppState => ({
 });
 
 const control = () => screen.queryByTestId('library-factset') as HTMLButtonElement | null;
+// Enabled once the list's rows have landed (disabled while empty).
+const enabledControl = async () => { await waitFor(() => expect(control()!.disabled).toBe(false)); return control()!; };
 
 beforeEach(() => { calls.length = 0; });
 afterEach(() => { factsetView.close(); window.history.replaceState(null, '', '/'); });
 
 describe('the FactSet entry control', () => {
-  it('relevance: beside the count; opens the repo FactSet of the list search, sort relevance', async () => {
+  it('relevance: alone at the right after the separator; opens the repo FactSet of the list search, sort relevance', async () => {
     render(<Library state={repoState({ freeText: 'goroutine', filters: [{ category: 'type', value: 'policy' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'search')).toBe(true));
     const btn = control()!;
-    expect(btn.nextElementSibling?.getAttribute('data-testid')).toBe('library-count');
-    expect(btn.disabled).toBe(false);
+    // The last thing in the header, the separator just before it, no count.
+    expect(screen.getByTestId('library-header').lastElementChild).toBe(btn);
+    expect(btn.previousElementSibling?.getAttribute('data-testid')).toBe('library-header-sep');
+    expect(screen.queryByTestId('library-count')).toBeNull();
+    await waitFor(() => expect(btn.disabled).toBe(false));
     fireEvent.click(btn);
     const s = factsetView.get().search!;
     expect(s.target).toEqual({ kind: 'repo', repo: 'knomit-kb', branch: 'agent/test' });
@@ -65,7 +71,7 @@ describe('the FactSet entry control', () => {
   it('a chip turns Path into Recent: the control is there and the FactSet is sort recent with the chip', async () => {
     render(<Library state={repoState({ librarySort: 'path', filters: [{ category: 'domain', value: 'ai' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'recent')).toBe(true));
-    fireEvent.click(control()!);
+    fireEvent.click(await enabledControl());
     const s = factsetView.get().search!;
     expect(s.sort).toBe('recent');
     expect(Object.fromEntries(new URLSearchParams(s.params))).toEqual({ path: 'kb', domain: 'ai' });
@@ -74,13 +80,28 @@ describe('the FactSet entry control', () => {
   it('is absent in the path tree (not a search)', async () => {
     render(<Library state={repoState({ librarySort: 'path' })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'browse')).toBe(true));
-    expect(screen.getByTestId('library-count')).toBeTruthy();
+    expect(screen.getByTestId('mode-flyout')).toBeTruthy();
     expect(control()).toBeNull();
+    expect(screen.queryByTestId('library-header-sep')).toBeNull();
   });
 
   it('is disabled in history mode, and a click opens nothing', async () => {
     render(<Library state={repoState({ librarySort: 'recent', asOf: { mode: 'history', commit: 'abc1234' } })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'recent')).toBe(true));
+    // The row has landed, so it is history, not an empty list, that disables it.
+    await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('1'));
+    expect(control()!.disabled).toBe(true);
+    fireEvent.click(control()!);
+    expect(factsetView.get().search).toBeNull();
+  });
+
+  // Book design §5: disabled for an empty list. Sabotage: drop `count > 0`.
+  it('is disabled for an empty list, and a click opens nothing', async () => {
+    const { api } = await import('./api');
+    vi.mocked(api.recent).mockImplementationOnce(async () => ({ facts: [], total: 0 }));
+    render(<Library state={repoState({ librarySort: 'recent' })} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(vi.mocked(api.recent)).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('0'));
     expect(control()!.disabled).toBe(true);
     fireEvent.click(control()!);
     expect(factsetView.get().search).toBeNull();
@@ -89,7 +110,7 @@ describe('the FactSet entry control', () => {
   it('lens recent, narrowed to one member: the lens route with the list\'s repo= narrowing', async () => {
     render(<Library state={lensState({ librarySort: 'recent', lensSources: ['docs'], filters: [{ category: 'type', value: 'concept' }] })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'listLensFacts')).toBe(true));
-    fireEvent.click(control()!);
+    fireEvent.click(await enabledControl());
     const s = factsetView.get().search!;
     expect(s.target).toEqual({ kind: 'lens', lens: 'eng' });
     expect(s.sort).toBe('recent');
@@ -102,7 +123,7 @@ describe('the FactSet entry control', () => {
   it('lens relevance: same control, sort relevance', async () => {
     render(<Library state={lensState({ freeText: 'auth' })} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(calls.some(c => c.fn === 'lensSearch')).toBe(true));
-    fireEvent.click(control()!);
+    fireEvent.click(await enabledControl());
     const s = factsetView.get().search!;
     expect(s.sort).toBe('relevance');
     expect(new URLSearchParams(s.params).get('q')).toBe('auth');

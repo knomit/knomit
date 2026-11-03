@@ -624,7 +624,7 @@ describe('Library — lens union paging stops on a short page, not on `total`', 
     render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
     // Exhausted on the first page, and the header still reports the corpus.
-    expect(screen.getByTestId('library-header').querySelector('[data-testid="library-count"]')?.textContent)
+    expect(screen.getByTestId('library-header').getAttribute('data-count'))
       .toBe('140');
   });
 

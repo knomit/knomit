@@ -107,3 +107,29 @@ describe('Library — modified arrows belong to window commands, not the list', 
   });
 });
 
+// #734 review: after a mouse pick in the mode flyout, focus can sit on the
+// current mode icon. The list's arrows must still move the selection: the
+// flyout never keeps Up/Down, and keeps Left/Right only while it is open.
+describe('Library — arrows after a mode pick', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('a mouse pick of Recent, then ↓ on the focused mode icon, moves the list selection', async () => {
+    const { dispatch } = setup({ asOf: { mode: 'live' } });
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBe(2));
+    await act(async () => {});
+    const group = screen.getByTestId('mode-flyout');
+    fireEvent.mouseEnter(group);
+    const current = group.querySelector('button[data-current="true"]') as HTMLButtonElement;
+    act(() => current.focus());
+    fireEvent.pointerDown(screen.getByTestId('sort-recent'), { pointerType: 'mouse' });
+    fireEvent.click(screen.getByTestId('sort-recent'), { detail: 1 });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_LIBRARY_SORT', sort: 'recent' });
+    // Focus left on the current icon (the worst case a browser can leave).
+    act(() => current.focus());
+    fireEvent.keyDown(current, { key: 'ArrowDown' });
+    // ↓ selected the first row (a dir), so → now opens it.
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'NAVIGATE' }));
+  });
+});
+

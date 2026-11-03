@@ -14,7 +14,7 @@
  */
 import { test, expect } from '../../fixtures/knomit.js';
 import { BrowsePage } from '../../pages/browse.page.js';
-import { firstLocalRef, openFirstFact, openHistory } from '../../helpers/nav.js';
+import { firstLocalRef, openFirstFact, openHistory, pickMode } from '../../helpers/nav.js';
 
 // Helpers
 async function blurAndBack(page: import('@playwright/test').Page) {
@@ -25,7 +25,7 @@ async function blurAndBack(page: import('@playwright/test').Page) {
 }
 
 async function switchView(page: import('@playwright/test').Page, view: 'tree' | 'chrono') {
-  await page.getByRole('button', { name: view === 'tree' ? 'Sort by Path' : 'Sort by Recent' }).click();
+  await pickMode(page, view === 'tree' ? 'Sort by Path' : 'Sort by Recent');
   await page.waitForTimeout(500);
 }
 
