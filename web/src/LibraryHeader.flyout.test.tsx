@@ -258,8 +258,10 @@ describe('Materialize', () => {
     expect(current().style.color).toBe('rgb(119, 204, 153)');
     fireEvent.mouseLeave(btn);
     expect(btn.style.color).toBe('rgb(136, 136, 136)');
-    rerender(<LibraryHeader {...base} factset={{ enabled: false, onOpen: vi.fn() }} />);
+    // Hovered when it turns disabled (history, or the list empties): no accent.
     fireEvent.mouseEnter(btn);
+    expect(btn.style.color).toBe('rgb(119, 204, 153)');
+    rerender(<LibraryHeader {...base} count={0} factset={{ enabled: true, onOpen: vi.fn() }} />);
     expect(btn.style.color).toBe('rgb(136, 136, 136)');
   });
 });
