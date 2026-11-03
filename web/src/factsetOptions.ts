@@ -149,8 +149,10 @@ export function useFactSetView(): FsView {
   return useSyncExternalStore(factsetView.subscribe, factsetView.get);
 }
 
-/** The list total to show with the open FactSet: only the total recorded for
- *  the very search it was frozen from. */
+/** The list total to show with the open FactSet. The store keeps only the
+ *  total of the very search the FactSet was frozen from: open() records it
+ *  under that search's key, setListTotal() accepts that key alone, close()
+ *  drops it, so no key check is needed here. */
 export function fsListTotal(v: FsView): number | undefined {
-  return v.search && v.listTotal && v.listTotal.key === searchKey(v.search) ? v.listTotal.total : undefined;
+  return v.search ? v.listTotal?.total : undefined;
 }
