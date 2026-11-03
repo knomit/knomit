@@ -85,6 +85,7 @@ func TestKBRoutes_UnknownAndMalformedAre400_DeclaredAccepted(t *testing.T) {
 		{"/lenses/{lens}/motifs", lens + "/motifs", true},
 		{"/lenses/{lens}/motifs/{key}", lens + "/motifs/config-drift", false},
 		{"/lenses/{lens}/stats", lens + "/stats", true},
+		{"/lenses/{lens}/events", lens + "/events", false}, // a stream: only refusals are read
 		{"/lenses/{lens}/topics", lens + "/topics", true},
 		{"/lenses/{lens}/topics/{path}", lens + "/topics/a", true},
 	}

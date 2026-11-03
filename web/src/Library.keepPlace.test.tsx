@@ -4,6 +4,7 @@ import { Library } from './Library';
 import { init } from './state';
 import type { AppState } from './state';
 import type { Lens } from './api';
+import { latestStream, streamsMatching } from './testEventSource';
 
 // A new head while the reader is deep in a list KEEPS THE READER'S PLACE (user
 // ruling 2026-11-03, option b): the loaded rows are re-read quietly, the
@@ -466,5 +467,44 @@ describe('Library — no false empty state while a search loads', () => {
     expect(screen.queryByText('No facts match the search.')).toBeNull();
     await act(async () => { gate.resolve({ results: [], total: 0 }); });
     await waitFor(() => expect(screen.getByText('No facts match the search.')).toBeTruthy());
+  });
+});
+
+// A lens list moves with ANY member's content (user ruling 2026-11-03): a
+// `content` notice on GET /lenses/{lens}/events (here for a READ member: the
+// write repo's head does not move) runs the same quiet keep-place refresh.
+// Repo lists hold no lens stream and ignore it.
+// Sabotage: leave lensRev out of the lens list's head, and the notice
+// refreshes nothing (the new row never shows).
+describe('Library — a read member\'s content notice refreshes the lens list', () => {
+  for (const c of [CASES[2], CASES[3]]) {
+    it(`${c.name}: a notice with no write-repo head change refreshes and keeps row 120`, async () => {
+      const { api } = await import('./api');
+      const { scroller } = await deepInList(c.state, c.testId);
+      const stream = latestStream('/api/v1/lenses/eng/events');
+      expect(stream).toBeDefined();
+      const call = (c.state.freeText ? api.lensSearch : api.listLensFacts) as ReturnType<typeof vi.fn>;
+      call.mockClear();
+      list = [NEW, ...list];
+      act(() => { stream!.emit('content', { repo: 'docs', id: 'bbbbbbbbbbbb', branch: 'main', head: 'abc' }); });
+      await waitFor(() => expect(paths(c.testId)[0]).toBe(NEW));
+      expect(call).toHaveBeenCalled();
+      expect(selectedPath()).toBe(pathOf(120));
+      expect(paths(c.testId).indexOf(pathOf(120))).toBe(121);
+      expect(scroller.scrollTop).toBe(121 * ROW - 100);
+    });
+  }
+
+  it('repo lists open no lens stream, and a stray notice changes nothing', async () => {
+    const { api } = await import('./api');
+    const { open } = await deepInList(CASES[0].state, CASES[0].testId);
+    void open;
+    expect(streamsMatching('/lenses/').filter(es => !es.closedByClient)).toHaveLength(0);
+    const recent = api.recent as ReturnType<typeof vi.fn>;
+    recent.mockClear();
+    list = [NEW, ...list];
+    await act(async () => { await Promise.resolve(); });
+    expect(recent).not.toHaveBeenCalled();
+    expect(paths(CASES[0].testId)[0]).toBe(pathOf(0));
   });
 });

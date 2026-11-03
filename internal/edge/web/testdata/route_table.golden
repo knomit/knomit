@@ -38,6 +38,7 @@ GET /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metrics
 GET /lenses | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALLenses
 GET /lenses/{lens}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALLens
 GET /lenses/{lens}/completions | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensCompletions
+GET /lenses/{lens}/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensEvents
 GET /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 GET /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 GET /lenses/{lens}/facts | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensMiddleware | handleHALLensFacts

@@ -18,6 +18,7 @@ import { useMotifClusters } from './useMotifClusters';
 import { motifEndpointOf } from './motifEndpoint';
 import { factSubject, subjectSummary } from './motifSubject';
 import type { NavRequest } from './useNavigationManager';
+import { useLensContentRev } from './useLensContentRev';
 import { beginFullLoad, captureAnchor, isRendered, newRefreshState, restoreAnchor, runRefresh, sentinelInView } from './listRefresh';
 import type { RefreshState, ScrollAnchor } from './listRefresh';
 
@@ -371,6 +372,11 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // lens context so a read never leaks onto a repo endpoint.
   const isLens = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
+  // A lens list moves with ANY member's content, not only the write repo's
+  // head (user ruling 2026-11-03): GET /lenses/{lens}/events counts member
+  // content changes, and the count joins the write head below as the lens
+  // list's head. Repo lists hold no lens stream.
+  const lensRev = useLensContentRev(lensName);
 
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
@@ -734,7 +740,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     if (emptyScope) { lensAtRef.current = null; beginFullLoad(rs); setLensRows([]); setLensTree([]); setTotal(0); setLensExhausted(true); setLensLoading(false); return; }
     const repos = reposParam;
     const scope = [lensName, path, state.freeText, effectiveSort, reposKey, filtersKey, state.ontologyRoot].join('\u0001');
-    const headOnly = sameScopeNewHead(lensAtRef, scope, state.headCommit);
+    const headOnly = sameScopeNewHead(lensAtRef, scope, `${state.headCommit}|${lensRev}`);
     if (headOnly && effectiveSort !== 'path' && rs.loaded && lensRowsRef.current.length > 0) {
       // A new head alone: re-read the loaded union rows in place, through the
       // same route and parameters the list pages with.
@@ -827,7 +833,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       if (gen === rs.gen) rs.loaded = true;
       openFirstRow(rows);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
-  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, state.ontologyRoot]);
+  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, lensRev, state.ontologyRoot]);
 
   // Keep the highlighted lens row tied to the open fact (mirrors the repo
   // Recent behavior) so returning to a fact re-selects its row.
