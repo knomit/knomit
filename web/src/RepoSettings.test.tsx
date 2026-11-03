@@ -180,6 +180,47 @@ describe('RepoSettings', () => {
       expect(screen.getByTestId('wizard-crumb-back').textContent).toBe('core');
     });
 
+    // A Reconnect clicked while this flow is open sets the APP's focus; the
+    // hand-back sets the local one. Consuming it must clear both owners.
+    it('clears the app\'s remote focus too when the flow hands back', async () => {
+      const onFocused = vi.fn();
+      function Owner() {
+        const [focus, setFocus] = useState<string | undefined>(undefined);
+        return (
+          <>
+            <button data-testid="reconnect" onClick={() => setFocus('remote')} />
+            <RepoSettings name="core" lenses={[]} focus={focus} onFocused={() => { onFocused(); setFocus(undefined); }}
+              canArchive serverReadOnly={false} hideRemoteConfig={false}
+              onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+          </>
+        );
+      }
+      render(<Owner />);
+      fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
+      await screen.findByTestId('remote-connect-wizard');
+      fireEvent.click(screen.getByTestId('reconnect'));
+      fireEvent.click(screen.getByTestId('wizard-crumb-back'));
+      await screen.findByTestId('repo-settings');
+      await waitFor(() => expect(onFocused).toHaveBeenCalled());
+    });
+
+    // The guard: the hand-back consumes ITS focus; an app focus naming another
+    // block is not satisfied by that and must survive.
+    it('leaves an app focus on a different block alone when the flow hands back', async () => {
+      const onFocused = vi.fn();
+      render(
+        <RepoSettings name="core" lenses={[]} focus="not-a-block" onFocused={onFocused}
+          canArchive serverReadOnly={false} hideRemoteConfig={false}
+          onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />,
+      );
+      fireEvent.click(await within(await screen.findByTestId('block-remote')).findByTestId('remote-connect'));
+      await screen.findByTestId('remote-connect-wizard');
+      fireEvent.click(screen.getByTestId('wizard-crumb-back'));
+      await screen.findByTestId('repo-settings');
+      await act(async () => {});
+      expect(onFocused).not.toHaveBeenCalled();
+    });
+
     it('replaces the settings page rather than stacking under it', async () => {
       await openConnect();
       expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();
@@ -1158,6 +1199,62 @@ describe('RepoSettings — arriving with focus', () => {
     await screen.findByTestId('block-license');
     expect(screen.getByTestId('toc-agent-branch')).not.toHaveAttribute('aria-current');
     vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' });
+  });
+});
+
+// A Remote focus the page cannot satisfy is dropped at once: otherwise it
+// would linger and yank the page to Remote when the block later appeared.
+describe('RepoSettings — a Remote focus with no Remote block', () => {
+  const job = (over: Partial<RepoCreateStatus> = {}): RepoCreateStatus =>
+    ({ create_id: 'c1', name: 'core', mode: 'subscribe', state: 'running', step: 'index', index_state: 'indexing', ...over });
+  const mount = (createJob: RepoCreateStatus | null, onFocused: () => void, hideRemoteConfig = false) => (
+    <RepoSettings name="core" lenses={[]} focus="remote" onFocused={onFocused} canArchive serverReadOnly={false}
+      hideRemoteConfig={hideRemoteConfig} createJob={createJob}
+      onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+  );
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.getRepo).mockResolvedValue({ name: 'core' }); });
+
+  it('drops it while the repo is being created', async () => {
+    const onFocused = vi.fn();
+    render(mount(job(), onFocused));
+    await screen.findByTestId('create-progress');
+    expect(onFocused).toHaveBeenCalled();
+    expect(screen.queryByTestId('block-remote')).toBeNull();
+  });
+
+  it('drops it when the server hides remote config', async () => {
+    const onFocused = vi.fn();
+    render(mount(null, onFocused, true));
+    await screen.findByTestId('block-agent-branch');
+    expect(onFocused).toHaveBeenCalled();
+  });
+
+  it('does not scroll to Remote when the block appears after the create ends', async () => {
+    const scroll = vi.fn();
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      // The owner clears the focus when told, as the app's CLEAR_FOCUS does.
+      function Owner() {
+        const [focus, setFocus] = useState<string | undefined>('remote');
+        const [createJob, setJob] = useState<RepoCreateStatus | null>(job());
+        return (
+          <>
+            <button data-testid="finish" onClick={() => setJob(null)} />
+            <RepoSettings name="core" lenses={[]} focus={focus} onFocused={() => setFocus(undefined)} canArchive
+              serverReadOnly={false} hideRemoteConfig={false} createJob={createJob}
+              onArchived={() => {}} onChanged={() => {}} onRenamed={() => {}} onSelectLens={() => {}} onError={() => {}} />
+          </>
+        );
+      }
+      render(<Owner />);
+      await screen.findByTestId('create-progress');
+      fireEvent.click(screen.getByTestId('finish'));
+      await screen.findByTestId('block-remote');
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
   });
 });
 

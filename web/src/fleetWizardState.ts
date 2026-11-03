@@ -136,7 +136,12 @@ export function stepSummary(s: FleetWizardState, id: FleetStepId): string {
   switch (id) {
     case 'start': return s.choice;
     case 'hosting': return s.hosting === 'here' ? 'this instance' : hostOf(s.forgeUrl) || 'forge';
-    case 'access': return s.authMethod || 'auto-detect';
+    case 'access':
+      // What fleetAuth will send, not what was picked: it promotes auto-detect
+      // plus a typed token to 'token'. A stored secret carries secret_id and no
+      // auth_method, so it is named here rather than read as auto-detect.
+      if (s.authMethod === 'secret') return 'secret';
+      return fleetAuth(s).auth_method || 'auto-detect';
     case 'bundle': return s.check ? s.check.host : 'loaded';
     case 'review': return '';
   }

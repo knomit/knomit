@@ -669,7 +669,12 @@ export function stepSummary(s: WizardState, id: StepId): string {
         .replace(/\/+$/, '')
         .replace(/\.git$/i, '');
     case 'access':
-      return ACCESS_WORDS[s.authMethod] ?? s.authMethod;
+      // What the request will carry, not what was picked: authFor promotes
+      // auto-detect plus a typed token to 'token'. A stored secret is the one
+      // case it reports as '' (the server derives the method), which must not
+      // read as "auto-detect".
+      if (s.authMethod === 'secret') return ACCESS_WORDS.secret;
+      return ACCESS_WORDS[authFor(s).auth_method] ?? s.authMethod;
     case 'branch':
       return s.branch;
     case 'ontology':
