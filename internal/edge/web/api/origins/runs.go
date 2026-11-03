@@ -38,7 +38,8 @@ import (
 // after the run ends, independent of the session (commit deletes its own
 // session when it finishes, and a late reader must still get the outcome).
 // A GET replays the log from the start, then follows it live, then ends after
-// the last event. Each event carries `id: <n>`, its 1-based position, and a
+// the last event. Each event carries `id: <n>` (increasing; progress is
+// coalesced, see PROGRESS on runLog), and a
 // reconnect that sends Last-Event-ID (EventSource and the desktop's knomit-sse
 // leg both do) resumes after it instead of replaying. A GET on a run that has
 // ended and has nothing past the reader's Last-Event-ID answers 204, which
@@ -66,12 +67,22 @@ const (
 )
 
 // runLog is one run's event log. A run appends; any number of readers follow.
+//
+// PROGRESS IS COALESCED. An event carrying "current" (replaying and indexing
+// progress: store.Replay reports once per fact) replaces the log's last entry
+// when that is a progress event of the same phase, under a NEW id. So the log
+// holds every phase event plus at most one progress event per run of progress,
+// whatever the corpus size: a late or reconnecting reader replays a few
+// entries, not one per fact. A live reader still sees each progress event it
+// is awake for, because ids only grow: a replaced entry's new id is past
+// whatever the reader has seen. Readers resume by id (since), never by index.
 type runLog struct {
 	kind string
 	repo string
 
 	mu       sync.Mutex
-	events   [][]byte
+	entries  []logEntry    // ordered by id
+	lastID   int           // the id of the newest entry ever made
 	terminal bool          // an event with phase done or error has been appended
 	finished bool          // the run has returned
 	wake     chan struct{} // closed and replaced on every change
@@ -81,6 +92,15 @@ type runLog struct {
 	done   chan struct{} // closed when the run has returned
 
 	hook func(data []byte) // test hook, called after each append; nil outside tests
+}
+
+// logEntry is one event of a run's log: its id (the SSE id: field), its JSON,
+// and whether it is a progress event of phase (coalescable).
+type logEntry struct {
+	id       int
+	data     []byte
+	phase    string
+	progress bool
 }
 
 func newRunLog(kind, repo string, hook func([]byte)) *runLog {
@@ -94,16 +114,18 @@ func newRunLog(kind, repo string, hook func([]byte)) *runLog {
 	}
 }
 
-// event appends v. It reports true always: a log has no client to lose, so a
-// run's sends never fail (the shape the old lazyStream had, kept so the run
-// code reads as before).
+// event appends v (or, for progress, may replace the last entry; see
+// PROGRESS). It reports true always: a log has no client to lose, so a run's
+// sends never fail (the shape the old lazyStream had, kept so the run code
+// reads as before).
 func (l *runLog) event(v any) bool {
 	data, err := json.Marshal(v)
 	if err != nil {
 		data, _ = json.Marshal(map[string]string{"phase": "error", "message": "encode progress event: " + err.Error()})
 	}
 	var head struct {
-		Phase string `json:"phase"`
+		Phase   string          `json:"phase"`
+		Current json.RawMessage `json:"current"`
 	}
 	_ = json.Unmarshal(data, &head)
 
@@ -112,20 +134,32 @@ func (l *runLog) event(v any) bool {
 		l.mu.Unlock()
 		return true
 	}
-	l.events = append(l.events, data)
+	l.appendLocked(logEntry{data: data, phase: head.Phase, progress: head.Current != nil})
 	if head.Phase == "done" || head.Phase == "error" {
 		l.terminal = true
 	}
-	if len(l.events) == 1 {
-		close(l.opened)
-	}
-	close(l.wake)
-	l.wake = make(chan struct{})
 	l.mu.Unlock()
 	if l.hook != nil {
 		l.hook(data)
 	}
 	return true
+}
+
+// appendLocked adds e under a new id, replacing the last entry when both are
+// progress of the same phase, and wakes the readers. l.mu is held.
+func (l *runLog) appendLocked(e logEntry) {
+	l.lastID++
+	e.id = l.lastID
+	if n := len(l.entries); n > 0 && e.progress && l.entries[n-1].progress && l.entries[n-1].phase == e.phase {
+		l.entries[n-1] = e
+	} else {
+		l.entries = append(l.entries, e)
+	}
+	if e.id == 1 {
+		close(l.opened)
+	}
+	close(l.wake)
+	l.wake = make(chan struct{})
 }
 
 // isOpened reports whether the run has emitted an event (lazyStream's question:
@@ -143,7 +177,7 @@ func (l *runLog) isOpened() bool {
 // as a plain HTTP problem. It is ignored once an event has been appended.
 func (l *runLog) refuse(write func(http.ResponseWriter, *http.Request)) {
 	l.mu.Lock()
-	if len(l.events) == 0 {
+	if l.lastID == 0 {
 		l.refusal = write
 	}
 	l.mu.Unlock()
@@ -158,9 +192,9 @@ func (l *runLog) finish() {
 		l.mu.Unlock()
 		return
 	}
-	if len(l.events) > 0 && !l.terminal {
+	if l.lastID > 0 && !l.terminal {
 		data, _ := json.Marshal(map[string]string{"phase": "error", "message": "the " + l.kind + " ended without a result"})
-		l.events = append(l.events, data)
+		l.appendLocked(logEntry{data: data, phase: "error"})
 		l.terminal = true
 	}
 	l.finished = true
@@ -170,16 +204,33 @@ func (l *runLog) finish() {
 	l.mu.Unlock()
 }
 
-// since returns the events after the first n (n clamped to the log's length,
-// returned as start), whether the run has finished, and the channel the next
-// change closes.
-func (l *runLog) since(n int) (evs [][]byte, start int, finished bool, wake <-chan struct{}) {
+// since returns the entries whose id is past after, whether the run has
+// finished, and the channel the next change closes.
+func (l *runLog) since(after int) (evs []logEntry, finished bool, wake <-chan struct{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if n > len(l.events) {
-		n = len(l.events)
+	if after > l.lastID {
+		// An id this run never issued (an earlier run of the same kind):
+		// replay this run from the start.
+		after = 0
 	}
-	return l.events[n:len(l.events):len(l.events)], n, l.finished, l.wake
+	i := len(l.entries)
+	for i > 0 && l.entries[i-1].id > after {
+		i--
+	}
+	return append([]logEntry(nil), l.entries[i:]...), l.finished, l.wake
+}
+
+// busy reports whether the run still counts as the session's running run for
+// reserve: it has not finished AND has not logged its outcome. Once its done
+// or error is logged, the client may move on (the wizard chains the commit
+// the moment it sees the apply's done) while the run is still releasing the
+// session; the next run's Use then waits for that release instead of being
+// refused (#754 review).
+func (l *runLog) busy() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.finished && !l.terminal
 }
 
 func (l *runLog) isFinished() bool {
@@ -213,8 +264,12 @@ func newRunRegistry() *runRegistry {
 }
 
 // reserve registers a new run of kind for the session, unless the session
-// already has an active run of either kind: then it returns that run's kind
-// and ok false. A reserved run must be ended with drop (it never started) or
+// already has a busy run (runLog.busy: not finished and its outcome not yet
+// logged) of either kind: then it returns that run's kind and ok false. A run
+// that has logged its outcome but not yet released the session does not
+// block: the caller's sm.Use waits for that release. That wait cannot
+// deadlock: a run past its outcome only finishes its own bookkeeping (session
+// state, the commit's sm.Delete) and never waits on another request. A reserved run must be ended with drop (it never started) or
 // with finish followed by retire.
 func (rr *runRegistry) reserve(repo, session, kind string, hook func([]byte)) (l *runLog, busyKind string, ok bool) {
 	rr.mu.Lock()
@@ -223,7 +278,7 @@ func (rr *runRegistry) reserve(repo, session, kind string, hook func([]byte)) (l
 		return nil, "", false
 	}
 	for _, k := range []string{runApply, runCommit} {
-		if cur := rr.runs[runKey{session, k}]; cur != nil && !cur.isFinished() {
+		if cur := rr.runs[runKey{session, k}]; cur != nil && cur.busy() {
 			return nil, k, false
 		}
 	}
@@ -240,7 +295,11 @@ func (rr *runRegistry) reserve(repo, session, kind string, hook func([]byte)) (l
 }
 
 // drop forgets a run that never streamed (refused before its first event),
-// so its link answers 404 and the POST can be retried.
+// so its link answers 404 and it does not block the session's next run. (A
+// commit refused by the machine's own guards, inside the run, has already
+// closed the session's clone, so re-POSTing that commit answers 409 "session
+// has no remote store", as before #509. The indexing 409, decided in the POST
+// before the clone is closed, can be retried with cancel_indexing.)
 func (rr *runRegistry) drop(session string, l *runLog) {
 	l.finish()
 	rr.mu.Lock()
@@ -283,18 +342,6 @@ func (rr *runRegistry) get(repo, session, kind string) (*runLog, bool) {
 	return l, true
 }
 
-// active returns the session's run that has not finished, if any.
-func (rr *runRegistry) active(repo, session string) (*runLog, bool) {
-	rr.mu.Lock()
-	defer rr.mu.Unlock()
-	for _, k := range []string{runApply, runCommit} {
-		if l := rr.runs[runKey{session, k}]; l != nil && l.repo == repo && !l.isFinished() {
-			return l, true
-		}
-	}
-	return nil, false
-}
-
 // close forgets every run and stops the retention timers (the manager's
 // lifetime has ended). Readers following a run still in progress keep
 // following it: the run itself was cancelled with the lifetime and finishes.
@@ -315,6 +362,16 @@ func (rr *runRegistry) close() {
 // cancelled when the session is dropped (Delete, replace, expiry): apply's
 // replay into a clone nobody will commit is abandoned, while a commit, whose
 // store swap must not stop half-way, runs to its end.
+//
+// Cancelling a COMMIT at lifetime end is safe, and is how a commit behaved
+// before #509 (its ctx was the request's, which ends when the server closes
+// its connections): repos.Manager.Send uses ctx only for ResolveOrigin, BEFORE
+// the event is queued (nothing has changed yet), and Machine.Send only to
+// bound queueing and waiting for the reply. A queued swap or attach runs on
+// the machine's own goroutine under the machine's own context
+// (guardContext(m.root)), so cancelling ctx stops the run's narration, never
+// the swap half-way. It lets the manager's close, which waits for every
+// session to be released, end promptly.
 //
 // release is the session's use, which the run now owns: it is released when fn
 // returns, after which the log is finished and retained.
@@ -401,7 +458,7 @@ func (sm *sessionManager) beginRun(w http.ResponseWriter, r *http.Request, b hal
 		}
 		href := b.OriginSessionRunEvents(repo, sessionID, busy)
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Session busy",
-			"this session already has an "+busy+" running; follow its events link", r.URL.Path,
+			"this session already has "+article(busy)+" "+busy+" running; follow its events link", r.URL.Path,
 			map[string]any{"_links": hal.LinkMap{"events": {Href: href}}})
 		return nil, nil, nil, false
 	}
@@ -432,16 +489,16 @@ func handleRunEvents(sm *sessionManager, kind string) http.HandlerFunc {
 				"this session has no "+kind+" run (none was started, or it ended more than "+runRetention.String()+" ago)", r.URL.Path)
 			return
 		}
-		cursor := 0
+		after := 0
 		if v := strings.TrimSpace(r.Header.Get("Last-Event-ID")); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				cursor = n
+				after = n
 			}
 		}
-		// A Last-Event-ID past the end (an id from an earlier run of this
-		// kind) resumes at the end: since clamps it.
-		evs, cursor, finished, wake := l.since(cursor)
+		evs, finished, wake := l.since(after)
 		if finished && len(evs) == 0 {
+			// Only a reader that has already seen everything: a first reader
+			// of an ended run (no Last-Event-ID) gets the 200 replay above.
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -452,9 +509,9 @@ func handleRunEvents(sm *sessionManager, kind string) http.HandlerFunc {
 		keepalive := time.NewTicker(runEventsKeepalive)
 		defer keepalive.Stop()
 		for {
-			for _, data := range evs {
-				cursor++
-				if !stream.Write("id: %d\ndata: %s\n\n", cursor, data) {
+			for _, e := range evs {
+				after = e.id
+				if !stream.Write("id: %d\ndata: %s\n\n", e.id, e.data) {
 					return
 				}
 			}
@@ -470,7 +527,15 @@ func handleRunEvents(sm *sessionManager, kind string) http.HandlerFunc {
 				}
 			case <-wake:
 			}
-			evs, cursor, finished, wake = l.since(cursor)
+			evs, finished, wake = l.since(after)
 		}
 	}
+}
+
+// article is "an" before apply and "a" before commit.
+func article(kind string) string {
+	if kind == runApply {
+		return "an"
+	}
+	return "a"
 }

@@ -34,8 +34,9 @@ import (
 // queued toward the page (Send blocks when full, so a stalled page throttles the
 // upstream read instead of growing memory); one frame at most 64 MiB; a poll
 // answer at most 1 MiB, so a burst larger than that arrives in several polls
-// (Windows pays one HTTP round trip per batch). The UI holds six kinds of
-// stream, a handful at a time.
+// (Windows pays one HTTP round trip per batch). The UI holds about nine kinds
+// of stream (every openEventStream call site in web/src; since #509 the
+// connect wizard's apply and commit events too), a handful at a time.
 const sseStreamName = "knomit-sse"
 
 // subscribeTimeout is how long a freshly opened stream may stay silent before

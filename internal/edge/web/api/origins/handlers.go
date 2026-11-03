@@ -745,14 +745,15 @@ func runApplyStep(ctx context.Context, l *runLog, ri *repos.RepoInstance, sess *
 			DanglingRefsDropped:  replayRes.DanglingRefsDropped,
 		}
 
-		sendEvent(map[string]any{"phase": "done", "result": result})
-
 		sess.mu.Lock()
 		sess.State = stateApplied
 		sess.ApplyResult = result
 		sess.AppliedBranch = replayAgentBranch
 		sess.RemoteBranch = remoteBranch
 		sess.mu.Unlock()
+		// The session is applied BEFORE done is logged: a client chains the
+		// commit the moment it sees done (#754 review).
+		sendEvent(map[string]any{"phase": "done", "result": result})
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).
 			Int("total", result.TotalFacts).Int("from_local", result.FromLocal).
@@ -765,7 +766,6 @@ func runApplyStep(ctx context.Context, l *runLog, ri *repos.RepoInstance, sess *
 		// For v1, shared history merge is a simplified path.
 		// TODO: implement full shared-history merge
 		result := applyResult{}
-		sendEvent(map[string]any{"phase": "done", "result": result})
 
 		// For shared history, the cloned store's HEAD is the remote's agent branch.
 		// Use the matched agent branch, or the first known remote agent branch,
@@ -784,6 +784,9 @@ func runApplyStep(ctx context.Context, l *runLog, ri *repos.RepoInstance, sess *
 		sess.AppliedBranch = sharedAppliedBranch
 		sess.RemoteBranch = remoteBranch
 		sess.mu.Unlock()
+		// The session is applied BEFORE done is logged: a client chains the
+		// commit the moment it sees done (#754 review).
+		sendEvent(map[string]any{"phase": "done", "result": result})
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).
 			Msg("apply completed (shared merge)")
