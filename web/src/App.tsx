@@ -1302,6 +1302,13 @@ export default function App() {
   // repo is the one that got renamed, follows it to its new name instead. The
   // archived list is re-read alongside, since an archive, restore or purge is
   // what changes it. Resolves once every list is in.
+  //
+  // A pinned broken lens that got renamed is followed too, and in the SAME
+  // render as the new lens list: the auto-unpin effect unpins a pin its list
+  // does not hold, so the pin and the list must change together. Re-pinned
+  // before the list lands, the new name is gone from the old list; after it,
+  // the old name is gone from the new one. Both calls sit in one synchronous
+  // block after the await, so React batches them.
   const refreshLists = useCallback(async (renamed?: { from: string; to: string }) => {
     const archivedRead = api.listArchived()
       .then(list => { setArchived(list); setArchivedLoaded(true); })
@@ -1309,9 +1316,10 @@ export default function App() {
     try {
       const { lenses: ls, repos: rs } = await refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens, renamed);
       setLenses(ls); setRepos(rs);
+      if (renamed) dispatchView({ type: 'RENAME_PINNED_LENS', from: renamed.from, to: renamed.to });
     } catch { /* best-effort: the lists keep what they had */ }
     await archivedRead;
-  }, [dispatch, isCurrentLens]);
+  }, [dispatch, dispatchView, isCurrentLens]);
   /**
    * enterBranch switches the whole UI to a branch of the current repo.
    *
@@ -1480,7 +1488,15 @@ export default function App() {
   // A repo with no store was archived: its archived row is the new target.
   // Refresh FIRST — if it was the context, refreshContextAfterChange moves the
   // context off it — then pin, by the id the server returned.
+  //
+  // The row the server returned goes into the archived list up front, so the
+  // pin has a row behind it whatever the re-read does: refreshLists swallows
+  // a failed listArchived, and archivedLoaded is already true from boot, so
+  // without it the auto-unpin effect would drop the pin the moment it is set
+  // (and the Settings page, which looks the row up there, would be empty). A
+  // re-read that succeeds still wins: it replaces the list, and holds the row.
   const onUnavailableArchived = useCallback((row: ArchivedRepo) => {
+    setArchived(prev => [...prev.filter(a => a.id !== row.id), row]);
     void refreshLists().then(() => dispatchView({ type: 'SELECT_PINNED', target: { kind: 'archived', id: row.id } }));
   }, [refreshLists, dispatchView]);
   // A create not yet registered now has its repository: it becomes the

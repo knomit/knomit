@@ -39,7 +39,7 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
       // The drafts and the pinned targets.
-      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
+      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
       getRepoCreate: vi.fn(), cancelRepoCreate: vi.fn(), dismissRepoCreate: vi.fn(),
       ontologyPresets: vi.fn(), ontologyPresetYAML: vi.fn(), validateOntology: vi.fn(), ontologySchema: vi.fn(), listTemplates: vi.fn(),
     },
@@ -548,6 +548,32 @@ describe('edge targets', () => {
     expect(screen.getByTestId('rail-archived-older').getAttribute('aria-current')).toBeNull();
   });
 
+  // #476: refreshLists swallows a failed listArchived, and archivedLoaded is
+  // already true from boot, so the archived list it left behind does not hold
+  // the new row. The pin must still have a row behind it, or the auto-unpin
+  // effect drops it the moment it is set.
+  it('archiving a repo with no store keeps its archived row pinned when the archived re-read fails', async () => {
+    const { m } = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, VENDOR]);
+    await mountApp();
+    fireEvent.click(screen.getByTestId('rail-repo-vendor-docs'));
+    await screen.findByTestId('repo-unavailable-archive');
+
+    const row = { id: 'u-v', name: 'vendor-docs', origin: '', archivedAt: '2026-10-10T00:00:00Z' };
+    m.archiveRepo.mockResolvedValue(row);
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }]);
+    m.listArchived.mockRejectedValue(new Error('archived list unavailable'));
+    fireEvent.click(screen.getByTestId('repo-unavailable-archive'));
+    fireEvent.click(screen.getByTestId('repo-unavailable-archive-confirm'));
+
+    expect(await screen.findByTestId('archived-settings')).toBeInTheDocument();
+    // Still there once everything has settled: not pinned and then dropped.
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(screen.getByTestId('archived-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^archived$/);
+    expect(screen.getByTestId('rail-archived-u-v')).toHaveAttribute('aria-current', 'true');
+  });
+
   // A lens with a mount that has no store: every read under it answers 503, so
   // it is pinned, not entered; and its Settings is the only way out, because
   // the server refuses to archive a repo a lens mounts.
@@ -596,6 +622,42 @@ describe('edge targets', () => {
     expect(screen.queryByTestId('target-label-chip')).toBeNull();
     expect(screen.queryByTestId('lens-broken-callout')).toBeNull();
     await waitFor(() => expect(ctx()).toEqual({ kind: 'lens', name: 'haunted' }));
+  });
+
+  // #476: a rename re-reads the lens list, which no longer holds the old
+  // name. The pin follows the lens to its new name in the same render, so the
+  // auto-unpin effect never sees it gone; the reader stays on its Settings.
+  it('renaming a pinned broken lens keeps it pinned, on its Settings, under the new name', async () => {
+    const { m } = await primeApi();
+    m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }, VENDOR]);
+    const haunted = {
+      name: 'haunted', uid: 'l-h', write: { uid: 'u-core', name: 'core-kb' },
+      reads: [{ uid: 'u-core', name: 'core-kb' }, { uid: 'u-v', name: 'vendor-docs' }], write_branch: STATUS,
+    };
+    m.listLenses.mockResolvedValue([haunted]);
+    m.getLens.mockResolvedValue(haunted);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-lens-haunted'));
+    await screen.findByTestId('lens-broken-callout');
+
+    const spooky = { ...haunted, name: 'spooky' };
+    m.renameLens.mockResolvedValue(spooky);
+    m.listLenses.mockResolvedValue([spooky]);
+    m.getLens.mockResolvedValue(spooky);
+    fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'spooky' } });
+    fireEvent.change(screen.getByTestId('lens-rename-confirm'), { target: { value: 'haunted' } });
+    fireEvent.click(screen.getByTestId('lens-rename-submit'));
+
+    await waitFor(() => expect(m.renameLens).toHaveBeenCalledWith('haunted', 'spooky'));
+    await waitFor(() => expect(screen.getByTestId('target-label')).toHaveTextContent('spooky'));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(screen.getByTestId('target-label')).toHaveTextContent('spooky');
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^mount missing$/);
+    expect(tabNames()).toEqual(['Settings']);
+    expect(screen.getByTestId('lens-broken-callout')).toHaveTextContent('vendor-docs');
+    expect(screen.getByTestId('rail-lens-spooky')).toHaveAttribute('aria-current', 'true');
+    // Never entered: the context is where it was.
+    expect(JSON.parse(localStorage.getItem('knomit.context') ?? 'null')).toEqual({ kind: 'repo', repo: 'ops-kb' });
   });
 
   it('a healthy lens is still picked as the context, with its three tabs (control)', async () => {
