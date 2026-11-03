@@ -10,7 +10,7 @@ import { useMatFocus } from './useMatFocus';
 import type { FsSectionExtra } from './materializeParts';
 import { FsError, factsetApi } from './factsetApi';
 import type { FactSetApi, FactSetLink, FactSetNode, FsSearch } from './factsetApi';
-import { FactSetAnchors } from './factsetAnchors';
+import { FactSetAnchors, stubLabel } from './factsetAnchors';
 import { useFactSetStream } from './useFactSetStream';
 import type { FsFault } from './useFactSetStream';
 import './materialize.css';
@@ -22,6 +22,22 @@ export const FS_NEAR_PX = 600;
 export const NOTICE_MS = 6000;
 /** The user's wording for the expired-cursor notice (Q-UI13), verbatim. */
 export const NOTICE_REFRESHED = 'FactSet refreshed';
+/** How long a link's target is highlighted on arrival (design §5: a click
+ *  "scrolls to the written appearance and flashes it"). */
+export const FLASH_MS = 1200;
+
+/** The Back pill's label (user ruling 2026-11-02: "back to title"): "Back to"
+ *  and the origin section's title, shortened by the link stubs' rule (the
+ *  stub's label minus its "see "), no numbers. */
+function backLabel(title: string): string {
+  return `Back to ${stubLabel(title).slice('see '.length)}`;
+}
+
+/** Where the reader was when they followed a link: the section used as the
+ *  reference (the clicked one, else the one at the top of the pane), its
+ *  offset from the pane's top, and the scrollTop then. */
+interface Origin { unit: number; n: number; anchor?: string; offset: number; scrollTop: number; title: string }
+
 /** The export's file name when the server sends none. PLACEHOLDER copy. */
 export const FALLBACK_EXPORT_NAME = 'factset.md'; // PLACEHOLDER copy
 
@@ -113,27 +129,83 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
   const findAnchor = useCallback((anchor: string) =>
     scroller.current?.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(anchor)}"]`) ?? null, []);
 
+  const byUnitN = useMemo(() => new Map(nodes.map(n => [`${n.unit}.${n.n}`, n])), [nodes]);
+
+  // The arrival highlight on a link's target (no CSS: the Web Animations API,
+  // absent in jsdom; data-fs-flash marks it for the same time).
+  const flash = useCallback((el: HTMLElement) => {
+    el.dataset.fsFlash = 'true';
+    if (typeof el.animate === 'function') {
+      el.animate([{ backgroundColor: 'rgba(224, 168, 64, 0.22)' }, { backgroundColor: 'rgba(224, 168, 64, 0)' }], { duration: FLASH_MS, easing: 'ease-out' });
+    }
+    window.setTimeout(() => { delete el.dataset.fsFlash; }, FLASH_MS);
+  }, []);
+  const arrive = useCallback((el: HTMLElement) => { scrollToEl(el); flash(el); }, [scrollToEl, flash]);
+
   // A link's click: scroll to the written section when it is on screen, else
   // seek to the link's unit (the stream reads on inside it until the anchor
-  // has arrived) and scroll there once the new run is in.
-  const onLink = useCallback((l: FactSetLink) => {
+  // has arrived) and scroll there once the new run is in. Returns whether it
+  // moves at all.
+  const follow = useCallback((l: FactSetLink): boolean => {
     const move = anchors.resolve(l, a => !!findAnchor(a));
-    if (move.kind === 'scroll') { const el = findAnchor(move.anchor); if (el) scrollToEl(el); return; }
-    if (move.kind === 'seek') { setPending(move.anchor); seek(move.unit, move.anchor); }
-  }, [anchors, findAnchor, scrollToEl, seek]);
+    if (move.kind === 'scroll') { const el = findAnchor(move.anchor); if (el) { arrive(el); return true; } return false; }
+    if (move.kind === 'seek') { setPending(move.anchor); seek(move.unit, move.anchor); return true; }
+    return false;
+  }, [anchors, findAnchor, arrive, seek]);
+
+  // ── The Back pill (design §5). Following any in-document link (a stub,
+  // forward or back, or a builds-on link) records the reader's origin; the
+  // pill returns there exactly and goes away. ONE origin is kept, the latest:
+  // a second link followed before Back replaces it. ──
+  const [back, setBack] = useState<Origin | null>(null);
+  /** The origin a Back seek is returning to, consumed by its landing. */
+  const backSeek = useRef<Origin | null>(null);
+  /** The section the reader's last click inside the article was in. */
+  const clickSec = useRef<HTMLElement | null>(null);
+  const takeOrigin = useCallback((): Origin | null => {
+    const box = scroller.current;
+    if (!box) return null;
+    const boxTop = box.getBoundingClientRect().top;
+    let el = clickSec.current && clickSec.current.isConnected ? clickSec.current : null;
+    clickSec.current = null;
+    if (!el) {
+      for (const sec of Array.from(box.querySelectorAll<HTMLElement>('[data-fs-unit][data-mat-n]'))) {
+        if (sec.getBoundingClientRect().bottom > boxTop) { el = sec; break; }
+      }
+    }
+    if (!el) return null;
+    const unit = Number(el.dataset.fsUnit), n = Number(el.dataset.matN);
+    // The title is the origin's own when it is written; a stub carries its
+    // TARGET's title, so for a stub it is the nearest written section above
+    // it in its tree (its parent chain, up to the unit root).
+    let node = byUnitN.get(`${unit}.${n}`);
+    const seen = new Set<number>();
+    while (node?.link && !seen.has(node.n)) {
+      seen.add(node.n);
+      const up = byUnitN.get(`${unit}.${node.parent || 1}`);
+      if (!up || up === node) break;
+      node = up;
+    }
+    const title = node ? (node.title || node.path) : '';
+    return { unit, n, anchor: el.dataset.anchor, offset: el.getBoundingClientRect().top - boxTop, scrollTop: box.scrollTop, title };
+  }, [byUnitN]);
+  const onLink = useCallback((l: FactSetLink) => {
+    const o = takeOrigin();
+    if (follow(l) && o) setBack(o);
+  }, [takeOrigin, follow]);
 
   // A builds-on link points inside its unit: to the written section when it is
   // on screen, else through the unit's own appearance of it (a stub's link),
   // and when that section has not been read yet, the stream reads on to it.
-  const byUnitN = useMemo(() => new Map(nodes.map(n => [`${n.unit}.${n.n}`, n])), [nodes]);
   const onGoto = useCallback((l: MatLink, unit?: number) => {
+    const o = takeOrigin();
     const el = findAnchor(l.anchor_id);
-    if (el) { scrollToEl(el); return; }
+    if (el) { arrive(el); if (o) setBack(o); return; }
     if (!unit) return;
     const target = byUnitN.get(`${unit}.${l.n}`);
-    if (target?.link) { onLink(target.link); return; }
-    if (!target) { setPending(l.anchor_id); reach({ unit, n: l.n }); }
-  }, [byUnitN, findAnchor, scrollToEl, onLink, reach]);
+    if (target?.link) { if (follow(target.link) && o) setBack(o); return; }
+    if (!target) { setPending(l.anchor_id); reach({ unit, n: l.n }); if (o) setBack(o); }
+  }, [byUnitN, findAnchor, arrive, follow, reach, takeOrigin]);
 
   // The extras of each FactSet section, stable per node object so the memoized
   // Section re-renders only when its node changed.
@@ -158,18 +230,32 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (!box) return;
     landed.current = land;
     setPending(null);
+    // A Back pill's return: the origin section at the offset it had (never
+    // followed, even when it is a stub, and not flashed).
+    if (land.back) {
+      const o = backSeek.current;
+      backSeek.current = null;
+      const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"][data-mat-n="${land.n}"]`);
+      if (o && sec) { setScrollTop(box, box.scrollTop + sec.getBoundingClientRect().top - box.getBoundingClientRect().top - o.offset); return; }
+      const root = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
+      if (root) scrollToEl(root);
+      return;
+    }
     // Section n of the unit (a builds-on target): a stub is followed, a
     // written section is the scroll target.
     if (land.n !== undefined) {
       const t = byUnitN.get(`${land.unit}.${land.n}`);
-      if (t?.link) { onLink(t.link); return; }
+      if (t?.link) { follow(t.link); return; }
       const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"][data-mat-n="${land.n}"]`);
-      if (sec) { scrollToEl(sec); return; }
+      if (sec) { arrive(sec); return; }
     }
-    const el = (land.anchor && findAnchor(land.anchor))
-      || box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
+    // A link's anchor is flashed on arrival; a unit (the Unit control, Back to
+    // top, a restart or a refresh) is only scrolled to.
+    const a = land.anchor ? findAnchor(land.anchor) : null;
+    if (a) { arrive(a); return; }
+    const el = box.querySelector<HTMLElement>(`[data-fs-unit="${land.unit}"]`);
     if (el) scrollToEl(el);
-  }, [land, epoch, stale, findAnchor, scrollToEl, byUnitN, onLink]);
+  }, [land, epoch, stale, findAnchor, scrollToEl, arrive, setScrollTop, byUnitN, follow]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // The run is settled one frame after it (and its landing) is on screen.
@@ -270,6 +356,39 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
     if (cur) { reportTop(cur); setTopUnit(u => (u === cur ? u : cur)); }
   }, [nodes, reportTop]);
   useEffect(() => { trackTop(); }, [trackTop, nodes.length, epoch]);
+
+  // Back: to the origin at its offset when its section is in the run, else a
+  // seek back to the origin's unit, reading on to its section, whose landing
+  // restores the offset. Either way the pill goes.
+  const goBack = useCallback(() => {
+    const o = back;
+    setBack(null);
+    const box = scroller.current;
+    if (!o || !box) return;
+    const sec = box.querySelector<HTMLElement>(`[data-fs-unit="${o.unit}"][data-mat-n="${o.n}"]`);
+    if (sec) {
+      setScrollTop(box, box.scrollTop + sec.getBoundingClientRect().top - box.getBoundingClientRect().top - o.offset);
+      trackTop();
+      return;
+    }
+    backSeek.current = o;
+    seek(o.unit, undefined, o.n, true);
+  }, [back, setScrollTop, trackTop, seek]);
+
+  // Back to top: the start of the FactSet, unit 1's root. When unit 1 heads
+  // the run nothing can be prepended above it, so the top of the run IS the
+  // start; otherwise the top of the run is only the top of what is loaded
+  // (landing there prepends and keeps the place), so seek to unit 1.
+  const toTop = useCallback(() => {
+    const box = scroller.current;
+    if (!box) return;
+    if (nodes[0]?.unit === 1) {
+      if (typeof box.scrollTo === 'function') box.scrollTo({ top: 0, behavior: 'smooth' });
+      else setScrollTop(box, 0);
+      return;
+    }
+    seek(1);
+  }, [nodes, seek, setScrollTop]);
 
   // The refreshed notice goes away on its own.
   const { notice, clearNotice } = s;
@@ -390,7 +509,9 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
           if (y > touchY.current) atTopUp(e.currentTarget);
           touchY.current = y;
         }}>
-        <article className="k-mat-article" data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'} data-pending={pending ?? undefined}>
+        <article className="k-mat-article"
+          onClickCapture={e => { clickSec.current = (e.target as Element).closest<HTMLElement>('[data-fs-unit][data-mat-n]'); }}
+          data-stale={stale ? 'true' : 'false'} aria-busy={stale || phase === 'loading'} data-pending={pending ?? undefined}>
           <div ref={top} data-testid="fs-top-sentinel" style={{ height: 1 }} />
           {head === 'loading' && <div className="k-mat-skel" data-testid="fs-head-loading"><i style={{ width: '55%', height: 18 }} /><i /></div>}
           {head === 'failed' && s.headError && (
@@ -442,14 +563,23 @@ export function FactSetView({ search, options, onOptionsChange, onBack, api = fa
           </div>
         </article>
       </div>
+      {back && (
+        <button type="button" className="k-bare" data-testid="fs-back-pill" onClick={goBack}
+          title={backLabel(back.title)}
+          style={{
+            position: 'absolute', left: '50%', bottom: 22, transform: 'translateX(-50%)', zIndex: 5,
+            maxWidth: 'calc(100% - 120px)', height: 30, padding: '0 12px 0 8px', borderRadius: 15,
+            background: '#1a1e28', border: '1px solid #2a3040', color: '#cfd8e6', opacity: 0.95,
+            display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 12,
+            whiteSpace: 'nowrap', boxShadow: '0 2px 10px rgba(0, 0, 0, 0.4)',
+          }}>
+          <ChevronLeftIcon color="currentColor" size={12} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{backLabel(back.title)}</span>
+        </button>
+      )}
       {scrolled && (
         <button type="button" className="k-bare k-mat-top" data-testid="fs-top" title="Back to top" aria-label="Back to top"
-          onClick={() => {
-            const box = scroller.current;
-            if (!box) return;
-            if (typeof box.scrollTo === 'function') box.scrollTo({ top: 0, behavior: 'smooth' });
-            else box.scrollTop = 0;
-          }}>
+          onClick={toTop}>
           <ArrowUpIcon color="currentColor" size={15} />
         </button>
       )}

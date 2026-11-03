@@ -37,9 +37,11 @@ export const MAX_BUSY_RETRIES = 3;
 export const MAX_RETRY_AFTER_S = 10;
 
 export type FsEnv = Omit<FactSetPage, 'facts'>;
-export interface Land { unit: number; anchor?: string; n?: number; epoch: number }
+/** `back`: the landing returns the reader to a Back pill's origin (the view
+ *  restores the saved offset there instead of following or flashing). */
+export interface Land { unit: number; anchor?: string; n?: number; back?: boolean; epoch: number }
 /** What a reach looks for in a unit: a written section's anchor, or section n. */
-export interface Target { unit: number; anchor?: string; n?: number }
+export interface Target { unit: number; anchor?: string; n?: number; back?: boolean }
 export interface FsFault { kind: FsErrorKind; detail: string }
 
 export interface FsStreamState {
@@ -229,8 +231,8 @@ export class FactSetStream {
 
   /** Replaces the run with one starting at unit, reading on inside that unit
    *  until the anchor (or section n) has arrived, then lands on it (or the
-   *  unit's root). */
-  seek = (unit: number, anchor?: string, n?: number): void => {
+   *  unit's root). `back` marks the landing as a Back pill's return. */
+  seek = (unit: number, anchor?: string, n?: number, back?: boolean): void => {
     const s = this.state;
     const units = s.env?.units ?? 0;
     if (s.phase !== 'ready' || !s.cursor || unit < 1 || unit > units) return;
@@ -244,7 +246,7 @@ export class FactSetStream {
       const page = await this.call(gen, sig => this.inputs!.api.seek(this.inputs!.search.target, cursor, unit, sig), signal);
       const r = await this.readOn(gen, signal, page.facts, page, { unit, anchor, n });
       this.recoveries = 0;
-      this.showRun(r.nodes, r.page, { unit, anchor, n });
+      this.showRun(r.nodes, r.page, back ? { unit, anchor, n, back } : { unit, anchor, n });
     }, f => this.commit({ stale: false, tail: 'failed', tailError: f }), true);
   };
 

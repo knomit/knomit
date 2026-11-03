@@ -674,3 +674,173 @@ describe('a prepend keeps the reader\'s anchor steady (#726 point 1)', () => {
     expect(box.scrollTop).toBe(150 + 200); // scrollTop + the prepended height
   });
 });
+
+// ── The Back pill and Back to top (user report 2026-11-02) ──────────────────
+//
+// Unit u's root has a long title; its second section is a FORWARD stub to
+// unit u + ahead's root, titled like the target (as a stub is). Page size 2 =
+// one unit per page. liveLayout: section i sits at 10 + 100 i - scrollTop,
+// and a scroll to a section puts it at PATH_H + 8 = 36.
+//
+// Sabotage, one run each (table in the PR): (a) Back re-applies the saved
+// scrollTop instead of re-seeking when the origin's run was dropped; (b) the
+// pill shows the stub's own title (its target's); (c) Back to top sets
+// scrollTop 0 without seeking (the reported bug); (d) the Back landing is
+// treated as a builds-on landing (the origin stub is followed again); (e) no
+// flash on arrival.
+const ROOT_TITLE = (u: number) => `Orchestrating many agents across one shared harness, unit ${u}`;
+/** stubLabel's rule: cut to 32 characters at a word boundary, then "…". */
+const BACK_LABEL = 'Back to Orchestrating many agents…';
+function linkedView(units: number, ahead: number) {
+  return pagedView(units, 2, 2, (u, k) => k === 0
+    ? { title: ROOT_TITLE(u) }
+    : {
+      written: false, body: undefined, title: `Multi-agent vs single-threaded target ${u + ahead}`, anchor_id: `stub-${u}`,
+      link: { anchor_id: `f-${u + ahead}-1`, direction: 'forward', unit: u + ahead, number: String(u + ahead), cited_blob: 'b' },
+    });
+}
+const pill = () => screen.queryByTestId('fs-back-pill');
+const progressText = () => screen.getByTestId('fs-progress').textContent;
+const unitStepper = () => (screen.getByTestId('fs-unit') as HTMLInputElement).value;
+const clickStub = (i: number) => fireEvent.click(within(sections()[i]).getByTestId('fs-stub-link'));
+
+describe('the Back pill (design §5; label ruling 2026-11-02 "back to title")', () => {
+  it('a forward link to a LOADED target: it flashes, the pill reads "Back to <short origin title>", Back restores the exact scrollTop', async () => {
+    const { api, calls } = linkedView(4, 1);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    await settle();
+    userScroll(30);
+    expect(pill()).toBeNull();
+    calls.length = 0;
+    clickStub(1); // unit 1's stub -> unit 2's root, loaded (section 2)
+    expect(calls).toEqual([]);
+    expect(box.scrollTop).toBe(30 + (10 + 200 - 30) - 36);
+    expect(sections()[2].dataset.fsFlash).toBe('true');
+    expect(pill()!.textContent).toBe(BACK_LABEL);
+    fireEvent.click(pill()!);
+    expect(box.scrollTop).toBe(30);
+    expect(pill()).toBeNull();
+    expect(calls).toEqual([]);
+    expect(progressText()).toBe('unit 1 of 4');
+    expect(unitStepper()).toBe('1');
+  });
+
+  it('a forward link to an UNLOADED unit: Back re-seeks the origin unit and restores the offset; a later page does not re-land', async () => {
+    const { api, calls } = linkedView(12, 4);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    await settle();
+    userScroll(30); // unit 1's stub (section 1) sits at 10 + 100 - 30 = 80
+    calls.length = 0;
+    clickStub(1);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('5'));
+    expect(calls).toEqual(['seek 5']);
+    await waitFor(() => expect(sections()[0].dataset.fsFlash).toBe('true'));
+    expect(pill()!.textContent).toBe(BACK_LABEL);
+    calls.length = 0;
+    fireEvent.click(pill()!);
+    expect(pill()).toBeNull();
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('1'));
+    expect(calls).toEqual(['seek 1']); // the origin stub is not followed again
+    expect(box.scrollTop).toBe(30);
+    await waitFor(() => expect(progressText()).toBe('unit 1 of 12'));
+    expect(unitStepper()).toBe('1');
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.2.0']);
+    expect(box.scrollTop).toBe(250);
+  });
+
+  it('after a Back re-seek into unit 3, a prepend shifts scrollTop by exactly the prepended height (no double shift)', async () => {
+    const { api, calls } = linkedView(12, 4);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(3);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    await settle();
+    userScroll(30);
+    clickStub(1); // unit 3's stub -> unit 7
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('7'));
+    fireEvent.click(pill()!);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('3'));
+    expect(box.scrollTop).toBe(30);
+    await settle();
+    userScroll(250);
+    calls.length = 0;
+    userScroll(150); // up: unit 2 (two sections, 200px) is prepended
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('2'));
+    expect(calls).toEqual(['seek 2']);
+    expect(box.scrollTop).toBe(150 + 200);
+  });
+
+  it('keeps the LATEST origin only: two links followed, one Back returns to the second origin and the pill goes', async () => {
+    const { api } = linkedView(4, 1);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(6));
+    await settle();
+    userScroll(30);
+    clickStub(1); // -> unit 2's root at 174
+    expect(box.scrollTop).toBe(174);
+    clickStub(3); // unit 2's stub (at 10 + 300 - 174 = 136) -> unit 3's root
+    expect(box.scrollTop).toBe(174 + (10 + 400 - 174) - 36);
+    fireEvent.click(pill()!);
+    expect(box.scrollTop).toBe(174);
+    expect(pill()).toBeNull();
+  });
+});
+
+describe('Back to top goes to the start of the FactSet (user report 2026-11-02)', () => {
+  it('after a seek and a prepend it seeks to unit 1 and lands there; a second click stays at unit 1; a later page does not re-land', async () => {
+    const { api, calls } = pagedView(20, 2, 2);
+    render(<FactSetView search={REPO} options={DEFAULT_OPTIONS} onOptionsChange={() => {}} onBack={() => {}} api={api} />);
+    const box = screen.getByTestId('fs-scroll');
+    const userScroll = liveLayout(box);
+    await waitFor(() => expect(sections()).toHaveLength(2));
+    seekUnit(10);
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('10'));
+    await settle();
+    userScroll(250);
+    userScroll(150); // up: unit 9 is prepended, as in the report
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('9'));
+    userScroll(700); // far enough down for the button
+    calls.length = 0;
+    fireEvent.click(screen.getByTestId('fs-top'));
+    await waitFor(() => expect(sections()[0].dataset.fsUnit).toBe('1'));
+    expect(calls).toEqual(['seek 1']);
+    expect(box.scrollTop).toBe(0);
+    await waitFor(() => expect(progressText()).toBe('unit 1 of 20'));
+    expect(unitStepper()).toBe('1');
+    await settle();
+    userScroll(700);
+    calls.length = 0;
+    fireEvent.click(screen.getByTestId('fs-top'));
+    expect(calls).toEqual([]);
+    await waitFor(() => expect(box.scrollTop).toBe(0));
+    expect(sections()[0].dataset.fsUnit).toBe('1');
+    expect(progressText()).toBe('unit 1 of 20');
+    userScroll(250);
+    calls.length = 0;
+    nearBottom();
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    expect(calls).toEqual(['next F.2.0']);
+    expect(box.scrollTop).toBe(250);
+  });
+});
