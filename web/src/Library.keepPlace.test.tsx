@@ -426,3 +426,45 @@ describe('Library — a reader at the bottom of the loaded rows', () => {
     expect(scroller.scrollTop).toBe(148 * ROW - 300);
   });
 });
+
+// R1 (#739 re-review): an EMPTY landed list has no place to keep. A new head
+// must reload it from page 1, or the fact the agent just wrote never shows:
+// a refresh of 0 rows reads nothing and applies nothing.
+// Sabotage: drop the "rows > 0" guard and the list stays empty.
+describe('Library — an empty list shows the first fact written', () => {
+  for (const c of [CASES[0], CASES[2]]) {
+    it(`${c.name}: empty, then a write and a new head: the fact appears and data-count is 1`, async () => {
+      list = [];
+      const dispatch = vi.fn();
+      const view = render(<Library state={c.state} dispatch={dispatch} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('0'));
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.queryAllByTestId(c.testId)).toHaveLength(0);
+      list = [NEW];
+      view.rerender(<Library state={{ ...c.state, headCommit: 'h2' }} dispatch={dispatch} navigate={vi.fn()} />);
+      await waitFor(() => expect(paths(c.testId)).toEqual([NEW]));
+      expect(screen.getByTestId('library-header').getAttribute('data-count')).toBe('1');
+    });
+  }
+});
+
+// R2 (#739 re-review): while a relevance search's page 1 loads (here from an
+// empty folder), the list does not claim "No facts match the search.".
+// Sabotage: drop the !relLoading check on the relevance empty state.
+describe('Library — no false empty state while a search loads', () => {
+  it('page 1 in flight from an empty folder: no "No facts match"', async () => {
+    const { api } = await import('./api');
+    (api.browse as ReturnType<typeof vi.fn>).mockResolvedValue({ path: 'kb', children: [] });
+    const search = api.search as ReturnType<typeof vi.fn>;
+    const gate = deferred<{ results: unknown[]; total: number }>();
+    search.mockImplementationOnce(() => gate.promise);
+    const pathState: AppState = { ...repoBase, librarySort: 'path' };
+    const view = render(<Library state={pathState} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('No items in this path.')).toBeTruthy());
+    view.rerender(<Library state={{ ...pathState, freeText: 'agentic' }} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('No facts match the search.')).toBeNull();
+    await act(async () => { gate.resolve({ results: [], total: 0 }); });
+    await waitFor(() => expect(screen.getByText('No facts match the search.')).toBeTruthy());
+  });
+});

@@ -550,7 +550,9 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     const scope = [path, state.freeText, state.repo, state.branch, filtersKey, state.sinceFork].join('\u0001');
     // Keep the place only once THIS scope's page 1 has landed (rs.loaded): a
     // head while page 1 is in flight is a fresh load, whatever rows are held.
-    if (sameScopeNewHead(recentAtRef, scope, state.headCommit) && rs.loaded) {
+    // An EMPTY landed list has no place to keep and nothing to re-read (a
+    // refresh of 0 rows would read nothing): a new head reloads it from page 1.
+    if (sameScopeNewHead(recentAtRef, scope, state.headCommit) && rs.loaded && factsRef.current.length > 0) {
       runRefresh<RecentFactEntry>(rs, factsRef.current.map(f => f.path), f => f.path, anchorPathNow,
         (offset, limit) => api.recent(state.repo, state.branch, path, state.freeText, limit, offset, listFilters)
           .then(r => ({ rows: r.facts || [], total: r.total })),
@@ -622,7 +624,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       return;
     }
     const scope = [path, state.freeText, state.repo, state.branch, filtersKey, state.sinceFork].join('\u0001');
-    if (sameScopeNewHead(relAtRef, scope, state.headCommit) && rs.loaded) {
+    if (sameScopeNewHead(relAtRef, scope, state.headCommit) && rs.loaded && childrenRef.current.length > 0) {
       // A new head alone: re-read the loaded rows in place. The ranked list
       // is at most 500 rows, so a pass is one call.
       runRefresh<DirChild>(rs, childrenRef.current.map(c => c.fullPath || ''), c => c.fullPath || '', anchorPathNow,
@@ -633,9 +635,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       return;
     }
     const gen = beginFullLoad(rs);
-    // A full load starts from nothing: the rows still held are the previous
-    // scope's (a folder, another query), never this one's.
-    setChildren([]);
     // Same window as the Recent reset: close it before the re-render does.
     relLoadingRef.current = true;
     setRelLoading(true);
@@ -735,7 +734,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     const repos = reposParam;
     const scope = [lensName, path, state.freeText, effectiveSort, reposKey, filtersKey, state.ontologyRoot].join('\u0001');
     const headOnly = sameScopeNewHead(lensAtRef, scope, state.headCommit);
-    if (headOnly && effectiveSort !== 'path' && rs.loaded) {
+    if (headOnly && effectiveSort !== 'path' && rs.loaded && lensRowsRef.current.length > 0) {
       // A new head alone: re-read the loaded union rows in place, through the
       // same route and parameters the list pages with.
       const toRow = (x: { path: string; title: string; type?: string; source: LensSource }): LensRow =>
@@ -1364,7 +1363,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
             registerRef={registerRef}
           />
         ))}
-        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
+        {!isLens && (effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && !(effectiveSort === 'relevance' && relLoading) && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
         {!isLens && effectiveSort === 'relevance' && (
           <>
             {/* Infinite-scroll sentinel — the same mechanism as Recent: pages the
