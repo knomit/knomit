@@ -88,7 +88,10 @@ export function ConnectionsPanel({
         width: CONNECTIONS_PANEL_WIDTH,
         // Never past the fact pane, which clips: shrink to what is visible and
         // let the list scroll. The header does not shrink, so esc and × stay.
-        maxWidth: clamp.maxWidth,
+        // Closed it stays mounted (for the fade) and an invisible box still
+        // counts toward the band's scrollWidth, so cap it to its containing
+        // block instead of the nominal width.
+        maxWidth: open !== null ? clamp.maxWidth : '100%',
         maxHeight: Math.min(CONNECTIONS_PANEL_MAX_HEIGHT, clamp.maxHeight ?? CONNECTIONS_PANEL_MAX_HEIGHT),
         background: '#101010',
         border: '1px solid #2f2f2f',
@@ -107,7 +110,7 @@ export function ConnectionsPanel({
         visibility: open ? 'visible' : 'hidden',
         transition: prefersReducedMotion
           ? 'none'
-          : `opacity 160ms ease-out, transform 160ms ease-out, visibility 0s linear ${open ? '0s' : '160ms'}`,
+          : `opacity 160ms ease-out, transform 160ms ease-out, visibility 0s linear ${open ? '0s' : '160ms'}, max-width 0s linear ${open ? '0s' : '160ms'}`,
         // Closed, it must not swallow clicks aimed at the fact body behind it.
         pointerEvents: open ? 'auto' : 'none',
       }}
