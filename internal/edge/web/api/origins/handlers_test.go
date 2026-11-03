@@ -45,10 +45,8 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	f.ri.WithRead(func(s *store.Service) { svcBefore = s })
 	syncGenBefore := f.ri.Status()
 
-	rec := newStreamRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/origin-sessions/"+f.sess.ID+"/commit", nil)
-	f.s.ServeHTTP(rec, req)
+	rec := serveRun(t, f.s, httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/origin-sessions/"+f.sess.ID+"/commit", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())

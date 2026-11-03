@@ -82,7 +82,9 @@ const runProbeWait = 50 * time.Millisecond
 //
 // USE. RemoteStore and the folder TempDir are touched only by a handler that
 // holds the session's use (sessionManager.Use: test, preview, apply, commit),
-// or by finalize. Use is exclusive (busy has room for one), so two steps of
+// or by finalize. apply and commit take the use in their POST and hand it to
+// their run, which releases it when the run ends, after the POST has answered
+// (RUNS in runs.go). Use is exclusive (busy has room for one), so two steps of
 // one session never run at once. When the session is dropped (Delete, replace,
 // expiry, lifetime end), retire finalizes it at once if no handler holds the
 // use, and otherwise leaves that to the handler's release: so a store is never
@@ -117,6 +119,21 @@ type originSession struct {
 	inUse     bool             // a handler holds the use; guarded by mu
 	dropped   bool             // the session has left the manager; guarded by mu
 	finalized bool             // finalize has been claimed; guarded by mu
+	cancelRun func()           // cancels the session's apply run (RUNS in runs.go); guarded by mu
+}
+
+// setCancelRun records (or, with nil, clears) the cancel of the session's
+// apply run, which retire calls: an apply into a clone nobody will commit is
+// abandoned when its session is dropped.
+// A session dropped before the run could record it cancels the run at once.
+func (s *originSession) setCancelRun(cancel func()) {
+	s.mu.Lock()
+	s.cancelRun = cancel
+	dropped := s.dropped
+	s.mu.Unlock()
+	if dropped && cancel != nil {
+		cancel()
+	}
 }
 
 // acquire takes the session's use, waiting for another holder as long as
@@ -179,7 +196,11 @@ func (s *originSession) retire() {
 	if final {
 		s.finalized = true
 	}
+	cancelRun := s.cancelRun
 	s.mu.Unlock()
+	if cancelRun != nil {
+		cancelRun()
+	}
 	if final {
 		s.finalize()
 	}
@@ -248,9 +269,14 @@ var errSessionsClosed = errors.New("origin sessions have shut down")
 // starts it when none is running, and it exits on the first tick that finds
 // the map empty), so a manager with no sessions owns no goroutine.
 type sessionManager struct {
-	now      func() time.Time // the clock expiry is judged by; time.Now outside tests
-	interval time.Duration    // the sweeper's tick; cleanupInterval outside tests
-	done     <-chan struct{}  // the manager's lifetime; nil never ends
+	life context.Context // the manager's lifetime, which cancels every run (RUNS)
+	runs *runRegistry    // the sessions' apply and commit runs (RUNS in runs.go)
+	// runEventHook, when set, is called after each event a run appends; a
+	// test hook (nil outside tests), set before the first run.
+	runEventHook func([]byte)
+	now          func() time.Time // the clock expiry is judged by; time.Now outside tests
+	interval     time.Duration    // the sweeper's tick; cleanupInterval outside tests
+	done         <-chan struct{}  // the manager's lifetime; nil never ends
 
 	// staleDone is closed when the startup sweep of dead runs has finished
 	// (at once when there is no base to sweep).
@@ -290,6 +316,8 @@ func newSessionManagerHooked(ctx context.Context, base string, h *runHooks) *ses
 		now:       time.Now,
 		interval:  cleanupInterval,
 		done:      ctx.Done(),
+		life:      ctx,
+		runs:      newRunRegistry(),
 		staleDone: make(chan struct{}),
 		released:  make(chan struct{}),
 		base:      base,
@@ -677,6 +705,9 @@ func (sm *sessionManager) shutdown() {
 	all := sm.sessions
 	sm.sessions = map[string]*originSession{}
 	sm.mu.Unlock()
+	// No new run starts, and no finished one is kept; a run in progress was
+	// cancelled with the lifetime and releases its session's use as it ends.
+	sm.runs.close()
 
 	for _, s := range all {
 		s.retire()

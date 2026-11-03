@@ -2,12 +2,14 @@ package origins
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/edge/web/httpx"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/testsupport/gitfixture"
 )
@@ -117,6 +120,53 @@ func (s *streamRecorder) body() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ResponseRecorder.Body.String()
+}
+
+// serveRun serves a POST /apply or /commit and, when it answers 202, follows
+// the events link it carries (RUNS in runs.go) and returns the GET's recorder:
+// status 200 and the run's whole event stream, which is what the POST itself
+// answered before #509. A refused POST (any other status) is returned as is.
+func serveRun(t *testing.T, h http.Handler, req *http.Request) *streamRecorder {
+	t.Helper()
+	post := newStreamRecorder()
+	h.ServeHTTP(post, req)
+	if post.Code != http.StatusAccepted {
+		return post
+	}
+	return followRunLink(t, h, post, "")
+}
+
+// followRunLink GETs the events link of an accepted POST (its body's
+// _links.events, which must equal its Location header), with Last-Event-ID
+// lastID when not "". The run must end for this to return.
+func followRunLink(t *testing.T, h http.Handler, post *streamRecorder, lastID string) *streamRecorder {
+	t.Helper()
+	href := runLink(t, post)
+	get := newStreamRecorder()
+	req := httptest.NewRequest(http.MethodGet, strings.TrimPrefix(href, httpx.APIBase), nil)
+	if lastID != "" {
+		req.Header.Set("Last-Event-ID", lastID)
+	}
+	h.ServeHTTP(get, req)
+	return get
+}
+
+// runLink is the events link of an accepted POST, checked against Location.
+func runLink(t *testing.T, post *streamRecorder) string {
+	t.Helper()
+	var body struct {
+		Links map[string]struct {
+			Href string `json:"href"`
+		} `json:"_links"`
+	}
+	if err := json.Unmarshal([]byte(post.body()), &body); err != nil {
+		t.Fatalf("202 body is not JSON: %v; body=%s", err, post.body())
+	}
+	href := body.Links["events"].Href
+	if href == "" || post.Header().Get("Location") != href {
+		t.Fatalf("202 must carry _links.events and the same Location; links=%v location=%q", body.Links, post.Header().Get("Location"))
+	}
+	return href
 }
 
 // seedBareKBOn builds a bare knowledge-base remote (the default ontology, one

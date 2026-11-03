@@ -2859,22 +2859,52 @@ paths:
       - $ref: "#/components/parameters/SessionID"
     post:
       tags: [origin, events]
-      summary: Apply merge/replay (SSE stream)
+      summary: Start the merge/replay; its progress is at the events link
       operationId: applyOriginSession
+      description: |
+        Validates the request, then starts the apply as a run and answers 202
+        with a link to its events (`_links.events`, also the `Location`
+        header): GET /apply/events. The POST does not stream (knomit#509). A
+        session runs one apply or commit at a time: a POST while one is
+        running is refused with 409 "Session busy", carrying that run's
+        events link. Deleting (or replacing) the session cancels a running
+        apply.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/OriginApplyRequest" }
       responses:
-        "200":
-          description: SSE stream (phases replaying/merging → done)
-          content:
-            text/event-stream:
-              schema: { type: string }
+        "202": { $ref: "#/components/responses/OriginRunStarted" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions/{sessionID}/apply/events:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    get:
+      tags: [origin, events]
+      summary: The apply run's events (SSE stream)
+      operationId: applyOriginSessionEvents
+      description: |
+        Replays the run's events from the start, then follows them live, and
+        ends after the last one: phases replaying (with current/total) or
+        merging, then done (with the result) or error. Each event has an
+        `id:` (its 1-based position); a request with `Last-Event-ID` resumes
+        after it. Readable for 10 minutes after the run ends, even once the
+        session is gone.
+      parameters:
+        - $ref: "#/components/parameters/OriginRunLastEventID"
+      responses:
+        "200":
+          description: SSE stream of the run's events
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "204": { description: The run has ended and the reader has every event (stops EventSource reconnecting) }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions/{sessionID}/commit:
     parameters:
@@ -2882,16 +2912,21 @@ paths:
       - $ref: "#/components/parameters/SessionID"
     post:
       tags: [origin, events]
-      summary: Finalize connection (SSE stream)
+      summary: Start finalizing the connection; its progress is at the events link
       operationId: commitOriginSession
       description: |
         Sends SwapStore (disjoint/empty: the session's clone becomes the repo's
         store) or AttachOrigin (shared history) to the repo's lifecycle
-        machine. Refusals decided before the machine starts are HTTP problems,
-        not stream events: 409 "Repo is indexing" (with a cancel-index link)
-        unless `cancel_indexing` is true, and the swap guard's identity and
-        ontology refusals. Failures after the machine began are an `error`
-        phase on the stream.
+        machine. Refusals decided before the machine starts are HTTP problems
+        on this POST, not events: 409 "Repo is indexing" (with a cancel-index
+        link) unless `cancel_indexing` is true, the swap guard's identity and
+        ontology refusals, and a disjoint-history commit with no consensus
+        branch (400). Once the commit is under way (its first phase) the POST
+        answers 202 with a link to its events (`_links.events`, also the
+        `Location` header): GET /commit/events. The POST does not stream
+        (knomit#509). Failures after the machine began are an `error` event.
+        A session runs one apply or commit at a time (409 "Session busy"
+        otherwise). Deleting the session does not stop a running commit.
       requestBody:
         required: false
         content:
@@ -2903,31 +2938,51 @@ paths:
                   type: boolean
                   description: Cancel the repo's running index job first, then commit.
       responses:
-        "200":
-          description: |
-            SSE stream of phases: swapping → configuring → indexing → done.
-            `done` carries `index_state`, and a `warning` when the new store's
-            index ended in error (its reason) or, on a shared-history commit,
-            when no consensus branch was known and no origin was recorded.
-            `error` carries the failure; a swap that fails restores the
-            previous store and origin. A disjoint-history commit with no
-            consensus branch is refused with 400 before anything changes.
-          content:
-            text/event-stream:
-              schema: { type: string }
+        "202": { $ref: "#/components/responses/OriginRunStarted" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409":
           description: |
             Refused. "Repo is indexing" (a store swap or origin change is
             exclusive with indexing) carries `_links.cancel-index` {href, method: POST}: wait
-            for the index, or cancel it and retry. Otherwise the swap guard
-            refused: the clone is a knowledge base another active repo holds,
-            or its ontology differs.
+            for the index, or cancel it and retry. "Session busy": the session
+            already has an apply or commit running (`_links.events` is its
+            link). Otherwise the swap guard refused: the clone is a knowledge
+            base another active repo holds, or its ontology differs.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions/{sessionID}/commit/events:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    get:
+      tags: [origin, events]
+      summary: The commit run's events (SSE stream)
+      operationId: commitOriginSessionEvents
+      description: |
+        Replays the run's events from the start, then follows them live, and
+        ends after the last one: cancelling-index, swapping, configuring,
+        indexing (current/total), then done (with `index_state`, and a
+        `warning` when the new store's index ended in error or, on a
+        shared-history commit, when no consensus branch was known and no
+        origin was recorded) or error (a swap that fails restores the
+        previous store and origin). Each event has an `id:`; a request with
+        `Last-Event-ID` resumes after it. Readable for 10 minutes after the
+        run ends: the commit deletes its session when it finishes, and the
+        events outlive it.
+      parameters:
+        - $ref: "#/components/parameters/OriginRunLastEventID"
+      responses:
+        "200":
+          description: SSE stream of the run's events
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "204": { description: The run has ended and the reader has every event (stops EventSource reconnecting) }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /fleet:
     get:
@@ -5290,6 +5345,12 @@ paths:
 
 components:
   parameters:
+    OriginRunLastEventID:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: The id of the last event the reader has; the stream resumes after it.
+      schema: { type: string }
     Repo:
       name: repo
       in: path
@@ -5500,6 +5561,27 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+    OriginRunStarted:
+      description: |
+        The apply or commit has started (knomit#509). Follow `_links.events`
+        (the same URL as the `Location` header) with a GET event stream for
+        its progress and outcome.
+      headers:
+        Location:
+          description: The run's events link.
+          schema: { type: string }
+      content:
+        application/hal+json:
+          schema:
+            type: object
+            properties:
+              session_id: { type: string }
+              run: { type: string, enum: [apply, commit] }
+              _links:
+                type: object
+                properties:
+                  events: { $ref: "#/components/schemas/Link" }
+                  session: { $ref: "#/components/schemas/Link" }
 
   schemas:
     OriginCredentialRequest:

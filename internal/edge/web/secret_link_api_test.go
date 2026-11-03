@@ -170,8 +170,14 @@ func (f *linkedFixture) adminSSE(t *testing.T, method, path, body string) string
 	}
 	req.RemoteAddr = "@"
 	f.s.Handler().ServeHTTP(rec, req.WithContext(auth.WithPeer(req.Context(), auth.Peer{ID: f.me, Via: auth.LocalVia})))
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	return rec.Body.String()
+	// /apply and /commit answer 202 and a link to their events (#509).
+	out := followRunEvents(t, rec.ResponseRecorder, func(href string, get *streamRecorder) {
+		g := httptest.NewRequest(http.MethodGet, href, nil)
+		g.RemoteAddr = "@"
+		f.s.Handler().ServeHTTP(get, g.WithContext(auth.WithPeer(g.Context(), auth.Peer{ID: f.me, Via: auth.LocalVia})))
+	})
+	require.Equal(t, http.StatusOK, out.Code, out.Body.String())
+	return out.Body.String()
 }
 
 func (f *linkedFixture) startSession(t *testing.T, repo, body string, asAdmin bool, tok ...string) string {
@@ -250,7 +256,12 @@ func TestOriginSession_CommitOnLinkedRepoNeedsAdmin(t *testing.T) {
 	base := "/api/v1/repos/z/origin-sessions/" + id
 	out := escDo(f.s.OAuthHandler(), zTok, http.MethodGet, base+"/test", "").Body.String()
 	require.NotContains(t, out, `"phase":"error"`, out)
-	apply := escDo(f.s.OAuthHandler(), zTok, http.MethodPost, base+"/apply", `{"conflict_strategy":"local_wins"}`)
+	apply := followRunEvents(t, escDo(f.s.OAuthHandler(), zTok, http.MethodPost, base+"/apply", `{"conflict_strategy":"local_wins"}`),
+		func(href string, get *streamRecorder) {
+			g := httptest.NewRequest(http.MethodGet, href, nil)
+			g.Header.Set("Authorization", "Bearer "+zTok)
+			f.s.OAuthHandler().ServeHTTP(get, g)
+		})
 	require.Equal(t, http.StatusOK, apply.Code, apply.Body.String())
 	require.NotContains(t, apply.Body.String(), `"phase":"error"`, apply.Body.String())
 	rec := escDo(f.s.OAuthHandler(), zTok, http.MethodPost, base+"/commit", "")

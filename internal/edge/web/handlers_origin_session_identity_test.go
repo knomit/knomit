@@ -199,10 +199,14 @@ func sseCall(t *testing.T, s *Server, method, path, body string) string {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	s.NewAPIRouter().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("%s %s: status %d, body=%s", method, path, rec.Code, rec.Body.String())
+	// /apply and /commit answer 202 and a link to their events (#509).
+	out := followRunEvents(t, rec.ResponseRecorder, func(href string, get *streamRecorder) {
+		s.NewAPIRouter().ServeHTTP(get, fromLoopback(httptest.NewRequest(http.MethodGet, stripAPIBase(href), nil)))
+	})
+	if out.Code != http.StatusOK {
+		t.Fatalf("%s %s: status %d, body=%s", method, path, out.Code, out.Body.String())
 	}
-	return rec.Body.String()
+	return out.Body.String()
 }
 
 // TestConnect_DivergentAdoptUpdatesIdentity runs the full four-step connect
@@ -411,7 +415,8 @@ func TestConnect_RemoteClaimedBetweenTestAndCommitRejectedBeforeSwap(t *testing.
 	}
 
 	// The Swap guard refuses before anything changed, so the refusal is a
-	// plain 409 problem — the stream never opened.
+	// plain 409 problem on the POST — the run never logged a phase, so the
+	// POST answers the refusal instead of 202 and an events link (#509).
 	commitRec := newStreamRecorder()
 	s.NewAPIRouter().ServeHTTP(commitRec, fromLoopback(httptest.NewRequest(http.MethodPost, base+"/commit", nil)))
 	commitBody := commitRec.Body.String()

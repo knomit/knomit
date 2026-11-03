@@ -938,8 +938,7 @@ func TestHandleTestConnectivity_RerunIsRefusedAndLeavesTheSessionGood(t *testing
 	}
 
 	// /apply still works on the session the refusal left alone.
-	apply := newStreamRecorder()
-	f.s.ServeHTTP(apply, newJSONRequest("POST", "/repos/alpha/origin-sessions/"+sess.ID+"/apply",
+	apply := serveRun(t, f.s, newJSONRequest("POST", "/repos/alpha/origin-sessions/"+sess.ID+"/apply",
 		strings.NewReader(`{"conflict_strategy":"local_wins"}`)))
 	if apply.Code != 200 || !strings.Contains(apply.body(), `"phase":"done"`) {
 		t.Fatalf("/apply after the refused re-run: status %d, body %s", apply.Code, apply.body())
