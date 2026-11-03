@@ -5,18 +5,24 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+
+	"knomit/internal/foundation/pki"
 )
 
 // ListenTLS opens the instance-to-instance listener (F19 phase 2): a plain
-// TCP listener wrapped by tls.NewListener and NOTHING ELSE.
+// TCP listener under pki.NewListener, which is tls.NewListener with each RAW
+// connection wrapped BENEATH the TLS layer so that a handshake our verifier
+// refused delivers its alert instead of a reset (knomit#543).
 //
-// It must return tls.NewListener's listener unwrapped. net/http recognises a
+// Nothing may wrap the connections ABOVE the TLS layer: net/http recognises a
 // TLS connection only by the concrete assertion c.rwc.(*tls.Conn)
-// (net/http/server.go, conn.serve), so any wrapper type around the conn
+// (net/http/server.go, conn.serve), so any wrapper type around the *tls.Conn
 // leaves r.TLS nil on every request, and AuthMiddleware would refuse every
-// enrolled peer. Which listener a request came in on is told by the SERVER
-// instead: the TLS listener gets its own http.Server whose ConnContext is
-// TLSConnContext.
+// enrolled peer. A wrapper UNDER tls (what tls.NewListener is handed) is safe:
+// Accept still returns a *tls.Conn.
+//
+// Which listener a request came in on is told by the SERVER instead: the TLS
+// listener gets its own http.Server whose ConnContext is TLSConnContext.
 //
 // The returned cleanup closes the listener; it is safe to call twice.
 func ListenTLS(addr string, cfg *tls.Config) (net.Listener, func(), error) {
@@ -28,7 +34,7 @@ func ListenTLS(addr string, cfg *tls.Config) (net.Listener, func(), error) {
 	if err != nil {
 		return nil, noop, fmt.Errorf("tls listen %s: %w", addr, err)
 	}
-	tl := tls.NewListener(ln, cfg)
+	tl := pki.NewListener(ln, cfg)
 	return tl, func() { _ = tl.Close() }, nil
 }
 

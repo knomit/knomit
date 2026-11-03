@@ -45,7 +45,10 @@ var sameLayerEdges = map[string]bool{
 	"domain/okf -> domain/fact":        true,
 	"domain/okf/source -> domain/fact": true,
 	// foundation
-	"foundation/config -> foundation/auth":       true,
+	"foundation/config -> foundation/auth": true,
+	// auth.ListenTLS wraps the raw listener with pki.NewListener so a
+	// refused handshake delivers its alert instead of a reset (#543).
+	"foundation/auth -> foundation/pki":          true,
 	"foundation/serveraddr -> foundation/auth":   true,
 	"foundation/serveraddr -> foundation/config": true,
 	// engine

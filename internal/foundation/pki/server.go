@@ -145,7 +145,14 @@ func NewServer(dir, keyPath string, logf Logf, interval time.Duration) (*Server,
 			}
 			r.logf(snap.uninstalled.Error(), "event", "tls_refused", "remote", remote)
 		}
-		return r.configFor(snap), nil
+		cfg := r.configFor(snap)
+		if hello != nil {
+			// A refusal by VerifyConnection must reach the client as the
+			// alert, not a reset (knomit#543): on a NewListener connection
+			// it marks the raw connection, whose Close then lingers.
+			markRefusalOn(cfg, hello.Conn)
+		}
+		return cfg, nil
 	}
 	return s, nil
 }

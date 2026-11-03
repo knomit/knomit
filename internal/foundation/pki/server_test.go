@@ -146,7 +146,7 @@ func startServer(t *testing.T, dir, keyPath string, rec *recorder) string {
 		}),
 		ErrorLog: discardLogger(),
 	}
-	go srv.Serve(tls.NewListener(ln, cfg))
+	go srv.Serve(NewListener(ln, cfg))
 	t.Cleanup(func() { srv.Close() })
 	return ln.Addr().String()
 }

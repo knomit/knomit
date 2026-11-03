@@ -35,7 +35,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net"
@@ -195,7 +194,7 @@ func startGitServer(t *testing.T, dir, keyPath string, repo *servedRepo) (string
 		inner.ServeHTTP(w, r)
 	})
 	srv := &http.Server{Handler: handler, ErrorLog: discardLogger()}
-	go srv.Serve(tls.NewListener(countingListener{ln, n}, cfg))
+	go srv.Serve(NewListener(countingListener{ln, n}, cfg))
 	t.Cleanup(func() { srv.Close() })
 	return ln.Addr().String(), rec
 }

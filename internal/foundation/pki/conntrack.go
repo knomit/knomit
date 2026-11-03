@@ -15,7 +15,10 @@ import (
 //
 // It is fed by the listener's http.Server.ConnState hook. That hook sees the
 // *tls.Conn itself, because auth.ListenTLS hands net/http tls.NewListener's
-// connections unwrapped (see its doc: a wrapper would leave r.TLS nil).
+// connections unwrapped (see its doc: a wrapper would leave r.TLS nil). The
+// one wrapper is UNDER the *tls.Conn (pki.NewListener's refusalConn, #543):
+// it is what c.NetConn() returns, and its Close of an established (never
+// refused) connection is the hard close the sweep relies on.
 //
 // HTTP/2 would be invisible here: net/http marks an ALPN-negotiated h2
 // connection active with its hooks skipped, so ConnState never fires for it.

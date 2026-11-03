@@ -87,7 +87,7 @@ func startSweepServer(t *testing.T, dir, keyPath string, interval time.Duration)
 		ConnState: s.ConnState,
 		ErrorLog:  discardLogger(),
 	}
-	go srv.Serve(tls.NewListener(ln, cfg))
+	go srv.Serve(NewListener(ln, cfg))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { s.Run(ctx); close(done) }()

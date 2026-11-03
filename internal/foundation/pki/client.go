@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -62,10 +64,62 @@ func HTTPClient(dir, keyPath string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Transport: &http.Transport{
+	tr := &http.Transport{
 		TLSClientConfig:     cfg,
 		TLSHandshakeTimeout: 10 * time.Second, // defensive bound on a dead peer, not a measured value
-	}}, nil
+	}
+	if h := afterHandshakeHook.Load(); h != nil {
+		// Tests only (see afterHandshakeHook): the same handshake, and the
+		// hook before the connection's first read. net/http starts reading
+		// as soon as the connection exists, so the hook has to hold that
+		// read, not the dial.
+		tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &hookedConn{Conn: c, hook: *h, wrote: make(chan struct{})}, nil
+		}
+	}
+	return &http.Client{Transport: tr}, nil
+}
+
+// afterHandshakeHook, when set, runs on the client after a completed
+// handshake: in peerAccepted before its request is written, and on a
+// connection of an HTTPClient built while it is set before its first read
+// (which then also waits for the request to be written). TESTS ONLY: holding
+// the client there until the refusing server has closed makes the old
+// immediate close reset the connection deterministically on Windows
+// (knomit#543). Unset in production, where HTTPClient builds exactly the
+// transport it always did.
+var afterHandshakeHook atomic.Pointer[func()]
+
+// hookedConn (tests only) holds its first read until hook has returned AND
+// its first write (net/http's request) has gone out, so the read comes after
+// whatever the peer answers that write with.
+type hookedConn struct {
+	net.Conn
+	hook      func()
+	once      sync.Once
+	wrote     chan struct{}
+	wroteOnce sync.Once
+}
+
+func (c *hookedConn) Read(p []byte) (int, error) {
+	c.once.Do(func() {
+		c.hook()
+		select {
+		case <-c.wrote:
+		case <-time.After(10 * time.Second):
+		}
+	})
+	return c.Conn.Read(p)
+}
+
+func (c *hookedConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.wroteOnce.Do(func() { close(c.wrote) })
+	return n, err
 }
 
 // Dial connects to addr with mTLS and returns the peer's VERIFIED Identity.
@@ -105,6 +159,9 @@ func Dial(ctx context.Context, addr, dir, keyPath string) (Identity, error) {
 // any status line means the peer let us in; a remote TLS alert means it
 // refused us (the reason is in ITS log, not ours).
 func peerAccepted(ctx context.Context, tc *tls.Conn, addr string) error {
+	if h := afterHandshakeHook.Load(); h != nil {
+		(*h)()
+	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(10 * time.Second) // defensive bound on a peer that never answers
@@ -117,10 +174,13 @@ func peerAccepted(ctx context.Context, tc *tls.Conn, addr string) error {
 		host = addr
 	}
 	if _, err := fmt.Fprintf(tc, "HEAD / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host); err != nil {
-		return peerError(err)
+		return peerError(beforeAnswer(err))
 	}
 	line, err := bufio.NewReader(tc).ReadString('\n')
 	if err != nil {
+		if line == "" { // no byte of the answer arrived
+			err = beforeAnswer(err)
+		}
 		return peerError(err)
 	}
 	if !strings.HasPrefix(line, "HTTP/") {
@@ -137,6 +197,25 @@ func peerError(err error) error {
 		return fmt.Errorf("%w: %v", ErrRefusedByPeer, op.Err)
 	}
 	return fmt.Errorf("pki: peer did not answer after the handshake: %w", err)
+}
+
+// resetBeforeAnswer marks a connection reset or abort (isConnReset) that
+// came after our handshake and before ANY byte of the peer's answer: on
+// Windows this is how a refusing peer's alert can be lost (knomit#543), so
+// ClassifyOrigin redials once. It is never a refusal itself, and its text is
+// the reset's own.
+type resetBeforeAnswer struct{ err error }
+
+func (e resetBeforeAnswer) Error() string { return e.err.Error() }
+func (e resetBeforeAnswer) Unwrap() error { return e.err }
+
+// beforeAnswer marks err as resetBeforeAnswer when it is a connection reset;
+// the caller has received no byte of the answer.
+func beforeAnswer(err error) error {
+	if isConnReset(err) {
+		return resetBeforeAnswer{err}
+	}
+	return err
 }
 
 // ErrOriginUnreachable: ClassifyOrigin could not connect to the origin's
@@ -220,28 +299,42 @@ func ClassifyOrigin(ctx context.Context, dir, keyPath, rawURL string) (bool, err
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second) // defensive bound on a host that never answers
 		defer cancel()
 	}
-	var d net.Dialer
-	raw, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false, fmt.Errorf("%w: can't reach %s: %v", ErrOriginUnreachable, addr, err)
-	}
-	defer raw.Close()
-	tc := tls.Client(raw, cfg)
-	if err := tc.HandshakeContext(ctx); err != nil {
-		switch {
-		case verified && errors.Is(verdict, ErrUntrustedRoot):
-			return false, nil
-		case verified && verdict != nil:
-			return false, fmt.Errorf("%w (%s): %w", ErrOriginCertRefused, addr, verdict)
-		case verified:
-			return false, fmt.Errorf("pki: the origin %s presents a certificate of this fleet, but the handshake failed: %w", addr, err)
-		case ctx.Err() != nil:
+	attempt := func() (bool, error) {
+		verified, verdict = false, nil
+		var d net.Dialer
+		raw, err := d.DialContext(ctx, "tcp", addr)
+		if err != nil {
 			return false, fmt.Errorf("%w: can't reach %s: %v", ErrOriginUnreachable, addr, err)
 		}
-		return false, nil
+		defer raw.Close()
+		tc := tls.Client(raw, cfg)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			switch {
+			case verified && errors.Is(verdict, ErrUntrustedRoot):
+				return false, nil
+			case verified && verdict != nil:
+				return false, fmt.Errorf("%w (%s): %w", ErrOriginCertRefused, addr, verdict)
+			case verified:
+				return false, fmt.Errorf("pki: the origin %s presents a certificate of this fleet, but the handshake failed: %w", addr, err)
+			case ctx.Err() != nil:
+				return false, fmt.Errorf("%w: can't reach %s: %v", ErrOriginUnreachable, addr, err)
+			}
+			return false, nil
+		}
+		if err := peerAccepted(ctx, tc, addr); err != nil {
+			return false, fmt.Errorf("pki: the origin %s is an instance of this fleet, but: %w", addr, err)
+		}
+		return true, nil
 	}
-	if err := peerAccepted(ctx, tc, addr); err != nil {
-		return false, fmt.Errorf("pki: the origin %s is an instance of this fleet, but: %w", addr, err)
+	peer, err := attempt()
+	// A reset after our handshake and before any byte of the answer is how a
+	// Windows client can lose a refusing peer's alert (knomit#543; a peer
+	// older than its fix still closes that way). Redial ONCE: the alert
+	// almost always wins a second race. The reset is never itself read as a
+	// refusal, and a second reset is returned as it is.
+	var reset resetBeforeAnswer
+	if errors.As(err, &reset) && ctx.Err() == nil {
+		peer, err = attempt()
 	}
-	return true, nil
+	return peer, err
 }
