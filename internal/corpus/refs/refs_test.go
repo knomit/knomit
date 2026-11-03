@@ -39,6 +39,8 @@ func TestGate_AcceptsExistingTarget(t *testing.T) {
 // The case that makes the gate ergonomic rather than a burden: three facts
 // written in ONE call, all citing each other, none existing yet. All must be
 // accepted, because BatchWriteFacts commits them together.
+// In practice only caller-chosen paths (artifact facts) can use this: knowledge-fact
+// paths are generated after the write, so a caller cannot name a sibling kb/ fact.
 func TestGate_AcceptsIntraBatchCrossReferences(t *testing.T) {
 	g := newGate()
 	batch := map[string][]string{
