@@ -363,3 +363,22 @@ func (a *AnthropicChat) finishBlock(pb *pendingBlock, o StreamOptions, sink func
 	}
 	return Block{}, false
 }
+
+// AnthropicPrefixJSON is the cached part of the Anthropic request for s: the
+// "tools" and "system" fields exactly as renderAnthropic marshals them, as
+// {"system":...,"tools":...}. It exists so the byte-identity tests outside
+// this package compare the bytes the API actually receives.
+func AnthropicPrefixJSON(s Snapshot, model string) ([]byte, error) {
+	raw, err := json.Marshal(renderAnthropic(s, model, AnthropicOptions{}))
+	if err != nil {
+		return nil, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return nil, err
+	}
+	return encodeCanonical(struct {
+		System json.RawMessage `json:"system"`
+		Tools  json.RawMessage `json:"tools"`
+	}{all["system"], all["tools"]})
+}
