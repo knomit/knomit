@@ -372,6 +372,7 @@ func fixedNow() time.Time { return time.Unix(1790000000, 0) }
 // loop's retry) completes it to registered and clears the error. Pushes of
 // other repositories change nothing.
 func TestFleet_RegisteringRetriedOnPush(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	url, root := seedJoinableFleet(t, filepath.Join(dir, "fleet.git"))
