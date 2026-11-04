@@ -325,7 +325,9 @@ func OllamaPrefixJSON(s Snapshot, model string) ([]byte, error) {
 	if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
 		system = &req.Messages[0]
 	}
-	return encodeCanonical(struct {
+	// json.Marshal, not encodeCanonical: the wire form escapes <, > and &, and
+	// this export must be those exact bytes.
+	return json.Marshal(struct {
 		System *ollamaMsgV2   `json:"system"`
 		Tools  []ollamaToolV2 `json:"tools"`
 	}{system, req.Tools})
