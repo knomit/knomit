@@ -919,3 +919,54 @@ func TestLoop_DuplicateEntryIDIsATurnErrorNotASilentDrop(t *testing.T) {
 		t.Fatalf("history = %+v, hook 7 = %d; want both empty (no unpaired tool_use)", got, len(b.Snapshot().Hooks[HookTurn]))
 	}
 }
+
+// A truncation whose partial holds only reasoning (a thinking model spent the
+// whole output budget thinking) stores no assistant entry: reasoning that no
+// later request builds on is never kept, and an empty text entry is never made.
+func TestLoop_ReasoningOnlyTruncation(t *testing.T) {
+	reasoning := Block{Kind: BlockReasoning, Reasoning: &Reasoning{Provider: "ollama", Model: "m", Native: json.RawMessage(`{"thinking":"hmm"}`)}}
+	cut := func() error {
+		return &StopError{Reason: StopMaxTokens, Response: &Response{
+			Blocks: []Block{reasoning}, StopReason: StopMaxTokens, Usage: Usage{Input: 1448, Output: 600},
+		}}
+	}
+
+	// First request: the whole turn is dropped, as for any first-request failure.
+	m := &fakeModel{steps: []fakeStep{{err: cut()}, {resp: textResp("fine", Usage{})}}}
+	l, b := newLoop(t, m, &fakeHost{})
+	res, err := l.RunTurn(context.Background(), "think hard")
+	if !errors.Is(err, ErrTruncated) || err.Error() != "The reply hit the output limit." {
+		t.Fatalf("err = %v, want the truncation sentence wrapping ErrTruncated", err)
+	}
+	if res.Usage.Output != 600 || res.Usage.Input != 1448 {
+		t.Fatalf("usage = %+v, want the truncated request counted", res.Usage)
+	}
+	if got := history(b); len(got) != 0 || len(b.Snapshot().Hooks[HookTurn]) != 0 {
+		t.Fatalf("history = %+v, want none: nothing the model answered", got)
+	}
+	if _, err := l.RunTurn(context.Background(), "again"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(conversationItems(m.snaps[1])); n != 1 {
+		t.Fatalf("the next request carries %d conversation items, want just the new question", n)
+	}
+
+	// After a tool call: the paired call and result stay; no empty or reasoning entry is added.
+	m2 := &fakeModel{steps: []fakeStep{{resp: toolResp("tu_1", "knomit_repos", `{}`, Usage{})}, {err: cut()}}}
+	h := &fakeHost{out: map[string]ToolOutcome{"knomit_repos": {Content: "r"}}}
+	l2, b2 := newLoop(t, m2, h)
+	if _, err := l2.RunTurn(context.Background(), "look"); !errors.Is(err, ErrTruncated) {
+		t.Fatalf("err = %v", err)
+	}
+	got := history(b2)
+	if len(got) != 3 || got[2].Role != RoleUser || got[2].Blocks[0].Kind != BlockToolResult {
+		t.Fatalf("history = %+v, want user, tool_use, tool_result and nothing after", got)
+	}
+	for _, e := range got {
+		for _, bl := range e.Blocks {
+			if bl.Kind == BlockReasoning {
+				t.Fatalf("a reasoning block was stored: %+v", e)
+			}
+		}
+	}
+}
