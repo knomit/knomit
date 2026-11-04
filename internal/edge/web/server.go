@@ -6,6 +6,7 @@ import (
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync"
+	"time"
 
 	"knomit/internal/engine/store/model"
 
@@ -342,4 +343,29 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	return r
+}
+
+// WaitReleased blocks until the origin-session manager and the chat manager
+// have finished tearing down after Lifetime ended, or until timeout passes
+// (it then logs which part is still running and returns false). It is what
+// lets App.Close end the lifetime and still close control.db only AFTER the
+// teardown that writes to it (a chat's MCP session row, its log line). A
+// manager that was never built, or built without a Lifetime, is not counted,
+// so this returns at once for a server with nothing to wait for.
+func (s *Server) WaitReleased(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		s.originSessionsReleased.Wait()
+		s.chatReleased.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		log.Warn().Dur("timeout", timeout).Msg("web: origin sessions or chats did not finish shutting down in time")
+		return false
+	}
 }

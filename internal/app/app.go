@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"knomit/internal/engine/store/model"
 
@@ -444,10 +445,26 @@ func (a *App) Handler() http.Handler {
 // configured.
 func (a *App) OAuthHandler() http.Handler { return a.server.OAuthHandler() }
 
+// shutdownReleaseWait bounds how long Close waits for chats and origin
+// sessions to finish tearing down before it closes the manager. A chat waits
+// at most 10s for a turn that ignores cancellation (maxTurnEndWait in
+// api/chat), and all chats end in parallel, so 10s is the longest a teardown
+// can legitimately take; the extra 5s is serveUntil's graceful-shutdown grace,
+// for ending the MCP session and writing the log line after that wait. A
+// teardown stuck past it is abandoned (logged) rather than hanging the stop.
+const shutdownReleaseWait = 15 * time.Second
+
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
 	if a.endLifetime != nil {
 		a.endLifetime()
+	}
+	// The chat and origin-session teardown runs in goroutines the lifetime
+	// just started, and it writes: a chat's end stamps its client_sessions row
+	// in control.db and its mounted repos may still be in use by a turn.
+	// manager.Close closes both, so wait first.
+	if a.server != nil {
+		a.server.WaitReleased(shutdownReleaseWait)
 	}
 	if err := a.manager.Close(); err != nil {
 		log.Warn().Err(err).Msg("app: manager close failed")
