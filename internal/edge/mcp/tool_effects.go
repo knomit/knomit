@@ -41,7 +41,10 @@ var toolEffects = []CallEffect{
 	{Tool: "knomit_update", Destructive: true},
 	{Tool: "knomit_retract", Destructive: true},
 
-	{Tool: "knomit_review", Action: actStart, ReadOnly: true},
+	// A start opens or resumes a pipeline session and can DISPLACE a session
+	// idle past the resume window even without takeover, so it needs approval.
+	{Tool: "knomit_review", Action: actStart},
+	// page and current only read, or advance, the caller's own session.
 	{Tool: "knomit_review", Action: actPage, ReadOnly: true},
 	{Tool: "knomit_review", Action: actCurrent, ReadOnly: true},
 	{Tool: "knomit_review", Action: actAnswer, Destructive: true},
@@ -49,7 +52,9 @@ var toolEffects = []CallEffect{
 	// of its own kind, never covered by a grant for answers.
 	{Tool: "knomit_review", Action: actTakeover, Destructive: true},
 
-	{Tool: "knomit_hypothesize", Action: actStart, ReadOnly: true},
+	// A start creates a session and silently displaces an active one on its
+	// branch (there is no resume rule, unlike review), so it needs approval.
+	{Tool: "knomit_hypothesize", Action: actStart},
 	{Tool: "knomit_hypothesize", Action: actCurrent, ReadOnly: true},
 	// session_id without current is an answer, even with an empty response.
 	{Tool: "knomit_hypothesize", Action: actAnswer},
@@ -62,42 +67,25 @@ var toolEffects = []CallEffect{
 }
 
 // actionOf names the action a call dispatches to, or "" when the tool has
-// none. An action the table does not know simply has no row. Each function
-// mirrors its handler's dispatch order: classification follows what the
-// handler will DO, not what the caller labelled.
+// none. An action the table does not know simply has no row. The review and
+// hypothesize functions are the ones the handlers themselves dispatch on
+// (reviewMode, hypothesizeMode): classification follows what the handler will
+// DO, not what the caller labelled.
 var actionOf = map[string]func(req mcpgo.CallToolRequest) string{
-	// review.go: takeover is its own kind (even beside a session_id, which the
-	// handler refuses, so asking is the safe side); no session_id starts;
-	// page>0 with no response pages; no response reads the current item;
-	// anything else answers.
-	"knomit_review": func(req mcpgo.CallToolRequest) string {
-		switch {
-		case req.GetBool("takeover", false):
-			return actTakeover
-		case req.GetString("session_id", "") == "":
-			return actStart
-		case req.GetFloat("page", 0) > 0 && req.GetString("response", "") == "":
-			return actPage
-		case req.GetString("response", "") == "":
-			return actCurrent
-		default:
-			return actAnswer
-		}
-	},
-	// hypothesize.go: no session_id starts; current reads; the rest answers.
-	"knomit_hypothesize": func(req mcpgo.CallToolRequest) string {
-		switch {
-		case req.GetString("session_id", "") == "":
-			return actStart
-		case req.GetBool("current", false):
-			return actCurrent
-		default:
-			return actAnswer
-		}
-	},
+	"knomit_review":      reviewMode,
+	"knomit_hypothesize": hypothesizeMode,
 	"knomit_experiment": func(req mcpgo.CallToolRequest) string {
 		return req.GetString("action", "")
 	},
+}
+
+// multiModeTools lists, for each tool whose modes are inferred from argument
+// shape, every mode its handler can dispatch to. The completeness test
+// requires a row for each. knomit_experiment's modes are its `action` enum,
+// which the test reads from the registration.
+var multiModeTools = map[string][]string{
+	"knomit_review":      ReviewModes,
+	"knomit_hypothesize": HypothesizeModes,
 }
 
 // ClassifyCall classifies one call by tool name and decoded arguments.
