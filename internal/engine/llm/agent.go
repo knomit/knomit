@@ -600,6 +600,10 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 	if caps.ContextWindow <= 0 {
 		return nil
 	}
+	if l.Options.MaxOutput > 0 {
+		// The request's own cap wins over the model's default.
+		caps.MaxOutput = l.Options.MaxOutput
+	}
 	reserve := replyReserve(caps)
 	if est+reserve > caps.ContextWindow {
 		return &turnError{

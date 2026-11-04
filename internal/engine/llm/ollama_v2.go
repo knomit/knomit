@@ -37,16 +37,7 @@ const (
 	// default context, and without truncate:false it silently drops the oldest
 	// messages of a prompt that does not fit (see ollamaChatRequestV2).
 	defaultOllamaNumCtx = 32768
-	// defaultOllamaMaxOutput is the reply length (num_predict, and the room the
-	// loop reserves) used when OllamaOptions.MaxOutput is 0: a quarter of the
-	// default window, so the default reserve leaves three quarters of num_ctx
-	// for the prompt. num_ctx covers prompt and reply together, and on Ollama
-	// reasoning tokens count against num_predict, so the figure has to leave
-	// room for thinking as well as the answer; a smaller one would end thinking
-	// models "length" mid-reasoning. It is derived from the window, not from a
-	// measurement. withDefaults lowers it to NumCtx/4 for a smaller num_ctx.
-	defaultOllamaMaxOutput = 8192
-	defaultOllamaHost      = "http://localhost:11434"
+	defaultOllamaHost   = "http://localhost:11434"
 	// ollamaUnlimited is num_predict -1: no output cap (see ollamaUncapped in
 	// ollama.go for why a cap buys nothing on a local model).
 	ollamaUnlimited = -1
@@ -56,9 +47,10 @@ const (
 // http://localhost:11434. KeepAlive defaults to "30m" and NumCtx to 32768;
 // NumCtx is also the context window the loop budgets against (Caps), capped
 // at the model's trained context when /api/show reports one.
-// MaxOutput is the reply length: it is sent as num_predict and reserved by the
-// loop. 0 takes min(8192, NumCtx/4); a negative value means no cap (num_predict
-// -1), and the loop then reserves a quarter of the window.
+// MaxOutput is an explicit reply cap: when > 0 it is sent as num_predict and
+// the loop reserves it. 0 (and a negative value) means no cap: num_predict -1
+// is sent, and the loop's pre-send reserve is a quarter of the effective
+// window. That reserve is a check only; it never limits the reply.
 type OllamaOptions struct {
 	Host, KeepAlive   string
 	NumCtx, MaxOutput int
@@ -80,9 +72,6 @@ func (o OllamaOptions) withDefaults() OllamaOptions {
 	}
 	if o.NumCtx <= 0 {
 		o.NumCtx = defaultOllamaNumCtx
-	}
-	if o.MaxOutput == 0 {
-		o.MaxOutput = min(defaultOllamaMaxOutput, o.NumCtx/4)
 	}
 	return o
 }

@@ -121,8 +121,8 @@ func TestOllamaChat_AlwaysSendsNumCtxAndKeepAlive(t *testing.T) {
 		ctx, pred int
 		keepAlive string
 	}{
-		{"defaults", OllamaOptions{}, StreamOptions{}, 32768, 8192, `"30m"`},
-		{"default reply is a quarter of a small window", OllamaOptions{NumCtx: 4096}, StreamOptions{}, 4096, 1024, `"30m"`},
+		{"defaults send no cap", OllamaOptions{}, StreamOptions{}, 32768, -1, `"30m"`},
+		{"small window still sends no cap", OllamaOptions{NumCtx: 4096}, StreamOptions{}, 4096, -1, `"30m"`},
 		{"negative means uncapped", OllamaOptions{MaxOutput: -1}, StreamOptions{}, 32768, -1, `"30m"`},
 		{"configured", OllamaOptions{NumCtx: 4096, KeepAlive: "2h", MaxOutput: 300}, StreamOptions{}, 4096, 300, `"2h"`},
 		{"per-request output", OllamaOptions{NumCtx: 4096, MaxOutput: 300}, StreamOptions{MaxOutput: 77}, 4096, 77, `"30m"`},

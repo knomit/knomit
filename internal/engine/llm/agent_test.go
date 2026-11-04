@@ -970,3 +970,27 @@ func TestLoop_ReasoningOnlyTruncation(t *testing.T) {
 		}
 	}
 }
+
+// F2: checkBudget reserves the request's own StreamOptions.MaxOutput when it
+// is set, otherwise the model's. The values are pairwise distinct: model 500,
+// request 2500, window 4000, so 1700 prompt tokens fits only under 500.
+func TestLoop_ReserveUsesRequestMaxOutput(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		opt     int
+		refused bool
+	}{
+		{"model reserve 500 fits", 0, false},
+		{"request reserve 2500 does not fit", 2500, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := &fakeModel{caps: Caps{ContextWindow: 4000, MaxOutput: 500}, steps: []fakeStep{{resp: textResp("ok", Usage{})}}}
+			l, _ := newLoop(t, m, &fakeHost{})
+			l.Options = StreamOptions{MaxOutput: c.opt}
+			_, err := l.RunTurn(context.Background(), tokensOfText(1700))
+			if c.refused != errors.Is(err, ErrContextFull) || c.refused != (len(m.snaps) == 0) {
+				t.Fatalf("err = %v, requests = %d, refused want %v", err, len(m.snaps), c.refused)
+			}
+		})
+	}
+}
