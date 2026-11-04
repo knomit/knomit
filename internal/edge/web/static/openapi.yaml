@@ -6004,7 +6004,19 @@ components:
             repo is readable but refuses every write. Absent when the repo has
             an ontology, while it has not been identified yet (a repo being
             created), and on a non-active row. A symlinked ontology is not
-            reported here: it refuses the repo, which is then `unopenable`.
+            reported here: it refuses the repo, which is then `unopenable` —
+            unless a repo that had no usable ontology receives a symlinked
+            one by sync, when this carries its error until the next mount.
+        ontology_reload_error:
+          type: string
+          description: |
+            Why the ontology at a later tip of the read branch was NOT
+            applied: it is missing, empty, unparseable, a symlink, or the
+            reserved fleet id on a repo that is not the fleet repository.
+            Ontology changes that arrive through git are otherwise applied
+            live, in full; an unusable one leaves the ontology in force (and
+            the repo writable). Absent when the tip's ontology is in force.
+            `GET /repos/{name}` carries the detail under `ontology`.
         fleet:
           type: boolean
           description: |
@@ -6105,6 +6117,26 @@ components:
             Why this repo has no usable ontology (none, empty, or does not
             parse): it is readable but refuses every write. Omitted when it
             has one. Same value as `ontology_error` on its `RepoSummary` row.
+        ontology:
+          type: object
+          description: >
+            Which ontology file is in force: ontology changes that arrive
+            through git (sync, a merge into the read branch) are applied live,
+            so this names the file the repo is using now. Omitted before the
+            repo is identified. The `reload_*` keys are present only while the
+            ontology at a later tip of the read branch could not be used (it
+            is missing, empty, unparseable, a symlink, or the reserved fleet
+            id), in which case the file named by `commit`/`path`/`blob` stays
+            in force.
+          required: [commit]
+          properties:
+            commit: { type: string, description: "Read-branch commit the ontology in force was read at." }
+            path:   { type: string, description: "Ontology rung read (e.g. .knomit/ontology.yaml); omitted when that commit has none." }
+            blob:   { type: string, description: "Git blob id of the ontology file in force; omitted when that commit has none." }
+            reload_error:  { type: string, description: "Why the ontology at reload_commit was not applied." }
+            reload_commit: { type: string, description: "Read-branch commit whose ontology was not applied." }
+            reload_path:   { type: string }
+            reload_blob:   { type: string }
         _links: { $ref: "#/components/schemas/LinkMap" }
         _embedded:
           type: object

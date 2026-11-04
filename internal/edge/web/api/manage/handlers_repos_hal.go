@@ -72,8 +72,19 @@ type repoSummary struct {
 	// Absent when it has one, before Identify has run (a repo being created),
 	// and on an unavailable row. A symlinked ontology never appears here: it
 	// refuses the repo, which is then listed "unopenable" with the message
-	// as its detail.
+	// as its detail — except on a mounted repo that had no usable ontology
+	// and whose read branch then received a symlinked one by sync: there is
+	// nothing to keep, so the symlink's error is this field until the next
+	// mount refuses the repo.
 	OntologyError string `json:"ontology_error,omitempty"`
+
+	// OntologyReloadError says why the ontology a LATER tip of the read
+	// branch holds was not applied (#429): it is missing, empty, unparseable,
+	// a symlink, or the reserved fleet id on a repo that is not the fleet
+	// repository, so the ontology in force stays in force and the repo stays
+	// writable. Absent when the tip's ontology is the one in force. GET
+	// /repos/{name} carries the full picture under `ontology`.
+	OntologyReloadError string `json:"ontology_reload_error,omitempty"`
 
 	// Fleet marks this instance's fleet repository (its ontology id is
 	// fleet), so a client can keep it out of every browse context without
@@ -167,19 +178,24 @@ func summaryFor(b hal.URLBuilder, name string, ri *repos.RepoInstance) repoSumma
 	if err := ri.IdentifiedOntologyError(); err != nil {
 		ontErr = err.Error()
 	}
+	reloadErr := ""
+	if st, ok := ri.OntologyStatus(); ok {
+		reloadErr = st.ReloadError
+	}
 	return repoSummary{
-		Name:          name,
-		UID:           ri.UID(),
-		ID:            ri.ShortID(),
-		State:         repoStateActive,
-		Stage:         st.Stage,
-		IndexState:    st.Index.State,
-		IndexDone:     st.Index.Done,
-		IndexTotal:    st.Index.Total,
-		IndexReason:   st.Index.Reason,
-		OntologyError: ontErr,
-		Fleet:         ri.IsFleet(),
-		Links:         hal.LinkMap{"self": {Href: b.Repo(name)}},
+		OntologyReloadError: reloadErr,
+		Name:                name,
+		UID:                 ri.UID(),
+		ID:                  ri.ShortID(),
+		State:               repoStateActive,
+		Stage:               st.Stage,
+		IndexState:          st.Index.State,
+		IndexDone:           st.Index.Done,
+		IndexTotal:          st.Index.Total,
+		IndexReason:         st.Index.Reason,
+		OntologyError:       ontErr,
+		Fleet:               ri.IsFleet(),
+		Links:               hal.LinkMap{"self": {Href: b.Repo(name)}},
 	}
 }
 
@@ -318,6 +334,33 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	// has an ontology — an empty string would read as an error with no words.
 	if err := ri.IdentifiedOntologyError(); err != nil {
 		body["ontology_error"] = err.Error()
+	}
+	// ontology: WHICH ontology file is in force — the read branch's commit it
+	// was read at, its rung and blob id — and, when a later tip holds one
+	// that could not be used, that file and why (#429: ontology changes that
+	// arrive through git are applied live, so "which ontology is this repo
+	// using" is no longer "the one at its last mount"). Omitted before
+	// Identify has run. path and blob are omitted when the commit holds no
+	// ontology at all; the reload_* keys only while a reload is refused.
+	if st, ok := ri.OntologyStatus(); ok {
+		o := map[string]any{"commit": st.Commit}
+		if st.Path != "" {
+			o["path"] = st.Path
+		}
+		if st.Blob != "" {
+			o["blob"] = st.Blob
+		}
+		if st.ReloadError != "" {
+			o["reload_error"] = st.ReloadError
+			o["reload_commit"] = st.ReloadCommit
+			if st.ReloadPath != "" {
+				o["reload_path"] = st.ReloadPath
+			}
+			if st.ReloadBlob != "" {
+				o["reload_blob"] = st.ReloadBlob
+			}
+		}
+		body["ontology"] = o
 	}
 	// description is the verbatim README.md root manifest read at the repo's
 	// READ branch tip — the agent branch, or the followed upstream for a

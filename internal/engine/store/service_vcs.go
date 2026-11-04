@@ -101,6 +101,32 @@ func (s *Service) OntologyFileAt(ctx context.Context, branch string) (string, []
 	return s.rh.OntologyFileAt(ctx, branch)
 }
 
+// OntologyBlobAt names the ontology at branch's tip without reading it: the
+// tip commit, the rung present ("" when none) and its blob id ("" when
+// none), all as hex. A symlink at the first rung present is an error
+// wrapping fact.ErrSymlinkNotFollowed, returned WITH the commit, path and
+// blob so the caller can tell a symlink it already reported from a new one.
+// The repo's live ontology reload (repos.reloadOntology) compares the blob
+// with the one it loaded and reads nothing more when they match.
+func (s *Service) OntologyBlobAt(ctx context.Context, branch string) (commit, path, blob string, err error) {
+	c, p, b, err := s.rh.OntologyBlobAt(ctx, branch)
+	if !c.IsZero() {
+		commit = c.String()
+	}
+	if !b.IsZero() {
+		blob = b.String()
+	}
+	return commit, p, blob, err
+}
+
+// OntologyFileAtCommit is OntologyFileAt at a commit rather than a branch
+// tip: the reload reads the bytes at the very commit whose blob it compared,
+// so a branch that moves in between cannot pair one commit's id with another
+// commit's file.
+func (s *Service) OntologyFileAtCommit(ctx context.Context, commit string) (string, []byte, error) {
+	return s.rh.OntologyFileAtCommit(ctx, plumbing.NewHash(commit))
+}
+
 // SetReplaySkipPaths names the paths a rewind replay never carries: a
 // non-merge commit of this branch that changes nothing but these paths is
 // dropped from the replay instead of being re-submitted onto the new

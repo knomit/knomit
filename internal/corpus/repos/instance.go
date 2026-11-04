@@ -62,10 +62,41 @@ func newStoreHandle(svc *store.Service) *storeHandle {
 
 // identity is what the Identify stage established about the repo: its
 // ontology, or why there is none. Swapped as a whole (Identify enters and
-// exits on a live repo while readers read it lock-free).
+// exits on a live repo, and the live reload replaces it, while readers read
+// it lock-free): a reader that Loads it once holds ONE ontology for as long
+// as it keeps the pointer, which is what makes a write validate against
+// exactly one ontology however many swaps happen around it. Writers of the
+// pointer (Identify's Enter and Exit, reloadOntology) hold
+// RepoInstance.ontMu; readers never do.
 type identity struct {
 	ontology    *fact.Ontology
 	ontologyErr error
+	// src is where ontology (or ontologyErr) was read: the read branch's
+	// commit, the rung and its blob id. The live reload compares the tip's
+	// blob with src.Blob and does nothing more when they match.
+	src ontologySource
+	// reloadErr is why the file at reloadSrc — a later tip of the read branch
+	// — was NOT applied: it is unusable (missing, empty, unparseable, a
+	// symlink, or the reserved fleet id on a repo without the fleet door),
+	// so ontology is still the one read at src. nil when the tip's ontology
+	// is the one in force. Reported in the repo's status (OntologyStatus).
+	reloadErr error
+	reloadSrc ontologySource
+}
+
+// ontologySource names one ontology file in git: the commit it was read at,
+// the rung present there ("" when none) and that file's blob id ("" when
+// none). All hex.
+type ontologySource struct {
+	Commit, Path, Blob string
+}
+
+// sameFile reports whether s and o name the same ontology file content: the
+// same rung holding the same blob. The commit is deliberately not compared —
+// almost every commit leaves the ontology alone, and re-parsing on each one is
+// what the blob comparison exists to avoid.
+func (s ontologySource) sameFile(o ontologySource) bool {
+	return s.Path == o.Path && s.Blob == o.Blob
 }
 
 // errNotIdentified is the ontology error of a repo whose Identify stage has
@@ -151,7 +182,16 @@ type RepoInstance struct {
 	// ident is the Identify stage's result; nil reads as not identified. A
 	// non-nil ontologyErr makes the repo readable but not writable — see
 	// WritableBranch.
-	ident               atomic.Pointer[identity]
+	ident atomic.Pointer[identity]
+	// ontMu serialises the WRITERS of ident: Identify (its whole ontology
+	// read, so a reload cannot slip a newer tip in between Identify's read
+	// and its store and then be overwritten by the older one), Identify's
+	// Exit, and reloadOntology (its compare, read and store). Readers never
+	// take it. It is never held while waiting for a branch lock held by
+	// someone who could wait on it: the reload runs from the commit
+	// observer's goroutine and after a sync round, never under a writer's
+	// branch lock.
+	ontMu               sync.Mutex
 	embedder            model.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64
@@ -543,8 +583,13 @@ func (ri *RepoInstance) writableExperiment(branch string) bool {
 	return writable
 }
 
-// Ontology returns the ontology loaded from this repo's git store at open time,
-// or NIL when it could not be established.
+// Ontology returns the ontology in force for this repo, or NIL when it could
+// not be established. It is read from the read branch at Identify and
+// replaced live whenever a later tip of that branch holds a different, usable
+// ontology file (reloadOntology, kb/decisions/repos/ontology/
+// consensus-reload-honors-all). So a caller must Load it ONCE per operation
+// and use that value throughout: two calls in one write may return two
+// ontologies.
 //
 // Nil is the honest answer and callers must handle it. The alternative — the
 // default taxonomy, which is what this returned before — is a different
@@ -581,6 +626,38 @@ func (ri *RepoInstance) IdentifiedOntologyError() error {
 		return nil
 	}
 	return err
+}
+
+// OntologyStatus is which ontology file a repo has in force, and why a newer
+// one was not applied: the repo's status surface for the live reload.
+type OntologyStatus struct {
+	// Commit, Path and Blob name the file the ontology in force was read
+	// from: the read branch's commit at that read, the rung, the blob id.
+	// On a repo with no usable ontology they name the file (or the commit
+	// with no file) whose error OntologyError reports.
+	Commit, Path, Blob string
+	// ReloadError is why the ontology at a LATER tip of the read branch
+	// (ReloadCommit, ReloadPath, ReloadBlob) was not applied — it is missing,
+	// empty, unparseable, a symlink, or the reserved fleet id on a repo that
+	// is not the fleet repository — so the one above stays in force. "" when
+	// the tip's ontology is the one in force.
+	ReloadError                          string
+	ReloadCommit, ReloadPath, ReloadBlob string
+}
+
+// OntologyStatus reports the ontology file in force (see OntologyStatus the
+// type); ok is false before Identify has established anything.
+func (ri *RepoInstance) OntologyStatus() (st OntologyStatus, ok bool) {
+	id := ri.ident.Load()
+	if id == nil || errors.Is(id.ontologyErr, errNotIdentified) {
+		return OntologyStatus{}, false
+	}
+	st = OntologyStatus{Commit: id.src.Commit, Path: id.src.Path, Blob: id.src.Blob}
+	if id.reloadErr != nil {
+		st.ReloadError = id.reloadErr.Error()
+		st.ReloadCommit, st.ReloadPath, st.ReloadBlob = id.reloadSrc.Commit, id.reloadSrc.Path, id.reloadSrc.Blob
+	}
+	return st, true
 }
 
 // Embedder returns the batch embedder for this repo, or nil if unavailable.
