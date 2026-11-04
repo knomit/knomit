@@ -22,7 +22,8 @@ type ChatModel interface {
 	Model() string
 	Caps() Caps
 	// Stream renders s for this provider, sends it, and calls sink
-	// synchronously, on the calling goroutine, for each event as it arrives.
+	// synchronously, on the calling goroutine, for each event as it arrives;
+	// sink may be nil.
 	// The returned Response holds the complete assistant blocks and the usage
 	// the provider reported.
 	Stream(ctx context.Context, s Snapshot, o StreamOptions, sink func(Event)) (*Response, error)
