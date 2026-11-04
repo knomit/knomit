@@ -170,3 +170,35 @@ func TestRegistry_PriceCardFromConfig(t *testing.T) {
 	}, r.Price("anthropic", "a1"))
 	require.Nil(t, r.Price("anthropic", "a2"), "no card means unknown cost")
 }
+
+// An endpoint that answers 401 and echoes the request headers puts the API key
+// into the SDK's error text. Neither the provider list's reason nor a stream
+// error shows it, and the stream error is still the typed original.
+//
+// SABOTAGE: redactKey returns err unchanged -> both halves fail.
+func TestRegistry_EchoedAPIKeyIsRedacted(t *testing.T) {
+	const key = "sk-echo-5a4b3c2d1e0f9a8b"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"bad key ` + r.Header.Get("X-Api-Key") + `"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	reg := NewRegistry(map[string]config.LLMProviderConfig{
+		"p": {Kind: "anthropic", BaseURL: srv.URL, APIKey: key, Models: []string{"m"}},
+	})
+
+	list := reg.List(context.Background())
+	require.Len(t, list, 1)
+	require.Len(t, list[0].Models, 1)
+	require.Contains(t, list[0].Models[0].Reason, "bad key [redacted]")
+	require.NotContains(t, list[0].Models[0].Reason, key)
+
+	chat := NewAnthropicChat("m", AnthropicOptions{APIKey: key, BaseURL: srv.URL})
+	_, err := chat.Stream(context.Background(), prefixSnapshot(t, false), StreamOptions{}, func(Event) {})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), key)
+	require.Contains(t, err.Error(), "bad key [redacted]")
+	var re *redactedError
+	require.ErrorAs(t, err, &re, "the original error is still reachable through Unwrap")
+}

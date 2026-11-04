@@ -155,8 +155,10 @@ func (r *Registry) anthropicStatus(ctx context.Context, p config.LLMProviderConf
 		offered[pager.Current().ID] = true
 	}
 	if err := pager.Err(); err != nil {
-		// The SDK's error text never carries the key; the key is only ever a header.
-		return allUnavailable(p, "could not list models: "+err.Error())
+		// The key travels only as a header, but the SDK's error text includes
+		// the response body, and a proxy or misconfigured endpoint can echo
+		// request headers into it. Blank the key before the text is shown.
+		return allUnavailable(p, "could not list models: "+redactKey(err, key).Error())
 	}
 	out := make([]ModelStatus, 0, len(p.Models))
 	for _, m := range p.Models {
@@ -231,6 +233,27 @@ func ollamaTags(ctx context.Context, host string) (map[string]bool, error) {
 		out[m.Model] = true
 	}
 	return out, nil
+}
+
+// redactedError is err with every occurrence of a secret blanked out of its
+// text. Unwrap keeps errors.Is and errors.As working on the original.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// redactKey returns err with key replaced by "[redacted]" in its text, or err
+// itself when the text does not contain it. The SDK's error text carries the
+// HTTP response body, which an endpoint that echoes request headers fills with
+// the API key.
+func redactKey(err error, key string) error {
+	if err == nil || key == "" || !strings.Contains(err.Error(), key) {
+		return err
+	}
+	return &redactedError{msg: strings.ReplaceAll(err.Error(), key, "[redacted]"), err: err}
 }
 
 // lookup finds the provider and checks the model against its allowlist.
