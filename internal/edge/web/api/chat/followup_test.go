@@ -18,8 +18,8 @@ import (
 // and is asked again every time.
 //
 // SABOTAGE (one at a time): chat.go Decide `if known && !unresolved {` -> `if
-// !unresolved {` (a grant is honoured for an unknown call) fails the second
-// ask; answerApproval `if !p.Grantable {` -> `if false {` fails the 400.
+// !unresolved {` (a seeded grant is honoured for an unknown call) fails the
+// first ask; answerApproval `if !p.Grantable {` -> `if false {` fails the 400.
 func TestChat_UnknownActionAsksAndIsNeverGrantable(t *testing.T) {
 	h := newHarness(t)
 	handle := h.bind(writer, "chat-00000000000000000000000000000071", "alpha")
@@ -28,6 +28,13 @@ func TestChat_UnknownActionAsksAndIsNeverGrantable(t *testing.T) {
 		toolStep("tu_u2", "knomit_experiment", map[string]any{"binding": handle, "action": "frobnicate"}, usage),
 		textStep("done", usage))
 	id := h.create("uid:501", "a1")
+	// Even a grant that somehow exists for the unknown action (the API cannot
+	// create one) is not honoured: the lookup itself is guarded by `known`.
+	c := h.mgr.find(id, writer.String())
+	require.NotNil(t, c)
+	c.mu.Lock()
+	c.grants[grantKey{"repo:uid-alpha", "knomit_experiment", "frobnicate"}] = grantInfo{Tool: "knomit_experiment", Action: "frobnicate"}
+	c.mu.Unlock()
 	s := h.attach("uid:501", id)
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "go"))
 
@@ -56,7 +63,7 @@ func TestChat_UnknownActionAsksAndIsNeverGrantable(t *testing.T) {
 
 	code, body = h.do("uid:501", http.MethodGet, "/chats/"+id+"/grants", nil)
 	require.Equal(t, http.StatusOK, code)
-	require.Contains(t, string(body), `"count":0`)
+	require.Contains(t, string(body), `"count":1`, "no grant was added by the allow_session attempt: only the seeded one remains")
 }
 
 // A side-effecting call whose handle lookup FAILS asks (and cannot be
