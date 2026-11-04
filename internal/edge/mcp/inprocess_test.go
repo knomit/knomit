@@ -162,16 +162,20 @@ func TestInProcessSession_BindingSetRecorded(t *testing.T) {
 	require.NotNil(t, row, "the queried handle is in the session's binding set: %+v", sets[chatIDA])
 	require.Equal(t, "repo:uid-alpha", row.Binding)
 
-	pinA, ok := s.TargetPin(context.Background(), map[string]any{"binding": ha})
+	pinA, ok, err := s.TargetPin(context.Background(), map[string]any{"binding": ha})
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "repo:uid-alpha", pinA)
-	pinB, ok := s.TargetPin(context.Background(), map[string]any{"binding": hb})
+	pinB, ok, err := s.TargetPin(context.Background(), map[string]any{"binding": hb})
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "repo:uid-beta", pinB)
 	require.NotEqual(t, pinA, pinB)
-	_, ok = s.TargetPin(context.Background(), map[string]any{"binding": "not-a-handle"})
+	_, ok, err = s.TargetPin(context.Background(), map[string]any{"binding": "not-a-handle"})
+	require.NoError(t, err, "an unknown handle is not a lookup failure")
 	require.False(t, ok)
-	_, ok = s.TargetPin(context.Background(), map[string]any{})
+	_, ok, err = s.TargetPin(context.Background(), map[string]any{})
+	require.NoError(t, err)
 	require.False(t, ok)
 }
 
@@ -313,4 +317,27 @@ func TestOpenInProcessSession_RefusesAZeroPrincipal(t *testing.T) {
 	require.Contains(t, err.Error(), "no principal")
 	require.Nil(t, s)
 	require.Empty(t, listSessions(t, st), "nothing was registered or recorded")
+}
+
+// A failed handle lookup is reported as an error, distinct from a handle that
+// simply does not resolve: the chat asks on the first and runs the binding
+// gate on the second.
+func TestInProcessSession_TargetPinReportsStoreErrors(t *testing.T) {
+	m, st, srv := bindFixture(t)
+	s, _, _, err := OpenInProcessSession(context.Background(), srv, m, chatOpts(chatIDA))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	ha := bindHandle(t, s, "alpha")
+
+	_, ok, err := s.TargetPin(context.Background(), map[string]any{"binding": ha})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// Cancelled context: the lookup fails without the handle being unknown.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, ok, err = s.TargetPin(ctx, map[string]any{"binding": ha})
+	require.Error(t, err)
+	require.False(t, ok)
+	_ = st
 }

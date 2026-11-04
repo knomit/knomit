@@ -130,8 +130,10 @@ var _ llm.CallGate = (*chat)(nil)
 // none it emits an approval event and blocks until the person answers, the
 // turn is cancelled or the chat ends. A side-effecting call whose handle does
 // not resolve is not prompted: it runs and the binding gate refuses it before
-// any handler code. An unknown tool or action always asks and is never
-// grantable.
+// any handler code. A call whose handle lookup FAILED (the store errored)
+// fails closed: it asks, and cannot be granted, because the binding gate does
+// its own lookup and may succeed. An unknown tool or action always asks and is
+// never grantable.
 func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, error) {
 	var args map[string]any
 	_ = json.Unmarshal(call.Args, &args)
@@ -146,15 +148,21 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 	case !known:
 		action, _ = args["action"].(string)
 	}
-	pin, pinOK := c.sess.TargetPin(ctx, args)
-	if !pinOK {
+	pin, pinOK, pinErr := c.sess.TargetPin(ctx, args)
+	unresolved := pinErr != nil
+	if unresolved {
+		log.Warn().Err(pinErr).Str("chat", c.id).Str("tool", call.Name).Msg("chat: cannot resolve the call's binding handle; asking")
+	} else if !pinOK {
 		return llm.Decision{Allow: true, Kind: "auto"}, nil
 	}
-	kind, name := c.m.targetOf(pin)
+	var kind, name string
+	if !unresolved {
+		kind, name = c.m.targetOf(pin)
+	}
 
 	c.mu.Lock()
 	c.meta[call.ID] = callMeta{action: action, pin: pin}
-	if known {
+	if known && !unresolved {
 		if _, ok := c.grants[grantKey{pin, call.Name, action}]; ok {
 			c.mu.Unlock()
 			return llm.Decision{Allow: true, Kind: "grant"}, nil
@@ -162,7 +170,7 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 	}
 	p := &pendingApproval{
 		CallID: call.ID, Tool: call.Name, Action: action, Target: name, TargetKind: kind,
-		Destructive: known && eff.Destructive, Grantable: known, pin: pin,
+		Destructive: known && eff.Destructive, Grantable: known && !unresolved, pin: pin,
 		ch: make(chan string, 1),
 	}
 	if len(call.Args) <= maxApprovalArgs {

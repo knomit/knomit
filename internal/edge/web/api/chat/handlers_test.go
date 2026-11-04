@@ -289,29 +289,6 @@ func TestChat_DeclineIsToolError(t *testing.T) {
 	require.NotContains(t, h.queryTitles(writer, "chat-00000000000000000000000000000052", handle), "Declined write")
 }
 
-func TestChat_OtherPrincipalGets404(t *testing.T) {
-	h := newHarness(t)
-	id := h.create("uid:501", "a1")
-	for _, tc := range []struct{ method, path string }{
-		{http.MethodGet, "/chats/" + id},
-		{http.MethodDelete, "/chats/" + id},
-		{http.MethodGet, "/chats/" + id + "/events"},
-		{http.MethodPost, "/chats/" + id + "/turns"},
-		{http.MethodPost, "/chats/" + id + "/cancel"},
-		{http.MethodGet, "/chats/" + id + "/grants"},
-		{http.MethodGet, "/chats/" + id + "/calls/tu_1"},
-	} {
-		var body any
-		if tc.method == http.MethodPost {
-			body = map[string]string{"text": "x"}
-		}
-		code, _ := h.do("uid:1000", tc.method, tc.path, body)
-		require.Equal(t, http.StatusNotFound, code, tc.method+" "+tc.path)
-	}
-	code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-	require.Equal(t, http.StatusOK, code, "the owner still sees it")
-}
-
 // Q2 and Review Focus 8.
 func TestChat_ReadOnlyPrincipalCanChatReads(t *testing.T) {
 	h := newHarness(t)

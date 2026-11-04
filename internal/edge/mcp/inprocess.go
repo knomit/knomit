@@ -136,18 +136,24 @@ func (s *InProcessSession) CallTool(ctx context.Context, name string, args json.
 // TargetPin resolves the call's `binding` handle to the repo or lens it
 // names ("repo:<uid>" or "lens:<uid>"), which is what a per-target approval
 // grant is keyed on. ok is false when the call carries no handle or the
-// handle does not resolve; such a call is not prompted, and the binding gate
-// refuses it before any handler code runs.
-func (s *InProcessSession) TargetPin(ctx context.Context, args map[string]any) (string, bool) {
+// handle does not resolve: such a call is not prompted, and the binding gate
+// refuses it before any handler code runs. err is non-nil when the lookup
+// itself FAILED (a busy or closed store): the handle may well be valid, so
+// the caller must not treat the call as unresolvable. It must ask, because the
+// binding gate does its own lookup and may succeed where this one failed.
+func (s *InProcessSession) TargetPin(ctx context.Context, args map[string]any) (pin string, ok bool, err error) {
 	handle, _ := args["binding"].(string)
 	if handle == "" || s.store == nil {
-		return "", false
+		return "", false, nil
 	}
-	pin, _, ok, err := s.store.BindingHandle(ctx, handle, time.Now())
-	if err != nil || !ok {
-		return "", false
+	pin, _, ok, err = s.store.BindingHandle(ctx, handle, time.Now())
+	if err != nil {
+		return "", false, err
 	}
-	return pin, true
+	if !ok {
+		return "", false, nil
+	}
+	return pin, true, nil
 }
 
 // Close ends the session row and unregisters the server-side session. Safe to

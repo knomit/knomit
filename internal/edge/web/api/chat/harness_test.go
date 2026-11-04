@@ -136,6 +136,7 @@ type harness struct {
 	t          *testing.T
 	repos      *repos.Manager
 	sessions   *clientsessions.Store
+	sessionsDB *sql.DB
 	srv        *mcpserver.MCPServer
 	mgr        *manager
 	ts         *httptest.Server
@@ -148,14 +149,14 @@ type harness struct {
 	next   int
 }
 
-func newSessionsStore(t *testing.T) *clientsessions.Store {
+func newSessionsStore(t *testing.T) (*clientsessions.Store, *sql.DB) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL")
 	require.NoError(t, err)
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	require.NoError(t, storemigrate.Control(db))
-	return clientsessions.New(db, clientsessions.Policy{DeadAfter: time.Hour, HiddenAfter: 3 * time.Hour})
+	return clientsessions.New(db, clientsessions.Policy{DeadAfter: time.Hour, HiddenAfter: 3 * time.Hour}), db
 }
 
 func newRepo(t *testing.T, m *repos.Manager, name string) {
@@ -176,13 +177,23 @@ func newRepo(t *testing.T, m *repos.Manager, name string) {
 // models replace only what the registry would have opened).
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"a1","type":"model","display_name":"A1","created_at":"2026-01-01T00:00:00Z"}],"has_more":false}`)
+	})
+}
+
+// newHarnessProvider is newHarness with the fake Anthropic endpoint's handler
+// chosen by the test (the default lists the model a1).
+func newHarnessProvider(t *testing.T, provider http.HandlerFunc) *harness {
+	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:     config.Config{Home: t.TempDir()},
 		AgentID: testsigner.FixtureAgentID("agent/test"), AgentBranch: "agent/test",
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
-	st := newSessionsStore(t)
+	st, stDB := newSessionsStore(t)
 	m.SetClientSessions(st)
 	newRepo(t, m, "alpha")
 	newRepo(t, m, "beta")
@@ -193,10 +204,7 @@ func newHarness(t *testing.T) *harness {
 		roUser.String():  {auth.Read: {}},
 	})
 
-	anthropicModels := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":[{"id":"a1","type":"model","display_name":"A1","created_at":"2026-01-01T00:00:00Z"}],"has_more":false}`)
-	}))
+	anthropicModels := httptest.NewServer(provider)
 	t.Cleanup(anthropicModels.Close)
 	reg := llm.NewRegistry(map[string]config.LLMProviderConfig{
 		"anthropic": {
@@ -212,7 +220,7 @@ func newHarness(t *testing.T) *harness {
 	})
 
 	life, endLife := context.WithCancel(context.Background())
-	h := &harness{t: t, repos: m, sessions: st, srv: srv, sessionDir: filepath.Join(t.TempDir(), "chat-sessions"), logDir: filepath.Join(t.TempDir(), "chat-logs"), life: endLife}
+	h := &harness{t: t, repos: m, sessions: st, sessionsDB: stDB, srv: srv, sessionDir: filepath.Join(t.TempDir(), "chat-sessions"), logDir: filepath.Join(t.TempDir(), "chat-logs"), life: endLife}
 	var released sync.WaitGroup
 	h.mgr = newManager(life, srv, m, reg, h.sessionDir, h.logDir, &released)
 	realOpen := h.mgr.openModel
