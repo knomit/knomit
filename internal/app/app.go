@@ -194,6 +194,17 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	logLLMSetup(log.Logger, llmAdapter, llmInitErr)
 
+	// The chat's providers (the v2 harness). Nothing is contacted until the
+	// chat lists or opens a model.
+	var llmRegistry *llm.Registry
+	if len(cfg.LLM.Providers) > 0 {
+		llmRegistry = llm.NewRegistry(cfg.LLM.Providers)
+		if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" {
+			llmRegistry.SetTrace(tracePath)
+		}
+		a.closers = append(a.closers, func() { _ = llmRegistry.Close() })
+	}
+
 	// Repo manager.
 	a.manager = repos.New(ctx, repos.Deps{
 		Cfg:         cfg,
@@ -234,6 +245,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a.server = &web.Server{
 		Lifetime:          lifetime,
 		OriginSessionsDir: filepath.Join(cfg.Home, "origin-sessions"),
+		LLMProviders:      llmRegistry,
+		ChatSessionsDir:   filepath.Join(cfg.Home, "chat-sessions"),
+		ChatLogDir:        filepath.Join(cfg.Home, "chat-logs"),
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
 		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.

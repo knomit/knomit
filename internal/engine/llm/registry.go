@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -45,11 +46,55 @@ type Registry struct {
 	mu     sync.Mutex
 	cached []ProviderStatus
 	at     time.Time
+
+	tracePath string
+	tracers   []io.Closer
 }
 
 // NewRegistry builds a registry over cfg.
 func NewRegistry(cfg map[string]config.LLMProviderConfig) *Registry {
 	return &Registry{cfg: cfg, now: time.Now}
+}
+
+// SetTrace makes every model Open returns append a per-request debugging line
+// to path (KNOMIT_LLM_TRACE). Close releases the files.
+func (r *Registry) SetTrace(path string) {
+	r.mu.Lock()
+	r.tracePath = path
+	r.mu.Unlock()
+}
+
+// Close releases the trace files Open created.
+func (r *Registry) Close() error {
+	r.mu.Lock()
+	ts := r.tracers
+	r.tracers = nil
+	r.mu.Unlock()
+	var first error
+	for _, t := range ts {
+		if err := t.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// traced wraps m with the tracer when one is set.
+func (r *Registry) traced(m ChatModel) (ChatModel, error) {
+	r.mu.Lock()
+	path := r.tracePath
+	r.mu.Unlock()
+	if path == "" {
+		return m, nil
+	}
+	t, c, err := NewTracingChat(m, path)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	r.tracers = append(r.tracers, c)
+	r.mu.Unlock()
+	return t, nil
 }
 
 // List reports every provider, sorted by name, with each allowlisted model's
@@ -239,7 +284,7 @@ func (r *Registry) Open(ctx context.Context, provider, model string) (ChatModel,
 		if err := m.o.Profile.validate(); err != nil {
 			return nil, err
 		}
-		return WrapChat(m, policyFor("anthropic")), nil
+		return r.traced(WrapChat(m, policyFor("anthropic")))
 	case config.LLMKindOllama:
 		c, err := NewOllamaChat(ctx, model, OllamaOptions{
 			Host: ollamaHost(p), KeepAlive: p.KeepAlive, NumCtx: p.NumCtx, MaxOutput: md.MaxOutputTokens,
@@ -256,7 +301,7 @@ func (r *Registry) Open(ctx context.Context, provider, model string) (ChatModel,
 		if w := c.Caps().ContextWindow; md.MaxOutputTokens > 0 && md.MaxOutputTokens >= w {
 			return nil, fmt.Errorf("llm: ollama model %q: max_output_tokens %d must be below its effective context window %d (the smaller of num_ctx and the model's trained length)", model, md.MaxOutputTokens, w)
 		}
-		return WrapChat(c, policyFor("ollama")), nil
+		return r.traced(WrapChat(c, policyFor("ollama")))
 	}
 	return nil, fmt.Errorf("llm: provider %q has unsupported kind %q", provider, p.Kind)
 }

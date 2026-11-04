@@ -7,6 +7,7 @@ CONNECT /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsM
 CONNECT /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 CONNECT /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 DELETE /archived/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchivedPurge
+DELETE /chats/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 DELETE /fleet/root | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleDeleteFleetRoot
 DELETE /lenses/{lens}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALLensDelete
 DELETE /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
@@ -31,6 +32,12 @@ DELETE /secrets/{id} | requestID > recoverer > reportPanic > authMiddleware > me
 GET / | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleAPIRoot
 GET /archived | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchived
 GET /archived/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchivedItem
+GET /chat-providers | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+GET /chats | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+GET /chats/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+GET /chats/{id}/calls/{callId} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+GET /chats/{id}/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+GET /chats/{id}/grants | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 GET /fleet | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleGetFleet
 GET /fleet/activity | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleFleetActivity
 GET /fleet/members | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleFleetMembers
@@ -142,6 +149,10 @@ PATCH /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPani
 PATCH /repos/{repo}/origin/upstream | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > require | handleHALSetOriginUpstream
 PATCH /secrets/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > (*Server).requireLocalOrSameOriginAdmin-fm | handlePatchSecret
 POST /archived/{id}/restore | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALArchivedRestore
+POST /chats | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+POST /chats/{id}/approvals/{callId} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+POST /chats/{id}/cancel | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+POST /chats/{id}/turns | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 POST /fleet/create | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleCreateFleet
 POST /fleet/decommission | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleDecommissionFleet
 POST /fleet/drop-commit | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleDropFleetCommit

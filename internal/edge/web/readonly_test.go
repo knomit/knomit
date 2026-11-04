@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"knomit/internal/engine/llm"
+	"knomit/internal/foundation/auth"
 )
 
 func TestIsMutatingRequest(t *testing.T) {
@@ -67,6 +70,19 @@ func TestIsMutatingRequest(t *testing.T) {
 		{"DELETE", "/api/v1/lenses/eng/search/factsetx", true},
 		{"DELETE", "/api/v1/lenses/eng/facts/search/factset", true},
 		{"DELETE", "/api/v1/lenses//search/factset", true},
+		// The chat routes create chats, post turns and answer approvals; none is
+		// a knowledge-base write (the per-tool permission gate decides what a
+		// chat's calls may do), so they bypass the method gate...
+		{"POST", "/api/v1/chats", false},
+		{"POST", "/api/v1/chats/chat-0f/turns", false},
+		{"POST", "/api/v1/chats/chat-0f/approvals/tu_1", false},
+		{"DELETE", "/api/v1/chats/chat-0f", false},
+		// ...but the pattern is anchored: look-alikes and paths that merely
+		// contain /chats stay gated.
+		{"POST", "/api/v1/chatsfoo", true},
+		{"POST", "/api/v1/chat-providers", true},
+		{"PUT", "/api/v1/repos/core/branches/main/facts/x/chats/y", true},
+		{"POST", "/api/v1/repos/core/chats", true},
 	}
 	for _, c := range cases {
 		if got := isMutatingRequest(c.method, c.path); got != c.want {
@@ -163,5 +179,73 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	h.ServeHTTP(lensPatch, fromLoopback(httptest.NewRequest("PATCH", "/api/v1/lenses/myview", nil)))
 	if lensPatch.Code != http.StatusForbidden {
 		t.Errorf("PATCH lens REST path: got status %d, want 403 (CRUD must stay gated)", lensPatch.Code)
+	}
+}
+
+// A principal without the write permission can start a chat and answer its
+// approvals: writeGate lets the chat routes through, because the permission to
+// write is checked per TOOL when a chat's call reaches the MCP server. A real
+// write route stays refused for the same principal.
+//
+// SABOTAGE: drop chatRoutePattern from isMutatingRequest -> red (403).
+func TestWriteGate_LetsAReadOnlyPrincipalUseChat(t *testing.T) {
+	reader := auth.Principal{Kind: auth.KindBridge, ID: "uid:777", Via: auth.ViaSocket}
+	g := auth.StaticGrants{reader.String(): {auth.Read: {}}}
+	reached := 0
+	h := writeGate(g, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	do := func(method, path string) int {
+		req := httptest.NewRequest(method, path, nil)
+		req = req.WithContext(auth.WithPrincipal(req.Context(), reader))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := do("POST", "/api/v1/chats"); got != http.StatusNoContent {
+		t.Errorf("POST /chats as a read-only principal = %d, want 204", got)
+	}
+	if got := do("POST", "/api/v1/chats/chat-0f/approvals/tu_1"); got != http.StatusNoContent {
+		t.Errorf("POST approval as a read-only principal = %d, want 204", got)
+	}
+	if got := do("POST", "/api/v1/repos"); got != http.StatusForbidden {
+		t.Errorf("POST /repos as a read-only principal = %d, want 403", got)
+	}
+	if reached != 2 {
+		t.Errorf("handler reached %d times, want 2", reached)
+	}
+}
+
+// A read-only (demo) server does not mount the chat at all: the routes answer
+// 404, with a provider registry configured or not.
+func TestHandler_ReadOnly_DoesNotMountChat(t *testing.T) {
+	s := &Server{ReadOnly: true, APIOnly: true, Manager: newTestManagerWithRepos(t), LLMProviders: llm.NewRegistry(nil)}
+	h := s.Handler()
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/api/v1/chats"},
+		{"GET", "/api/v1/chats"},
+		{"GET", "/api/v1/chat-providers"},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, fromLoopback(httptest.NewRequest(tc.method, tc.path, nil)))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("read-only %s %s = %d, want 404", tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
+// And a writable server does: without a provider registry the list is empty
+// and starting a chat is refused, rather than the route being absent.
+func TestHandler_Writable_MountsChat(t *testing.T) {
+	s := &Server{APIOnly: true, Manager: newTestManagerWithRepos(t)}
+	h := s.Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, fromLoopback(httptest.NewRequest("GET", "/api/v1/chat-providers", nil)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /chat-providers = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"providers":[]`) {
+		t.Errorf("no registry should list no providers: %s", rec.Body)
 	}
 }

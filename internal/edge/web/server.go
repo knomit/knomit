@@ -57,6 +57,22 @@ type Server struct {
 	// a private directory under os.TempDir(). internal/app sets
 	// <home>/origin-sessions.
 	OriginSessionsDir string
+	// LLMProviders opens the configured chat providers' models. nil lists no
+	// providers and refuses to start a chat; ReadOnly leaves the chat routes
+	// unmounted.
+	LLMProviders *llm.Registry
+	// ChatSessionsDir is where the chats' temp files live (a run directory per
+	// process; "" gives a private one under os.TempDir()). internal/app sets
+	// <home>/chat-sessions.
+	ChatSessionsDir string
+	// ChatLogDir is where the persistent chat session logs go, one JSONL file
+	// per chat; "" turns them off. internal/app sets <home>/chat-logs.
+	ChatLogDir string
+	// chatOnce builds chatRoutes, the api/chat routes, once per Server, so
+	// the plain and OAuth API routers share one set of live chats.
+	chatOnce     sync.Once
+	chatRoutes   chi.Router
+	chatReleased sync.WaitGroup
 	// ClientSessions records every MCP request's session (control.db
 	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
 	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start
@@ -126,6 +142,9 @@ type Server struct {
 	CORSOrigins []string
 
 	mcpHandler http.Handler // single MCP server; profile is a per-repo setting
+	// mcpServer is the MCP server mcpHandler serves; the chats' in-process
+	// sessions talk to the same one, so its gates apply to them too.
+	mcpServer *mcpserver.MCPServer
 
 	// staticFS overrides the embedded web UI. nil — the production zero
 	// value — means embeddedStaticFS(). Tests set it to an fstest.MapFS
@@ -171,6 +190,7 @@ func (s *Server) buildMCPHandler() {
 	} else {
 		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
 	}
+	s.mcpServer = mcpSrv
 	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
 		mcpserver.WithHTTPContextFunc(mcpHTTPContext),
 	)

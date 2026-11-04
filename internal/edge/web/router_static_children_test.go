@@ -95,6 +95,9 @@ var paramClass = map[string]struct {
 	"/repos/{repo}/branches/{branch}/index-rebuilds": {false, "{id}: a server-minted job id"},
 	"/repos/{repo}/branches/{branch}/synthesis-runs": {false, "{id}: a server-minted job id"},
 	"/repos/{repo}/origin-sessions":                  {false, "{sessionID}: comes from the origin, not from a name chosen here"},
+	"/chats":                                         {false, "{id}: a server-minted chat id (chat- and 32 random hex digits); the user picks a provider and model, never an id"},
+	"/chats/{id}/approvals":                          {false, "{callId}: the loop's tool-call id (tu_<n>), minted by knomit, never typed by a user"},
+	"/chats/{id}/calls":                              {false, "{callId}: the loop's tool-call id (tu_<n>), minted by knomit, never typed by a user"},
 }
 
 // NO STATIC ROUTE MAY SIT BESIDE A {param} THAT HOLDS A USER-CHOSEN NAME.

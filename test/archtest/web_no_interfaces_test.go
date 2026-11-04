@@ -174,6 +174,14 @@ var webKnownTypes = map[string]map[string]string{
 		"sessionManager":       "session_manager.go",
 		"createSessionRequest": "handlers.go",
 	},
+	// api/chat: the chat manager, one live chat, its temp-file store and its
+	// persistent session log, each in its own file.
+	webPkg + "/api/chat": {
+		"manager":    "mount.go",
+		"chat":       "chat.go",
+		"chatStore":  "store.go",
+		"sessionLog": "sessionlog.go",
+	},
 	// api/secrets: the secret view; mount.go declares no type.
 	webPkg + "/api/secrets": {
 		"secretView": "handlers.go",

@@ -176,6 +176,7 @@ func TestWeb_APIImportDetector_Discriminates(t *testing.T) {
 var webAPIExportAllowlist = map[string]map[string]string{
 	"api/kb":      {},
 	"api/manage":  {},
+	"api/chat":    {},
 	"api/jobs":    {},
 	"api/origins": {},
 	"api/secrets": {},

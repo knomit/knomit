@@ -35,6 +35,15 @@ import (
 var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
 	`(?:/repos/[^/]+/branches/[^/]+/mcp|/lenses/[^/]+/mcp|/mcp)(/|$)`)
 
+// chatRoutePattern matches the chat routes: /chats and everything under it.
+// Their POSTs and DELETEs create chats, post turns and answer approvals; none
+// is a knowledge-base write. What a chat's tool calls may do is enforced per
+// TOOL by the same permission gate that guards every MCP call (a read-only
+// principal chats and sees only the tools it may use), so the POST rule would
+// only lock read-only principals out. A read-only (demo) server does not mount
+// the chat routes at all.
+var chatRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) + `/chats(/|$)`)
+
 // factsetClosePattern matches the REST factset resource, whose DELETE closes
 // the caller's own factset: a repo branch's and a lens's alike (a lens is a
 // virtual repo). Closing frees a read session the caller made by reading (a
@@ -50,9 +59,9 @@ var factsetClosePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBas
 func isMutatingRequest(method, path string) bool {
 	switch method {
 	case http.MethodDelete:
-		return !mcpRoutePattern.MatchString(path) && !factsetClosePattern.MatchString(path)
+		return !mcpRoutePattern.MatchString(path) && !factsetClosePattern.MatchString(path) && !chatRoutePattern.MatchString(path)
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
-		return !mcpRoutePattern.MatchString(path)
+		return !mcpRoutePattern.MatchString(path) && !chatRoutePattern.MatchString(path)
 	default:
 		return false
 	}

@@ -248,6 +248,13 @@ var sameLayerEdges = map[string]bool{
 	// helpers (APIBase, StartSSE, RefuseUnwritableBranch, ...) through httpx.
 	"edge/web/api/jobs -> edge/web/hal":   true,
 	"edge/web/api/jobs -> edge/web/httpx": true,
+	// api/chat is the same: problems and HAL through hal, the shared helpers
+	// (APIBase, DecodeJSON, StartSSE, the run-dir lock) through httpx, and the
+	// in-process MCP session, prefix and call classification through edge/mcp
+	// (chat never calls a handler or a corpus API directly).
+	"edge/web/api/chat -> edge/web/hal":   true,
+	"edge/web/api/chat -> edge/web/httpx": true,
+	"edge/web/api/chat -> edge/mcp":       true,
 	// api/secrets is the same: problems and HAL through hal, APIBase and
 	// DecodeJSON through httpx.
 	"edge/web/api/secrets -> edge/web/hal":   true,
