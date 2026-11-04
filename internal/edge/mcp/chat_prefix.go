@@ -19,7 +19,8 @@ const (
 	prefixToolItemPrefix   = "tool:"
 )
 
-// LoadPrefix initializes c as info and pages tools/list, returning the
+// LoadPrefix initializes c as info and pages tools/list (following
+// nextCursor until the server returns none), returning the
 // initialize instructions (hook 3) and the tool definitions (hook 1), sorted
 // by name with canonical schemas.
 //
@@ -41,17 +42,31 @@ func LoadPrefix(ctx context.Context, c *client.Client, info mcpgo.Implementation
 	if err != nil {
 		return "", nil, fmt.Errorf("chat prefix: initialize: %w", err)
 	}
-	list, err := c.ListTools(ctx, mcpgo.ListToolsRequest{})
-	if err != nil {
-		return "", nil, fmt.Errorf("chat prefix: tools/list: %w", err)
-	}
-	tools := make([]llm.ToolDef, 0, len(list.Tools))
-	for _, t := range list.Tools {
-		def, err := toolDef(t)
+	var tools []llm.ToolDef
+	seen := map[mcpgo.Cursor]bool{}
+	var req mcpgo.ListToolsRequest
+	for {
+		// One page per call: Client.ListTools (mcp-go v0.45.0) would follow
+		// the cursor itself, with no guard against a cursor that repeats.
+		list, err := c.ListToolsByPage(ctx, req)
 		if err != nil {
-			return "", nil, err
+			return "", nil, fmt.Errorf("chat prefix: tools/list: %w", err)
 		}
-		tools = append(tools, def)
+		for _, t := range list.Tools {
+			def, err := toolDef(t)
+			if err != nil {
+				return "", nil, err
+			}
+			tools = append(tools, def)
+		}
+		if list.NextCursor == "" {
+			break
+		}
+		if seen[list.NextCursor] {
+			return "", nil, fmt.Errorf("chat prefix: tools/list: cursor %q repeated", list.NextCursor)
+		}
+		seen[list.NextCursor] = true
+		req.Params.Cursor = list.NextCursor
 	}
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	return res.Instructions, tools, nil
