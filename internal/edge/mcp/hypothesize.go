@@ -144,12 +144,13 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 
 		var result *step.PipelineResult
 
-		if current {
+		switch hypothesizeMode(req) {
+		case actCurrent:
 			// The binding's write branch on every path: a session_id
 			// continues only on the branch its session was opened on.
 			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}, b.WriteBranch()).
 				Current(ctx, sessionID)
-		} else if sessionID == "" {
+		case actStart:
 			effort, scope, perr := parseEffortAndScope(req, ri)
 			if perr != nil {
 				return mcpgo.NewToolResultError(perr.Error()), nil
@@ -165,12 +166,14 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			// branch off the session row.
 			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, effort, scope, b.WriteBranch()).
 				StartSession(withActor(ctx, req))
-		} else {
+		case actAnswer:
 			// Effort and scope are deliberately NOT parsed on the continue path:
 			// an invalid effort must not be able to wedge a live session, and the
 			// scope that matters was persisted on the session row at start.
 			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, step.DefaultEffort, step.ScopeFilter{}, b.WriteBranch()).
 				ContinueSessionForItem(ctx, sessionID, response, itemID)
+		default:
+			return mcpgo.NewToolResultError("internal: hypothesize mode has no handler branch"), nil
 		}
 
 		if err != nil {
@@ -243,4 +246,21 @@ func hypothesizeNext(res *HypothesizeResult, unscoped bool) string {
 	return fmt.Sprintf("Answer item %d: call knomit_hypothesize with session_id=%q, item_id=%d and response%s. "+
 		"session_id is required on every call after the first.",
 		res.Item.ID, res.SessionID, res.Item.ID, binding)
+}
+
+// HypothesizeModes is every mode knomit_hypothesize dispatches to: the
+// handler's start, current and continue branches.
+var HypothesizeModes = []string{actStart, actCurrent, actAnswer}
+
+// hypothesizeMode names the mode a call dispatches to: no session_id starts;
+// current reads; the rest answers.
+func hypothesizeMode(req mcpgo.CallToolRequest) string {
+	switch {
+	case req.GetString("session_id", "") == "":
+		return actStart
+	case req.GetBool("current", false):
+		return actCurrent
+	default:
+		return actAnswer
+	}
 }

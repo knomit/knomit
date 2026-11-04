@@ -134,24 +134,27 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 
 		var result *step.ReviewResult
 
-		switch {
-		case sessionID == "":
+		switch reviewMode(req) {
+		case actStart, actTakeover:
 			result, err = reviewer.StartOrResumeSession(ctx, synthesize.StartOptions{
 				Takeover:     takeover,
 				ResumeWindow: ri.PipelineResumeWindow(),
 			})
-		case page > 0 && response == "":
+		case actPage:
 			// A page fetch, not an answer. Ordered before the response guard
 			// below because paging is the one continue-call that legitimately
 			// carries no decisions — it is a pure read of an item the agent is
 			// still assembling.
 			result, err = reviewer.PageItem(ctx, sessionID, itemID, page)
-		case response == "":
+		case actCurrent:
 			result, err = reviewer.Current(ctx, sessionID)
-		case itemID == 0:
-			return mcpgo.NewToolResultError(errAnswerWithoutItem), nil
-		default:
+		case actAnswer:
+			if itemID == 0 {
+				return mcpgo.NewToolResultError(errAnswerWithoutItem), nil
+			}
 			result, err = reviewer.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, completionToken)
+		default:
+			return mcpgo.NewToolResultError("internal: review mode has no handler branch"), nil
 		}
 
 		if err != nil {
@@ -207,4 +210,28 @@ func logProgress(e step.ProgressEvent) {
 		return
 	}
 	log.Debug().Str("phase", e.Phase).Msg(e.Message)
+}
+
+// ReviewModes is every mode knomit_review dispatches to. The handler switches
+// on reviewMode, whose results are exactly these, and the tool-effects table
+// must have a row for each (TestToolEffects_EveryModeHasARow).
+var ReviewModes = []string{actStart, actTakeover, actPage, actCurrent, actAnswer}
+
+// reviewMode names the mode a call dispatches to: takeover is its own kind
+// (even beside a session_id, which the handler refuses, so asking is the safe
+// side); no session_id starts; page>0 with no response pages; no response
+// reads the current item; anything else answers.
+func reviewMode(req mcpgo.CallToolRequest) string {
+	switch {
+	case req.GetBool("takeover", false):
+		return actTakeover
+	case req.GetString("session_id", "") == "":
+		return actStart
+	case req.GetFloat("page", 0) > 0 && req.GetString("response", "") == "":
+		return actPage
+	case req.GetString("response", "") == "":
+		return actCurrent
+	default:
+		return actAnswer
+	}
 }
