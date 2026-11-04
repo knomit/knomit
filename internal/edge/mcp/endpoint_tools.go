@@ -48,7 +48,8 @@ func toolsForEndpoint(tools []mcpgo.Tool, gates map[string]gateMode, kind endpoi
 		case mode == gateUngated && kind == endpointFixed:
 			// knomit_bind is the only ungated tool; nothing can bind here.
 		case mode == gateUngated:
-			out = append(out, scopedBindTool())
+			// A freshly built tool, so it takes its hints from the table too.
+			out = append(out, annotateFromEffects(scopedBindTool()))
 		default:
 			out = append(out, withBindingDescription(t, bindingDescription(mode, kind)))
 		}

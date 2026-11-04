@@ -133,6 +133,8 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 	// on behalf of a caller who may not write anyway.
 	for _, t := range regs {
 		h := t.handler
+		// Hints come from the one classification table (tool_effects.go).
+		t.tool = annotateFromEffects(t.tool)
 		if t.gate != gateUngated {
 			h = gateBinding(mgr, t.tool, t.gate, h)
 		}
