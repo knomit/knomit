@@ -2,7 +2,6 @@ package chat
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -34,15 +33,30 @@ func TestChat_PriceWarningUsesTheNamedCopyOnce(t *testing.T) {
 		}
 	}
 	require.Len(t, warnings, 1, "one warning per chat, not one per request")
-	want := priceWarningText(llm.PriceWarning{Threshold: 95000, PromptTokens: 97004, TierTokens: 100000, Model: "claude-test-x"})
-	require.Equal(t, want, warnings[0]["message"])
+	require.Equal(t, "This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.", warnings[0]["message"])
 	require.EqualValues(t, 95000, warnings[0]["threshold"])
 	require.EqualValues(t, 97004, warnings[0]["prompt_tokens"])
 }
 
-func TestPriceWarningText_FallsBackToTheThresholdForASingleTier(t *testing.T) {
-	got := priceWarningText(llm.PriceWarning{Threshold: 41, PromptTokens: 43, TierTokens: 0, Model: "m-x"})
-	require.Equal(t, fmt.Sprintf(priceWarningFormat, 43, "m-x", 41), got)
+// The number is the card's tier boundary, not the prompt size or the model id:
+// each boundary below must appear with its own thousands separators.
+func TestPriceWarningText_ShowsTheTierBoundaryFromTheCard(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		w    llm.PriceWarning
+		want string
+	}{
+		{"first tier", llm.PriceWarning{Threshold: 95000, PromptTokens: 97004, TierTokens: 100000, Model: "m-x"},
+			"This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save."},
+		{"second tier", llm.PriceWarning{Threshold: 190000, PromptTokens: 192000, TierTokens: 200000, Model: "m-x"},
+			"This chat is nearing 200,000 tokens. Past that, each message costs more. Start a new chat to save."},
+		{"single tier falls back to threshold", llm.PriceWarning{Threshold: 41, PromptTokens: 43, TierTokens: 0, Model: "m-x"},
+			"This chat is nearing 41 tokens. Past that, each message costs more. Start a new chat to save."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, priceWarningText(tc.w))
+		})
+	}
 }
 
 func TestChat_ReasoningOnlyTruncationUsesTheNamedMessage(t *testing.T) {
