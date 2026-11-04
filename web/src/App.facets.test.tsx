@@ -939,6 +939,98 @@ describe('a pinned pending create that is cancelled', () => {
   });
 });
 
+// #469: a create started by ANOTHER client is seen by the creates poll, but
+// nothing in this tab re-read the repo list for it, so it stayed a "created"
+// pending row until clicked and was missing from the lens draft's mounts.
+describe('a create that finished elsewhere', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+
+  const job = (over: Record<string, unknown> = {}) => ({
+    create_id: 'c-far', name: 'far-kb', mode: 'initialize', state: 'running', step: 'ingest', phase: 'ingest',
+    ...over,
+  });
+  const BASE = [{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }];
+  const WITH_FAR = [...BASE, { name: 'far-kb', uid: 'u-far' }];
+
+  it('becomes a real repo row with no click, and a mount the lens draft offers', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    expect(await screen.findByTestId('pending-create-rail-far-kb')).toBeInTheDocument();
+
+    // The other client's create finishes; the server lists its repo.
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockResolvedValue([job({ state: 'done', step: 'done', phase: 'done', index_state: 'ready', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+
+    expect(await screen.findByTestId('rail-repo-far-kb')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-create-rail-far-kb')).toBeNull();
+    fireEvent.click(screen.getByTestId('rail-new-lens'));
+    expect(await screen.findByTestId('lens-read-far-kb')).toBeInTheDocument();
+  });
+
+  it('is listed, flagged creating, as soon as it registers — before the job is done', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    await screen.findByTestId('pending-create-rail-far-kb');
+
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+
+    await screen.findByTestId('rail-repo-far-kb');
+    expect(screen.getByTestId('rail-create-chip-far-kb')).toHaveTextContent(/^creating$/);
+    expect(screen.queryByTestId('pending-create-rail-far-kb')).toBeNull();
+  });
+
+  // The pinned `pending` target and this refetch meet here: the refetch drops
+  // the pending row, the auto-unpin effect has no `pending` case so the pin
+  // stays, and the pinned page hands over to the repository on its own.
+  it('a pinned pending create that registers elsewhere hands over to its repository', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('pending-create-rail-far-kb'));
+    await screen.findByTestId('pending-create-settings');
+
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+
+    await waitFor(() => expect(screen.getByTestId('rail-repo-far-kb')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByTestId('pending-create-settings')).toBeNull();
+    expect(tabNames()).toEqual(['Settings']);
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^creating$/);
+  });
+
+  it('a done job whose repo never appears costs one refetch, not one per poll', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    await waitFor(() => expect(m.repos).toHaveBeenCalled());
+    // Let boot's reads settle before counting.
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const before = m.repos.mock.calls.length;
+
+    // Deleted elsewhere after it finished: the job outlives its repo. Every
+    // answer is a NEW array, as a real poll's is: a mock that returned one
+    // instance would publish nothing new, and no effect would re-run to test.
+    m.repos.mockImplementation(async () => [...BASE]);
+    m.listRepoCreates.mockImplementation(async () => [job({ state: 'done', step: 'done', phase: 'done', index_state: 'ready', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { await refreshRepoCreates(); });
+    }
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(m.repos.mock.calls.length).toBe(before + 1);
+  });
+});
+
 describe('the status footer\'s creates count', () => {
   it('opens the rail, where each create is a row with its chip', async () => {
     const { m } = await primeApi();

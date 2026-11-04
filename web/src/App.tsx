@@ -15,7 +15,7 @@ import { openEventStream, streamErrorSuffix } from './eventStream';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
 import { useListUrl } from './listUrl';
-import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
+import { useRepoCreates, activeCreateByRepo, refreshRepoCreates, createRepoIsRegistered, createListedIn } from './useRepoCreates';
 import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, accessTabsFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
@@ -1509,6 +1509,69 @@ export default function App() {
       dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: name } });
     });
   }, [dispatch, dispatchView, refreshLists]);
+
+  // A create whose repository is registered but NOT in `repos` means the list
+  // is behind, and nothing else will bring it forward (#469).
+  //
+  // The creates poll (useRepoCreates) sees every job on the server, whoever
+  // started it. The repo list does not: it is re-read by refreshLists after
+  // something THIS tab did, by the draft's own callback for a create started
+  // here, and by the repo-events stream's reconnect. The stream itself only
+  // patches rows it already has (index state, remote health) — it never
+  // announces a newly registered repository. So a create started by another
+  // client, or in another tab, reached `done` here while its repo stayed out
+  // of the list: the rail drew it as a "created" pending row until someone
+  // clicked it, and the lens draft could not mount it at all.
+  //
+  // The trigger is REGISTRATION, not only `done`. A create becomes a real,
+  // browsable repository at m.Add, long before its index finishes, and one
+  // started in this tab is listed from that moment (onRepoDraftRegistered).
+  // A foreign one must be too, or the same repository reads as two different
+  // things depending on which window made it. "Not listed" is pendingCreates'
+  // own test (createListedIn, by name or uid), so the effect refetches exactly
+  // when the rail would otherwise keep drawing a pending row.
+  //
+  // AT MOST ONCE PER (create, point), for two points: first seen registered,
+  // and first seen done. The second is the retry: refreshLists swallows a
+  // failed read, and a job first seen mid-index whose read went wrong would
+  // otherwise stay pending until something else refetched. The cap exists
+  // because the
+  // condition can stay true for good: a done job outlives its repo by design
+  // (the server keeps it for an hour), so a repo deleted, or renamed past its
+  // uid's reach, by someone else leaves a job that is "registered and not
+  // listed" on every 2 s poll. Without the cap that is a refetch every poll,
+  // for an hour. A job first seen already done claims both points at once, so
+  // it costs one refetch, not two.
+  //
+  // Skipped: a cancelled job (its repo is being, or was, removed, and the
+  // rail draws nothing for it) and a failed one (CreateFailed promises the
+  // repo does not exist). Gated on reposLoaded so boot's own first read is
+  // not raced by a second.
+  //
+  // A pinned `pending` target is not this effect's business. The auto-unpin
+  // effect above has no `pending` case, so the pin survives the refetch; its
+  // page (PendingCreateSettings) checks the list itself and hands over to the
+  // repository through onCreateRegistered, which refetches once more —
+  // harmless, since refreshLists is a re-read with no side effect beyond the
+  // lists it sets.
+  const createRefetchTried = useRef(new Set<string>());
+  useEffect(() => {
+    if (!reposLoaded) return;
+    const listed = createListedIn(repos);
+    const tried = createRefetchTried.current;
+    let refetch = false;
+    for (const c of creates) {
+      if (c.state === 'cancelled' || c.state === 'failed') continue;
+      if (!(createRepoIsRegistered(c) || c.state === 'done') || listed(c)) continue;
+      for (const point of c.state === 'done' ? ['registered', 'done'] : ['registered']) {
+        const key = `${c.create_id}:${point}`;
+        if (tried.has(key)) continue;
+        tried.add(key);
+        refetch = true;
+      }
+    }
+    if (refetch) void refreshLists();
+  }, [creates, repos, reposLoaded, refreshLists]);
 
   // The banner's Reconnect lands on the failing repo's Settings, on its
   // Remote block. In a lens context the failing repo is the lens's write repo

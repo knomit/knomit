@@ -142,8 +142,7 @@ export function pendingCreates(
   list: RepoCreateStatus[],
   repos: readonly { name: string; uid?: string }[],
 ): RepoCreateStatus[] {
-  const names = new Set(repos.map(r => r.name));
-  const uids = new Set(repos.map(r => r.uid).filter((u): u is string => !!u));
+  const listed = createListedIn(repos);
   // CANCELLED JOBS ARE DROPPED HERE TOO, not only by the server.
   //
   // The server omits them from the collection, so this is belt and braces —
@@ -152,10 +151,24 @@ export function pendingCreates(
   // would draw showed an empty "Being created" block with a heading and
   // nothing under it. Filtering where both surfaces already filter keeps the
   // count and the rows the same fact.
-  return list.filter(c =>
-    c.state !== 'cancelled'
-    && !names.has(c.name)
-    && !(c.repo?.uid && uids.has(c.repo.uid)));
+  return list.filter(c => c.state !== 'cancelled' && !listed(c));
+}
+
+// createListedIn answers "is this job's repo already in the list?" — the test
+// pendingCreates applies, by name OR by uid (see above for why both).
+//
+// It is its own function because App asks the same question for a different
+// reason: a job whose repo is registered but NOT listed is a repo list that is
+// behind, and App re-reads it (see the foreign-create effect there). Two
+// copies of this test would drift, and the day they disagree is the day a row
+// is drawn as pending while App believes it is listed — so nothing refetches
+// and the row never resolves.
+export function createListedIn(
+  repos: readonly { name: string; uid?: string }[],
+): (c: RepoCreateStatus) => boolean {
+  const names = new Set(repos.map(r => r.name));
+  const uids = new Set(repos.map(r => r.uid).filter((u): u is string => !!u));
+  return c => names.has(c.name) || !!(c.repo?.uid && uids.has(c.repo.uid));
 }
 
 // runningCreates is the count the top-bar indicator shows — every create with
