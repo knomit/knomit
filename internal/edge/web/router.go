@@ -346,9 +346,7 @@ func (s *Server) chatRouter() chi.Router {
 		return nil
 	}
 	s.chatOnce.Do(func() {
-		if s.mcpServer == nil {
-			s.buildMCPHandler()
-		}
+		s.ensureMCPServer()
 		ctx := s.Lifetime
 		var released *sync.WaitGroup
 		if ctx == nil {

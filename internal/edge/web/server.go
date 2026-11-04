@@ -177,6 +177,20 @@ func (s *Server) grants() auth.Grants {
 // all repos and lenses. Profile is a per-repo attribute now; the formerly
 // profile-keyed instances are collapsed (lenses RFC decision 12).
 func (s *Server) buildMCPHandler() {
+	s.ensureMCPServer()
+	s.mcpHandler = mcpserver.NewStreamableHTTPServer(s.mcpServer,
+		mcpserver.WithHTTPContextFunc(mcpHTTPContext),
+	)
+}
+
+// ensureMCPServer builds the MCP server once. The HTTP handler and the chats'
+// in-process sessions serve the SAME one, so its permission and binding gates
+// apply to both; it is split from buildMCPHandler so the chat can have it
+// without replacing an MCP handler a test installed.
+func (s *Server) ensureMCPServer() {
+	if s.mcpServer != nil {
+		return
+	}
 	// The SAME Grants the HTTP gate consults, so the two enforcement points
 	// cannot come to disagree about anonymous. Form B disables it alongside
 	// writeGate, or an authDisabled test would still be refused per tool.
@@ -184,16 +198,11 @@ func (s *Server) buildMCPHandler() {
 	if !s.authDisabled {
 		g = s.grants()
 	}
-	var mcpSrv *mcpserver.MCPServer
 	if s.Embedder != nil {
-		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g, s.Embedder)
+		s.mcpServer = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g, s.Embedder)
 	} else {
-		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
+		s.mcpServer = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
 	}
-	s.mcpServer = mcpSrv
-	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
-		mcpserver.WithHTTPContextFunc(mcpHTTPContext),
-	)
 }
 
 // mcpHTTPContext is the MCP server's HTTPContextFunc. mcp-go does not put the
