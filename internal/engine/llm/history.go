@@ -58,7 +58,8 @@ type Block struct {
 }
 
 // ToolUse is a model's tool call. ID is knomit-assigned ("tu_<n>"), never the
-// provider's. Args is always valid JSON. When the model streamed arguments
+// provider's; ProviderID holds the id the provider put on the call, when it
+// sent one, so the adapter can send the same id back with the result. Args is always valid JSON. When the model streamed arguments
 // that are not valid JSON, the adapter stores Args as {} and keeps the bytes
 // it received in RawArgs, so the entry still marshals and renders; ArgsErr
 // then reports the problem, and the caller answers the call with a tool error
@@ -68,6 +69,8 @@ type ToolUse struct {
 	Name    string          `json:"name"`
 	Args    json.RawMessage `json:"args"`
 	RawArgs string          `json:"raw_args,omitempty"`
+
+	ProviderID string `json:"provider_id,omitempty"`
 }
 
 // ErrInvalidToolArgs is what an *InvalidToolArgsError Is.
@@ -123,8 +126,12 @@ type Approval struct {
 
 // Usage is one response's token accounting, as reported by the provider.
 // Input is uncached input; CacheRead and CacheWrite are the cached parts.
-// PromptEval is a raw provider count where one exists (Ollama). Estimated
-// marks numbers computed locally rather than reported.
+// PromptEval is a raw provider count where one exists (Ollama): ALL prompt
+// tokens, cached ones included, so Input + CacheRead == PromptEval there.
+// Estimated is true when any field was computed locally rather than reported;
+// EstimatedFields then names those fields by their JSON name (e.g.
+// "cache_read"), and every field not named is the provider's own count
+// (user decision, 2026-11-04).
 type Usage struct {
 	Input      int64 `json:"input"`
 	CacheRead  int64 `json:"cache_read"`
@@ -132,6 +139,8 @@ type Usage struct {
 	Output     int64 `json:"output"`
 	PromptEval int64 `json:"prompt_eval,omitempty"`
 	Estimated  bool  `json:"estimated,omitempty"`
+
+	EstimatedFields []string `json:"estimated_fields,omitempty"`
 }
 
 // ReplayFor returns e as it may be sent to provider: reasoning produced by a

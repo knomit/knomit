@@ -107,6 +107,11 @@ var (
 	// ErrTruncated: the response stopped at max_tokens. Thinking counts
 	// against max_tokens, so this can happen before any text.
 	ErrTruncated = errors.New("llm: the response hit the output token limit before it finished")
+	// ErrContextFull: the prompt does not fit the model's context window and
+	// the provider refused it instead of cutting history (Ollama with
+	// truncate:false). Retrying the same request gets the same answer; the
+	// caller must shrink the prompt.
+	ErrContextFull = errors.New("llm: the prompt does not fit the context window")
 	// ErrRefused: the provider's safety classifiers declined the request
 	// (stop_reason "refusal"). Retrying the same request gets the same answer.
 	ErrRefused = errors.New("llm: the model declined this request")

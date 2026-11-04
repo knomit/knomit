@@ -21,6 +21,20 @@ func TestOllamaChat_CapsFromShow(t *testing.T) {
 		require.Equal(t, "", c.UnusableReason())
 		require.Equal(t, Caps{Tools: true, MaxBreakpoints: 0, ContextWindow: 8192, MaxOutput: 512}, c.Caps())
 	})
+	t.Run("window is capped at the trained context", func(t *testing.T) {
+		srv := newOllamaV2Server(t, []string{"tools"})
+		srv.info = map[string]any{"general.architecture": "llama", "llama.context_length": 8000}
+		c := newTestOllama(t, srv, OllamaOptions{NumCtx: 32768})
+		require.Equal(t, 8000, c.Caps().ContextWindow)
+		// num_ctx smaller than the trained context stays as configured.
+		c = newTestOllama(t, srv, OllamaOptions{NumCtx: 4096})
+		require.Equal(t, 4096, c.Caps().ContextWindow)
+	})
+	t.Run("no trained context reported keeps num_ctx", func(t *testing.T) {
+		srv := newOllamaV2Server(t, []string{"tools"})
+		srv.info = map[string]any{"general.architecture": "llama"}
+		require.Equal(t, 32768, newTestOllama(t, srv, OllamaOptions{}).Caps().ContextWindow)
+	})
 	t.Run("no tools", func(t *testing.T) {
 		srv := newOllamaV2Server(t, []string{"completion"})
 		c := newTestOllama(t, srv, OllamaOptions{})
@@ -104,6 +118,7 @@ func TestOllamaChat_AlwaysSendsNumCtxAndKeepAlive(t *testing.T) {
 			require.NoError(t, json.Unmarshal(b["options"], &opts))
 			require.Equal(t, map[string]int{"num_ctx": tc.ctx, "num_predict": tc.pred}, opts)
 			require.Equal(t, tc.keepAlive, string(b["keep_alive"]))
+			require.Equal(t, `false`, string(b["truncate"]), "truncate:false on every request")
 		})
 	}
 }
@@ -151,37 +166,155 @@ func TestRenderOllama_ReasoningReplay(t *testing.T) {
 	require.Equal(t, "SECRET", own.Messages[0].Thinking, "Ollama's own reasoning goes back in the thinking field")
 }
 
-func TestOllamaChat_InvalidToolArgsKeptRaw(t *testing.T) {
+func TestOllamaChat_ToolArgumentsAreObjects(t *testing.T) {
 	srv := newOllamaV2Server(t, []string{"tools"},
-		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":"not an object"}},{"function":{"name":"knomit_repos","arguments":null}},{"function":{"name":"knomit_query","arguments":{ "text" : "ok" }}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_repos","arguments":null}},{"function":{"name":"knomit_query","arguments":{ "text" : "ok" }}}]},"done":false}`,
 		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
 	)
 	c := newTestOllama(t, srv, OllamaOptions{})
-	ids := []string{"tu_a", "tu_b", "tu_c"}
+	ids := []string{"tu_a", "tu_b"}
 	n := 0
 	resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{NewID: func() string { n++; return ids[n-1] }}, nil)
 	require.NoError(t, err)
-	require.Len(t, resp.Blocks, 3)
-
-	bad := resp.Blocks[0].ToolUse
-	require.Equal(t, "tu_a", bad.ID)
-	require.Equal(t, `{}`, string(bad.Args), "invalid arguments are stored as {}")
-	require.Equal(t, `"not an object"`, bad.RawArgs)
-	var ia *InvalidToolArgsError
-	require.True(t, errors.As(bad.ArgsErr(), &ia))
-	require.ErrorIs(t, bad.ArgsErr(), ErrInvalidToolArgs)
-	require.Equal(t, "knomit_query", ia.Name)
-
-	none := resp.Blocks[1].ToolUse
+	require.Len(t, resp.Blocks, 2)
+	none := resp.Blocks[0].ToolUse
 	require.Equal(t, `{}`, string(none.Args))
-	require.NoError(t, none.ArgsErr(), "null arguments are an empty call, not an error")
-
-	ok := resp.Blocks[2].ToolUse
+	require.NoError(t, none.ArgsErr(), "null arguments are an empty call")
+	ok := resp.Blocks[1].ToolUse
 	require.Equal(t, `{"text":"ok"}`, string(ok.Args), "arguments are compacted")
-	require.NoError(t, ok.ArgsErr())
+	require.Equal(t, "", ok.RawArgs)
+}
 
-	_, err = json.Marshal(Entry{Role: RoleAssistant, Blocks: resp.Blocks})
-	require.NoError(t, err, "the entry still marshals with the {} stored for the bad call")
+// Real Ollama never sends malformed tool arguments: its server fails the
+// request instead (llm/llama_server.go "llama-server returned invalid tool
+// call arguments", v0.40.14), as an HTTP 500 before any output or as an
+// {"error":...} line after. Either way the whole turn is an error, never a
+// tool call to answer, and it is not retried (500 is not overload).
+func TestOllamaChat_InvalidToolArgumentsFailTheTurn(t *testing.T) {
+	const msg = `llama-server returned invalid tool call arguments for "knomit_query": invalid character 'x' looking for beginning of value`
+	t.Run("error line after content", func(t *testing.T) {
+		srv := newOllamaV2Server(t, []string{"tools"},
+			`{"message":{"role":"assistant","content":"calling"},"done":false}`,
+			`{"error":"`+strings.ReplaceAll(msg, `"`, `\"`)+`"}`)
+		resp, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		require.Nil(t, resp)
+		require.ErrorContains(t, err, "invalid tool call arguments")
+		require.False(t, isRetryable(err))
+	})
+	t.Run("http 500", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/show" {
+				_, _ = io.WriteString(w, `{"capabilities":["tools"]}`)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+		}))
+		t.Cleanup(srv.Close)
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		require.NoError(t, err)
+		resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		require.Nil(t, resp)
+		require.ErrorContains(t, err, "ollama: HTTP 500")
+		require.ErrorContains(t, err, "invalid tool call arguments")
+		require.False(t, isRetryable(err))
+	})
+}
+
+// With truncate:false an over-long prompt is refused, not cut. The text is
+// Ollama v0.40.14's promptTooLongMessage (llm/llama_server.go, returned as a
+// 400 StatusError and sent as {"error":"..."}).
+func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
+	const tooLong = "the prompt is longer than the context length currently available to the model; shorten the prompt, adjust the context length in settings, or use a model with a longer context length"
+	t.Run("http 400", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/show" {
+				_, _ = io.WriteString(w, `{"capabilities":["tools"]}`)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": tooLong})
+		}))
+		t.Cleanup(srv.Close)
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		require.NoError(t, err)
+		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		require.ErrorIs(t, err, ErrContextFull)
+		require.ErrorContains(t, err, "ollama: HTTP 400")
+		require.ErrorContains(t, err, "longer than the context length")
+		require.False(t, isRetryable(err), "the same prompt fails the same way")
+	})
+	t.Run("error line", func(t *testing.T) {
+		srv := newOllamaV2Server(t, []string{"tools"}, `{"error":"`+tooLong+`"}`)
+		_, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		require.ErrorIs(t, err, ErrContextFull)
+	})
+	t.Run("other 400 is not context-full", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/show" {
+				_, _ = io.WriteString(w, `{"capabilities":["tools"]}`)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": `"m" does not support thinking`})
+		}))
+		t.Cleanup(srv.Close)
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		require.NoError(t, err)
+		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, ErrContextFull)
+	})
+}
+
+// Two calls to the SAME tool in one turn are told apart by id on the wire.
+func TestOllamaChat_ParallelSameNameCallsKeepTheirIDs(t *testing.T) {
+	roundTrip := func(t *testing.T, line string, ids ...string) (resp *Response, sent []ollamaMsgV2) {
+		srv := newOllamaV2Server(t, []string{"tools"}, line,
+			`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`)
+		c := newTestOllama(t, srv, OllamaOptions{})
+		n := 0
+		resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{NewID: func() string { n++; return ids[n-1] }}, nil)
+		require.NoError(t, err)
+		require.Len(t, resp.Blocks, 2)
+
+		// Answer the calls in the REVERSE order, then send the conversation back.
+		b := NewBuilder()
+		require.NoError(t, b.Add(Item{ID: "a", Hook: HookConversation, Entry: &Entry{ID: "a", Role: RoleAssistant, Blocks: resp.Blocks}}))
+		require.NoError(t, b.Add(Item{ID: "r", Hook: HookConversation, Entry: &Entry{ID: "r", Role: RoleUser, Blocks: []Block{
+			{Kind: BlockToolResult, ToolResult: &ToolResult{ToolUseID: resp.Blocks[1].ToolUse.ID, Content: "SECOND"}},
+			{Kind: BlockToolResult, ToolResult: &ToolResult{ToolUseID: resp.Blocks[0].ToolUse.ID, Content: "FIRST"}},
+		}}}))
+		_, err = c.Stream(context.Background(), b.Snapshot(), StreamOptions{}, nil)
+		require.NoError(t, err)
+		var body struct {
+			Messages []ollamaMsgV2 `json:"messages"`
+		}
+		raw, _ := json.Marshal(srv.received()[1])
+		require.NoError(t, json.Unmarshal(raw, &body))
+		return resp, body.Messages
+	}
+
+	t.Run("server sends ids", func(t *testing.T) {
+		resp, msgs := roundTrip(t, `{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_aaa11111","function":{"name":"knomit_query","arguments":{"text":"1"}}},{"id":"call_bbb22222","function":{"name":"knomit_query","arguments":{"text":"2"}}}]},"done":false}`, "tu_a", "tu_b")
+		require.Equal(t, "tu_a", resp.Blocks[0].ToolUse.ID, "ToolUse.ID stays knomit's")
+		require.Equal(t, "call_aaa11111", resp.Blocks[0].ToolUse.ProviderID)
+		require.Equal(t, "call_bbb22222", resp.Blocks[1].ToolUse.ProviderID)
+		require.Len(t, msgs, 3)
+		require.Equal(t, "call_aaa11111", msgs[0].ToolCalls[0].ID)
+		require.Equal(t, "call_bbb22222", msgs[0].ToolCalls[1].ID)
+		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "call_bbb22222"}, msgs[1])
+		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "call_aaa11111"}, msgs[2])
+	})
+	t.Run("server sends no ids", func(t *testing.T) {
+		resp, msgs := roundTrip(t, `{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"1"}}},{"function":{"name":"knomit_query","arguments":{"text":"2"}}}]},"done":false}`, "tu_a", "tu_b")
+		require.Equal(t, "", resp.Blocks[0].ToolUse.ProviderID)
+		require.Len(t, msgs, 3)
+		require.Equal(t, "tu_a", msgs[0].ToolCalls[0].ID, "knomit's id is sent when the server sent none")
+		require.Equal(t, "tu_b", msgs[0].ToolCalls[1].ID)
+		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
+		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
+	})
 }
 
 func TestOllamaChat_StreamFailures(t *testing.T) {
@@ -264,7 +397,25 @@ func TestOllamaChat_ThinkingLinesAreProgress(t *testing.T) {
 	require.Equal(t, 2, chats, "the wrapped call was not retried")
 }
 
-func TestOllamaChat_UsageCacheEstimate(t *testing.T) {
+func TestOllamaChat_UsageFromCachedCount(t *testing.T) {
+	run := func(counts string) Usage {
+		srv := newOllamaV2Server(t, []string{"tools"},
+			`{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true,`+counts+`,"eval_count":3}`)
+		resp, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		require.NoError(t, err)
+		return resp.Usage
+	}
+	// prompt_eval_count is the WHOLE prompt; the cached part is not Input.
+	require.Equal(t, Usage{Input: 200, PromptEval: 900, Output: 3, CacheRead: 700},
+		run(`"prompt_eval_count":900,"prompt_eval_cached_count":700`))
+	// A reported 0 is a real "nothing cached", not the fallback.
+	require.Equal(t, Usage{Input: 900, PromptEval: 900, Output: 3, CacheRead: 0},
+		run(`"prompt_eval_count":900,"prompt_eval_cached_count":0`))
+}
+
+// A server with no prompt_eval_cached_count (Ollama before v0.35.0) gets the
+// bytes/4 estimate, flagged on the estimated field only.
+func TestOllamaChat_UsageFallbackEstimate(t *testing.T) {
 	s := ollamaSnapshot(t, "x")
 	est := 0
 	for _, n := range s.Record().Tokens {
@@ -279,9 +430,9 @@ func TestOllamaChat_UsageCacheEstimate(t *testing.T) {
 		require.NoError(t, err)
 		return resp.Usage
 	}
-	require.Equal(t, Usage{Input: 20, PromptEval: 20, Output: 3, CacheRead: int64(est - 20), Estimated: true}, run("20"))
+	require.Equal(t, Usage{Input: 20, PromptEval: 20, Output: 3, CacheRead: int64(est - 20), Estimated: true, EstimatedFields: []string{"cache_read"}}, run("20"))
 	// More evaluated than estimated: the estimate never goes negative.
-	require.Equal(t, Usage{Input: 100000, PromptEval: 100000, Output: 3, CacheRead: 0, Estimated: true}, run("100000"))
+	require.Equal(t, Usage{Input: 100000, PromptEval: 100000, Output: 3, CacheRead: 0, Estimated: true, EstimatedFields: []string{"cache_read"}}, run("100000"))
 }
 
 func TestOllamaPrefixJSON_MatchesWire(t *testing.T) {

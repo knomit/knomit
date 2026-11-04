@@ -20,6 +20,9 @@ type ollamaV2Server struct {
 	mu     sync.Mutex
 	bodies []map[string]json.RawMessage
 	chats  int
+	// info is the model_info /api/show returns, nil for none; set it before
+	// the adapter is built.
+	info map[string]any
 }
 
 func newOllamaV2Server(t *testing.T, caps []string, lines ...string) *ollamaV2Server {
@@ -28,7 +31,7 @@ func newOllamaV2Server(t *testing.T, caps []string, lines ...string) *ollamaV2Se
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/show":
-			_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": caps})
+			_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": caps, "model_info": s.info})
 		case "/api/chat":
 			b, _ := io.ReadAll(r.Body)
 			var m map[string]json.RawMessage
@@ -87,8 +90,8 @@ func TestRenderOllama_ToolResultCarriesToolName(t *testing.T) {
 	req := renderOllama(ollamaSnapshot(t, "next"), "m", OllamaOptions{})
 	raw, err := json.Marshal(req)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), `{"role":"tool","content":"repo-list-result","tool_name":"knomit_repos"}`)
-	require.NotContains(t, string(raw), "tu_1")
+	require.Contains(t, string(raw), `{"role":"tool","content":"repo-list-result","tool_name":"knomit_repos","tool_call_id":"tu_1"}`)
+	require.Contains(t, string(raw), `"tool_calls":[{"id":"tu_1","function":{"name":"knomit_repos","arguments":{"a":1}}}]`)
 
 	// The whole layout, message by message: nothing else is sent.
 	var roles []string
@@ -155,18 +158,29 @@ func TestOllamaChat_StreamToolCallGetsKnomitID(t *testing.T) {
 	require.Equal(t, int64(120), want.PromptEval)
 	require.Equal(t, int64(120), want.Input)
 	require.Equal(t, int64(7), want.Output)
-	require.True(t, want.Estimated)
+	require.True(t, want.Estimated, "no prompt_eval_cached_count in this stream: the fallback estimate")
+	require.Equal(t, []string{"cache_read"}, want.EstimatedFields)
 
 	got := srv.received()
 	require.Len(t, got, 1)
 	b := got[0]
 	// Every field of the request body, none left unasserted.
-	require.Len(t, b, 6)
+	require.Len(t, b, 7)
 	require.Equal(t, `"test-model"`, string(b["model"]))
 	require.Equal(t, `true`, string(b["stream"]))
 	require.Equal(t, `"30m"`, string(b["keep_alive"]))
 	require.Equal(t, `{"num_ctx":32768,"num_predict":-1}`, string(b["options"]))
-	require.Contains(t, b, "messages")
-	require.Contains(t, b, "tools")
+	require.Equal(t, `false`, string(b["truncate"]))
+	wantMsgs, err := json.Marshal(renderOllama(ollamaSnapshot(t, "go"), "test-model", OllamaOptions{}).Messages)
+	require.NoError(t, err)
+	require.JSONEq(t, string(wantMsgs), string(b["messages"]), "the wire messages are exactly the render")
+	require.Contains(t, string(b["messages"]), `"content":"go"`)
+	var wireTools []struct {
+		Function struct{ Name string } `json:"function"`
+	}
+	require.NoError(t, json.Unmarshal(b["tools"], &wireTools))
+	require.Len(t, wireTools, 2)
+	require.Equal(t, "knomit_query", wireTools[0].Function.Name)
+	require.Equal(t, "knomit_repos", wireTools[1].Function.Name)
 	require.NotContains(t, b, "think", "a model without the thinking capability is never sent think")
 }
