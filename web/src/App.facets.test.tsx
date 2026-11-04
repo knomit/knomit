@@ -39,7 +39,7 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
       // The drafts and the pinned targets.
-      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
+      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), renameRepo: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
       getRepoCreate: vi.fn(), cancelRepoCreate: vi.fn(), dismissRepoCreate: vi.fn(),
       ontologyPresets: vi.fn(), ontologyPresetYAML: vi.fn(), validateOntology: vi.fn(), ontologySchema: vi.fn(), listTemplates: vi.fn(),
     },
@@ -1121,6 +1121,74 @@ describe('a create that finished elsewhere', () => {
 
     expect(await screen.findByTestId('rail-repo-far-kb')).toBeInTheDocument();
     expect(screen.getByTestId('rail-health-core-kb')).toBeInTheDocument();
+  });
+
+  // Re-review of #755, reproduced: a held answer still carries a repo that a
+  // NEWER whole list (here the stream's reconnect read) has since dropped. It
+  // must not bring that repo back, not even as "a row the list lacks".
+  it('a held answer cannot bring back a repo a newer whole list removed', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    const GONE = [...BASE, { name: 'gone-kb', uid: 'u-gone' }];
+    m.repos.mockResolvedValue(GONE);
+    await mountApp();
+    await screen.findByTestId('rail-repo-gone-kb');
+    await waitFor(() => expect(latestStream('/api/v1/repo-events')).toBeDefined());
+
+    let answer: (v: unknown) => void = () => {};
+    m.repos.mockImplementationOnce(() => new Promise(r => { answer = r; }));
+    const before = m.repos.mock.calls.length;
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+
+    // The stream reconnects and re-reads: gone-kb was deleted meanwhile.
+    m.repos.mockResolvedValue(WITH_FAR);
+    act(() => { latestStream('/api/v1/repo-events')!.emit('ready', {}); });
+    await waitFor(() => expect(screen.queryByTestId('rail-repo-gone-kb')).toBeNull());
+    expect(screen.getByTestId('rail-repo-far-kb')).toBeInTheDocument();
+
+    // The held answer lands, still listing gone-kb.
+    await act(async () => { answer([...GONE, { name: 'far-kb', uid: 'u-far' }]); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(screen.queryByTestId('rail-repo-gone-kb')).toBeNull();
+    expect(screen.getByTestId('rail-repo-far-kb')).toBeInTheDocument();
+  });
+
+  // The same hole through this tab's own whole-list write: a rename's
+  // refreshLists lands while the read is held, and the held answer still has
+  // the old name. It must neither revert the rename nor add the old name as a
+  // second row for the same repository.
+  it('a rename landing during a held read is neither reverted nor doubled', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    await waitFor(() => expect(m.repos).toHaveBeenCalled());
+
+    let answer: (v: unknown) => void = () => {};
+    m.repos.mockImplementationOnce(() => new Promise(r => { answer = r; }));
+    const before = m.repos.mock.calls.length;
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+
+    // ops-kb is renamed to ops-new from its Settings.
+    const RENAMED = [{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-new', uid: 'u-ops' }, { name: 'far-kb', uid: 'u-far' }];
+    m.repos.mockResolvedValue(RENAMED);
+    m.renameRepo.mockResolvedValue({ name: 'ops-new' });
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    fireEvent.change(await screen.findByTestId('repo-rename-input'), { target: { value: 'ops-new' } });
+    fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'ops-kb' } });
+    fireEvent.click(screen.getByTestId('repo-rename-submit'));
+    await screen.findByTestId('rail-repo-ops-new');
+    await waitFor(() => expect(screen.queryByTestId('rail-repo-ops-kb')).toBeNull());
+
+    // The held answer lands with the name from before the rename.
+    await act(async () => { answer([...WITH_FAR]); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(screen.queryByTestId('rail-repo-ops-kb')).toBeNull();
+    expect(screen.getByTestId('rail-repo-ops-new')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-repo-far-kb')).toBeInTheDocument();
   });
 });
 

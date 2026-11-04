@@ -297,6 +297,33 @@ function statusAction(s: Status): Action {
   };
 }
 
+// mergeMissingRepos adds to `prev` the rows of `next` it does not hold, and
+// changes nothing else: every row `prev` has stays exactly as it is.
+//
+// For a read whose answer is older than an event patch it must not undo (the
+// foreign-create read, when only the event counter moved). A row is "held"
+// by name OR uid, createListedIn's rule, so a repo renamed since the read was
+// asked is not added a second time under its old name.
+//
+// Rows come out in `next`'s order, not appended, because order in this list
+// is not cosmetic: pickRepo falls back to the first readable repo, and an
+// added row at the end would make that fallback depend on which read
+// happened to land first. Rows `prev` holds that `next` lacks are kept, after
+// the others: this merge only adds, and deciding a row is gone belongs to a
+// whole-list write.
+function mergeMissingRepos(prev: RepoInfo[], next: RepoInfo[]): RepoInfo[] {
+  const held = (r: RepoInfo) => prev.find(p => p.name === r.name || (!!r.uid && p.uid === r.uid));
+  if (next.every(r => held(r))) return prev;
+  const used = new Set<RepoInfo>();
+  const out = next.map(r => {
+    const p = held(r);
+    if (p) { used.add(p); return p; }
+    return r;
+  });
+  for (const p of prev) if (!used.has(p)) out.push(p);
+  return out;
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   // The view state: which page of the shell is on screen. Its own reducer and
@@ -343,6 +370,13 @@ export default function App() {
   const [serverBooting, setServerBooting] = useState(isDesktopBooting);
   const version = useVersion(!serverBooting);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  // Bumped by every write of a WHOLE repo list — boot's, refreshLists',
+  // the repo-events reconnect's, and the foreign-create read's when it
+  // replaces — and by nothing that patches rows. A read that was asked before
+  // it moved knows a newer whole list has landed since, and must not write
+  // any of its older one (see the foreign-create effect). Event patches have
+  // their own counter, repoListGen, by the repo-events stream.
+  const repoFullGen = useRef(0);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   // The archived repos: the rail's Archived group, and the pages pinned from
@@ -519,6 +553,7 @@ export default function App() {
     api.repos()
       .then(async list => {
         if (cancelled) return;
+        repoFullGen.current += 1;
         setRepos(list);
         setReposLoaded(true);
         // The URL's context beats the remembered one: localStorage is shared
@@ -862,7 +897,11 @@ export default function App() {
         // Re-read the list once.
         const gen = ++repoListGen.current;
         api.repos()
-          .then(list => { if (gen === repoListGen.current) setRepos(list); })
+          .then(list => {
+            if (gen !== repoListGen.current) return;
+            repoFullGen.current += 1;
+            setRepos(list);
+          })
           .catch(() => {});
         return;
       }
@@ -1315,6 +1354,7 @@ export default function App() {
       .catch(() => { /* best-effort: the group keeps what it had */ });
     try {
       const { lenses: ls, repos: rs } = await refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens, renamed);
+      repoFullGen.current += 1;
       setLenses(ls); setRepos(rs);
       // Harmless on a repo rename: lenses and repos share one namespace, so a repo's old name never matches a brokenLens pin.
       if (renamed) dispatchView({ type: 'RENAME_PINNED_LENS', from: renamed.from, to: renamed.to });
@@ -1584,23 +1624,40 @@ export default function App() {
     // RENAME_PINNED_LENS note on refreshLists). A lens whose broken mount is
     // this repo is repaired by `repos` alone: brokenLensMember reads repos.
     //
-    // Generation-guarded like the stream's reconnect re-read. An index or
-    // remote event that lands while this is in flight is newer than the
-    // snapshot, and writing the snapshot over it would put back the stale
-    // chip the event had just corrected. A retired answer is still not thrown
-    // away whole, though: index events for the new repo itself arrive all
-    // through its index and would retire nearly every read, while patching
-    // nothing, since the repo is not in the list. So a retired answer only
-    // ADDS the rows the list lacks — the reason it was asked — and leaves
-    // every row the list already holds as the events made it.
-    const gen = ++repoListGen.current;
+    // TWO generations decide what the answer may do, both SNAPSHOT here and
+    // neither bumped, so this read never retires anyone else's.
+    //
+    // repoFullGen moves on every FULL list write (boot, refreshLists, the
+    // stream's reconnect, this read when it replaces). If it moved, a newer
+    // whole list has landed, and this answer is at best as new as that one
+    // and possibly older: an archive, purge or rename this tab made, or a
+    // repo the reconnect found gone. Any write from it, even "add what is
+    // missing", can bring back a row that list removed (a purged repo, or a
+    // renamed one's old name beside the new) — so it is dropped. The done
+    // point is the retry if that list still lacked the new repo.
+    //
+    // repoListGen moves on every stream EVENT (index state, remote health).
+    // If only it moved, the list is still the one this read was asked about,
+    // patched by something newer than the snapshot. Replacing it would put
+    // back the stale chip the event corrected, but throwing the answer away
+    // is no good either: index events for the new repo itself arrive all
+    // through its index and would void nearly every read, while patching
+    // nothing, since the repo is not in the list. So it only ADDS the rows the
+    // list lacks, matched by name OR uid (createListedIn's rule, so a row
+    // renamed by an event-free path is never doubled), and keeps every row
+    // the list holds exactly as the events made it.
+    //
+    // If neither moved, the answer is the newest list there is: it replaces.
+    const fullAt = repoFullGen.current;
+    const eventsAt = repoListGen.current;
     api.repos().then(rs => {
-      if (gen === repoListGen.current) { setRepos(rs); return; }
-      setRepos(prev => {
-        const have = new Set(prev.map(r => r.name));
-        const added = rs.filter(r => !have.has(r.name));
-        return added.length ? [...prev, ...added] : prev;
-      });
+      if (repoFullGen.current !== fullAt) return;
+      if (repoListGen.current === eventsAt) {
+        repoFullGen.current += 1;
+        setRepos(rs);
+        return;
+      }
+      setRepos(prev => mergeMissingRepos(prev, rs));
     }).catch(() => { /* the done point retries; a failed read lists nothing new */ });
   }, [creates, repos, reposLoaded]);
 
