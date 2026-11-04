@@ -191,7 +191,11 @@ type RepoInstance struct {
 	// someone who could wait on it: the reload runs from the commit
 	// observer's goroutine and after a sync round, never under a writer's
 	// branch lock.
-	ontMu               sync.Mutex
+	ontMu sync.Mutex
+	// ontologyReadHook (nil in production) runs before readOntology reads
+	// the ontology file's bytes; a non-nil error it returns is that read's
+	// error. Tests count reads with it and inject a transient read failure.
+	ontologyReadHook    atomic.Pointer[func() error]
 	embedder            model.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64

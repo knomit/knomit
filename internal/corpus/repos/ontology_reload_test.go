@@ -18,12 +18,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/domain/fact"
+	"knomit/internal/engine/store"
 )
 
 const reloadBase = `id: live
@@ -290,6 +293,195 @@ func TestOntologyReload_ConcurrentReadersSeeOneOntology(t *testing.T) {
 	wg.Wait()
 	require.NoError(t, placementOK(g.ri, "delta"))
 	require.Error(t, placementOK(g.ri, "gamma"))
+}
+
+// countReads installs a hook on g's ontology file reads: it counts every
+// read, and fails the next `fail` of them with a transient error.
+func countReads(g *ghInstance, fail int32) *atomic.Int32 {
+	var n atomic.Int32
+	var left atomic.Int32
+	left.Store(fail)
+	h := func() error {
+		n.Add(1)
+		if left.Add(-1) >= 0 {
+			return errors.New("injected transient read failure")
+		}
+		return nil
+	}
+	g.ri.ontologyReadHook.Store(&h)
+	return &n
+}
+
+// A TRANSIENT READ ERROR is "unknown, ask again", never "no ontology": it is
+// not recorded as a refused file, so the next round applies the usable
+// consensus ontology. SABOTAGE: readOntology returning the read error as a
+// plain "no ontology" error with src = the tip → stored as reloadErr with
+// reloadSrc = the tip's blob, the refused-blob skip keeps it out → red.
+func TestOntologyReload_TransientReadErrorRetriesAndApplies(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	before := g.ri.Ontology()
+	// The observer may also try during the window; fail generously, then
+	// stop failing before the second round.
+	o.commit(t, "add gamma", map[string]string{OntologyPath: reloadBase + "  gamma:\n    description: gamma\n"})
+	countReads(g, 1000)
+	syncRound(t, g)
+	require.Same(t, before, g.ri.Ontology(), "an unreadable file is not applied")
+	st, _ := g.ri.OntologyStatus()
+	require.Empty(t, st.ReloadError, "a read error is not a verdict on the file and is not reported as one")
+	require.NoError(t, g.ri.OntologyError())
+
+	countReads(g, 0)
+	syncRound(t, g)
+	require.NoError(t, placementOK(g.ri, "gamma"), "the next trigger reads it and applies it")
+}
+
+// The same on a repo with NO usable ontology in force: a read error must not
+// become its OntologyError naming the tip's file (src), or sameFile would
+// skip that file for good.
+func TestOntologyReload_TransientReadErrorOnARepoWithNoOntology(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	orig := errors.New("ontology at .knomit/ontology.yaml does not parse")
+	g.ri.ontMu.Lock()
+	cur := g.ri.ident.Load()
+	g.ri.ident.Store(&identity{ontologyErr: orig, src: cur.src})
+	g.ri.ontMu.Unlock()
+
+	o.commit(t, "a usable ontology", map[string]string{OntologyPath: reloadBase + "  gamma:\n    description: gamma\n"})
+	countReads(g, 1000)
+	syncRound(t, g)
+	require.ErrorIs(t, g.ri.OntologyError(), orig, "nothing is recorded for an unreadable file")
+	st, _ := g.ri.OntologyStatus()
+	require.Equal(t, cur.src, ontologySource{Commit: st.Commit, Path: st.Path, Blob: st.Blob}, "src does not move to the unread tip")
+
+	countReads(g, 0)
+	syncRound(t, g)
+	require.NoError(t, g.ri.OntologyError())
+	require.True(t, g.ri.WritableBranch(g.branch))
+}
+
+// The tip REVERTING to the file in force clears the reported reload error.
+// SABOTAGE: drop the clear in reloadOntology's sameFile(cur.src) branch → the
+// error stays → red.
+func TestOntologyReload_RevertToTheFileInForceClearsTheError(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	before := g.ri.Ontology()
+	o.commit(t, "break it", map[string]string{OntologyPath: "topics: [::\n"})
+	syncRound(t, g)
+	st, _ := g.ri.OntologyStatus()
+	require.NotEmpty(t, st.ReloadError)
+
+	o.commit(t, "revert", map[string]string{OntologyPath: reloadBase})
+	syncRound(t, g)
+	st, _ = g.ri.OntologyStatus()
+	require.Empty(t, st.ReloadError, "the tip holds the file in force again: nothing is refused")
+	require.Empty(t, st.ReloadCommit)
+	require.Same(t, before, g.ri.Ontology(), "the same blob: kept, not re-parsed")
+}
+
+// A blob already refused is not read again on later triggers. SABOTAGE: drop
+// the refused-blob skip (cur.reloadSrc) → the second round reads and parses
+// it again → red.
+func TestOntologyReload_RefusedBlobIsNotReadAgain(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	o.commit(t, "break it", map[string]string{OntologyPath: "topics: [::\n"})
+	reads := countReads(g, 0)
+	syncRound(t, g)
+	st, _ := g.ri.OntologyStatus()
+	require.NotEmpty(t, st.ReloadError)
+	afterFirst := reads.Load()
+	require.GreaterOrEqual(t, afterFirst, int32(1))
+	id := g.ri.ident.Load()
+
+	o.commit(t, "unrelated", map[string]string{"notes.txt": "hello\n"})
+	syncRound(t, g)
+	syncRound(t, g)
+	require.Equal(t, afterFirst, reads.Load(), "the refused blob is not read again")
+	require.Same(t, id, g.ri.ident.Load(), "nothing is stored again")
+}
+
+// An unchanged blob is not even READ (counted at the file read).
+func TestOntologyReload_UnchangedBlobIsNotRead(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	reads := countReads(g, 0)
+	o.commit(t, "unrelated", map[string]string{"notes.txt": "hello\n"})
+	syncRound(t, g)
+	syncRound(t, g)
+	require.Equal(t, int32(0), reads.Load())
+}
+
+// A reload racing Identify's Enter and Exit (a remount, a swap) never
+// resurrects an identity after Exit and never interleaves with Enter's read
+// and store; run with -race.
+func TestOntologyReload_ConcurrentWithIdentifyAndExit(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	o.commit(t, "add gamma", map[string]string{OntologyPath: reloadBase + "  gamma:\n    description: gamma\n"})
+	_, err := testService(t, g.ri).Remote().Sync(context.Background(), g.branch, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = g.ri.WithRead(func(svc *store.Service) { g.ri.reloadOntology(ctx, svc) })
+				_ = g.ri.Ontology()
+				_, _ = g.ri.OntologyStatus()
+			}
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		identifyStage{}.Exit(g.ri)
+		require.NoError(t, identifyStage{}.Enter(ctx, nil, g.ri))
+	}
+	close(stop)
+	wg.Wait()
+
+	// After an Exit, a reload must not establish anything.
+	identifyStage{}.Exit(g.ri)
+	require.NoError(t, g.ri.WithRead(func(svc *store.Service) { g.ri.reloadOntology(ctx, svc) }))
+	require.ErrorIs(t, g.ri.OntologyError(), errNotIdentified, "a reload never resurrects an identity after Exit")
+	require.NoError(t, identifyStage{}.Enter(ctx, nil, g.ri))
+	require.NoError(t, placementOK(g.ri, "gamma"))
+}
+
+// FLEET -> NOT FLEET on the fleet repository (a repo with the fleet door) is
+// applied, as the next mount would load it: IsFleet turns false, authored
+// writes open, Manager.fleetRepo finds no fleet — and a Warn names the edge.
+// Not parallel: it captures the global logger.
+func TestOntologyReload_FleetRepoDroppingTheFleetIDIsAppliedAndWarned(t *testing.T) {
+	o, g := newReloadFixture(t)
+	g.ri.ontMu.Lock()
+	g.ri.fleetDoor = true
+	g.ri.ontMu.Unlock()
+	const fleetish = "id: fleet\nname: Fleet\ntopics:\n  alpha:\n    description: alpha\n"
+	o.commit(t, "become the fleet", map[string]string{OntologyPath: fleetish})
+	logs := captureLogs(t, zerolog.InfoLevel)
+	syncRound(t, g)
+	require.True(t, g.ri.IsFleet(), "through the fleet door the fleet id is admitted")
+	require.False(t, g.ri.WritableBranch(g.branch), "the fleet repository is read-only for authored writes")
+	require.Contains(t, logs.String(), "NOT FLEET -> FLEET")
+
+	o.commit(t, "drop the fleet id", map[string]string{OntologyPath: reloadBase})
+	syncRound(t, g)
+	require.False(t, g.ri.IsFleet(), "consensus dropped the fleet id: honoured")
+	require.True(t, g.ri.WritableBranch(g.branch), "authored writes are open on the former fleet repository")
+	require.Nil(t, g.ri.env.m.fleetRepo(), "the instance no longer has a fleet repository")
+	require.Contains(t, logs.String(), "FLEET -> NOT FLEET: the fleet repository's consensus ontology dropped the fleet id")
+	require.Contains(t, logs.String(), `"level":"warn"`)
 }
 
 // The commit observer is the catch-all trigger: a read branch moved by

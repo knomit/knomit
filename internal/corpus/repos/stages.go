@@ -530,6 +530,16 @@ func (r *RepoInstance) reloadOntology(ctx context.Context, svc *store.Service) {
 		return
 	}
 	ont, src, err := r.readOntology(ctx, svc)
+	var unread ontologyReadError
+	if errors.As(err, &unread) {
+		// Unknown, not unusable: record NOTHING (no reloadErr, no
+		// reloadSrc, no OntologyError), so the refused-blob skip above never
+		// sees this blob as judged and the next round or commit reads it
+		// again. A read error must never keep usable consensus content out.
+		log.Warn().Err(err).Str("repo", r.Name()).Str("commit", tip.Commit).Str("blob", tip.Blob).
+			Msg("ontology reload: the read branch's ontology could not be read; nothing changed, retrying on the next round or commit")
+		return
+	}
 	if err == nil {
 		if aerr := admitFleetOntology(r, ont); aerr != nil {
 			err = fmt.Errorf("ontology at %s on %s: %w", src.Path, r.ReadBranch(), aerr)
@@ -546,11 +556,24 @@ func (r *RepoInstance) reloadOntology(ctx context.Context, svc *store.Service) {
 		r.ident.Store(&identity{ontology: cur.ontology, src: cur.src, reloadErr: err, reloadSrc: src})
 		return
 	}
-	ev := log.Info()
-	if cur.ontology != nil && fact.IsFleetOntology(cur.ontology) != fact.IsFleetOntology(ont) {
-		ev = log.Warn().Bool("fleet_before", fact.IsFleetOntology(cur.ontology)).Bool("fleet_after", fact.IsFleetOntology(ont))
+	// A FLEET TRANSITION is applied like any consensus change (that is what
+	// the next mount would load), but it changes what the repo IS, so it is
+	// a Warn that names the edge. Dropping the fleet id on the fleet
+	// repository makes IsFleet false at once: WritableBranch opens authored
+	// writes on it, and Manager.fleetRepo no longer finds a fleet (nil), so
+	// every fleet duty stops. Gaining it (only possible through the fleet
+	// door; admitFleetOntology refused it otherwise) makes the repo
+	// read-only for authored writes and the instance's fleet repository.
+	wasFleet, isFleet := cur.ontology != nil && fact.IsFleetOntology(cur.ontology), fact.IsFleetOntology(ont)
+	switch {
+	case wasFleet && !isFleet:
+		log.Warn().Str("repo", r.Name()).Str("commit", src.Commit).Str("blob", src.Blob).Str("ontology_id", ont.ID).
+			Msg("ontology reload: FLEET -> NOT FLEET: the fleet repository's consensus ontology dropped the fleet id; it is now an ordinary repository — authored writes are open on it and this instance no longer has a fleet repository")
+	case !wasFleet && isFleet:
+		log.Warn().Str("repo", r.Name()).Str("commit", src.Commit).Str("blob", src.Blob).Str("previous_id", idOf(cur.ontology)).
+			Msg("ontology reload: NOT FLEET -> FLEET: the repository's consensus ontology took the fleet id; it is now the fleet repository and read-only for authored writes")
 	}
-	ev.Str("repo", r.Name()).Str("commit", src.Commit).Str("path", src.Path).Str("blob", src.Blob).
+	log.Info().Str("repo", r.Name()).Str("commit", src.Commit).Str("path", src.Path).Str("blob", src.Blob).
 		Str("previous_blob", cur.src.Blob).Str("ontology_id", ont.ID).
 		Msg("ontology reload: the read branch holds a different ontology; it is now in force")
 	r.ident.Store(&identity{ontology: ont, src: src})
@@ -657,6 +680,18 @@ func (r *RepoInstance) recordAgentBranchOwner(ctx context.Context, svc *store.Se
 func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*fact.Ontology, ontologySource, error) {
 	read := r.ReadBranch()
 	ont, src, err := r.readOntology(ctx, svc)
+	var unread ontologyReadError
+	if errors.As(err, &unread) {
+		// At Identify a read failure leaves nothing usable, as it always
+		// has: the repo mounts unwritable with the "no ontology" reason it
+		// has always given, now carrying the cause. src stays EMPTY, so the
+		// live reload does not take this tip's file as already judged: the
+		// first trigger that can read it applies it.
+		paths := strings.Join(fact.OntologyPathsNewestFirst(), ", ")
+		log.Error().Err(unread.err).Str("repo", r.Name()).Str("branch", read).
+			Msgf("no ontology at %s: this repository is not a knowledge base and will not accept writes", paths)
+		return nil, ontologySource{}, fmt.Errorf("no ontology at %s on %s: %w", paths, read, err)
+	}
 	if err != nil {
 		return nil, src, err
 	}
@@ -677,6 +712,23 @@ func (r *RepoInstance) loadOntology(ctx context.Context, svc *store.Service) (*f
 	}
 	return refreshed, src, nil
 }
+
+// ontologyReadError is readOntology's "the ontology could not be READ" —
+// the tip, its tree or the file's blob was unreadable (a store closing under
+// a swap, a transient storage error, a branch not there yet). It says
+// nothing about what the file holds, so it is never a verdict: the live
+// reload records nothing for it and retries on its next trigger, and
+// Identify reports it under the "no ontology" reason with an empty source.
+type ontologyReadError struct {
+	branch string
+	err    error
+}
+
+func (e ontologyReadError) Error() string {
+	return fmt.Sprintf("the ontology on %s could not be read: %v", e.branch, e.err)
+}
+
+func (e ontologyReadError) Unwrap() error { return e.err }
 
 // readOntology reads and parses the ontology at the tip of the repo's read
 // branch, with the rules loadOntology documents (first rung present; a
@@ -699,18 +751,32 @@ func (r *RepoInstance) readOntology(ctx context.Context, svc *store.Service) (*f
 			Msg("ontology is a symlink: this repository is refused until the ontology is a file")
 		return nil, src, fmt.Errorf("ontology on %s: %w", read, berr)
 	}
+	// A READ failure — the tip, its tree or the blob could not be read — is
+	// not an answer about the ontology: it is "unknown, ask again". It is
+	// returned as ontologyReadError with NO source, never as "no ontology
+	// at …" naming the tip's file. Naming that file would let the reload
+	// record a transient storage error as the verdict on a usable consensus
+	// file and skip that blob for good (identity.reloadSrc, or src on a repo
+	// with nothing in force), keeping consensus content out until a restart.
+	if berr != nil {
+		return nil, ontologySource{}, ontologyReadError{branch: read, err: berr}
+	}
 	content := ""
-	rerr := berr
-	if rerr == nil && srcPath != "" {
-		var data []byte
+	if srcPath != "" {
+		if h := r.ontologyReadHook.Load(); h != nil {
+			if herr := (*h)(); herr != nil {
+				return nil, ontologySource{}, ontologyReadError{branch: read, err: herr}
+			}
+		}
 		// The bytes at the very commit whose blob was named, not at the
 		// branch's tip again: the tip may have moved in between.
-		srcPath, data, rerr = svc.OntologyFileAtCommit(ctx, commit)
-		if rerr == nil {
-			content = string(data)
+		p, data, rerr := svc.OntologyFileAtCommit(ctx, commit)
+		if rerr != nil {
+			return nil, ontologySource{}, ontologyReadError{branch: read, err: rerr}
 		}
+		srcPath, content = p, string(data)
 	}
-	if rerr == nil && srcPath != "" && content == "" {
+	if srcPath != "" && content == "" {
 		// The first rung present is empty: that IS the ontology, and a later
 		// rung does not stand in for it. Name the file, not every rung.
 		log.Error().Str("repo", r.Name()).Str("branch", read).Str("path", srcPath).
@@ -1128,4 +1194,12 @@ func (r *RepoInstance) ensureLocalUpstream(ctx context.Context, svc *store.Servi
 		log.Info().Str("repo", r.Name()).Str("upstream", r.upstreamMain).
 			Msg("ensureLocalUpstream: local upstream created or completed")
 	}
+}
+
+// idOf is o's id, "" for a nil ontology (a repo with none in force).
+func idOf(o *fact.Ontology) string {
+	if o == nil {
+		return ""
+	}
+	return o.ID
 }
