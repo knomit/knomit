@@ -24,12 +24,20 @@ import (
 // that does not has finished, and then runs beside the other parallel ones
 // only. So the rule is about the parallel set alone: a test may call
 // t.Parallel when nothing it reaches, its helpers included, changes
-// process-wide state. That excludes setHooks and SetMissionTriggerHooksForTest
-// (triggerTestHooks), the sync, consensus and recipe-exec hooks, the other
-// package-level seams (swapCopy, hostPlatform, guidanceWarnHook,
-// templatePresetByID, recipeServerAddrWait, experimentSweepIntervalOverride),
-// captureLogs (log.Logger), t.Setenv, storetest.SetFastDurability and fact's
-// trigger globals. It also excludes a test whose assertion is a latency or a
+// process-wide state. The general rule: any package-level variable that a
+// test assigns, directly or through a setter, is a process-wide seam. So is
+// any global of another package that a test assigns. The list below gives
+// examples and is NOT complete; check what a test reaches, not only this
+// list. Examples: setHooks and SetMissionTriggerHooksForTest
+// (triggerTestHooks); the sync, consensus and recipe-exec hooks; the fleet
+// hooks (fleetTestHooks via setFleetHooks, fleetRenewTestHooks,
+// SetFleetClockForTest); the origin-write seams (beforeCredentialWrite,
+// afterCredentialReread, beforeAttachOriginWrite, beforeDetachOriginWrite,
+// beforeSwapOriginWrite); swapCopy, hostPlatform, guidanceWarnHook
+// (SetGuidanceWarnHookForTest), templatePresetByID, recipeServerAddrWait and
+// experimentSweepIntervalOverride; captureLog/captureLogs (log.Logger);
+// t.Setenv; storetest.SetFastDurability; and fact's trigger globals. It also
+// excludes a test whose assertion is a latency or a
 // short positive deadline (the write-latency gates,
 // EmitReachesStreamWithoutDebounce, a 2 s Eventually): those keep the machine
 // to themselves by staying sequential. Moving objects over a git transport
