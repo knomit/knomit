@@ -201,8 +201,13 @@ func realMachineNeedles(t *testing.T) machineNeedles {
 	for name, v := range map[string]string{"hostname": host, "home": home, "wd": wd, "tempdir": tmp, "username": u.Username} {
 		require.NotEmpty(t, v, "machine needle %s is empty", name)
 	}
+	// A bare system temp root ("/tmp" on Linux) is also an ordinary word
+	// stem ("/tmpl"), so it is matched as a PATH PREFIX: the root plus "/".
+	// A leak of the temp dir is always a path under it, so nothing is lost.
+	// (Skipping the needle instead would drop the macOS/Windows coverage too.)
+	tmpPrefix := strings.TrimRight(tmp, `/\`) + "/"
 	n := machineNeedles{
-		substrings: map[string]string{"os.Hostname": host, "os.UserHomeDir": home, "os.Getwd": wd, "os.TempDir": tmp},
+		substrings: map[string]string{"os.Hostname": host, "os.UserHomeDir": home, "os.Getwd": wd, "os.TempDir": tmpPrefix},
 		words:      map[string]*regexp.Regexp{},
 	}
 	if env := os.Getenv("HOME"); env != "" && env != home {
@@ -212,7 +217,12 @@ func realMachineNeedles(t *testing.T) machineNeedles {
 	if i := strings.IndexByte(host, '.'); i > 0 {
 		short = host[:i]
 	}
-	n.words["short hostname"] = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(short) + `\b`)
+	require.NotEmpty(t, short, "machine needle short hostname is empty")
+	if genericUsernames[strings.ToLower(short)] || strings.EqualFold(short, "localhost") {
+		t.Logf("short hostname %q is an ordinary word; the full hostname %q is still a needle", short, host)
+	} else {
+		n.words["short hostname"] = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(short) + `\b`)
+	}
 	if genericUsernames[strings.ToLower(u.Username)] {
 		t.Logf("username %q is a generic word; checking $HOME %q for it instead", u.Username, home)
 	} else {
@@ -229,7 +239,6 @@ func requireNoMachineBytes(t *testing.T, label string, b []byte, ins ...prefixIn
 	s := string(b)
 	m := realMachineNeedles(t)
 	require.GreaterOrEqual(t, len(m.substrings), 4)
-	require.GreaterOrEqual(t, len(m.words), 1)
 	for name, needle := range m.substrings {
 		require.NotContains(t, s, needle, "%s: real machine value (%s) in the shared prefix", label, name)
 	}

@@ -153,7 +153,10 @@ var (
 //     carries cache_control ttl 1h: that one breakpoint caches tools + system
 //     prompt + instructions, the prefix shared per permission set. The last
 //     hook-4 block, when there is one, carries a second 1h breakpoint. Hook 5
-//     gets none: the working set changes within a conversation.
+//     gets none. It renders into system, so changing it mid-conversation
+//     is an edit to history: it invalidates every later thinking block and
+//     restarts the cache. See the append-only rule (ErrHistoryAppendOnly,
+//     builder.go), which guards hook 6.
 //   - messages: hook 6 then hook 7, consecutive same-role entries merged.
 //     Every entry goes out unchanged, Anthropic reasoning included whichever
 //     Anthropic model produced it (ReplayFor drops only other providers'
