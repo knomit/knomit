@@ -516,3 +516,45 @@ func TestPurge_CollectsPeerOrphans(t *testing.T) {
 		t.Fatalf("client_session_peers rows left after purge: %d", n)
 	}
 }
+
+// RecordRequest is the one recorder: a request that resolved a handle leaves a
+// binding-set row, and one that did not still counts as a request but adds
+// none. Both values are asserted, so a recorder that wrote the row on every
+// request, or never, or dropped the Touch, fails here.
+func TestRecordRequest_TouchAndBindingSet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	o := Observation{SessionID: "chat-rec", Binding: "repo:u1", Principal: "uid:501@socket", Now: t0}
+
+	if err := s.RecordRequest(ctx, o, "h1", "main"); err != nil {
+		t.Fatal(err)
+	}
+	sets, err := s.SessionBindings(ctx, []string{"chat-rec"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := sets["chat-rec"]
+	if len(rows) != 1 || rows[0].Handle != "h1" || rows[0].Binding != "repo:u1" || rows[0].Branch != "main" {
+		t.Fatalf("binding set after a resolved handle = %+v, want one row {h1 repo:u1 main}", rows)
+	}
+	list, _, err := s.List(ctx, Filter{})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	if list[0].RequestCount != 1 || list[0].Principal != "uid:501@socket" {
+		t.Fatalf("session row = count %d principal %q, want 1 and the observation's", list[0].RequestCount, list[0].Principal)
+	}
+
+	o.Now = t0.Add(time.Minute)
+	if err := s.RecordRequest(ctx, o, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	sets, _ = s.SessionBindings(ctx, []string{"chat-rec"})
+	if len(sets["chat-rec"]) != 1 || sets["chat-rec"][0].RequestCount != 1 {
+		t.Fatalf("a request with no handle changed the binding set: %+v", sets["chat-rec"])
+	}
+	list, _, _ = s.List(ctx, Filter{})
+	if list[0].RequestCount != 2 {
+		t.Fatalf("request_count = %d after a handle-less request, want 2", list[0].RequestCount)
+	}
+}

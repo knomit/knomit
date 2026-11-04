@@ -46,6 +46,28 @@ type Observation struct {
 	Now         time.Time
 }
 
+// RecordRequest is one request's Touch plus, when a handle resolved, its row in
+// the session's binding set. It is the single recorder: HTTP dispatch
+// (web.recordClientSession) and in-process transports (the chat session) both
+// call it, so what a request leaves in client_sessions and the binding set is
+// decided in one place.
+//
+// handle and branch are what the request's binding resolved to; the caller
+// reads them once (repos.ResolvedBindingFromContext) so the pin on o and the
+// binding-set row cannot disagree. Only a request that resolved a handle AND a
+// pin adds a binding-set row: a URL-scoped request has a pin but no handle and
+// contributes nothing there. A Touch error is returned before the binding set
+// is written.
+func (s *Store) RecordRequest(ctx context.Context, o Observation, handle, branch string) error {
+	if err := s.Touch(ctx, o); err != nil {
+		return err
+	}
+	if o.SessionID != "" && handle != "" && o.Binding != "" {
+		return s.RecordSessionBinding(ctx, o.SessionID, handle, o.Binding, branch, o.Now)
+	}
+	return nil
+}
+
 // Touch records one request: insert on first sight, otherwise bump
 // last_seen_at and request_count. With declared client info every declared
 // column is refreshed (a session resumed after a server restart fills in on

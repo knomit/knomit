@@ -69,17 +69,13 @@ func recordClientSession(r *http.Request, store *clientsessions.Store) {
 			obs.Client = &info
 		}
 	}
-	if err := store.Touch(ctx, obs); err != nil {
-		log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: touch failed")
-	}
-	// The binding SET. Only a request that actually resolved a handle adds a
-	// row, so a URL-scoped request — which has a pin but no handle — records
-	// its pin on the session row as before and contributes nothing here. That
+	// RecordRequest is the single recorder shared with in-process transports:
+	// Touch, then the binding SET row. Only a request that resolved a handle
+	// adds a row, so a URL-scoped request — which has a pin but no handle —
+	// records its pin on the session row and contributes nothing there. That
 	// asymmetry is correct: the set answers "which handles has this session
 	// presented", and a URL-scoped caller presented none.
-	if resolved.Handle != "" && resolved.Pin != "" {
-		if err := store.RecordSessionBinding(ctx, sid, resolved.Handle, resolved.Pin, resolved.Branch, now); err != nil {
-			log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: binding set update failed")
-		}
+	if err := store.RecordRequest(ctx, obs, resolved.Handle, resolved.Branch); err != nil {
+		log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: record request failed")
 	}
 }

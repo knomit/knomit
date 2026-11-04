@@ -501,6 +501,19 @@ func TestAnthropicChat_StopReasons(t *testing.T) {
 		require.Equal(t, "", se.Category)
 		require.Equal(t, "llm: the model declined this request", err.Error())
 	})
+	t.Run("model_context_window_exceeded", func(t *testing.T) {
+		resp, err, got := run(t, textEndStream("model_context_window_exceeded", ""))
+		require.Nil(t, resp)
+		require.ErrorIs(t, err, ErrContextFull)
+		require.NotErrorIs(t, err, ErrTruncated)
+		var se *StopError
+		require.ErrorAs(t, err, &se)
+		require.Equal(t, StopContextWindowExceeded, se.Reason)
+		require.Equal(t, "partial", se.Response.Blocks[0].Text)
+		require.Equal(t, int64(44), se.Response.Usage.Output)
+		require.Equal(t, []Event{{Kind: EventTextDelta, Text: "partial"}}, got) // no EventDone
+		require.False(t, isRetryable(err))
+	})
 	t.Run("pause_turn", func(t *testing.T) {
 		resp, err, got := run(t, textEndStream("pause_turn", ""))
 		require.NoError(t, err)
@@ -703,4 +716,44 @@ func TestAnthropicPrefixJSON_EqualsReceivedBody(t *testing.T) {
 		require.Equal(t, string(received[k]), string(exported[k]), k)
 	}
 	require.Contains(t, string(received["system"]), "FRAME B")
+}
+
+func TestAnthropicChat_PromptTooLongIsContextFull(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+		full   bool
+	}{
+		"400 prompt is too long": {http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1048577 tokens > 1000000 maximum"}}`, true},
+		"400 another reason":     {http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"messages.0: bad role"}}`, false},
+		"413 is not this error":  {http.StatusRequestEntityTooLarge, `{"type":"error","error":{"type":"request_too_large","message":"prompt is too long"}}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(srv.Close)
+			chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+			_, err := chat.Stream(context.Background(), prefixSnapshot(t, false), StreamOptions{}, nil)
+			require.Error(t, err)
+			if tc.full {
+				require.ErrorIs(t, err, ErrContextFull)
+				require.Contains(t, err.Error(), "prompt is too long: 1048577 tokens")
+				require.False(t, isRetryable(err))
+			} else {
+				require.NotErrorIs(t, err, ErrContextFull)
+			}
+		})
+	}
+}
+
+func TestAnthropicChat_CacheWriteSplitByTTL(t *testing.T) {
+	start := `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test-x","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":11,"cache_creation_input_tokens":33,"cache_read_input_tokens":22,"output_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":13}}}}`
+	srv, _ := anthropicSSEServer(t, textAndToolStream(start, `{"output_tokens":44}`)...)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	resp, err := chat.Stream(context.Background(), prefixSnapshot(t, false), StreamOptions{}, nil)
+	require.NoError(t, err)
+	require.Equal(t, Usage{Input: 11, CacheRead: 22, CacheWrite: 33, CacheWrite5m: 20, CacheWrite1h: 13, Output: 44}, resp.Usage)
 }

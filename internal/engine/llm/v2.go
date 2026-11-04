@@ -96,6 +96,10 @@ const (
 	StopSequence  = "stop_sequence"
 	StopMaxTokens = "max_tokens"
 	StopRefusal   = "refusal"
+	// StopContextWindowExceeded: generation reached the context window
+	// (Anthropic's model_context_window_exceeded). Like max_tokens it is
+	// returned as a *StopError, and it Is ErrContextFull.
+	StopContextWindowExceeded = "model_context_window_exceeded"
 	// StopPauseTurn is a server-side tool loop that paused. It is returned as
 	// a normal Response; the caller continues by sending the conversation
 	// again with this response appended, never with a new user message.
@@ -122,7 +126,7 @@ var (
 // streamed before the stop, usage included, so the caller can show the
 // partial text and account for the tokens. It is not retryable.
 type StopError struct {
-	Reason   string    // StopMaxTokens or StopRefusal
+	Reason   string    // StopMaxTokens, StopRefusal or StopContextWindowExceeded
 	Category string    // refusal only: the provider's stop_details category, "" if none
 	Response *Response // never nil
 }
@@ -137,13 +141,17 @@ func (e *StopError) Error() string {
 		return msg
 	case StopMaxTokens:
 		return ErrTruncated.Error()
+	case StopContextWindowExceeded:
+		return ErrContextFull.Error()
 	}
 	return "llm: response stopped: " + e.Reason
 }
 
-// Is makes errors.Is(err, ErrRefused) and errors.Is(err, ErrTruncated) work.
+// Is makes errors.Is(err, ErrRefused), ErrTruncated and ErrContextFull work.
 func (e *StopError) Is(target error) bool {
-	return (target == ErrRefused && e.Reason == StopRefusal) || (target == ErrTruncated && e.Reason == StopMaxTokens)
+	return (target == ErrRefused && e.Reason == StopRefusal) ||
+		(target == ErrTruncated && e.Reason == StopMaxTokens) ||
+		(target == ErrContextFull && e.Reason == StopContextWindowExceeded)
 }
 
 // toolUseSeq backs NextToolUseID.
